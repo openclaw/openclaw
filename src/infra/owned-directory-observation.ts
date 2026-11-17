@@ -15,6 +15,7 @@ type Directory = {
   listeners: readonly Listener[];
   nextFallback: { atMs: number; elapsedAtMs: number };
   source?: Source;
+  ancestorChild?: string;
 };
 type Source = {
   key: string;
@@ -144,6 +145,13 @@ function notify(directory: Directory, filename?: string, event?: string) {
 
 function attach(directory: Directory, candidate = directory.watchRoot) {
   // Missing roots observe only their next ancestor segment, never its whole tree.
+  directory.ancestorChild =
+    candidate === directory.watchRoot
+      ? undefined
+      : path.relative(candidate, directory.watchRoot).split(path.sep, 1)[0];
+  if (process.platform === "win32") {
+    directory.ancestorChild = directory.ancestorChild?.toLowerCase();
+  }
   const recursive = directory.recursive && candidate === directory.watchRoot;
   const sourceKey = JSON.stringify([candidate, recursive]);
   const shared = sources.get(sourceKey);
@@ -166,13 +174,16 @@ function attach(directory: Directory, candidate = directory.watchRoot) {
         const affected = source.directories;
         const renamedRoot = event === "rename" && (!filename || filename === candidateName);
         let changedPath: string | undefined;
+        const childName = process.platform === "win32" ? filename?.toLowerCase() : filename;
         for (const entry of affected) {
           if (
             entry.path === candidate ||
             !filename ||
             renamedRoot ||
-            isPathInside(entry.path, (changedPath ??= path.resolve(candidate, filename))) ||
-            isPathInside(changedPath, entry.path)
+            (entry.ancestorChild !== undefined
+              ? childName === entry.ancestorChild
+              : isPathInside(entry.path, (changedPath ??= path.resolve(candidate, filename))) ||
+                isPathInside(changedPath, entry.path))
           ) {
             notify(entry, entry.path === candidate ? filename : undefined, event);
           }
@@ -187,9 +198,7 @@ function attach(directory: Directory, candidate = directory.watchRoot) {
           for (const entry of affected) {
             if (
               renamedRoot ||
-              (entry.watchRoot !== candidate &&
-                filename !== undefined &&
-                isPathInside((changedPath ??= path.resolve(candidate, filename)), entry.watchRoot))
+              (entry.ancestorChild !== undefined && childName === entry.ancestorChild)
             ) {
               (readmit ??= []).push(entry);
             }
