@@ -179,11 +179,9 @@ const allScenarios: Scenario[] = [
     id: routeId,
     routeId,
     selector:
-      routeId === "activity"
-        ? "openclaw-activity-page .content-header"
-        : routeId === "dashboards"
-          ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
-          : `openclaw-${routeId}-page`,
+      routeId === "dashboards"
+        ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
+        : `openclaw-${routeId}-page`,
   })),
   {
     id: "new-session",

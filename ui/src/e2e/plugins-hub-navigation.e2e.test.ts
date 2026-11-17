@@ -530,8 +530,6 @@ suite.define(() => {
         const pluginInstallPresentation = await installButtonPresentation(page);
         const mobile = viewport.width <= 900;
         const customize = customizeSidebar(page, mobile);
-        await customize.select();
-        await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
 
         await customize.open("Skills");
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
@@ -590,10 +588,11 @@ suite.define(() => {
       },
     });
     try {
-      await page.goto(`${suite.server.baseUrl}plugins`);
-      await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiRoute(page, { routeId: "chat" });
       const customize = customizeSidebar(page, false);
       await customize.select();
+      await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
       await customize.row("Templates").waitFor();
       expect(
         await customize.sidebar
