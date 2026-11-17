@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import type { ConversationListItem } from "@openclaw/gateway-protocol";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createChannelCapability } from "../../lib/channels/index.ts";
 import { cronListResponse, operatorHello, waitForCronPage } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
@@ -60,6 +60,7 @@ async function mountSuggestions(conversations: ConversationListItem[]) {
     }),
     { render: true, scopeId: "writer" },
   );
+  onTestFinished(() => mounted.page.remove());
   mounted.context.acquireChannels(createChannelCapability).state.channelsSnapshot = {
     ts: 0,
     channelOrder: ["telegram", "discord"],
@@ -120,7 +121,12 @@ it.each([
       );
       expect(suggestions(page, "cron-delivery-account-suggestions")).toEqual(accounts);
     });
-    expect(suggestions(page, "cron-tz-suggestions")).toContain("Etc/GMT+12");
+    page.patchForm({ scheduleKind: "cron" });
+    await page.settle();
+    page.querySelector<HTMLButtonElement>("#cron-cron-tz")!.click();
+    await waitForCronPage(() =>
+      expect(document.querySelector('[role="option"][data-value="Etc/GMT+12"]')).not.toBeNull(),
+    );
   },
 );
 
