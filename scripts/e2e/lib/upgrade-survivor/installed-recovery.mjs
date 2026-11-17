@@ -289,6 +289,25 @@ async function main([artifacts, prefix, tarball, configPath, summary, selectedCu
     fs.unlinkSync(target);
   }
 
+  // The package helper settles publication custody only. Each killed update
+  // also leaves its run recovery, which plain update refuses once the helper's
+  // claim retired that run's lease; the documented next step is update repair.
+  const repaired = await run(artifacts, "update-repair", node, [
+    bin,
+    "update",
+    "repair",
+    "--yes",
+    "--no-restart",
+    "--json",
+  ]);
+  const repair = JSON.parse(repaired.stdout.trim());
+  assert.equal(repair.mode, "finalize");
+  assert.equal(repair.coreUpdate, "completed");
+  assert.notEqual(repair.status, "error");
+  assert.equal(new Set(repair.reconciledRuns).size, cuts.length, "one killed run per cut");
+  for (const runId of repair.reconciledRuns) {
+    assert.match(runId, /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u);
+  }
   const target = path.join(artifacts, "next-update.tgz");
   packFirstHopUpdateFixture(tarball, target, 7);
   const expected = packedManifest(target);

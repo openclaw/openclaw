@@ -315,10 +315,13 @@ it.each([false, true])(
       "resume-retirement",
       "completed-status",
       "archive-completed",
+      "update-repair",
       "next-update",
       "next-update-status",
     ].map((name) => {
-      const prefix = name.startsWith("next-") ? "" : "partial-previous/";
+      const prefix = ["update-repair", "next-update", "next-update-status"].includes(name)
+        ? ""
+        : "partial-previous/";
       return {
         cut: prefix ? "partial-previous" : null,
         name,
