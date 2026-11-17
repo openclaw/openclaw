@@ -135,9 +135,9 @@ async function killAfter(tools: KillSweepTools, pick: (labels: string[]) => numb
 /** What a package manager does to the launcher: a new link with the same target. */
 function relinkLauncher(killed: Killed) {
   const launcher = path.join(killed.prefix, "bin", "openclaw");
-  const target = fs.readlinkSync(launcher);
-  fs.unlinkSync(launcher);
-  fs.symlinkSync(target, launcher);
+  // The old link stays under another name: a freed inode can be reused at once.
+  fs.renameSync(launcher, `${launcher}.old`);
+  fs.symlinkSync(fs.readlinkSync(`${launcher}.old`), launcher);
 }
 /** A run killed with its candidate waiting under `previous` beside the untouched package. */
 async function killWithWaitingCandidate() {
