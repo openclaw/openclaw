@@ -60,7 +60,10 @@ export async function readWorkspaceBaseRefreshTrees(
       env,
       input: stdin,
       timeoutMs: 300_000,
-      maxOutputBytes: MAX_WORKSPACE_INVENTORY_PATH_BYTES,
+      // Longest ls-tree record adds "160000 commit <oid>\t" and a trailing NUL.
+      maxOutputBytes:
+        MAX_WORKSPACE_INVENTORY_PATH_BYTES +
+        MAX_WORKSPACE_INVENTORY_ENTRIES * (16 + input.beforeTree.length),
     });
   const checkout = async (root: string, paths: string[]) => {
     if (paths.length) {
