@@ -6,7 +6,11 @@ import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protoc
 import type { GatewayClient } from "../gateway/client.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sleep } from "../utils/sleep.js";
-import type { TuiRequestScope } from "./tui-backend.js";
+import {
+  TUI_HISTORY_TEXT_MAX_CHARS,
+  TUI_HISTORY_TOOL_RESULT_MAX_CHARS,
+  type TuiRequestScope,
+} from "./tui-backend.js";
 
 type WriteRequest = <T>(method: string, params: unknown) => Promise<T>;
 
@@ -137,6 +141,8 @@ export class GatewayChatRequests {
           sessionKey: opts.sessionKey,
           ...(opts.agentId ? { agentId: opts.agentId } : {}),
           limit: opts.limit,
+          maxChars: TUI_HISTORY_TEXT_MAX_CHARS,
+          toolResultMaxChars: TUI_HISTORY_TOOL_RESULT_MAX_CHARS,
         });
       } catch (err) {
         if (performance.now() >= deadline || !isRetryableStartupUnavailable(err)) {

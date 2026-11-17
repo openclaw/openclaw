@@ -17,6 +17,14 @@ import type {
 import type { SessionInfoDefaults } from "./tui-session-info.js";
 import type { SessionInfo, TuiSessionRow } from "./tui-types.js";
 
+/**
+ * History text limits for the TUI, which renders `chat.history` rows as-is and
+ * has no per-message expansion. Replies load whole (the protocol maximum);
+ * tool results keep the Gateway's default preview size.
+ */
+export const TUI_HISTORY_TEXT_MAX_CHARS = 500_000;
+export const TUI_HISTORY_TOOL_RESULT_MAX_CHARS = 8_000;
+
 export type ChatSendOptions = {
   sessionKey: string;
   agentId?: string;

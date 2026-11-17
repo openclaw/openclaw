@@ -399,7 +399,8 @@ describe("GatewayChatClient", () => {
         expect.objectContaining({ ...scope, message: "hello", idempotencyKey: runId }),
         writeOptions,
       ],
-      ["chat.history", { ...scope, limit: 50 }],
+      // Whole replies: the TUI cannot expand a display-capped history row.
+      ["chat.history", { ...scope, limit: 50, maxChars: 500_000, toolResultMaxChars: 8_000 }],
       ["chat.abort", { ...scope, runId }],
       ["models.list", { agentId: "work" }],
     );

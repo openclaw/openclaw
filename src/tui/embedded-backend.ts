@@ -47,7 +47,6 @@ import {
   mergeAssistantText,
   resolveAssistantTextInput,
 } from "../gateway/agent-event-assistant-text.js";
-import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryActivityProjection,
@@ -144,6 +143,7 @@ import type {
   TuiImageRequest,
   TuiImageData,
 } from "./tui-backend.js";
+import { TUI_HISTORY_TEXT_MAX_CHARS, TUI_HISTORY_TOOL_RESULT_MAX_CHARS } from "./tui-backend.js";
 import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 export class EmbeddedTuiBackend implements TuiBackend {
@@ -455,7 +455,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const max = Math.min(CHAT_HISTORY_MAX_ENTRIES, opts.limit ?? 200);
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
-    const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars();
     const historyPage = await readChatHistoryPage({
       entry,
       provider: resolvedSessionModel.provider,
@@ -465,7 +464,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       canonicalKey,
       max,
       maxHistoryBytes,
-      effectiveMaxChars,
+      effectiveMaxChars: TUI_HISTORY_TEXT_MAX_CHARS,
+      toolResultMaxChars: TUI_HISTORY_TOOL_RESULT_MAX_CHARS,
       offset: undefined,
       messageId: undefined,
     });
