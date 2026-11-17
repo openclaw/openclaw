@@ -695,8 +695,9 @@ async function createSessionStoreBackup(params: {
         sourcePath: physicalPath,
         targetPath,
         preserveRowIds: true,
-        transform: (database) =>
-          embedSessionColdArchivesInSnapshot({ database, sourceStorePath: storePath }),
+        transform: async (database) => {
+          await embedSessionColdArchivesInSnapshot({ database, sourceStorePath: storePath });
+        },
       }),
     );
   }

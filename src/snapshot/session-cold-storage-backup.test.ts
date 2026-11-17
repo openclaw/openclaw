@@ -3,8 +3,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
+import { backupVerifyCommand } from "../commands/backup-verify.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { embedSessionColdArchivesInSnapshot } from "../config/sessions/session-cold-storage-backup.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import {
   restoreSessionColdTranscript,
@@ -16,6 +18,10 @@ import {
   maintenanceConfig,
 } from "../config/sessions/session-cold-storage.test-support.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
+import {
+  listArchiveEntries,
+  listArchiveEntryDetails,
+} from "../infra/backup-create.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -137,6 +143,104 @@ it.each(backupKinds)("%s restores exact events without the source archive", asyn
   ).toEqual([{ message_id: "history-assistant" }]);
   expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
   expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+});
+
+it("full backup omits embedded cold files, retains other files, and regenerates cold storage", async () => {
+  const fixture = await createColdFixture();
+  const coldDir = path.dirname(fixture.archivePath);
+  const orphanPath = path.join(coldDir, `${"a".repeat(64)}.jsonl.zst`);
+  const symlinkPath = path.join(coldDir, "retained-link.zst");
+  await fs.writeFile(orphanPath, "unreferenced cold file");
+  await fs.symlink(path.basename(orphanPath), symlinkPath);
+  const runtime = createTestRuntime();
+  const backup = await backupCreateCommand(runtime, {
+    output: path.join(fixture.root, "cold-backup.tar.gz"),
+    includeWorkspace: false,
+  });
+  const archivedPath = (pathname: string) => buildBackupArchivePath(backup.archiveRoot, pathname);
+  const entries = await listArchiveEntries(backup.archivePath);
+  expect(entries).not.toContain(archivedPath(fixture.archivePath));
+  expect(entries).toContain(archivedPath(orphanPath));
+  expect(
+    (await listArchiveEntryDetails(backup.archivePath)).find(
+      (entry) => entry.path === archivedPath(symlinkPath),
+    )?.type,
+  ).toBe("SymbolicLink");
+  await expect(
+    backupVerifyCommand(runtime, { archive: backup.archivePath }),
+  ).resolves.toMatchObject({
+    ok: true,
+  });
+  const restored = await backupRestoreCommand(runtime, {
+    archive: backup.archivePath,
+    target: path.join(fixture.root, "restored-full-archive"),
+  });
+  const restoredDatabasePath = path.join(restored.targetPath, archivedPath(fixture.sourcePath));
+  const restoredColdPath = resolveSessionColdArchivePath(
+    restoredDatabasePath,
+    path.basename(fixture.archivePath),
+  );
+  await expect(fs.access(restoredColdPath)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(
+    await runSessionColdStorageMaintenance({ config: maintenanceConfig(restoredDatabasePath) }),
+  ).toEqual({ archivedTranscripts: 0, externalizedTranscripts: 1 });
+  expect(await fs.readFile(restoredColdPath)).toEqual(await fs.readFile(fixture.archivePath));
+  await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredDatabasePath });
+  using database = new DatabaseSync(restoredDatabasePath, { readOnly: true });
+  expect(fixture.snapshot(database).events).toEqual(fixture.original.events);
+  expect(database.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+});
+
+it("retains an external file when the captured archive already uses SQLite storage", async () => {
+  const fixture = await createColdFixture();
+  expect(
+    await embedSessionColdArchivesInSnapshot({
+      database: fixture.database(),
+      sourceStorePath: fixture.sourcePath,
+    }),
+  ).toEqual([fixture.archivePath]);
+  const runtime = createTestRuntime();
+  const backup = await backupCreateCommand(runtime, {
+    output: path.join(fixture.root, "sqlite-cold-backup.tar.gz"),
+    includeWorkspace: false,
+  });
+  expect(await listArchiveEntries(backup.archivePath)).toContain(
+    buildBackupArchivePath(backup.archiveRoot, fixture.archivePath),
+  );
+  await expect(
+    backupVerifyCommand(runtime, { archive: backup.archivePath }),
+  ).resolves.toMatchObject({
+    ok: true,
+  });
+});
+
+it("retains a symlink at a verified embedded archive path", async () => {
+  const fixture = await createColdFixture();
+  const targetPath = path.join(path.dirname(fixture.archivePath), `${"b".repeat(64)}.jsonl.zst`);
+  await fs.rename(fixture.archivePath, targetPath);
+  await fs.symlink(path.basename(targetPath), fixture.archivePath);
+  const runtime = createTestRuntime();
+  const backup = await backupCreateCommand(runtime, {
+    output: path.join(fixture.root, "linked-cold-backup.tar.gz"),
+    includeWorkspace: false,
+  });
+  const archivedPath = buildBackupArchivePath(backup.archiveRoot, fixture.archivePath);
+  expect(
+    (await listArchiveEntryDetails(backup.archivePath)).find((entry) => entry.path === archivedPath)
+      ?.type,
+  ).toBe("SymbolicLink");
+  await expect(
+    backupVerifyCommand(runtime, { archive: backup.archivePath }),
+  ).resolves.toMatchObject({
+    ok: true,
+  });
+  const restored = await backupRestoreCommand(runtime, {
+    archive: backup.archivePath,
+    target: path.join(fixture.root, "restored-linked-cold"),
+  });
+  expect(await fs.readFile(path.join(restored.targetPath, archivedPath))).toEqual(
+    await fs.readFile(targetPath),
+  );
 });
 
 it.each(["full archive capture", "SQLite snapshot"] as const)(

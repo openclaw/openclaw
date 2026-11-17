@@ -315,9 +315,11 @@ export async function createBackupSqliteSnapshotPlan(params: {
   postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }>;
   postgresAnchors: BackupManifestPostgresAnchor[];
   discoveredSourcePaths: Set<string>;
+  embeddedColdFilePaths: Set<string>;
   sharedDatabaseSourcePath?: string;
 }> {
   const capturedSnapshots = new Map<BackupSqliteSourceGroup, string>();
+  const embeddedColdFilePaths = new Set<string>();
   const snapshots: SqliteBackupAsset[] = [];
   const postgresSnapshots: Array<{ sourcePath: string; manifestSha256: string }> = [];
   const postgresAnchors: BackupManifestPostgresAnchor[] = [];
@@ -363,6 +365,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     } as const satisfies Record<string, BackupProgressStage>;
     let currentStage: keyof typeof stages = "online-copy";
     let hasPostgresAnchor: boolean | undefined;
+    let embeddedPaths: string[] = [];
     try {
       const capture = () =>
         createVerifiedSqliteSnapshot({
@@ -457,7 +460,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
                   .set({ socket_token: null }),
               );
             }
-            await embedSessionColdArchivesInSnapshot({
+            embeddedPaths = await embedSessionColdArchivesInSnapshot({
               database,
               sourceStorePath: canonicalSource?.archiveSourcePath ?? sourceDatabasePath,
             });
@@ -471,6 +474,12 @@ export async function createBackupSqliteSnapshotPlan(params: {
           : capture(),
       );
       capturedSnapshots.set(sourceGroup, sourcePath);
+      // Only a verified captured image can make its source files redundant.
+      if (!capturedPath) {
+        for (const pathname of embeddedPaths) {
+          embeddedColdFilePaths.add(path.resolve(pathname));
+        }
+      }
     } catch (error) {
       const stateChange = findLegacyAuditBackupStateChange(error);
       if (stateChange) {
@@ -686,6 +695,7 @@ export async function createBackupSqliteSnapshotPlan(params: {
     postgresSnapshots,
     postgresAnchors,
     discoveredSourcePaths: discovery.discoveredSourcePaths,
+    embeddedColdFilePaths,
     sharedDatabaseSourcePath,
   };
 }

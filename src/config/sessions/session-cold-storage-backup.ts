@@ -5,14 +5,14 @@ import type { SqliteArchiveOneShotWorkerData } from "./session-accessor.sqlite-a
 export async function embedSessionColdArchivesInSnapshot(params: {
   database: DatabaseSync;
   sourceStorePath: string;
-}): Promise<void> {
+}): Promise<string[]> {
   const snapshotPath = params.database.location();
   if (!snapshotPath) {
     throw new Error("Cold archive embedding requires a file-backed private snapshot");
   }
   const { runSqliteTranscriptArchiveWorkerOperation } =
     await import("./session-accessor.sqlite-archive.js");
-  await runSqliteTranscriptArchiveWorkerOperation<void>({
+  return runSqliteTranscriptArchiveWorkerOperation<string>({
     expectedMessageType: "done",
     nativeLocations: [snapshotPath],
     workerData: {

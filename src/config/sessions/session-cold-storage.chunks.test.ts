@@ -1,7 +1,15 @@
 import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import zlib from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { backupRestoreCommand } from "../../commands/backup-restore.js";
+import { backupVerifyCommand } from "../../commands/backup-verify.js";
+import { backupCreateCommand } from "../../commands/backup.js";
+import { createTestRuntime } from "../../commands/test-runtime-config-helpers.js";
+import { buildBackupArchivePath } from "../../infra/backup-archive-path-policy.js";
+import { listArchiveEntries } from "../../infra/backup-create.test-support.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -21,8 +29,13 @@ import {
   prepareSessionColdRestoreInWorker,
 } from "./session-cold-storage-worker.js";
 import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "./session-cold-storage.js";
+import {
   createSessionColdStorageFixture,
   historicalId,
+  maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
@@ -38,7 +51,9 @@ let seedPath: string;
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
-  fixture = await createSessionColdStorageFixture(state.statePath("chunks.sqlite"));
+  fixture = await createSessionColdStorageFixture(
+    path.join(state.agentDir(), "openclaw-agent.sqlite"),
+  );
   await replaceTranscriptEvents(fixture.scope, [
     { type: "session", id: historicalId, version: 3 },
     ...Array.from({ length: 12 }, (_, index) => ({
@@ -258,6 +273,48 @@ it("embeds every chunk for a self-contained backup and re-externalizes it", asyn
   const records = await prepareSessionColdRestoreInWorker(plan);
   expect(mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored).toBe(true);
   expect(fixture.snapshot()).toEqual(original);
+});
+
+it("full backup omits embedded chunks and restores their bytes", async () => {
+  expect((await archive()).archivedTranscripts).toBe(1);
+  const descriptor = readSessionColdTranscript(fixture.database(), historicalId)!;
+  const chunks = readSessionColdChunks(fixture.database(), descriptor);
+  expect(chunks.length).toBeGreaterThan(1);
+  const runtime = createTestRuntime();
+  const backup = await backupCreateCommand(runtime, {
+    output: state.path("chunk-backup.tar.gz"),
+    includeWorkspace: false,
+  });
+  const archivedPath = (pathname: string) => buildBackupArchivePath(backup.archiveRoot, pathname);
+  const entries = await listArchiveEntries(backup.archivePath);
+  for (const chunk of chunks) {
+    expect(entries).not.toContain(
+      archivedPath(resolveSessionColdArchivePath(fixture.scope.storePath, chunk.archive_name)),
+    );
+  }
+  await expect(
+    backupVerifyCommand(runtime, { archive: backup.archivePath }),
+  ).resolves.toMatchObject({
+    ok: true,
+  });
+  const restored = await backupRestoreCommand(runtime, {
+    archive: backup.archivePath,
+    target: state.path("restored-chunks"),
+  });
+  const restoredPath = path.join(restored.targetPath, archivedPath(fixture.scope.storePath));
+  expect(
+    await runSessionColdStorageMaintenance({ config: maintenanceConfig(restoredPath) }),
+  ).toEqual({ archivedTranscripts: 0, externalizedTranscripts: 1 });
+  for (const chunk of chunks) {
+    expect(
+      await fs.readFile(resolveSessionColdArchivePath(restoredPath, chunk.archive_name)),
+    ).toEqual(
+      await fs.readFile(resolveSessionColdArchivePath(fixture.scope.storePath, chunk.archive_name)),
+    );
+  }
+  await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
+  using database = new DatabaseSync(restoredPath, { readOnly: true });
+  expect(fixture.snapshot(database)).toEqual(original);
 });
 
 it("removes every chunk file and cascading child row on full-history deletion", async () => {

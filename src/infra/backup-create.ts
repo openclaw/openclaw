@@ -279,6 +279,7 @@ async function createConsistentStateSnapshotPlan(params: {
             postgresSnapshots: [],
             postgresAnchors: [],
             discoveredSourcePaths: new Set<string>(),
+            embeddedColdFilePaths: new Set<string>(),
           }
         : await captureSqlite(params.tempDir),
     };
@@ -524,6 +525,10 @@ async function createBackupArchiveInScope(
         );
       }
       if (isPathInside(gatewayLockDir, resolvedEntryPath)) {
+        return false;
+      }
+      // Captured SQLite already owns these verified bytes; retain links and other cold files.
+      if (entryStat.isFile() && stateSqliteBackup.embeddedColdFilePaths.has(resolvedEntryPath)) {
         return false;
       }
       if (

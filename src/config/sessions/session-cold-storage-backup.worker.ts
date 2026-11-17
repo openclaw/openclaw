@@ -6,7 +6,10 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { readSessionColdChunks } from "./session-cold-storage-chunks.js";
-import { readVerifiedSessionColdArchive } from "./session-cold-storage-codec.js";
+import {
+  readVerifiedSessionColdArchive,
+  resolveSessionColdArchivePath,
+} from "./session-cold-storage-codec.js";
 
 type ColdSnapshotDatabase = Pick<
   DB,
@@ -19,8 +22,9 @@ type ColdSnapshotDatabase = Pick<
 export async function embedSessionColdArchivesInSnapshotInWorker(params: {
   database: DatabaseSync;
   sourceStorePath: string;
-}): Promise<void> {
+}): Promise<string[]> {
   const db = getNodeSqliteKysely<ColdSnapshotDatabase>(params.database);
+  const embeddedFilePaths: string[] = [];
   if (
     !executeSqliteQueryTakeFirstSync(
       params.database,
@@ -31,7 +35,7 @@ export async function embedSessionColdArchivesInSnapshotInWorker(params: {
         .where("name", "=", "session_transcript_cold_archives"),
     )
   ) {
-    return;
+    return embeddedFilePaths;
   }
   // Historical snapshots predate the chunk table and retain their single-file contract.
   const hasChunks = Boolean(
@@ -57,7 +61,7 @@ export async function embedSessionColdArchivesInSnapshotInWorker(params: {
     }
     const archive = executeSqliteQueryTakeFirstSync(params.database, query);
     if (!archive) {
-      return;
+      return embeddedFilePaths;
     }
     // The copied row fixes the generation. Immutable source files survive
     // restoration, so a live restore cannot invalidate this snapshot's read.
@@ -87,6 +91,9 @@ export async function embedSessionColdArchivesInSnapshotInWorker(params: {
             .where("session_id", "=", archive.session_id)
             .where("chunk_index", "=", chunk.chunk_index),
         );
+        embeddedFilePaths.push(
+          resolveSessionColdArchivePath(params.sourceStorePath, chunk.archive_name),
+        );
       }
     }
     const bytes =
@@ -101,6 +108,11 @@ export async function embedSessionColdArchivesInSnapshotInWorker(params: {
           .set({ storage: "sqlite", archive_blob: bytes })
           .where("session_id", "=", archive.session_id),
       );
+      if (chunks.length === 0) {
+        embeddedFilePaths.push(
+          resolveSessionColdArchivePath(params.sourceStorePath, archive.archive_name),
+        );
+      }
     }
     previousSessionId = archive.session_id;
   }
