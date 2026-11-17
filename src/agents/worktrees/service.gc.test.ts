@@ -147,6 +147,29 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(await fs.stat(manual.path)).toBeTruthy();
   });
 
+  it("retries orphan cleanup after a concurrent inventory change without manual retry", async () => {
+    const registered = await materializeDownstreamFixture("retained");
+    const orphan = await fs.mkdtemp(path.join(path.dirname(registered.path), "orphan-"));
+    const allocate = allocation.withWorktreeAllocationLease;
+    const admission = vi
+      .spyOn(allocation, "withWorktreeAllocationLease")
+      .mockImplementationOnce(async (params, run) => {
+        await updateRegistryWorktree(env, registered.id, {
+          lastActiveAt: registered.lastActiveAt + 1,
+        });
+        return await allocate(params, run);
+      });
+    try {
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
+      expect(await fs.stat(orphan)).toBeTruthy();
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 1, failedCount: 0 });
+      await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(registered.path, "README.md"), "utf8")).toBe("base\n");
+    } finally {
+      admission.mockRestore();
+    }
+  });
+
   it("spreads equal-age expiry across a stable extra hour without shortening retention", async () => {
     const later = await materializeRunOwnedFixture("jitter-a", "session");
     const earlier = await materializeRunOwnedFixture("jitter-b", "session");

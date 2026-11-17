@@ -374,6 +374,7 @@ async function reconcileOrphans(
         }
         orphanFailures.delete(candidate);
       }
+      let removalAttempted = false;
       try {
         const original = candidate;
         candidate = await withWorktreeAllocationLease({ ...guard, env }, async (allocation) => {
@@ -403,6 +404,7 @@ async function reconcileOrphans(
           // The atomic namespace change commits retirement. Recursive deletion owns only this
           // unselectable sibling after allocation is released; a crash leaves it for the next GC.
           const retired = path.join(fingerprintPath, `.openclaw-retired-${randomUUID()}`);
+          removalAttempted = true;
           await fs.rename(original, retired);
           return retired;
         });
@@ -429,12 +431,15 @@ async function reconcileOrphans(
         deleted += 1;
       } catch (error) {
         assertCurrent();
+        progress.error("orphans", error, candidate);
+        if (!removalAttempted) {
+          continue;
+        }
         const stat = await fs.lstat(candidate).catch(() => undefined);
         if (stat?.dev === source.dev && stat.ino === source.ino) {
           materializeErrorStack(error);
           orphanFailures.set(candidate, { dev: stat.dev, ino: stat.ino, error });
         }
-        progress.error("orphans", error, candidate);
         log.warn(
           `worktree orphan cleanup deferred for ${candidate}; repair access and run openclaw worktrees gc --retry-deferred: ${String(error)}`,
         );
