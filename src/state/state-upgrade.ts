@@ -28,6 +28,7 @@ import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
 import { readRetainedAgentDeletionIds } from "./agent-deletion-journal.snapshot.worker.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { CONTENT_VERSION_KEY } from "./openclaw-state-db-schema-version.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
@@ -636,7 +637,14 @@ export async function upgradeStateDirectory(params: {
         fsyncPath(op.next);
       }
     }
-    const refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
+    let refusal: string | undefined;
+    try {
+      refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
+    } finally {
+      // Config admission can retain a reader on the successor inode. Retire it before
+      // rename: its old shadow pathname cannot find the first live writer's WAL/SHM.
+      await closeOpenClawStateDatabaseByPathAsync(toShadow(liveState));
+    }
     if (refusal !== undefined) {
       fs.rmSync(workDir, { recursive: true, force: true });
       params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);

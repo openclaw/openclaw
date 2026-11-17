@@ -56,7 +56,7 @@ type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
-async function recordRequiredCompletionFailure(
+export async function recordRequiredCompletionFailure(
   entry: SubagentRunRecord,
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
@@ -563,6 +563,12 @@ function currentRequesterEntries(
       operation === "transition" && !committed
         ? currentCompletionOwner(rows, expected)
         : rows.get(expected.runId);
+    // A pause notice belongs to this child, even when a resumed sibling rekeys the cohort.
+    const settlesPauseNotice =
+      operation === "settle" &&
+      current?.pauseReason === "sessions_yield" &&
+      expected.pauseReason === "sessions_yield" &&
+      current.requesterSettleWake?.pauseNotice;
     if (
       !current ||
       !isSameSubagentRunOwner(current, expected) ||
@@ -572,10 +578,11 @@ function currentRequesterEntries(
         (!current.requesterSettleWake ||
           current.requesterSettleWake.rearmGeneration !==
             expected.requesterSettleWake?.rearmGeneration ||
-          !isDeepStrictEqual(
-            current.requesterSettleWake.batchRunIds?.toSorted(),
-            expected.requesterSettleWake?.batchRunIds?.toSorted(),
-          ) ||
+          (!settlesPauseNotice &&
+            !isDeepStrictEqual(
+              current.requesterSettleWake.batchRunIds?.toSorted(),
+              expected.requesterSettleWake?.batchRunIds?.toSorted(),
+            )) ||
           !isDeepStrictEqual(
             current.requesterSettleWake.pauseNotice,
             expected.requesterSettleWake?.pauseNotice,
