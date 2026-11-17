@@ -64,6 +64,11 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
+In-process catalog calls bind the run's watchdog owner even when a tool already
+has a hook wrapper. The reply watchdog honors the deadline published by the
+tool's execution owner, so a silent command can reach its own exec timeout and
+return its error to guest code without losing the reply at the quiet-tool window.
+
 Completed nested calls persist as bounded display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
