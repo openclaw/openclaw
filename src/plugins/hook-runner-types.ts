@@ -11,23 +11,29 @@ export type HookResult<K extends PluginHookName> = Exclude<
   Awaited<ReturnType<PluginHookHandlerMap[K]>>,
   void
 >;
-export type ModifyingHookPolicy<K extends PluginHookName> = {
+export type ModifyingHookPolicy<K extends PluginHookName, TResult = HookResult<K>> = {
   mergeResults?: (
-    accumulated: HookResult<K> | undefined,
-    next: HookResult<K>,
+    accumulated: TResult | undefined,
+    next: TResult,
     registration: PluginHookRegistration<K>,
     event: HookEvent<K>,
-  ) => HookResult<K>;
+  ) => TResult;
+  /**
+   * Called when a handler's contribution is discarded (throw or timeout) and the
+   * runner continues without it. Lets a caller surface the loss instead of
+   * shipping a result that merely looks complete.
+   */
+  onHandlerDropped?: (params: { hookName: K; pluginId: string; error: unknown }) => void;
   isolateEventPerHandler?: boolean;
-  eventForHandler?: (event: HookEvent<K>, result: HookResult<K> | undefined) => HookEvent<K>;
+  eventForHandler?: (event: HookEvent<K>, result: TResult | undefined) => HookEvent<K>;
   mergeNullResults?: boolean;
-  shouldStop?: (result: HookResult<K>) => boolean;
+  shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   includeRegistration?: (registration: PluginHookRegistration<K>) => boolean;
   assertHandlerBoundaryActive?: () => void;
   onHandlerResult?: (params: {
     hook: PluginHookRegistration<K>;
-    result: HookResult<K> | undefined;
+    result: TResult | undefined;
   }) => void;
   onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
 };
