@@ -157,15 +157,20 @@ export function createSessionActorFactory(
         expectedIdentity:
           "physicalIdentity" in requestedTarget.database ? requestedTarget.database : undefined,
       });
+      // Register before preparation queues: another retained borrower may create the store.
+      let registration:
+        | ReturnType<OpenClawAgentDatabaseExecution["observeRegistration"]>
+        | undefined;
       try {
+        registration = followRegistration && execution.observeRegistration(followRegistration);
         if (!execution.fileIdentity) {
           await prepareSessionEntryReplacementDatabase(
             captured,
             () => lifetime.assertCurrent(),
             execution,
-            followRegistration,
           );
         }
+        registration?.assertCurrent();
         lifetime.assertCurrent();
         const identity = execution.fileIdentity;
         if (!identity) {
@@ -182,6 +187,8 @@ export function createSessionActorFactory(
       } catch (error) {
         await execution.release();
         throw error;
+      } finally {
+        registration?.release();
       }
     },
   };

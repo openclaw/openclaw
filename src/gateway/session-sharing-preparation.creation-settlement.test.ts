@@ -17,6 +17,8 @@ import {
   writeSessionEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readTranscriptStorageRows } from "../config/sessions/session-accessor.sqlite-read.js";
+import * as replacementWorker from "../config/sessions/session-accessor.sqlite-replacement-worker.js";
+import { createSessionActorFactory } from "../config/sessions/session-actor-durable.js";
 import * as discoveryResources from "../config/sessions/session-transcript-worker-resources.js";
 import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,6 +34,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import * as agentExecutions from "../state/openclaw-agent-execution.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -46,6 +49,73 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 
 const prepareMissing = (cfg: OpenClawConfig, sessionKey: string) =>
   prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main", allowMissing: true });
+
+it("retains both missing-session authorities when they share first-use registration", async ({
+  state,
+}) => {
+  const cfg = { agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:shared-first-use";
+  const first = await prepareMissing(cfg, sessionKey);
+  const second = await prepareMissing(cfg, sessionKey);
+  const database = { agentId: "main", path: resolveOpenClawAgentSqlitePath({ agentId: "main" }) };
+  const actors = [];
+  const prepare = replacementWorker.prepareSessionEntryReplacementDatabase;
+  const preparations = vi.spyOn(replacementWorker, "prepareSessionEntryReplacementDatabase");
+  preparations.mockImplementation((...args) => prepare(...args));
+  const receipts = [vi.fn(first.followRegistration), vi.fn(second.followRegistration)];
+  const bothCaptured = createDeferredCore();
+  const releaseCaptures = createDeferredCore();
+  const capture = agentExecutions.captureOpenClawAgentDatabaseExecutionAsync;
+  let captured = 0;
+  const interception = vi
+    .spyOn(agentExecutions, "captureOpenClawAgentDatabaseExecutionAsync")
+    .mockImplementation(async (...args) => {
+      const execution = await capture(...args);
+      expect(execution.fileIdentity, "actor captured before store creation").toBeUndefined();
+      if (++captured === 2) {
+        bothCaptured.resolve();
+      }
+      await releaseCaptures.promise;
+      return execution;
+    });
+  try {
+    expect(() => first.readCurrent(cfg), "first before creation").not.toThrow();
+    expect(() => second.readCurrent(cfg), "second before creation").not.toThrow();
+    const acquiring = Promise.allSettled(
+      receipts.map((followRegistration) =>
+        createSessionActorFactory(database).acquire(
+          { database: { kind: "file" }, sessionKey },
+          { assertCurrent() {}, assertReadable() {} },
+          followRegistration,
+        ),
+      ),
+    );
+    await bothCaptured.promise;
+    expect(captured).toBe(2);
+    releaseCaptures.resolve();
+    const acquired = await acquiring;
+    for (const result of acquired) {
+      if (result.status === "fulfilled") {
+        actors.push(result.value);
+      }
+    }
+    expect(acquired.every((result) => result.status === "fulfilled")).toBe(true);
+    expect(preparations).toHaveBeenCalledTimes(2);
+    expect(receipts[0]).toHaveBeenCalled();
+    expect(receipts[1], "second captured borrower receives registration").toHaveBeenCalled();
+    expect(() => first.readCurrent(cfg), "first after creation").not.toThrow();
+    expect(() => second.readCurrent(cfg), "second after creation").not.toThrow();
+  } finally {
+    releaseCaptures.resolve();
+    interception.mockRestore();
+    preparations.mockRestore();
+    await Promise.all(actors.map((actor) => actor.release()));
+    first.release();
+    second.release();
+  }
+});
 
 it.for(["creation", "storage", "early-storage"] as const)(
   "observes failed %s opening through the lifecycle readiness chain",

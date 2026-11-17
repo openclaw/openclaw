@@ -28,6 +28,13 @@ export type AgentDatabaseExecutionScope = Pick<AgentDatabaseNativeStore, "execut
 export type OpenClawAgentDatabaseExecution = OpenClawAgentDatabaseAdmissionExecution & {
   /** Observe the next terminal native/admission loss after accepted work settles; excludes idle retirement. */
   onTerminal(listener: (reason: Error) => void): () => void;
+  /** Follow this retained owner's registration before a caller waits for the writer FIFO. */
+  observeRegistration(
+    listener: NonNullable<AgentDatabaseRequestExecutionSource["onRegistryChange"]>,
+  ): {
+    assertCurrent(): void;
+    release(): void;
+  };
   /** The accepted native receipt; reading this never adopts the current pathname. */
   readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   /** Accept the admitted native handle used by a synchronous SDK operation. */

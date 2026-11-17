@@ -43,7 +43,10 @@ import type {
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
-import { captureAgentDatabasePreparedIntegrity } from "./openclaw-agent-execution-preparation.js";
+import {
+  captureAgentDatabasePreparedIntegrity,
+  createAgentDatabaseRegistrationObservers,
+} from "./openclaw-agent-execution-preparation.js";
 import {
   type AgentDatabaseExecutionPreparedTarget,
   captureBorrowedAgentDatabaseFile,
@@ -84,6 +87,7 @@ export function createAgentDatabaseExecution(
   const lifetime = new AgentDatabaseExecutionLifetime();
   let borrowers = 0;
   const acceptedWork = createAgentDatabaseAcceptedWork();
+  const registrations = createAgentDatabaseRegistrationObservers();
   let creationIdentity = expectedCreationIdentity;
   let creationBorrowers = 0;
   let generation: AgentDatabaseNativeGeneration | undefined;
@@ -257,7 +261,7 @@ export function createAgentDatabaseExecution(
     let entered = false;
     try {
       const result = await current.run(
-        source,
+        registrations.bindSource(source),
         (scope) => {
           entered = true;
           return operation(scope);
@@ -398,9 +402,7 @@ export function createAgentDatabaseExecution(
           throw new Error("Originally observed agent target requires creating admission first");
         }
         if (creationBorrowers && !fileIdentity && (!create || !creatingTarget)) {
-          throw new Error(
-            "Originally observed agent target requires its captured creating reference",
-          );
+          throw new Error("Agent creation requires its captured reference");
         }
       };
       const borrowerLifetime = new AgentDatabaseExecutionLifetime();
@@ -421,10 +423,12 @@ export function createAgentDatabaseExecution(
         }
         return generation.captureClaim(assertBorrowed);
       };
+      const registration = registrations.borrow(assertBorrowed);
       const borrowed: OpenClawAgentDatabaseExecution = {
         agentId,
         path: borrowedPath,
         onTerminal: acceptedWork.onTerminal,
+        observeRegistration: (listener) => registration.observe(listener),
         get fileIdentity() {
           assertBorrowed();
           return fileIdentity;
@@ -551,6 +555,7 @@ export function createAgentDatabaseExecution(
         },
         release() {
           borrowerLifetime.retire();
+          registration.release();
           acceptedWork.cancelReadAdmissions(borrower);
           return (release ??= (async () => {
             await acceptedWork.settleBorrower(borrower);

@@ -186,6 +186,68 @@ export function createSharedAgentDatabasePreparation(assertCurrent: () => void) 
   };
 }
 
+/** Registration receipts follow retained borrowers before their writer turn starts. */
+export function createAgentDatabaseRegistrationObservers() {
+  const observers = new Set<(change: AgentDatabaseRegistryChange) => void>();
+  return {
+    bindSource(source: AgentDatabaseRequestExecutionSource): AgentDatabaseRequestExecutionSource {
+      if (observers.size === 0) {
+        return source;
+      }
+      return {
+        ...source,
+        onRegistryChange(change) {
+          try {
+            source.onRegistryChange?.(change);
+          } finally {
+            for (const notify of observers) {
+              notify(change);
+            }
+          }
+        },
+      };
+    },
+    borrow(assertBorrowed: () => void) {
+      const releases = new Set<() => void>();
+      return {
+        observe(listener: (change: AgentDatabaseRegistryChange) => void) {
+          assertBorrowed();
+          const inCaller = AsyncLocalStorage.snapshot();
+          let failure: { error: unknown } | undefined;
+          const notify = (change: AgentDatabaseRegistryChange) => {
+            try {
+              assertBorrowed();
+              inCaller(() => listener(change));
+            } catch (error) {
+              failure ??= { error };
+            }
+          };
+          const release = () => {
+            observers.delete(notify);
+            releases.delete(release);
+          };
+          observers.add(notify);
+          releases.add(release);
+          return {
+            assertCurrent() {
+              assertBorrowed();
+              if (failure) {
+                throw failure.error;
+              }
+            },
+            release,
+          };
+        },
+        release() {
+          for (const release of releases) {
+            release();
+          }
+        },
+      };
+    },
+  };
+}
+
 /** Native generations retain the logical owner's observer, never a request context. */
 export function captureAgentDatabasePreparedIntegrity(
   scope: Pick<AgentDatabasePreparedIntegrity, "agentId" | "path" | "env">,
