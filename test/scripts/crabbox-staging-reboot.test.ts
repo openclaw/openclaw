@@ -752,7 +752,9 @@ posixIt.each(
     { operation: "inspect", changed: "lock" },
     { operation: "recover", changed: "receipt" },
     { operation: "recover", changed: "lock" },
-  ].flatMap((test) => ["legacy", "writers"].map((kind) => ({ ...test, kind }))),
+  ].flatMap(({ operation, changed }) =>
+    ["legacy", "writers"].map((kind) => ({ operation, changed, kind })),
+  ),
 )(
   "rechecks $kind $changed custody after final source revalidation during $operation",
   async ({ operation, changed, kind }) => {
