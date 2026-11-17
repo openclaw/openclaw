@@ -109,7 +109,10 @@ attempt; no manual database edits are needed.
 
 A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
 eligible root requester from its persisted run identity in the immediately preceding
-Gateway lifetime. Children do not resume independently. Inspect their saved work
+Gateway lifetime. Children do not resume independently. After any restart, a child
+that was still running in the previous Gateway is recorded as failed with an
+interruption error, and its requester receives that failure through the normal
+completion path, so a waiting parent wakes instead of waiting indefinitely. Inspect their saved work
 before sending a fresh instruction to the same retained child session. A stopped
 execution is not a yielded pause, and a replacement does not inherit workspace or
 publication ownership. If the root cannot resume, send a new message to continue.
