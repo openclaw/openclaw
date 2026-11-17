@@ -6,7 +6,7 @@ import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../cli/profile.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { installGatewayTerminalCli } from "./terminal-cli.js";
+import { installDesktopTerminalPath, installGatewayTerminalCli } from "./terminal-cli.js";
 
 vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/atomic")>();
@@ -110,6 +110,56 @@ async function fixture(profile = "default", shell = "/bin/bash") {
 }
 
 describe.skipIf(process.platform === "win32")("Gateway terminal installation", () => {
+  it.each([
+    "selected",
+    "offline",
+    "browser",
+    "wrong runtime",
+    "linked",
+    "partial",
+    "not-directory",
+  ])("desktop PATH setup preserves %s state without replacing its launcher", async (kind) => {
+    const f = await fixture();
+    const profileHome = path.join(f.root, "profile-home-file");
+    const marker = {
+      purpose: kind === "browser" ? "browser" : "gateway",
+      runtime: { bun: kind === "wrong runtime" ? "/missing/runtime" : process.execPath },
+      entry: process.argv[1],
+    };
+    const content =
+      "#!/bin/sh\n# OpenClaw-Tauri runtime v1 " + JSON.stringify(marker) + "\nexit 0\n";
+    await writeFixtureFile(f.launcher, content, 0o755);
+    if (kind === "selected") {
+      f.env.PATH = (await f.operator("operator/bin", "operator")) + ":/usr/bin:/bin";
+    } else if (kind === "offline") {
+      await writeFixtureFile(path.join(f.home, ".openclaw-work/openclaw.json"), "operator config");
+    } else if (kind === "not-directory") {
+      f.env.OPENCLAW_HOME = profileHome;
+      await fs.writeFile(f.env.OPENCLAW_HOME, "operator data");
+    } else if (kind === "linked") {
+      const peer = path.join(f.root, "operator-cli");
+      await fs.rename(f.launcher, peer);
+      await fs.symlink(peer, f.launcher);
+    } else if (kind === "partial") {
+      await writeFixtureFile(path.join(f.home, ".bashrc"), Buffer.from([0xff]));
+    }
+    const apply = () => installDesktopTerminalPath(f.launcher, f.env);
+    if (kind === "selected" || kind === "offline") {
+      expect(await apply()).toContain("Terminal default unchanged");
+    } else if (kind === "not-directory") {
+      await expect(apply()).rejects.toMatchObject({ code: "ENOTDIR" });
+      expect(await fs.readFile(profileHome, "utf8")).toBe("operator data");
+    } else {
+      await expect(apply()).rejects.toThrow();
+    }
+    expect(await fs.readFile(f.launcher, "utf8")).toBe(content);
+    await expectMissing(path.join(f.home, ".openclaw/openclaw.json"));
+    if (kind !== "partial") {
+      await expectMissing(path.join(f.home, ".bashrc"));
+    } else {
+      expect(await fs.readFile(path.join(f.home, ".bashrc"))).toEqual(Buffer.from([0xff]));
+    }
+  });
   it.each([
     ["default", ".local/bin"],
     ["default", "npm/bin"],

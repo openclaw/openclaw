@@ -1,7 +1,21 @@
-# PR #200425: +498 net test lines against CI base f8038cd6fcf2d7b6df7deef5e1bfb8b5939960c5.
-# Shared fixtures and parameterized cases removed 93 lines before this allocation.
+# PR #200425: +826 net test lines against pinned comparison cc6c3a733dfa9e226efcf4b2c221c45fe40f9acc.
+# Earlier unstaged --base f8038cd6fcf2d7b6df7deef5e1bfb8b5939960c5 resolved to that merge-base, not the supplied tip.
+# Shared fixtures and parameterized cases removed 93 lines before the original allocation.
 # Retain distinct actual-shell startup/PATH discovery and precedence, profile and
 # exit propagation, launcher/startup ownership, permissions, atomic races, and
 # refusal/failure proofs; installer and wrapper boundaries remain independently covered.
-# Allocate only the 98 lines above the unchanged 400-line allowance; no extra headroom.
-98
+# Desktop expansion adds 328 lines: real setup registration/config bypass and fresh
+# shell discovery (119), qualified-launcher/preserved-selection/refusal cases (50),
+# and disposable Windows registry/cmd proof (159). Windows cases cover raw String/
+# ExpandString preservation, case-insensitive dedup/selection, refused or concurrent
+# writes, and unusable PATHEXT; no live user PATH or environment broadcast is tested.
+# The review correction adds 27 lines by parameterizing the registration fixture;
+# it proves differing OPENCLAW_HOME/state/config/profile survive setup and new-shell execution,
+# with original config bytes and state-directory contents unchanged.
+# Reviewed credit: 426 (98 original + 286 desktop + 27 custom-home + 15 missing-home).
+# Missing-home review adds 15 lines: registration reuse (6) verifies absent home stays
+# absent with inherited environment and launcher bytes preserved; daemon reuse (9)
+# verifies a real non-directory scan root still fails with ENOTDIR and preserves data.
+# Parent accepted the exact total 426 above the unchanged 400-line allowance.
+# No spare or future credit.
+426

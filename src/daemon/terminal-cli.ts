@@ -1,20 +1,24 @@
+import { execFileSync } from "node:child_process";
 import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readRegularFile, readRegularFileSync, sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
-import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { isMissingPathError } from "../infra/errno.js";
-import { resolveExecutablePathAsync } from "../infra/executable-path.js";
+import { ignoreMissingPath, isMissingPathError } from "../infra/errno.js";
+import { isExecutableFileAsync, resolveExecutablePathAsync } from "../infra/executable-path.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { lstatIfExists } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { appendShellProfilePath, resolveShellConfigRoot } from "../infra/shell-profile.js";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
+import { getWindowsPowerShellExePath } from "../infra/windows-install-roots.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
 import type { GatewayServiceInstallArgs } from "./service-types.js";
@@ -213,6 +217,124 @@ export async function installGatewayTerminalCli(params: {
   } catch (error) {
     warn("Gateway installed, but terminal CLI setup failed: " + String(error));
   }
+}
+
+/** PATH-only bridge for the desktop's qualified launcher. Never creates config or a CLI. */
+export async function installDesktopTerminalPath(
+  launcher: string,
+  env: NodeJS.ProcessEnv,
+): Promise<string> {
+  const windows = process.platform === "win32";
+  // Match the Tauri owner: nonempty HOME, with USERPROFILE fallback only on Windows.
+  // The shared OS-home normalizer also trims and falls back to other host sources.
+  const home =
+    resolveEnvironmentValue(env, "HOME") ||
+    (windows ? resolveEnvironmentValue(env, "USERPROFILE") : undefined);
+  if (!home) {
+    throw new Error("HOME is not set");
+  }
+  const expected = path.join(home, ".openclaw/bin", windows ? "openclaw.cmd" : "openclaw");
+  const metadata = await lstatIfExists(launcher);
+  if (
+    launcher !== expected ||
+    !metadata?.isFile() ||
+    !(await isExecutableFileAsync(launcher, { env }))
+  ) {
+    throw new Error("Terminal PATH setup requires the executable app-managed CLI launcher.");
+  }
+  const bytes = await readRegularFile({ filePath: launcher, maxBytes: 65536 });
+  const marker = decodeUtf8Input(bytes.buffer, launcher).split(/\r?\n/)[1];
+  const prefix = windows ? "@rem # OpenClaw-Tauri runtime v1 " : "# OpenClaw-Tauri runtime v1 ";
+  const selection: unknown = marker?.startsWith(prefix)
+    ? JSON.parse(marker.slice(prefix.length))
+    : undefined;
+  if (
+    !isRecord(selection) ||
+    selection.purpose !== "gateway" ||
+    !isRecord(selection.runtime) ||
+    typeof selection.runtime.bun !== "string" ||
+    typeof selection.entry !== "string" ||
+    (await fs.realpath(selection.runtime.bun)) !== (await fs.realpath(process.execPath)) ||
+    (await fs.realpath(selection.entry)) !==
+      (await fs.realpath(
+        selection.runtime.flavor === "aot" ? process.execPath : (process.argv[1] ?? ""),
+      ))
+  ) {
+    throw new Error("Terminal PATH setup requires the CLI currently qualified by the desktop app.");
+  }
+  const selected = await resolveExecutablePathAsync("openclaw", {
+    env: { ...env, PATH: resolveEnvironmentValue(env, "PATH") ?? "" },
+    useCache: false,
+  });
+  if (selected && (await fs.realpath(selected)) !== (await fs.realpath(launcher))) {
+    return "Terminal default unchanged; keeping the existing selected CLI: " + selected;
+  }
+  const profileHome = resolveRequiredHomeDir(env);
+  if (!(await lstatIfExists(path.join(profileHome, ".openclaw/openclaw.json")))) {
+    for (const directory of (await fs.readdir(profileHome).catch(ignoreMissingPath)) ?? []) {
+      if (
+        directory.startsWith(".openclaw-") &&
+        (await lstatIfExists(path.join(profileHome, directory, "openclaw.json")))
+      ) {
+        return "Terminal default unchanged; another profile is configured.";
+      }
+    }
+  }
+  const bin = path.dirname(launcher);
+  if (bin.includes(path.delimiter)) {
+    throw new Error(
+      "Terminal CLI directory contains the PATH separator; keep the existing PATH unchanged.",
+    );
+  }
+  if (windows) {
+    const extensions = (resolveEnvironmentValue(env, "PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+      .toUpperCase()
+      .split(";");
+    if (!extensions.includes(".CMD")) {
+      throw new Error(
+        "Terminal PATH setup needs .CMD in PATHEXT to resolve the installed launcher.",
+      );
+    }
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "$key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')",
+      "try {",
+      "  $raw = $key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)",
+      "  $kind = if ($null -eq $raw) { [Microsoft.Win32.RegistryValueKind]::ExpandString } else { $key.GetValueKind('Path') }",
+      "  if ($kind -notin @([Microsoft.Win32.RegistryValueKind]::String, [Microsoft.Win32.RegistryValueKind]::ExpandString)) { throw 'User PATH is not a registry string.' }",
+      `  $bin = ${quotePowerShellArg(bin)}`,
+      "  $entries = @(([string]$raw -split ';') | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).Trim('\"').TrimEnd('\\', '/') })",
+      "  if ($entries -notcontains $bin.TrimEnd('\\', '/')) {",
+      "    $next = if ([string]::IsNullOrEmpty($raw)) { $bin } else { $raw + ';' + $bin }",
+      "    if ($key.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) -cne $raw -or ($null -ne $raw -and $key.GetValueKind('Path') -ne $kind)) { throw 'User PATH changed; retry terminal setup.' }",
+      "    $key.SetValue('Path', $next, $kind)",
+      "  }",
+      "} finally { $key.Dispose() }",
+      "Add-Type -Namespace OpenClaw -Name TerminalEnvironment -MemberDefinition '[System.Runtime.InteropServices.DllImport(\"user32.dll\", CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, string lParam, uint flags, uint timeout, out System.IntPtr result);'",
+      "$result = [IntPtr]::Zero",
+      "if ([OpenClaw.TerminalEnvironment]::SendMessageTimeout([IntPtr]0xffff, 0x1a, [IntPtr]::Zero, 'Environment', 2, 5000, [ref]$result) -eq [IntPtr]::Zero) { throw 'User PATH saved, but environment notification failed. Sign out and back in before opening a terminal.' }",
+    ].join("\n");
+    execFileSync(
+      getWindowsPowerShellExePath(env),
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      {
+        env,
+        encoding: "utf8",
+        timeout: 15000,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  } else {
+    const warnings: string[] = [];
+    await installShellPath({ home, bin, env, warn: (warning) => warnings.push(warning) });
+    if (warnings.length > 0) {
+      throw new Error(
+        "CLI installed, but terminal PATH setup is incomplete: " + warnings.join("\n"),
+      );
+    }
+  }
+  return "CLI available in new terminals. Existing CLI configuration and connection are unchanged.";
 }
 
 async function installShellPath(params: {
