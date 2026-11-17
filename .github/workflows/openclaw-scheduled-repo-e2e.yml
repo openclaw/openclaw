@@ -1,0 +1,38 @@
+name: OpenClaw Scheduled Repo E2E
+
+on:
+  schedule:
+    - cron: "53 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+  pull-requests: read
+
+concurrency:
+  group: openclaw-scheduled-repo-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  repo_e2e:
+    if: github.repository == 'openclaw/openclaw'
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ github.sha }}
+      include_repo_e2e: true
+      include_release_path_suites: false
+      include_openwebui: false
+      include_live_suites: false
+      allow_unreleased_changelog: true
+      shared_image_artifact_namespace: scheduled-repo-e2e
+      shared_image_policy: no-push-artifact
