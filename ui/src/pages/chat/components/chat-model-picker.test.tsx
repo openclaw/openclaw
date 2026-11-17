@@ -35,11 +35,15 @@ function keydown(input: HTMLInputElement, key: string) {
   flush();
 }
 
-function accountSection(onSelect = vi.fn(), open = false) {
+function accountSection(
+  onSelect = vi.fn(),
+  open = false,
+  selectionKind: "automatic" | "personal" = "automatic",
+) {
   return {
     onClose() {},
     viewProps: (startIndex: number) => ({
-      selectionKind: "automatic" as const,
+      selectionKind,
       disabled: false,
       selectedIdentity: "Current account",
       options: [{ value: "current", label: "Needle account" }],
@@ -340,7 +344,7 @@ it("opens setup directly for a settled empty catalog and restores the picker whe
   view.update({ ...params, modelOptions: [option("fixture", "current")], open: true });
   await waitForMenu(view.container);
   expect(control(view.container, "option", "fixture/current")).not.toBeNull();
-  view.update(params);
+  view.update({ ...params, accountSection: accountSection() });
   expect(view.container.querySelector("details")).toBeNull();
   expect(view.container.querySelector("button[data-chat-model-setup]")).not.toBeNull();
 });
@@ -357,13 +361,13 @@ it.each(["loading", "error", "offline"] as const)(
   },
 );
 
-it("keeps account recovery searchable with an empty catalog", async () => {
+it("keeps personal account recovery searchable with an empty catalog", async () => {
   const selectAccount = vi.fn();
   const { container } = mountPicker({
     open: true,
     modelOptions: [],
     modelCatalogState: { hasSnapshot: true, status: "ready" },
-    accountSection: accountSection(selectAccount),
+    accountSection: accountSection(selectAccount, false, "personal"),
     onModelSetup: vi.fn(),
   });
   await waitForMenu(container);

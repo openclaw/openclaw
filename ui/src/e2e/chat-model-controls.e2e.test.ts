@@ -10,12 +10,21 @@ const suite = createControlUiE2eSuite({ name: "Control UI model and effort contr
 
 suite.define(() => {
   it.each(["chat", "new"])(
-    "opens setup directly from an empty model control in /%s",
+    "opens setup directly from an empty automatic-account model control in /%s",
     async (route) => {
       await suite.withPage({ viewport: { width: 1240, height: 794 } }, async ({ page }) => {
         await installMockGateway(page, {
+          // A configured default keeps /new on its composer; without one it already
+          // shows the full-page model setup action rather than a model picker.
+          agentModel: route === "new" ? "example/model-a" : null,
           models: [],
-          methodResponses: { "models.list": { models: [] } },
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          methodResponses: {
+            "models.list": {
+              models: [],
+              accountSelection: { kind: "automatic", label: "Automatic account selection" },
+            },
+          },
         });
         await page.goto(new URL(route, suite.server.baseUrl).href);
         const composer = page.locator(".agent-chat__input").first();
