@@ -111,3 +111,19 @@ it("admits a CLI live session under Bun on macOS unless reclaimable memory is lo
     code: "cli_live_session_host_memory",
   });
 });
+
+it.each([
+  [0, 0, false],
+  [2 ** 64, 0, false],
+  [1000, 201, false],
+  [1000, 200, true],
+])(
+  "defers optional work in the last fifth of a process limit (limit: %d, available: %d)",
+  (limit, available, low) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
+    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+
+    expect(isConstrainedProcessLowOnMemory()).toBe(low);
+  },
+);
