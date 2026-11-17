@@ -69,12 +69,12 @@ export function insertMdSource(
       : "";
   const suffix = offset < ast.raw.length || /[\r\n]$/.test(ast.raw) ? ending : "";
   const line = ast.raw.slice(0, offset).split(/\r\n?|\n/).length + (prefix ? 1 : 0);
-  return replaceMdSource(
-    ast,
-    offset,
-    offset,
-    prefix + text.replace(/\r\n?|\n/g, ending) + suffix,
-    (shifted) => update(shifted, line),
+  const normalized = text.replace(/\r\n?|\n/g, ending);
+  // Keep a leading LF from merging with an existing CR into one line break.
+  const insertion =
+    ast.raw[offset - 1] === "\r" && normalized.startsWith("\n") ? `\r${normalized}` : normalized;
+  return replaceMdSource(ast, offset, offset, prefix + insertion + suffix, (shifted) =>
+    update(shifted, line),
   );
 }
 

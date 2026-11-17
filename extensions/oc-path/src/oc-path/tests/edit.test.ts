@@ -99,6 +99,26 @@ describe("setOcPath", () => {
     expect(result.blocks[1]?.line).toBe(3);
   });
 
+  it.each(["\n", "\r\n", "\r"])(
+    "keeps an appended section addressable after a trailing CR with %j",
+    (ending) => {
+      const raw = `## Intro${ending}- keep: safe\r`;
+      const appended = edit(raw, "+", "Added");
+      const gap = ending === "\n" ? "\r\n" : ending;
+      expect(appended.raw).toBe(`${raw}${gap}## Added${ending}`);
+      if (appended.kind !== "md") {
+        throw new Error("expected Markdown edit");
+      }
+      expect(appended.blocks[1]?.line).toBe(4);
+      const inserted = setOcPath(appended, parseOcPath("oc://AGENTS.md/intro/+"), "extra: added");
+      expect(inserted.raw).toBe(`${raw}${gap}- extra: added${ending}## Added${ending}`);
+      expect(parseMd(inserted.raw).blocks[0]?.items.map((item) => item.kv?.key)).toEqual([
+        "keep",
+        "extra",
+      ]);
+    },
+  );
+
   it("preserves literal dollar replacement text", () => {
     const raw = "## Tools\n\n- command: old\n- keep: stable\n";
     const ast = parseMd(raw);
