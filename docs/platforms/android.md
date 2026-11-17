@@ -653,8 +653,6 @@ Android can forward device notifications to the Gateway as `node.event` items. T
 | Max Events / Minute         | Per-device rate limit on forwarded notifications. Default 20.                                                                                                                                          |
 | Route Session Key           | Optional. Pins forwarded notification events into a specific session instead of the device's default notification route.                                                                               |
 
-Most notifications need no answer. When the agent replies `NO_REPLY` to a forwarded notification, the turn ends silently, without an empty-reply error or a switch to a fallback model.
-
 <Note>
 Notification forwarding requires the Android Notification Listener permission. The app prompts for this during setup.
 </Note>
