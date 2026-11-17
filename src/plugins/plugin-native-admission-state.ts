@@ -18,6 +18,7 @@ import { getPluginCache } from "./plugin-cache.js";
 import type { PluginCache } from "./plugin-cache.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
+import type { PluginNativeCaptureRoot as NativeSnapshot } from "./plugin-native-root-lease.js";
 import type {
   PluginNativeArtifactFact,
   PluginNativeNamespaceFact,
@@ -30,7 +31,6 @@ import {
   retainPluginNativeCapturePath,
 } from "./plugin-source-capture-directory.js";
 
-type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 export type AdmissionState = {
   readonly viewKey: string;
   readonly captureStorage: PluginSourceCaptureStorage;

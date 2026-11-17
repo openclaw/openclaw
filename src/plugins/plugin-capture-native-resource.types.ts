@@ -22,5 +22,5 @@ export type PluginCaptureResourceReply =
       root?: PluginCaptureResourceRoot;
       retainBrokerUntilProcessExit?: boolean;
     }
-  | { id: number; ok: false; error: NativeWorkerFailure };
+  | { id: number; ok: false; error: NativeWorkerFailure; sourceAcquisitionFailure?: true };
 export type PluginCaptureRootAnnouncement = { captureId: number; root: PluginCaptureResourceRoot };

@@ -17,8 +17,9 @@ import {
   type PluginCaptureResourceRoot,
   type PluginCaptureRootAnnouncement,
 } from "./plugin-capture-native-resource.types.js";
+import { markPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
-import type { createPluginNativeCaptureRoot } from "./plugin-source-capture-directory.js";
+import type { PluginNativeCaptureRoot } from "./plugin-native-root-lease.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
 
 export function createPluginCaptureResourceClient(
@@ -70,7 +71,8 @@ export function createPluginCaptureResourceClient(
   };
   const unwrap = (reply: PluginCaptureResourceReply) => {
     if (!reply.ok) {
-      throw decodeNativeWorkerFailure(reply.error);
+      const error = decodeNativeWorkerFailure(reply.error);
+      throw reply.sourceAcquisitionFailure ? markPluginSourceAcquisitionError(error) : error;
     }
     return reply;
   };
@@ -110,10 +112,7 @@ export function createPluginCaptureResourceClient(
 export async function createPluginCaptureOwner(
   source: RetainedNativeWorkerSource,
   callbacks: {
-    native(
-      captureId: number,
-      root: ReturnType<typeof createPluginNativeCaptureRoot>,
-    ): PluginCaptureResourceRoot;
+    native(captureId: number, root: PluginNativeCaptureRoot): PluginCaptureResourceRoot;
   },
 ) {
   const owner = randomUUID();

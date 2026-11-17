@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -12,6 +14,7 @@ import {
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import * as preparation from "../plugins/plugin-generation-worker.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
 import { createPluginReloadRecovery } from "./server-plugin-reload-recovery.js";
 
@@ -63,7 +66,9 @@ function recoveryFixture(id: string, body: string) {
   };
 }
 
-it("joins host-local recovery cleanup without synchronous recursive removal", async () => {
+it("joins host-local recovery cleanup without synchronous recursive removal", async ({
+  signal,
+}) => {
   await using fixture = recoveryFixture(
     "recovery-cleanup",
     'module.exports = { id: "recovery-cleanup", register(api) { api.registerProvider({ id: "recovery-provider", label: "Active", auth: [], normalizeModelId: ({ modelId }) => `active:${modelId}` }); } };',
@@ -71,39 +76,39 @@ it("joins host-local recovery cleanup without synchronous recursive removal", as
   const { plugin, load, capturedRoot } = fixture;
   await fixture.run(async () => {
     const previous = await load();
-    // The transferred source stays in worker scratch; recovery owns a host-local sibling.
-    const workerScratch = path.dirname(capturedRoot());
-    const captureParent = path.dirname(workerScratch);
-    const capturesBefore = fs.readdirSync(captureParent);
+    // Recovery owns a host-local copy independently of the broker's source directory.
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const copy = fs.promises.cp;
+    using copies = vi.spyOn(fs.promises, "cp").mockImplementation(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return copy(...args);
+    });
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
+    let settled = false;
+    const capturing = recovery.capture(new Set([plugin.id])).finally(() => {
+      settled = true;
+    });
     try {
-      // The real copy must yield before populating the new recovery directory.
-      const foregroundCapture = Promise.resolve().then(() => {
-        const added = fs
-          .readdirSync(captureParent)
-          .filter((entry) => !capturesBefore.includes(entry));
-        expect(added).toHaveLength(1);
-        expect(fs.readdirSync(path.join(captureParent, added[0]!))).toEqual([]);
-      });
-      expect(await recovery.capture(new Set([plugin.id]))).toEqual([]);
-      await foregroundCapture;
-      const addedCaptures = fs
-        .readdirSync(captureParent)
-        .filter((entry) => !capturesBefore.includes(entry));
-      expect(addedCaptures).toHaveLength(1);
-      const recoveryRoot = path.join(captureParent, addedCaptures[0]!);
+      await withinTest(entered.promise, signal);
+      await setImmediate();
+      expect(settled).toBe(false);
+      release.resolve();
+      expect(await capturing).toEqual([]);
+      expect(copies).toHaveBeenCalledTimes(1);
+      const [source, recoveryRoot] = copies.mock.calls[0]!;
+      expect(source).toBe(capturedRoot());
+      expect(recoveryRoot).not.toBe(source);
+      expect(fs.existsSync(recoveryRoot)).toBe(true);
       // Native async removal can finish before a queued microtask; observe blocking work instead.
-      const synchronousRemovals = vi.spyOn(fs, "rmSync");
-      try {
-        await recovery.dispose();
-        expect(
-          synchronousRemovals.mock.calls.filter(([, options]) => options?.recursive),
-        ).toHaveLength(0);
-      } finally {
-        synchronousRemovals.mockRestore();
-      }
+      using synchronousRemovals = vi.spyOn(fs, "rmSync");
+      await recovery.dispose();
+      expect(
+        synchronousRemovals.mock.calls.filter(([, options]) => options?.recursive),
+      ).toHaveLength(0);
       expect(fs.existsSync(recoveryRoot)).toBe(false);
-      expect(fs.readdirSync(captureParent)).toEqual(capturesBefore);
+      expect(fs.existsSync(capturedRoot())).toBe(true);
       expect(
         previous.providers[0]!.provider.normalizeModelId!({
           provider: "recovery-provider",
@@ -111,7 +116,12 @@ it("joins host-local recovery cleanup without synchronous recursive removal", as
         }),
       ).toBe("active:still-callable");
     } finally {
-      await recovery.dispose();
+      release.resolve();
+      try {
+        await capturing;
+      } finally {
+        await recovery.dispose();
+      }
     }
   });
 });

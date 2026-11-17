@@ -49,6 +49,29 @@ const captureResource = createPluginCaptureResourceClient(workerData[PLUGIN_CAPT
 type Resource = { dispose(): void; disposeAsync(): Promise<void> };
 type CaptureCommand = Extract<GenerationWorkerInput, { operation: "capture" }>;
 
+function preparationFailure(failure: unknown, sourcePreparation: boolean) {
+  const exception = failure instanceof Error ? failure : new Error(String(failure));
+  return {
+    error: {
+      message: exception.message,
+      name: exception.name,
+      stack: exception.stack,
+      ...("code" in exception && typeof exception.code === "string"
+        ? { code: exception.code }
+        : {}),
+      ...("artifactPath" in exception && typeof exception.artifactPath === "string"
+        ? { artifactPath: exception.artifactPath }
+        : {}),
+      ...("modulePath" in exception && typeof exception.modulePath === "string"
+        ? { modulePath: exception.modulePath }
+        : {}),
+    },
+    ...(sourcePreparation && isPluginSourceAcquisitionError(failure)
+      ? { sourceAcquisitionFailure: true as const }
+      : {}),
+  };
+}
+
 function createPreparationSession(
   context: CaptureCommand & { scratch: string; managedRoot?: string },
 ) {
@@ -454,27 +477,11 @@ function createPreparationSession(
               );
             }
           }
-          const exception = failure instanceof Error ? failure : new Error(String(failure));
           return {
-            error: {
-              message: exception.message,
-              name: exception.name,
-              stack: exception.stack,
-              ...("code" in exception && typeof exception.code === "string"
-                ? { code: exception.code }
-                : {}),
-              ...("artifactPath" in exception && typeof exception.artifactPath === "string"
-                ? { artifactPath: exception.artifactPath }
-                : {}),
-              ...("modulePath" in exception && typeof exception.modulePath === "string"
-                ? { modulePath: exception.modulePath }
-                : {}),
-            },
-            ...((command.operation === "capture" ||
-              codec.isSourcePreparationCall(command.handle)) &&
-            isPluginSourceAcquisitionError(failure)
-              ? { sourceAcquisitionFailure: true as const }
-              : {}),
+            ...preparationFailure(
+              failure,
+              command.operation === "capture" || codec.isSourcePreparationCall(command.handle),
+            ),
             resources: resources.size - orphaned.size,
             released: codec.takeReleasedHandles(),
           };
@@ -516,23 +523,30 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
     // SAFETY: The matching internal host submits only GenerationWorkerInput to this pool.
     const command = input as GenerationWorkerInput;
     if (command.operation === "capture") {
-      const source = await captureResource.request({
-        type: "source",
-        captureId: command.captureId,
-        storage: command.storage,
-        prefix: "plugin-preparation-",
-      });
-      if (!source) {
-        throw new Error("Plugin capture owner returned no source root");
+      try {
+        const source = await captureResource.request({
+          type: "source",
+          captureId: command.captureId,
+          storage: command.storage,
+          prefix: "plugin-preparation-",
+        });
+        if (!source) {
+          throw new Error("Plugin capture owner returned no source root");
+        }
+        sessions.set(
+          command.captureId,
+          createPreparationSession({
+            ...command,
+            scratch: source.directory,
+            managedRoot: source.managedRoot,
+          }),
+        );
+      } catch (error) {
+        if (!isPluginSourceAcquisitionError(error)) {
+          throw error;
+        }
+        return { ...preparationFailure(error, true), resources: 0 };
       }
-      sessions.set(
-        command.captureId,
-        createPreparationSession({
-          ...command,
-          scratch: source.directory,
-          managedRoot: source.managedRoot,
-        }),
-      );
     }
     const session = sessions.get(command.captureId);
     if (!session) {

@@ -1,8 +1,11 @@
 import { snapshotOwners } from "./plugin-native-admission-state.js";
-import type { createPluginNativeCaptureRoot } from "./plugin-source-capture-directory.js";
-
-type NativeRoot = ReturnType<typeof createPluginNativeCaptureRoot>;
-const leases = new WeakMap<object, { root: NativeRoot; release(): void }>();
+export type PluginNativeCaptureRoot = {
+  directory: string;
+  commit(): void | Promise<void>;
+  dispose(): void;
+  disposeAsync(): Promise<void>;
+};
+const leases = new WeakMap<object, { root: PluginNativeCaptureRoot; release(): void }>();
 
 /** Only leases made by the custody owner may cross the preparation transport. */
 export function snapshotPluginNativeRootLease(value: object) {
@@ -10,7 +13,7 @@ export function snapshotPluginNativeRootLease(value: object) {
 }
 
 /** A transferred root holds independent custody until its receiving owner releases it. */
-export function retainPluginNativeRoot(root: NativeRoot) {
+export function retainPluginNativeRoot(root: PluginNativeCaptureRoot) {
   const owner = {};
   const owners = snapshotOwners.get(root)!;
   owners.add(owner);

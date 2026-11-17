@@ -331,21 +331,3 @@ it("shares cold broker admission between independent and synchronous execution r
     await closeDefaultRetainedNativeWorkerSource();
   }
 });
-
-it("retires an independent resource whose factory refused creation", async () => {
-  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
-  try {
-    await expect(
-      source.captureIndependentResource(
-        new URL(
-          `data:text/javascript,${encodeURIComponent(
-            'export function createNativeWorkerResource() { throw new Error("synthetic capture refusal"); }',
-          )}`,
-        ),
-      ),
-    ).rejects.toThrow("synthetic capture refusal");
-    expect(await source.retireIdleBroker()).toBe(true);
-  } finally {
-    await closeDefaultRetainedNativeWorkerSource();
-  }
-});

@@ -2,22 +2,22 @@ import { snapshotOwners } from "./plugin-native-admission-state.js";
 import {
   retainPluginNativeRoot,
   snapshotPluginNativeRootLease,
+  type PluginNativeCaptureRoot,
 } from "./plugin-native-root-lease.js";
-import type { createPluginNativeCaptureRoot } from "./plugin-source-capture-directory.js";
 
 /** Host leases retain the capture owner; execution workers only borrow paths. */
 export function createPluginGenerationNativeRoots() {
   const roots = new Map<
     number,
     {
-      root: ReturnType<typeof createPluginNativeCaptureRoot>;
+      root: PluginNativeCaptureRoot;
       custody: ReturnType<typeof retainPluginNativeRoot>;
     }
   >();
   let nextId = 0;
   let closed = false;
   return {
-    allocate(root: ReturnType<typeof createPluginNativeCaptureRoot>) {
+    allocate(root: PluginNativeCaptureRoot) {
       if (closed) {
         throw new Error("Plugin native preparation custody has closed");
       }

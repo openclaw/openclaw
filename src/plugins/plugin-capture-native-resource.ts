@@ -14,6 +14,7 @@ import type {
   PluginCaptureResourceReply,
   PluginCaptureRootAnnouncement,
 } from "./plugin-capture-native-resource.types.js";
+import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
@@ -55,6 +56,7 @@ export function createNativeWorkerResource(
     throw new Error("Plugin capture owner is unavailable");
   }
   const owned = domain;
+  const sendOwnerMessage = ownerPort?.postMessage.bind(ownerPort);
   if (config.role === "execution") {
     owned.borrowers++;
   }
@@ -94,7 +96,7 @@ export function createNativeWorkerResource(
       };
     }
     if (command.type === "native") {
-      if (!ownerPort) {
+      if (!sendOwnerMessage) {
         throw new Error("Plugin capture execution has no host owner");
       }
       const root = createPluginNativeCaptureRoot(
@@ -111,8 +113,7 @@ export function createNativeWorkerResource(
         captureId: command.captureId,
         root: { id: rootId, directory: root.directory },
       } satisfies PluginCaptureRootAnnouncement & { id: number };
-      // oxlint-disable-next-line unicorn/require-post-message-target-origin -- This serialized broker port has no DOM targetOrigin or transfer list.
-      ownerPort.postMessage(announcement);
+      sendOwnerMessage(announcement);
       const reply = await response.promise;
       if (!reply.ok) {
         throw decodeNativeWorkerFailure(reply.error);
@@ -141,7 +142,7 @@ export function createNativeWorkerResource(
       if (!entry) {
         throw new Error("Plugin native capture has closed");
       }
-      await entry.root.commit();
+      entry.root.commit();
     } else {
       await owned.roots.get(command.rootId)?.root.disposeAsync();
       owned.roots.delete(command.rootId);
@@ -160,6 +161,9 @@ export function createNativeWorkerResource(
           id: request.id,
           ok: false,
           error: encodeNativeWorkerFailure(error),
+          ...(isPluginSourceAcquisitionError(error)
+            ? { sourceAcquisitionFailure: true as const }
+            : {}),
         };
       }
       if (available) {
