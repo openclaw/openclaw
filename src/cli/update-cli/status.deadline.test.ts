@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 const mocks = {
   check: vi.fn(),
   run: vi.fn(),
+  enrich: vi.fn(async () => {}),
   writeJson: vi.fn(),
   log: vi.fn(),
 };
@@ -28,6 +29,7 @@ const overrides = {
     readUpdateRunStatusWithOwedSteps: async (onStatus: (status: unknown) => void) => {
       const status = await mocks.run();
       onStatus(status);
+      await mocks.enrich();
       return status;
     },
   },
@@ -55,6 +57,7 @@ const { updateStatusCommand } = await import("./status.js");
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  mocks.enrich.mockResolvedValue(undefined);
 });
 const lastRun = { runId: "completed-run", status: "succeeded" };
 const delayed = <T>(value: T, ms: number) =>
@@ -94,6 +97,28 @@ it.each(["2147483", "2147484", "9007199254740"])(
     expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("inspectionErrors");
   },
 );
+
+it("retains completed history when owed-step enrichment exceeds the overall deadline", async () => {
+  const started = Promise.withResolvers<void>();
+  mocks.check.mockResolvedValue({ installKind: "unknown" });
+  mocks.run.mockResolvedValue({ lastRun });
+  mocks.enrich.mockImplementation(() => {
+    started.resolve();
+    return new Promise(() => {});
+  });
+  vi.useFakeTimers();
+  const pending = updateStatusCommand({ json: true });
+  await started.promise;
+  await vi.advanceTimersByTimeAsync(30_001);
+  await pending;
+  expect(mocks.writeJson).toHaveBeenCalledOnce();
+  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
+  expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
+  expect(mocks.writeJson.mock.lastCall?.[0].inspectionErrors).toContainEqual({
+    section: "update history",
+    message: expect.stringMatching(/timed out.*30.*second/i),
+  });
+});
 
 it.each(["installation", "update history"])(
   "returns partial JSON at the overall deadline when %s never settles",
