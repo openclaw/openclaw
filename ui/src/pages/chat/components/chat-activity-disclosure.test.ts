@@ -598,3 +598,59 @@ it("groups child-chat openings with file activity while keeping autonomous launc
   childLink.click();
   expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(childKey);
 });
+
+it.each([
+  { status: "answered", grouped: true, wrapped: false },
+  { status: "answered", grouped: true, wrapped: true },
+  { status: "ready_to_verify", grouped: true, wrapped: false },
+  { status: "pending", grouped: false, wrapped: false },
+  { status: "cancelled", grouped: false, wrapped: false },
+  { status: "expired", grouped: false, wrapped: false },
+  { status: "action_unresolved", grouped: false, wrapped: false },
+  { status: undefined, grouped: false, wrapped: false },
+])(
+  "groups only answered questions ($status, wrapped=$wrapped)",
+  async ({ status, grouped, wrapped }) => {
+    const args = {
+      questions: [{ questionId: "format", header: "Format", question: "Which format?" }],
+    };
+    const details = {
+      status,
+      ...(status === "answered" ? { answers: { answers: { format: ["Markdown"] } } } : {}),
+    };
+    const output = status === "answered" ? "Format: Markdown" : (status ?? "Requested");
+    const result = { content: [{ type: "text", text: output }], details };
+    const name = wrapped ? "tool_call" : "ask_user";
+    const group = createToolGroup("question-work", [
+      createMessageEntry("before-question", createAssistantMessage([read("before")])),
+      createMessageEntry(
+        "question",
+        createAssistantMessage([
+          createToolCall("ask", name, wrapped ? { id: "openclaw:core:ask_user", args } : args),
+          createToolResultBlock(
+            "ask",
+            name,
+            wrapped ? JSON.stringify({ tool: { name: "ask_user" }, result }) : output,
+            { isError: false, ...(wrapped ? {} : { details }) },
+          ),
+        ]),
+      ),
+      createMessageEntry("after-question", createAssistantMessage([read("after")])),
+    ]);
+    const draw = async (expanded: boolean) => {
+      activityRoot.render(prepareHistoryGroups([group]), {
+        ...visibleTools,
+        isToolMessageExpanded: () => expanded,
+        isToolExpanded: () => expanded,
+      });
+      await settleToolBridges(summaryContainer);
+    };
+    await draw(false);
+    expect(summaryContainer.querySelectorAll(".chat-activity-group__summary")).toHaveLength(
+      grouped ? 1 : 2,
+    );
+    await draw(true);
+    expect(summaryContainer.textContent).toContain("Which format?");
+    expect(summaryContainer.textContent).toContain(output);
+  },
+);

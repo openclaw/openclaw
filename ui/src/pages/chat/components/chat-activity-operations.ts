@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
@@ -20,11 +21,19 @@ export function isInlineCommandCard(card: ToolCard): boolean {
   return kind === "command" || kind === "read" || kind === "search";
 }
 
+function isAnsweredQuestion(card: ToolCard): boolean {
+  const result = isToolCallDispatcherName(card.name)
+    ? asNullableRecord(safeParseJsonRecord(card.outputText ?? "")?.result)
+    : undefined;
+  const status = asNullableRecord(result?.details ?? card.details)?.status;
+  return card.isError !== true && (status === "answered" || status === "ready_to_verify");
+}
+
 export function isStandaloneActivity(card: ToolCard): boolean {
   const name = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
   return (
     name === "view_image" ||
-    name === "ask_user" ||
+    (name === "ask_user" && !isAnsweredQuestion(card)) ||
     name === "agents_wait" ||
     readSubagentCancellation(card) !== null ||
     resolveSessionLaunchPresentation(card)?.kind === "subagent" ||
