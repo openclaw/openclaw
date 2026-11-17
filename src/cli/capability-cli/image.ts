@@ -3,6 +3,7 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
@@ -116,7 +117,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
             file && file.length > 0
               ? await Promise.all(
                   file.map(async (filePath) => {
-                    const resolvedPath = path.resolve(filePath);
+                    const resolvedPath = resolveFilesystemPath(filePath);
                     const { readRegularFile } = await import("../../infra/fs-safe.js");
                     const { buffer } = await readRegularFile({
                       filePath: await realpath(resolvedPath),
@@ -248,7 +249,9 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const outputs = await Promise.all(
             files.map(async (filePath) => {
               const trimmed = filePath.trim();
-              const resolvedPath = /^https?:\/\//i.test(trimmed) ? trimmed : path.resolve(filePath);
+              const resolvedPath = /^https?:\/\//i.test(trimmed)
+                ? trimmed
+                : resolveFilesystemPath(filePath);
               const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
               const preparedImage = activeModel
                 ? await prepareImageDescriptionInput(

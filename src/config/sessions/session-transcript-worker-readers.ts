@@ -1,9 +1,10 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { SessionEntry } from "../../agents/sessions/session-manager-types.js";
 import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   measureSessionStoreTargetInventoryInputBytes,
@@ -16,6 +17,7 @@ import type {
 } from "./session-store-target-inventory.js";
 import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
+import { createSessionTranscriptHydrationDecoder } from "./session-transcript-hydration-decoder.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
@@ -330,77 +332,57 @@ const readers: Readers & ThisType<ReaderContext> = {
   },
   async readTranscript(input, signal) {
     const caller = input.caller ?? getSessionTranscriptHydrationCaller();
-    const events: TranscriptEvent[] = [];
-    const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
     const streamSelection = input.limits && "compaction" in input.limits && input.limits.compaction;
-    const eventSeqs: number[] | undefined =
-      input.includeEventJson || streamSelection ? [] : undefined;
-    const parts: Uint8Array[] = [];
-    let decoder: TextDecoder | undefined;
+    const decoder = createSessionTranscriptHydrationDecoder({
+      includeEventJson: input.includeEventJson,
+      selected: streamSelection,
+    });
     const receiveChunk = (raw: unknown) => {
       // SAFETY: The paired local hydration worker constructs this typed envelope.
-      const value = raw as SessionTranscriptHydrationChunk;
-      // The worker holds one storage encoding for the entire read snapshot.
-      decoder ??= new TextDecoder(value.encoding, { ignoreBOM: true });
-      for (const frame of value.frames) {
-        parts.push(frame.data);
-        if (frame.endOfEvent) {
-          const json = decoder.decode(parts.length === 1 ? parts[0] : Buffer.concat(parts));
-          events.push(JSON.parse(json));
-          eventJson?.push(json);
-          if (eventSeqs) {
-            if (typeof frame.seq !== "number" || !Number.isSafeInteger(frame.seq)) {
-              throw new Error("Transcript snapshot omitted its row sequence");
-            }
-            eventSeqs.push(frame.seq);
-          }
-          parts.length = 0;
-        }
-      }
+      decoder.accept(raw as SessionTranscriptHydrationChunk);
     };
     return await this.runRequest(
       () => ({ kind: "transcript-hydration", ...input, caller }),
       JSON.stringify(input).length * 2,
-      (value) => {
-        if (value.kind === "bounded") {
-          return value;
-        }
-        if (parts.length !== 0 || events.length !== value.eventCount) {
-          throw new Error("Session history worker returned an incomplete transcript");
-        }
-        if (value.kind === "streamed-bounded") {
-          const bySequence = new Map(eventSeqs!.map((seq, index) => [seq, events[index]!]));
-          if (
-            bySequence.size !== value.eventCount ||
-            new Set(value.sequences).size !== value.eventCount ||
-            value.sequences.some((seq) => !bySequence.has(seq))
-          ) {
-            throw new Error("Session history worker returned an incomplete selected transcript");
-          }
-          // SQL streams physical order; the semantic window can inject a later boundary
-          // before retained earlier entries, and a migrated header always comes first.
-          return {
-            kind: "bounded",
-            snapshot: {
-              ...value.snapshot,
-              events: value.sequences.map((seq) => bySequence.get(seq)!),
-            },
-            residentRows: value.residentRows,
-            ...(value.transcript ? { transcript: value.transcript } : {}),
-            ...(value.compaction ? { compaction: value.compaction } : {}),
-          };
-        }
-        return {
-          kind: "full",
-          snapshot: {
-            events,
-            version: value.version,
-            ...(eventJson ? { eventJson, eventSeqs } : {}),
-          },
-        };
-      },
+      (value) => decoder.finish(value),
       signal,
       !input.limits || streamSelection ? receiveChunk : undefined,
+    );
+  },
+  async readPreparedCompaction(input, signal) {
+    const decoder = createSessionTranscriptHydrationDecoder({});
+    return await this.runRequest(
+      () => ({ kind: "compaction-preparation", ...input }),
+      JSON.stringify(input).length * 2,
+      (value) => {
+        if (value.status !== "prepared") {
+          return value;
+        }
+        const decoded = decoder.finish({
+          kind: "full",
+          version: value.version,
+          eventCount: value.retainedEventCount,
+        });
+        if (decoded.kind !== "full") {
+          throw new Error("Prepared retained context did not complete its hydration");
+        }
+        const retained: SessionEntry[] = [];
+        for (const event of decoded.snapshot.events) {
+          if (!isIndexedSessionEntry(event)) {
+            throw new Error("Prepared retained context contains an invalid session entry");
+          }
+          retained.push(event);
+        }
+        const { retainedEventCount: _count, ...prepared } = value;
+        return { ...prepared, plan: { ...value.plan, retained } };
+      },
+      signal,
+      input.operation.kind === "plan"
+        ? (raw) => {
+            // SAFETY: The paired native hydration producer owns this envelope.
+            decoder.accept(raw as SessionTranscriptHydrationChunk);
+          }
+        : undefined,
     );
   },
   readMaintenance: reader(

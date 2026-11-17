@@ -17,7 +17,13 @@ Session-list failures appear in the sidebar while that list is active and clear
 when it recovers or you change filters. A failed session action, such as a
 rename, keeps its error with that action instead of adding a list error.
 
-On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+On phones, swipe right starting within 32 CSS pixels of the chat’s left edge to
+open navigation, or tap **Expand sidebar** in the header. The opening strip starts
+after any device safe-area inset, including in landscape. Swipes farther inside
+the content stay with that content, such as a 3D viewer’s orbit controls.
+A deliberate edge swipe opens the full drawer while your finger is still down,
+rather than holding a partly clipped sidebar over the conversation. Short drags
+and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on** _device_ in the workspace picker. Admins

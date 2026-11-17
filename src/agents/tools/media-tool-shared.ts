@@ -110,7 +110,7 @@ type CapabilityProviderSource =
   | (() => readonly CapabilityProvider[]);
 
 /** @deprecated Only synchronous tool-constructor compatibility uses this path. */
-export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
+function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
   providers: readonly T[];
   provider?: T;
   providerId?: string;

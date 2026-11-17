@@ -80,6 +80,74 @@ describe("subagent registry sqlite store", () => {
     }
   });
 
+  it("commits terminal removal facts with deletion and rolls both back on failure", () => {
+    const runs = ["delivered", "suspended", "discarded", "failed"].map((status) =>
+      createRun({
+        runId: `removal-${status}`,
+        requesterAgentId: "main",
+        delivery:
+          status === "delivered"
+            ? { status: "delivered", deliveredAt: 300 }
+            : status === "suspended"
+              ? { status: "suspended", suspendedAt: 300, suspendedReason: "permanent_failure" }
+              : status === "discarded"
+                ? { status: "discarded", discardedAt: 300, discardReason: "expired" }
+                : {
+                    status: "failed",
+                    disposition: "permanent_failure",
+                    lastError: "requester deleted",
+                  },
+      }),
+    );
+    saveRuns(...runs);
+    const ids = runs.map((run) => run.runId);
+    const readFacts = () =>
+      openOpenClawStateDatabase()
+        .db.prepare(
+          "SELECT run_id, payload_json FROM session_state_events WHERE kind = 'child_delivery_removed' ORDER BY run_id",
+        )
+        .all();
+    expect(() =>
+      runOpenClawStateWriteTransaction((database) => {
+        writeSubagentRunValuesInDatabase(database, [], ids);
+        throw new Error("rollback removal");
+      }),
+    ).toThrow("rollback removal");
+    expect(readFacts()).toEqual([]);
+    expect(loadSubagentRegistryFromSqlite().size).toBe(4);
+    runOpenClawStateWriteTransaction((database) =>
+      writeSubagentRunValuesInDatabase(database, [], ids),
+    );
+    reopen();
+    expect(loadSubagentRegistryFromSqlite().size).toBe(0);
+    expect(
+      readFacts().map((row) =>
+        Object.assign({ runId: row.run_id }, JSON.parse(String(row.payload_json))),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        runId: "removal-delivered",
+        outcome: "delivered",
+        deliveredAt: 300,
+      }),
+      expect.objectContaining({
+        runId: "removal-discarded",
+        outcome: "discarded",
+        reason: "expired",
+      }),
+      expect.objectContaining({
+        runId: "removal-failed",
+        outcome: "discarded",
+        lastError: "requester deleted",
+      }),
+      expect.objectContaining({
+        runId: "removal-suspended",
+        outcome: "suspended",
+        reason: "permanent_failure",
+      }),
+    ]);
+  });
+
   it("reads unbound old-schema rows and rolls back first-use parent-store columns with registration", async () => {
     const legacy = createRun();
     saveRuns(legacy);

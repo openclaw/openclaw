@@ -48,7 +48,7 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-l
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export async function appendCompletedToolWork(
+async function appendCompletedToolWork(
   manager: SessionManager,
   runId: string,
   beforeNested?: () => void | Promise<void>,
@@ -90,7 +90,7 @@ export async function appendCompletedToolWork(
   await original.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 4 });
 }
 
-export async function appendOversizedCacheSnapshot(manager: SessionManager) {
+async function appendOversizedCacheSnapshot(manager: SessionManager) {
   const state = createToolResultPromptProjectionState();
   state.frozen.add("prior-result");
   state.sourceHashByKey.set("prior-result", "synthetic-source");

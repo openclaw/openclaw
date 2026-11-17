@@ -6,12 +6,12 @@ import type {
   ChannelOutboundAdapter,
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation, ReplyPayloadDeliveryPin } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { BackgroundSessionResultProvenance } from "../../sessions/background-session-result.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
@@ -235,8 +235,8 @@ export type DeliverOutboundPayloadsCoreParams = OutboundChannelContext & {
   transcriptDeliveryId?: string;
   /** @internal State root captured for this delivery; history never follows a later ambient root. */
   transcriptStateDir?: string;
-  /** Pins destination history to the conversation incarnation the caller observed. */
-  transcriptExpectedGeneration?: { sessionKey?: string; lifecycleRevision?: string };
+  /** Pins destination history to the caller's conversation when several share an address. */
+  transcriptExpectedGeneration?: { sessionKey?: string };
   /** Background producer recorded on destination history rows. */
   transcriptProvenance?: BackgroundSessionResultProvenance;
   /** Receives warnings when a confirmed send could not be added to history. */
@@ -276,7 +276,7 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
 /** Private owner facts excluded from SDK delivery parameters and stored payloads. */
 export type InternalDeliverOutboundPayloadsParams = DeliverOutboundPayloadsParams & {
   /** Host-captured session generation retained independently by this delivery intent. */
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   conversationDeliveryTarget?: ConversationDeliveryTarget;
   deliveryQueueStateContext?: DeliveryQueueStateContext;
 };

@@ -38,8 +38,9 @@ import {
 import type { NodeHostOpenClawIdTarget } from "./openclaw-id-target.js";
 
 /** W is never serialized into config, a worker descriptor or a subprocess environment. */
-export function loadNodeTunnelKey(stateDir = resolveStateDir()): Buffer {
-  return loadOrCreateEndpointKey(path.join(stateDir, "node-openclaw-id", "endpoint.key")).key;
+export async function loadNodeTunnelKey(stateDir = resolveStateDir()): Promise<Buffer> {
+  return (await loadOrCreateEndpointKey(path.join(stateDir, "node-openclaw-id", "endpoint.key")))
+    .key;
 }
 
 function requestHeaders(raw: string[]): HeaderPair[] {
@@ -68,7 +69,7 @@ export async function startNodeTunnelTransport(options: {
     throw new Error("Labs OpenClaw ID node transport currently requires Unix sockets");
   }
   const binding = loadIrohBinding();
-  const key = loadNodeTunnelKey(options.stateDir);
+  const key = await loadNodeTunnelKey(options.stateDir);
   const signer = await ed25519SignerFromSeed(key).catch((error: unknown) => {
     key.fill(0);
     throw error;
