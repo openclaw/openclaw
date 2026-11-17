@@ -65,6 +65,7 @@ import type { SessionPendingInputReceipt } from "./session-pending-input-receipt
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import {
   isFinalInputCompletion,
+  isRetryableSessionPendingInputEndCause,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 import type { SessionPendingInputEndCause } from "./session-pending-input.types.js";
@@ -388,20 +389,18 @@ async function stagePreparedPendingInput(
         );
       }
     };
-    const reopen = existing?.state === "cancelled" && existing.end_cause == null;
     const reclaimsCancelledSourceTurn =
       options.reclaimCancelledSourceTurn === true &&
       !previous &&
       existing?.state === "cancelled" &&
-      (reopen ||
-        existing.end_cause === "failed" ||
-        existing.end_cause === "restart-unrecoverable") &&
+      isRetryableSessionPendingInputEndCause(existing.end_cause) &&
       existing.consumed_event_id == null &&
       existing.request_hash === requestHash;
-    // Explicit retries are caller-authorized; Stop and completion receipts are enforced by the caller.
+    // Explicit retries are caller-authorized; a recorded user Stop still wins.
     const reopensCancelled =
       existing?.state === "cancelled" &&
-      (options.retryCancelled === true || reclaimsCancelledSourceTurn);
+      ((options.retryCancelled === true && existing.end_cause !== "user-stop") ||
+        reclaimsCancelledSourceTurn);
     if (existing) {
       if (
         !matchesSessionPendingInputRequest(existing, stableMessage, requestHash) ||

@@ -25,6 +25,13 @@ export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolea
   );
 }
 
+/** Endings a channel redelivery or Doctor merge may treat as not deliberately retired. */
+export function isRetryableSessionPendingInputEndCause(
+  cause: SessionPendingInputRow["end_cause"],
+): boolean {
+  return cause == null || cause === "failed" || cause === "restart-unrecoverable";
+}
+
 export function readSessionPendingInputEndCause(
   row: Pick<SessionPendingInputRow, "end_cause">,
 ): SessionPendingInputEndCause | undefined {

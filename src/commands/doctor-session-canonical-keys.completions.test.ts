@@ -282,6 +282,31 @@ describe("Doctor canonical pending-input repair", () => {
       expect(await f.repair()).toMatchObject({ repairedGroups: 0 });
     });
   });
+
+  it.each([
+    ["user-stop", "failed"],
+    ["failed", "user-stop"],
+  ] as const)(
+    "keeps a deliberate retirement when merging copies (source %s, destination %s)",
+    async (sourceCause, destinationCause) => {
+      await withStateDirEnv("doctor-merge-cause-", async ({ stateDir }) => {
+        const f = fixture(stateDir);
+        f.create(false, 20);
+        f.create(true, 10);
+        const source = await f.stage();
+        source.finish("cancelled", sourceCause);
+        await source.settled?.();
+        const destination = await f.stage(true);
+        destination.finish("cancelled", destinationCause);
+        await destination.settled?.();
+        await f.restart();
+        expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
+        expect(
+          f.database(true).db.prepare("SELECT state, end_cause FROM session_pending_inputs").all(),
+        ).toEqual([{ state: "cancelled", end_cause: "user-stop" }]);
+      });
+    },
+  );
 });
 
 describe("doctor transcript owner repair", () => {

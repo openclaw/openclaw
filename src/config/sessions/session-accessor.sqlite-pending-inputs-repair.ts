@@ -14,7 +14,10 @@ import {
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
-import { isFinalInputCompletion } from "./session-pending-input-value.js";
+import {
+  isFinalInputCompletion,
+  isRetryableSessionPendingInputEndCause,
+} from "./session-pending-input-value.js";
 
 type PendingInputDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 
@@ -91,9 +94,12 @@ export function copySessionPendingInputsForRepair(
           .updateTable("session_pending_inputs")
           .set({
             consumed_event_id: consumedEventId,
+            // A deliberate retirement in either copy must not become retryable.
             end_cause:
+              (isRetryableSessionPendingInputEndCause(existing.end_cause)
+                ? row.end_cause
+                : undefined) ??
               existing.end_cause ??
-              row.end_cause ??
               (consumedEventId === null ? "restart-unrecoverable" : null),
             state:
               existing.state === "cancelled" || row.state === "cancelled"
