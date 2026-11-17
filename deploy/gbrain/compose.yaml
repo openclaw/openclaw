@@ -1,0 +1,66 @@
+# GBrain next to the Gateway container, for the GBrain plugin.
+#
+#   docker compose -f docker-compose.yml -f deploy/gbrain/compose.yaml up -d
+#
+# GBrain runs its own `gbrain serve --http` here; Compose keeps it running and
+# OpenClaw only connects to it. The service shares the Gateway's network
+# namespace, so the brain is at 127.0.0.1:3131 inside the Gateway as on a
+# normal machine, and nothing new is published on the host. The Gateway reads
+# GBrain's receipt and owner credential from the shared volume (read-only) to
+# create its own MCP key; it never opens the brain itself.
+services:
+  gbrain:
+    image: docker.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
+    network_mode: "service:openclaw-gateway"
+    depends_on:
+      - openclaw-gateway
+    init: true
+    environment:
+      HOME: /home/node
+      BUN_INSTALL: /home/node/.bun
+      # The bun image links global binaries into root-owned /usr/local/bin by default.
+      BUN_INSTALL_BIN: /home/node/.bun/bin
+      PATH: /home/node/.bun/bin:/usr/local/bin:/usr/bin:/bin
+      GBRAIN_INSTALL_SPEC: ${GBRAIN_INSTALL_SPEC:-github:garrytan/gbrain#stable}
+    volumes:
+      - gbrain-home:/home/node/.gbrain
+      - gbrain-bun:/home/node/.bun
+    # Volumes start root-owned; hand them to the Gateway's user (uid 1000),
+    # then run GBrain as that user. GBrain is installed once into the bun
+    # volume and keeps its own upgrade path (`gbrain upgrade`).
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        mkdir -p /home/node/.gbrain /home/node/.bun
+        chown 1000:1000 /home/node /home/node/.gbrain /home/node/.bun
+        exec setpriv --reuid=1000 --regid=1000 --init-groups /bin/sh -ec '
+          command -v gbrain >/dev/null 2>&1 || bun install -g "$$GBRAIN_INSTALL_SPEC"
+          if gbrain mcp expose --no-tailscale --yes --json > /tmp/expose.json; then :; elif grep -q no_brain_config /tmp/expose.json; then
+            gbrain init --pglite --no-embedding
+            gbrain mcp expose --no-tailscale --yes --json > /tmp/expose.json || true
+          fi
+          exec "$$HOME/.gbrain/serve/gbrain-serve.sh"
+        '
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bun",
+          "-e",
+          "const r = await fetch('http://127.0.0.1:3131/health'); process.exit(r.ok ? 0 : 1)",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
+    stop_signal: SIGTERM
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  openclaw-gateway:
+    volumes:
+      - gbrain-home:/home/node/.gbrain:ro
+
+volumes:
+  gbrain-home:
+  gbrain-bun:
