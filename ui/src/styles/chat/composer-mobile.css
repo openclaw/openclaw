@@ -189,16 +189,17 @@
 
 /* The one-line phone composer has no free cell: the draft cell shows the
    transcript. Dictation status gets its own row between the lede (replies,
-   attachments) and the draft, so this case still grows by one row. */
+   attachments) and the draft, so this case still grows by one row. The row
+   follows the status, which outlives capture while transcripts are pending. */
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
-  .agent-chat__input--dictating {
+  .agent-chat__input:has(.agent-chat__dictation-status) {
   --chat-composer-action-row: 3;
 
   grid-template-rows: max-content max-content 36px;
 }
 
 .agent-chat__composer-shell[data-mobile-composer="true"][data-composer-resting="true"]
-  .agent-chat__input--dictating
+  .agent-chat__input:has(.agent-chat__dictation-status)
   .agent-chat__composer-input-row {
   grid-row: 3;
 }

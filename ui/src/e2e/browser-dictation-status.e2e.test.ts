@@ -462,6 +462,51 @@ suite.define(() => {
       await captureComposer(page, "dictation-new-session-tooltip-cancelled.png");
     }));
 
+  it("keeps pending-transcript status clear of the one-line phone composer after Stop", () =>
+    suite.withPage(
+      {
+        permissions: ["microphone"],
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+      },
+      async ({ page }) => {
+        const { gateway, textarea, admit } = await openDictation(page, {
+          deferredMethods: ["talk.session.create", "talk.session.close"],
+        });
+        await textarea.waitFor();
+        const shell = page.locator('.agent-chat__composer-shell[data-composer-resting="true"]');
+        await shell.waitFor();
+        await shell.getByRole("button", { name: "Dictation", exact: true }).click();
+        await admit();
+        await button(page, "Stop and keep text").click();
+        await gateway.waitForRequest("talk.session.close");
+        // Stop ends capture while the transcript is still pending, so the status stays.
+        await expect.poll(() => shell.locator(".agent-chat__input--dictating").count()).toBe(0);
+        const status = shell.locator(".agent-chat__dictation-status");
+        await status.waitFor();
+        const overlaps = await status.evaluate((element) => {
+          const box = element.getBoundingClientRect();
+          return [".agent-chat__composer-input-row", ".agent-chat__composer-actions"].filter(
+            (selector) => {
+              const other = element
+                .closest(".agent-chat__input")!
+                .querySelector(selector)!
+                .getBoundingClientRect();
+              return (
+                other.top < box.bottom &&
+                box.top < other.bottom &&
+                other.left < box.right &&
+                box.left < other.right
+              );
+            },
+          );
+        });
+        expect(overlaps).toEqual([]);
+        await captureComposer(page, "dictation-pending-one-line.png");
+      },
+    ));
+
   it("keeps the slow microphone permission hint whole and the starting highlight moving in a narrow composer", () =>
     suite.withPage(
       { permissions: ["microphone"], viewport: { width: 320, height: 720 } },
