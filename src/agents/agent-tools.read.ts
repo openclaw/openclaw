@@ -68,6 +68,7 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.
 import {
   createAlreadyDeliveredSkillResult,
   rememberSkillInstructionDelivery,
+  rememberSkillInstructionDeliveryForToolCall,
 } from "./skill-instruction-result.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 import {
@@ -741,6 +742,8 @@ export function wrapReadToolWithSkillContent(
     containerWorkdir?: string;
     instructionPaths?: readonly string[];
     instructionDeliveryCache?: SkillInstructionDeliveryCache;
+    /** Attempt that owns this tool set; scopes skill delivery bookkeeping. */
+    runId?: string;
   },
 ): AnyAgentTool<ReadToolDetails> {
   const cwd = options?.cwd ?? process.cwd();
@@ -858,6 +861,12 @@ export function wrapReadToolWithSkillContent(
         }
         if (!signal?.aborted) {
           rememberSkillInstructionDelivery(result, details.content, delivery);
+          rememberSkillInstructionDeliveryForToolCall({
+            runId: options?.runId,
+            toolCallId,
+            content: details.content,
+            forget: resetDelivery,
+          });
         }
         settleDelivery(true);
         return result;
