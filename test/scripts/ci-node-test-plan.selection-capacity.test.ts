@@ -382,9 +382,9 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     "src/gateway/server-methods/plugins.test.ts",
     "src/gateway/server-methods/templates-add.test.ts",
     "src/gateway/server-methods/templates.test.ts",
+    "src/gateway/server-plugin-reload.installed-package.test.ts",
   ];
-  const isolatedTarget = "src/gateway/server-plugin-reload.installed-package.test.ts";
-  const targets = ["src/gateway/client-callsites.guard.test.ts", ...serialTargets, isolatedTarget];
+  const targets = ["src/gateway/client-callsites.guard.test.ts", ...serialTargets];
   const selected = expectDefined(
     createSelectedNodeTestShardBundles(targets, {
       runnerBackend: "hybrid",
@@ -404,19 +404,11 @@ it("shares selected serial setup within the shortest contributing timeout", () =
     planConcurrency: 1,
   });
   expect(serial.timeoutMinutes ?? 60).toBe(60);
-  // The native plugin reload now has a separate two-worker owner, not the methods setup.
-  const isolated = expectDefined(
-    selected.find((job) =>
-      job.groups.some((group) => group.includePatterns?.includes(isolatedTarget)),
-    ),
-    "isolated reload selection",
-  );
-  expect(isolated).not.toBe(serial);
-  expect(isolated).toMatchObject({
-    runner: "blacksmith-16vcpu-ubuntu-2404",
-    planConcurrency: 1,
-    env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
-  });
+  for (const group of serial.groups) {
+    expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe(
+      group.configs.includes("test/vitest/vitest.gateway-methods.config.ts") ? "4" : "2",
+    );
+  }
   expect(
     selected
       .flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? []))
