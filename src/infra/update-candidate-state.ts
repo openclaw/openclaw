@@ -22,14 +22,7 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { normalizeWindowsPathPreservingCase } from "./path-guards.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { tryInspectSqliteReadOnlyInProcess } from "./sqlite-readonly-inspection.js";
-import {
-  retainSnapshotWork,
-  withPreparedSqliteSnapshot,
-} from "./sqlite-readonly-location-cleanup.js";
-import {
-  prepareSqliteReadOnlyLocationInProcess,
-  prepareSqliteReadOnlyLocationSyncInProcess,
-} from "./sqlite-readonly-location.js";
+import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import { createSqliteSnapshotStagingDirectory } from "./sqlite-snapshot-staging.js";
 import {
   StateDatabaseDiscoverySchema,
@@ -65,6 +58,7 @@ import {
   readUpdateStateDatabaseSizes,
   updateStateDatabaseExists,
 } from "./update-candidate-state.sizes.js";
+import { withStateDatabaseSnapshot } from "./update-candidate-state.snapshot-read.js";
 import {
   publishStateDatabaseVersions,
   resolveAgentDirOverrideDatabasePaths,
@@ -102,33 +96,6 @@ export const UpdateStateSchemaInspectionPlanSchema = z.object({
   sharedVersion: UpdateStateSchemaVersionsSchema.element,
 });
 type UpdateStateSchemaInspectionPlan = z.infer<typeof UpdateStateSchemaInspectionPlanSchema>;
-
-async function withStateDatabaseSnapshot<T>(
-  file: string,
-  read: (location: string) => T | Promise<T>,
-  stagingRoot?: string,
-  onProgress?: (progress: UpdateStateInspectionProgress) => void,
-  preserveSourceArtifacts = false,
-): Promise<T> {
-  const progress = createUpdateStateSnapshotReporter(file, "shared database snapshot", onProgress);
-  const snapshot = preserveSourceArtifacts
-    ? prepareSqliteReadOnlyLocationSyncInProcess(file, stagingRoot)
-    : await prepareSqliteReadOnlyLocationInProcess(
-        file,
-        stagingRoot,
-        undefined,
-        progress.onProgress,
-      );
-  // Temporary cleanup cannot replace a candidate result or its original read failure.
-  return withPreparedSqliteSnapshot(
-    snapshot,
-    async (location) => {
-      progress.complete((await fs.stat(location)).size);
-      return read(location);
-    },
-    { cleanupFailure: "warn" },
-  );
-}
 
 export async function collectStateDatabasePaths(
   input: StateInput,
@@ -716,6 +683,14 @@ export async function snapshotUpdateCandidateState(
           }
         : {}),
     });
+    if (file !== shared) {
+      // Rehearsal Doctor resolves file-backed cold archives beside the copied store, which has
+      // no archive directory; embed the verified payloads so the copy is self-contained.
+      const { embedSessionColdArchivesInSnapshot } =
+        await import("../config/sessions/session-cold-storage-backup.js");
+      using copy = openNodeSqliteDatabase(target);
+      await embedSessionColdArchivesInSnapshot({ database: copy, sourceStorePath: file });
+    }
     progress.complete((await fs.stat(target)).size);
     inspected.set(identity, {
       userVersion: snapshot.userVersion,
