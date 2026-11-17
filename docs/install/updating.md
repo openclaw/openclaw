@@ -45,6 +45,14 @@ backup.
 
 ## Update implementation contract
 
+Candidate Gateway rehearsal can prepare strictly valid config in its complete
+private update namespace even when a newer release wrote the config. It preserves
+the source writer stamp for installed-updater capture checks; the target's normal
+validated-downgrade writer records its version before live restart. Ordinary
+service startup, force/reset actions, invalid config, and paths outside that
+private namespace retain their future-config refusal. The candidate Gateway must
+contain this repair; the installed updater needs no change.
+
 Engine identification reads the committed SQLite engine anchor in an isolated
 read-only transaction without copying a healthy live database. Hot rollback
 journals and incomplete WAL families retain private recovery, and unreadable or
