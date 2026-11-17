@@ -399,8 +399,10 @@ cross-provider fallback preludes do not copy private hook attachments.
 Claude Code saves a single hook value above 10,000 characters to a file and
 shows the model only a preview, which message-only turns cannot open. OpenClaw
 splits longer private context, such as a long subagent result in a completion
-turn, across several prompt hooks of at most 10,000 characters each, so Claude
-receives the whole text up to 200,000 characters.
+turn, across 100 prompt hooks of at most 10,000 UTF-16 code units each. This
+bounded allowance covers a 160,000-code-unit result even when runtime-context
+JSON escaping expands it sixfold, with room for framing and surrogate-safe
+slice boundaries. Larger context can still spill to Claude Code's file fallback.
 
 Local plugin-managed Claude turns also receive the renderer-owned Runtime facts
 through this private hook context on every turn. Session identity stays out of the

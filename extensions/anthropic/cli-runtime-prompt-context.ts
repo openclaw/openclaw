@@ -3,9 +3,11 @@ import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
 // Claude Code caps each hook's additionalContext at 10,000 characters and spills longer
 // values to a file that message-only turns cannot open. Each callback carries one slice.
 const HOOK_CONTEXT_MAX_CHARS = 10_000;
-// 20 slices cover the 160,000-character completion findings cap plus framing.
+// Runtime context JSON-encodes findings: one UTF-16 code unit can become six.
+// 100 slices cover 160,000 code units at that expansion, with over 39,000 left
+// for framing even when surrogate-safe cuts each cost one code unit.
 // Text beyond the last slice still spills.
-export const PROMPT_CONTEXT_HOOK_IDS = Array.from({ length: 20 }, (_, slot) =>
+export const PROMPT_CONTEXT_HOOK_IDS = Array.from({ length: 100 }, (_, slot) =>
   slot === 0 ? "UserPromptSubmit" : `UserPromptSubmit:${slot}`,
 );
 
