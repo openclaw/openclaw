@@ -442,10 +442,9 @@ actor PortGuardian {
         var reports: [PortReport] = []
         for (port, portMode) in ports {
             let inspection = await self.listeners(on: port)
-            let listeners: [Listener]
-            switch inspection {
-            case let .listeners(parsed): listeners = parsed
-            case .inconclusive: listeners = []
+            let listeners = switch inspection {
+            case let .listeners(parsed): parsed
+            case .inconclusive: [Listener]()
             }
             let tunnelHealthy = await self.probeGatewayHealthIfNeeded(
                 port: port,

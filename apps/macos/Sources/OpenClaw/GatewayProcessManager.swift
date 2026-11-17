@@ -821,10 +821,9 @@ final class GatewayProcessManager {
         let instance = inspection.ownedDescriptor
         // An unreadable port may still hold a Gateway, so it is never treated as free.
         // Its owner is unknowable, so the profile conflict check cannot run either.
-        let hasListener: Bool
-        switch inspection {
-        case .free: hasListener = false
-        case .owned, .unknown: hasListener = true
+        let hasListener = switch inspection {
+        case .free: false
+        case .owned, .unknown: true
         }
         if case .owned = inspection,
            await !(self.profileOwnsGateway(
@@ -1345,15 +1344,14 @@ extension GatewayProcessManager {
             let inspection = await PortGuardian.shared.inspect(port: context.port)
             // Ownership only matters when something is listening. With no listener, a named
             // profile's startup failure is its own; reporting a port conflict would hide it.
-            let publishable: Bool
-            switch inspection {
+            let publishable = switch inspection {
             case .free:
-                publishable = self.isCurrentGatewayReadiness(context)
+                self.isCurrentGatewayReadiness(context)
             case let .owned(instance):
-                publishable = await self.canPublishGatewayReadiness(instance: instance, context: context)
+                await self.canPublishGatewayReadiness(instance: instance, context: context)
             case .unknown:
                 // Ownership is unknowable, so only a stale generation blocks publishing.
-                publishable = self.isCurrentGatewayReadiness(context)
+                self.isCurrentGatewayReadiness(context)
             }
             guard publishable else {
                 return false

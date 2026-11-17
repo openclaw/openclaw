@@ -288,11 +288,10 @@ extension OnboardingView {
             if case .free = inspection { self.localGatewayProbe = nil }
             return
         }
-        let managedServicePID: Int32?
-        if AppProfile.current.isActive {
-            managedServicePID = await GatewayLaunchAgentManager.runningGatewayPID()
+        let managedServicePID = if AppProfile.current.isActive {
+            await GatewayLaunchAgentManager.runningGatewayPID()
         } else {
-            managedServicePID = nil
+            Int32?.none
         }
         self.localGatewayProbe = LocalGatewayProbe(
             port: port,
