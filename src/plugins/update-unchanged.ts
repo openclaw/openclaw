@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { buildNpmResolutionInstallFields } from "./installs.js";
 import { formatNewerExactPinnedNpmDefaultLineMessage } from "./update-attempt.js";

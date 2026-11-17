@@ -14,8 +14,12 @@ export type CodexThreadConfigurationOptions = {
   askUserAvailable?: boolean;
   /** Preflight `config/read` snapshot whose origins distinguish authored settings from defaults. */
   nativeConfig?: CodexConfigReadResponse;
+  /** Supervision preserves native mode selection and catalogue-owned instructions. */
+  preserveNativeCollaboration?: boolean;
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
+  /** Observe assembled native instructions without rebuilding configuration decisions. */
+  onDeveloperInstructions?: (instructions: string) => void;
   /** A before_prompt_build `systemPrompt` replaced OpenClaw's policy; place no OpenClaw base. */
   systemPromptReplaced?: boolean;
   /** Skills, persona, and memory carried with thread developer instructions, separate from generic policy. */

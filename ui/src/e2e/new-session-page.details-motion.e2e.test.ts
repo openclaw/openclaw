@@ -34,7 +34,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").fill("Check the session layout");
-      await page.locator(".new-session-page__message").press("Control+Enter");
+      await page.locator(".new-session-page__message").press("Enter");
       await gateway.waitForRequest("sessions.create");
       await page.locator("openclaw-pending-session-create").waitFor();
       if (captureUiProofEnabled) {

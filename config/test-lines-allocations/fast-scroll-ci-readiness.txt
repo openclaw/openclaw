@@ -1,3 +1,0 @@
-# Preserve connector-state, retry-count, and native chooser assertions across
-# lazy loading, real-thread signing, and an explicitly paused second opening.
-23

@@ -3,9 +3,17 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { openClawIdAccount, subscribeOpenClawIdAccount } from "./account.ts";
 import { subscribeOwnerDeviceKey } from "./device-key.ts";
-import { createOwnerApproval, type OwnerApproval } from "./owner-approval.ts";
+import {
+  createOwnerApproval,
+  type OwnerApproval,
+  type OwnerApprovalRequest,
+} from "./owner-approval.ts";
 import { thisOwnerDevice } from "./owner-devices.ts";
-import type { OpenClawIdPeopleLink, OpenClawIdStatusResult } from "./types.ts";
+import type {
+  OpenClawIdPeopleLink,
+  OpenClawIdRecoveryUse,
+  OpenClawIdStatusResult,
+} from "./types.ts";
 
 const owners = new WeakMap<GatewayBrowserClient, OwnerApproval>();
 
@@ -17,7 +25,9 @@ export function ownerApprovalFor(client: GatewayBrowserClient): OwnerApproval | 
 /** Binds browser approval to the admitted local connection and this origin's account/key lifecycle. */
 export function bindOwnerApproval(
   gateway: ApplicationGateway,
-  onRequest: (client: GatewayBrowserClient) => void,
+  onRequest: (client: GatewayBrowserClient, request: OwnerApprovalRequest) => void,
+  onKitUsed: (client: GatewayBrowserClient, device: string | undefined) => void,
+  onMemberDeviceAdded: (recoveryUse: OpenClawIdRecoveryUse | undefined) => void,
 ) {
   let client: GatewayBrowserClient | null = null;
   let account = openClawIdAccount();
@@ -52,7 +62,12 @@ export function bindOwnerApproval(
       if (!(await thisOwnerDevice(link)) || disposed || epoch !== generation) {
         return;
       }
-      const owner = createOwnerApproval(next, () => onRequest(next));
+      const owner = createOwnerApproval(
+        next,
+        (request) => onRequest(next, request),
+        (device) => onKitUsed(next, device),
+        onMemberDeviceAdded,
+      );
       owners.set(next, owner);
       owner.start();
     })().catch(() => {

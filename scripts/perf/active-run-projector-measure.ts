@@ -1,7 +1,7 @@
 /**
  * Owner microbenchmark: registered active sessions, 65 interleaved callers, 50–2,000 rows.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/active-run-projector-measure.ts
- *   --state-dir .local/active-run-measure --workload page|event --iterations 3000
+ *   --state-dir .local/active-run-measure --workload page|event|publication --iterations 3000
  *   [--allocation] [--event-lookup scan|indexed] [--rows 50] [--runs 34] [--mixed]
  * Use separate timing/allocation passes, alternating base/candidate order.
  * --owner-dir <dir> loads saved session-active-runs.ts and session-controller.rpc-sources.ts
@@ -10,13 +10,16 @@
  * subscription lookup contract and indexed for the replacement owner operation.
  * "event" measures only scoped source lookup, not event dispatch or WebSocket latency.
  * "page" includes projector construction and every row (default: 34 active + 16 idle).
+ * "publication" repeats filter/display active reads across three audience presenters;
+ * use --rows 68 --runs 68 and --presentation-owner <saved source> for the baseline.
+ * --audiences 1 --reads 1 measures the no-reuse presentation case.
  * --mixed adds terminal persistence, direct subagents and capacity waits. Output digests
  * cover indexed/direct projection, terminal history and foreign agent/store selections.
  * Preparation, work-count instrumentation, warmup, and cleanup are outside measurement.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
@@ -38,9 +41,12 @@ const { values } = parseArgs({
     "event-lookup": { type: "string", default: "indexed" },
     "owner-dir": { type: "string" },
     "state-dir": { type: "string" },
+    "presentation-owner": { type: "string" },
+    audiences: { type: "string", default: "3" },
+    reads: { type: "string", default: "2" },
   },
 });
-assert(values.workload === "page" || values.workload === "event");
+assert(["page", "event", "publication"].includes(values.workload!));
 assert(values["event-lookup"] === "scan" || values["event-lookup"] === "indexed");
 assert(values["state-dir"], "Pass a new isolated --state-dir");
 const stateDir = path.resolve(values["state-dir"]);
@@ -67,6 +73,20 @@ const replacements = new Map(
     : [],
 );
 const loadedOwners = new Set<string>();
+let presentationReplaced = false;
+if (values["presentation-owner"]) {
+  const owner = new URL("../../src/gateway/session-row-presentation.ts", import.meta.url).href;
+  const source = readFileSync(values["presentation-owner"], "utf8");
+  registerHooks({
+    load(url, context, nextLoad) {
+      if (url !== owner) {
+        return nextLoad(url, context);
+      }
+      presentationReplaced = true;
+      return { format: "module-typescript", source, shortCircuit: true };
+    },
+  });
+}
 if (replacements.size) {
   registerHooks({
     load(url, context, nextLoad) {
@@ -93,6 +113,18 @@ assert.equal(loadedOwners.size, replacements.size, "Requested baseline owners we
 
 const rows = parseStrictIntegerOption({ raw: values.rows, label: "--rows", min: 1, fallback: 50 });
 const runs = parseStrictIntegerOption({ raw: values.runs, label: "--runs", min: 0, fallback: 34 });
+const audiences = parseStrictIntegerOption({
+  raw: values.audiences,
+  label: "--audiences",
+  min: 1,
+  fallback: 3,
+});
+const reads = parseStrictIntegerOption({
+  raw: values.reads,
+  label: "--reads",
+  min: 1,
+  fallback: 2,
+});
 assert(runs <= rows);
 assert(values.workload !== "event" || runs > 0);
 const { claimAgentRunContext, releaseAgentRunContext, getAgentRunLifecycleGeneration } =
@@ -167,6 +199,47 @@ const sources = selections.slice(0, runs).map((selection, index) => {
   }
   return { runId, ref };
 });
+const publicationFixture =
+  values.workload === "publication"
+    ? await (async () => {
+        const { prepareSessionRowPublication } =
+          await import("../../src/gateway/session-row-presentation.js");
+        assert(
+          !values["presentation-owner"] || presentationReplaced,
+          "Presentation owner was not loaded",
+        );
+        const { createSessionRowProjectionFixture } =
+          await import("../../src/gateway/session-row-projection.test-support.js");
+        const { buildSessionListRowMetadataContext } =
+          await import("../../src/gateway/session-utils-projection.js");
+        const { buildSubagentRunReadIndexFromRuns } =
+          await import("../../src/agents/subagents/registry/subagent-registry-queries.js");
+        const projection = createSessionRowProjectionFixture({
+          cfg: { agents: { entries: { main: {} } }, plugins: { enabled: false } },
+          storePath,
+          store: Object.fromEntries(
+            selections.map((selection) => [
+              selection.canonicalKey,
+              { sessionId: selection.sessionId, updatedAt: 1 },
+            ]),
+          ),
+          modelCatalog: [],
+          rowContext: buildSessionListRowMetadataContext({
+            now: 1_800_000_000_000,
+            subagentRuns: buildSubagentRunReadIndexFromRuns({
+              runs: new Map(),
+              inMemoryRuns: [],
+              now: 1_800_000_000_000,
+            }),
+          }),
+        });
+        return {
+          prepare: prepareSessionRowPublication,
+          projection,
+          rows: projection.selectEntries({}),
+        };
+      })()
+    : undefined;
 const matchesGateway = captureGatewayScopeMatcher(undefined);
 const lookup =
   values["event-lookup"] === "scan"
@@ -200,6 +273,7 @@ for (const selection of selections) {
   }
 }
 const projectionDigest = contractDigest.digest("hex");
+let activeProjectionCalls: number | undefined;
 function runOne(index: number): number {
   const client = index % clients;
   if (values.workload === "event") {
@@ -207,7 +281,31 @@ function runOne(index: number): number {
     assert.equal(lookup(source.runId), source.ref);
     return 1;
   }
-  const project = createVisibleActiveSessionRunProjector();
+  const liveProject = createVisibleActiveSessionRunProjector();
+  const project =
+    activeProjectionCalls === undefined
+      ? liveProject
+      : (selection: Parameters<typeof liveProject>[0]) => {
+          activeProjectionCalls!++;
+          return liveProject(selection);
+        };
+  if (publicationFixture) {
+    const publication = publicationFixture.prepare(
+      publicationFixture.projection,
+      1_800_000_000_000,
+    );
+    let active = 0;
+    for (let audience = 0; audience < audiences; audience++) {
+      const presentation = publication(undefined, project).getPresentation();
+      for (let pass = 0; pass < reads; pass++) {
+        for (const row of publicationFixture.rows) {
+          active += Number(presentation.active(row)?.active);
+        }
+      }
+    }
+    assert.equal(active, expectedActive * audiences * reads);
+    return active;
+  }
   let active = 0;
   for (let row = 0; row < selections.length; row++) {
     active += Number(project(selections[(row + client) % selections.length]!).active);
@@ -235,10 +333,13 @@ try {
     return undefined;
   };
   try {
+    activeProjectionCalls = 0;
     runOne(0);
   } finally {
     rpcSourcesByRunId[Symbol.iterator] = iterate;
   }
+  const activeProjectionsPerOperation = activeProjectionCalls;
+  activeProjectionCalls = undefined;
   run(1000);
   globalThis.gc?.();
   const inspector = new Session();
@@ -264,7 +365,13 @@ try {
       : undefined;
     console.log(
       JSON.stringify({
-        workload: values.workload === "page" ? "page-active-run-projection" : "scoped-event-lookup",
+        workload:
+          values.workload === "publication"
+            ? "publication-active-run-projection"
+            : values.workload === "page"
+              ? "page-active-run-projection"
+              : "scoped-event-lookup",
+        presentationOwner: values["presentation-owner"] ?? "current",
         mode: values.allocation ? "allocation" : "timing",
         ownerDir: values["owner-dir"] ?? "current",
         eventLookup: values["event-lookup"],
@@ -273,10 +380,13 @@ try {
         mixed: values.mixed,
         projectionDigest,
         clients,
+        audiences: publicationFixture ? audiences : undefined,
+        readsPerRowPerAudience: publicationFixture ? reads : undefined,
         rowsPerPage: selections.length,
         iterations,
         registryScansPerOperation: registryScans,
         visitedRunIdsPerOperation: visitedRunIds,
+        activeProjectionsPerOperation,
         checksum,
         elapsedMs,
         cpuUsPerOperation: (usedCpu.user + usedCpu.system) / iterations,

@@ -22,6 +22,7 @@ import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import { withProjectCheckoutLifecycle } from "../../projects/project-checkout.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
@@ -474,6 +475,9 @@ describe("worktree Git maintenance", () => {
     expect(failed.result.gitMaintenance?.stage).toBe("suspended");
     expect(await packNames(repo)).toEqual(beforeFailure);
     commands.mockImplementation(execute);
+    // The retirement-budget case below separately covers elapsed-time limits.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     const trace = path.join(root, "pack-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     const checkpoints: Array<NonNullable<ManagedWorktreeGcResult["gitMaintenance"]>> = [];
@@ -542,6 +546,8 @@ describe("worktree Git maintenance", () => {
   ])(
     "consolidates a backlog exceeding the old $label budget",
     async ({ packBytes, indexBytes }) => {
+      // This proves byte-budget admission; retirement deadlines are covered separately.
+      vi.spyOn(performance, "now").mockReturnValue(0);
       const repo = await initRepo(tempDirs.make("worktree-backlog-"));
       const { objects, packs: stems } = await packBlobs(repo, [
         "backlog-a",
@@ -577,14 +583,18 @@ describe("worktree Git maintenance", () => {
     await packBlobs(repo, ["busy-a", "busy-b", "busy-c"]);
     await register(repo, "busy-maintenance", { branch: "main" });
     const maintain = createWorktreeGitMaintenance(env);
-    await withProjectCheckoutLifecycle(repo, { env }, async () => {
-      const progress = new WorktreeGcProgress();
-      await maintain({ progress });
-      expect(await packNames(repo)).toHaveLength(3);
-      expect(progress.result.issues).toEqual([
-        expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
-      ]);
-    });
+    await withProjectCheckoutLifecycle(
+      repo,
+      { context: captureOpenClawStateWorkerContext({ env }) },
+      async () => {
+        const progress = new WorktreeGcProgress();
+        await maintain({ progress });
+        expect(await packNames(repo)).toHaveLength(3);
+        expect(progress.result.issues).toEqual([
+          expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
+        ]);
+      },
+    );
     await maintain({});
     expect(await packNames(repo)).toHaveLength(1);
   });
@@ -638,16 +648,20 @@ describe("worktree Git maintenance", () => {
         expect(peer.result.issues).toEqual([
           expect.objectContaining({ stage: "git-maintenance", outcome: "deferred" }),
         ]);
-        await withProjectCheckoutLifecycle(repo, { env, signal, waitMs: 0 }, async (lease) => {
-          await requireGit(
-            repo,
-            ["worktree", "add", "-b", "foreground", path.join(repo, "foreground")],
-            {
-              signal: lease.signal,
-              beforeRun: () => lease.assertCurrent(),
-            },
-          );
-        });
+        await withProjectCheckoutLifecycle(
+          repo,
+          { context: captureOpenClawStateWorkerContext({ env }), signal, waitMs: 0 },
+          async (lease) => {
+            await requireGit(
+              repo,
+              ["worktree", "add", "-b", "foreground", path.join(repo, "foreground")],
+              {
+                signal: lease.signal,
+                beforeRun: () => lease.assertCurrent(),
+              },
+            );
+          },
+        );
       }
       return await execute(cwd, args, options);
     });
@@ -674,10 +688,14 @@ describe("worktree Git maintenance", () => {
       .mockImplementation(async (cwd, args, options) => {
         const result = await execute(cwd, args, options);
         if (args.at(-1) === "openclaw-consolidate") {
-          foreground = withProjectCheckoutLifecycle(repo, { env, waitMs: 0 }, async () => {
-            entered.resolve();
-            await release.promise;
-          });
+          foreground = withProjectCheckoutLifecycle(
+            repo,
+            { context: captureOpenClawStateWorkerContext({ env }), waitMs: 0 },
+            async () => {
+              entered.resolve();
+              await release.promise;
+            },
+          );
           await Promise.race([entered.promise, foreground]);
         }
         return result;
@@ -696,36 +714,95 @@ describe("worktree Git maintenance", () => {
       await foreground;
       commands.mockRestore();
     }
-    await maintain({});
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const remove = fs.rm;
+    const retired: string[] = [];
+    const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      await remove(target, options);
+      if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
+        retired.push(String(target).slice(0, -4));
+        now += 251;
+      }
+    });
+    // Each settled pass may finish one pack's sidecars, then must yield.
+    for (const [before, after] of [
+      [4, 3],
+      [3, 2],
+    ] as const) {
+      const bounded = new WorktreeGcProgress();
+      await maintain({ checkBacklog: true, progress: bounded });
+      expect(bounded.result.gitMaintenance).toMatchObject({
+        stage: "completed",
+        packsBefore: before,
+        packsAfter: after,
+      });
+      expect(bounded.result.issues).toEqual([]);
+      expect(retired).toHaveLength(4 - after);
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        await expectMissing(`${retired.at(-1)}.${extension}`);
+      }
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    }
+    retirement.mockRestore();
+    for (const name of await packNames(repo)) {
+      await git(repo, "verify-pack", "-v", path.join(packsPath(repo), name));
+    }
+    // Even with no further clock advancement, geometric admission used to strand
+    // the last small input beside the larger union. Recreating the owner must
+    // preserve the retirement continuation as well.
+    const final = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ retryDeferred: true, progress: final });
+    expect(final.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 1 });
+    expect(final.result.issues).toEqual([]);
     expect(await packNames(repo)).toHaveLength(1);
     expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
   });
 
-  it("bounds retirement while finishing the current pack's sidecars", async () => {
-    const repo = await initRepo(tempDirs.make("worktree-retirement-budget-"));
-    const { objects } = await packBlobs(repo, ["bounded-a", "bounded-b", "bounded-c"]);
-    await git(repo, "prune-packed");
-    await register(repo, "retirement-budget", { branch: "main" });
-    let now = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const remove = fs.rm;
-    let retired: string | undefined;
-    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-      await remove(target, options);
-      if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
-        retired = String(target).slice(0, -4);
-        now += 251;
+  it.each([false, true])(
+    "bounds retirement while finishing the current pack's sidecars (repacked=%s)",
+    async (repacked) => {
+      const repo = await initRepo(tempDirs.make("worktree-retirement-budget-"));
+      const { objects } = await packBlobs(repo, ["bounded-a", "bounded-b", "bounded-c"]);
+      await git(repo, "prune-packed");
+      await register(repo, "retirement-budget", { branch: "main" });
+      let now = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => now);
+      const remove = fs.rm;
+      let retired: string | undefined;
+      const retirement = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        await remove(target, options);
+        if (String(target).startsWith(packsPath(repo)) && String(target).endsWith(".idx")) {
+          retired = String(target).slice(0, -4);
+          now += 251;
+        }
+      });
+      const progress = new WorktreeGcProgress();
+      const maintain = createWorktreeGitMaintenance(env);
+      await maintain({ progress });
+      expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
+      expect(retired).toBeDefined();
+      for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
+        await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
       }
-    });
-    const progress = new WorktreeGcProgress();
-    await createWorktreeGitMaintenance(env)({ progress });
-    expect(progress.result.gitMaintenance).toMatchObject({ stage: "completed", packsAfter: 3 });
-    expect(retired).toBeDefined();
-    for (const extension of ["idx", "pack", "rev", "bitmap", "promisor"]) {
-      await expect(fs.access(`${retired}.${extension}`)).rejects.toHaveProperty("code", "ENOENT");
-    }
-    expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
-  });
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+      retirement.mockRestore();
+      if (repacked) {
+        for (const [index, object] of objects.entries()) {
+          await git(repo, "update-ref", `refs/tags/blob-${index}`, object);
+        }
+        const beforeRepack = await packNames(repo);
+        await git(repo, "repack", "-a", "-d");
+        expect((await packNames(repo)).some((name) => beforeRepack.includes(name))).toBe(false);
+      }
+      const resumed = new WorktreeGcProgress();
+      await maintain({ checkBacklog: true, progress: resumed });
+      expect(resumed.result.gitMaintenance?.stage).toBe("completed");
+      expect(resumed.result.issues).toEqual([]);
+      expect((await packNames(repo)).length).toBeLessThan(3);
+      expect(await objectTypes(repo, objects)).toBe("blob\nblob\nblob");
+    },
+  );
 
   it("retains a replacement that is already an input and a pack pinned during publication", async () => {
     const repo = await initRepo(tempDirs.make("worktree-pack-existing-output-"));
@@ -755,6 +832,9 @@ describe("worktree Git maintenance", () => {
       return result;
     });
     const progress = new WorktreeGcProgress();
+    // The retirement-budget cases separately cover elapsed-time limits.
+    using clock = vi.spyOn(performance, "now");
+    clock.mockReturnValue(0);
     await createWorktreeGitMaintenance(env)({ progress });
     expect(progress.result.gitMaintenance).toMatchObject({
       stage: "completed",

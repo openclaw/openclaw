@@ -84,6 +84,18 @@ export const UPDATE_ENVIRONMENT_FAILURE_REASONS: ReadonlySet<string> = new Set([
   UPDATE_FOREIGN_DESTINATION_REASON,
 ]);
 
+// Host prerequisites refused before the update changed anything; the message says what to fix.
+const UPDATE_PREREQUISITE_REFUSAL_REASONS: ReadonlySet<string> = new Set([
+  "preflight-node-runtime-incompatible",
+  "git-version-unsupported",
+  "preflight-insufficient-space",
+  "snapshot-capacity-insufficient",
+]);
+
+export function isUpdatePrerequisiteRefusal(reason: string | null | undefined): boolean {
+  return Boolean(reason && UPDATE_PREREQUISITE_REFUSAL_REASONS.has(reason));
+}
+
 export function formatUpdateActivationTimeoutGuidance(
   command: (value: string) => string = (value) => value,
 ): string {
@@ -92,7 +104,7 @@ export function formatUpdateActivationTimeoutGuidance(
 
 export const UPDATE_INSTALL_SKIP_GUIDANCE: Readonly<Record<string, string>> = {
   "external-supervisor-update-required":
-    "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The Control UI and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
+    "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The OpenClaw app and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
   "container-image-install":
     "Pull or build the target Docker/container image, then redeploy it with the same state/config mounts. No package changes or Gateway restart were attempted.",
   "unmanaged-package-install":

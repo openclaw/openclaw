@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   checkDeviceTokenPeer,
+  prepareDeviceTokenBindingLookup,
   recordDeviceTokenPeer,
   setDeviceTokenBindingOwner,
   setDeviceTokenBindingsLoading,
@@ -17,6 +18,7 @@ function owner(bindings: Record<string, string> = {}) {
     record: async (deviceId, role, peerKey) => {
       bindings[`${deviceId}/${role}`] = peerKey;
     },
+    forget: async () => {},
     reportMismatch,
   };
   setDeviceTokenBindingOwner(value);
@@ -86,12 +88,46 @@ describe("device tokens bound to the authenticated endpoint key", () => {
     await expect(check).resolves.toEqual({ ok: false, reason: "device-token-peer-mismatch" });
   });
 
+  it("prepares bindings before reading the current owner and fails closed on uncertain state", async () => {
+    let finish = () => {};
+    setDeviceTokenBindingsLoading(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    let ready = false;
+    const prepared = prepareDeviceTokenBindingLookup().then((lookup) => {
+      ready = true;
+      return lookup;
+    });
+    await Promise.resolve();
+    expect(ready).toBe(false);
+    owner({ "d/operator": W1 });
+    finish();
+    const lookup = await prepared;
+    expect(lookup("d", "operator")).toBe(W1);
+    owner({ "d/operator": W2 });
+    expect(lookup("d", "operator")).toBe(W2);
+    setDeviceTokenBindingOwner("unreadable");
+    expect(() => lookup("d", "operator")).toThrow("bindings are unavailable");
+    setDeviceTokenBindingOwner({
+      lookup: () => {
+        throw new Error("uncertain storage outcome");
+      },
+      record: async () => {},
+      forget: async () => {},
+      reportMismatch: vi.fn(),
+    });
+    expect(() => lookup("d", "operator")).toThrow("uncertain storage outcome");
+  });
+
   it("fails token checks closed while the authority cannot reconcile a write", async () => {
     setDeviceTokenBindingOwner({
       lookup: () => {
         throw new Error("uncertain storage outcome");
       },
       record: async () => {},
+      forget: async () => {},
       reportMismatch: vi.fn(),
     });
     expect(

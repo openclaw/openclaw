@@ -334,7 +334,6 @@ describe("memory index", () => {
           mtimeMs: Date.now(),
           size: Buffer.byteLength(content),
           hash: hashText(content),
-          content,
         },
         "memory",
       );

@@ -127,11 +127,24 @@ function publicationFixture(releaseVersion = "2026.9.4") {
     "dir",
   );
   fs.symlinkSync(".release-harness/node_modules", join(root, "node_modules"), "dir");
+  const bin = join(root, "bin");
+  fs.mkdirSync(bin);
+  fs.writeFileSync(
+    join(bin, "gh"),
+    `#!${process.execPath}
+const fs = require("node:fs");
+require("node:assert/strict").deepEqual(process.argv.slice(2), ["api", "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main", "--jq", ".content"]);
+process.stdout.write(fs.readFileSync(process.env.GITHUB_WORKSPACE + "/.release-harness/package.json").toString("base64"));
+`,
+    { mode: 0o755 },
+  );
   const env = {
     ...createNestedGitEnv(),
+    PATH: `${bin}:${process.env.PATH}`,
     GITHUB_WORKSPACE: root,
     GITHUB_REPOSITORY: "fixture/repository",
     RELEASE_TAG: `v${releaseVersion}`,
+    RELEASE_NPM_DIST_TAG: "latest",
     TARGET_SHA: targetSha,
   };
   return {
@@ -356,3 +369,46 @@ attach_or_verify_release_asset "$RUNNER_TEMP/manifest.json" "$ASSET_NAME"
   expect(fs.existsSync(join(root, "uploads"))).toBe(state === "missing" && !error);
   expect(JSON.parse(read("release.json")).body).toBe(releaseBody);
 });
+
+it.each([
+  { releaseVersion: "2026.8.35", regularStableVersion: "2026.9.5", reason: "" },
+  {
+    releaseVersion: "2026.9.37",
+    regularStableVersion: "2026.11.2",
+    reason: "Approved retired-line security fix",
+  },
+])(
+  "resumes canonical extended-stable public page $releaseVersion",
+  ({ releaseVersion, regularStableVersion, reason }) => {
+    const { root, json, read, run } = publicationFixture(releaseVersion);
+    json(".release-harness/package.json", { version: regularStableVersion });
+    const result = run(
+      `
+source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
+verify_release_tag_target() { :; }
+gh() {
+  if [[ "$1 $2" == "release view" ]]; then cat "$RUNNER_TEMP/release.json"; return; fi
+  echo "Unexpected mutation: $*" >&2; return 1
+}
+prepared_release_notes_file="$RUNNER_TEMP/prepared.md"
+render_github_release_notes "$prepared_release_notes_file"
+node -e 'const fs = require("node:fs"); fs.writeFileSync(process.env.RUNNER_TEMP + "/release.json", JSON.stringify({isDraft: false, body: fs.readFileSync(process.env.RUNNER_TEMP + "/prepared.md", "utf8")}));'
+guard_existing_public_release
+create_or_update_github_release
+`,
+      {
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        PUBLISH_OPENCLAW_NPM: "true",
+        RELEASE_NPM_DIST_TAG: "extended-stable",
+        RELEASE_EVIDENCE_MODE: "full-release-validation",
+        RETIRED_LINE_PUBLICATION_REASON: reason,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(read("summary")).toContain("existing public page left untouched");
+    expect(JSON.parse(read("release.json")).body).toBe(read("prepared.md"));
+    expect(read("prepared.md")).toContain(
+      reason ? "retired maintenance line" : "current equivalent to LTS",
+    );
+  },
+);

@@ -86,7 +86,10 @@ history cannot be reconstructed from source code or outer results.
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.
 If guest code does not catch an error, `exec` or `wait` returns a failed tool
-result and the agent can continue normally. Follow the
+result and the agent can continue normally. A rejected program cancels its
+remaining bridge calls instead of waiting for replies it can no longer consume.
+Successful programs still drain every dispatched call. Cancellation does not
+undo actions a tool already performed. Follow the
 [tool-error guidance](/tools/code-mode/quickstart#recover-from-tool-errors) to inspect possible partial
 effects before choosing another action. Network-controlled tool output and errors
 retain their existing untrusted-content wrapping and sanitization; continuing
@@ -119,6 +122,21 @@ cancellation and policy checks.
 
 ## Run and snapshot lifecycle
 
+Catalog descriptors and their rendered prompts are shared across attempts, runs,
+and sessions when the finalized tool definitions match. The process retains at
+most 32 prepared catalogs, limited to 1 Mi characters of schema and key per catalog
+and 4 Mi characters across the cache. Native and published schemas use the same
+content fingerprint. The cache shares immutable
+data. Changes to tool selection, descriptions, or projected schemas select a
+different catalog; unchanged inputs preserve identical prompt bytes. Unpublished
+remote schemas remain opaque and do not enter the shared cache.
+Client projections share only their metadata; their advertised input remains
+`unknown`, and the live schema stays with the current run's describe/call path.
+
+Executable tools, hooks, abort signals, counters, and result stores remain owned
+by the current run. Terminal cleanup releases those bindings; cached descriptors
+never keep a completed run executable.
+
 Every new `exec` starts a fresh JavaScript context. Variables, functions, and
 imports never carry over between cells; `wait` continues the original cell.
 
@@ -141,7 +159,9 @@ statuses: `completed`, `waiting`, or `failed`.
   do not survive a restart; committed session-store values do.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
-  runs.`.
+  runs.`. Cells submitted with outer `awaitResults: true` retain ownership through
+  completion instead of publishing a suspended run, so they do not reserve a
+  slot. They still obey tool authority, cancellation, and execution limits.
 
 The selected executor stays fixed for the cell's lifetime. Suspended state is
 bounded by the per-process cap above and `snapshotTtlSeconds`. QuickJS also
@@ -210,7 +230,9 @@ it forms a direct branch extension, bounded to 256 events and 1 MiB. An unchange
 suffix returns no writes. Divergent branches, rewrites, and larger or non-linear
 suffixes use the canonical branch selector. Both paths validate historical
 shapes, keys, and provenance in the reader, then return only each key's final
-write or delete. The main thread applies that compact result in the attributed
+write or delete. Cold replay folds each selected store payload before reading the
+next, so superseded snapshots do not accumulate in the reader. The main thread
+applies that compact result in the attributed
 `sessions.transcript-maintenance:apply` task; superseded values never cross the
 worker boundary.
 

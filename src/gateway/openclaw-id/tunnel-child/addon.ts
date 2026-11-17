@@ -106,5 +106,10 @@ export function loadIrohBinding(): typeof IrohNative {
       );
     }
   }
-  throw new Error(`iroh binding unavailable (${errors.join("; ") || "not installed"})`);
+  const message = findSourceCheckoutBinding()
+    ? "OpenClaw ID is enabled, but the iroh binding is not built or could not be loaded. Run `pnpm build:iroh` from the source checkout."
+    : "The OpenClaw ID transport is not available in this build.";
+  throw new Error(message, {
+    cause: new Error(`iroh binding unavailable (${errors.join("; ") || "not installed"})`),
+  });
 }

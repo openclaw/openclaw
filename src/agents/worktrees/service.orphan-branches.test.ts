@@ -223,7 +223,10 @@ describe("managed orphan branch cleanup", () => {
     const expired = await service.gc();
     expect(expired.snapshotsPruned).toBe(0);
     expect(expired.issues).toContainEqual(
-      expect.objectContaining({ reason: expect.stringContaining("checkout files remain") }),
+      expect.objectContaining({
+        outcome: "deferred",
+        reason: expect.stringContaining("recovery and branch preserved"),
+      }),
     );
     expect((await prune()).branches).toContainEqual(
       expect.objectContaining({ branch: record.branch, outcome: "preserved" }),

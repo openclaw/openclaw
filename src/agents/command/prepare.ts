@@ -7,6 +7,7 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { assertAgentInitializationCompleteInWorker } from "../../config/sessions/agent-initialization.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
@@ -256,6 +257,7 @@ export async function prepareAgentCommandExecution(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+  await assertAgentInitializationCompleteInWorker(cfg, sessionAgentId, assertPreparationCurrent);
   const harnessSessionError = sessionKey
     ? resolveAgentHarnessSessionContextError(sessionKey, sessionEntryRaw)
     : undefined;
@@ -397,7 +399,7 @@ export async function prepareAgentCommandExecution(
     });
     await ensureAgentWorkspace({
       dir: agentWorkspaceDir,
-      ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+      ensureBootstrapFiles: !agentCfg?.skipBootstrap && !opts.deferWorkspaceBootstrap,
       skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
       provisioning: workspaceProvisioning,
       guard: { assertHost: assertAcpPreparationCurrent },

@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
-import { NativeWorker } from "../infra/worker-native-handle.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { loadOpenClawPluginsAsync } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -14,6 +14,7 @@ import {
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import * as preparation from "../plugins/plugin-generation-worker.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
 import { createPluginReloadRecovery } from "./server-plugin-reload-recovery.js";
 
@@ -65,8 +66,9 @@ function recoveryFixture(id: string, body: string) {
   };
 }
 
-it("joins worker-backed recovery cleanup without blocking foreground work", async () => {
-  const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+it("joins host-local recovery cleanup without synchronous recursive removal", async ({
+  signal,
+}) => {
   await using fixture = recoveryFixture(
     "recovery-cleanup",
     'module.exports = { id: "recovery-cleanup", register(api) { api.registerProvider({ id: "recovery-provider", label: "Active", auth: [], normalizeModelId: ({ modelId }) => `active:${modelId}` }); } };',
@@ -74,34 +76,39 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
   const { plugin, load, capturedRoot } = fixture;
   await fixture.run(async () => {
     const previous = await load();
-    const captureParent = path.dirname(capturedRoot());
-    const capturesBefore = fs.readdirSync(captureParent);
+    // Recovery owns a host-local copy independently of the broker's source directory.
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const copy = fs.promises.cp;
+    using copies = vi.spyOn(fs.promises, "cp").mockImplementation(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return copy(...args);
+    });
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
-    recovery.capture(new Set([plugin.id]));
-    expect(fs.readdirSync(captureParent)).toHaveLength(capturesBefore.length + 1);
-    const capture = posts.mock.calls.findIndex(
-      ([value]) => isRecord(value) && isRecord(value.input) && value.input.operation === "capture",
-    );
-    expect(capture).toBeGreaterThanOrEqual(0);
-    const worker = posts.mock.contexts[capture] as NativeWorker;
-    let foregroundRan = false;
-    const foregroundAtReplies: boolean[] = [];
-    const observeReply = (value: unknown) => {
-      if (isRecord(value) && value.status === "ok") {
-        foregroundAtReplies.push(foregroundRan);
-      }
-    };
-    worker.on("message", observeReply);
-    // Synchronous worker polling delivers its reply before queued foreground work.
-    const foreground = Promise.resolve().then(() => {
-      foregroundRan = true;
+    let settled = false;
+    const capturing = recovery.capture(new Set([plugin.id])).finally(() => {
+      settled = true;
     });
     try {
+      await withinTest(entered.promise, signal);
+      await setImmediate();
+      expect(settled).toBe(false);
+      release.resolve();
+      expect(await capturing).toEqual([]);
+      expect(copies).toHaveBeenCalledTimes(1);
+      const [source, recoveryRoot] = copies.mock.calls[0]!;
+      expect(source).toBe(capturedRoot());
+      expect(recoveryRoot).not.toBe(source);
+      expect(fs.existsSync(recoveryRoot)).toBe(true);
+      // Native async removal can finish before a queued microtask; observe blocking work instead.
+      using synchronousRemovals = vi.spyOn(fs, "rmSync");
       await recovery.dispose();
-      await foreground;
-      expect(foregroundAtReplies).not.toHaveLength(0);
-      expect(foregroundAtReplies.every(Boolean)).toBe(true);
-      expect(fs.readdirSync(captureParent)).toEqual(capturesBefore);
+      expect(
+        synchronousRemovals.mock.calls.filter(([, options]) => options?.recursive),
+      ).toHaveLength(0);
+      expect(fs.existsSync(recoveryRoot)).toBe(false);
+      expect(fs.existsSync(capturedRoot())).toBe(true);
       expect(
         previous.providers[0]!.provider.normalizeModelId!({
           provider: "recovery-provider",
@@ -109,8 +116,12 @@ it("joins worker-backed recovery cleanup without blocking foreground work", asyn
         }),
       ).toBe("active:still-callable");
     } finally {
-      worker.off("message", observeReply);
-      await recovery.dispose();
+      release.resolve();
+      try {
+        await capturing;
+      } finally {
+        await recovery.dispose();
+      }
     }
   });
 });
@@ -130,7 +141,7 @@ it("replaces a worker-backed plugin when its previous captured source is missing
     fs.rmSync(root, { recursive: true });
     const recovery = createPluginReloadRecovery(previous, prepareGatewayPluginLoad);
     try {
-      expect(recovery.capture(new Set([plugin.id]))).toEqual([
+      expect(await recovery.capture(new Set([plugin.id]))).toEqual([
         `Plugin ${plugin.id} captured source is missing. Continuing replacement; rollback cannot restore this plugin's previous code.`,
       ]);
       expect([...recovery.unavailablePluginIds]).toEqual([plugin.id]);

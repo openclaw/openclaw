@@ -5,6 +5,7 @@ import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-p
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isOperatorAuthorityUnavailable } from "../../infra/operator-authority-error.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import type {
   ReplyMessageInjectionOutcome,
@@ -32,6 +33,7 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import type { MessageInjectionRuntimeReason } from "./message-injection-authority.js";
 import {
   admitFollowupRunLifecycle,
   reserveSteerCandidate,
@@ -159,6 +161,7 @@ export async function runActiveReplySteer(
     reason: ActiveReplySteerFallbackReason,
     activeRunId?: string,
     error?: string,
+    runtimeReason?: MessageInjectionRuntimeReason,
   ): Promise<"handled"> => {
     assertReadCurrent();
     parked.fallback();
@@ -181,13 +184,14 @@ export async function runActiveReplySteer(
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
-      ...(error ? { error } : {}),
+      ...(runtimeReason ? { runtimeReason } : {}),
+      ...(error ? { error: error.slice(0, 512) } : {}),
       disposition: queueCapRejected ? "skipped-queue-cap" : "followup-policy",
       channel:
         followupRun.originatingChannel ??
         followupRun.run.messageProvider ??
         params.sessionCtx.Provider,
-      sessionId: steerSessionId,
+      sessionKey: sessionKey ?? followupRun.run.sessionKey,
       runId: params.opts?.runId,
       activeRunId,
     });
@@ -424,7 +428,12 @@ export async function runActiveReplySteer(
       shouldAbortOnAdoptionError: isIngressAdoptionLostError,
     });
     if (finalization.status === "rejected") {
-      return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
+      return await fallback(
+        finalization.outcome.reason,
+        injectionAttempt.targetRunId,
+        finalization.outcome.errorMessage,
+        finalization.outcome.runtimeReason,
+      );
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.
@@ -475,12 +484,16 @@ export async function runActiveReplySteer(
           try {
             assertReadCurrent();
             parked.fallback();
-          } catch {
-            diagnosticLogger.warn("steering followup unavailable: source authority lost", {
-              sessionId: steerSessionId,
-              runId: params.opts?.runId,
-            });
-            parked.consume();
+          } catch (error) {
+            if (isOperatorAuthorityUnavailable(error)) {
+              parked.fallback();
+            } else {
+              diagnosticLogger.warn("steering followup unavailable: source authority lost", {
+                sessionId: steerSessionId,
+                runId: params.opts?.runId,
+              });
+              parked.consume();
+            }
           }
         }
       }

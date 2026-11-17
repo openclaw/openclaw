@@ -235,7 +235,7 @@ export class ArchivedTranscriptReader {
       start = 0;
     }
     if (cursor && filePath === cursor.path && prepared?.displaySource !== cursor.source) {
-      throw new Error("Transcript archive changed during source pagination; retry the read");
+      throw new Error("Chat history archive changed during source pagination; retry the read");
     }
     if (prepared && !prepared.index) {
       return {

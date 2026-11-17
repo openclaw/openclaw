@@ -19,7 +19,12 @@ vi.mock("./registry.js", () => ({
   assertSandboxRegistryEntryCurrent: () => {},
 }));
 // mock-isolation: registry snapshots do not acquire a real Gateway state root.
-vi.mock("./state-owner.js", () => ({ captureSandboxStateOwner: async () => () => {} }));
+vi.mock("./state-owner.js", () => ({
+  captureSandboxStateOwner: async () => ({
+    assertCurrent: () => {},
+    prepareCurrent: async () => {},
+  }),
+}));
 // mock-isolation: synthetic targets avoid probing an operator's actual Podman connection.
 vi.mock("./podman-runtime.js", () => ({
   validateSandboxContainerEngineTarget: async () => {},

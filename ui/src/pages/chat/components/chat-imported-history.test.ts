@@ -239,9 +239,23 @@ it.each([
 });
 
 it.each([
-  ["\n", ""],
+  ["", "Keep this body"],
+  ["Thinking\n\n", "Thinking\n\nKeep this body"],
+])("unwraps the untrimmed continue-path frame after %j", (prefix, expected) => {
+  // wrapExternalContent without a warning begins with one LF; continue imports
+  // persisted that frame untrimmed before the gateway copy started trimming it.
+  const framed = wrapExternalContent("Keep this body", {
+    source: "unknown",
+    includeWarning: false,
+  });
+  expect(framed.startsWith("\n<<<")).toBe(true);
+  expectDisplay(imported(prefix + framed), expected);
+});
+
+it.each([
+  ["\n\n", ""],
   ["\r\n", ""],
-  ["Thinking\n\n\n", ""],
+  ["Thinking\n\n\n\n", ""],
   ["", "\n"],
   ["", "\r\n"],
 ])("does not unwrap extra separators %j / %j", (prefix, suffix) => {

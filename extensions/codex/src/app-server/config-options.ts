@@ -310,7 +310,6 @@ export function createCodexAppServerConfig({
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
       ...(config.nativeHookRelay ? { nativeHookRelay: config.nativeHookRelay } : {}),
       codeModeOnly: config.codeModeOnly === true,
-      loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
       requestTimeoutMs: resolveCodexAppServerRequestTimeoutMs(pluginConfig),
       approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
       sandbox: resolvedSandbox,

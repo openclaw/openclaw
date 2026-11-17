@@ -233,6 +233,9 @@ export type ChannelOutboundAdapter = {
     text?: string;
   }) => boolean;
   preferFinalAssistantVisibleText?: boolean;
+  /**
+   * @deprecated Core compares routes through `messaging.resolveInboundConversation`.
+   */
   targetsMatchForReplySuppression?: (params: {
     originTarget: string;
     targetKey: string;

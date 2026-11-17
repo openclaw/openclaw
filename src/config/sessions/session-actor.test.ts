@@ -8,6 +8,7 @@ import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnost
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
+  SQLITE_WORKER_MAX_MESSAGE_BYTES,
 } from "../../infra/sqlite-worker-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
@@ -314,7 +315,7 @@ it.each([false, true])(
   },
 );
 
-it("recovers a transferred native commit after ordinary reply loss without replay", async () => {
+it("recovers a compact native commit with a large entry after ordinary reply loss without replay", async () => {
   await withActor(async ({ actor, commands, fault, seedTransferEntry, readEntry }) => {
     seedTransferEntry();
     fault.reply = "lost";
@@ -339,13 +340,26 @@ it("recovers a transferred native commit after ordinary reply loss without repla
 });
 
 it("does not publish a candidate when its outcome transfer is incomplete", async () => {
-  await withActor(async ({ actor, commands, fault, seedTransferEntry, readEntry }) => {
-    seedTransferEntry();
+  await withActor(async ({ actor, commands, fault, readEntry }) => {
     const before = readEntry();
     fault.incompleteOutcomeTransfer = true;
     const observer = { committed: vi.fn() };
     const result = await actor.patch(
-      activity("incomplete-transfer", 601, { phaseId: "activity" }),
+      {
+        ...activity("incomplete-transfer", 601, { phaseId: "activity" }),
+        // An unchanged oversized preimage is now referenced, so change a large field.
+        reducers: [
+          {
+            kind: "fallback-notice",
+            notice: {
+              kind: "active",
+              selectedModel: "synthetic/selected",
+              activeModel: "synthetic/active",
+              reason: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES + 1024),
+            },
+          },
+        ],
+      },
       authority,
       observer,
     );

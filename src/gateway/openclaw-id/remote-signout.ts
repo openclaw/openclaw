@@ -38,7 +38,7 @@ export async function signOutTunnelPeer(
       throw new Error("Could not revoke this browser's Gateway token");
     }
   }
-  // Persist revocation before removing the bindings; failed writes remain discoverable on retry.
-  await authority.unbindPeers([peerKey]);
+  // The bindings stay: they mark these as OpenClaw ID browsers, managed on the Access page,
+  // and re-sign-in rebinds the re-issued token. Membership removal drops them.
   return true;
 }

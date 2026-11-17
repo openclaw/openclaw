@@ -3,7 +3,10 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
@@ -42,6 +45,12 @@ suite.define(() => {
       await installMockGateway(page, {
         assistantName: "Main agent",
         defaultAgentId: "main",
+        featureMethods: [
+          ...defaultControlUiFeatureMethods,
+          "agents.list",
+          "channels.status",
+          "config.get",
+        ],
         methodResponses: {
           "agents.list": createAgentRoster({ main: "Main agent" }, "main", "agent"),
           "channels.status": {

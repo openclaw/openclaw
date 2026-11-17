@@ -87,9 +87,9 @@ pauses new plugin calls, and waits up to 60 seconds for in-flight work while the
 previous generation stays active. If the work does not finish, the reload fails
 once, resumes calls, and leaves services and channels running. Otherwise, it stops
 services and channels, drains remaining work, and completes shutdown and disposal
-before registering the replacement. Other plugin instances remain active. If
-registration or pre-publication activation fails, the Gateway attempts
-a fresh registration using the captured previous code and config automatically.
+before registering the replacement. Other plugin instances remain active.
+Once services and channels begin stopping, a failure before publication can trigger
+an automatic attempt to register the captured previous code with its previous config.
 Recovery restores the active runtime; it does not rewrite externally edited config files.
 If cleanup or recovery also fails, the error reports that recovery could not
 complete. Failures after publication remain visible on the accepted generation.

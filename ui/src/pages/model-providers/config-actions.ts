@@ -127,14 +127,16 @@ export function createModelProviderConfigActions(deps: {
     const reason = formatUiExternalText(
       result.error ?? t(`modelProviders.probe.status.${result.status}`),
     );
-    // Only a refused credential or account is about the key; anything else leaves it unproven.
+    // Authentication and billing failures need different recovery; other checks are inconclusive.
     const inconclusive = result.status !== "auth" && result.status !== "billing";
     return {
       kind: inconclusive ? "warning" : "error",
       text: t(
         inconclusive
           ? "modelProviders.apiKey.checkInconclusive"
-          : "modelProviders.apiKey.checkFailed",
+          : result.status === "billing"
+            ? "modelProviders.apiKey.checkBillingFailed"
+            : "modelProviders.apiKey.checkFailed",
         { reason },
       ),
     };

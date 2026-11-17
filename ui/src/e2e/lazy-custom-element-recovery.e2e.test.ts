@@ -558,7 +558,7 @@ suite.define(() => {
       await retryThroughReload(page, error, failure);
       const toolbar = page.locator(".macos-titlebar-controls");
       await toolbar.waitFor({ state: "visible" });
-      await page.locator(".sidebar-session-toolbar__collapse").click();
+      await toolbar.getByRole("button", { name: "Collapse sidebar" }).click();
       await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });

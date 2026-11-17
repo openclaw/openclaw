@@ -313,8 +313,8 @@ it.each([
               .prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'")
               .get(),
           ).toEqual({ value_json: '"preserved"' });
-          expect(liveFullChecks()).toBe(1);
-          expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeDefined();
+          expect(liveFullChecks()).toBe(verifiedLiveSource ? 1 : 0);
+          expect(readSqliteDatabaseIntegrityVerification(pathname)).toEqual(verification);
         });
       } finally {
         vi.restoreAllMocks();

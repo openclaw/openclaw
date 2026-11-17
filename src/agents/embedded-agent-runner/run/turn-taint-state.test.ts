@@ -12,8 +12,6 @@ describe("agent turn taint state", () => {
 
     state.observe({
       toolName: "fake_web_tool",
-      argsHash: "args",
-      resultHash: "result",
       resultContentSource: "network",
       presentationOnly: true,
     });
@@ -21,11 +19,9 @@ describe("agent turn taint state", () => {
 
     state.observe({
       toolName: "fake_web_tool",
-      argsHash: "args",
-      resultHash: "result",
       resultContentSource: "network",
     });
-    state.observe({ toolName: "read", argsHash: "next", resultHash: "next" });
+    state.observe({ toolName: "read" });
     expect(state.isTainted()).toBe(true);
   });
 });

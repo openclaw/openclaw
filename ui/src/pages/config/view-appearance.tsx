@@ -11,6 +11,7 @@ import {
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import { UI_APPEARANCE_DEFAULTS } from "../../app/settings.ts";
+import type { CatalogTheme } from "../../app/theme-catalog.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -81,11 +82,35 @@ const ACCENT_PRESETS = [
 ] as const;
 
 /* Builtin cards preview their real palette (chip colors live in config.css,
-   mirrored from the base.css theme blocks). Plugin cards use the live palette.
+   mirrored from the base.css theme blocks). Catalog cards use their cached palette.
    Only the inactive custom import card falls back to the download icon. */
-function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName; selected: boolean }) {
+function ThemeCardVisual(props: {
+  id: ThemeName;
+  activeTheme: ThemeName;
+  selected: boolean;
+  palette?: CatalogTheme["palette"];
+}) {
+  const previewStyle = createMemo(() => {
+    const palette = props.palette;
+    if (!palette) {
+      // Catalog cards stay neutral until their own palette is available.
+      return props.id.includes("/")
+        ? {
+            "--theme-chip-bg": "var(--bg-hover)",
+            "--theme-chip-accent": "var(--muted)",
+            "--theme-chip-accent-2": "var(--muted)",
+          }
+        : undefined;
+    }
+    return {
+      "--theme-chip-bg": `light-dark(${palette.light.bg}, ${palette.dark.bg})`,
+      "--theme-chip-ink": `light-dark(${palette.light.text}, ${palette.dark.text})`,
+      "--theme-chip-accent": `light-dark(${palette.light.accent}, ${palette.dark.accent})`,
+      "--theme-chip-accent-2": `light-dark(${palette.light["accent-2"]}, ${palette.dark["accent-2"]})`,
+    };
+  });
   return (
-    <span class="settings-theme-card__swatch" aria-hidden="true">
+    <span class="settings-theme-card__swatch" aria-hidden="true" style={previewStyle()}>
       <Show
         when={props.id !== "custom" || props.activeTheme === props.id}
         fallback={
@@ -331,7 +356,7 @@ export function AppearanceSection(props: ConfigProps) {
                   <button
                     class={[
                       "settings-theme-card",
-                      `settings-theme-card--${opt().id.includes("/") ? "custom" : opt().id}`,
+                      `settings-theme-card--${opt().id.includes("/") ? "catalog" : opt().id}`,
                       { "settings-theme-card--active": opt().id === presentedTheme().id },
                     ]}
                     aria-pressed={
@@ -361,6 +386,7 @@ export function AppearanceSection(props: ConfigProps) {
                       id={opt().id}
                       activeTheme={presentedTheme().id}
                       selected={opt().id === presentedTheme().id}
+                      palette={props.themeCatalog?.palettes?.get(opt().id)}
                     />
                     <span class="settings-theme-card__label">{opt().label}</span>
                   </button>

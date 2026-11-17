@@ -1,10 +1,43 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveUsageProviderId } from "../../../src/infra/provider-usage.shared.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ModelAuthStatusProvider, ModelAuthStatusResult } from "../api/types.ts";
+import type {
+  ModelAuthStatusProfile,
+  ModelAuthStatusProvider,
+  ModelAuthStatusResult,
+} from "../api/types.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { authReads, type ModelAuthRequest } from "./model-auth-request-state.ts";
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
+
+/** The auth owner supplies a reason for unusable grants, not for routine access expiry. */
+export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
+  return (
+    profile.type === "oauth" &&
+    (profile.status === "expiring" || profile.status === "expired") &&
+    profile.reasonCode === undefined
+  );
+}
+
+/** For OAuth, the auth owner reports `expired` only while a refresh claim may still settle. */
+export function isOAuthRefreshPending(profile: ModelAuthStatusProfile): boolean {
+  return profile.type === "oauth" && profile.reasonCode === "expired";
+}
+
+/** Routine renewal is quiet only when no actionable missing credential also needs attention. */
+export function hasRoutineOAuthExpiry(
+  status: "expired" | "expiring",
+  profiles: readonly ModelAuthStatusProfile[],
+): boolean {
+  const expiring = profiles.filter((profile) => profile.status === status);
+  return (
+    expiring.length > 0 &&
+    !profiles.some(
+      (profile) => profile.status === "missing" && profile.reasonCode !== "setup_inactive",
+    ) &&
+    expiring.every((profile) => isAccessTokenExpiry(profile) || isOAuthRefreshPending(profile))
+  );
+}
 
 const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
 const authRefreshDeadlines = new WeakMap<ModelAuthStatusResult, number | undefined>();
@@ -38,10 +71,11 @@ const AUTH_STATUS_PRIORITY = ["expired", "missing", "expiring", "ok", "static"] 
 /** Collapse auth aliases before display; Gateway rows retain their auth facts. */
 export function listEffectiveModelAuthProviders(
   providers: readonly ModelAuthStatusProvider[],
+  providerKey: (provider: string) => string = canonicalModelAuthProviderId,
 ): ModelAuthStatusProvider[] {
   const groups = new Map<string, ModelAuthStatusProvider[]>();
   for (const provider of providers) {
-    const id = canonicalModelAuthProviderId(provider.provider);
+    const id = providerKey(provider.provider);
     const group = groups.get(id) ?? [];
     group.push(provider);
     groups.set(id, group);
@@ -55,11 +89,17 @@ export function listEffectiveModelAuthProviders(
     // An API key configured on any alias is a fact of the merged provider, not of
     // the worst-status record alone; dropping it would fake a sign-in gap.
     const apiKey = group.find((provider) => provider.apiKey)?.apiKey;
-    return Object.assign({}, selected, {
+    const merged = Object.assign({}, selected, {
       provider: id,
       profiles: group.flatMap((provider) => provider.profiles),
       ...(apiKey ? { apiKey } : {}),
     });
+    // Usage aliases cannot move a native runtime's billing facts onto an API
+    // provider. Runtime-specific consumers preserve the runtime key instead.
+    if (selected.provider !== id) {
+      delete merged.nativeAuth;
+    }
+    return merged;
   });
 }
 
