@@ -167,7 +167,7 @@ function sniffDocumentCharset(bytes: Uint8Array): string | undefined {
   return undefined;
 }
 
-function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
+export function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const charset = sniffCharset(res.headers.get("content-type"), bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
