@@ -794,6 +794,7 @@ const startupEnglish = {
     deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
+    openSessionsPage: "Open Sessions",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level",
@@ -1196,6 +1197,7 @@ const startupEnglish = {
     },
     rosterTitle: "Online",
     usersTitle: "Users",
+    peopleTitle: "People",
     allUsers: "All users",
     directoryFailed: "Could not load all users. Retry",
     filters: {
@@ -1794,6 +1796,7 @@ const startupEnglish = {
       menuDisplay: "Display",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
+      viewAllSessions: "View all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",

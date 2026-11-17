@@ -4571,7 +4571,6 @@
       "ui/src/e2e/sidebar-pinned-agents.e2e.test.ts": 33,
       "ui/src/e2e/sidebar-profileless-scope.e2e.test.ts": 3,
       "ui/src/e2e/sidebar-pull-requests.e2e.test.ts": 3,
-      "ui/src/e2e/sidebar-rail-alignment.e2e.test.ts": 14,
       "ui/src/e2e/sidebar-rail-toggles.capture.e2e.test.ts": 6,
       "ui/src/e2e/sidebar-rail.e2e.test.ts": 16,
       "ui/src/e2e/sidebar-refresh-availability.e2e.test.ts": 4,

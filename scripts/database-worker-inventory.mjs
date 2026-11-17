@@ -3793,6 +3793,10 @@ const cliModules = new Map([
     "Explicit developer-only measurement of cold archive publication, navigation backfill and bounded reads on synthetic state; no runtime imports or Gateway callers",
   ],
   [
+    "scripts/perf/session-cold-writer.mjs",
+    "Explicit developer-only writer-hold and restore benchmark on synthetic state; no runtime imports or Gateway callers",
+  ],
+  [
     "scripts/perf/session-cold-selection.ts",
     "Explicit developer-only benchmark of cold preparation and mutation on synthetic state; no runtime imports or Gateway callers",
   ],

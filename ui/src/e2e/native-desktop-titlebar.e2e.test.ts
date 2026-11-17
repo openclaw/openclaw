@@ -238,7 +238,12 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
   }
   await focusChatSidePanel(page);
   await assertChromeClear();
-  await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+  // New session lives in the Sessions panel header; open the panel when it is closed.
+  const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+  if (!(await create.isVisible())) {
+    await page.locator('[data-navigation-view="sessions"]').click();
+  }
+  await create.click();
   await page.locator(".new-session-page__message").waitFor();
   await assertChromeClear();
   await page.evaluate(() =>
@@ -300,8 +305,9 @@ async function alignsNativeHeaders(
     : row.getByRole("button", { name: "Collapse sidebar" });
   await collapse.waitFor();
   expect(await collapse.getAttribute("aria-expanded")).toBe("true");
-  expect(await row.locator("a").count()).toBe(0);
-  expect(await row.getByRole("button", { name: /New (session|conversation)/ }).count()).toBe(0);
+  // The header's only link is New session, beside Filter & sort and Collapse.
+  expect(await row.locator("a").count()).toBe(1);
+  expect(await row.getByRole("link", { name: "New session", exact: true }).count()).toBe(1);
   const geometry = await row.evaluate((element) => {
     const box = (selector: string) =>
       document.querySelector(selector)!.getBoundingClientRect().toJSON();
@@ -329,68 +335,67 @@ async function alignsNativeHeaders(
     expect(bar!.x).toBe(content!.x + 12);
     expect(title!.x).toBeGreaterThanOrEqual(bar!.x + bar!.width + 8);
   }
-  for (const panel of ["pages", "online"] as const) {
-    await page.locator(`[data-navigation-view="${panel}"]`).click();
-    const header = page.locator(".sidebar-panel-header");
-    const toggle = macNavigation
-      ? page.locator(".macos-titlebar-controls__sidebar")
-      : header.getByRole("button", { name: "Collapse sidebar" });
-    await toggle.waitFor();
-    const panelGeometry = await header.evaluate((element) => {
-      const title = element.firstElementChild!.getBoundingClientRect();
-      const collapseBounds = element
-        .querySelector(".sidebar-session-toolbar__collapse")!
-        .getBoundingClientRect();
-      const headerBounds = element.getBoundingClientRect();
-      return {
-        x: title.x,
-        y: headerBounds.y,
-        height: headerBounds.height,
-        center: title.y + title.height / 2,
-        collapseCenter: collapseBounds.y + collapseBounds.height / 2,
-        collapseRight: collapseBounds.right,
-        right: headerBounds.right,
-      };
-    });
-    expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
-    expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
-    if (!macNavigation) {
-      expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
-      expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
-    }
-    // Empty header space must stay non-interactive so it can drag the window.
-    const dragGap = await header.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const controls = [...element.querySelectorAll("button")]
-        .map((button) => button.getBoundingClientRect())
-        .toSorted((a, b) => a.left - b.left);
-      let start = bounds.left;
-      let widest = { left: start, width: 0 };
-      for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
-        if (control.left - start > widest.width) {
-          widest = { left: start, width: control.left - start };
-        }
-        start = Math.max(start, control.right);
+  // People opens Activity; measure the Users panel back over the chat.
+  await page.locator('[data-navigation-view="online"]').click();
+  await page.goBack();
+  const header = page.locator(".sidebar-panel-header");
+  const toggle = macNavigation
+    ? page.locator(".macos-titlebar-controls__sidebar")
+    : header.getByRole("button", { name: "Collapse sidebar" });
+  await toggle.waitFor();
+  const panelGeometry = await header.evaluate((element) => {
+    const title = element.firstElementChild!.getBoundingClientRect();
+    const collapseBounds = element
+      .querySelector(".sidebar-session-toolbar__collapse")!
+      .getBoundingClientRect();
+    const headerBounds = element.getBoundingClientRect();
+    return {
+      x: title.x,
+      y: headerBounds.y,
+      height: headerBounds.height,
+      center: title.y + title.height / 2,
+      collapseCenter: collapseBounds.y + collapseBounds.height / 2,
+      collapseRight: collapseBounds.right,
+      right: headerBounds.right,
+    };
+  });
+  expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
+  expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
+  if (!macNavigation) {
+    expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
+    expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
+  }
+  // Empty header space must stay non-interactive so it can drag the window.
+  const dragGap = await header.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const controls = [...element.querySelectorAll("button")]
+      .map((button) => button.getBoundingClientRect())
+      .toSorted((a, b) => a.left - b.left);
+    let start = bounds.left;
+    let widest = { left: start, width: 0 };
+    for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
+      if (control.left - start > widest.width) {
+        widest = { left: start, width: control.left - start };
       }
-      const hit = document.elementFromPoint(
-        widest.left + widest.width / 2,
-        bounds.top + bounds.height / 2,
-      );
-      return { width: widest.width, button: Boolean(hit?.closest("button")) };
-    });
-    expect(dragGap.width).toBeGreaterThanOrEqual(24);
-    expect(dragGap.button).toBe(false);
-    if (native && !macNavigation) {
-      expect(panelGeometry.x).toBe(macos ? 92 : 68);
+      start = Math.max(start, control.right);
     }
-    await toggle.click();
+    const hit = document.elementFromPoint(
+      widest.left + widest.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    return { width: widest.width, button: Boolean(hit?.closest("button")) };
+  });
+  expect(dragGap.width).toBeGreaterThanOrEqual(24);
+  expect(dragGap.button).toBe(false);
+  if (native && !macNavigation) {
+    expect(panelGeometry.x).toBe(macos ? 92 : 68);
+  }
+  await toggle.click();
+  // Native shells reopen with their own control; on the web Sessions reopens the panel.
+  if (native) {
     await page
       .locator(
-        macNavigation
-          ? ".macos-titlebar-controls__sidebar"
-          : native
-            ? ".shell-chrome-controls__nav-toggle"
-            : `[data-navigation-view="${panel}"]`,
+        macNavigation ? ".macos-titlebar-controls__sidebar" : ".shell-chrome-controls__nav-toggle",
       )
       .click();
   }

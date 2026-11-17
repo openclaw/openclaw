@@ -18,6 +18,7 @@ import { runControlUiPluginAction, type ControlUiComposerDraft } from "./control
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { PluginContribution } from "./control-ui-view.solid.tsx";
+import { navigationItemCurrent } from "./navigation-sections.ts";
 
 type ContributionsProps = {
   kind: "navigation" | "session-header" | "composer" | "header";
@@ -25,6 +26,8 @@ type ContributionsProps = {
   agentId: string | undefined;
   navigationKey: string;
   navigationChildren: boolean;
+  /** The item stands for its whole section, so a child's open page marks it too. */
+  navigationSection: boolean;
   navigationMenus: SidebarMenus | undefined;
   presented: boolean;
   /** The pane's draft owner, exposed to composer actions. */
@@ -102,18 +105,17 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     actionLifetimes.clear();
   });
   const navigation = createMemo(() => {
-    const runtime = source().read();
-    const search = new URLSearchParams(window.location.search);
-    return (
-      runtime?.registrations("navigation").map((entry) => {
-        const href = entry.host.navigation.pageHref(entry.value.page);
-        const target = new URL(href, window.location.href);
-        const active =
-          target.pathname === window.location.pathname &&
-          [...target.searchParams].every(([key, value]) => search.get(key) === value);
-        return { entry, href, active };
-      }) ?? []
-    );
+    const registrations = source().read()?.registrations("navigation") ?? [];
+    return registrations.map((entry) => ({
+      entry,
+      href: entry.host.navigation.pageHref(entry.value.page),
+      active: navigationItemCurrent(
+        registrations,
+        entry,
+        window.location,
+        !props.navigationChildren && props.navigationSection,
+      ),
+    }));
   });
   type Navigation = ReturnType<typeof navigation>[number];
   const iconName = (entry: Navigation["entry"], fallback = "plug"): IconName => {
@@ -364,6 +366,7 @@ defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginCon
     agentId: { default: undefined, attribute: false },
     navigationKey: { default: "", attribute: false },
     navigationChildren: { default: true, type: Boolean },
+    navigationSection: { default: false, type: Boolean },
     navigationMenus: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
     composer: { default: undefined, attribute: false },
