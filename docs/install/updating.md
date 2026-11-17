@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor compares pending plugin migration obligations independently of
+plugin order and repair guidance. A changed owner, protected path, or migration
+requirement still refuses input publication; diagnostics name added or removed
+owners even when the displayed ID summary is truncated. The candidate must contain
+this repair; the installed updater needs no schema or protocol change.
+
 A newer Doctor recognizes retained update captures whose state directory used
 an older alias or Windows short-path spelling. Scope comparison resolves the
 recorded state directory and configuration parent without changing sealed capture
