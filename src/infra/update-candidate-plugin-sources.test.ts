@@ -378,6 +378,60 @@ it.each(["relative", "package", "absolute", "file URL"])(
   },
 );
 
+it.each(["candidate", "external", "candidate escape", "candidate transitive escape"] as const)(
+  "validates a private plugin dependency resolved into the %s tree",
+  async (location) => {
+    const f = await fixture();
+    const dependency = path.join(f.candidateRoot, "node_modules", "typebox");
+    const external = path.join(f.root, "serving-install", "node_modules", "typebox");
+    const target =
+      location === "candidate" || location === "candidate transitive escape"
+        ? dependency
+        : external;
+    await writeTree(target, {
+      "package.json": { name: "typebox", type: "module", exports: "./build/index.mjs" },
+      "build/index.mjs": 'export default "candidate-ready";',
+    });
+    if (location === "candidate escape") {
+      await fs.mkdir(path.dirname(dependency), { recursive: true });
+      await fs.symlink(external, dependency, "junction");
+    }
+    if (location === "candidate transitive escape") {
+      await writeTree(external, {
+        "package.json": { name: "vendor", type: "module", exports: "./index.mjs" },
+        "index.mjs": 'export default "serving-install";',
+      });
+      await fs.mkdir(path.join(dependency, "node_modules"));
+      await fs.symlink(external, path.join(dependency, "node_modules", "vendor"), "junction");
+      await fs.writeFile(
+        path.join(dependency, "build/index.mjs"),
+        'export { default } from "vendor";',
+      );
+    }
+    const modules = path.join(f.copiedPlugin, "node_modules");
+    await fs.mkdir(modules);
+    await fs.symlink(
+      location === "external" ? external : dependency,
+      path.join(modules, "typebox"),
+      "junction",
+    );
+    await write(path.join(f.copiedPlugin, "package.json"), {
+      name: "demo",
+      type: "module",
+      openclaw: { extensions: ["./index.mjs"] },
+      dependencies: { typebox: "1.4.3" },
+    });
+    await fs.writeFile(f.copiedEntry, 'import value from "typebox"; console.log(value);');
+
+    if (location !== "candidate") {
+      await expect(f.repair()).rejects.toThrow("outside the temporary update copy");
+      return;
+    }
+    expect(await f.repair()).toEqual({ copiedFiles: 0, warnings: [] });
+    await expectOutput(f.run, "candidate-ready");
+  },
+);
+
 it.each([
   { syntax: "import", fileLocator: false },
   { syntax: "import", fileLocator: true },

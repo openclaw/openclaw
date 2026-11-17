@@ -1699,6 +1699,13 @@ a visible timeout. Stored state and recovery backups retain their existing
 durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
+Candidate Doctor accepts plugin dependencies inside the private rehearsal copy
+or the staged OpenClaw package, including its nested `node_modules`. Private host
+links deliberately target that staged package; on Windows these are junctions.
+Dependency paths must remain inside those roots after resolving links. Plugin
+repair writes remain confined to the private copy. The candidate Doctor must
+contain this fix; older installed updaters need no new marker or protocol.
+
 Candidate validation uses separate size-aware allowances for snapshots and each
 runtime check. Slow snapshots and Doctor no longer consume the next check's
 allowance or trigger an additional 30-minute limit for the whole validation.
