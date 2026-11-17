@@ -6,9 +6,13 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
+import { recordAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
 import * as deletionFacts from "../state/agent-deletion-journal-status.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
@@ -137,6 +141,29 @@ it("lists cold deletion state without filesystem work in optional receipt lookup
     expect(getSqliteDatabaseAdmissionIdentityForPath(copied)).toBeUndefined();
     expect((await listWithReceipt(1)).agents.map(({ id }) => id)).toEqual(["main"]);
     expect((await listWithReceipt(0)).agents.map(({ id }) => id)).toEqual(["main"]);
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+  }
+});
+
+it("keeps main visible through cold and prepared auxiliary recovery discovery", async () => {
+  const cfg = { agents: { entries: { main: {}, held: {} } } };
+  const agentPath = (id: string) =>
+    path.join(stateDir, "agents", id, "agent", "openclaw-agent.sqlite");
+  runOpenClawStateWriteTransaction((database) =>
+    recordAgentDeletionRecoveryHolds(database, [
+      ...["generation-lock", "generation-writer", "reindex-lock"].map((kind) => ({
+        agentId: "main",
+        path: `${agentPath("main")}.${kind}.sqlite`,
+      })),
+      { agentId: "held", path: agentPath("held") },
+    ]),
+  );
+  try {
+    await closeOpenClawStateDatabaseAsync();
+    for (let read = 0; read < 2; read++) {
+      expect((await listGatewayAgentsBasic(cfg)).agents.map(({ id }) => id)).toEqual(["main"]);
+    }
   } finally {
     await closeOpenClawStateDatabaseAsync();
   }
