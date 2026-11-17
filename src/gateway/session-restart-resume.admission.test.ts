@@ -4,14 +4,14 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { prepareInternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { prepareSessionEventInput } from "../auto-reply/reply/session-event-context.js";
-import { type SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { type OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
