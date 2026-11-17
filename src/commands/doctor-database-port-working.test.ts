@@ -80,7 +80,7 @@ const artifact = (file: string) => {
   };
 };
 
-it("keeps working SQL local and resumes durable bytes without early cleanup", async () => {
+async function checkWorkingCopyRecovery(from: "sqlite" | "postgres") {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "port-local-working-"));
   const state = path.join(root, "durable");
   const cache = path.join(root, "local-cache");
@@ -89,7 +89,7 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
   mocks.durable = state;
   mocks.configPath = path.join(root, "config.json");
   mocks.config = {
-    database: { engine: "postgres", families: { agent: { engine: "sqlite" } } },
+    database: { engine: "postgres", families: { agent: { engine: from } } },
     plugins: { enabled: false },
   };
   fs.writeFileSync(mocks.configPath, JSON.stringify(mocks.config), { mode: 0o600 });
@@ -121,8 +121,8 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
       ],
       selection: {
         path: ["database", "families", "agent", "engine"],
-        originalValue: "sqlite",
-        effectiveSource: "sqlite",
+        originalValue: from,
+        effectiveSource: from,
       },
       outOfScope: [],
     }),
@@ -135,7 +135,7 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
     revision: 1,
     state: "preparing",
     root: { stateDir: state, dev: String(stateStat.dev), ino: String(stateStat.ino) },
-    direction: { from: "sqlite", to: "postgres" },
+    direction: { from, to: from === "sqlite" ? "postgres" : "sqlite" },
     originalConfig: [artifact(mocks.configPath)],
     artifacts: [artifact(image), artifact(inputs)],
     targets: [
@@ -144,8 +144,14 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
         sourceSchemaVersion: 1,
         targetSchemaVersion: 1,
         descriptorHash: "a".repeat(64),
-        original: { engine: "sqlite", path: source },
-        intended: { engine: "postgres", anchorPath: source, namespace: "port_test" },
+        original:
+          from === "sqlite"
+            ? { engine: "sqlite", path: source }
+            : { engine: "postgres", anchorPath: source, namespace: "port_test" },
+        intended:
+          from === "sqlite"
+            ? { engine: "postgres", anchorPath: source, namespace: "port_test" }
+            : { engine: "sqlite", path: source },
         originalCapture: artifact(image),
         verification: null,
       },
@@ -155,9 +161,15 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
   const fixed = databasePortManifestPath(state);
   const original = artifact(image);
   const proof = { tables: { witness: { rows: 1, sha256: "b".repeat(64) } }, allocations: {} };
+  if (from === "postgres") {
+    const postgres = path.join(directory, "0", "postgres");
+    fs.mkdirSync(postgres, { mode: 0o700 });
+    fs.writeFileSync(path.join(postgres, "manifest.json"), JSON.stringify({ verification: proof }));
+  }
   let entered = Promise.withResolvers<string>();
   let release = Promise.withResolvers<void>();
   let fail = true;
+  let stagedValue: unknown;
   mocks.task.mockImplementation(async (task: DatabasePortTask) => {
     if (!("sourcePath" in task)) {
       throw new Error("unexpected worker operation");
@@ -170,6 +182,10 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
       using local = new DatabaseSync(task.sourcePath);
       local.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     } else if (task.operation === "stage") {
+      {
+        using local = new DatabaseSync(task.sourcePath, { readOnly: true });
+        stagedValue = local.prepare("SELECT value FROM witness").get();
+      }
       entered.resolve(task.sourcePath);
       await release.promise;
       if (fail) {
@@ -211,6 +227,7 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
   expect(fs.readFileSync(recorded.path)).toEqual(fs.readFileSync(firstLocal));
   release.resolve();
   expect(await first).toBeInstanceOf(Error);
+  expect(stagedValue).toEqual({ value: from === "sqlite" ? "canonical" : "original" });
   expect(fs.existsSync(firstLocal)).toBe(true);
   expect(artifact(image)).toEqual(original);
 
@@ -236,6 +253,13 @@ it("keeps working SQL local and resumes durable bytes without early cleanup", as
   ).toBe(true);
   expect(fs.existsSync(secondLocal)).toBe(false);
   expect(fs.existsSync(firstLocal)).toBe(true);
-  expect(mocks.task.mock.calls.filter(([task]) => task.operation === "migrate")).toHaveLength(1);
+  expect(mocks.task.mock.calls.filter(([task]) => task.operation === "migrate")).toHaveLength(
+    from === "sqlite" ? 1 : 0,
+  );
   expect(artifact(image)).toEqual(original);
-});
+}
+
+it.each(["sqlite", "postgres"] as const)(
+  "keeps %s working SQL local and resumes durable bytes without early cleanup",
+  checkWorkingCopyRecovery,
+);

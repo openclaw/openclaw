@@ -58,7 +58,11 @@ async function privateMigrate(
   if (recorded) {
     return;
   }
-  await runDatabasePortTask({ operation: "migrate", sourcePath: localPath, config }, ctx);
+  // PostgreSQL exports already passed exact schema-version admission. Migrating
+  // their SQLite image can restamp canonical metadata and invalidate verification.
+  if (current.direction.from === "sqlite") {
+    await runDatabasePortTask({ operation: "migrate", sourcePath: localPath, config }, ctx);
+  }
   await runDatabasePortTask({ operation: "checkpoint", sourcePath: localPath }, ctx);
   syncDatabasePortPath(localPath);
   const qualified = await captureDatabaseArtifact(localPath);

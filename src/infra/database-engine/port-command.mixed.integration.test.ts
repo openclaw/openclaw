@@ -164,6 +164,15 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         expect(hash(otherPath)).toBe(untouched);
         if (family === "agent") {
           expect(readBackupEngine(shared).engine).toBe("sqlite");
+          const anchor = readBackupEngine(agent);
+          expect(anchor.engine).toBe("postgres");
+          if (anchor.engine !== "postgres") {
+            throw new Error("Expected PostgreSQL agent anchor");
+          }
+          // A release update without a schema step leaves PostgreSQL metadata unchanged.
+          await client.query(
+            `UPDATE "${anchor.namespace}".schema_meta SET app_version = '2026.11.3', updated_at = 17`,
+          );
         }
         expect(config().database).toMatchObject({
           engine: "sqlite",
@@ -178,6 +187,10 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
         expect(config().database?.families).toEqual({ [other]: { engine: "postgres" } });
         if (family === "agent") {
           using db = openNodeSqliteDatabase(agent, { readOnly: true });
+          expect(db.prepare("SELECT app_version, updated_at FROM schema_meta").get()).toEqual({
+            app_version: "2026.11.3",
+            updated_at: 17,
+          });
           expect(
             db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),
           ).toEqual({ value_json: '"agent-data"' });
