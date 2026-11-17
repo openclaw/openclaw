@@ -1,6 +1,8 @@
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import type { UnsettledRequesterChild } from "../subagents/registry/subagent-registry-requester-yield.js";
+import { normalizeToolPolicyName } from "../tool-policy-shared.js";
+import { readToolResultStatus } from "../tool-result-error.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readToolStringParam } from "./common.js";
 
@@ -36,6 +38,18 @@ export type SessionsYieldCallback = (
     resumesInPlace?: true;
   },
 ) => Promise<void> | void;
+
+/**
+ * A later turn's yield found an earlier turn's children still pending. When that turn
+ * already delivered its visible reply through the message tool, the runtime ends it here:
+ * the reply is out and the earlier wake resumes the session, so trailing text is not a reply.
+ */
+export function isAlreadyPendingSessionsYieldResult(toolName: string, result: unknown): boolean {
+  return (
+    normalizeToolPolicyName(toolName) === "sessions_yield" &&
+    readToolResultStatus(result) === "already_pending"
+  );
+}
 
 function describePendingChild(child: UnsettledRequesterChild): string {
   const name = child.label ? `${child.label} (${child.childSessionKey})` : child.childSessionKey;

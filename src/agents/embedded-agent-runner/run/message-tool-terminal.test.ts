@@ -320,6 +320,40 @@ describe("message-tool-only source replies", () => {
   );
 });
 
+describe("already-pending yield after a delivered reply", () => {
+  const alreadyPending = {
+    content: [{ type: "text" as const, text: '{"status":"already_pending"}' }],
+    details: { status: "already_pending", pendingChildren: [] },
+  };
+  it.each([true, false])("ends the turn only after a delivered reply (sent %s)", async (sent) => {
+    const f = fixture();
+    if (sent) {
+      await f.invoke({
+        args: { action: "send", message: "progress reply", final: false },
+        result: settledResult(true),
+      });
+    }
+    const result = await f.invoke({ toolName: "sessions_yield", args: {}, result: alreadyPending });
+    // Without a delivered reply, already_pending keeps the turn for its normal answer.
+    expect(result).toEqual(sent ? { terminate: true } : undefined);
+  });
+
+  it("keeps the turn for other yield results", async () => {
+    const f = fixture();
+    await f.invoke({
+      args: { action: "send", message: "progress reply", final: false },
+      result: settledResult(true),
+    });
+    await expect(
+      f.invoke({
+        toolName: "sessions_yield",
+        args: {},
+        result: { content: [], details: { status: "nothing_pending" } },
+      }),
+    ).resolves.toBeUndefined();
+  });
+});
+
 function createAfterToolCallContext({
   toolName = "message",
   args = { action: "send", message: "visible reply" },

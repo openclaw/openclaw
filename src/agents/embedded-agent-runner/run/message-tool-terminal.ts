@@ -23,6 +23,7 @@ import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../run
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
+import { isAlreadyPendingSessionsYieldResult } from "../../tools/sessions-yield-tool.js";
 
 type MessageToolTerminalRoute = Omit<
   Parameters<typeof isDeliveredMessagingToolSendToCurrentSource>[0],
@@ -107,6 +108,7 @@ export function installMessageToolTerminalHook(
   },
 ): void {
   const finalReplyInputs = new Set<object>();
+  let deliveredSourceReply = false;
   const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
   // Let sibling tools settle, then finish without another model request.
@@ -160,12 +162,23 @@ export function installMessageToolTerminalHook(
     } finally {
       delivered ||= isDelivered(hookResult);
       if (delivered) {
+        deliveredSourceReply = true;
         if (final && inputScope) {
           finalReplyInputs.add(inputScope);
         }
         params.onDeliveredSourceReply?.();
       }
     }
-    return delivered && final ? { ...hookResult, terminate: true } : hookResult;
+    // The visible reply already went out and an earlier turn's wake resumes this session.
+    const endsAfterPendingYield =
+      deliveredSourceReply &&
+      !context.isError &&
+      isAlreadyPendingSessionsYieldResult(toolName, context.result);
+    if (endsAfterPendingYield && inputScope) {
+      finalReplyInputs.add(inputScope);
+    }
+    return (delivered && final) || endsAfterPendingYield
+      ? { ...hookResult, terminate: true }
+      : hookResult;
   };
 }

@@ -55,7 +55,7 @@ import {
   extractCliMessagingTarget,
   isPreparedCliInternalSourceReply,
 } from "./execute-messaging.js";
-import { createCliTurnInterruptRequest } from "./execute-turn-interrupt.js";
+import { createCliTurnInterruptRequest, createCliYieldTurnEnd } from "./execute-turn-interrupt.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const CLI_LOOPBACK_CORRELATION_MAX_CALLS = 64;
@@ -72,6 +72,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
     (yielded || turnInterrupt.reason() === "source_reply") && turnInterrupt.isSupported();
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
+  const yieldTurnEnd = createCliYieldTurnEnd(turnInterrupt);
   let sourceReplyDelivered: true | undefined;
   let terminalSourceReplyDelivered = false;
   let latestStartedTool: CliLoopbackCall | string | undefined;
@@ -465,6 +466,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
         }
         const candidate = candidates.length === 1 ? candidates[0] : undefined;
         const isLatestToolResult = observeToolResult(candidate, candidate?.boundToolCallId);
+        yieldTurnEnd.observe(toolName, call, didDeliverSourceReplyViaMessageTool);
         if (isMessagingToolDeliveryAction(toolName, call.args)) {
           commitMessagingToolResult({
             toolName,
@@ -551,14 +553,7 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       event.toolCallId,
       activeTool?.loopbackCall?.outcome !== undefined,
     );
-    if (
-      yielded &&
-      !event.isError &&
-      stripOpenClawMcpToolPrefix(activeTool?.toolName ?? event.name) === "sessions_yield"
-    ) {
-      // Native's tool-result record confirms the yield response was consumed before interruption.
-      turnInterrupt.request("yield");
-    }
+    yieldTurnEnd.onToolResult(activeTool?.toolName ?? event.name, event.isError, yielded);
     if (activeTool?.loopbackCall) {
       askUserDeadlines.clear(activeTool.loopbackCall);
     }
