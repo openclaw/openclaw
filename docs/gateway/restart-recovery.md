@@ -76,7 +76,9 @@ without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
 After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
-and output pipes. On macOS and Linux, any remaining referenced handles get a
+and output pipes. Shared-state leases finish their cleanup before the SQLite worker
+host closes. Completed orderly cleanup preserves exit status 0; cleanup failures
+still produce a failed exit. On macOS and Linux, any remaining referenced handles get a
 one-second final drain before the process logs remaining handle types and re-raises
 `SIGTERM`. Failed or retained
 cleanup keeps its existing deadline and exit-status handling.
