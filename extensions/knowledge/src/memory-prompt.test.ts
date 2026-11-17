@@ -30,7 +30,7 @@ it("prompt call shapes match the knowledge tool schemas", () => {
   const [outer, item] = remember!.split(/\[\{|\}\]/u) as [string, string];
   // requestId is optional only for the host pre-compaction flush, which agents never run.
   expectShapeMatches(`${outer}}`, ops.remember.input as TObject, ["requestId"]);
-  expectShapeMatches(item, RememberItem);
+  expectShapeMatches(`${item}}`, RememberItem);
   expect([...item.matchAll(/"([^"]+)"/gu)].map((match) => match[1])).toStrictEqual(
     RememberItem.properties.kind.anyOf.map((kind: { const: string }) => kind.const),
   );
