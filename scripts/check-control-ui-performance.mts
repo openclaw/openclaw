@@ -70,12 +70,15 @@ const controlUiPerformanceBudgets = {
   // Approved publication task filtering: +90 B over 054fd978, with no added headroom.
   // Popover prompt cache hit rate (#200223, Ayaan shipped 2026-11-17): measured +737 B
   // over its merge base plus 64 B headroom.
-  chatBootJsGzipBytes: 1_325_580,
+  // Vyctor approved navigation artwork (#199822, 2026-11-17): measured 1,327,314 B
+  // (+2,371 B over the paired base), plus the existing 64 B variance margin.
+  chatBootJsGzipBytes: 1_327_378,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
   // Same #200223 popover cache hit rate: measured +408 B over its merge base plus 64 B.
-  newBootJsGzipBytes: 816_632,
+  // Same approved artwork: measured 818,136 B plus 64 B variance.
+  newBootJsGzipBytes: 818_200,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -90,7 +93,8 @@ const controlUiPerformanceBudgets = {
   // Same #198491 approval, absorbing inherited debt: measured 572,080 B (+1,010 B over main)
   // plus 64 B headroom.
   // Continuation wakes (#200056): measured 572,376 B plus 64 B.
-  largestJsGzipBytes: 572_440,
+  // Same approved artwork: measured shared chunk 574,553 B plus 64 B variance.
+  largestJsGzipBytes: 574_617,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
