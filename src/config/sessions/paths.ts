@@ -4,7 +4,6 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { safeRealpathSync } from "../../infra/boundary-path.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import { canAccess, realpathOrResolve } from "../../infra/path-existence.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -132,21 +131,6 @@ function resolveSessionPathSync<T>(steps: SessionPathResolution<T>): T {
       probe.kind === "realpath"
         ? (safeRealpathSync(probe.path) ?? undefined)
         : fs.existsSync(probe.path)
-          ? probe.path
-          : undefined,
-    );
-  }
-  return step.value;
-}
-
-async function resolveSessionPathAsync<T>(steps: SessionPathResolution<T>): Promise<T> {
-  let step = steps.next();
-  while (!step.done) {
-    const probe = step.value;
-    step = steps.next(
-      probe.kind === "realpath"
-        ? await realpathOrResolve(path.resolve(probe.path))
-        : (await canAccess(probe.path))
           ? probe.path
           : undefined,
     );
@@ -375,7 +359,7 @@ export function resolveSessionTranscriptPath(
     topicId,
   );
 }
-function* resolveSessionFilePathCoreSteps(
+export function* resolveSessionFilePathCoreSteps(
   sessionId: string,
   entry?: object,
   opts?: SessionFilePathOptions,
@@ -406,14 +390,6 @@ export function resolveSessionFilePathCore(
   opts?: SessionFilePathOptions,
 ): string {
   return resolveSessionPathSync(resolveSessionFilePathCoreSteps(sessionId, entry, opts));
-}
-
-export function resolveSessionFilePathCoreAsync(
-  sessionId: string,
-  entry?: object,
-  opts?: SessionFilePathOptions,
-): Promise<string> {
-  return resolveSessionPathAsync(resolveSessionFilePathCoreSteps(sessionId, entry, opts));
 }
 
 export class SessionStoreAgentIdRequiredError extends Error {
