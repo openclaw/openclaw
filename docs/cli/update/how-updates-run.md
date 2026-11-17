@@ -533,6 +533,8 @@ After the package is installed, a failed post-plugin Doctor process is a recorde
 warning when it has no explicit writer or migration refusal. The updater still
 validates the final config and readiness, then starts the Gateway. A child whose
 termination cannot be confirmed remains blocking because it may still write state.
+A plugin convergence failure, or an updater failure around a started Doctor, is
+recorded as an [owed step](#owed-steps) under the same conditions.
 
 Offline Doctor cron inspection reuses its admitted maintenance reader after the
 backup boundary instead of creating another disposable SQLite snapshot. If optional
@@ -890,7 +892,7 @@ history.
 Some follow-up steps are not needed for the new version to run. When one of them
 fails and the update otherwise succeeds, the update records the step as owed,
 with its reason, prints it as a warning, and exits 0. In `--json` output the
-warning is an advisory step, and the `run` record lists the owed step. Two steps
+warning is an advisory step, and the `run` record lists the owed step. Four steps
 can be owed:
 
 - **Shell completion refresh** (`shell-completion`): the completion cache or the
@@ -898,10 +900,36 @@ can be owed:
 - **Gateway service definition refresh** (`service-definition`): the service
   installer failed and the update continued on the previous definition, or the
   definition still points outside the updated installation after the refresh.
+- **Plugin convergence** (`plugin-convergence`): plugin sync, update, or repair
+  threw before it published any plugin record or config change. During a core
+  update, the updater restores every plugin package it replaced in that pass, so
+  plugins stay on their previous versions. On an already-current core and in
+  `openclaw update repair`, each plugin install completes or restores on its own,
+  so a plugin updated before the failure keeps its new package while its record
+  waits for the next convergence. The update then validates the final config,
+  runs readiness checks, and starts the Gateway as usual.
+- **Post-plugin Doctor** (`post-plugin-doctor`): Doctor started after plugins
+  changed, and the updater then failed around it for a reason Doctor did not
+  report, such as a state read that failed after Doctor finished. Config
+  validation and readiness checks still run before the Gateway starts.
 
 Required database migrations, refused or invalid configuration, Doctor refusals,
 and Gateway readiness are never owed. They still block completion. A failed or
 rolled-back update owes nothing, including a step recorded before it failed.
+
+A plugin or Doctor failure is owed only when plugin records and config are
+known to be unchanged. These failures still fail the update and roll back a
+replaced core:
+
+- a refused config write, or an unexpected failure while plugin records and
+  config are being published
+- a package that could not be restored after a failed plugin install
+- a post-core update process that exits nonzero, is terminated, or times out
+- a Doctor refusal: a migration or config-write refusal, a cancelled Doctor, and
+  any refusal that names data at risk
+- a missing updated entrypoint, a Gateway that could not be parked for Doctor,
+  or a state read that fails before Doctor starts
+- a command whose termination cannot be confirmed, and lost update authority
 
 Later commands settle what is owed:
 
@@ -912,11 +940,21 @@ Later commands settle what is owed:
 - An update settles an owed service definition refresh only when it refreshes the
   service definition itself, as a core update with a restart does. Otherwise the
   step stays owed and the update repeats the warning.
+- The next `openclaw update` runs plugin convergence again, including when the
+  core is already current, and settles the step when convergence completes.
+  Individual plugins that fail to update are reported as plugin warnings, as
+  before, and do not keep the step owed.
+- An update settles an owed post-plugin Doctor only when it changes plugins and
+  its own Doctor then completes. An update that leaves plugins unchanged does not
+  run full Doctor, so the step stays owed and the update repeats the warning.
 - `openclaw update repair` refreshes the completion cache when it runs
   finalization. It does not run the service installer. After its Doctor
   maintenance, it settles the service definition step when the managed definition
-  targets the active installation, or when no managed service remains. A repair
-  that finds a healthy Gateway and skips finalization leaves owed steps unchanged.
+  targets the active installation, or when no managed service remains. Repair
+  runs full Doctor and then plugin convergence, so it settles the post-plugin
+  Doctor step, and settles plugin convergence when its own convergence completes.
+  A repair that finds a healthy Gateway and skips finalization leaves owed steps
+  unchanged.
 
 A retry that fails keeps the step owed, warns again, and does not fail the
 command. The command that retried it then holds the step in its own run. Gateway
@@ -926,7 +964,14 @@ startup does not retry owed steps. See
 An updater records and retries owed steps only when its own version supports
 them. On the first update to a version that does, the previously installed
 updater runs these steps and still drops a failed shell completion refresh
-without a record.
+without a record. Plugin convergence for a package or Git update runs in the new
+version's own process, so that first update already keeps its result when
+convergence fails: the plugin phase reports a warning with reason
+`plugin-convergence`, and the previously installed updater continues. That
+updater does not record the step as owed. The next `openclaw update` runs
+convergence again either way and records the step if it fails again. An updater
+from 2026.9.5 or later runs the post-plugin Doctor pass itself, so on that first
+update it still rolls back when the pass fails around Doctor.
 
 <a id="durable-serving-recovery" />
 

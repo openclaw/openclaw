@@ -265,18 +265,33 @@ describe("update-cli", () => {
         true,
       );
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-      mockPostCoreConvergenceOnce(modules.runPostCorePluginConvergenceSpy, { installRecords: {} });
+      if (code) {
+        mocks.syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error("registry still broken"));
+      } else {
+        mockPostCoreConvergenceOnce(modules.runPostCorePluginConvergenceSpy, {
+          installRecords: {},
+        });
+      }
       const earlier = modules.createUpdateRun({ trigger: "cli" }).runId;
       recordUpdateRunOwedStep(earlier, "shell-completion", "EACCES: permission denied");
       recordUpdateRunOwedStep(earlier, "service-definition", "install failed");
+      recordUpdateRunOwedStep(earlier, "plugin-convergence", "plugin registry exploded");
+      recordUpdateRunOwedStep(earlier, "post-plugin-doctor", "state database is locked");
       finishUpdateRun(earlier, { status: "succeeded" });
       setup.mockCompletionCacheRefresh({ code, stderr: "still EACCES" });
 
       await updateCommand({ yes: true, json: true });
 
-      // This command did not refresh the service definition, so that step stays owed.
+      // Convergence that completes settles its step; one that throws again owes it for the new
+      // reason. This command neither refreshed the service definition nor ran Doctor after
+      // changing plugins, so those steps stay owed.
       const result = output();
-      const owed = [...completion, { id: "service-definition", reason: "install failed" }];
+      const owed = [
+        ...(code ? [{ id: "plugin-convergence", reason: "registry still broken" }] : []),
+        ...completion,
+        { id: "service-definition", reason: "install failed" },
+        { id: "post-plugin-doctor", reason: "state database is locked" },
+      ];
       expect(readOwedUpdateSteps()).toEqual(owed.map((step) => ({ ...step, runId: result.runId })));
       // A settled step leaves the earlier run's report. One this run still owes stays on it too,
       // so the earlier run owes it again if this run fails.

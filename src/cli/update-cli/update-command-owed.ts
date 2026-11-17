@@ -17,6 +17,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { CLI_NAME } from "../cli-name.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import {
   inspectManagedGatewayServiceBeforeUpdate,
   readGatewayServiceStateForUpdate,
@@ -115,6 +116,33 @@ export async function retryOwedUpdateSteps(
   return stillOwed;
 }
 
+/** The steps a plugin phase left owed: each is a warning whose reason is the step id. */
+export function listOwedPluginSteps(plugins: PostCorePluginUpdateResult | undefined): OwedStep[] {
+  return (plugins?.warnings ?? []).flatMap((warning) =>
+    isUpdateOwedStepId(warning.reason) ? [{ id: warning.reason, reason: warning.message }] : [],
+  );
+}
+
+/**
+ * What this command's plugin phase proves about plugin steps an earlier run owes. A phase that
+ * did not run proves nothing, and one that owes a step again keeps it owed for the new reason.
+ * The Doctor step also needs a full Doctor run from this command.
+ */
+export function retryOwedPluginSteps(
+  plugins: PostCorePluginUpdateResult | undefined,
+  doctorCompleted: boolean,
+): OwedStepRetries {
+  const converged = plugins?.status === "ok" || plugins?.status === "warning";
+  const owedNow = new Map<string, string>(
+    listOwedPluginSteps(plugins).map((step) => [step.id, step.reason]),
+  );
+  return {
+    "plugin-convergence": async (step) => (converged ? owedNow.get(step.id) : step.reason),
+    "post-plugin-doctor": async (step) =>
+      converged && doctorCompleted ? owedNow.get(step.id) : step.reason,
+  };
+}
+
 /** A refreshed cache does not upgrade a shell profile that still loads completion the slow way. */
 export async function shellProfileStillOwes(reason: string): Promise<string | undefined> {
   return (await checkShellCompletionStatus(CLI_NAME)).usesSlowPattern ? reason : undefined;
@@ -143,18 +171,30 @@ async function serviceDefinitionStillOwes(
     : reason;
 }
 
-/** Standalone finalization and repair: Doctor has run, and the completion cache was attempted. */
+/**
+ * Standalone finalization and repair: full Doctor ran before the plugin phase, and the
+ * completion cache was attempted.
+ */
 export async function settleOwedStepsAfterFinalization(
   run: OwedRun,
-  observed: { root: string; completionFailure?: string; timeoutMs: number },
+  observed: {
+    root: string;
+    completionFailure?: string;
+    plugins: PostCorePluginUpdateResult;
+    timeoutMs: number;
+  },
 ): Promise<OwedStep[]> {
-  const failed: OwedStep[] = observed.completionFailure
-    ? [{ id: "shell-completion", reason: observed.completionFailure }]
-    : [];
+  const failed: OwedStep[] = [
+    ...listOwedPluginSteps(observed.plugins),
+    ...(observed.completionFailure
+      ? [{ id: "shell-completion" as const, reason: observed.completionFailure }]
+      : []),
+  ];
   for (const step of failed) {
     recordOwedUpdateStep(run, step);
   }
   const stillOwed = await retryOwedUpdateSteps(run, {
+    ...retryOwedPluginSteps(observed.plugins, true),
     "shell-completion": (step) => shellProfileStillOwes(step.reason),
     "service-definition": (step) =>
       serviceDefinitionStillOwes(observed.root, run.env, step.reason, observed.timeoutMs),

@@ -14,7 +14,9 @@ import { defaultRuntime } from "../../runtime.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { retireStandaloneGitWrapper } from "./update-command-git.js";
 import {
+  listOwedPluginSteps,
   recordOwedUpdateStep,
+  retryOwedPluginSteps,
   retryOwedUpdateSteps,
   shellProfileStillOwes,
   warnOwedUpdateStep,
@@ -192,6 +194,11 @@ export async function completePostUpdateMaintenance(
   },
 ): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
   const run = params.opts.run;
+  const plugins = result.postUpdate?.plugins;
+  // Plugin work runs before activation. What it left undone is owed only now, on a kept result.
+  for (const step of listOwedPluginSteps(plugins)) {
+    warnOwedUpdateStep(result, step, recordOwedUpdateStep(run, step));
+  }
   const refreshShellCompletion = (skipPrompt: boolean) =>
     tryInstallShellCompletion({
       root: context.root,
@@ -204,6 +211,14 @@ export async function completePostUpdateMaintenance(
     }
     assertCurrent();
     const stillOwed = await retryOwedUpdateSteps(run, {
+      // A retirement-only Doctor follows unchanged plugins and settles nothing.
+      ...retryOwedPluginSteps(
+        plugins,
+        plugins?.changed === true &&
+          result.steps.some(
+            (done) => done.name === "post-plugin doctor" && done.exitCode === 0 && !done.advisory,
+          ),
+      ),
       "shell-completion": async (step) =>
         (await completion()) ?? (await shellProfileStillOwes(step.reason)),
       // Only this update's own successful refresh settles it; repair inspects the service instead.
