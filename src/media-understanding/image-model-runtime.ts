@@ -8,7 +8,7 @@ import {
   type PreparedModelRuntimeSnapshot,
 } from "../agents/prepared-model-runtime.js";
 import { acquirePreparedModelRuntimeSnapshotInvocation } from "../agents/prepared-model-runtime.resources.js";
-import { prepareSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
+import { prepareModelWithCredentials } from "../agents/simple-completion-runtime.js";
 import type { Model } from "../llm/types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ImageDescriptionRequest } from "./provider-types.js";
@@ -179,8 +179,8 @@ export async function resolveImageRuntime(
       requestedModel: params.model,
     });
     // A model can have several credential routes, such as the OpenAI Platform API and ChatGPT.
-    // The shared completion owner selects the credential first and returns the route it owns.
-    const prepared = await prepareSimpleCompletionModel({
+    // Share credential selection without importing sessionless-completion admission policy.
+    const prepared = await prepareModelWithCredentials({
       cfg: preparedParams.cfg,
       ...(preparedParams.agentId ? { agentId: preparedParams.agentId } : {}),
       provider: model.provider,
