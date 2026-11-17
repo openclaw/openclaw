@@ -335,7 +335,8 @@ PR title or description without publishing source. Read the current metadata wit
 `expectedHeadCommit`, its publication `requestId`, and only the fields to change,
 each paired with its observed `expectedTitle`/`expectedBody`. The observed head can
 be newer than `publication.headCommit`; editing metadata does not rewrite that
-historical receipt. Other receipt-backed actions still require the receipt head.
+historical receipt. Readiness also uses the reviewed current head; other
+receipt-backed actions still require the receipt head.
 Keep the attribution, publication marker and footer unchanged in the full body.
 Omitted fields stay unchanged. Edit accepts no child-session selector. It never synchronizes, stages, commits or
 pushes workspace files, and never changes PR lifecycle state. Closed PRs are read-only.
@@ -366,9 +367,11 @@ title/body are creation-only and do not edit an existing PR.
 
 Guests can mark their own current session's shared draft ready for review with
 `github_publish` and `action: "ready"`. First read its state with `action: "edit"`,
-then supply that publication's `requestId` and `expectedHeadCommit`. Readiness
-changes the draft state without publishing more source or merging the PR. It
-accepts no child or arbitrary PR selector. After an uncertain response, read with
+then review its top-level `headCommit` and supply it as `expectedHeadCommit`,
+alongside the publication's `requestId`. The reviewed head may be newer than
+`publication.headCommit`; readiness preserves that historical receipt and the
+saved workspace. It changes only the draft state, without publishing source or
+merging the PR. It accepts no child or arbitrary PR selector. After an uncertain response, read with
 `edit` before retrying; an already-ready PR returns its observed state.
 
 To request another ClawSweeper review, use `github_publish` with
