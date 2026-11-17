@@ -16,6 +16,7 @@ import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.j
 import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import type { AgentTerminalSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
+import type { ContextPressure } from "../../context-pressure.js";
 import type { ContextWindowInfo } from "../../context-window-guard.js";
 import type { DelegationCapability } from "../../delegation-capability.js";
 import type {
@@ -321,6 +322,8 @@ export type EmbeddedRunAttemptResult = {
   contextEngineTerminalAnchor?: import("../../../config/sessions/transcript-entry-anchor.js").TranscriptEntryAnchor;
   preflightRecovery?: {
     route: Exclude<PreemptiveCompactionRoute, "fits">;
+    /** Only "overflow" may fail the turn; "maintenance" always continues it. */
+    pressure: ContextPressure;
     source?: "mid-turn";
     estimatedPromptTokens?: number;
     promptBudgetBeforeReserve?: number;

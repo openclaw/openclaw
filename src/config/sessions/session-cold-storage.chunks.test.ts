@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import zlib from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { copyColdArchives } from "../../infra/update-candidate-cold-archives.worker.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
@@ -12,7 +15,11 @@ import {
 import { resetSessionStore } from "./session-accessor.sqlite-reset.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { embedSessionColdArchivesInSnapshot } from "./session-cold-storage-backup.js";
-import { hashSessionColdChunks, readSessionColdChunks } from "./session-cold-storage-chunks.js";
+import {
+  hashSessionColdChunks,
+  iterateSessionColdRecords,
+  readSessionColdChunks,
+} from "./session-cold-storage-chunks.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
@@ -258,6 +265,45 @@ it("embeds every chunk for a self-contained backup and re-externalizes it", asyn
   const records = await prepareSessionColdRestoreInWorker(plan);
   expect(mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored).toBe(true);
   expect(fixture.snapshot()).toEqual(original);
+});
+
+it("projects every file chunk and falls back to an independent copy across filesystems", async () => {
+  await archive();
+  const descriptor = readSessionColdTranscript(fixture.database(), historicalId)!;
+  const chunks = readSessionColdChunks(fixture.database(), descriptor);
+  expect(chunks.length).toBeGreaterThan(1);
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  const target = state.statePath("rehearsal", "agent", "openclaw-agent.sqlite");
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.copyFile(fixture.scope.storePath, target);
+  using database = openNodeSqliteDatabase(target);
+  const link = vi
+    .spyOn(fs, "link")
+    .mockRejectedValueOnce(
+      Object.assign(new Error("synthetic cross-device link"), { code: "EXDEV" }),
+    );
+  try {
+    await copyColdArchives(database, fixture.scope.storePath, target);
+  } finally {
+    link.mockRestore();
+  }
+  expect(readSessionColdTranscript(database, historicalId)).toEqual(descriptor);
+  const source = resolveSessionColdArchivePath(fixture.scope.storePath, chunks[0]!.archive_name);
+  const copy = resolveSessionColdArchivePath(target, chunks[0]!.archive_name);
+  expect((await fs.stat(source, { bigint: true })).ino).not.toBe(
+    (await fs.stat(copy, { bigint: true })).ino,
+  );
+  for (const chunk of chunks) {
+    await fs.unlink(resolveSessionColdArchivePath(fixture.scope.storePath, chunk.archive_name));
+  }
+  expect(
+    [...iterateSessionColdRecords(database, target, descriptor)]
+      .filter((record) => record.kind === "event")
+      .map((record) => record.row.event_json),
+  ).toEqual(
+    original.events.filter((row) => row.session_id === historicalId).map((row) => row.event_json),
+  );
 });
 
 it("removes every chunk file and cascading child row on full-history deletion", async () => {

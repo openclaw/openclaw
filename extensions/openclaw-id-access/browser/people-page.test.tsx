@@ -737,7 +737,7 @@ describe("Access page", () => {
       id: "access",
       label: "Access",
       page: { id: "access" },
-      icon: "users",
+      icon: "access",
       defaultVisible: false,
     });
     harness.connect(false);

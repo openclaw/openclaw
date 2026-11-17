@@ -717,7 +717,7 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
   return withArtifactPreservingStateReads(async () => {
     const pathname = resolveOpenClawStateReadPath(options);
     const snapshot = stateSnapshotReads.getStore();
-    if (snapshot?.path === pathname && snapshot.prepareSource) {
+    if (snapshot?.path === pathname && snapshot.prepareSource && !isStatePostgres()) {
       return snapshot.work.track(async () => {
         await snapshot.prepareSource!();
         resolveStateReadCallerSignal()?.throwIfAborted();
