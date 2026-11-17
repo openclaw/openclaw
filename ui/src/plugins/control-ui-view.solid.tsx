@@ -123,13 +123,18 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         return;
       }
       // SAFETY: the prior bridge value is a host-rendered SDK props record; page props may omit session identity.
-      const previous = before as (Partial<BoardGetParams> & { toolCallId?: string }) | undefined;
+      const previous = before as
+        | (Partial<BoardGetParams> & { toolCallId?: string; runId?: string })
+        | undefined;
       // SAFETY: the next bridge value follows the same host-rendered SDK props contract.
-      const next = after as (Partial<BoardGetParams> & { toolCallId?: string }) | undefined;
+      const next = after as
+        | (Partial<BoardGetParams> & { toolCallId?: string; runId?: string })
+        | undefined;
       if (
         previous?.sessionKey !== next?.sessionKey ||
         previous?.agentId !== next?.agentId ||
-        (host.kind === "inlineViews" && previous?.toolCallId !== next?.toolCallId)
+        (host.kind === "inlineViews" && previous?.toolCallId !== next?.toolCallId) ||
+        (host.surface === "run-failure-feedback" && previous?.runId !== next?.runId)
       ) {
         ownerChanged = true;
         mountAbort?.abort();
