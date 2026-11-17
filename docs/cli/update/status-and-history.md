@@ -146,12 +146,15 @@ to `openclaw doctor --fix` without telling you to wait for the completed update.
 
 Status shows each [owed step](/cli/update/how-updates-run#owed-steps) as a warning
 with its reason and what settles it. A successful update's headline counts it
-among its warnings. The newest of the last 50 runs that mentions a step decides
-whether it is still owed, so the warning stays visible after a later run that did
-not settle it. Failed and rolled-back runs owe nothing. JSON lists owed steps as
-`owedSteps` with `id`, `runId`, and `reason`; the field is absent when nothing is
-owed. `openclaw update repair --json` reports the steps it leaves owed in the
-same field, with `id` and `reason`. In the run record, an owed step is a
+among its warnings. The step `id` is `shell-completion`, `service-definition`,
+`plugin-convergence`, or `post-plugin-doctor`. A plugin step also appears in the
+update's `postUpdate.plugins.warnings` with the step `id` as its `reason`. The
+newest of the last 50 runs that mentions a step decides whether it is still
+owed, so the warning stays visible after a later run that did not settle it.
+Failed and rolled-back runs owe nothing. JSON lists owed steps as `owedSteps`
+with `id`, `runId`, and `reason`; the field is absent when nothing is owed.
+`openclaw update repair --json` reports the steps it leaves owed in the same
+field, with `id` and `reason`. In the run record, an owed step is a
 `finalize:owed:<id>` step with status `skipped` and the reason in `detail`. The
 status becomes `completed` once the step is settled. A later run that still owes
 the step records its own row and leaves the earlier one unchanged, so the earlier
