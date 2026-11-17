@@ -216,7 +216,7 @@ const enCron = {
         "Leave blank to use the time zone of the computer running OpenClaw, or enter an IANA time zone.",
       runsIn: "Runs in",
       mainSession: "Main session",
-      isolatedSession: "Isolated session",
+      isolatedSession: "Its own session",
       sessionHelp:
         "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
       wakeMode: "Wake mode",

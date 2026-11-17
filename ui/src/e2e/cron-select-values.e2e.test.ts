@@ -164,7 +164,7 @@ suite.define(() => {
 
       const target = page.locator("#cron-session-target");
       await target.click();
-      await page.getByRole("option", { name: "Isolated session", exact: true }).click();
+      await page.getByRole("option", { name: "Its own session", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("isolated");
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("agentTurn");
     });
