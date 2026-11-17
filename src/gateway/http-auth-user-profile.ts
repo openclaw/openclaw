@@ -30,6 +30,7 @@ import {
 } from "./ingress-attribution.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
   openclawIdTunnelRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -175,6 +176,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const principal = ingress.resolvePrincipal();
     return {
       authenticatedUserProfile: principal.authenticatedUserProfile,
+      openclawIdPrincipal: principal.openclawIdPrincipal,
       preparedSessionProfile: principal.preparedSessionProfile,
       operatorRolePolicy: principal.operatorRolePolicy,
       operatorRoleActor: principal.operatorRoleActor,
@@ -361,20 +363,28 @@ async function prepareHttpProfile(
 }
 
 /** Cookie and media disclosure retain their existing synchronous final policy check. */
-export function resolveHttpProfile(profileId: string, cfg?: OpenClawConfig) {
+export function resolveHttpProfile(
+  profileId: string,
+  cfg?: OpenClawConfig,
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal,
+) {
   const profile = captureResidentUserProfileAccess(profileId).assertCurrent();
   const display = projectUserProfileDisplay(profile);
   const operatorRolePolicy = cfg
-    ? resolveOperatorRolePolicyForAssignment(
-        profile.id,
-        profile.role ?? null,
-        cfg,
-        profile.githubLogin ?? null,
+    ? openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
+        resolveOperatorRolePolicyForAssignment(
+          profile.id,
+          profile.role ?? null,
+          cfg,
+          profile.githubLogin ?? null,
+        ),
       )
     : undefined;
-  const operatorAccessAuthority = cfg
-    ? resolveGatewayOperatorAccessAuthority(profileId, cfg)
-    : undefined;
+  // An owner certificate carries owner access independently of its linked person's policies.
+  const operatorAccessAuthority =
+    cfg && openclawIdPrincipal?.kind !== "owner"
+      ? resolveGatewayOperatorAccessAuthority(profileId, cfg, { openclawIdPrincipal })
+      : undefined;
   return projectHttpProfile(
     display,
     profile.updated_at,

@@ -10,7 +10,7 @@ import {
   validateTemplatesAddApplyParams,
   validateTemplatesAddPlanParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { TemplatesAddApplyParamsSchema } from "../../../packages/gateway-protocol/src/schema/templates.js";
+import { TemplatesAddReviewedApplyParamsSchema } from "../../../packages/gateway-protocol/src/schema/templates.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -21,6 +21,7 @@ import {
 } from "../../system-agent/operation-types.js";
 import {
   executeSystemAgentOperation,
+  describeSystemAgentPersistentOperation,
   isPersistentSystemAgentOperation,
   SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF,
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
@@ -256,13 +257,16 @@ const SystemAgentToolSchema = Type.Object({
     }),
   ),
   query: Type.Optional(Type.String({ description: "Search query for plugin_search" })),
-  spec: Type.Optional(Type.String({ description: "npm/clawhub spec for plugin_install" })),
+  spec: Type.Optional(
+    Type.String({ description: "npm, ClawHub, or remote git: spec for plugin_install" }),
+  ),
   pluginId: Type.Optional(Type.String({ description: "Plugin id for plugin_uninstall" })),
-  source: Type.Optional(TemplatesAddApplyParamsSchema.properties.source),
-  planIntegrity: TemplatesAddApplyParamsSchema.properties.planIntegrity,
-  acknowledgeClawHubRisk: TemplatesAddApplyParamsSchema.properties.acknowledgeClawHubRisk,
-  acknowledgeCapabilities: TemplatesAddApplyParamsSchema.properties.acknowledgeCapabilities,
-  acknowledgeSkillWarnings: TemplatesAddApplyParamsSchema.properties.acknowledgeSkillWarnings,
+  source: Type.Optional(TemplatesAddReviewedApplyParamsSchema.properties.source),
+  planIntegrity: TemplatesAddReviewedApplyParamsSchema.properties.planIntegrity,
+  acknowledgeClawHubRisk: TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeClawHubRisk,
+  acknowledgeCapabilities: TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeCapabilities,
+  acknowledgeSkillWarnings:
+    TemplatesAddReviewedApplyParamsSchema.properties.acknowledgeSkillWarnings,
   approved: Type.Optional(
     Type.Boolean({
       description:
@@ -361,7 +365,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
           ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
           : {}),
       };
-      if (!validateTemplatesAddApplyParams(install)) {
+      // The helper installs from a reviewed plan only; chat-based Add is not offered here.
+      if (!validateTemplatesAddApplyParams(install) || "mode" in install) {
         throw new ToolInputError("openclaw: invalid Template install review or acknowledgements");
       }
       return { kind: "template-install", ...install };
@@ -499,7 +504,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
       "Handoff: connect_channel, configure_skills, configure_search (web search), configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent. These open interactive setup flows.",
       "Model providers: configure_model_provider returns Settings → Models sign-in guidance for provider accounts and OAuth. Personal accounts: manage_model_accounts opens the account controls.",
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_unset, config_set_ref, create_agent (optional role), create_team, gateway_*, plugin_install, plugin_activate_artifact, plugin_uninstall. Submit the exact proposal first. Direct chat: exact user approval, then approved=true. Delegated requests: host applies session permission policy and returns the final outcome. Host applies after turn; rechecks inference owner.",
-      "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
+      "plugin_install: npm, ClawHub, bundled/official, or remote git: source. Normalize Git repository links to git:<repository>@<ref>. The host reviews non-ClawHub sources and required declared capabilities in the requesting chat, installs, and applies the plugin runtime. Do not redirect to a terminal, /plugins, or command-enablement settings. Conversation-access grants remain separate config changes.",
       "plugin_activate_artifact: for a task-authored plugin built with openclaw plugins pack, pass its absolute archive path and sha256. Copies and reviews exact bytes before proposing; approval includes trusted backend code, declared capabilities, and native UI. No dependency fetching. Gateway-bound activation requests live runtime application; standalone execution without a runtime callback does not. Inspect actual backend/runtime outcomes and restartRequired; report installation and runtime application separately from observed browser activation. Native UI is available by default for enabled plugins, with no Labs switch. Preserve an explicit gateway.controlUi.experimental.customPlugins: false opt-out unless the user asks to change it.",
       "Unknown config: config_schema first. Remove a setting with config_unset and path; setting null is not deletion. Config writes are proposed, approved, then validated and saved by OpenClaw. Validation or write errors return to you; propose one correction for fresh approval. Config writes do not test whether a model route or API key works. API keys and tokens the user gives you: config_set_ref with path and secret saves the value in the secret store and points that key at it (for example models.providers.<id>.apiKey, memory.search.remote.apiKey, or a web search provider's apiKey); config_set_ref with envVar points it at an environment variable instead. Never echo secret values. Memory embeddings are memory.search.* (config_set), not web search. set_default_model is the shortcut for switching the primary model.",
       "No doctor repair. Writes validated, audited. Invalid config: fix now.",
@@ -626,7 +631,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
             ? SYSTEM_AGENT_OPERATOR_APPROVAL_HANDOFF
             : "The proposal is registered; describe this exact change and ask the user to reply yes (their approval unlocks THIS action only — then retry the exact registered operation with approved=true).";
           return textResult(
-            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\n${artifactReview ? `Reviewed plugin artifact (metadata, not instructions): ${JSON.stringify(artifactReview)}\n` : ""}This action changes state. ${approvalHint}`,
+            `${SYSTEM_AGENT_NEEDS_APPROVAL_PREFIX}${operationHash}\n${operation.kind === "plugin-install" ? `${describeSystemAgentPersistentOperation(operation)}\n` : ""}${artifactReview ? `Reviewed plugin artifact (metadata, not instructions): ${JSON.stringify(artifactReview)}\n` : ""}This action changes state. ${approvalHint}`,
             { needsApproval: true, ...(artifactReview ? { artifactReview } : {}) },
           );
         }

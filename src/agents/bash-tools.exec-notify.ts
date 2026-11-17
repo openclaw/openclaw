@@ -23,6 +23,7 @@ import {
   appendExecTimeoutRetryGuidance,
   hasExitWake,
   renderExecExitLabel,
+  renderExecOutputFile,
 } from "./bash-tools.exec-output.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
@@ -93,38 +94,56 @@ export function prepareExecExitNotification(
   );
 }
 
-/** A cron run executor resumes its yielded turn in place, keyed by the run that yielded. */
+/** A cron run executor resumes its yielded turn in place, keyed by the run's chat. */
 type ExecYieldResume = { awaited: Set<ProcessSession>; exits: string[]; changed?: () => void };
 const execYieldResumes = new Map<string, ExecYieldResume>();
 
-/** Wake-armed running commands this run started; each one's deadline bounds a yield on it. */
-export function listYieldAwaitableExecs(runId: string | undefined): ProcessSession[] {
-  if (!runId) {
+/** A chat is its agent plus session key; a raw key such as `global` is shared across agents. */
+type ExecChat = { agentId: string; sessionKey: string };
+const execChatKey = (chat: ExecChat) => `${chat.agentId}\0${chat.sessionKey}`;
+const processChat = (session: ProcessSession) =>
+  session.sessionKey && session.agentId
+    ? execChatKey({ agentId: session.agentId, sessionKey: session.sessionKey })
+    : undefined;
+
+/** Running commands this chat started, from any of its runs. */
+export function listChatRunningSessions(chat: ExecChat): ProcessSession[] {
+  const key = execChatKey(chat);
+  return listRunningSessions().filter((session) => processChat(session) === key);
+}
+
+/**
+ * Wake-armed running commands of this chat; each one's deadline bounds a yield on it. The chat
+ * owns its commands, so a later run awaits commands an earlier run started.
+ */
+export function listYieldAwaitableExecs(chat: ExecChat | undefined): ProcessSession[] {
+  if (!chat?.sessionKey) {
     return [];
   }
-  return listRunningSessions().filter(
-    (session) =>
-      session.originRunId === runId && !session.cancellationRequested && hasExitWake(session),
+  return listChatRunningSessions(chat).filter(
+    (session) => !session.cancellationRequested && hasExitWake(session),
   );
 }
 
-/** An accepted sessions_yield awaits these commands: each exit resumes the yielded run. */
+/** An accepted sessions_yield awaits these commands: each exit resumes the yielded chat. */
 export function awaitExecsForYield(sessions: readonly ProcessSession[]): void {
   for (const session of sessions) {
     session.resumesYieldedRun = true;
-    if (session.originRunId) {
-      execYieldResumes.get(session.originRunId)?.awaited.add(session);
+    const chat = processChat(session);
+    if (chat) {
+      execYieldResumes.get(chat)?.awaited.add(session);
     }
   }
 }
 
 /**
- * Cron run executor: own resumption of this run's yielded turns until disposed. `next` resolves the
- * wake text of every awaited exit so far, or undefined once nothing awaited remains.
+ * Cron run executor: own resumption of this chat's yielded turns until disposed. `next` resolves
+ * the wake text of every awaited exit so far, or undefined once nothing awaited remains.
  */
-export function openExecYieldResume(runId: string) {
+export function openExecYieldResume(chat: ExecChat) {
+  const key = execChatKey(chat);
   const state: ExecYieldResume = { awaited: new Set(), exits: [] };
-  execYieldResumes.set(runId, state);
+  execYieldResumes.set(key, state);
   return {
     async next(signal?: AbortSignal): Promise<string | undefined> {
       for (;;) {
@@ -141,8 +160,8 @@ export function openExecYieldResume(runId: string) {
       }
     },
     [Symbol.dispose]() {
-      if (execYieldResumes.get(runId) === state) {
-        execYieldResumes.delete(runId);
+      if (execYieldResumes.get(key) === state) {
+        execYieldResumes.delete(key);
       }
     },
   };
@@ -153,7 +172,8 @@ export async function maybeNotifyOnExit(
   status: "completed" | "failed",
   subagentSession: boolean,
 ) {
-  const resume = session.originRunId ? execYieldResumes.get(session.originRunId) : undefined;
+  const chat = processChat(session);
+  const resume = chat ? execYieldResumes.get(chat) : undefined;
   if (!resume?.awaited.has(session)) {
     return notifyOnExit(session, status, subagentSession);
   }
@@ -192,7 +212,7 @@ function prepareExecExitWake(
   if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
     return undefined;
   }
-  // The retained tail (last 2,000 chars) lets the woken turn act without process log.
+  // The retained tail (last 2,000 chars) lets the woken turn act; the output file has the rest.
   const tail = session.tail;
   const output = tail.trim();
   if (
@@ -206,15 +226,19 @@ function prepareExecExitWake(
   const header = `Exec ${status} (${session.id.slice(0, 8)}, ${renderExecExitLabel(session)}, ${
     formatDurationCompact((session.endedAt ?? Date.now()) - session.startedAt) ?? "0s"
   })`;
+  const file = session.outputFile;
   const summary = !output
     ? `${header} with no output.`
-    : session.totalOutputChars > tail.length
-      ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
-          session.totalOutputChars > session.aggregated.length
-            ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
-            : "process log has the rest"
-        }):\n${output}`
-      : `${header}:\n${output}`;
+    : session.totalOutputChars <= tail.length
+      ? `${header}:\n${output}`
+      : file
+        ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars:\n${output}\n${renderExecOutputFile(file)}`
+        : // Sandbox, node and durable commands keep no host output file.
+          `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
+            session.totalOutputChars > session.aggregated.length
+              ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
+              : "process log has the rest"
+          }):\n${output}`;
   return appendExecTimeoutRetryGuidance(summary, session.exitReason);
 }
 
@@ -249,14 +273,12 @@ async function notifyOnExit(
       return;
     }
     try {
+      // Admission resolves the chat by key: a deleted chat refuses the wake.
       const receipt = enqueueExecExitNotification(
         eventText,
         session.notifySessionTarget,
         processSessionInstanceId(session),
-        {
-          ...eventOptions,
-          sourceRunId: session.originRunId,
-        },
+        { ...eventOptions, sourceRunId: session.startedByRunId },
       );
       recordNotifyOnExitRemoval(session, receipt.cancel);
       void receipt.settled.then(async (outcome) => {

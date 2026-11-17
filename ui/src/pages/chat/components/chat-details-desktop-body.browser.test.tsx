@@ -3,6 +3,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsDesktopContent } from "./chat-details-desktop-body.tsx";
+import { loadChatDetailsDesktopComposition } from "./chat-details-desktop-loader.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 function mount() {
@@ -60,6 +61,8 @@ async function nextFrame() {
 }
 
 it("adds no handoff measurements or animations to cached and settled scrolling", async () => {
+  // Cached admission resolves both real lazy modules before interaction measurement.
+  await loadChatDetailsDesktopComposition();
   const animations = vi.spyOn(Element.prototype, "animate");
   onTestFinished(() => animations.mockRestore());
   // The shared browser graph may already have loaded these modules in another file.

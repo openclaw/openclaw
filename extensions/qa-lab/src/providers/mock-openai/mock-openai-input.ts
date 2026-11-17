@@ -356,6 +356,19 @@ export function hasToolOutput(input: ResponsesInputItem[]) {
   return findCurrentToolOutput(input) !== undefined;
 }
 
+/** Tool results since the latest authored user turn: how far a scripted multi-step run has got. */
+export function countCurrentToolOutputs(input: ResponsesInputItem[]) {
+  let count = 0;
+  for (const item of input.toReversed()) {
+    if (isResponsesToolCallOutput(item)) {
+      count += 1;
+    } else if (isUserTurn(item) && !isContinuationUserText(extractInputText(item.content))) {
+      break;
+    }
+  }
+  return count;
+}
+
 export function extractToolOutput(input: ResponsesInputItem[]) {
   const item = findCurrentToolOutput(input);
   return item ? stringifyFunctionCallOutput(item.output) : "";
