@@ -20,6 +20,7 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
+import type { RepositorySourceSearch } from "./repository-source-search.ts";
 
 type ProjectSearchOutcome = { result: ProjectsSearchRemoteResult } | { error: unknown } | null;
 
@@ -59,6 +60,7 @@ export class DraftPlaceBrowser {
   readonly projectFocus: ProjectBrowserFocus = {};
   private projectCatalog: ProjectCatalog | undefined;
   private projectCatalogCleanup: (() => void) | undefined;
+  private pluginCatalogCleanup: (() => void) | undefined;
   private projectCatalogGateway: ApplicationContext["gateway"] | undefined;
   private lastProjectResult: ProjectCatalog["snapshot"]["result"] = null;
   private projectSelection: DraftProjectSelection = null;
@@ -82,6 +84,8 @@ export class DraftPlaceBrowser {
   readonly browser: PlaceBrowserState;
 
   private projectSearchArgs: readonly unknown[] = [];
+  // Plugin repository search loads on first use, outside the New Session startup bundle.
+  private repositorySearch: RepositorySourceSearch | undefined;
   private projectSearchReadValue: ProjectSearchRead | null = null;
   private finishProjectSearch: ((outcome: ProjectSearchOutcome) => void) | undefined;
   private readonly projectSearchRequest = createPageRequest(() => this.callbacks.changed(), {
@@ -171,8 +175,9 @@ export class DraftPlaceBrowser {
         "projects.searchRemote",
         "operator.read",
       ),
-      this.debouncedProjectQuery,
+      this.projectSearchTimer ? this.debouncedProjectQuery : this.projectQueryValue.trim(),
       this.gateway.connectionEpoch,
+      JSON.stringify(this.repositorySources),
     ] as const;
   }
 
@@ -184,6 +189,8 @@ export class DraftPlaceBrowser {
     this.finishProjectSearch = undefined;
     this.projectSearchReadValue = null;
     const [client, advertised, query] = args;
+    // A failed chunk load reaches the console; the next query retries it.
+    void this.searchRepositorySources(args, projectCloneInput(query) ? null : client, query);
     if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
       return;
     }
@@ -215,6 +222,56 @@ export class DraftPlaceBrowser {
 
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
+  }
+
+  get repositorySources() {
+    const context = this.read().context;
+    return (context?.plugins?.repositorySources ?? []).filter(
+      (source) =>
+        source.searchMethod !== "projects.searchRemote" &&
+        canCallGatewayMethod(context?.gateway.snapshot, source.searchMethod, "operator.read"),
+    );
+  }
+
+  get repositorySearchGroups() {
+    return this.repositorySearch?.groups ?? [];
+  }
+
+  private async searchRepositorySources(
+    args: readonly unknown[],
+    client: Parameters<RepositorySourceSearch["search"]>[0],
+    query: string,
+  ) {
+    if (!this.repositorySearch) {
+      if (!client || query.length < 2 || this.repositorySources.length === 0) {
+        return;
+      }
+      const { RepositorySourceSearch: Search } = await import("./repository-source-search.ts");
+      // A newer query owns the search; it starts its own request after loading.
+      if (this.projectSearchArgs !== args) {
+        return;
+      }
+      this.repositorySearch ??= new Search(() => this.callbacks.changed());
+    }
+    this.repositorySearch.search(client, this.repositorySources, query);
+  }
+
+  projectSubmissionBlocked(checkoutSubmissionBlocked: boolean): boolean | undefined {
+    return this.projectId || this.remoteProject
+      ? !this.remoteProject && (!this.selectedProject() || checkoutSubmissionBlocked)
+      : undefined;
+  }
+
+  get repositorySourceStatus(): "checking" | "unavailable" | undefined {
+    const selected = this.remoteProject?.sourceId;
+    if (!selected) {
+      return undefined;
+    }
+    return this.read().context?.plugins?.registryStatus === "pending"
+      ? "checking"
+      : this.repositorySources.some((source) => source.key === selected)
+        ? undefined
+        : "unavailable";
   }
 
   get githubHost(): string | undefined {
@@ -308,6 +365,7 @@ export class DraftPlaceBrowser {
       return;
     }
     this.projectCatalogCleanup?.();
+    this.pluginCatalogCleanup?.();
     this.projectCatalogGateway = gateway;
     this.projectCatalog = gateway ? projectsForGateway(gateway) : undefined;
     this.lastProjectResult = null;
@@ -323,6 +381,10 @@ export class DraftPlaceBrowser {
     };
     // Catalog receipts clear vanished project selections before the next draft read.
     this.projectCatalogCleanup = this.projectCatalog?.subscribe(update);
+    this.pluginCatalogCleanup = this.read().context?.plugins?.subscribe(() => {
+      this.synchronize();
+      this.callbacks.changed();
+    });
     update();
   }
 
@@ -411,7 +473,13 @@ export class DraftPlaceBrowser {
     this.projectQueryValue = query;
     this.clearProjectSearchTimer();
     this.debouncedProjectQuery = "";
-    this.searchProjects([null, false, "", this.gateway.connectionEpoch]);
+    this.searchProjects([
+      null,
+      false,
+      "",
+      this.gateway.connectionEpoch,
+      JSON.stringify(this.repositorySources),
+    ]);
     const normalized = query.trim();
     const context = this.read().context;
     if (
@@ -420,7 +488,8 @@ export class DraftPlaceBrowser {
       !this.gateway.connected ||
       !this.gateway.client ||
       !context ||
-      !canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.read")
+      (!canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.read") &&
+        this.repositorySources.length === 0)
     ) {
       this.callbacks.changed();
       return;
@@ -433,7 +502,13 @@ export class DraftPlaceBrowser {
         return;
       }
       this.debouncedProjectQuery = normalized;
-      this.searchProjects([client, true, normalized, connectionEpoch]);
+      this.searchProjects([
+        client,
+        canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.read"),
+        normalized,
+        connectionEpoch,
+        JSON.stringify(this.repositorySources),
+      ]);
       this.callbacks.changed();
     }, PICKER_INPUT_DEBOUNCE_MS);
     this.callbacks.changed();
@@ -567,9 +642,11 @@ export class DraftPlaceBrowser {
     this.clearProjectSearchTimer();
     this.projectCatalogCleanup?.();
     this.projectCatalogCleanup = undefined;
+    this.pluginCatalogCleanup?.();
+    this.pluginCatalogCleanup = undefined;
     this.projectCatalogGateway = undefined;
     this.projectCatalog = undefined;
-    this.searchProjects([null, false, "", -1]);
+    this.searchProjects([null, false, "", -1, "[]"]);
   }
 
   private resetBrowser(closePopover: boolean) {

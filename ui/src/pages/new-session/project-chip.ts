@@ -18,6 +18,7 @@ export function projectCloneInput(value: string): string | null {
 }
 
 export type DraftRemoteProject = Readonly<{
+  sourceId?: string;
   identity: string;
   cloneUrl: string;
   defaultBranch?: string;

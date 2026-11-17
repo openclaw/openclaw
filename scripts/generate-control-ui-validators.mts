@@ -5,6 +5,7 @@ import { format } from "oxfmt";
 import { ObjectOptions, Type, type TSchema } from "typebox";
 import { Intern } from "typebox/schema";
 import { AgentRuntimeRestrictionErrorDetailsSchema } from "../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
+import { ControlUiRepositorySearchResultSchema } from "../packages/gateway-protocol/src/plugin-control-ui-repositories.js";
 import {
   SessionApprovalEventSchema,
   SessionApprovalReplaySchema,
@@ -57,12 +58,20 @@ type Group =
   | "transcript"
   | "board"
   | "history-state"
-  | "sender-identity";
+  | "sender-identity"
+  // Loaded with plugin repository search, outside Control UI startup.
+  | "repository-source";
 const additionalLintRules: Partial<Record<Group, string[]>> = {
   activity: ["eslint/curly"],
   approvals: ["unicorn/no-useless-length-check"],
 };
 const validators: Array<[name: string, schema: TSchema, type: string, group: Group]> = [
+  [
+    "ControlUiRepositorySearchResult",
+    ControlUiRepositorySearchResultSchema,
+    'import("../../../../packages/gateway-protocol/src/plugin-control-ui-repositories.js").ControlUiRepositorySearchResult',
+    "repository-source",
+  ],
   [
     "BoardSnapshot",
     BoardSnapshotSchema,
@@ -237,6 +246,7 @@ async function main() {
     "history-state",
     "sender-identity",
     "board",
+    "repository-source",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
     // Share repeated shapes only within each existing lazy boundary.

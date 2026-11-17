@@ -199,6 +199,9 @@ const enNewSessionSetup = {
     projectSearchPlaceholder: "Search projects or paste a Git URL",
     searchProjects: "Search projects",
     githubProjects: "GitHub",
+    remoteCredentialHint: "Connect {source} in Settings to search repositories.",
+    repositorySourceUnavailable:
+      "This repository source is no longer available. Choose another repository.",
     githubTokenHint:
       "No GitHub account is configured for the web app or Gateway. Only public GitHub results are shown.",
     cloneProject: "Clone",

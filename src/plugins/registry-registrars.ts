@@ -39,6 +39,7 @@ import type {
   PluginAgentToolResultMiddlewareRegistration,
   PluginRecord,
 } from "./registry-types.js";
+import { createRepositorySourceRegistrar } from "./repository-source-registration.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import { normalizePluginToolContractNames, normalizePluginToolNames } from "./tool-contracts.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
@@ -714,6 +715,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     ...createNetworkRegistrars(state),
     ...providers,
     ...createOperationRegistrars(state),
+    registerRepositorySource: createRepositorySourceRegistrar(state),
     ...createHostRegistrars(state),
     registerMemoryCapability,
     registerMemoryPromptSupplement,

@@ -209,6 +209,21 @@ describe("DraftPlaceState repository selection", () => {
     expect(f.state).toMatchObject({ baseRef: "", worktreeName: "" });
   });
 
+  it("preserves an explicit contributed repository owner in local and hosted creation", () => {
+    const { state, browser } = createRepositoryFixture();
+    onTestFinished(() => browser.disconnect());
+    state.selectRemoteProject({ ...REMOTE_PROJECT, sourceId: "forge/repositories" });
+    expect(createParams(state, "Create locally")).toMatchObject({
+      projectGitUrl: REMOTE_PROJECT.cloneUrl,
+      repositorySource: "forge/repositories",
+    });
+    state.selectCloudProfile("aws");
+    expect(createParams(state, "Create hosted")).toMatchObject({
+      repository: { url: REMOTE_PROJECT.cloneUrl },
+      repositorySource: "forge/repositories",
+    });
+  });
+
   it("remembers a remote project and restores its default branch", () => {
     const restored = createRepositoryFixture();
     vi.spyOn(restored.browser, "projectsReady", "get").mockReturnValue(true);

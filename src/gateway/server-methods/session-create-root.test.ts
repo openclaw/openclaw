@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { prepareSessionCreateFilesystemRoot } from "./session-create-root.js";
+import {
+  prepareSessionCreateFilesystemRoot,
+  sessionWorkspaceReuseError,
+} from "./session-create-root.js";
 
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
 
@@ -96,4 +99,20 @@ it("does not resolve remote node paths on the Gateway", async () => {
     ok: true,
     value: { sessionCwd },
   });
+});
+
+it("rejects changing a native session to a plugin source while preserving exact source retries", () => {
+  const params = { repositorySource: "example/remote" };
+  const native = { sessionId: "existing", updatedAt: 1 };
+  expect(sessionWorkspaceReuseError(params, false, native)).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: expect.stringContaining("repository source cannot be changed"),
+  });
+  expect(
+    sessionWorkspaceReuseError(params, false, {
+      ...native,
+      repositorySourceId: params.repositorySource,
+    }),
+  ).toBeUndefined();
+  expect(sessionWorkspaceReuseError(params, false, undefined)).toBeUndefined();
 });

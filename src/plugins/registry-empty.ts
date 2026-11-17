@@ -40,6 +40,7 @@ export const pluginArrays = [
   "nodeHostCommands",
   "nodeInvokePolicies",
   "gatewayAccessPolicies",
+  "repositorySources",
   "repositoryIntegrations",
   "securityAuditCollectors",
   "services",

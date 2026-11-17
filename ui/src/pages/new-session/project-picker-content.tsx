@@ -543,8 +543,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                                 icon,
                                 sub: project().description ?? t("newSession.cloneProject"),
                                 checked:
+                                  !props.params.place.browser.remoteProject?.sourceId &&
                                   props.params.place.browser.remoteProject?.cloneUrl ===
-                                  project().cloneUrl,
+                                    project().cloneUrl,
                                 title: project().webUrl,
                                 onSelect: () =>
                                   props.params.place.selectRemoteProject({
@@ -565,6 +566,60 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                 </Errored>
               </>
             ) : undefined}
+            <Show when={!props.nativeTerminal && !view().cloneInput && view().query.length >= 2}>
+              <For
+                each={props.params.place.browser.repositorySearchGroups}
+                keyed={(group) => group.source.key}
+              >
+                {(group) => (
+                  <>
+                    <MenuHeading
+                      class="new-session-page__menu-title"
+                      label={group().source.label}
+                    />
+                    <Show when={group().loading}>
+                      <PickerSkeleton />
+                    </Show>
+                    <Show when={group().error}>
+                      <div class="new-session-page__project-error" role="alert">
+                        {group().error}
+                      </div>
+                    </Show>
+                    <Show when={group().notice}>
+                      <div class="new-session-page__menu-note">{group().notice}</div>
+                    </Show>
+                    <For each={group().items} keyed={(project) => project.cloneUrl}>
+                      {(project) => (
+                        <SessionMenuItem
+                          item={{
+                            value: `remote-project:${group().source.key}:${project().fullName}`,
+                            label: project().fullName,
+                            icon: <Icon name="gitBranch" />,
+                            sub: project().description ?? t("newSession.cloneProject"),
+                            checked:
+                              props.params.place.browser.remoteProject?.sourceId ===
+                                group().source.key &&
+                              props.params.place.browser.remoteProject?.cloneUrl ===
+                                project().cloneUrl,
+                            title: project().webUrl,
+                            onSelect: () =>
+                              props.params.place.selectRemoteProject({
+                                identity: project().fullName,
+                                sourceId: group().source.key,
+                                cloneUrl: project().cloneUrl,
+                                ...(project().defaultBranch
+                                  ? { defaultBranch: project().defaultBranch }
+                                  : {}),
+                              }),
+                          }}
+                          submitting={props.params.submitting || !view().projectAddAvailable}
+                        />
+                      )}
+                    </For>
+                  </>
+                )}
+              </For>
+            </Show>
             {(props.nativeTerminal || props.params.place.browser.projects.length === 0) &&
             props.params.place.canWrite() &&
             !props.params.place.isAdmin() ? (

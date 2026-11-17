@@ -67,7 +67,9 @@ export async function submitDraftInTerminal(options: {
     worktreeName: place.worktreeName,
     baseRef: place.baseRef,
   };
-  const consumeWorktreeName = place.captureSubmittedWorktreeName(terminalInput, agentId);
+  const consumeWorktreeName = place.repositoryState.captureSubmittedName(terminalInput, {
+    agentId,
+  });
   submission.publish(
     buildLocalUserMessage({ text: initialMessage, createdAt: Date.now() }, "available"),
     true,
