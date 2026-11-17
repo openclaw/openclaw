@@ -53,9 +53,13 @@ export function registerPendingRequesterAuthorityCases({
   requireRunReplyAgentCall: () => Parameters<typeof runReplyAgent>[0];
   turn: typeof createPreparedReplyTurn;
 }): void {
-  it.each([false, true])(
-    "carries only direct originally-unlinked requester facts into admission (internal=%s)",
-    async (internal) => {
+  it.each([
+    { internal: false, revokeSource: false },
+    { internal: false, revokeSource: true },
+    { internal: true, revokeSource: false },
+  ])(
+    "carries only direct originally-unlinked requester facts into admission (internal=$internal, revokeSource=$revokeSource)",
+    async ({ internal, revokeSource }) => {
       const params = turn("Create a session", {
         ...createProviderSurface("discord"),
         SenderId: "unlinked-sender",
@@ -66,6 +70,7 @@ export function registerPendingRequesterAuthorityCases({
       await runPrepared(params);
       // prepareReplyAgentTurn clones this projection before run admission.
       const sourceContext = { ...requireRunReplyAgentCall().followupRun.run };
+      const source = new AbortController();
       const prepare = (runId: string) =>
         prepareChannelRunAdmission({
           cfg: {},
@@ -74,6 +79,7 @@ export function registerPendingRequesterAuthorityCases({
           ingressKind: "channel",
           boundary: "prepared-reply-test",
           sourceContext,
+          assertSourceCurrent: () => source.signal.throwIfAborted(),
         });
       const admission = prepare("originally-unlinked");
       const later = prepare("later-system-turn");
@@ -84,6 +90,14 @@ export function registerPendingRequesterAuthorityCases({
         requester?.();
         const next = await later.admit("embedded");
         expect(readAdmittedUnlinkedChannelRequester(next.operationalRunInstance)).toBeUndefined();
+        if (requester) {
+          if (revokeSource) {
+            source.abort(new Error("unlinked request source revoked"));
+          } else {
+            admission.close();
+          }
+          expect(requester).toThrow(/no longer active/);
+        }
       } finally {
         admission.close();
         later.close();
