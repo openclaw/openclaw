@@ -148,6 +148,12 @@ export class SpawnBrokerHost {
   get pid(): number | undefined {
     return this.process?.pid;
   }
+  get hasOpenNativeResourceClaims(): boolean {
+    return this.resourceClaims?.hasOpenClaims ?? false;
+  }
+  get nativeResourceAdmissionClosed(): boolean {
+    return this.resourceClaims?.admissionClosed ?? false;
+  }
   ready(): Promise<void> {
     return this.closing
       ? Promise.reject(new SpawnBrokerError("Spawn broker is closing"))

@@ -3,9 +3,10 @@ import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
-import * as captureDirectory from "../plugins/plugin-source-capture-directory.js";
+import * as captureResources from "../plugins/plugin-capture-native-resource.client.js";
 import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { readFixtureLines } from "./prepared-model-catalog-worker.shared.test-support.js";
 import {
   catalogEntry,
@@ -34,18 +35,24 @@ it.for([
   "keeps the $owner artifact selection in catalog and auth workers",
   async ({ version, prepareInboundPluginRegistry }, { signal }) => {
     const captureReleases = new Map<string, Promise<void>>();
-    const createCapture = captureDirectory.createPluginSourceCaptureRoot;
+    const createOwner = captureResources.createPluginCaptureOwner;
     const observeCapture = vi
-      .spyOn(captureDirectory, "createPluginSourceCaptureRoot")
-      .mockImplementation((...args) => {
-        const capture = createCapture(...args);
-        const released = createDeferredCore();
-        captureReleases.set(capture.directory, released.promise);
+      .spyOn(captureResources, "createPluginCaptureOwner")
+      .mockImplementation(async (...args) => {
+        const owner = await createOwner(...args);
+        const releases = new Map<number, Deferred>();
         return {
-          ...capture,
-          release: () => {
-            const pending = capture.release();
-            released.resolve(pending);
+          ...owner,
+          createSource: async (...params) => {
+            const root = await owner.createSource(...params);
+            const released = createDeferredCore();
+            releases.set(params[0], released);
+            captureReleases.set(root.directory, released.promise);
+            return root;
+          },
+          releaseSource: (id) => {
+            const pending = owner.releaseSource(id);
+            releases.get(id)?.resolve(pending);
             return pending;
           },
         };
@@ -59,6 +66,7 @@ it.for([
         prepareInboundPluginRegistry,
       },
     );
+    using observedFs = observeMainThreadFs();
     await snapshot.loadFullModelCatalog!();
     const auth = await loadPreparedModelRuntimeAuth(snapshot, {
       providerIds: [PROVIDER_ID],
@@ -127,5 +135,10 @@ it.for([
     expect(fs.existsSync(captureRoot)).toBe(false);
     expect(workerCaptures.filter(exists)).toEqual([]);
     expect(parentCaptures.every(exists)).toBe(true);
+    expect(
+      observedFs
+        .stacks()
+        .filter(({ stack }) => stack.includes("prepared-model-catalog-worker.pool")),
+    ).toEqual([]);
   },
 );
