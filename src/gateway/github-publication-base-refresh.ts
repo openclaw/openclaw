@@ -8,7 +8,9 @@ import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attributio
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
+import { nativeWorktreeFilesystem } from "../agents/worktrees/filesystem-native.js";
 import { resolveGitMetadataPath } from "../agents/worktrees/git.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
@@ -388,6 +390,8 @@ export async function integrateManagedWorkspaceSource(
             .split("\0")
             .filter(Boolean);
           if (state.current().base_commit !== baseCommit) {
+            // Disposable checkouts settle under run-end custody after request cancellation too.
+            const cleanup = captureWorktreeRunEndContext(owner.env ?? process.env);
             const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-base-refresh-"));
             try {
               const mergedCommit = await git(
@@ -437,7 +441,9 @@ export async function integrateManagedWorkspaceSource(
                 workerAuthority: state.workerAuthority,
               });
             } finally {
-              await fs.rm(temporary, { recursive: true, force: true });
+              await nativeWorktreeFilesystem.remove(temporary, {
+                commitGuard: cleanup.admission.assertCurrent,
+              });
             }
             // Reserve only an admitted payload. A rejected source must not pin retries
             // to its old PR head after the author removes generated output.

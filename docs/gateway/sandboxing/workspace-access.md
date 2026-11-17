@@ -384,6 +384,8 @@ temporary-tree and accepted-result cleanup. Recovery of interrupted guest mutati
 still keeps the guest paused until both workspaces accept the transfer.
 Canonical path selection stays in the workspace worker, so selecting paths does
 not copy a complete accepted manifest through the Gateway.
+Disposable base-refresh checkouts are removed by the native worktree filesystem
+owner, keeping the recursive cleanup walk out of the Gateway heap.
 
 GitHub PR preparation and base refresh download commit history and missing objects
 with the guest running. After those downloads finish, OpenClaw checks the guest's

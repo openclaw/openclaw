@@ -15,6 +15,7 @@
  * unmeasured messages; known payload bytes are not complete wire-byte totals.
  * --traffic separately measures V8-serializable main-boundary envelopes (shared
  * memory and message ports counted as handles); exclude it from timing/allocation.
+ * cgroupCpuMs includes subprocesses; use a task-isolated Linux cgroup for comparison.
  * The unchanged tree has 62k files/1.1 GB. Its upstream adds 512 MiB of unique
  * historical objects then replaces them with small current files. This local Git
  * server declines filtering, so the real fetch downloads history while the final
@@ -269,6 +270,12 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const guestCpu = async () => nativeImage && nativeEngine === "docker"
     ? Number((await docker(["exec", nativeName, "cat", "/sys/fs/cgroup/cpu.stat"])).stdout.match(/^usage_usec (\d+)$/m)?.[1])
     : null;
+  const cgroupCpu = async () => {
+    const usage = process.platform === "linux"
+      ? (await fs.readFile("/sys/fs/cgroup/cpu.stat", "utf8").catch(() => "")).match(/^usage_usec (\d+)$/m)?.[1]
+      : undefined;
+    return usage === undefined ? null : Number(usage);
+  };
   const objectBytesBefore = await bytesUnder(objects);
   const guestCpuBefore = await guestCpu();
   const heartbeatStart = nativeImage ? (await fs.readFile(path.join(f.projection, ".git/pause-proof-heartbeat.jsonl"), "utf8")).trim().split("\n").length : 0;
@@ -282,6 +289,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
   }
   const filesystem = await fs.statfs(f.projection);
   const agentDatabaseBytes = (await fs.stat(path.join(process.env.OPENCLAW_STATE_DIR!, "agents/main/agent/openclaw-agent.sqlite"))).size;
+  const cgroupCpuBefore = await cgroupCpu();
   const workerMessagesBefore = workerMessages.getWorkerMessageMetrics();
   const allocatedBefore = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const cpu = process.cpuUsage();
@@ -312,6 +320,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const heapAfter = process.memoryUsage();
   const allocatedAfter = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const workerMessagesAfter = workerMessages.getWorkerMessageMetrics();
+  const cgroupCpuAfter = await cgroupCpu();
   let sampledAllocationBytes: number | null = null;
   if (allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -341,6 +350,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     node: process.version, bun: process.versions.bun ?? null, executable: process.execPath, platform: process.platform, cpus: os.cpus().length, memory: os.totalmem(), beforeLoad, afterLoad: os.loadavg(),
     ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
+    cgroupCpuMs: cgroupCpuBefore !== null && cgroupCpuAfter !== null ? (cgroupCpuAfter - cgroupCpuBefore) / 1000 : null,
     heapBefore, heapAfter, sampledAllocationBytes, fetched, pauseMs, phaseMs,
     mainAllocatedBytes: typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
       ? allocatedAfter - allocatedBefore : null,
