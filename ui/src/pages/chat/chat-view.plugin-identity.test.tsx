@@ -1,12 +1,12 @@
-/* @vitest-environment jsdom */
-
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
+/* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ControlUiSurface,
   ControlUiViewContext,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { prepareChatMessageRender } from "../../lib/chat/message-display.ts";
 import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -19,7 +19,6 @@ import { createChatProps } from "./chat-view.test-helpers.ts";
 import { ChatView } from "./chat-view.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { GroupedMessage } from "./components/chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./components/chat-message-markdown-view.tsx";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
 

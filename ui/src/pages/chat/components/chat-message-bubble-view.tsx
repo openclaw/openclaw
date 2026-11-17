@@ -20,11 +20,12 @@ import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-cha
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import type { ChatMessageRenderPreparation } from "../../../lib/chat/message-display.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
-import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
+import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
@@ -49,7 +50,6 @@ import {
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
-import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
 import {

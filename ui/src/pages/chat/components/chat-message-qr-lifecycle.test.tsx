@@ -1,11 +1,10 @@
-/* @vitest-environment jsdom */
-
 import { createSignal } from "solid-js";
+/* @vitest-environment jsdom */
 import { afterEach, expect, it, vi } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import * as media from "./chat-message-media.ts";
 
 afterEach(() => {
