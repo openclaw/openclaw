@@ -15,6 +15,7 @@ import type {
   SqliteIntegrityCheckOptions,
   SqliteIntegrityCheckTiming,
 } from "./sqlite-integrity.js";
+import { SqliteIntegrityError } from "./sqlite-integrity.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
@@ -43,6 +44,7 @@ export type SqliteIntegrityWorkerResult =
         code?: string;
         errcode?: number;
         cause?: { message: string; code?: string; errcode?: number };
+        findings?: readonly unknown[];
       };
     };
 
@@ -275,7 +277,17 @@ export function assertSqliteIntegrityInWorker(
           }
           readSqliteIntegrityFileIdentity(pathname, identity);
           if (!result.ok) {
-            throw restoreNativeErrorResponse(result.error);
+            const error = restoreNativeErrorResponse(result.error);
+            if (error.name === "SqliteIntegrityError") {
+              const integrityError = new SqliteIntegrityError(
+                error.message,
+                error.cause,
+                result.error.findings,
+              );
+              integrityError.message = error.message;
+              throw integrityError;
+            }
+            throw error;
           }
           resolve();
         } catch (error) {

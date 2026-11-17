@@ -17,33 +17,24 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     } as const;
   }
 
+  const loaderFreeEntrypoint = (modulePath: string) =>
+    runtimeProcessEntrypoint(modulePath, undefined, undefined, ".mjs");
+
   return {
     daemonRuntimeProbe: runtimeProcessEntrypoint("infra/daemon-runtime-probe.entry"),
     pluginToolsServe: runtimeProcessEntrypoint("mcp/plugin-tools-serve"),
     openclawToolsServe: runtimeProcessEntrypoint("mcp/openclaw-tools-serve"),
-    repositoryPublicationRestore: runtimeProcessEntrypoint(
+    repositoryPublicationRestore: loaderFreeEntrypoint(
       "gateway/repository-publication-restore.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspacePublicationSnapshot: runtimeProcessEntrypoint(
+    nodeWorkspacePublicationSnapshot: loaderFreeEntrypoint(
       "node-host/node-worker-publication-snapshot.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceManifest: runtimeProcessEntrypoint(
+    nodeWorkspaceManifest: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-manifest.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    nodeWorkspaceGitHistory: runtimeProcessEntrypoint(
+    nodeWorkspaceGitHistory: loaderFreeEntrypoint(
       "node-host/node-worker-workspace-git-history.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     doctorDatabaseEngineInspection: runtimeProcessEntrypoint(
       "commands/doctor-database-engine-inspection.worker",
@@ -59,30 +50,21 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "infra/database-engine/port-command.entry.worker",
     ),
     systemCaWarmup: runtimeProcessEntrypoint("gateway/system-ca-warmup.worker"),
-    shutdownHardExit: runtimeProcessEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
+    shutdownHardExit: loaderFreeEntrypoint("cli/gateway-cli/shutdown-hard-exit.worker"),
     packageIntegrityHasher: runtimeProcessEntrypoint(
       "infra/package-update-integrity-hasher.worker",
     ),
     packageLocalOverrides: runtimeProcessEntrypoint("infra/package-local-overrides.worker"),
     directoryWatchHost: runtimeProcessEntrypoint("infra/directory-watch-host.worker"),
     directoryWatchParent: runtimeProcessEntrypoint("infra/directory-watch-parent.worker"),
-    workspaceQuiescenceAcquire: runtimeProcessEntrypoint(
+    workspaceQuiescenceAcquire: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-acquire.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRenew: runtimeProcessEntrypoint(
+    workspaceQuiescenceRenew: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-renew.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
-    workspaceQuiescenceRelease: runtimeProcessEntrypoint(
+    workspaceQuiescenceRelease: loaderFreeEntrypoint(
       "gateway/worker-environments/workspace-quiescence-release.generated.worker",
-      undefined,
-      undefined,
-      ".mjs",
     ),
     packageActivationRecovery: runtimeProcessEntrypoint(
       "infra/package-update-activation-sealed",
