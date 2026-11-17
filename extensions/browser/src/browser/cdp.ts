@@ -19,6 +19,7 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import { redactSensitiveAXNodeValues } from "./sensitive-field-values.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
 export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
@@ -248,6 +249,7 @@ export async function snapshotAria(opts: {
         nodes?: RawAXNode[];
       };
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+      await redactSensitiveAXNodeValues(send, nodes);
       return { nodes: formatAriaSnapshot(nodes, limit) };
     },
     { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
