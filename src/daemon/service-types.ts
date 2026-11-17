@@ -78,6 +78,8 @@ export type GatewayServiceControlArgs = {
   beforeMutation?: () => Promise<void>;
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
+  /** Prepare service-targeted restart intent after foreground recovery has settled. */
+  prepareRestart?: () => Promise<void>;
   disable?: boolean;
   preserveDefinition?: boolean;
   /** Start the captured manager without changing its separately restored enable policy. */

@@ -1,5 +1,8 @@
 // Native transport is simulated; update-command-service-custody.test.ts covers receiver custody.
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
+import { hostname } from "node:os";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, aroundEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,10 +14,14 @@ import {
   resolveLaunchAgentEnvironmentReadOptions,
   resolveLaunchAgentEnvWrapperPath,
 } from "../../daemon/launchd-service-files.js";
+import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import * as systemdExec from "../../daemon/systemd-exec.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import * as gatewayOwner from "../../infra/gateway-owner-lease.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import * as processIdentity from "../../shared/pid-alive.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -54,6 +61,9 @@ const mocks = vi.hoisted(() => ({
   terminateStale: vi.fn(async (pids: number[]) => pids),
   running: true,
   loaded: true,
+  systemScope: false,
+  systemOwnership: vi.fn(async () => {}),
+  recoveryScope: vi.fn(async () => fixtureSystemdTarget()),
   managerUid: 2001 as number | undefined,
   listenerPids: vi.fn(() => [4242]),
   ports: vi.fn<typeof import("../../infra/ports-inspect.js").inspectPortUsage>(),
@@ -134,7 +144,7 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
     ...(mocks.running ? { pid: 4242 } : {}),
   }),
   isSystemdServiceEnabled: async () => mocks.loaded,
-  findInstalledSystemdGatewayScope: async () => null,
+  findInstalledSystemdGatewayScope: async () => fixtureSystemdTarget(),
   isSystemdUserServiceAvailable: async () => true,
   stopSystemdService: async () => {
     mocks.stopAllowances.push(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS);
@@ -144,6 +154,18 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   restartSystemdService: mocks.restart,
   startSystemdService: mocks.start,
   installSystemdService: mocks.install,
+}));
+vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-scope.js")>()),
+  // The fixture writes this user unit; discovery must not inspect the host's system manager.
+  findSystemdGatewayInstallation: async () => ({ kind: "user", user: fixtureSystemdTarget() }),
+  findInstalledSystemdGatewayScope: mocks.recoveryScope,
+  isSystemdServiceAbsent: async () => false,
+}));
+// Native system-manager ownership is fixture I/O; never inspect the host manager.
+vi.mock("../../daemon/systemd-system.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-system.js")>()),
+  assertNoSystemSystemdOwnership: mocks.systemOwnership,
 }));
 vi.mock("../../daemon/systemd-user-transport.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-user-transport.js")>()),
@@ -247,6 +269,13 @@ let configPath: string;
 let run: NonNullable<UpdateCommandOptions["run"]>;
 let envSnapshot: Awaited<ReturnType<typeof createServiceActivationFixture>>["envSnapshot"];
 let servingOwner: Awaited<ReturnType<typeof createServiceActivationFixture>>["servingOwner"];
+function fixtureSystemdTarget() {
+  return {
+    scope: mocks.systemScope ? ("system" as const) : ("user" as const),
+    unitName: "openclaw-gateway.service",
+    unitPath: path.join(root, ".config/systemd/user/openclaw-gateway.service"),
+  };
+}
 const writeConfig = (version: string) => writeRecoveryConfig(configPath, version);
 const gatewayArgs = (port = "19305") => [
   process.execPath,
@@ -320,6 +349,9 @@ beforeEach(async () => {
   );
   mocks.running = true;
   mocks.loaded = true;
+  mocks.systemScope = false;
+  mocks.systemOwnership.mockReset().mockResolvedValue(undefined);
+  mocks.recoveryScope.mockReset().mockImplementation(async () => fixtureSystemdTarget());
   mocks.managerUid = 2001;
   mocks.launchctl.mockImplementation(async () => {
     throw new Error("Unexpected native control in fixture");
@@ -356,6 +388,105 @@ afterEach(async () => {
 });
 
 describe("preserved update activation with real version guards", () => {
+  it
+    .skipIf(process.platform !== "linux")
+    .each([
+      "foreground",
+      "another supervisor",
+      "reused pid",
+      "newer config",
+      "system scope",
+      "system owner",
+      "revoked authority",
+    ] as const)("recovers the installed unit with %s state ownership", async (ownership) => {
+    const nativeRestart = mocks.restart.getMockImplementation()!;
+    // Keep the signal, process identity, liveness and shutdown wait real.
+    const orphan = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000); process.send('ready')"],
+      {
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      },
+    );
+    const exited = once(orphan, "exit");
+    try {
+      await once(orphan, "message");
+      const orphanPid = orphan.pid!;
+      const startedAt = processIdentity.getFileLockProcessStartTime(orphanPid);
+      expect(startedAt).not.toBeNull();
+      mocks.running = false;
+      if (ownership === "newer config") {
+        await writeConfig("9999.1.1");
+      }
+      if (ownership === "system scope") {
+        mocks.systemScope = true;
+        vi.spyOn(systemdExec, "isRunningAsRoot").mockReturnValue(false);
+      }
+      if (ownership === "system owner") {
+        mocks.systemOwnership.mockRejectedValue(new Error("System unit owns this installation"));
+        vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue(undefined);
+      }
+      const owner = {
+        pid: orphanPid,
+        host: hostname(),
+        startedAt: ownership === "reused pid" ? -1 : startedAt,
+        owner: "orphan-owner",
+        port: 19305,
+        mode:
+          ownership === "another supervisor" ? ("supervised" as const) : ("foreground" as const),
+        supervisor:
+          ownership === "another supervisor"
+            ? { kind: "external" as const, name: "operator" }
+            : null,
+        state: "live" as const,
+        expired: false,
+      };
+      vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockImplementation(() =>
+        processIdentity.isPidAlive(orphanPid) ? owner : undefined,
+      );
+      let current = true;
+      if (ownership === "revoked authority") {
+        mocks.recoveryScope.mockImplementationOnce(async () => {
+          current = false;
+          return fixtureSystemdTarget();
+        });
+      }
+      mocks.restart.mockImplementation(async () => {
+        if (ownership === "system owner") {
+          const { restartSystemdService } = await import("../../daemon/systemd-lifecycle.js");
+          await restartSystemdService({ env: process.env, stdout: process.stdout });
+        }
+        expect(processIdentity.isPidAlive(orphanPid)).toBe(false);
+        return await nativeRestart();
+      });
+      const recovered = await withGatewayServiceUpdateAuthority(
+        () => {
+          if (!current) {
+            throw new Error("Fixture update authority revoked");
+          }
+        },
+        () => runDaemonRestart({ preserveDefinition: true, json: true }),
+      ).catch((error: unknown) => {
+        if (ownership !== "revoked authority") {
+          throw error;
+        }
+        expect(String(error)).toContain("authority revoked");
+        return false;
+      });
+      expect(recovered).toBe(ownership === "foreground");
+      expect(processIdentity.isPidAlive(orphanPid)).toBe(ownership !== "foreground");
+      if (ownership === "foreground") {
+        expect(mocks.restart).toHaveBeenCalledOnce();
+      } else {
+        expect(mocks.restart).not.toHaveBeenCalled();
+      }
+    } finally {
+      mocks.restart.mockImplementation(nativeRestart);
+      orphan.kill();
+      await exited;
+    }
+  });
+
   registerRestartOutcomeTests(() => ({ root, run, mocks, servingOwner }));
 
   it.each(preservedActivationCases)(
