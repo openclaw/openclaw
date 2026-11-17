@@ -1,6 +1,11 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createNodeMeetingRealtimeAudioTransport } from "./realtime-node-audio-transport.js";
 
@@ -84,6 +89,53 @@ describe("node meeting realtime audio transport", () => {
     });
 
     await transport.stop();
+  });
+
+  it("keeps bridge commands reachable after the joining Gateway request has responded", async () => {
+    // Models googlemeet.join: node invokes still dispatched under its scope are refused once it responds.
+    const request = { responded: false };
+    const joinScope = {
+      isWebchatConnect: () => false,
+      signal: new AbortController().signal,
+      hasCurrentClientAuthority: () => !request.responded,
+    };
+    const pulls: ReturnType<typeof createDeferredCore<object>>[] = [];
+    const invoke = vi.fn(async ({ params }: { params: { action: string } }) => {
+      if (getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority?.() === false) {
+        throw new Error("Gateway client authority closed before dispatching node.invoke.");
+      }
+      if (params.action !== "pullAudio") {
+        return { ok: true };
+      }
+      const pending = createDeferredCore<object>();
+      pulls.push(pending);
+      return await pending.promise;
+    });
+    const onAudio = vi.fn();
+    const onFatal = vi.fn();
+    const owner = createOwnedTestInstance("meeting-owner");
+    const transport = withPluginRuntimeGatewayRequestScope(joinScope, () =>
+      owner.run(() => {
+        const created = createTransport(invoke);
+        created.onFatal(onFatal);
+        created.startInput(onAudio);
+        return created;
+      }),
+    );
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    request.responded = true;
+    pulls.shift()?.resolve({ base64: Buffer.from([1, 2]).toString("base64") });
+    await vi.waitFor(() => expect(pulls).toHaveLength(1));
+    await withPluginRuntimeGatewayRequestScope(joinScope, () =>
+      transport.writeOutput(Buffer.from([5, 6])),
+    );
+    expect(onAudio.mock.calls).toEqual([[Buffer.from([1, 2])]]);
+    expect(onFatal).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenLastCalledWith(
+      expect.objectContaining({ params: expect.objectContaining({ action: "pushAudio" }) }),
+    );
+    await transport.stop();
+    pulls.shift()?.resolve({});
   });
 
   it("cannot verify stopped output from a pending input pull", async () => {
