@@ -57,6 +57,40 @@ also verify `dist/build-info.json` against a source commit should use
 or declaration build. Keep generated files unchanged after either build so
 equivalent-input admission can certify the same source bytes.
 
+## Isolated native chat startup diagnostics
+
+`scripts/perf/native-chat-start-measure.ts` attaches to a separately prepared,
+authenticated synthetic Gateway using the `gateway-client/ui` identity. It never
+starts or reconfigures a Gateway. Use `--write-config <new-file> --gateway-port
+<port> --mock-port <port>` to generate its synthetic input, then set the guest-owned
+workspace before launch. The existing `scripts/e2e/mock-openai-server.mjs` supplies
+the loopback provider; the driver verifies unique replies and mock request counts.
+
+Copy the self-contained `scripts/perf/native-chat-start-preload.mjs` into the
+task-owned runtime's readable staging directory. Before launch, run it with
+`--check-owner-root <packaged-app> --expected-build <commit>` and one
+`--expected-owner-hash <sha256>` per qualified owner. This checks the actual
+bundled `dist` layout without editing it. Append its file URL to the owned guest
+process's existing `NODE_OPTIONS`, set `OPENCLAW_PERF_CHAT_OWNER_ROOT` to that app,
+and set `OPENCLAW_PERF_CHAT_CAPTURE_DIR` to a guest-writable task directory.
+On Windows, use file URLs for Node `--import` arguments, not backslash specifiers.
+
+Run the driver through the repository TypeScript loader with `--url <loopback-ws>
+--mock-url <loopback-http-v1> --samples 6 --output <new-file>`. An optional
+`--stop-target <file>` accepts only the task lock's exact `{pid, ownerId, port}`;
+the driver verifies the connected PID and requests targeted graceful shutdown
+after the turns. A scheduled shutdown is not completion: join the foreground
+process and retrieve its capture through the runtime owner before reducing it.
+Do not treat host invocation cancellation or forced termination as graceful exit.
+
+`node scripts/perf/native-chat-start-report.mjs --client <receipts>
+--capture-dir <retrieved-captures>` requires complete, same-process monotonic
+anchors, no dropped observations, and one mock request per turn. It rejects
+incomplete shutdown, retries and ambiguous joins rather than assigning time
+silently. Loader instrumentation is diagnostic overhead, not uninstrumented
+performance evidence. Raw network first byte, paint and supervised-service
+lifecycle remain separate claims; no client or runtime authorization is widened.
+
 ## Interrupted Control UI builds
 
 Source UI builds and Settings preparation share checkout artifact ownership.

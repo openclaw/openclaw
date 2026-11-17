@@ -104,6 +104,36 @@ it("handles census start/stop before releasing the host's last resource", async 
   expect(profile.head).toBeDefined();
 });
 
+it("invalidates bounded native chat capture without interrupting the measured process", async () => {
+  const output = tempDirs.make("native-chat-capture-budget-");
+  const { child, closed, stderr } = childWithPreload(
+    "native-chat-start-preload.mjs",
+    `
+      const record = globalThis[Symbol.for("openclaw.perf.native-chat-start")];
+      record("provider-start", "unsupported-compaction-identity");
+      for (let index = 0; index <= 10000; index++) {
+        record("acknowledged", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+      }
+    `,
+    {
+      OPENCLAW_PERF_CHAT_CAPTURE_DIR: output,
+      OPENCLAW_PERF_CHAT_OWNER_ROOT: path.resolve("src"),
+    },
+  );
+  expect(await closed, stderr()).toEqual([0, null]);
+  const capture = (await readFile(path.join(output, `native-chat-${child.pid}.jsonl`), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(capture.at(-1)).toMatchObject({
+    type: "capture-end",
+    droppedEvents: 1,
+    unclassifiedIdentities: 1,
+    writeFailures: 0,
+  });
+  expect(capture).toHaveLength(10002);
+});
+
 it.each([
   {
     name: "plugin-preparation-boot-preload.mjs",
