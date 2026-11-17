@@ -98,6 +98,7 @@ export async function startWaitClockProvider(options: { updateVia?: WaitClockUpd
   const receipts: Array<{ step: number; tool: string; result: ReturnType<typeof toolResult> }> = [];
   let parentRequests = 0;
   let trailingNarrationRequests = 0;
+  let completionInput: string | undefined;
   let childResponse: ServerResponse | undefined;
   let childReleased = false;
   let stopped = false;
@@ -181,7 +182,10 @@ export async function startWaitClockProvider(options: { updateVia?: WaitClockUpd
           } else {
             expect(step, "exactly one completion turn must resume the parent").toBe(4);
             expect(childReleased).toBe(true);
-            expect(JSON.stringify(body.input)).toContain(waitClockFixture.childReply);
+            completionInput = JSON.stringify(body.input);
+            if (updateVia === "reply") {
+              expect(completionInput).toContain(waitClockFixture.childReply);
+            }
             writeReply(response, waitClockFixture.resumedReply, "resumed");
           }
         })();
@@ -205,6 +209,7 @@ export async function startWaitClockProvider(options: { updateVia?: WaitClockUpd
     check: () => Promise.race([failure.promise, Promise.resolve()]),
     parentRequests: () => parentRequests,
     trailingNarrationRequests: () => trailingNarrationRequests,
+    completionInput: () => completionInput,
     childIsRunning: () => childResponse?.destroyed === false && !childReleased,
     releaseChild() {
       if (!childResponse || childResponse.destroyed || childReleased) {
