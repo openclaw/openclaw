@@ -2,7 +2,10 @@ import { assert, describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-import { validateConfigObjectRawWithPlugins } from "./validation.js";
+import {
+  validateConfigObjectRawWithPlugins,
+  validateConfigObjectWithPlugins,
+} from "./validation.js";
 
 const manifestRegistry: PluginManifestRegistry = {
   plugins: [
@@ -82,4 +85,37 @@ describe("mixed-case manifest settings", () => {
       }
     },
   );
+});
+
+it.each([
+  { name: "absent settings", entry: undefined },
+  { name: "policy-only settings", entry: { enabled: true } },
+  { name: "authored empty settings", entry: { config: {} } },
+])("preserves $name when a plugin has no schema defaults", ({ entry }) => {
+  const expected = structuredClone(entry);
+  const result = validateConfigObjectWithPlugins(
+    {
+      plugins: {
+        slots: { memory: "none" },
+        ...(entry ? { entries: { "empty-defaults": entry } } : {}),
+      },
+    },
+    {
+      pluginMetadataSnapshot: {
+        manifestRegistry: {
+          plugins: [
+            createPluginManifestRecordFixture({
+              id: "empty-defaults",
+              origin: "bundled",
+              enabledByDefault: true,
+              configSchema: { type: "object", properties: {}, additionalProperties: false },
+            }),
+          ],
+          diagnostics: [],
+        },
+      },
+    },
+  );
+  assert(result.ok);
+  expect(result.config.plugins?.entries?.["empty-defaults"]).toEqual(expected);
 });

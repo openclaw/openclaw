@@ -355,7 +355,10 @@ export function validateExplicitPluginConfig(params: {
             delete sessionCatalog.enabled;
             nextValue = { ...nextValue, sessionCatalog };
           }
-          params.replacePluginEntryConfig(entryId, nextValue);
+          // An empty schema result must not invent a configured-plugin entry.
+          if (entryHasConfig || Object.keys(nextValue).length > 0) {
+            params.replacePluginEntryConfig(entryId, nextValue);
+          }
         }
       } else if (record.format !== "bundle") {
         issues.push({
