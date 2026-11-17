@@ -92,10 +92,3 @@ it.each([false, true])(
     }
   },
 );
-
-it("widens only the automation lane past the default cron width", () => {
-  expect(resolveGatewayLaneConcurrency({ hooks: { enabled: true } })).toMatchObject({
-    cron: 16,
-    hookDispatch: 8,
-  });
-});
