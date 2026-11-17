@@ -1,3 +1,5 @@
+import { afterAll } from "vitest";
+import { beforeAll } from "vitest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { captureSessionEventConfigPolicy } from "../auto-reply/reply/session-event-policy.js";
 import {
@@ -13,6 +15,12 @@ import {
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence-error.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
+import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
+import { resetLogger } from "../logging/logger.js";
+import { setLoggerOverride } from "../logging/logger.js";
+import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
+import { loggingState } from "../logging/state.js";
+import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
   AgentRunTerminalOutcomeError,
@@ -38,6 +46,7 @@ import {
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { recordModelFallbackStop as recordLightweightStop } from "./model-fallback-stop.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { createAgentRunDirectAbortError } from "./run-termination.js";
 import {
   createSessionPlacementSettlementClosedAbortError,
   isSessionPlacementSettlementClosedError,
@@ -388,3 +397,118 @@ it.each([false, true])(
     await expectTerminalStop(wrapper);
   },
 );
+
+describe("terminal fallback diagnostics", () => {
+  const stopLogs = createSuiteLogPathTracker("openclaw-chain-stop-");
+  beforeAll(() => stopLogs.setup());
+  afterAll(() => stopLogs.cleanup());
+  async function withStopDiagnostics(
+    run: (
+      capture: ReturnType<typeof createDiagnosticLogRecordCapture>,
+      warn: ReturnType<typeof vi.fn>,
+    ) => Promise<void>,
+  ) {
+    const capture = createDiagnosticLogRecordCapture(),
+      previous = loggingState.rawConsole,
+      warn = vi.fn();
+    loggingState.rawConsole = { log: vi.fn(), info: vi.fn(), warn, error: vi.fn() };
+    setLoggerOverride({
+      level: "warn",
+      consoleLevel: "warn",
+      consoleStyle: "compact",
+      file: stopLogs.nextPath(),
+    });
+    try {
+      await run(capture, warn);
+    } finally {
+      await capture.flush();
+      await loggerTestApi.flushFileLogQueueForTests();
+      capture.cleanup();
+      loggingState.rawConsole = previous;
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  }
+  it.each([
+    () =>
+      new AgentRunTerminalOutcomeError(new Error("private timeout detail"), {
+        status: "timeout",
+        reason: "hard_timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      }),
+    createAgentRunDirectAbortError,
+  ])("does not replay a terminal timeout or direct abort", async (make) => {
+    await expectTerminalStop(make());
+  });
+  it("preserves an idle-breaker result without reporting fallback success or trying another model", async () => {
+    await withStopDiagnostics(async (capture) => {
+      const terminalResult = { modelFallbackStopReason: "idle_timeout_circuit_breaker" };
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new FailoverError("fixture failure", { reason: "format" }))
+        .mockResolvedValueOnce(terminalResult);
+      const result = await runWithModelFallback({
+        ...fallbackOptions,
+        fallbacksOverride: ["fixture-next/fixture-model", "fixture-last/fixture-model"],
+        run,
+        classifyResult: () => ({ stopReason: "idle_timeout_circuit_breaker" }),
+      });
+      expect(run).toHaveBeenCalledTimes(2);
+      expect(result.result).toBe(terminalResult);
+      await capture.flush();
+      const records = capture.records.filter(
+        (record) =>
+          record.attributes?.event === "model_fallback_chain_stopped" ||
+          record.attributes?.event === "model_fallback_decision",
+      );
+      expect(records).toHaveLength(2);
+      expect(records[0]?.attributes?.decision).toBe("candidate_failed");
+      expect(records[1]?.attributes).toMatchObject({
+        event: "model_fallback_chain_stopped",
+        reason: "idle_timeout_circuit_breaker",
+        candidateProvider: "fixture-next",
+        candidateModel: "fixture-model",
+      });
+    });
+  });
+  it("sanitizes compact stop diagnostics without exposing error details", async () => {
+    await withStopDiagnostics(async (capture, warn) => {
+      const provider = "fixture\nprovider\u001b[31m",
+        model = "fixture\rmodel\u007f";
+      const error = new Error("private diagnostic message", { cause: new Error("private cause") });
+      error.name = "Fault\nName\u001b[0m";
+      await expect(
+        runFallbackAttempt({
+          run: async () => {
+            throw error;
+          },
+          provider,
+          model,
+          attempts: [],
+          attempt: 1,
+          total: 2,
+          abortSignal: AbortSignal.abort(),
+        }),
+      ).rejects.toBe(error);
+      await capture.flush();
+      const records = capture.records.filter(
+        (record) => record.attributes?.event === "model_fallback_chain_stopped",
+      );
+      expect(records).toHaveLength(1);
+      expect(records[0]?.attributes).toMatchObject({
+        candidateProvider: provider,
+        candidateModel: model,
+        errorName: error.name,
+      });
+      expect(warn).toHaveBeenCalledOnce();
+      const line = String(warn.mock.calls[0]?.[0]);
+      expect(line).toContain("candidate=fixtureprovider/fixturemodel errorName=FaultName");
+      expect(line).not.toContain("\n");
+      expect(line).not.toContain("\r");
+      expect(line).not.toContain(error.message);
+      expect(line).not.toContain("private cause");
+      expect(JSON.stringify(records)).not.toContain("private diagnostic message");
+    });
+  });
+});

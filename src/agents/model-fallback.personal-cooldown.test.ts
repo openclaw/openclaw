@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import { vi } from "vitest";
 import { describe, expect, it } from "vitest";
 import {
   connectUserModelAccount,
@@ -6,8 +8,14 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { FailoverError } from "./failover-error.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
+import { markProbeAttempt } from "./model-fallback-cooldown.js";
+import { resolveCooldownDecision } from "./model-fallback-cooldown.js";
+import { resolveProbeThrottleKey } from "./model-fallback-cooldown.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
+import * as sessionSuspension from "./session-suspension.js";
+import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 
 describe("personal account fallback cooldown summaries", () => {
   it("refreshes selected cooldown with authored order", async () => {
@@ -78,5 +86,132 @@ describe("personal account fallback cooldown summaries", () => {
         expect(ensureAuthProfileStore(state.agentDir()).profiles).not.toHaveProperty(authProfileId);
       },
     );
+  });
+});
+
+describe("fallback probe and deferred suspension guards", () => {
+  const deferred = {
+    cfg: {},
+    sessionId: "test-session",
+    reason: "quota_exhausted" as const,
+    failedProvider: "openai",
+    failedModel: "gpt-4.1-mini",
+  };
+  const defaults = {
+    cfg: {
+      plugins: { enabled: false },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-4.1-mini", fallbacks: ["anthropic/claude-haiku-3-5"] },
+        },
+      },
+    },
+    provider: "openai",
+    model: "gpt-4.1-mini",
+    manifestPlugins: [],
+    skipAuthProfileRuntime: true,
+  };
+  const runProbe = (
+    params: Omit<Parameters<typeof runWithModelFallback>[0], "provider" | "model">,
+  ) => runWithModelFallback({ ...defaults, ...params });
+  async function withSuspension(action: (suspend: ReturnType<typeof vi.spyOn>) => Promise<void>) {
+    using suspend = vi.spyOn(sessionSuspension, "suspendSession").mockResolvedValue(undefined);
+    using scope = vi
+      .spyOn(sessionSuspension, "runWithDeferredSessionSuspension")
+      .mockImplementation((run, onDeferred) => {
+        onDeferred?.(deferred);
+        return run();
+      });
+    await action(suspend);
+  }
+  it("re-probes a single-provider primary blocked by a far-future subscription_limit (#90702)", () => {
+    const now = 1700000000000,
+      soonest = now + 6 * 24 * 60 * 60 * 1000,
+      throttleKey = resolveProbeThrottleKey("openai", `probe-${crypto.randomUUID()}`);
+    const decision = () =>
+      resolveCooldownDecision({
+        candidate: { provider: "openai", model: "gpt-4.1-mini" },
+        isPrimary: true,
+        requestedModel: true,
+        hasFallbackCandidates: false,
+        now,
+        probeThrottleKey: throttleKey,
+        authRuntime: {
+          getSoonestCooldownExpiry: () => soonest,
+          resolveProfilesUnavailableReason: () => "rate_limit",
+        },
+        authStore: {
+          version: 1,
+          profiles: {},
+          usageStats: {
+            "openai-profile-1": {
+              blockedUntil: soonest,
+              blockedReason: "subscription_limit",
+              blockedSource: "wham",
+            },
+          },
+        },
+        profileIds: ["openai-profile-1"],
+      });
+    expect(decision()).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
+    markProbeAttempt(now - 10000, throttleKey);
+    expect(decision()).toEqual({ type: "suspend_session", reason: "rate_limit" });
+  });
+  it.each(["caller abort", "terminal classified result"])(
+    "settles deferred suspension for %s",
+    async (mode) => {
+      await withSuspension(async (suspend) => {
+        const controller = new AbortController(),
+          error =
+            mode === "caller abort"
+              ? Object.assign(new Error("client disconnected"), { name: "ClientDisconnectError" })
+              : new AggregateError(
+                  [
+                    new FailoverError("recorded terminal stop", {
+                      reason: "unknown",
+                      code: "cli_max_turns",
+                    }),
+                  ],
+                  "wrapper",
+                );
+        const run = vi.fn(async () => {
+          if (mode === "caller abort") {
+            controller.abort(error);
+            throw error;
+          }
+          return "partial result";
+        });
+        await expect(
+          runProbe({
+            run,
+            classifyResult: () => ({ error }),
+            sessionId: "test-session",
+            lane: "main",
+            abortSignal: controller.signal,
+          }),
+        ).rejects.toBe(error);
+        expect(run).toHaveBeenCalledOnce();
+        if (mode === "terminal classified result")
+          expect(suspend).toHaveBeenCalledExactlyOnceWith(deferred);
+        else expect(suspend).not.toHaveBeenCalled();
+      });
+    },
+  );
+  it("restores deferred suspension when a later harness precheck fails", async () => {
+    await withSuspension(async (suspend) => {
+      const run = vi.fn().mockRejectedValueOnce(new Error("primary failed"));
+      await expect(
+        runProbe({
+          cfg: createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]),
+          run,
+          sessionId: "test-session",
+          resolveAgentHarnessRuntimeOverride: (provider) =>
+            provider === "anthropic" ? "missing-strict-harness" : undefined,
+          prepareAgentHarnessRuntime: () => undefined,
+        }),
+      ).rejects.toThrow('Requested agent harness "missing-strict-harness" is not registered.');
+      expect(run).toHaveBeenCalledOnce();
+      expect(suspend).toHaveBeenCalledWith(expect.objectContaining({ failedProvider: "openai" }));
+    });
   });
 });

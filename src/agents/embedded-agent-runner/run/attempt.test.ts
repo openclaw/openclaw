@@ -2,9 +2,13 @@ import type { LlmRuntime } from "@openclaw/ai";
 import { defaultLlmRuntime } from "@openclaw/ai/internal/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { streamSimple } from "../../../llm/stream.js";
+import { type Context } from "../../../llm/types.js";
+import { type Model } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import type { StreamFn } from "../../runtime/index.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createQueuedAssistantStream } from "../../test-helpers/assistant-event-stream.test-support.js";
 import {
   sparseAssistant,
   textToolResult,
@@ -12,6 +16,7 @@ import {
 } from "../../test-helpers/sparse-transcript.test-support.js";
 import { resolveEmbeddedAgentStream as resolveEmbeddedAgentStreamImpl } from "../stream-resolution.js";
 import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
+import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import { createFakeStream, type FakeWrappedStream } from "./attempt-stream.test-helpers.js";
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
@@ -604,5 +609,43 @@ describe("wrapStreamFnRepairMalformedToolCallArguments", () => {
   `("$name", async ({ deltas, initialArgs, expected }: ArgumentCase) => {
     const calls = await replayArgumentDeltas(deltas, initialArgs);
     expect(calls.map((call) => call.arguments)).toStrictEqual(expected);
+  });
+});
+
+it.each([
+  { mode: "stream", stopReason: "sensitive" },
+  { mode: "throw", stopReason: "refusal_policy" },
+])("converts $mode errors with stop reason $stopReason", async ({ mode, stopReason }) => {
+  const model = {
+    api: "anthropic-messages",
+    provider: "anthropic",
+    id: "claude-sonnet-4-6",
+  } as Model<"anthropic-messages">;
+  const errorMessage = `Unhandled stop reason: ${stopReason}`;
+  const base: StreamFn = () => {
+    if (mode === "throw") throw new Error(errorMessage);
+    return createQueuedAssistantStream((push) =>
+      push({
+        type: "error",
+        reason: "error",
+        error: makeAgentAssistantMessage({
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stopReason: "error",
+          errorMessage,
+        }),
+      }),
+    );
+  };
+  const stream = await wrapStreamFnHandleSensitiveStopReason(base)(
+    model,
+    { messages: [] } as Context,
+    undefined,
+  );
+  expect(await stream.result()).toMatchObject({
+    stopReason: "error",
+    errorMessage: `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`,
   });
 });

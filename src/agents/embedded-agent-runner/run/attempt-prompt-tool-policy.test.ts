@@ -1,7 +1,10 @@
+import { vi } from "vitest";
 import { expect, it } from "vitest";
+import * as hostHookState from "../../../plugins/host-hook-state.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import type { ToolSearchCatalogEntry, ToolSearchCatalogRef } from "../../tool-search.js";
+import { resolvePromptBuildHookResult } from "./attempt-prompt-helpers.js";
 import {
   applyResolvedToolPromptFinalizer,
   createPromptBuildToolPolicy,
@@ -139,4 +142,21 @@ it("keeps cataloged plugin tools allowed through the plugin group", () => {
   expect(result.activeToolNames).toEqual(["tool_search"]);
   expect(result.effectiveTools).toEqual([{ name: "tool_search" }]);
   expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["plugin_lookup"]);
+});
+
+it("preserves an explicit empty per-turn tool allowlist", async () => {
+  using drain = vi
+    .spyOn(hostHookState, "drainPluginNextTurnInjectionContext")
+    .mockResolvedValue({ queuedInjections: [] });
+  const result = await resolvePromptBuildHookResult({
+    config: {},
+    prompt: "answer without tools",
+    messages: [],
+    hookCtx: { sessionKey: "agent:main:main" },
+    hookRunner: {
+      hasHooks: (name) => name === "before_prompt_build",
+      runBeforePromptBuild: vi.fn(async () => ({ toolsAllow: [] })),
+    },
+  });
+  expect(result.toolsAllow).toEqual([]);
 });

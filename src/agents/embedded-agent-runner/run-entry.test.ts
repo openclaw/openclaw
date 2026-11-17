@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildReplyUsageState } from "../../auto-reply/reply/reply-usage-state.js";
+import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.js";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
+import { resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync } from "../../utils/usage-format.js";
+import { type NormalizedUsage } from "../usage.js";
 import { makeModel } from "./model.test-harness.js";
 import { registerRunEntryFailureTests } from "./run-entry.failures.test-support.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
+import { fallbackAttemptOptions } from "./run-entry.test-support.js";
 import {
   createDirectHarness,
   makeResult,
@@ -12,6 +18,7 @@ import {
   initialAttemptOptions,
   type FallbackRunnerParams,
 } from "./run-entry.test-support.js";
+import { type EmbeddedAgentMeta } from "./types.js";
 
 const state = setupRunEntryTestState();
 
@@ -522,5 +529,99 @@ describe("runEmbeddedAgentEntry", () => {
       requested: { provider: "provider", model: "model" },
       successfulToolNames: ["message"],
     });
+  });
+});
+
+describe("fallback usage accounting", () => {
+  async function accounted(primary: NormalizedUsage | Error, fallback: NormalizedUsage) {
+    const { result } = await runEntry({
+      runCandidate: async (provider, model, options) => {
+        const usage = options.isFallbackRetry ? fallback : primary;
+        if (usage instanceof Error) throw usage;
+        const candidate = makeResult({
+          provider,
+          model,
+          classification: options.isFallbackRetry ? undefined : "empty",
+        });
+        candidate.meta.agentMeta = {
+          ...candidate.meta.agentMeta!,
+          usage,
+          lastCallUsage: options.isFallbackRetry
+            ? { input: 20, output: 2 }
+            : { input: 90, output: 2 },
+        };
+        return candidate;
+      },
+    });
+    return result.meta.agentMeta!;
+  }
+  async function costs(meta: Partial<EmbeddedAgentMeta>) {
+    const turnUsd = await estimateAggregateUsageCostAsync({
+      usage: meta.usage,
+      prepareCost: () =>
+        resolveModelCostConfig({
+          config: {},
+          agentDir: "/nonexistent-fallback-accounting",
+          provider: meta.provider,
+          model: meta.model,
+        }),
+    });
+    const reply = buildReplyUsageState({
+      ...meta,
+      config: {},
+      turnUsd,
+      agentId: "main",
+      sessionId: "session-1",
+      winnerProvider: meta.provider,
+      winnerModel: meta.model,
+    });
+    const session = prepareSessionUsageUpdate({
+      ...meta,
+      estimatedCostUsd: turnUsd,
+      providerUsed: meta.provider,
+      modelUsed: meta.model,
+    });
+    return { reply, session };
+  }
+  it.each([
+    [
+      "provider-billed zero",
+      { total: 0, totalOrigin: "provider-billed" as const },
+      { total: 0, totalOrigin: "provider-billed" as const },
+      0,
+    ],
+    ["unknown price before known price", { total: 0 }, { total: 0.7 }, undefined],
+  ] as const)(
+    "retains discarded work and %s across reply and session accounting",
+    async (_name, primary, fallback, expected) => {
+      const meta = await accounted(
+        { input: 100, output: 10, cost: primary },
+        { input: 200, output: 20, cost: fallback },
+      );
+      expect(meta).toMatchObject({
+        usage: { input: 300, output: 30, total: 330 },
+        ...fallbackRoute,
+        lastCallUsage: { input: 20, output: 2 },
+      });
+      const { reply, session } = await costs(
+        expected === undefined ? { ...meta, lastCallUsage: undefined } : meta,
+      );
+      expect(reply.usage).toMatchObject({ input: 300, output: 30 });
+      expect(reply.contextUsedTokens).toBe(expected === undefined ? undefined : 20);
+      expect([reply.turnUsd, session?.estimatedCostUsd]).toEqual([expected, expected]);
+    },
+  );
+  it("does not invent usage for an attempt that throws before returning", async () => {
+    state.runWithModelFallback.mockImplementationOnce(async (params) => {
+      await expect(
+        params.run(params.provider, params.model, initialAttemptOptions(params)),
+      ).rejects.toThrow("before result");
+      const { provider, model } = fallbackRoute;
+      const result = await params.run(provider, model, fallbackAttemptOptions(params, "unknown"));
+      return { outcome: "completed", result, provider, model, attempts: [] };
+    });
+    expect(
+      (await accounted(new Error("before result"), { input: 7, cost: { total: 0.25 } })).usage,
+    ).toEqual({ input: 7, cost: { total: 0.25 } });
   });
 });

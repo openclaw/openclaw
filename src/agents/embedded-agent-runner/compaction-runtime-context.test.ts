@@ -13,6 +13,7 @@ import {
   providerEntry,
 } from "../model-auth.fixtures.test-support.js";
 import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveCompactionContextTokenBudget,
@@ -20,6 +21,7 @@ import {
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+import { buildAfterTurnRuntimeContext } from "./run/attempt-prompt-helpers.js";
 import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -492,4 +494,81 @@ describe("compaction runtime context", () => {
       }),
     ).toEqual({ agentId: "main", sessionId, storePath });
   });
+});
+
+it.each([true, false])("preserves process scope and model policy (locked=%s)", (locked) => {
+  const scopedId = "after-turn-session",
+    foreignId = "after-turn-foreign";
+  for (const [id, scopeKey, pid] of [
+    [scopedId, "session-123", 1234],
+    [foreignId, "agent:main", undefined],
+  ] as const)
+    addSession({
+      ...createProcessSessionFixture({ id, command: "sleep 600", backgrounded: true, pid }),
+      scopeKey,
+    });
+  try {
+    const runtimePlan = buildAgentRuntimePlan({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      providerRuntimeHandle: {
+        provider: "openai",
+        modelId: "gpt-5.5",
+        workspaceDir: "/tmp/workspace",
+        prepared: true,
+      },
+      preparedAuthPlan: {
+        providerForAuth: "openai",
+        modelId: "gpt-5.5",
+        authProfileProviderForAuth: "openai",
+        forwardedAuthProfileId: "openai:p1",
+        forwardedAuthProfileSource: "user",
+      },
+    });
+    const context = buildAfterTurnRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      activeAgentId: "main",
+      attempt: {
+        sessionId: "session-123",
+        sessionKey: "session-123",
+        sandboxSessionKey: "global",
+        sandboxAgentId: "main",
+        provider: "openai",
+        modelId: "gpt-5.5",
+        thinkLevel: "low",
+        trigger: "cron",
+        inputProvenance: { kind: "external_user" },
+        authProfileId: "openai:p1",
+        authProfileIdSource: "user",
+        modelSelectionLocked: locked,
+        runtimePlan,
+        config: {
+          agents: {
+            defaults: {
+              models: { "openrouter/anthropic/claude-sonnet-4-5": { alias: "summary" } },
+              compaction: { model: "summary" },
+            },
+          },
+        },
+      },
+    });
+    expect(context.activeProcessSessions).toHaveLength(1);
+    expect(context).toMatchObject({
+      activeProcessSessions: [{ sessionId: scopedId, command: "sleep 600", pid: 1234 }],
+      transcriptStorage: { kind: "sqlite" },
+      modelSelectionLocked: locked,
+      sandboxSessionKey: "global",
+      sandboxAgentId: "main",
+      provider: locked ? "openai" : "openrouter",
+      model: locked ? "gpt-5.5" : "anthropic/claude-sonnet-4-5",
+      modelCallUrgency: "background",
+    });
+    if (!locked) expect(context.authProfileId).toBeUndefined();
+    expect(context.runtimeAuthPlan).toBe(locked ? runtimePlan.auth : undefined);
+  } finally {
+    deleteSession(scopedId);
+    deleteSession(foreignId);
+  }
 });

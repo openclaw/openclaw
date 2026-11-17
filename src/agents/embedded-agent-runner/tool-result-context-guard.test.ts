@@ -1,8 +1,11 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Agent, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { renderSolidColorPngBase64 } from "../../../test/helpers/live-image-probe.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { expectCollected, expectLiveObjects } from "../../test-utils/retention.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
@@ -13,8 +16,10 @@ import {
   makeAgentAssistantMessage,
 } from "../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { createImageTool } from "../tools/image-tool.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { resolveProjectedRequestPressure } from "./run/preemptive-compaction.js";
+import { TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE } from "./tool-result-char-estimator.js";
 import {
   estimateMessageCharsCached,
   getToolResultText as getAllToolResultText,
@@ -543,4 +548,81 @@ describe("installContextEngineLoopHook", () => {
     await expectCollected(assembled);
     expect(agent.transformContext).not.toBe(installed);
   });
+});
+
+async function nativeImageResult(count: number): Promise<AgentMessage> {
+  const tool = expectDefined(
+    createImageTool({
+      config: { agents: { defaults: { imageMaxDimensionPx: 32 } } },
+      agentDir: join(tmpdir(), "openclaw-native-image-context-test"),
+      modelHasVision: true,
+    }),
+    "native-vision image tool is available",
+  );
+  const result = await tool.execute("native-image-context", {
+    paths: Array.from(
+      { length: count },
+      (_, index) =>
+        `data:image/png;base64,${renderSolidColorPngBase64({ r: (index + 1) * 17, g: 60, b: 90 })}`,
+    ),
+  });
+  return castAgentMessage({
+    role: "toolResult",
+    toolCallId: "native-image-context",
+    toolName: "view_image",
+    isError: false,
+    timestamp: 0,
+    ...result,
+  });
+}
+function imageBlocks(message: AgentMessage) {
+  return (message as { content: Array<{ type: string; text?: string }> }).content;
+}
+async function projectImage(source: AgentMessage, tokens = 32000) {
+  const [result] = await project([source], tokens);
+  const projected = expectDefined(result, "guarded native image result");
+  expect(
+    estimateMessageCharsCached(projected, new WeakMap<AgentMessage, number>()),
+  ).toBeLessThanOrEqual(
+    Math.max(1024, Math.floor(tokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * 0.5)),
+  );
+  expect(projected).not.toHaveProperty("details");
+  const content = imageBlocks(projected);
+  return { content, images: content.filter((block) => block.type === "image") };
+}
+it("explains when no sanitized image fits the context window", async () => {
+  const source = await nativeImageResult(1),
+    original = structuredClone(source);
+  const { content, images } = await projectImage(source, 8000);
+  const text = content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  expect(images).toEqual([]);
+  expect(text).toMatch(/1 image .*omitted|omitted.*1 image/i);
+  expect(text).toMatch(/context/i);
+  expect(text).toMatch(
+    /no images? (?:fit|included|available)|images? (?:could not|cannot) (?:fit|be included)/i,
+  );
+  expect(source).toEqual(original);
+});
+it("preserves mixed text, unknown blocks, CJK content, image order, and original privacy", async () => {
+  const native = await nativeImageResult(3),
+    blocks = imageBlocks(native),
+    unknown = { type: "custom", value: { label: "bounded metadata" } },
+    cjk = { type: "text", text: "画像の順序を維持する 🖼️" };
+  const source = castAgentMessage({
+    ...native,
+    toolName: "read",
+    content: [blocks[0], blocks[1], unknown, cjk, blocks[2], blocks[3]],
+    details: { media: { outbound: false }, privateReference: "private-fixture-reference" },
+  });
+  const { content, images } = await projectImage(source);
+  expect(images).toEqual([blocks[1]]);
+  expect(content.map((block) => block.type)).toEqual(["text", "image", "custom", "text", "text"]);
+  expect(content).toContain(unknown);
+  expect(content).toContain(cjk);
+  expect(content.at(-1)?.text).toMatch(/2 images? .*omitted|omitted.*2 images?/i);
+  expect(JSON.stringify(content)).not.toContain("private-fixture-reference");
+  expect(source).toMatchObject({ details: { media: { outbound: false } } });
 });

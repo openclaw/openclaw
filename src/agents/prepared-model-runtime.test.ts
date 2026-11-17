@@ -1,8 +1,14 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { withinTest } from "../../test/helpers/promise.js";
+import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { getPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import * as configSerialization from "../config/runtime-config-snapshot-match.js";
 import {
   clearRuntimeConfigSnapshot as clearConfig,
@@ -10,21 +16,41 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { modelsHandlers } from "../gateway/server-methods/models.js";
+import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
+import {
+  loadPreparedGatewayModelCatalogSnapshot,
+  readPreparedGatewayModelCatalogOwnerSnapshot,
+} from "../gateway/server-model-catalog.js";
+import * as pricing from "../model-catalog/pricing.js";
+import {
+  captureRemoteModelCatalogSnapshot,
+  captureRemoteModelCatalogStartupSnapshot,
+  prepareRemoteModelCatalogStartupSnapshot,
+} from "../model-catalog/remote-overlay.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
+import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { getPreparedModelCatalogOwnerSnapshot as catalogOwner } from "./prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   acquireAgentRunPreparedModelRuntime as acquireRun,
   acquireReadOnlyPreparedModelRuntime as acquireReadOnly,
   activateStandalonePreparedModelRuntime as activate,
   getPreparedModelRuntimeSnapshot as readSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale as markStale,
   prepareModelRuntimeSnapshot as prepare,
   publishPreparedModelRuntimeSnapshot as publish,
   refreshPreparedModelRuntimeSnapshots as refresh,
   type PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.js";
+import { applyRemoteModelCatalogUpdate } from "./prepared-model-runtime.js";
+import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const pendingBuilds: Array<() => Promise<void>> = [];
@@ -413,5 +439,397 @@ describe("prepared model runtime snapshots", () => {
     );
 
     expect(lease.snapshot.metadataSnapshot).toBe(selectedMetadata);
+  });
+});
+
+describe("remote catalog publication boundaries", () => {
+  const sourceUrl = "https://catalog.openclaw.ai/models/v2/catalog.json";
+  const stored = vi.fn();
+  const config: OpenClawConfig = {
+    agents: {
+      entries: { default: {}, other: {} },
+      defaults: { model: "custom/remote-200" },
+    },
+    ...providerConfig("custom", {
+      baseUrl: "https://fixture.invalid",
+      api: "openai-completions",
+      models: [modelDefinition("remote-200", { reasoning: false })],
+    }),
+  };
+  function bundle(generatedAt: number) {
+    return {
+      source_url: sourceUrl,
+      bundle_json: JSON.stringify({
+        schemaVersion: 1,
+        sourceCommit: "fixture",
+        generatedAt,
+        providers: {
+          custom: { models: [{ id: `remote-${generatedAt}`, name: `Remote ${generatedAt}` }] },
+        },
+        pricing: {
+          [`custom/remote-${generatedAt}`]: { input: generatedAt, output: generatedAt * 2 },
+        },
+      }),
+    };
+  }
+  async function setup(
+    options: { allowGatewaySubagentBinding?: true } = {},
+    runtimeConfig = config,
+  ) {
+    stored.mockReturnValue(bundle(200));
+    setRemoteModelCatalogOverlaySourcesForTest({
+      bundledGeneratedAt: () => 100,
+      readStoredCatalog: stored,
+    });
+    await prepareRemoteModelCatalogStartupSnapshot();
+    mocks.configuredAgentIds = ["default", "other"];
+    mocks.buildPreparedModelCatalogSnapshot.mockImplementation(async () => {
+      const entries = Object.values(captureRemoteModelCatalogSnapshot()?.providers ?? {}).flatMap(
+        (provider) =>
+          (provider.models ?? []).map((model) => ({
+            id: model.id,
+            provider: "custom",
+            name: model.name ?? model.id,
+          })),
+      );
+      return { entries, routeVariants: entries };
+    });
+    await refresh(runtimeConfig, {
+      ...options,
+      gatewayLifecycle: true,
+      catalogMode: "static",
+    });
+    stored.mockReturnValue(bundle(300));
+  }
+  async function listModels(
+    refreshFullCatalog: boolean,
+    afterRead?: () => Promise<void>,
+    success = true,
+  ) {
+    const respond = vi.fn();
+    const loader = (params: Parameters<typeof loadPreparedGatewayModelCatalogSnapshot>[0]) =>
+      loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig: () => config });
+    registerGatewayModelCatalogPrivateAccess(loader, {
+      loadDeferred: loader,
+      readPrepared: async (params) => {
+        const snapshot = await readPreparedGatewayModelCatalogOwnerSnapshot({
+          ...params,
+          getConfig: () => config,
+        });
+        await afterRead?.();
+        return snapshot;
+      },
+    });
+    await modelsHandlers["models.list"]!({
+      req: { type: "req", id: "list", method: "models.list" },
+      params: { agentId: "default", view: "all", refresh: refreshFullCatalog },
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => config,
+        loadGatewayModelCatalogSnapshot: loader,
+        logGateway: { debug: vi.fn(), warn: vi.fn() },
+      } as never,
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(success);
+    return respond.mock.calls[0]?.[success ? 1 : 2];
+  }
+  afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+  function holdPricing() {
+    const preparing = createDeferred();
+    const commit = createDeferred();
+    const preparePricing = pricing.prepareModelPricingContext;
+    const pricingSpy = vi
+      .spyOn(pricing, "prepareModelPricingContext")
+      .mockImplementationOnce(async (...args) => {
+        preparing.resolve();
+        await commit.promise;
+        return await preparePricing(...args);
+      });
+    return { preparing, commit, pricingSpy };
+  }
+
+  it("models.list does not retry after the remote replacement itself loses authority", async () => {
+    await setup();
+    const afterRead = vi.fn(async () => {
+      expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+      await refresh(config, { gatewayLifecycle: true, catalogMode: "static" });
+    });
+    const error = await listModels(false, afterRead, false);
+    expect(error.code).toBe("UNAVAILABLE");
+    expect(afterRead).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers the first reply when catalog adoption retires its captured dispatch publication", async () => {
+    await setup({ allowGatewaySubagentBinding: true });
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    await preparing.promise;
+    const deliver = vi.fn(async (_payload: ReplyPayload) => undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+    try {
+      const result = await dispatchLowLevelChannelReplyFromConfig({
+        cfg: config,
+        ctx: finalizeInboundContext({
+          Body: "hello",
+          From: "synthetic-user",
+          To: "synthetic-bot",
+          AgentId: "default",
+          SessionKey: "agent:default:main",
+          MessageSid: "catalog-adoption-first-reply",
+          Provider: "synthetic-channel",
+          Surface: "synthetic-channel",
+          ChatType: "direct",
+          InboundAccessAuthorized: true,
+        }),
+        dispatcher,
+        replyResolver: async () => {
+          const runtime = getPreparedReplyDispatchRuntime()!;
+          commit.resolve();
+          expect(await adoption).toBe("published");
+          await using lease = await acquireRun(
+            {
+              config: runtime.config,
+              agentId: runtime.agentId,
+              agentDir: runtime.agentDir,
+              workspaceDir: runtime.workspaceDir,
+              allowGatewaySubagentBinding: true,
+              runtimePluginSelections: [
+                { provider: "custom", modelId: "remote-200", runtime: "openclaw" },
+              ],
+            },
+            { catalogMode: "static", pluginGeneration: runtime.pluginGeneration },
+          );
+          expect(runtime.readFullModelCatalog?.()?.entries.map((row) => row.id)).toContain(
+            "remote-200",
+          );
+          expect(lease.pluginGeneration.remoteCatalog?.generatedAt).toBe(200);
+          expect(lease.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-200");
+          expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+          return { text: "first reply completed" };
+        },
+      });
+      expect(result.queuedFinal).toBe(true);
+    } finally {
+      commit.resolve();
+      await Promise.allSettled([adoption]);
+      pricingSpy.mockRestore();
+      dispatcher.markComplete();
+      await dispatcher.waitForIdle();
+    }
+    expect(deliver.mock.calls.map(([payload]) => payload.text)).toEqual(["first reply completed"]);
+  });
+
+  it("does not hold Gateway shutdown on an adoption's pricing preparation", async ({ signal }) => {
+    await setup();
+    const pricingGate = createEnteredGate();
+    const preparePricing = pricing.prepareModelPricingContext;
+    const pricingSpy = vi
+      .spyOn(pricing, "prepareModelPricingContext")
+      .mockImplementation(async (...args) => {
+        await pricingGate.wait();
+        return preparePricing(...args);
+      });
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    try {
+      await pricingGate.entered;
+      // Pricing stays held until `finally`; shutdown that joined it never settles.
+      await withinTest(closePreparedModelRuntimeSnapshots(), signal);
+      expect(await adoption).toBe("superseded");
+      expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+    } finally {
+      pricingGate.release();
+      pricingSpy.mockRestore();
+    }
+  });
+});
+
+it("reprepares run admission when config publication supersedes its unfinished build", async () => {
+  const config = { messages: { responsePrefix: "before" } };
+  const current = { messages: { responsePrefix: "after" } };
+  await refresh(config, { gatewayLifecycle: true, catalogMode: "static" });
+  const gate = createEnteredGate();
+  mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+    await gate.wait();
+    return { entries: [] };
+  });
+  const admission = acquireRun({
+    ...fixture.agentInput("default", config),
+    loadRuntimePlugins: true,
+  });
+  void admission.catch(() => {});
+  let publication: Promise<void> | undefined;
+  try {
+    await gate.entered;
+    publication = refresh(current, { gatewayLifecycle: true, catalogMode: "static" });
+    gate.release();
+    await publication;
+    await using lease = await admission;
+    expect(lease.snapshot.config).toEqual(current);
+    expect(lease.snapshot.isCurrent()).toBe(true);
+    expect(
+      (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))?.config,
+    ).toEqual(current);
+  } finally {
+    gate.release();
+    await Promise.allSettled([
+      publication,
+      admission.then((lease) => lease[Symbol.asyncDispose]()),
+    ]);
+  }
+});
+
+describe("prepared runtime generation admission", () => {
+  const agentInput = (
+    config: OpenClawConfig = {},
+    overrides: Partial<PreparedModelRuntimeInput> = {},
+  ) => ({ ...fixture.agentInput("default", config), ...overrides });
+  const publishedRuntime = () => loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+  const publishGateway = async (
+    config: OpenClawConfig = {},
+    options: Parameters<typeof refresh>[1] = {},
+  ) => {
+    mocks.configuredAgentIds = ["default"];
+    await refresh(config, { gatewayLifecycle: true, ...options });
+  };
+  it("keeps a committed gateway owner current when an admitted turn resumes on its older generation", async () => {
+    const defaults = {
+      model: "openai/gpt-5",
+      models: {
+        "openai/gpt-5": { params: { transport: "sse" as const, openaiWsWarmup: false } },
+      },
+    };
+    const configFor = (responsePrefix: string) => ({
+      agents: { defaults },
+      messages: { responsePrefix },
+    });
+    const previousConfig = configFor("previous");
+    const committedConfig = configFor("committed");
+    const publicationOptions = {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static" as const,
+      gatewayLifecycle: true,
+    };
+    const runInput = (config: typeof previousConfig) => ({
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+      allowGatewaySubagentBinding: true,
+      config,
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5", runtime: "openclaw" }],
+      workspaceDir: "/tmp/unused-workspace",
+    });
+
+    await publishGateway(previousConfig, publicationOptions);
+    const admitted = await publishedRuntime();
+    const generation = admitted!.pluginGeneration;
+    const previousInput = runInput(previousConfig);
+    const committedInput = runInput(committedConfig);
+    const acquirePrevious = (input = previousInput, pluginGeneration = generation) =>
+      acquireRun(input, { catalogMode: "static", pluginGeneration });
+    const previousSnapshot = readSnapshot(previousInput);
+
+    await using outerLease = scopePreparedModelRuntimeLease(await acquirePrevious());
+    expect(outerLease.snapshot).toBe(previousSnapshot);
+
+    await refresh(committedConfig, publicationOptions);
+    const committedSnapshot = readSnapshot(committedInput);
+    expect(committedSnapshot).toBeDefined();
+    expect(committedSnapshot).not.toBe(previousSnapshot);
+    const detachedAdmissionGate = createDeferred();
+    let detachedAdmission!: Promise<unknown>;
+
+    try {
+      await outerLease.run(async () => {
+        const resumed = await withPreparedModelRuntimePluginGenerationScope(
+          generation,
+          acquirePrevious,
+        );
+
+        expect(resumed.snapshot).toBe(previousSnapshot);
+        expect(readSnapshot(committedInput)).toBe(committedSnapshot);
+        await resumed[Symbol.asyncDispose]();
+        {
+          await using cloned = await acquirePrevious(runInput(structuredClone(previousConfig)));
+          expect(cloned.snapshot).toBe(previousSnapshot);
+        }
+        for (const [input, requestedGeneration] of [
+          [{ ...previousInput, workspaceDir: "/tmp/different-workspace" }, generation],
+          [previousInput, { ...generation }],
+        ] as const) {
+          await expect(acquirePrevious(input, requestedGeneration)).rejects.toThrow(
+            "plugin generation was superseded",
+          );
+        }
+        detachedAdmission = detachedAdmissionGate.promise.then(() => acquirePrevious());
+      });
+    } finally {
+      await outerLease[Symbol.asyncDispose]();
+      detachedAdmissionGate.resolve();
+      await Promise.allSettled([detachedAdmission]);
+    }
+    await expect(detachedAdmission).rejects.toThrow("plugin generation was superseded");
+
+    await expect(acquirePrevious()).rejects.toThrow("plugin generation was superseded");
+    expect(readSnapshot(committedInput)).toBe(committedSnapshot);
+
+    await using next = await acquireRun(committedInput);
+    expect(next.snapshot).toBe(committedSnapshot);
+  });
+  it("does not let a stale dynamic lease authorize a replacement generation", async () => {
+    const config = {};
+    await publishGateway(config);
+    const input = agentInput(config, { workspaceDir: "/tmp/stale-dynamic-workspace" });
+    await using _ = await acquireRun(input);
+
+    markStale("test dynamic owner staling");
+    await expect(acquireRun(input)).rejects.toThrow(
+      "prepared model runtime owner was not committed",
+    );
+  });
+  it("stales every owner when queued auth refresh fails after config publication", async () => {
+    mocks.configuredAgentIds = ["default", "secondary"];
+    await refresh({});
+    const refreshError = new Error("queued auth refresh failed");
+    await using configWrite = holdNextBuild();
+    mocks.ensureOpenClawModelsJson
+      .mockResolvedValueOnce({})
+      .mockResolvedValueOnce({})
+      .mockRejectedValueOnce(refreshError);
+
+    const refresh = configWrite.track(refresh({}));
+    await configWrite.started;
+    await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
+    mocks.mutationListener?.({ affectsInheritedStores: true });
+    configWrite.finish();
+
+    await expect(refresh).rejects.toBe(refreshError);
+    for (const [agentDir, workspaceDir] of [
+      [fixture.state.agentDir("default"), "/tmp/unused-workspace"],
+      [fixture.state.agentDir("secondary"), "/tmp/workspace-secondary"],
+    ] as const) {
+      await expect(
+        prepare({
+          config: {},
+          agentDir,
+          inheritedAuthDir: fixture.state.agentDir("default"),
+          workspaceDir,
+        }),
+      ).rejects.toMatchObject({ message: refreshError.message, stack: refreshError.stack });
+    }
+  });
+  it("rejects unreserved unconfigured identities on an active gateway", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refresh(config, { gatewayLifecycle: true });
+    await expect(
+      acquireRun({
+        ...fixture.agentInput("default", config),
+        agentId: "missing",
+        agentDir: "/tmp/configured-missing",
+        workspaceDir: "/tmp/workspace-missing",
+      }),
+    ).rejects.toThrow("prepared model runtime owner was not committed");
   });
 });

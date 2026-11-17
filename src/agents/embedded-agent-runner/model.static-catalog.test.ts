@@ -2,6 +2,8 @@ import type { ModelCatalogAlias } from "@openclaw/model-catalog-core/model-catal
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createBundledStaticCatalogModelResolver } from "./model.static-catalog.js";
 import { createManifestRecord, setManifestPlugins } from "./model.static-catalog.test-helpers.js";
 
 const mistralLookup = { provider: "mistral", modelId: "mistral-medium-3-5" };
@@ -392,4 +394,42 @@ describe("manifest provider aliases", () => {
       );
     },
   );
+});
+
+describe("static catalogue generation lifetime", () => {
+  function generation(id: string) {
+    const plugin = createMistralManifestPlugin();
+    plugin.modelCatalog.providers.mistral.models[0]!.id = id;
+    plugin.modelCatalog.providers.mistral.models[0]!.name = id;
+    return createManifestRecord("mistral", {
+      ...plugin,
+      modelIdNormalization: { providers: { mistral: { aliases: { latest: id } } } },
+    });
+  }
+  it("pins lifecycle lookups to the supplied plugin generation", () => {
+    const first = generation("mistral-medium-3-5");
+    const resolve = createBundledStaticCatalogModelResolver({
+      cfg: {},
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [first] }),
+    });
+    manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(
+      createPluginMetadataSnapshotFixture({ plugins: [generation("mistral-medium-next")] }),
+    );
+    expect(resolve(mistralLookup)?.id).toBe("mistral-medium-3-5");
+    expect(resolve({ provider: "mistral", modelId: "latest" })?.id).toBe("mistral-medium-3-5");
+    expect(resolve({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
+  });
+  it("refreshes a retained no-snapshot resolver at the plugin metadata lifecycle boundary", () => {
+    setManifestPlugins(manifestMocks, [generation("mistral-medium-3-5")]);
+    const resolve = createBundledStaticCatalogModelResolver({ env: { HOME: "/custom-home" } });
+    expect(resolve(mistralLookup)?.id).toBe("mistral-medium-3-5");
+    setManifestPlugins(manifestMocks, [generation("mistral-medium-next")]);
+    expect(resolve(mistralLookup)?.id).toBe("mistral-medium-3-5");
+    expect(resolve({ provider: "mistral", modelId: "mistral-medium-next" })).toBeUndefined();
+    clearPluginMetadataLifecycleCaches();
+    expect(resolve(mistralLookup)).toBeUndefined();
+    expect(resolve({ provider: "mistral", modelId: "mistral-medium-next" })?.id).toBe(
+      "mistral-medium-next",
+    );
+  });
 });
