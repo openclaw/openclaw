@@ -4,6 +4,18 @@ import { ChatRunFailureNotice } from "./chat-run-failure-notice.tsx";
 
 function FailureNotice(props: ChatNoticeProps) {
   const failure = () => props.item.runError!;
+  const feedback = () => {
+    const recovery = props.recovery;
+    const agentId = recovery?.currentAgentId ?? recovery?.fullMessageAgentId;
+    return recovery?.sessionKey && agentId
+      ? {
+          sessionKey: recovery.sessionKey,
+          agentId,
+          runId: failure().runId,
+          repeatCount: props.item.repeatCount ?? 1,
+        }
+      : undefined;
+  };
   const actions = createMemo(() => {
     // Bind the displayed failure: an open confirmation must not retarget a newer run.
     const initialRunId = failure().runId;
@@ -28,6 +40,7 @@ function FailureNotice(props: ChatNoticeProps) {
       data-run-failure={failure().runId}
     >
       <ChatRunFailureNotice
+        feedback={feedback()}
         summary={failure().summary}
         cause={failure().cause}
         repeatCount={props.item.repeatCount}
@@ -41,7 +54,7 @@ function FailureNotice(props: ChatNoticeProps) {
 
 export function ChatNotice(props: ChatNoticeProps) {
   return (
-    <Show when={props.item.runError} fallback={<ChatNoticeDetails {...props} />}>
+    <Show when={props.item.runError?.runId} keyed fallback={<ChatNoticeDetails {...props} />}>
       <FailureNotice item={props.item} recovery={props.recovery} />
     </Show>
   );

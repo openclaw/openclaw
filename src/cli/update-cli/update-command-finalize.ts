@@ -549,7 +549,7 @@ async function updateFinalizeCommandInternal(
       ? []
       : await settleOwedStepsAfterFinalization(
           { runId: invokingRunId, env: process.env },
-          { root, completionFailure, timeoutMs: completionBudget },
+          { root, completionFailure, plugins: pluginUpdate, timeoutMs: completionBudget },
         );
     for (const step of owedSteps) {
       defaultRuntime.error(`Warning: ${formatUpdateOwedStep(step)}`);

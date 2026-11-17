@@ -86,7 +86,7 @@ environment variable. It redacts the connection from child output.
 Arguments after `--` go to the normal test runner. Start with a file or directory
 to replace the default targets; options alone retain all suites. For example,
 append `-- src/infra/postgres-sync/locks.test.ts --maxWorkers=1` for a smoke test.
-Use `--shard 1/3`, `--shard 2/3`, or `--shard 3/3` for the CI partitions.
+Use `--shard 1/4`, `--shard 2/4`, `--shard 3/4`, or `--shard 4/4` for the CI partitions.
 The shared weighted allocator balances the existing target inventory using committed
 `config/postgres-conformance-timings.json` measurements. Refresh those advisory
 weights from per-file case spans in PostgreSQL conformance job logs when costs change;
@@ -120,7 +120,7 @@ the existing Vitest workers can overlap independent recovery and custody cases.
 They retain real one-shot command workers, isolated state, and PostgreSQL namespaces;
 no additional job or service is started.
 
-CI's **PostgreSQL conformance** matrix runs three shards in parallel with a 30-minute
+CI's **PostgreSQL conformance** matrix runs four shards in parallel with a 30-minute
 job budget each. Every shard has a
 fresh PostgreSQL 17 service using the pinned `pgvector/pgvector:pg17` image and
 the `unaccent`, `pg_trgm`, and `vector` extensions. It runs

@@ -93,7 +93,9 @@ that budget because a filesystem can decline reflinking. Insufficient space
 reports the exact required, available, and missing bytes. Copies of at least
 256 MiB log their byte count, file count, elapsed time, and throughput.
 
-Replaced files remain as `<file>.pre-<version>`. Startup prunes older unpinned
+Replaced files remain as `<file>.pre-<buildId>`, named after the build that replaced
+them, so two builds of one version each keep their own predecessor. Builds without a
+build ID, and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
 generations only for files it owns. It leaves retired startup-migration backups,
 SQLite `.bak` files, and media-persistence recovery images in place, reporting
 file counts and bytes within the inspected copy scope. These are operator or
@@ -537,12 +539,15 @@ whole-store image for classification. A reader-pinned WAL or rollback journal re
 private recovery and pre-capture engine inspection. Backup digests, PostgreSQL exports, and
 source-change refusal still apply. The candidate backup worker must contain this change.
 
-Candidate Doctor also accepts an empty WAL index appearing or disappearing
-between an older updater's capture and migration admission, provided the database
-identity and committed contents still match and the index contains no write
-evidence. This preserves the installed updater's original fingerprint format.
-Changed committed data or write evidence still refuses migration and automatic
-restoration. The candidate must contain this repair.
+Candidate Doctor separates its initial database admission from the updater's
+rollback baseline. If databases changed after the updater captured them, Doctor
+warns and continues from the current observed state rather than aborting an
+otherwise valid migration. The receipt permanently disables automatic database
+restoration for that update, so a later failure cannot overwrite newer data with
+the stale backup. Existing integrity, schema, and maintenance-ownership checks
+still apply, as do checks for writes after admission. The candidate must contain
+this repair; the installed updater's capture and backup checks are unchanged.
+Empty WAL-index transitions without write evidence remain rollback-eligible.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its
@@ -806,6 +811,12 @@ lease; if an owner, descendant, or scope remains live or unverified, it fails wi
 the retained lease's owner, version, phase, last activity, and recovery guidance.
 The repairing CLI must contain this fix; a downloaded update candidate cannot
 repair an older updater's blocked admission.
+
+Explicit repair uses the package journal's verified historical lease store when
+it still exists, so uncertain-handoff recovery and publication settlement share
+one repair claim even when the default per-user store is empty. Recovery checks
+and ordinary update admission remain unchanged. The repairing CLI must contain
+this fix; no lease schema or update protocol change is required.
 
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
