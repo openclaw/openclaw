@@ -432,7 +432,6 @@ async function runCronIsolatedAgentTurnInTrace(
                       target: {
                         agentId: prepared.context.agentId,
                         sessionKey: prepared.context.runSessionKey,
-                        sessionId: prepared.context.cronSession.sessionEntry.sessionId,
                       },
                       signal: abortSignal,
                       deliveryAttemptFence: params.deliveryAttemptFence,

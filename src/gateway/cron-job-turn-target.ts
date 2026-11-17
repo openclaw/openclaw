@@ -51,7 +51,7 @@ export async function captureCronJobTurnTarget(params: {
     const target = await capture({ requesterOwner: owner && isOwner ? { assertCurrent } : {} });
     return { target, release: () => {} };
   }
-  // Parent-bound sources keep their incarnation; standalone sources retain device authority independently.
+  // Parent-bound sources follow their chat by key; standalone sources retain device authority independently.
   const { source } = requester;
   const captured = job.operatorSource;
   let operator: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
@@ -64,10 +64,7 @@ export async function captureCronJobTurnTarget(params: {
     }
     operator = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
-      target:
-        source.kind === "gateway"
-          ? undefined
-          : { agentId, sessionKey, sessionId: source.sessionId },
+      target: source.kind === "gateway" ? undefined : { agentId, sessionKey },
       context,
       assertCurrent: () => {
         if (!isDeepStrictEqual(context.cron.getJob(job.id)?.operatorSource, captured)) {
@@ -84,9 +81,6 @@ export async function captureCronJobTurnTarget(params: {
         ? { ownerContinuation: true as const }
         : {}),
     });
-    if (source.kind !== "gateway" && target.sessionId !== source.sessionId) {
-      throw new Error("Automation owner conversation was reset");
-    }
     return { target, release: operator.release };
   } catch {
     operator?.release();

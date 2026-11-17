@@ -27,8 +27,8 @@ export async function restoreCronOperatorSource(params: {
   job: CronStoredJob;
   /** Condition/script runners supply the same current Gateway owner explicitly. */
   context?: GatewayRequestContext;
-  /** The session this run executes in; the restored authority lives as long as it does. */
-  target?: { agentId: string; sessionKey: string; sessionId?: string };
+  /** The chat this run executes in, by key; the restored authority lives until that chat is deleted. */
+  target?: { agentId: string; sessionKey: string };
   signal?: AbortSignal;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
 }) {

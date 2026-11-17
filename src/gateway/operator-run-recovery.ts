@@ -438,7 +438,8 @@ async function restoreGatewayOperatorSnapshot(params: {
 /** Restore owner-held continuation evidence through the shared authentication owner. */
 export async function restoreGatewayOperatorSource(params: {
   snapshot: OperatorRunRecoverySnapshot;
-  target?: { agentId: string; sessionKey: string; sessionId?: string };
+  /** The chat this authority serves, by key: edits, resets and compaction keep it; deletion ends it. */
+  target?: { agentId: string; sessionKey: string };
   context: GatewayRequestContext;
   assertCurrent: () => void;
   prepareCurrent?: () => Promise<void>;
@@ -451,10 +452,9 @@ export async function restoreGatewayOperatorSource(params: {
       ? (revoke) =>
           onSessionIdentityMutation((mutation) => {
             if (
+              mutation.kind === "delete" &&
               mutation.agentId === target.agentId &&
-              ((target.sessionId !== undefined &&
-                mutation.previous.sessionId === target.sessionId) ||
-                mutation.previous.sessionKeys.includes(target.sessionKey))
+              mutation.previous.sessionKeys.includes(target.sessionKey)
             ) {
               revoke();
             }
