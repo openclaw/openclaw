@@ -3,6 +3,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/registry/subagent-registry-restart-collector.test.ts",
   "src/agents/simple-completion-runtime.postgres.test.ts",
   "src/agents/embedded-agent-runner/compact.watched-sessions.postgres.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-system-prompt.watched-sessions.postgres.test.ts",
   "src/agents/subagents/registry/subagent-registry-maintenance.completion.test.ts",
   "src/agents/clawrouter-failover.integration.test.ts",
   "src/infra/backup-local-companion.test.ts",
