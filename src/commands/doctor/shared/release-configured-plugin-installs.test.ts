@@ -148,6 +148,21 @@ describe("configured plugin install release step", () => {
       pluginIds: [],
     },
     {
+      source: "explicit Kimi ownership of the shared key during release backfill",
+      cfg: { plugins: { entries: { kimi: { enabled: true } } } },
+      env: { KIMI_API_KEY: "test-kimi-code-key" },
+      pluginIds: ["kimi"],
+    },
+    {
+      source: "explicit Moonshot search alongside Kimi during release backfill",
+      cfg: {
+        plugins: { entries: { kimi: { enabled: true } } },
+        tools: { web: { search: { provider: "kimi" } } },
+      },
+      env: { KIMI_API_KEY: "test-shared-key" },
+      pluginIds: ["kimi", "moonshot"],
+    },
+    {
       source: "environment-only external providers before model discovery",
       cfg: {},
       env: { GROQ_API_KEY: "groq-key", MODELSTUDIO_API_KEY: "qwen-key" },
