@@ -58,6 +58,8 @@ export type SidebarProjectionHost = {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly collapsedSessionSections: ReadonlySet<string>;
+  readonly sessionOwnershipVisibility: { readonly filters: boolean };
+  readonly sessionOrganizer: { readonly draggingSessionKey: string | null };
   readonly hiddenSessionCatalogIds: ReadonlySet<string>;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionOwnerFilterActive: boolean;
@@ -136,6 +138,13 @@ export function memoizedSidebarSections(
   const groups = context?.navigation.snapshot.personalSessionGroups;
   const references = groups?.length ? host.personalGroupSessionReferences() : [];
   const catalogRows = host.catalogSessionRows();
+  // Empty Other keeps rendering where the sidebar always kept it as a target:
+  // more pages to load, owner filters shown, a non-Active status, or a drag.
+  const showEmptyOther =
+    host.sessionData.sessionsResult?.hasMore === true ||
+    host.sessionOwnershipVisibility.filters ||
+    host.sessionsStatusFilter !== "active" ||
+    host.sessionOrganizer.draggingSessionKey !== null;
   return memo.read(
     () => [
       rows,
@@ -148,6 +157,7 @@ export function memoizedSidebarSections(
       host.collapsedSessionSections,
       host.effectiveSessionsGrouping(),
       host.sessionsEmptyGroupsMode,
+      showEmptyOther,
       rosterLimits,
       host.sessionData.visibleSessionLimits,
       host.sidebarEntries,
@@ -192,6 +202,7 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
+        showEmptyOther,
         ownerFilter: host.sessionOwnerFilterActive
           ? "owner"
           : host.sessionInvolvingMeFilterActive

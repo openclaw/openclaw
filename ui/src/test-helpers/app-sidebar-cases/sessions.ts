@@ -126,7 +126,7 @@ describe("AppSidebar session pagination", () => {
     expect(sidebar.querySelector('button[aria-label="Show more"]')).toBeNull();
   });
 
-  it("keeps session pages scoped to grouping and lets the last section show every row", async () => {
+  it("keeps session pages scoped to grouping and lets a lone flat list show every row", async () => {
     const keys = Array.from({ length: 61 }, (_, index) => `agent:main:session-${index}`);
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", keys);

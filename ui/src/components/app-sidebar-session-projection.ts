@@ -60,6 +60,8 @@ type SidebarProjectionInput = {
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
   emptyGroupsMode: SidebarEmptyGroupsMode;
+  /** Empty Other still renders as a target for rows that can arrive or be dropped there. */
+  showEmptyOther: boolean;
   /** "owner" selects exactly one owner; "involvingMe" can span several. */
   ownerFilter: "owner" | "involvingMe" | null;
   visibleSessionLimits: ReadonlyMap<string, number>;
@@ -420,6 +422,9 @@ export class SidebarSessionProjection {
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
+  // Rows a lone section showed, kept after a peer arrives until collapse or
+  // Show less (resetMembership) so the list does not shrink under the reader.
+  private readonly revealedRowCounts = new Map<string, number>();
   readonly children = new SidebarChildExpansion(() => {
     this.revision += 1;
   });
@@ -574,8 +579,13 @@ export class SidebarSessionProjection {
       ).filter(
         (section) =>
           section.id !== "pinned" &&
-          // Catalog rows have their own projection; these sections are placeholders.
-          !(hideEmptyGroups && !section.id.startsWith("catalog:") && section.rows.length === 0),
+          // The one decision about which sections render: the renderer draws
+          // every returned section. Empty Coding never renders.
+          (section.rows.length > 0 ||
+            (section.id !== "work" &&
+              (section.id !== "ungrouped" || input.showEmptyOther) &&
+              // Catalog rows have their own projection; these sections are placeholders.
+              (!hideEmptyGroups || section.id.startsWith("catalog:")))),
       );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {
@@ -584,7 +594,7 @@ export class SidebarSessionProjection {
       }
     }
     // A lone catch-all sits directly under the global Sessions toolbar. Empty
-    // Coding does not render, while empty custom/Groups sections remain targets.
+    // custom/Groups sections remain targets.
     // Headerless means no collapse control, so a stored ungrouped-collapsed
     // preference is deliberately inert here; it re-applies once a peer returns.
     // Flat mode ("none") holds every native row, so its "Other" label would
@@ -599,22 +609,13 @@ export class SidebarSessionProjection {
       pinnedKeys.size > 0 ||
       (input.grouping !== "none" &&
         sections.some(
-          (section) =>
-            section.id !== "ungrouped" &&
-            section.id !== soloOwnerSectionId &&
-            (section.id !== "work" || section.rows.length > 0),
+          (section) => section.id !== "ungrouped" && section.id !== soloOwnerSectionId,
         ));
-    // Only the bottom list section shows every loaded row; an unpaged section
-    // above another buries it (1700+ sessions on a team server). Empty Other
-    // and Coding render nothing below. The last section keeps its stored page
-    // as visibleLimit for when a section follows it again. Agent roster cards
+    // A lone section (flat list, or Other with no peers) shows every loaded
+    // row. With several, each pages so none buries the others (1700+ sessions
+    // on a team server) or changes paging on reorder. Roster cards
     // (input.sections) keep their own paging.
-    const trailingSectionId = input.sections
-      ? undefined
-      : sections.findLast(
-          (section) =>
-            section.rows.length > 0 || (section.id !== "ungrouped" && section.id !== "work"),
-        )?.id;
+    const soleSectionId = !input.sections && sections.length === 1 ? sections[0]!.id : undefined;
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
@@ -629,10 +630,13 @@ export class SidebarSessionProjection {
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);
       const { initialLimit: pageLimit, key } = sidebarSessionPagination(grouping, section.id);
-      const visibleLimit = input.visibleSessionLimits.get(key) ?? pageLimit;
-      const trailing = section.id === trailingSectionId;
-      const initialLimit = trailing ? totalRowCount : pageLimit;
-      const rowLimit = trailing ? totalRowCount : visibleLimit;
+      const visibleLimit = Math.max(
+        input.visibleSessionLimits.get(key) ?? pageLimit,
+        this.revealedRowCounts.get(section.id) ?? 0,
+      );
+      const sole = section.id === soleSectionId;
+      const initialLimit = sole ? totalRowCount : pageLimit;
+      const rowLimit = sole ? totalRowCount : visibleLimit;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.containsActiveDescendant || row.pinned),
         0,
@@ -662,13 +666,10 @@ export class SidebarSessionProjection {
           retainedSlots -= 1;
           return true;
         });
-        // The last section holds no prior page: once a section follows it,
-        // it drops back to its own page instead of keeping every row.
-        if (trailing) {
-          this.stickySections.delete(section.id);
-        } else {
-          this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
+        if (sole) {
+          this.revealedRowCounts.set(section.id, section.rows.length);
         }
+        this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
         visibleRows.push(...section.rows);
         visibleRowCount = section.rows.length;
       }
@@ -689,8 +690,10 @@ export class SidebarSessionProjection {
     this.revision += 1;
     if (sectionId === undefined) {
       this.stickySections.clear();
+      this.revealedRowCounts.clear();
     } else {
       this.stickySections.delete(sectionId);
+      this.revealedRowCounts.delete(sectionId);
     }
   }
 

@@ -218,7 +218,7 @@ describe("sidebar projection memo", () => {
   });
 
   it.each([
-    // The flat list is the last section here, so it shows every row.
+    // The flat list is the only section here, so it shows every row.
     { savedGrouping: "none", grouping: "none", limit: undefined, expected: 62 },
     { savedGrouping: "none", grouping: "category", limit: undefined, expected: 15 },
     { savedGrouping: "category", grouping: "none", limit: undefined, expected: 62 },

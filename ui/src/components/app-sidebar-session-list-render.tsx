@@ -113,22 +113,8 @@ function renderSessionListBody(params: Parameters<typeof renderSessionList>[0]) 
         <Show
           when={section().id.startsWith("catalog:")}
           fallback={
-            // Empty personal sections are omitted by the projection. Other empty sections retain their drag destinations.
-            <Show
-              when={
-                !(section().id === "work" && section().totalRowCount === 0) &&
-                !(
-                  section().id === "ungrouped" &&
-                  section().totalRowCount === 0 &&
-                  !params.nativeSessionsHaveMore &&
-                  !host().sessionOwnershipVisibility.filters &&
-                  host().sessionsStatusFilter === "active" &&
-                  host().sessionOrganizer.draggingSessionKey === null
-                )
-              }
-            >
-              <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
-            </Show>
+            // The projection decides which empty sections render.
+            <SessionSection host={host()} section={section()} personHeaders={personHeaders()} />
           }
         >
           <Show when={catalogsBySectionId().get(section().id)}>
