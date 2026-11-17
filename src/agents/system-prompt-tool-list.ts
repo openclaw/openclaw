@@ -65,6 +65,9 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
       ? `Spawn subagent/ACP. Native clean context: context="isolated"; transcript: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
       : 'Spawn subagent; clean context: context="isolated"; transcript: context="fork"',
     sessions_yield: "End turn; await subagent events",
+    continue_work: "Arm your next turn for unfinished work, now or after a delay.",
+    continue_delegate:
+      "Queue a bounded branch after this turn or later; `silent-wake` wakes you on return.",
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
     skill_workshop: "Author reusable skills",

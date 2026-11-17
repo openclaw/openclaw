@@ -234,4 +234,39 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
       expect(disabled).not.toBe(enabled);
     });
   });
+
+  describe("## Tooling list", () => {
+    const work = "- continue_work: Arm your next turn for unfinished work, now or after a delay.";
+    const delegate =
+      "- continue_delegate: Queue a bounded branch after this turn or later; `silent-wake` wakes you on return.";
+    const toolLines = (toolNames: string[], promptMode?: "minimal") =>
+      buildAgentSystemPrompt({ ...baseParams, continuationEnabled: true, toolNames, promptMode })
+        .split("Tools policy-filtered. Names case-sensitive; call exact.\n")[1]
+        ?.split("\nThe AGENTS.md Tools section guides usage")[0]
+        ?.split("\n");
+
+    it.each([undefined, "minimal"] as const)(
+      "gives both core slots beside sessions_yield (promptMode %s)",
+      (promptMode) => {
+        // Shuffled input: the renderer owns core order and alphabetical extras.
+        const names = "zeta_x continue_delegate subagents continue_work sessions_yield alpha_x";
+        expect(toolLines(names.split(" "), promptMode)).toEqual([
+          "- sessions_yield: End turn; await subagent events",
+          work,
+          delegate,
+          "- subagents: Subagent status; never wait-loop",
+          "- alpha_x",
+          "- zeta_x",
+        ]);
+      },
+    );
+
+    it("omits an unavailable tool and its summary", () => {
+      expect(toolLines(["continue_work", "sessions_yield"])).toEqual([
+        "- sessions_yield: End turn; await subagent events",
+        work,
+      ]);
+      expect(toolLines(["continue_delegate"])).toEqual([delegate]);
+    });
+  });
 });
