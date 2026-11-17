@@ -26,6 +26,7 @@ import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
 import { createTemplateAgentFromChat, selectChatTemplateAgentId } from "./gateway-add-chat.js";
 import {
+  refuseAdmittedTemplateAgent,
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
   type PreparedAgentChat,
@@ -688,6 +689,9 @@ export async function applyTemplateAddForGateway(
     if (settledResult) {
       defaultRuntime.log("Template source cleanup failed after Add; cached files may remain.");
       return settledResult;
+    }
+    if (error instanceof TemplateGatewayPlanBlockedError) {
+      await refuseAdmittedTemplateAgent(admitted, input, stateContext, error);
     }
     if (admitted) {
       return {
