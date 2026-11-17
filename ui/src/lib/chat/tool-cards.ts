@@ -329,7 +329,7 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
 
 let nextPreviewRevision = 0;
 
-export function isToolCallContentBlock(item: {
+function isToolCallContentBlock(item: {
   type?: unknown;
   name?: unknown;
   arguments?: unknown;
