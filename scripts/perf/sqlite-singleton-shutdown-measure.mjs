@@ -66,7 +66,9 @@ const work = withOpenClawStateLeaseAsync(
   captureOpenClawStateWorkerContext({ env: process.env }),
   async (lease) => {
     entered.resolve();
-    if (!lease.signal.aborted) await once(lease.signal, "abort");
+    if (!lease.signal.aborted) {
+      await once(lease.signal, "abort");
+    }
   },
 );
 const workOutcome = work.then(
