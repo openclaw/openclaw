@@ -410,11 +410,16 @@ select.settings-select:not([multiple]) {
 /* Native controls own their box. */
 .settings-input,
 select.settings-select {
-  border: 1px solid var(--field-border);
+  border: 1px solid var(--control-field-edge);
   border-radius: var(--field-radius);
-  background-color: var(--field-bg);
-  color: var(--text);
+  background-color: var(--control-field-surface);
+  color: var(--text-strong);
   padding: 7px var(--field-padding-inline);
+}
+
+select.settings-select {
+  border-color: var(--control-edge);
+  background-color: var(--control-surface);
 }
 
 /* Secret inputs also appear in the startup login gate. Keep these selectors

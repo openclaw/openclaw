@@ -2001,6 +2001,7 @@ openclaw-approvals-page .data-table-pagination__info {
   padding: 0 9px;
   border-color: transparent;
   background: transparent;
+  color: var(--text);
   font-size: 14px;
 }
 
@@ -2447,13 +2448,14 @@ openclaw-settings-save-indicator:empty {
   align-items: stretch;
   min-width: 0;
   height: var(--settings-control-height);
-  background: var(--field-bg);
-  border: 1px solid var(--field-border);
+  background: var(--control-field-surface);
+  border: 1px solid var(--control-field-edge);
   border-radius: var(--field-radius);
 }
 
 .cfg-stepper:focus-within {
-  border-color: var(--ring);
+  border-color: var(--field-focus-border);
+  box-shadow: 0 0 0 3px var(--control-focus-ring);
 }
 
 .settings-row .cfg-stepper > .settings-input,

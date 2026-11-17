@@ -1003,8 +1003,9 @@ openclaw-toast-host[data-toast-placement="shell"] .app-toast-lane--top-center {
 .field textarea,
 .field select,
 .input {
-  border: 1px solid var(--field-border);
-  background: var(--field-bg);
+  border: 1px solid var(--control-field-edge);
+  background: var(--control-field-surface);
+  color: var(--text-strong);
   border-radius: var(--field-radius);
   padding: 6px var(--field-padding-inline);
   outline: none;
@@ -1020,6 +1021,7 @@ select.input {
 
 .oc-sensitive-input:focus-within {
   border-color: var(--field-focus-border);
+  box-shadow: 0 0 0 3px var(--control-focus-ring);
 }
 
 /* Carapace Sensitive Input adapted to the Control UI token contract. */
@@ -1030,16 +1032,16 @@ select.input {
   min-width: 0;
   min-height: 44px;
   align-items: stretch;
-  border: 1px solid var(--field-border);
+  border: 1px solid var(--control-field-edge);
   border-radius: var(--field-radius);
-  background: var(--field-bg);
+  background: var(--control-field-surface);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
 .oc-sensitive-input:hover:not(:has(input:disabled)) {
-  border-color: var(--border-strong);
+  border-color: var(--control-edge-hover);
 }
 
 .oc-sensitive-input > input {
@@ -1050,7 +1052,7 @@ select.input {
   border-radius: var(--radius-md) 0 0 var(--radius-md);
   outline: none;
   background: transparent;
-  color: var(--text);
+  color: var(--text-strong);
   box-shadow: none;
 }
 
@@ -1136,6 +1138,11 @@ select.input {
   }
 }
 
+.field select {
+  border-color: var(--control-edge);
+  background-color: var(--control-surface);
+}
+
 .field select,
 select.settings-select:not([multiple]) {
   appearance: none;
@@ -1188,7 +1195,7 @@ select.settings-select:not([multiple]) {
         height: 16px;
         margin: 0;
         padding: 0;
-        background: var(--text-tertiary);
+        background: var(--muted);
         mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
           center / contain no-repeat;
         transition: none;
@@ -2725,10 +2732,10 @@ select.data-table-pagination__size {
   width: 100%;
   min-height: var(--settings-control-height);
   padding: 0 var(--field-padding-inline);
-  border: 1px solid var(--field-border);
+  border: 1px solid var(--control-edge);
   border-radius: var(--field-radius);
-  background: var(--field-bg);
-  color: var(--text);
+  background: var(--control-surface);
+  color: var(--text-strong);
   font-size: var(--field-font-size);
   outline: none;
   text-align: left;
@@ -4104,8 +4111,27 @@ select.data-table-pagination__size {
       [aria-expanded="true"],
       [data-disabled]
     ) {
-    border-color: var(--border-strong);
+    border-color: var(--control-edge-hover);
   }
+
+  /* Selects lift their fill on hover; text fields already sit on that step. */
+  :where(.field) :where(select):hover:not(:disabled, [aria-expanded="true"]),
+  :where(select.settings-select):hover:not(:disabled, [aria-expanded="true"]),
+  :where(.picker-select__trigger):hover:not(:disabled, [aria-expanded="true"]),
+  :where(.agent-select__trigger):hover:not(:disabled, [aria-expanded="true"]) {
+    background-color: var(--control-surface-hover);
+  }
+}
+
+/* Keyboard focus adds a neutral ring outside the focused edge; open menus keep only the edge. */
+:where(.field) :where(input, textarea, select):focus-visible:focus-visible,
+:where(.settings-input):focus-visible:focus-visible,
+:where(select.settings-select):focus-visible:focus-visible,
+:where(.picker-select__trigger):focus-visible:focus-visible,
+:where(.agent-select__trigger):focus-visible:focus-visible,
+:where(.input):focus-visible:focus-visible,
+:where(.multi-select):focus-within {
+  box-shadow: 0 0 0 3px var(--control-focus-ring);
 }
 :where(.field) :where(input, textarea, select):disabled,
 :where(.settings-input):disabled,

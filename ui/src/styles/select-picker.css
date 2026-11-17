@@ -5,10 +5,10 @@
   width: 100%;
   min-height: var(--settings-control-height);
   padding-inline: var(--field-padding-inline);
-  border: 1px solid var(--field-border);
+  border: 1px solid var(--control-edge);
   border-radius: var(--field-radius);
-  background: var(--field-bg);
-  color: var(--text);
+  background: var(--control-surface);
+  color: var(--text-strong);
   font-size: var(--field-font-size);
   text-align: start;
   cursor: var(--cursor-action);
@@ -359,6 +359,7 @@ openclaw-select-picker {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
+  color: var(--text);
 }
 
 .picker-select--submenu .picker-select__trigger:is(:hover, [aria-expanded="true"]) {

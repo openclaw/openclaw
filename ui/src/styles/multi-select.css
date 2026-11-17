@@ -16,10 +16,10 @@ openclaw-multi-select {
   width: 100%;
   min-height: var(--settings-control-height);
   padding: 2px 34px 2px var(--field-padding-inline);
-  border: 1px solid var(--field-border);
+  border: 1px solid var(--control-field-edge);
   border-radius: var(--field-radius);
-  background: var(--field-bg);
-  color: var(--text);
+  background: var(--control-field-surface);
+  color: var(--text-strong);
   cursor: text;
 }
 
@@ -43,7 +43,7 @@ openclaw-multi-select {
   outline: none;
   box-shadow: none;
   font-size: var(--field-font-size);
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .multi-select__input::placeholder {

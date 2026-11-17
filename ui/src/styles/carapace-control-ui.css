@@ -51,11 +51,11 @@
   --oc-status-error-fg: var(--danger);
   --oc-status-info-fg: var(--info);
 
-  --oc-input-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  --oc-input-border: var(--input);
+  --oc-input-bg: var(--control-field-surface);
+  --oc-input-border: var(--control-field-edge);
   --oc-input-placeholder: var(--muted);
-  --oc-input-focus-border: var(--ring);
-  --oc-input-focus-ring: var(--focus);
+  --oc-input-focus-border: var(--field-focus-border);
+  --oc-input-focus-ring: var(--control-focus-ring);
 
   --oc-font-body: var(--font-body);
   --oc-font-mono: var(--mono);
@@ -307,7 +307,7 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 }
 
 .oc-input:hover:not(:disabled) {
-  border-color: var(--oc-border-strong);
+  border-color: var(--control-edge-hover);
 }
 
 .oc-input:focus-visible {
