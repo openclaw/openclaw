@@ -90,6 +90,9 @@ close; the native shutdown watchdog kills the process if leaked handles keep it
 alive past the deadline. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
+A settled process-supervisor failure no longer prevents agent-database close;
+supervisor cleanup still pending past its grace retains those databases.
+
 Reversible suspension and host freeze preparation keep their own semantics. A
 suspension does not mark sessions or abort them. Preparation with `drain: true`
 can become ready once persistence is clear; the committed stop or restart performs

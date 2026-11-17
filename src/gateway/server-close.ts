@@ -60,10 +60,6 @@ const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
 const RUNTIME_CLOSE_GRACE_MS = 5_000;
 const PERSISTENCE_CLOSE_GRACE_MS = 3_000;
 const REGISTRY_CLOSE_GRACE_MS = 10_000;
-type ShutdownResult = {
-  durationMs: number;
-  warnings: string[];
-};
 
 function createCloseSteps(
   reason: string,
@@ -347,7 +343,7 @@ export async function prepareGatewayClose(
 export function completeGatewayClose(
   params: GatewayCloseParams,
   preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
-): Promise<ShutdownResult> {
+): Promise<{ durationMs: number; warnings: string[] }> {
   // Cleanup belongs to shutdown, not the initiating RPC's drained connection scope.
   return preparation.cleanupWork.run(async () => {
     const result = await closeGatewayResources(params, preparation).then(
@@ -371,7 +367,7 @@ export function completeGatewayClose(
 async function closeGatewayResources(
   params: GatewayCloseParams,
   preparation: Awaited<ReturnType<typeof prepareGatewayClose>>,
-): Promise<ShutdownResult> {
+) {
   await measureGatewayCloseStep("restart.close.metadata-begin", () =>
     params.pluginMetadata.beginClose(),
   );
@@ -648,14 +644,18 @@ async function closeGatewayResources(
                 await measureCloseStep("incognito-sessions", () =>
                   memorySessionActorOwners.reset(),
                 );
-                // Owned process trees get their normal TERM window before shared state retires.
-                await measureCloseStep(
+                const supervisorFailure = await measureCloseStep(
                   "process-supervisor",
-                  shutdownProcessSupervisor,
+                  () => shutdownProcessSupervisor().catch((error: unknown) => ({ error })),
                   GRACEFUL_CANCEL_TIMEOUT_MS + 1_000,
                 );
+                // A settled failure has joined owned runs; failed out-of-process trees own
+                // their own connections and leases. Pending cleanup still retains our handles.
                 // Releasing agent leases still writes shared state; keep its owner alive until then.
                 await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
+                if (supervisorFailure) {
+                  throw supervisorFailure.error;
+                }
                 await measureCloseStep("debug-proxy", () =>
                   finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
                 );
