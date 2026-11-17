@@ -492,6 +492,7 @@ export async function deliverCompletionDirect(params: {
         path: "direct",
         terminal: true,
         disposition: "permanent_failure",
+        reason: "delivery_failed",
         error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
       };
     }
@@ -505,6 +506,7 @@ export async function deliverCompletionDirect(params: {
     return {
       delivered: false,
       path: "direct",
+      reason: "delivery_failed",
       error: `text completion direct delivery failed: ${summarizeDeliveryError(err)}`,
     };
   } finally {

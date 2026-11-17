@@ -13,6 +13,8 @@ import {
   resolveSubagentChildAuthority,
 } from "../registry/subagent-child-owner-match.js";
 import {
+  recordRequesterDelivery,
+  resolveRequesterDeliveryOutcome,
   consumeSubagentPauseNotice,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
@@ -295,92 +297,111 @@ function prepareRequesterBatch(
 
 function mutateRequesterBatch(
   database: OpenClawStateDatabase,
-  params: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
+  request: Extract<SubagentCompletionMutation, { kind: "requesterWake" | "requesterBatch" }>,
 ): SubagentCompletionMutationResult {
-  if (params.committed) {
-    return reconcileRequesterWake(database, params);
+  if (request.committed) {
+    return reconcileRequesterWake(database, request);
   }
-  const mutations = prepareRequesterBatch(database, params).map(
-    ({ expected, subagent }): CompletionMutation => {
-      if (params.kind === "requesterWake") {
-        if (params.operation.kind === "complete") {
-          return { subagent, retire: completeRequesterSettleWakeState(subagent) };
+  const batch = prepareRequesterBatch(database, request);
+  const params =
+    request.kind === "requesterBatch"
+      ? {
+          ...request,
+          outcome: resolveRequesterDeliveryOutcome(
+            batch.map(({ subagent }) => subagent),
+            request.outcome,
+          )!,
         }
-        if (
-          subagent.pauseReason === "sessions_yield" &&
-          Boolean(subagent.requesterSettleWake?.pauseNotice) !==
-            Boolean(params.operation.state.pauseNotice)
-        ) {
-          throw new Error("Requester pause notice changed before transition");
-        }
-        if (
-          (subagent.requesterSettleWake?.yieldedFinalDeliverable === true) !==
-          (params.operation.state.yieldedFinalDeliverable === true)
-        ) {
-          throw new Error("Requester wake reply policy changed before transition");
-        }
-        transitionRequesterSettleWakeState(subagent, params.operation.state);
+      : request;
+  const mutations = batch.map(({ expected, subagent }): CompletionMutation => {
+    if (params.kind === "requesterWake") {
+      if (params.operation.kind === "requesterDelivery") {
+        recordRequesterDelivery(subagent, params.operation.fact);
         return { subagent };
       }
-      const now = params.now;
-      if (consumeSubagentPauseNotice(subagent)) {
-        // A notice is one paused member's input, not settlement of its frozen cohort.
-        if (
-          params.outcome.storeReplaced ||
-          params.outcome.disposition === "intentional_non_delivery" ||
-          params.outcome.reason === "operator_authority_unavailable"
-        ) {
-          subagent.requesterSettleWake = undefined;
-        }
-        return { subagent };
+      if (params.operation.kind === "complete") {
+        return { subagent, retire: completeRequesterSettleWakeState(subagent) };
       }
-      const changedOwner = () =>
-        new Error("subagent completion owner changed before settlement: " + expected.runId);
-      // Expiry transfers settlement to the wake, including its terminal failure outcome.
-      const settleExpiredDelivery =
-        subagent.delivery?.status === "suspended" && subagent.delivery.suspendedReason === "expiry";
-      let mutation: CompletionMutation = { subagent };
       if (
-        subagent.pauseReason !== "sessions_yield" &&
-        subagent.expectsCompletionMessage === true &&
-        (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
-          settleExpiredDelivery)
+        subagent.pauseReason === "sessions_yield" &&
+        Boolean(subagent.requesterSettleWake?.pauseNotice) !==
+          Boolean(params.operation.state.pauseNotice)
       ) {
-        if (params.outcome.delivered) {
-          const delivery = ensureDeliveryState(subagent);
-          const deliveredAt = params.outcome.deliveredAt ?? now;
-          Object.assign(delivery, {
-            status: "delivered",
-            disposition: "delivered",
-            deliveredAt,
-            announcedAt: deliveredAt,
-            lastDropReason: undefined,
-          });
-          clearSubagentPendingDelivery(subagent);
-        } else {
-          const blocked = prepareBlockedSubagentCompletion(
-            database,
-            {
-              subagent: expected,
-              reason:
-                params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
-              disposition: params.outcome.disposition,
-              storeReplaced: params.outcome.storeReplaced,
-              suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
-            },
-            now,
-            subagent,
-          );
-          if (!blocked) {
-            throw changedOwner();
-          }
-          mutation = blocked;
-        }
+        throw new Error("Requester pause notice changed before transition");
       }
-      mutation.retire = completeRequesterSettleWakeState(mutation.subagent);
-      return mutation;
-    },
-  );
+      if (
+        (subagent.requesterSettleWake?.yieldedFinalDeliverable === true) !==
+        (params.operation.state.yieldedFinalDeliverable === true)
+      ) {
+        throw new Error("Requester wake reply policy changed before transition");
+      }
+      transitionRequesterSettleWakeState(subagent, params.operation.state);
+      if (params.operation.requesterDelivery) {
+        recordRequesterDelivery(subagent, params.operation.requesterDelivery);
+      }
+      return { subagent };
+    }
+    const now = params.now;
+    if (consumeSubagentPauseNotice(subagent)) {
+      // A notice is one paused member's input, not settlement of its frozen cohort.
+      if (
+        params.outcome.storeReplaced ||
+        params.outcome.disposition === "intentional_non_delivery" ||
+        params.outcome.reason === "operator_authority_unavailable"
+      ) {
+        subagent.requesterSettleWake = undefined;
+      }
+      return { subagent };
+    }
+    const changedOwner = () =>
+      new Error("subagent completion owner changed before settlement: " + expected.runId);
+    // Expiry transfers settlement to the wake, including its terminal failure outcome.
+    const settleExpiredDelivery =
+      subagent.delivery?.status === "suspended" && subagent.delivery.suspendedReason === "expiry";
+    let mutation: CompletionMutation = { subagent };
+    if (
+      subagent.pauseReason !== "sessions_yield" &&
+      subagent.expectsCompletionMessage === true &&
+      (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
+        settleExpiredDelivery)
+    ) {
+      if (params.outcome.delivered) {
+        const delivery = ensureDeliveryState(subagent);
+        const deliveredAt = params.outcome.deliveredAt ?? now;
+        Object.assign(delivery, {
+          status: "delivered",
+          disposition: "delivered",
+          deliveredAt,
+          announcedAt: deliveredAt,
+          lastDropReason: undefined,
+        });
+        clearSubagentPendingDelivery(subagent);
+      } else {
+        const blocked = prepareBlockedSubagentCompletion(
+          database,
+          {
+            subagent: expected,
+            reason: params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
+            disposition: params.outcome.disposition,
+            ...(params.outcome.reason === "message_tool_delivery_missing" ||
+            params.outcome.reason === "visible_reply_missing"
+              ? { lastDropReason: params.outcome.reason }
+              : {}),
+            storeReplaced: params.outcome.storeReplaced,
+            suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
+          },
+          now,
+          subagent,
+        );
+        if (!blocked) {
+          throw changedOwner();
+        }
+        mutation = blocked;
+      }
+    }
+    mutation.retire = completeRequesterSettleWakeState(mutation.subagent);
+    return mutation;
+  });
   return commitCompletionMutations(database, mutations);
 }
 
@@ -435,6 +456,10 @@ function reconcileRequesterWake(
       current.completionTarget !== intended.completionTarget ||
       current.expectsCompletionMessage !== intended.expectsCompletionMessage ||
       current.delivery?.generation !== intended.delivery?.generation ||
+      !isDeepStrictEqual(
+        current.delivery?.requesterDelivery,
+        intended.delivery?.requesterDelivery,
+      ) ||
       !isDeepStrictEqual(current.execution, intended.execution) ||
       !isDeepStrictEqual(current.killIntent, intended.killIntent) ||
       !isDeepStrictEqual(current.killReconciliation, intended.killReconciliation) ||

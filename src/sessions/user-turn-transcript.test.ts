@@ -83,6 +83,20 @@ describe("user turn transcript persistence", () => {
     ]);
   }
 
+  it("records input consumption only once after submission, not transcript persistence", async () => {
+    let submissions = 0;
+    const recorder = record(userInput("completion result", "requester-consumption"), getTarget, {
+      onInputSubmitted: () => {
+        submissions += 1;
+      },
+    });
+    await recorder.persistApproved();
+    expect(submissions).toBe(0);
+    recorder.markSentToProvider?.();
+    recorder.markSentToProvider?.();
+    expect(submissions).toBe(1);
+  });
+
   async function startLateMedia(input: UserTurnInput, options: Parameters<typeof record>[2] = {}) {
     const dir = sessionDirs.make();
     const target = makeTarget(undefined, dir);

@@ -53,7 +53,17 @@ describe("Gateway completed requester replay", () => {
       const instance = await createOpenClawTestInstance({
         name: "gateway-completion-replay",
         config: createConfig(model.url),
-        env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+        env: {
+          OPENCLAW_SKIP_PROVIDERS: undefined,
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          // Only the owned loopback provider is direct; external proxy routing is preserved.
+          NO_PROXY: [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+            .filter(Boolean)
+            .join(","),
+          no_proxy: [process.env.no_proxy ?? process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"]
+            .filter(Boolean)
+            .join(","),
+        },
       });
       instances.push(instance);
       instance.state.applyEnv();

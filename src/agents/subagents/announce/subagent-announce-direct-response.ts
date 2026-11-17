@@ -168,6 +168,7 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       return {
         delivered: false,
         path: "direct",
+        reason: "delivery_failed",
         error: directDeliveryFailure,
         ...(automaticEvidence.mayHaveSent ? { disposition: "ambiguous" as const } : {}),
       };

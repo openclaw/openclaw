@@ -215,6 +215,8 @@ export type CreateUserTurnTranscriptRecorderParams = {
   assertOriginalInputCommit?: SessionSourceAssertion;
   onPersistenceError?: (error: unknown) => void;
   onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
+  /** First foreground submission, after the input and runtime-context persistence settle. */
+  onInputSubmitted?: () => void | Promise<void>;
   /** Fresh original input only, after durable append and before transcript publication. */
   onOriginalInputCommitted?: (commit: UserTurnOriginalInputCommit) => void;
   expectedSessionState?: SessionTranscriptTurnExpectedState;

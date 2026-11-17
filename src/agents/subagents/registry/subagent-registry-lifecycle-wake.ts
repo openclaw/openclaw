@@ -51,7 +51,8 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
-  isSubagentObligationRetired,
+  requesterSettleWakeScope,
+  awaitsStoppedPauseRetirement,
 } from "./subagent-requester-settle-identity.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import {
@@ -244,24 +245,6 @@ function isRetiredByLiveRequesterTurn(entry: SubagentRunRecord): boolean {
       caller.agentId,
     )
   );
-}
-
-function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
-  return (
-    entry.pauseReason !== "sessions_yield" &&
-    entry.requesterSettleWake?.pauseNotice !== undefined &&
-    isSubagentObligationRetired(entry)
-  );
-}
-
-/** One in-flight evaluation per owed continuation; members of one cohort share it. */
-function requesterSettleWakeScope(entry: SubagentRunRecord): string {
-  const wake = entry.requesterSettleWake;
-  const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
-  if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
-    return `${owner}\0pause\0${entry.runId}\0${wake.rearmGeneration ?? ""}`;
-  }
-  return `${owner}\0${wake?.batchRunIds?.toSorted().join(",") ?? ""}\0${wake?.rearmGeneration ?? ""}`;
 }
 
 function clearRequesterSettleWait(context: SubagentLifecycleWakeContext, scope: string): void {
@@ -485,7 +468,18 @@ export function scheduleRequesterSettleWake(
                       descendantWait = { entry, deadline };
                     }
                   },
-                  transitionBatch: async (batch, state, onPublished) => {
+                  recordRequesterDelivery: async (batch, fact, onPublished) => {
+                    await mutateRequesterSettleWakeBatch(
+                      context,
+                      batch,
+                      entry.requesterSettleWake?.rearmGeneration,
+                      { kind: "requesterDelivery", fact },
+                      stateContext,
+                      {},
+                      onPublished,
+                    );
+                  },
+                  transitionBatch: async (batch, state, onPublished, requesterDelivery) => {
                     // New transitions need the whole batch; retained receipts may reconcile survivors.
                     if (!isSourceCurrent()) {
                       return;
@@ -533,7 +527,7 @@ export function scheduleRequesterSettleWake(
                             context,
                             members,
                             state.rearmGeneration,
-                            { kind: "transition", state },
+                            { kind: "transition", state, requesterDelivery },
                             stateContext,
                             receipt,
                             onPublished,

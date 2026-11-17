@@ -312,3 +312,21 @@ export function isRequesterYieldCohortMember(
     wake.batchRunIds.every((runId, index) => runId === batchRunIds[index])
   );
 }
+
+/** One in-flight evaluation per owed continuation; members of one cohort share it. */
+export function requesterSettleWakeScope(entry: SubagentRunRecord): string {
+  const wake = entry.requesterSettleWake;
+  const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
+  if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
+    return `${owner}\0pause\0${entry.runId}\0${wake.rearmGeneration ?? ""}`;
+  }
+  return `${owner}\0${wake?.batchRunIds?.toSorted().join(",") ?? ""}\0${wake?.rearmGeneration ?? ""}`;
+}
+
+export function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
+  return (
+    entry.pauseReason !== "sessions_yield" &&
+    entry.requesterSettleWake?.pauseNotice !== undefined &&
+    isSubagentObligationRetired(entry)
+  );
+}

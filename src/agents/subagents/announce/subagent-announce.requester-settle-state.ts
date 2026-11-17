@@ -62,10 +62,16 @@ export function resolveRequesterSettleRetryState(params: {
 }
 
 type RequesterSettleWakeBatchCallbacks = {
+  recordRequesterDelivery?: (
+    batch: readonly SubagentRunRecord[],
+    fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>,
+    onPublished: (entries: readonly SubagentRunRecord[]) => void,
+  ) => Promise<void>;
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
     onPublished?: (entries: readonly SubagentRunRecord[]) => void,
+    requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"],
   ) => void | Promise<void>;
   completeBatch: (
     batch: readonly SubagentRunRecord[],
@@ -236,4 +242,9 @@ export function resolveRequesterSettlePolicy(
   const requireVisibleReply =
     requesterYielded && !hasPrivateRows && completionRows.some(needsRequesterSettleFindings);
   return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
+}
+
+/** The bounded dispatch budget does not limit receipt-only settlement. */
+export function hasExhaustedRequesterSettleAttempts(state: RequesterSettleWakeState): boolean {
+  return state.status === "pending" && state.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS;
 }

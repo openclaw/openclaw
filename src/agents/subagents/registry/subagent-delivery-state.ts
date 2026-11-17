@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
@@ -86,6 +87,7 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? {
           delivery: {
             status: entry.delivery.status,
+            requesterDelivery: entry.delivery.requesterDelivery,
             ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
             ...(entry.delivery.suspendedAt !== undefined
               ? { suspendedAt: entry.delivery.suspendedAt }
@@ -266,8 +268,58 @@ export const markRequesterSettleWakePending = (
   } satisfies RequesterSettleWakeState;
 };
 
+export function recordRequesterDelivery(
+  entry: SubagentRunRecord,
+  fact: NonNullable<SubagentCompletionDeliveryState["requesterDelivery"]>,
+): void {
+  const delivery = ensureDeliveryState(entry);
+  if (delivery.requesterDelivery?.state === "consumed") {
+    return;
+  }
+  delivery.requesterDelivery = fact;
+  if (delivery.status === "pending" || delivery.status === "in_progress") {
+    delivery.disposition = undefined;
+    delivery.lastError = undefined;
+  }
+}
+
+/** A result committed to the requester transcript is never replayed. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
+}
+
+// The requester turn itself stopped; no answer exists to deliver.
+const REQUESTER_TURN_FAILURES = new Set(["requester_aborted", "requester_transcript_conflict"]);
+
+/**
+ * A committed result is delivered when its turn failed before answering. A turn that answered,
+ * or ended for a recorded reason, keeps its own outcome: a missed send stays a failure.
+ */
+export function resolveRequesterDeliveryOutcome(
+  entries: readonly SubagentRunRecord[],
+  outcome: SubagentAnnounceDeliveryResult | undefined,
+): SubagentAnnounceDeliveryResult | undefined {
+  const turnFailedBeforeAnswer =
+    outcome?.finalAssistantVisibleText === undefined &&
+    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
+  return outcome &&
+    !outcome.delivered &&
+    !outcome.storeReplaced &&
+    outcome.disposition !== "intentional_non_delivery" &&
+    outcome.disposition !== "ambiguous" &&
+    outcome.finalAssistantVisibleText === undefined &&
+    entries.length > 0 &&
+    turnFailedBeforeAnswer &&
+    entries.every(hasConsumedRequesterInput)
+    ? { delivered: true, path: "direct" }
+    : outcome;
+}
+
 export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   const delivery = ensureDeliveryState(entry);
+  const consumed =
+    delivery.requesterDelivery?.state === "consumed" ? delivery.requesterDelivery : undefined;
+  delivery.requesterDelivery = consumed;
   delivery.payload = undefined;
   delivery.createdAt = undefined;
   delivery.lastAttemptAt = undefined;
@@ -278,6 +330,7 @@ export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   delivery.suspendedReason = undefined;
   if (delivery.status !== "delivered" && delivery.status !== "failed") {
     clearDeliveryState(entry);
+    entry.delivery!.requesterDelivery = consumed;
   }
 };
 
@@ -335,4 +388,27 @@ export function completeRequesterSettleWakeState(entry: SubagentRunRecord): bool
   }
   entry.requesterSettleWake = undefined;
   return retire;
+}
+
+/** A consumed receipt cannot overwrite a previously recorded delivery refusal. */
+export function resolveConsumedRequesterDeliveryOutcome(
+  entries: readonly SubagentRunRecord[],
+): SubagentAnnounceDeliveryResult {
+  const failed = entries.find(
+    (entry) =>
+      entry.delivery?.status === "failed" ||
+      entry.delivery?.disposition === "ambiguous" ||
+      entry.delivery?.disposition === "permanent_failure" ||
+      entry.delivery?.disposition === "intentional_non_delivery" ||
+      entry.delivery?.lastDropReason !== undefined,
+  );
+  return failed
+    ? {
+        delivered: false,
+        path: "none",
+        disposition: failed.delivery?.disposition ?? "permanent_failure",
+        reason: "delivery_suppressed",
+        error: getDeliveryLastError(failed),
+      }
+    : { delivered: true, path: "direct" };
 }

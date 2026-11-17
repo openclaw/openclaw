@@ -13,6 +13,7 @@ type SubagentAnnounceDeliveryDisposition = NonNullable<
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
+  | "delivery_failed"
   | "delivery_suppressed"
   | "generated_media_missing"
   | "message_tool_delivery_missing"

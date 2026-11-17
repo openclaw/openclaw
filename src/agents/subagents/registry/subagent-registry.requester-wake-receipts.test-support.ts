@@ -72,6 +72,10 @@ function createRequesterWakeReceiptHolds(
         () => mutate(params),
       );
     }
+    if (params.operation.kind === "requesterDelivery") {
+      // Consumption publication is independent of the wake transition/retirement checkpoints.
+      return mutate(params);
+    }
     const phase = params.committed ? "reconcile" : params.operation.kind;
     return mutationScope.run({ entries: params.entries, phase }, async () => {
       const publication = publications[phase];

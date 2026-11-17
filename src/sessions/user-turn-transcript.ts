@@ -29,7 +29,10 @@ import {
   inheritUserTurnPromptReactionSource,
 } from "./user-turn-transcript-admission.js";
 import { persistUserTurnInput, stageUserTurnPendingInput } from "./user-turn-transcript-media.js";
-import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
+import {
+  createUserTurnProcessingCompletion,
+  notifyUserTurnObserver,
+} from "./user-turn-transcript-processing.js";
 import {
   capturePersistedModelPromptProjection,
   confirmPersistedSteerTargetRunId,
@@ -242,13 +245,10 @@ export function createUserTurnTranscriptRecorder(
       return;
     }
     persistedMessageNotified = true;
-    try {
-      void Promise.resolve(params.onMessagePersisted(notificationMessage)).catch(
-        handlePersistenceError,
-      );
-    } catch (error) {
-      handlePersistenceError(error);
-    }
+    notifyUserTurnObserver(
+      () => params.onMessagePersisted?.(notificationMessage),
+      handlePersistenceError,
+    );
   };
 
   const notifyOriginalInputCommitted = (commit: UserTurnOriginalInputCommit) => {
@@ -280,11 +280,7 @@ export function createUserTurnTranscriptRecorder(
         originalInputCommitNotifiers.get(source)?.(commit.anchor);
       }
     }
-    try {
-      void Promise.resolve(params.onOriginalInputCommitted?.(commit)).catch(handlePersistenceError);
-    } catch (error) {
-      handlePersistenceError(error);
-    }
+    notifyUserTurnObserver(() => params.onOriginalInputCommitted?.(commit), handlePersistenceError);
   };
 
   const recordAdmission = (
@@ -657,7 +653,11 @@ export function createUserTurnTranscriptRecorder(
       admissionHandler = handler;
     },
     markSentToProvider: () => {
+      if (sentToProvider) {
+        return;
+      }
       sentToProvider = true;
+      notifyUserTurnObserver(() => params.onInputSubmitted?.(), handlePersistenceError);
     },
     markRuntimePersistencePending: (pending) => {
       runtimePersistencePromise = pending;

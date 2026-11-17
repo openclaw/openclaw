@@ -134,3 +134,15 @@ export function createUserTurnProcessingCompletion(
     },
   };
 }
+
+/** Observer failures are diagnostic and cannot replace an accepted input's outcome. */
+export function notifyUserTurnObserver(
+  observer: () => void | Promise<void>,
+  onError: (error: unknown) => void,
+): void {
+  try {
+    void Promise.resolve(observer()).catch(onError);
+  } catch (error) {
+    onError(error);
+  }
+}
