@@ -755,7 +755,7 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-          OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
+          OPENCLAW_EXTENSION_BATCH_PARALLEL: ${{ github.event_name != 'workflow_dispatch' && (matrix.runner_label || matrix.runner) == 'boat' && 1 || 2 }}
           OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
           OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}

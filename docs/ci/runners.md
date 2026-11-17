@@ -518,7 +518,10 @@ canonical-main admission, protected environments, commands, and 120-minute deadl
 Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
 backend. Its manifest translates the resolved physical two-CPU Blacksmith class
 to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
-16 GiB). Logical planner labels and test concurrency stay unchanged. Manual
+16 GiB). The 8-GiB `boat` runner executes one extension config group at a time
+so separate compiler and worker owners do not overlap in that memory budget.
+`boat-large` and other runners retain two concurrent groups. Logical planner
+labels and per-group worker limits stay unchanged. Manual
 dispatches retain their existing `ubuntu-24.04` override; runner groups, coverage,
 runtime policies, artifact identities and deadlines are unchanged.
 
