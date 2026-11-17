@@ -24,6 +24,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
@@ -283,8 +284,43 @@ suite.define(() => {
           .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         // People opens Activity; going back returns to this page beside the Sessions list.
-        await page.goBack();
-        await selected.waitFor();
+        const readBackState = () =>
+          evaluateControlUiContext(
+            page,
+            (context, sessionKey) => {
+              const sidebar = document.querySelector<AppSidebarElement>("openclaw-app-sidebar");
+              const route = context.router.getState().matches[0];
+              const selected = sidebar?.querySelector(`[data-session-key="${sessionKey}"]`);
+              return {
+                page: window.location.pathname === "/sessions" ? "sessions" : "other",
+                route: route?.routeId,
+                routeStatus: route?.status,
+                sidebarRoute: sidebar?.activeRouteId,
+                navigationView: sidebar?.navigationView,
+                navigationVisible: sidebar?.navigationVisible,
+                navigationCollapsed: sidebar?.navigationCollapsed,
+                agentsMode: sidebar?.sidebarAgentsMode,
+                selectedPresent: Boolean(selected),
+                selectedVisible: Boolean(selected?.getClientRects().length),
+              };
+            },
+            key,
+          );
+        const beforeBack = await readBackState();
+        try {
+          await page.goBack();
+          await selected.waitFor();
+        } catch (error) {
+          try {
+            console.info("roster-back-diagnostic", {
+              beforeBack,
+              afterBack: await readBackState(),
+            });
+          } catch {
+            console.info("roster-back-diagnostic", { beforeBack, afterBack: "unavailable" });
+          }
+          throw error;
+        }
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await pauseVirtualClock(page);
         const beforeOther = lists.length;
