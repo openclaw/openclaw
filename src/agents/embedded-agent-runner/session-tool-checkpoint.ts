@@ -4,7 +4,7 @@ import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { describeSessionToolDefinition } from "./session-tool-definition.js";
 
 export type ToolDefinition = ReturnType<typeof describeSessionToolDefinition>;
-export type PublicationListing = ToolDefinition &
+type PublicationListing = ToolDefinition &
   Pick<AnyAgentTool, "label" | "async" | "catalogMode"> & { scope?: string };
 
 export type ToolSurface = {
