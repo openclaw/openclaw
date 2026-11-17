@@ -448,7 +448,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(validateConfigObject(repaired.cfg).ok).toBe(true);
   });
 
-  it("migrates legacy Claude CLI refs in agent entries", () => {
+  it("preserves legacy Claude CLI refs in agent entries with a conflicting API pin", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         entries: {
@@ -479,26 +479,25 @@ describe("normalizeCompatibilityConfigValues", () => {
       main: {
         description: "Primary agent",
         model: {
-          primary: "anthropic/claude-opus-4-7",
-          fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+          primary: "claude-cli/claude-opus-4-7",
+          fallbacks: ["claude-cli/claude-sonnet-4-6", "openai/gpt-5.5"],
         },
         models: {
+          "claude-cli/claude-opus-4-7": { alias: "Legacy Opus" },
           "anthropic/claude-opus-4-7": {
             alias: "Canonical Opus",
             agentRuntime: { id: "openclaw" },
           },
-          "anthropic/claude-sonnet-4-6": {
-            alias: "Sonnet",
-            agentRuntime: { id: "claude-cli" },
-          },
+          "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
         },
         modelPolicy: {
-          allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+          allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"],
         },
       },
       worker: { model: "openai/gpt-5.5" },
     });
-    expect(res.changes).toHaveLength(3);
+    expect(res.changes).toEqual([]);
+    expect(res.warnings).toEqual([expect.stringContaining("Kept legacy claude-cli/* model refs")]);
   });
 
   it("preserves runtime policy for allowlist-only legacy refs", () => {

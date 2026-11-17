@@ -109,7 +109,7 @@ export function normalizeCompatibilityConfigValues(
   normalizeLegacyNanoBananaSkill(next, changes);
   next = normalizeLegacyTalkConfig(next, changes);
   normalizeLegacyOpenAIModelProviderApi(next, changes);
-  next = normalizeLegacyRuntimeModelRefs(next, changes, options.blockedModelIdentities);
+  next = normalizeLegacyRuntimeModelRefs(next, changes, warnings, options.blockedModelIdentities);
   normalizeLegacyOllamaNativeNumCtxParams(next, changes);
   normalizeLegacyMistralModelDefaults(next, changes);
   stripRetiredTuningKnobs(next, changes);
