@@ -14,9 +14,10 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { lstatIfExists } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { appendShellProfilePath, resolveShellConfigRoot } from "../infra/shell-profile.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
 import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
-import type { GatewayServiceCommandConfig } from "./service-types.js";
+import type { GatewayServiceInstallArgs } from "./service-types.js";
 
 const signature = "#!/bin/sh\n# OpenClaw managed terminal CLI\n";
 type Snapshot = Awaited<ReturnType<typeof readRegularFile>> | undefined;
@@ -50,6 +51,8 @@ async function publish(
     filePath: file,
     content,
     mode,
+    dirMode: "preserve",
+    destinationHardlinks: "reject",
     tempPrefix: ".openclaw-terminal",
     assertBeforeMutation: () => {
       if (resolvePathViaExistingAncestorSync(file) !== physical) {
@@ -85,10 +88,7 @@ async function publish(
 /** Install only the verified package CLI, preserving an established terminal selection. */
 export async function installGatewayTerminalCli(params: {
   env: NodeJS.ProcessEnv;
-  command: Pick<
-    GatewayServiceCommandConfig,
-    "programArguments" | "workingDirectory" | "environment"
-  >;
+  command: Pick<GatewayServiceInstallArgs, "programArguments" | "workingDirectory" | "environment">;
   warn: (message: string) => void;
 }): Promise<void> {
   if (process.platform === "win32") {
@@ -259,7 +259,7 @@ async function installShellPath(params: {
     }
     try {
       const previous = await snapshot(target.file);
-      const current = previous?.buffer.toString("utf8") ?? "";
+      const current = previous ? decodeUtf8Input(previous.buffer, target.file) : "";
       // Append after normal initialization, and never precede a deliberate command selection.
       const line =
         target.shell === "fish"
