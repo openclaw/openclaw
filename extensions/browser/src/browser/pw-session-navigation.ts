@@ -84,6 +84,7 @@ export async function assertPageNavigationCompletedSafely(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   const policySignal = opts.signal ? { signal: opts.signal } : {};
   try {
@@ -143,6 +144,7 @@ export async function withPageNavigationRequestGuard<T>(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   if (
     !navigationPolicy.ssrfPolicy &&
@@ -374,6 +376,7 @@ export async function gotoPageWithNavigationGuard(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   let blockedError: unknown = null;
 

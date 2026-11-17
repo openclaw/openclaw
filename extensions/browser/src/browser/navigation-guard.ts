@@ -50,6 +50,8 @@ export function parseBrowserNavigationUrl(url: string): URL {
 
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
+  /** Configured policy retained by the tab, without invocation-scoped grants. */
+  standingSsrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
   /** Live authority for an invocation-scoped navigation exception. */
   assertNavigationCurrent?: () => void;
@@ -67,10 +69,14 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: Pick<BrowserNavigationPolicyOptions, "browserProxyMode" | "assertNavigationCurrent">,
+  opts?: Pick<
+    BrowserNavigationPolicyOptions,
+    "browserProxyMode" | "assertNavigationCurrent" | "standingSsrfPolicy"
+  >,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.standingSsrfPolicy ? { standingSsrfPolicy: opts.standingSsrfPolicy } : {}),
     ...(opts?.assertNavigationCurrent
       ? { assertNavigationCurrent: opts.assertNavigationCurrent }
       : {}),

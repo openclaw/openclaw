@@ -13,6 +13,8 @@ export function resolveBrowserNavigationPolicy(
   const { resolved } = state;
   const policy = withBrowserNavigationPolicy(resolved.ssrfPolicy, {
     browserProxyMode: resolveBrowserNavigationProxyMode({ resolved, profile }),
+    // The automatic loopback grant must not widen policy between invocations.
+    standingSsrfPolicy: resolved.ssrfPolicy,
   });
   const scope = getBrowserRequestScope();
   const assertInvocationCurrent = scope?.assertInvocationCurrent;

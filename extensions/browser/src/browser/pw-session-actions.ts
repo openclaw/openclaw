@@ -512,6 +512,7 @@ export async function createPageViaPlaywright(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   await assertBrowserNavigationAllowed({
     url: targetUrl,
