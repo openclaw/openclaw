@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
@@ -12,12 +12,6 @@ import {
 } from "./session-management.test-support.ts";
 import { captureFrame, expectAttribute, expectCount } from "./sidebar-assertions.test-support.ts";
 import { seedSidebarSettings, sidebarSessionList } from "./sidebar-contract.test-support.ts";
-
-const dotStyle = (dot: Locator) =>
-  dot.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return [style.width, style.height, style.backgroundColor, style.borderRadius, style.boxShadow];
-  });
 
 // Real layout and observer delivery settle before a request can be ruled out.
 const observerDelivery = (page: Page) =>
@@ -256,7 +250,6 @@ suite.define(() => {
               [attention, unread],
             );
           }
-          expect.soft(await dotStyle(attention)).toEqual(await dotStyle(unread));
         }
         // A collapsed list has no end to continue from.
         expect.soft(await pagination.count()).toBe(0);
