@@ -291,6 +291,19 @@ it.each(["ready", "retired", "failure", "timeout", "cancelled"] as const)(
   },
 );
 
+it("keeps the published owner's latest accepted catalog after a lookup timeout", async () => {
+  const accepted = nativeEntry({ reasoning: false });
+  const loadNativeModelCatalog = vi.fn(async () => {
+    throw new Error("read timed out");
+  });
+  publishedSnapshotMock.mockReturnValue({
+    ...owner({}, [nativeEntry()]),
+    loadNativeModelCatalog,
+    readFullModelCatalog: () => catalog([accepted]),
+  });
+  await expect(readThinking({}, { agentRuntime: "native-one" })).resolves.toEqual([accepted]);
+});
+
 it.each([
   { configured: [], before: [entry] },
   { configured: [entry], before: undefined },
