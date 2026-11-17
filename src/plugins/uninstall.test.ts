@@ -17,6 +17,20 @@ import {
   cleanupTrackedTempDirsAsync,
   makeTrackedTempDirAsync,
 } from "./test-helpers/fs-fixtures.js";
+import {
+  createInstalledNpmPluginFixture,
+  createSinglePluginEntries,
+  createNpmInstallRecord,
+  createGitInstallRecord,
+  createMarketplaceInstallRecord,
+  createPathInstallRecord,
+  createPluginConfig,
+  createSinglePluginWithEmptySlotsConfig,
+  createSingleNpmInstallConfig,
+  createKitchenSinkInstallConfig,
+  createPluginDirFixture,
+  writePackageJson,
+} from "./test-helpers/uninstall-fixtures.js";
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
@@ -31,9 +45,6 @@ const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: runCommandWithTimeoutMock,
 }));
-
-type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
-type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
 type TestUninstallParams = Parameters<typeof planPluginUninstall>[0] & {
   runtimePluginIds?: readonly string[];
@@ -62,42 +73,6 @@ async function uninstallPlugin(params: TestUninstallParams) {
     pluginId: plan.pluginId,
     actions: { ...plan.actions, directory: directory.directoryRemoved },
     warnings: directory.warnings,
-  };
-}
-
-async function createInstalledNpmPluginFixture(params: {
-  baseDir: string;
-  pluginId?: string;
-}): Promise<{
-  pluginId: string;
-  extensionsDir: string;
-  pluginDir: string;
-  config: OpenClawConfig;
-}> {
-  const pluginId = params.pluginId ?? "my-plugin";
-  const extensionsDir = path.join(params.baseDir, "extensions");
-  const pluginDir = resolvePluginInstallDir(pluginId, extensionsDir);
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
-
-  return {
-    pluginId,
-    extensionsDir,
-    pluginDir,
-    config: {
-      plugins: {
-        entries: {
-          [pluginId]: { enabled: true },
-        },
-        installs: {
-          [pluginId]: {
-            source: "npm",
-            spec: `${pluginId}@1.0.0`,
-            installPath: pluginDir,
-          },
-        },
-      },
-    },
   };
 }
 
@@ -146,120 +121,6 @@ function expectSuccessfulUninstallActions(
   return successfulResult;
 }
 
-function createSinglePluginEntries(pluginId = "my-plugin") {
-  return {
-    [pluginId]: { enabled: true },
-  };
-}
-
-function createNpmInstallRecord(pluginId = "my-plugin", installPath?: string): PluginInstallRecord {
-  return {
-    source: "npm",
-    spec: `${pluginId}@1.0.0`,
-    ...(installPath ? { installPath } : {}),
-  };
-}
-
-function createGitInstallRecord(pluginId = "my-plugin", installPath?: string): PluginInstallRecord {
-  return {
-    source: "git",
-    spec: `git:https://github.com/acme/${pluginId}.git`,
-    gitUrl: `https://github.com/acme/${pluginId}.git`,
-    gitCommit: "abc123",
-    ...(installPath ? { installPath } : {}),
-  };
-}
-
-function createMarketplaceInstallRecord(installPath: string): PluginInstallRecord {
-  return {
-    source: "marketplace",
-    installPath,
-    marketplaceSource: "release-fixtures",
-    marketplacePlugin: "my-plugin",
-  };
-}
-
-function createPathInstallRecord(
-  installPath = "/path/to/plugin",
-  sourcePath = installPath,
-): PluginInstallRecord {
-  return {
-    source: "path",
-    sourcePath,
-    installPath,
-  };
-}
-
-function createPluginConfig(params: {
-  entries?: Record<string, { enabled: boolean }>;
-  installs?: Record<string, PluginInstallRecord>;
-  allow?: string[];
-  deny?: string[];
-  enabled?: boolean;
-  slots?: PluginConfig["slots"];
-  loadPaths?: string[];
-  channels?: OpenClawConfig["channels"];
-}): OpenClawConfig {
-  const plugins: PluginConfig = {};
-  if (params.entries) {
-    plugins.entries = params.entries;
-  }
-  if (params.installs) {
-    plugins.installs = params.installs;
-  }
-  if (params.allow) {
-    plugins.allow = params.allow;
-  }
-  if (params.deny) {
-    plugins.deny = params.deny;
-  }
-  if (params.enabled !== undefined) {
-    plugins.enabled = params.enabled;
-  }
-  if (params.slots) {
-    plugins.slots = params.slots;
-  }
-  if (params.loadPaths) {
-    plugins.load = { paths: params.loadPaths };
-  }
-  return {
-    ...(Object.keys(plugins).length > 0 ? { plugins } : {}),
-    ...(params.channels ? { channels: params.channels } : {}),
-  };
-}
-
-function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
-  return createPluginConfig({
-    entries: createSinglePluginEntries(),
-    slots: {},
-  });
-}
-
-function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
-  return createPluginConfig({
-    entries: createSinglePluginEntries(),
-    installs: {
-      "my-plugin": createNpmInstallRecord("my-plugin", installPath),
-    },
-  });
-}
-
-function createKitchenSinkInstallConfig(
-  installPath: string,
-  entries?: Record<string, { enabled: boolean }>,
-): OpenClawConfig {
-  return createPluginConfig({
-    entries,
-    installs: {
-      "openclaw-kitchen-sink-fixture": {
-        source: "npm",
-        spec: "@openclaw/kitchen-sink@1.0.0",
-        installPath,
-      },
-    },
-  });
-}
-
 function planKitchenSinkUninstall(
   pluginDir: string,
   extensionsDir: string,
@@ -271,20 +132,6 @@ function planKitchenSinkUninstall(
     deleteFiles: true,
     extensionsDir,
   });
-}
-
-async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
-  const pluginDir = path.join(baseDir, pluginId);
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
-  return pluginDir;
-}
-
-async function writePackageJson(directory: string, manifest: Record<string, unknown>) {
-  await fs.writeFile(
-    path.join(directory, "package.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
 }
 
 async function expectPathAccessState(pathToCheck: string, expected: "exists" | "missing") {
@@ -1910,16 +1757,24 @@ describe("uninstallPlugin", () => {
     {
       name: "deletes managed git install repos outside the extensions directory",
       keepSibling: false,
+      directory: undefined,
     },
     {
       name: "keeps non-empty managed git install parents after deleting the repo",
       keepSibling: true,
+      directory: undefined,
     },
-  ])("$name", async ({ keepSibling }) => {
+    {
+      name: "deletes the entire managed Git checkout for a selected nested package",
+      keepSibling: false,
+      directory: "plugins/nested",
+    },
+  ])("$name", async ({ keepSibling, directory }) => {
     const stateDir = path.join(tempDir, "state");
     const extensionsDir = path.join(stateDir, "extensions");
     const installParent = path.join(stateDir, "git", "git-abc123");
-    const installPath = path.join(installParent, "repo");
+    const repoPath = path.join(installParent, "repo");
+    const installPath = path.join(repoPath, directory ?? ".");
     const siblingPath = path.join(installParent, "keep.txt");
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
@@ -1930,7 +1785,12 @@ describe("uninstallPlugin", () => {
     const result = await uninstallPlugin({
       config: createPluginConfig({
         entries: createSinglePluginEntries(),
-        installs: { "my-plugin": createGitInstallRecord("my-plugin", installPath) },
+        installs: {
+          "my-plugin": {
+            ...createGitInstallRecord("my-plugin", installPath),
+            ...(directory ? { gitDirectory: directory } : {}),
+          },
+        },
       }),
       pluginId: "my-plugin",
       deleteFiles: true,
@@ -1938,7 +1798,7 @@ describe("uninstallPlugin", () => {
     });
 
     expectSuccessfulUninstallActions(result, { directory: true });
-    await expectPathAccessState(installPath, "missing");
+    await expectPathAccessState(repoPath, "missing");
     await expectPathAccessState(
       keepSibling ? siblingPath : installParent,
       keepSibling ? "exists" : "missing",

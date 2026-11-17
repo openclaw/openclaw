@@ -168,6 +168,15 @@ describe("plugin install mutation-free preflight", () => {
     ...[" clawhub:demo@ ", "demo@", "@composio/composio@", "unknown:demo"].map(
       (raw): [string[], string] => [[raw], `Unsupported ClawHub plugin spec: ${raw}`],
     ),
+    [
+      ["npm:demo", "--directory", "plugins/demo"],
+      "--directory is only supported with git: installs.",
+    ],
+    [["demo", "--directory", "plugins/demo"], "--directory is only supported with git: installs."],
+    [
+      ["demo", "--marketplace", "local/repo", "--directory", "plugins/demo"],
+      "--directory is only supported with git: installs.",
+    ],
     [["\t"], "Plugin install source must not be empty."],
     [["demo", "--marketplace", ""], "--marketplace requires a non-empty source."],
     [["demo", "--marketplace", "\t"], "--marketplace requires a non-empty source."],

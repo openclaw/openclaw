@@ -22,6 +22,7 @@ export type RunPluginInstallCommandParams = {
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
+    directory?: string;
   };
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
@@ -129,6 +130,12 @@ export async function resolvePluginInstallPreflight(params: RunPluginInstallComm
     : sourcePlan
       ? resolveSourceOptionError(opts, sourcePlan)
       : "Plugin install source could not be resolved.";
+  if (params.opts.directory !== undefined) {
+    if (!sourcePlan || sourcePlan.request.source !== "git" || marketplace) {
+      return { ok: false as const, error: "--directory is only supported with git: installs." };
+    }
+    sourcePlan.request = { ...sourcePlan.request, directory: params.opts.directory };
+  }
   if (optionError) {
     return { ok: false as const, error: optionError };
   }

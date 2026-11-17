@@ -660,6 +660,7 @@ describe("plugins cli install", () => {
   it("installs Git sources directly and records the selected revision", async () => {
     primeSuccessfulPluginPersistence("demo");
     const spec = "git:github.com/acme/demo@v1.2.3";
+    const directory = "plugins/demo";
     installPluginFromGitSpecMock.mockResolvedValue({
       ok: true,
       pluginId: "demo",
@@ -669,17 +670,20 @@ describe("plugins cli install", () => {
         url: "https://github.com/acme/demo.git",
         ref: "v1.2.3",
         commit: "abc123",
+        directory,
         resolvedAt: "2026-04-30T00:00:00.000Z",
       },
     });
-    await installAcknowledged(spec);
-    expect(mockCallArg(installPluginFromGitSpecMock)).toMatchObject({ spec, mode: "update" });
+    await installAcknowledged(spec, "--directory", directory);
+    const gitOptions = mockCallArg(installPluginFromGitSpecMock);
+    expect(gitOptions).toMatchObject({ spec, mode: "update", directory });
     expectNoCalls(installNpm, installClawHub);
     expect(persistedInstallRecord("demo")).toMatchObject({
       source: "git",
       spec,
       gitRef: "v1.2.3",
       gitCommit: "abc123",
+      gitDirectory: directory,
     });
   });
 

@@ -454,6 +454,35 @@ it("selects the canonical installed artifact integrity in precedence order", () 
   ]);
 });
 
+it.skipIf(process.platform === "win32")(
+  "distinguishes consent owners whose paths differ by trailing whitespace",
+  async () => {
+    const parentDir = createArtifactFixture({});
+    const siblingDir = path.join(parentDir, "package");
+    const currentDir = path.join(parentDir, "package ");
+    const files = pluginFiles("plugin", { contracts: { tools: ["read"] } });
+    writeArtifacts(siblingDir, files);
+    writeArtifacts(currentDir, files);
+    const stagedDir = createArtifactFixture(files);
+    const sibling = acceptedRecord(siblingDir, "sha512-sibling");
+    const current = acceptedRecord(currentDir, "sha512-current");
+    const artifact = {
+      ...makeArtifact(stagedDir, "plugin", "update"),
+      currentArtifactDir: currentDir,
+    };
+
+    await expect(
+      createConsent({ previousRecords: { sibling } }).onBeforePluginArtifactCommit(artifact),
+    ).rejects.toMatchObject({ capabilityConsent: { pluginId: "plugin" } });
+    const consent = createConsent({ previousRecords: { sibling, current } });
+    await consent.onBeforePluginArtifactCommit(artifact);
+    expect(
+      consent.applyAcceptedSurface<PluginInstallRecord>("plugin", { source: "npm" })
+        .acceptedSurface,
+    ).toEqual(current.acceptedSurface);
+  },
+);
+
 it.each(["missing", "invalid"])(
   "requires fresh review to repair a %s previous artifact",
   async (condition) => {

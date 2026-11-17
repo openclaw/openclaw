@@ -33,6 +33,7 @@ import {
 import { addMissingRequiredPluginDiagnostics } from "./discovery-required-plugins.js";
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { resolveRecordedPluginPath } from "./install-paths.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
@@ -242,11 +243,10 @@ function prepareInstalledPluginPaths(
   const byPath = new Map<string, InstalledPluginRecordPath>();
   const installedPluginDirKeys = new Set<string>();
   const managedPluginDirs = new Set<string>();
-  const resolveRecordPath = (rawPath: string | undefined) =>
-    typeof rawPath === "string" && rawPath.trim() ? resolveUserPath(rawPath, env) : undefined;
   for (const [installOwner, record] of Object.entries(installRecords ?? {})) {
-    const installPath = resolveRecordPath(record.installPath);
-    const sourcePath = resolveRecordPath(record.sourcePath);
+    const [installPath, sourcePath] = [record.installPath, record.sourcePath].map((rawPath) =>
+      rawPath?.trim() ? resolveRecordedPluginPath(rawPath, env) : undefined,
+    );
     // Discovery follows the preferred install path, even when it is missing.
     // Both paths remain managed so a source copy cannot bypass built-entry checks.
     for (const recordedPath of [installPath, sourcePath]) {
@@ -808,7 +808,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv) {
       rawPath: string;
     },
   ) {
-    const resolved = resolveUserPath(params.rawPath, env);
+    const resolved = resolveRecordedPluginPath(params.rawPath, env);
     const stat = inspectPluginLoadPath(resolved, params.origin, diagnostics);
     if (!stat) {
       return;
@@ -873,7 +873,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv) {
     const firstConfigured = candidates.length;
     for (const loadPath of loadPaths) {
       if (typeof loadPath === "string" && loadPath.trim()) {
-        discoverFromPath({ rawPath: loadPath.trim(), origin: "config", workspaceDir });
+        discoverFromPath({ rawPath: loadPath, origin: "config", workspaceDir });
       }
     }
     // Explicit operator selection is its own fact: host-owned aliases keep bundled

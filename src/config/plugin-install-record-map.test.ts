@@ -29,6 +29,23 @@ describe("plugin install record maps", () => {
     expect(Object.getPrototypeOf(records)).toBeNull();
   });
 
+  it("round-trips the selected Git package directory", () => {
+    const records = parsePluginInstallRecordMap({
+      demo: {
+        source: "git",
+        spec: "git:github.com/acme/repo@main",
+        gitDirectory: " plugins/demo ",
+        installPath: "/state/git/repo/ plugins/demo ",
+      },
+    });
+    expect(records?.demo?.gitDirectory).toBe(" plugins/demo ");
+    expect(records?.demo?.installPath).toBe("/state/git/repo/ plugins/demo ");
+    expect(
+      parsePluginInstallRecordMap(JSON.parse(serializePluginInstallRecordMap(records!))),
+    ).toEqual(records);
+    expect(parsePluginInstallRecordMap({ demo: { source: "git", gitDirectory: 42 } })).toBeNull();
+  });
+
   it("validates retained context-engine ownership as structured install metadata", () => {
     const value = {
       demo: { source: "npm", contextEngineIdsByPlugin: { child: ["canonical-engine"] } },

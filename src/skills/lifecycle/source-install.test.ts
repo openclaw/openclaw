@@ -311,6 +311,72 @@ describe("installSkillFromSource", () => {
     },
   );
 
+  it("installs only the selected Git directory at the requested commit and records it", async () => {
+    const repoDir = path.join(root, "repo");
+    await initGitSkillRepo(repoDir, "root-skill");
+    await writeSkill(path.join(repoDir, "skills", "nested"), { name: "nested-skill" });
+    await runGitOk(repoDir, ["add", "."]);
+    await runGitOk(repoDir, ["commit", "-m", "add nested skill"]);
+    const commit = await runGitOk(repoDir, ["rev-parse", "HEAD"]);
+    await writeSkill(path.join(repoDir, "skills", "nested"), { name: "newer-skill" });
+    await runGitOk(repoDir, ["add", "."]);
+    await runGitOk(repoDir, ["commit", "-m", "change nested skill"]);
+
+    const result = await install({
+      spec: `git:file://${repoDir}@${commit}`,
+      directory: "skills/nested",
+    });
+    expect(result).toMatchObject({
+      slug: "nested-skill",
+      git: { commit, directory: "skills/nested" },
+    });
+    await expect(fs.readFile(path.join(result.targetDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "nested-skill",
+    );
+    await expect(fs.access(path.join(result.targetDir, "skills"))).rejects.toThrow();
+    const origin = JSON.parse(
+      await fs.readFile(path.join(result.targetDir, ".openclaw/source-origin.json"), "utf8"),
+    );
+    expect(origin).toMatchObject({
+      source: "git",
+      git: { ref: commit, commit, directory: "skills/nested" },
+    });
+  });
+
+  it("rejects non-Git selectors and Git directory traversal before installation", async () => {
+    await writeSkill(sourceDir);
+    await expect(install({ directory: "nested" })).rejects.toThrow("only supported for git");
+    for (const directory of [
+      "../escape",
+      "skills/../../escape",
+      "/absolute",
+      "C:/absolute",
+      "skills\\escape",
+      "",
+    ]) {
+      await expect(install({ spec: "git:owner/repo", directory })).rejects.toThrow(
+        "repository-relative",
+      );
+    }
+    await expect(fs.access(path.join(workspaceDir, "skills"))).rejects.toThrow();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a selected Git symlink escaping the fetched repository",
+    async () => {
+      const repoDir = path.join(root, "repo");
+      await initGitSkillRepo(repoDir);
+      await writeSkill(sourceDir, { name: "outside" });
+      await fs.symlink(sourceDir, path.join(repoDir, "escape"), "dir");
+      await runGitOk(repoDir, ["add", "."]);
+      await runGitOk(repoDir, ["commit", "-m", "add escaping selector"]);
+      await expect(install({ spec: `git:file://${repoDir}`, directory: "escape" })).rejects.toThrow(
+        "escapes the repository",
+      );
+      await expect(fs.access(path.join(workspaceDir, "skills"))).rejects.toThrow();
+    },
+  );
+
   it.each(["GIT_DIR", "GIT_CONFIG_SYSTEM"] as const)(
     "isolates git commands from inherited %s",
     async (variable) => {

@@ -54,6 +54,7 @@ const InstallRecordShape = {
   gitUrl: z.string().optional(),
   gitRef: z.string().optional(),
   gitCommit: z.string().optional(),
+  gitDirectory: z.string().optional(),
 } as const;
 
 const InstallRecordSchema = z.object(InstallRecordShape);

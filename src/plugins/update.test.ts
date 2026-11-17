@@ -19,6 +19,7 @@ import {
 } from "./installed-plugin-index-records.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import { expectOutcome, expectUpdateFields } from "./test-helpers/update-assertions.js";
 
 const APP_ROOT = "/app";
 
@@ -519,19 +520,6 @@ function gitInstallCall(index = 0): Record<string, unknown> | undefined {
 function npmViewCall(): [unknown, Record<string, unknown>] | undefined {
   const calls = runCommandWithTimeoutMock.mock.calls as [unknown, Record<string, unknown>][];
   return calls.find(([argv]) => Array.isArray(argv) && npmCommandArgs(argv)?.[0] === "view");
-}
-
-function expectRecordFields(
-  actual: Record<string, unknown> | undefined,
-  expected: Record<string, unknown>,
-) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual?.[key]).toEqual(value);
-  }
-}
-
-function expectOutcome(result: { outcomes: unknown[] }, expected: Record<string, unknown>) {
-  expect(result.outcomes).toEqual([expected]);
 }
 
 function expectNpmUpdateCall(params: {
@@ -1514,7 +1502,7 @@ describe("updateNpmInstalledPlugins", () => {
       expect(npmInstallCall()?.expectedPluginId).toBe("msteams");
     }
     expect(result.changed).toBe(true);
-    expectRecordFields(result.config.plugins?.installs?.msteams, {
+    expectUpdateFields(result.config.plugins?.installs?.msteams, {
       source: "npm",
       version: "2026.5.28-beta.3",
       resolvedName: "@openclaw/msteams",
@@ -1803,7 +1791,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.outcomes).toHaveLength(1);
-    expectRecordFields(result.outcomes[0], {
+    expectUpdateFields(result.outcomes[0], {
       pluginId: "lossless-claw",
       status: "unchanged",
       currentVersion: "0.9.0",
@@ -2096,7 +2084,7 @@ describe("updateNpmInstalledPlugins", () => {
       enabled: false,
       config: { preserved: true },
     });
-    expectRecordFields(result.config.plugins?.installs?.codex, {
+    expectUpdateFields(result.config.plugins?.installs?.codex, {
       source: "npm",
       spec: "@openclaw/codex@2026.5.3",
       version: "2026.5.3",
@@ -2104,7 +2092,7 @@ describe("updateNpmInstalledPlugins", () => {
       resolvedVersion: "2026.5.3",
       resolvedSpec: "@openclaw/codex@2026.5.3",
     });
-    expectRecordFields(result.outcomes[0], {
+    expectUpdateFields(result.outcomes[0], {
       pluginId: "codex",
       status: "unchanged",
       currentVersion: "2026.5.3",
@@ -2161,7 +2149,7 @@ describe("updateNpmInstalledPlugins", () => {
         "demo",
         { dryRun: true, ...(probe ? { syncOfficialPluginInstalls: false } : {}) },
       );
-      expectRecordFields(result.outcomes[0], {
+      expectUpdateFields(result.outcomes[0], {
         pluginId: "demo",
         status,
         currentVersion: "1.2.3",
@@ -2245,7 +2233,7 @@ describe("updateNpmInstalledPlugins", () => {
         baseUrl: undefined,
         timeoutMs: undefined,
       });
-      expectRecordFields(result.outcomes[0], {
+      expectUpdateFields(result.outcomes[0], {
         pluginId: "diagnostics-otel",
         status: "unchanged",
         currentVersion: "2026.9.1",
@@ -2436,7 +2424,7 @@ describe("updateNpmInstalledPlugins", () => {
       expect.any(Function),
       undefined,
     );
-    expectRecordFields(result.config.plugins?.installs?.demo, {
+    expectUpdateFields(result.config.plugins?.installs?.demo, {
       ...updated.clawhub,
       spec: "clawhub:demo@1.2.3",
       installPath: "/tmp/demo",
@@ -2483,7 +2471,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
     expect(result.outcomes).toHaveLength(1);
-    expectRecordFields(result.outcomes[0], { pluginId, status: "skipped" });
+    expectUpdateFields(result.outcomes[0], { pluginId, status: "skipped" });
     expect(result.outcomes[0]?.message).toContain(`bundled version ${bundledVersion} is newer`);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(`bundled version ${bundledVersion} is newer`);
@@ -2528,7 +2516,7 @@ describe("updateNpmInstalledPlugins", () => {
       hooks: { allowPromptModification: false },
     });
     expect(result.config.plugins?.entries?.["fish-audio"]).toBeUndefined();
-    expectRecordFields(result.config.plugins?.installs?.["fish-audio-speech"], {
+    expectUpdateFields(result.config.plugins?.installs?.["fish-audio-speech"], {
       source: "npm",
       spec: "@openclaw/fish-audio-speech",
       installPath: "/tmp/fish-audio-speech",
@@ -2740,7 +2728,7 @@ describe("updateNpmInstalledPlugins", () => {
         ]),
       );
       expect(result.config.plugins?.installs?.qqbot).toBeUndefined();
-      expectRecordFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
+      expectUpdateFields(result.config.plugins?.installs?.["openclaw-qqbot"], {
         source: "npm",
         spec: "@tencent-connect/openclaw-qqbot@2.0.1",
         installPath: canonicalInstallPath,
@@ -2804,6 +2792,7 @@ describe("updateNpmInstalledPlugins", () => {
         url: "https://github.com/acme/demo.git",
         ref: "main",
         commit: "def456",
+        directory: "plugins/demo",
         resolvedAt: "2026-04-30T00:00:00.000Z",
       };
       (git ? installPluginFromGitSpecMock : installPluginFromMarketplaceMock).mockResolvedValue({
@@ -2820,13 +2809,13 @@ describe("updateNpmInstalledPlugins", () => {
           [pluginId]: {
             source,
             installPath,
-            ...(git ? { spec, gitCommit: "abc123" } : marketplace),
+            ...(git ? { spec, gitCommit: "abc123", gitDirectory: "plugins/demo" } : marketplace),
           },
         }),
         pluginId,
       );
       expect(result.changed).toBe(true);
-      expectRecordFields(result.config.plugins?.installs?.[pluginId], {
+      expectUpdateFields(result.config.plugins?.installs?.[pluginId], {
         source,
         installPath,
         version: "1.3.0",
@@ -2836,11 +2825,13 @@ describe("updateNpmInstalledPlugins", () => {
               gitUrl: gitMetadata.url,
               gitRef: gitMetadata.ref,
               gitCommit: gitMetadata.commit,
+              gitDirectory: "plugins/demo",
             }
           : marketplace),
       });
       if (git) {
         expect(gitInstallCall()?.spec).toBe(spec);
+        expect(gitInstallCall()?.directory).toBe("plugins/demo");
         expect(gitInstallCall()?.expectedPluginId).toBe("demo");
         expect(gitInstallCall()?.mode).toBe("update");
         expectOutcome(result, {
@@ -2897,7 +2888,7 @@ describe("syncPluginsForUpdateChannel", () => {
           });
           expect(result.changed).toBe(!homeRelative);
           expect(result.config.plugins?.load?.paths).toEqual([recordedPath]);
-          expectRecordFields(result.config.plugins?.installs?.feishu, {
+          expectUpdateFields(result.config.plugins?.installs?.feishu, {
             source: "path",
             sourcePath: recordedPath,
             installPath: recordedPath,
@@ -2938,7 +2929,7 @@ describe("syncPluginsForUpdateChannel", () => {
         },
       });
       expect(result.summary.switchedToNpm).toEqual([pluginId]);
-      expectRecordFields(result.config.plugins?.installs?.[pluginId], {
+      expectUpdateFields(result.config.plugins?.installs?.[pluginId], {
         source: "npm",
         spec,
         installPath,
@@ -3090,7 +3081,7 @@ describe("syncPluginsForUpdateChannel", () => {
       });
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(result.changed).toBe(false);
-      expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], {
+      expectUpdateFields(result.config.plugins?.installs?.["legacy-chat"], {
         source: "path",
         ...(reason === "custom-path" ? { sourcePath: customPath } : {}),
       });
@@ -3134,7 +3125,7 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.config.plugins?.entries?.[targetPluginId]).toEqual({ enabled: true });
     expect(Object.hasOwn(result.config.plugins?.installs ?? {}, targetPluginId)).toBe(true);
     expect(Object.getPrototypeOf(result.config.plugins?.installs ?? {})).toBe(Object.prototype);
-    expectRecordFields(result.config.plugins?.installs?.[targetPluginId], {
+    expectUpdateFields(result.config.plugins?.installs?.[targetPluginId], {
       source: "npm",
       spec: npmPackageName,
       installPath: `/tmp/${targetPluginId}`,
@@ -3184,7 +3175,7 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.load?.paths).toEqual(["/workspace/plugins/other"]);
-    expectRecordFields(result.config.plugins?.installs?.["legacy-chat"], expectedInstall);
+    expectUpdateFields(result.config.plugins?.installs?.["legacy-chat"], expectedInstall);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

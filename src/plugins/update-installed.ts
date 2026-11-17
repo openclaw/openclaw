@@ -8,7 +8,6 @@ import {
   readInstalledPackageManifest,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
-import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import {
   resolveBundledPluginSources,
@@ -23,7 +22,7 @@ import {
   NpmChannelResolutionError,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
+import { resolveDefaultPluginExtensionsDir, resolveRecordedPluginPath } from "./install-paths.js";
 import {
   copyPluginInstallTransactionRequest,
   retainPluginInstallTransaction,
@@ -328,8 +327,8 @@ async function runInstalledPluginUpdate(
 
     let installPath: string;
     try {
-      installPath = resolveUserPath(
-        record.installPath?.trim() || resolvePluginInstallDir(pluginId),
+      installPath = resolveRecordedPluginPath(
+        record.installPath?.trim() ? record.installPath : resolvePluginInstallDir(pluginId),
       );
     } catch (err) {
       recordFailure(pluginId, `Invalid install path for "${pluginId}": ${String(err)}`);
@@ -655,6 +654,7 @@ async function runInstalledPluginUpdate(
         gitUrl: gitResult.git.url,
         gitRef: gitResult.git.ref,
         gitCommit: gitResult.git.commit,
+        gitDirectory: gitResult.git.directory,
       };
     } else {
       const marketplaceResult = result as MarketplacePluginUpdateSuccess;

@@ -1,8 +1,8 @@
 /** Builds refresh projections; the installed-index writer owns publication and receipts. */
 import { existsSync } from "node:fs";
-import { resolveUserPath } from "../infra/home-dir.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginCandidate } from "./discovery.types.js";
+import { resolveRecordedPluginPath } from "./install-paths.js";
 import type { PluginInstallRoots } from "./install-root-context.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -61,9 +61,9 @@ function hasCompletePolicyRefreshProjection(
     if (installOwners.has(installOwner)) {
       return true;
     }
-    const installedPath = record.installPath?.trim() || record.sourcePath?.trim();
+    const installedPath = record.installPath?.trim() ? record.installPath : record.sourcePath;
     // Missing package bytes are orphaned owner records, not rediscoverable plugins.
-    return !installedPath || !existsSync(resolveUserPath(installedPath, env));
+    return !installedPath?.trim() || !existsSync(resolveRecordedPluginPath(installedPath, env));
   });
 }
 

@@ -29,6 +29,7 @@ import {
   PluginInstallTrustSchema,
   PluginOperatorGrantsSchema,
 } from "./plugin-inspection.js";
+import { PluginCapabilityAcknowledgmentSchema } from "./plugin-install.js";
 import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { PluginInspectRuntimeRetentionSchema } from "./plugin-retention.js";
 import { NonEmptyString } from "./primitives.js";
@@ -39,6 +40,9 @@ export {
   PluginCatalogOfficialInstallSchema,
   PluginCatalogInstallActionSchema,
 } from "./plugin-catalog-install.js";
+
+export { PluginsInstallParamsSchema } from "./plugin-install.js";
+export type { PluginsInstallParams } from "./plugin-install.js";
 
 export { PluginJsonValueSchema } from "./plugin-json-value.js";
 
@@ -341,10 +345,6 @@ export const CapabilityConsentErrorDetailsSchema = closedObject({
   acceptedAt: Type.Optional(NonEmptyString),
 });
 
-const PluginCapabilityAcknowledgmentSchema = closedObject({
-  reviewToken: NonEmptyString,
-});
-
 /** Request payload for searching installable ClawHub plugin families. */
 export const PluginsSearchParamsSchema = closedObject({
   query: NonEmptyString,
@@ -615,69 +615,6 @@ export const PluginsInspectResultSchema = closedObject({
   catalog: Type.Optional(PluginsCatalogGetResultSchema),
 });
 
-const PluginInstallOptions = {
-  /** False preserves existing enablement policy while installing the source. */
-  enable: Type.Optional(Type.Boolean()),
-  mode: Type.Optional(stringLiteralUnion(["install", "update"])),
-  acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
-  acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
-};
-
-/** Source intent only; install provenance and capability review remain host-owned. */
-export const PluginsInstallParamsSchema = Type.Union([
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("clawhub"),
-    packageName: NonEmptyString,
-    version: Type.Optional(NonEmptyString),
-    expectedPluginId: Type.Optional(NonEmptyString),
-    expectedIntegrity: Type.Optional(NonEmptyString),
-  }),
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("official"),
-    pluginId: NonEmptyString,
-    version: Type.Optional(Type.Literal("latest")),
-    pin: Type.Optional(Type.Boolean()),
-  }),
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("npm"),
-    spec: NonEmptyString,
-    pin: Type.Optional(Type.Boolean()),
-    expectedPluginId: Type.Optional(NonEmptyString),
-    expectedIntegrity: Type.Optional(NonEmptyString),
-  }),
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("git"),
-    spec: NonEmptyString,
-  }),
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("local"),
-    path: NonEmptyString,
-    link: Type.Optional(Type.Boolean()),
-  }),
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("npm-pack"),
-    archivePath: NonEmptyString,
-  }),
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("marketplace"),
-    marketplace: NonEmptyString,
-    plugin: NonEmptyString,
-  }),
-  closedObject({
-    ...PluginInstallOptions,
-    source: Type.Literal("bundled"),
-    pluginId: NonEmptyString,
-    spec: Type.Optional(NonEmptyString),
-  }),
-]);
-
 /** Receipt emitted only after the requested runtime generation was applied. */
 export const PluginRuntimeApplicationSchema = closedObject({
   operationId: NonEmptyString,
@@ -788,7 +725,6 @@ export type PluginsCatalogCategoriesParams = Static<typeof PluginsCatalogCategor
 export type PluginsCatalogCategoriesResult = Static<typeof PluginsCatalogCategoriesResultSchema>;
 export type PluginsCatalogGetParams = Static<typeof PluginsCatalogGetParamsSchema>;
 export type PluginsCatalogGetResult = Static<typeof PluginsCatalogGetResultSchema>;
-export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;
 export type PluginsInstallResult = Static<typeof PluginsInstallResultSchema>;
 export type PluginsRefreshParams = Static<typeof PluginsRefreshParamsSchema>;
 export type PluginsRefreshResult = Static<typeof PluginsRefreshResultSchema>;

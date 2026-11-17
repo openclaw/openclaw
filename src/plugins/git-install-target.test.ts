@@ -5,17 +5,30 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePluginInstallPreflight } from "../cli/plugins-install-preflight.js";
+import {
+  parsePluginInstallRecordMap,
+  serializePluginInstallRecordMap,
+} from "../config/plugin-install-record-map.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createManagedPluginArtifactConsentHandler } from "./capability-consent.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
   requestDeferredPluginInstall,
   takePluginInstallTransaction,
 } from "./install-transaction.js";
+import {
+  collectMissingPluginInstallPayloads,
+  isPayloadMissing,
+  runPluginPayloadSmokeCheck,
+} from "./payload-verification.js";
 import { writeArtifacts } from "./public-surface.test-support.js";
+import { applyPluginUninstallDirectoryRemoval, planPluginUninstall } from "./uninstall.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
@@ -113,6 +126,167 @@ describe("git install target ownership", () => {
         });
         expect(await head(result.targetDir)).toBe(nextCommit);
       }
+    },
+  );
+
+  it("installs a nested package and keeps selections in separate managed checkouts", async () => {
+    const nestedDir = path.join(sourceDir, "plugins", "nested");
+    const commit = await commitPlugin("nested", "2.0.0", nestedDir);
+    const installed = await install({ directory: "plugins/nested", expectedPluginId: "nested" });
+    expect(installed).toMatchObject({
+      version: "2.0.0",
+      git: { commit, directory: "plugins/nested" },
+    });
+    expect(installed.targetDir).toMatch(/plugins[/\\]nested$/);
+    await expect(read(installed.targetDir, "index.js")).resolves.toBe('export default "2.0.0";\n');
+    const root = await install();
+    expect(root.pluginId).toBe("demo");
+    expect(root.targetDir).not.toBe(installed.targetDir);
+  });
+
+  it.each([" plugins/nested", ...(process.platform === "win32" ? [] : ["plugins/nested "])])(
+    "preserves selection %j through record round-trip, update and uninstall",
+    async (directory) => {
+      const root = await install();
+      const legacyRoot: PluginInstallRecord = {
+        source: "git",
+        spec,
+        installPath: root.targetDir,
+        gitUrl: root.git.url,
+        gitCommit: root.git.commit,
+      };
+      const packageDir = path.join(sourceDir, directory);
+      await commitPlugin("nested", "2.0.0", packageDir);
+      const reviewedPluginIds: string[] = [];
+      const consent = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "git",
+        requireCapabilityConsent: true,
+        onCapabilityConsent: async (review) => {
+          reviewedPluginIds.push(review.pluginId);
+          return { reviewToken: review.reviewToken };
+        },
+      });
+      const installed = await install({
+        directory,
+        expectedPluginId: "nested",
+        onBeforePluginArtifactCommit: consent.onBeforePluginArtifactCommit,
+      });
+      expect(reviewedPluginIds).toEqual(["nested"]);
+      const records = expectDefined(
+        parsePluginInstallRecordMap(
+          JSON.parse(
+            serializePluginInstallRecordMap({
+              demo: legacyRoot,
+              nested: consent.applyAcceptedSurface("nested", {
+                source: "git",
+                spec,
+                installPath: installed.targetDir,
+                gitUrl: installed.git.url,
+                gitCommit: installed.git.commit,
+                gitDirectory: installed.git.directory,
+              }),
+            }),
+          ),
+        ),
+        "round-tripped Git install records",
+      );
+      expect(records.demo).toEqual(legacyRoot);
+      expect(records.demo).not.toHaveProperty("gitDirectory");
+      expect(records.nested?.gitDirectory).toBe(directory);
+      expect(records.nested?.installPath).toBe(installed.targetDir);
+      expect({
+        missing: isPayloadMissing(process.env, records.nested?.installPath),
+        missingRecords: await collectMissingPluginInstallPayloads({ records }),
+        smoke: await runPluginPayloadSmokeCheck({ records, env: process.env }),
+      }).toEqual({
+        missing: false,
+        missingRecords: [],
+        smoke: { checked: ["demo", "nested"], failures: [] },
+      });
+      const discovered = discoverOpenClawPlugins({
+        installRecords: records,
+        bundledRoot: state.path("empty-bundled"),
+      });
+      expect(discovered.candidates.map((candidate) => candidate.rootDir)).toContain(
+        installed.targetDir,
+      );
+      const nextCommit = await commitPlugin("nested", "3.0.0", packageDir);
+      const updateConsent = createManagedPluginArtifactConsentHandler({
+        config: {},
+        source: "git",
+        previousRecords: records,
+      });
+      const updated = await install({
+        directory: records.nested?.gitDirectory,
+        expectedPluginId: "nested",
+        mode: "update",
+        onBeforePluginArtifactCommit: updateConsent.onBeforePluginArtifactCommit,
+      });
+      expect(updated).toMatchObject({
+        targetDir: installed.targetDir,
+        version: "3.0.0",
+        git: { commit: nextCommit, directory },
+      });
+      const plan = planPluginUninstall({
+        config: { plugins: { installs: records } },
+        pluginId: "nested",
+      });
+      if (!plan.ok) {
+        throw new Error(plan.error);
+      }
+      expect(await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval)).toEqual({
+        directoryRemoved: true,
+        warnings: [],
+      });
+      await expect(fs.access(path.resolve(installed.targetDir, "../.."))).rejects.toThrow();
+      await expect(read(root.targetDir, "index.js")).resolves.toBe('export default "1.0.0";\n');
+      const rootUpdated = await install({
+        spec: records.demo?.spec,
+        mode: "update",
+        expectedPluginId: "demo",
+      });
+      expect(rootUpdated).toMatchObject({ targetDir: root.targetDir, version: "1.0.0" });
+      expect(rootUpdated.git.directory).toBeUndefined();
+      const rootPlan = planPluginUninstall({ config: plan.config, pluginId: "demo" });
+      if (!rootPlan.ok) {
+        throw new Error(rootPlan.error);
+      }
+      expect(await applyPluginUninstallDirectoryRemoval(rootPlan.directoryRemoval)).toEqual({
+        directoryRemoved: true,
+        warnings: [],
+      });
+      await expect(fs.access(root.targetDir)).rejects.toThrow();
+    },
+  );
+
+  it("rejects invalid or absent package selectors without publishing a checkout", async () => {
+    for (const directory of [
+      "../escape",
+      "plugins/../../escape",
+      "/absolute",
+      "C:/absolute",
+      "plugins\\escape",
+      "",
+      "missing",
+      "index.js",
+    ]) {
+      expect(await installPluginFromGitSpec({ spec, directory, dryRun: true })).toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Git source directory"),
+      });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a selected symlink outside the fetched Git repository",
+    async () => {
+      await fs.symlink(sourceSeed, path.join(sourceDir, "escape"), "dir");
+      await git(sourceDir, "add", ".");
+      await git(sourceDir, "-c", "commit.gpgsign=false", "commit", "-m", "escaping selector");
+      expect(
+        await installPluginFromGitSpec({ spec, directory: "escape", dryRun: true }),
+      ).toMatchObject({ ok: false, error: expect.stringContaining("escapes the repository") });
     },
   );
 

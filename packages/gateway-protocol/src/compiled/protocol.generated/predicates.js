@@ -997,7 +997,7 @@ var External = [
     /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^packageName$|^version$|^expectedPluginId$|^expectedIntegrity$)/u,
     /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^pluginId$|^version$|^pin$)/u,
     /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^spec$|^pin$|^expectedPluginId$|^expectedIntegrity$)/u,
-    /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^spec$)/u,
+    /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^spec$|^directory$)/u,
     /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^path$|^link$)/u,
     /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^archivePath$)/u,
     /(^enable$|^mode$|^acknowledgeInstallPolicyWarning$|^acknowledgeCapabilities$|^source$|^marketplace$|^plugin$)/u,
@@ -8260,7 +8260,8 @@ var External = [
       !("acknowledgeCapabilities" in value) ||
       check_1142(value.acknowledgeCapabilities)) &&
     check_1169(value.source) &&
-    check_6(value.spec),
+    check_6(value.spec) &&
+    (value.directory === void 0 || !("directory" in value) || check_63(value.directory)),
   check_1169 = (value) => typeof value == "string" && value === "git",
   check_1170 = (value) =>
     typeof value == "object" &&
