@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { gitPathspecBatches } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGit, requireGitPath } from "../../agents/worktrees/git.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
@@ -13,7 +14,7 @@ import {
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
 } from "./workspace-inventory-limits.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
-import { projectWorkspaceEntries } from "./workspace-path-exclusions.js";
+import { isDerivedWorkspacePath, projectWorkspaceEntries } from "./workspace-path-exclusions.js";
 
 /** Temporary indexes borrow immutable objects; unchanged source paths retain accepted bytes. */
 export async function readWorkspaceBaseRefreshTrees(
@@ -61,29 +62,90 @@ export async function readWorkspaceBaseRefreshTrees(
       timeoutMs: 300_000,
       maxOutputBytes: MAX_WORKSPACE_INVENTORY_PATH_BYTES,
     });
+  const checkout = async (root: string, paths: string[]) => {
+    if (paths.length) {
+      await git(
+        root,
+        ["checkout-index", "--force", "--prefix=" + root + path.sep, "-z", "--stdin"],
+        paths.join("\0") + "\0",
+      );
+    }
+  };
   const inventories = [];
-  for (const tree of [input.beforeTree, input.afterTree]) {
-    const listed = await git(metadata, ["ls-tree", "-r", "-t", "-z", "--full-tree", tree]);
-    const records = listed.split("\0").filter(Boolean);
-    // Recursive ls-tree already places parents before their children.
-    inventories.push(
-      records.map((record) => {
-        const separator = record.indexOf("\t");
-        const [mode, type, object] = record.slice(0, separator).split(" ");
-        return {
-          path: record.slice(separator + 1),
-          type: type === "blob" ? "file" : "directory",
-          mode,
-          object,
-        };
-      }),
-    );
+  for (const [index, tree] of [input.beforeTree, input.afterTree].entries()) {
+    const root = path.join(input.temporaryRoot, index === 0 ? "before" : "after");
+    await fs.mkdir(root);
+    const markers = new Set<string>();
+    const isStagedInput = createStagedInputPathMatcher(await fsRoot(root));
+    const retained = new Set<string>();
+    const inventory = [];
+    let directories = [""];
+    // Visit one level at a time: excluded subtrees must not consume Git output budgets.
+    while (directories.length) {
+      const children: string[] = [];
+      for (const batch of gitPathspecBatches(directories)) {
+        const listed = await git(metadata, [
+          "ls-tree",
+          "-z",
+          "--full-tree",
+          tree,
+          "--",
+          ...batch.filter(Boolean).map((directory) => `:(literal)${directory}/`),
+        ]);
+        const entries = listed
+          .split("\0")
+          .filter(Boolean)
+          .map((record) => {
+            const separator = record.indexOf("\t");
+            const [mode, type, object] = record.slice(0, separator).split(" ");
+            return {
+              path: record.slice(separator + 1),
+              type: type === "blob" ? "file" : "directory",
+              mode,
+              object,
+            };
+          });
+        const addedMarkers = entries
+          .filter(
+            (entry) =>
+              entry.type === "file" &&
+              entry.path === `${stagedInputPathDirectory(entry.path)}/.gitignore`,
+          )
+          .map((entry) => entry.path);
+        if (addedMarkers.length) {
+          if (!markers.size) {
+            await git(root, ["read-tree", tree]);
+          }
+          await checkout(root, addedMarkers);
+          for (const marker of addedMarkers) {
+            markers.add(marker);
+          }
+        }
+        for (const entry of entries) {
+          // Keep excluded roots so projection still prunes their otherwise-empty parents.
+          inventory.push(entry);
+          if (!isDerivedWorkspacePath(entry.path) || (await isStagedInput(entry.path))) {
+            retained.add(entry.path);
+            if (entry.mode === "040000") {
+              children.push(entry.path);
+            }
+          }
+        }
+      }
+      directories = children;
+    }
+    const eligible = projectWorkspaceEntries(inventory, (file) => retained.has(file));
+    if (eligible.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+      throw new Error("Gateway workspace manifest has too many entries");
+    }
+    inventories.push({ root, markers, entries: eligible });
   }
-  const [before, after] = inventories;
-  const previous = new Map(before!.map((entry) => [entry.path, entry]));
-  const next = new Map(after!.map((entry) => [entry.path, entry]));
+  const before = inventories[0]!.entries;
+  const after = inventories[1]!.entries;
+  const previous = new Map(before.map((entry) => [entry.path, entry]));
+  const next = new Map(after.map((entry) => [entry.path, entry]));
   // Attribute changes can alter checkout bytes even when the blob OID stays the same.
-  const attributesChanged = [...before!, ...after!].some(
+  const attributesChanged = [...before, ...after].some(
     (entry) =>
       (path.posix.basename(entry.path) === ".gitattributes" ||
         entry.path === `${stagedInputPathDirectory(entry.path)}/.gitignore`) &&
@@ -91,41 +153,8 @@ export async function readWorkspaceBaseRefreshTrees(
   );
   const saved = new Map(accepted.entries.map((entry) => [entry.path, entry]));
   const result: WorkerWorkspaceManifest[] = [];
-  for (const [index, inventory] of inventories.entries()) {
-    const root = path.join(input.temporaryRoot, index === 0 ? "before" : "after");
-    await fs.mkdir(root);
+  for (const [index, { root, markers, entries: eligible }] of inventories.entries()) {
     await git(root, ["read-tree", index === 0 ? input.beforeTree : input.afterTree]);
-    const checkout = async (paths: string[]) => {
-      if (paths.length) {
-        await git(
-          root,
-          ["checkout-index", "--force", "--prefix=" + root + path.sep, "-z", "--stdin"],
-          paths.join("\0") + "\0",
-        );
-      }
-    };
-    // The scanner's staged-input marker owns inclusion, including derived-looking inputs.
-    const markers = new Set(
-      inventory
-        .filter(
-          (entry) =>
-            entry.type === "file" &&
-            entry.path === `${stagedInputPathDirectory(entry.path)}/.gitignore`,
-        )
-        .map((entry) => entry.path),
-    );
-    await checkout([...markers]);
-    const isStagedInput = createStagedInputPathMatcher(await fsRoot(root));
-    const retained = new Set<string>();
-    for (const entry of inventory) {
-      if (await isStagedInput(entry.path)) {
-        retained.add(entry.path);
-      }
-    }
-    const eligible = projectWorkspaceEntries(inventory, (file) => retained.has(file));
-    if (eligible.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw new Error("Gateway workspace manifest has too many entries");
-    }
     const reused = [];
     const materialize = [];
     for (const entry of eligible) {
@@ -148,7 +177,7 @@ export async function readWorkspaceBaseRefreshTrees(
         materialize.push(entry.path);
       }
     }
-    await checkout(materialize);
+    await checkout(root, materialize);
     const { manifest } = await readActualWorkspaceManifestImpl({
       root,
       baseCommit: input.baseCommit,

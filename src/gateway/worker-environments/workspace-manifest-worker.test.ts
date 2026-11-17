@@ -476,7 +476,7 @@ it("does not charge excluded Git subtrees to the refreshed manifest entry budget
   const excludedTree = await requireGit(root, ["mktree"], {
     input: Array.from(
       { length: MAX_WORKSPACE_INVENTORY_ENTRIES },
-      (_, index) => `100644 blob ${blob}\tfile-${index}\n`,
+      (_, index) => `100644 blob ${blob}\t${`file-${index}`.padEnd(220, "x")}\n`,
     ).join(""),
   });
   const afterTree = await requireGit(root, ["mktree"], {

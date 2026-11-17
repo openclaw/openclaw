@@ -28,6 +28,7 @@ import { prepareLocalWorkspaceCheckout } from "../../src/gateway/worker-environm
 import { readActualWorkspaceManifestImpl } from "../../src/gateway/worker-environments/workspace-actual-manifest.js";
 import { executeWorkspaceManifestComputation } from "../../src/gateway/worker-environments/workspace-manifest-computation.runtime.js";
 import { workerWorkspaceResultStaging } from "../../src/gateway/worker-environments/workspace-result-staging.js";
+import { STAGED_INPUT_GITIGNORE, stagedInputDirectory } from "../../src/media/staged-inputs.js";
 import { drainGlobalSingletonLifecycleState } from "../../src/shared/global-singleton.js";
 
 const { values } = parseArgs({
@@ -87,6 +88,10 @@ try {
       await fs.writeFile(path.join(root, file), text);
     };
     const buildCacheInputs = values.representative ? [".artifacts/build-cache-inputs/kept"] : [];
+    const stagedInputs = [
+      stagedInputDirectory("a".repeat(64)),
+      stagedInputDirectory("b".repeat(64)),
+    ];
     if (values.representative) {
       for (const file of [
         "rename.txt",
@@ -102,8 +107,15 @@ try {
       await write("excluded/node_modules/input", "derived");
       await fs.symlink("rename.txt", path.join(root, "link"));
       await fs.symlink("../outside", path.join(root, "escaping"));
+      for (const [index, directory] of stagedInputs.entries()) {
+        await write(`${directory}/.gitignore`, index === 0 ? STAGED_INPUT_GITIGNORE : "unowned\n");
+        await write(`${directory}/node_modules/input`, "old input");
+      }
     }
     await git("add", ".");
+    if (values.representative) {
+      await git("add", "--force", "--", ...stagedInputs);
+    }
     await git("commit", "--quiet", "-m", "Synthetic source");
     const beforeTree = await git("rev-parse", "HEAD");
     const baseline = await readActualWorkspaceManifestImpl({ root, baseCommit: beforeTree });
@@ -126,6 +138,9 @@ try {
       await fs.symlink("renamed.txt", path.join(root, "link"));
       await fs.mkdir(path.join(root, "submodule"));
       await git("update-index", "--add", "--cacheinfo", `160000,${beforeTree},submodule`);
+      for (const directory of stagedInputs) {
+        await write(`${directory}/node_modules/input`, "new input");
+      }
     }
     await git("add", ".");
     await git("commit", "--quiet", "-am", "Synthetic refresh");
