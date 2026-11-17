@@ -42,6 +42,9 @@ export async function autoRemovalProtectionReason(
     if (protection) {
       return protection;
     }
+    if (policy.retryDeferred) {
+      await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
+    }
   } else {
     const revision = worktreeGcRevision(record);
     const previous = context.deferrals.get(record.id);
@@ -88,6 +91,7 @@ export async function autoRemovalProtectionReason(
       elapsedMs: 0,
       now: context.now,
       previousAttempts: record.gcRetry?.attempts ?? 0,
+      observed: record,
       assertCurrent: () => context.beforeRun?.(),
     });
     return reason;

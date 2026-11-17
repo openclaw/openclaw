@@ -358,7 +358,8 @@ export function createWorktreeGcRemoval(context: {
           id: record.id,
           stage: "permission-denied",
           reason:
-            "Checkout preserved: permission-denied; repair access, then run openclaw worktrees gc --retry-deferred",
+            `Checkout preserved: permission-denied; ${truncateUtf16Safe(formatErrorMessage(error), 500)}; ` +
+            "repair access, then run openclaw worktrees gc --retry-deferred",
           elapsedMs: 0,
           now,
           previousAttempts: record.gcRetry?.attempts ?? 0,

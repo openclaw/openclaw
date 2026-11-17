@@ -1,10 +1,11 @@
 import { GitCommandTimeoutError } from "../../infra/git-exec.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
+import type { WorktreePreservationReason } from "./errors.js";
 import { readRegistryWorktreeForMutation } from "./registry-read.js";
 import { runWorktreeRegistryCommand } from "./registry-run-end.js";
 import { createWorktreeRemovalClaimsGuard } from "./registry.js";
-import { worktreePreservationReason, type WorktreePreservationReason } from "./removal-errors.js";
+import { worktreePreservationReason } from "./removal-errors.js";
 import {
   captureWorktreeRunEndContext,
   captureWorktreeRegistryMutation,
@@ -51,6 +52,7 @@ export async function deferFailedWorktreeRemoval(params: {
   elapsedMs: number;
   now: number;
   previousAttempts: number;
+  observed?: ManagedWorktreeRecord;
   claimToken?: string;
   assertCurrent: () => void;
 }): Promise<WorktreeRemovalDeferral | undefined> {
@@ -63,11 +65,13 @@ export async function deferFailedWorktreeRemoval(params: {
   };
   // An admitted deletion can outlive cancellation and update its snapshot before
   // failing. Capture the revision under retained custody before releasing the claim.
-  const observed = await readRegistryWorktreeForMutation({
-    env: params.env,
-    id: params.id,
-    commitGuard: assertCurrent,
-  });
+  const observed =
+    params.observed ??
+    (await readRegistryWorktreeForMutation({
+      env: params.env,
+      id: params.id,
+      commitGuard: assertCurrent,
+    }));
   if (!observed || observed.removedAt !== undefined) {
     return undefined;
   }

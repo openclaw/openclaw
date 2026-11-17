@@ -1,5 +1,9 @@
 import { hasErrnoCode } from "../../infra/errno.js";
-import { WorktreeRemovalContentionError, WorktreeRemovalLockError } from "./errors.js";
+import {
+  WorktreeRemovalContentionError,
+  WorktreeRemovalLockError,
+  type WorktreePreservationReason,
+} from "./errors.js";
 export { WorktreeRemovalLockError } from "./errors.js";
 
 export function isWorktreePermissionError(error: unknown): boolean {
@@ -14,22 +18,6 @@ export function isWorktreePermissionError(error: unknown): boolean {
     }
   }
   return false;
-}
-
-export type WorktreePreservationReason =
-  | "nested-repository"
-  | "repository-corrupt"
-  | "permission-denied";
-
-/** The code survives the existing Git worker error transport. */
-export class WorktreePreservationError extends Error {
-  constructor(
-    readonly code: WorktreePreservationReason,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-  }
 }
 
 export function worktreePreservationReason(error: unknown): WorktreePreservationReason | undefined {

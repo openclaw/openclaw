@@ -8,6 +8,7 @@ import {
   createStagedInputPathMatcher,
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
+import { WorktreePreservationError } from "./errors.js";
 import {
   checkoutPathFromGitBytes,
   containsGitMarker,
@@ -23,7 +24,6 @@ import {
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 import { commandError, requireGit, requireGitBuffer, requireGitPath, runGit } from "./git.js";
 import { snapshotProvisionedFiles } from "./provisioned-snapshot.js";
-import { WorktreePreservationError } from "./removal-errors.js";
 import {
   captureExactState,
   exactSnapshotPrefix,

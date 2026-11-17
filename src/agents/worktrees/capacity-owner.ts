@@ -7,6 +7,7 @@ import { WorktreePendingContentionError } from "./errors.js";
 import { evictManagedWorktree } from "./eviction.js";
 import { indexWorktreeEvictionDependencies } from "./gc-dependencies.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
+import type { ManagedWorktreeGcParams } from "./gc-removal.js";
 import type {
   GitWorktreeOperations,
   WorktreeEvictionCandidate,
@@ -20,13 +21,17 @@ import {
 import { worktreeGcRevision } from "./registry-read.kernel.js";
 import {
   deferFailedWorktreeRemoval,
+  deferWorktreeCleanup,
   removalDeferralReason,
   worktreeCleanupProtection,
 } from "./registry-retirement.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
-import type { CreateManagedWorktreeParams, ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
-type WorktreeCapacityGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard">;
+type WorktreeCapacityGuard = Pick<
+  ManagedWorktreeGcParams,
+  "signal" | "commitGuard" | "retryDeferred"
+>;
 type RepositoryInventory =
   GitWorktreeOperations["worktree.eviction-repositories"]["output"][number];
 const DEFAULT_WORKTREE_MAX_COUNT = 4096;
@@ -89,6 +94,7 @@ export function createWorktreeCapacityOwner({
     guard: WorktreeAllocationGuard,
     ranked: Map<string, WorktreeEvictionCandidate>,
     repositories: Map<string, RepositoryInventory>,
+    retryDeferred = false,
   ): Promise<{ removed: string[]; attempted: number; more: boolean }> {
     const started = performance.now();
     let attempted = 0;
@@ -122,7 +128,7 @@ export function createWorktreeCapacityOwner({
     const idle: ManagedWorktreeRecord[] = [];
     const leased = new Set<string>();
     for (const record of records) {
-      const protection = worktreeCleanupProtection(record, Date.now());
+      const protection = worktreeCleanupProtection(record, Date.now(), retryDeferred);
       if (live.has(worktreeRunLeaseScope(record.id))) {
         leased.add(record.id);
         if (progress.start(record.id)) {
@@ -186,6 +192,13 @@ export function createWorktreeCapacityOwner({
       }
       if (state.liveIds.has(record.id) && progress.start(record.id)) {
         try {
+          if (retryDeferred && record.gcRetry) {
+            await deferWorktreeCleanup(
+              env ?? process.env,
+              { observed: record, reason: null },
+              guard.commitGuard,
+            );
+          }
           // Selection is advisory. The host claims removal atomically against run
           // admission, then revalidates its claim immediately before worker writes.
           progress.result.eligibleCount += 1;
@@ -333,7 +346,8 @@ export function createWorktreeCapacityOwner({
     do {
       const batch = await withWorktreeAllocationLease(
         { ...guard, env: env ?? process.env },
-        (allocation) => enforce(maxCount, progress, allocation, ranked, repositories),
+        (allocation) =>
+          enforce(maxCount, progress, allocation, ranked, repositories, guard.retryDeferred),
       );
       result.removed.push(...batch.removed);
       for (let count = 0; count < Math.max(1, batch.attempted); count += 1) {

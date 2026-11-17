@@ -13,6 +13,7 @@ import {
 } from "./allocation.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
+import { WorktreePreservationError } from "./errors.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
 import { hydrateCommitObjects, missingCommitObjects } from "./object-hydration.js";
 import { collectOrphanWorktreeBranches } from "./orphan-branches.js";
@@ -24,7 +25,6 @@ import {
 } from "./registry-read.js";
 import { deferWorktreeCleanup } from "./registry-retirement.js";
 import { deleteRegistryWorktree, createWorktreeRemovalClaimsGuard } from "./registry.js";
-import { WorktreePreservationError } from "./removal-errors.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
 import { resolveRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
