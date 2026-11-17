@@ -398,11 +398,10 @@ async function stagePreparedPendingInput(
         existing.end_cause === "restart-unrecoverable") &&
       existing.consumed_event_id == null &&
       existing.request_hash === requestHash;
+    // Explicit retries are caller-authorized; Stop and completion receipts are enforced by the caller.
     const reopensCancelled =
-      (options.retryCancelled === true &&
-        (reopen ||
-          (previous && existing?.state === "cancelled" && existing.end_cause === "failed"))) ||
-      reclaimsCancelledSourceTurn;
+      existing?.state === "cancelled" &&
+      (options.retryCancelled === true || reclaimsCancelledSourceTurn);
     if (existing) {
       if (
         !matchesSessionPendingInputRequest(existing, stableMessage, requestHash) ||
