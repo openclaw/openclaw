@@ -620,14 +620,17 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toEqual(["Removed legacy skills.entries.nano-banana-pro."]);
   });
 
-  it("removes nano-banana from skills.allowBundled during migration", () => {
-    const res = normalizeCompatibilityConfigValues({
-      skills: { allowBundled: ["peekaboo", "nano-banana-pro"] },
-    });
+  it.each([{ retained: [] }, { retained: ["peekaboo"] }])(
+    "keeps skills.allowBundled restrictive after removing nano-banana ($retained)",
+    ({ retained }) => {
+      const res = normalizeCompatibilityConfigValues({
+        skills: { allowBundled: [...retained, "nano-banana-pro"] },
+      });
 
-    expect(res.config.skills?.allowBundled).toEqual(["peekaboo"]);
-    expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
-  });
+      expect(res.config.skills?.allowBundled).toEqual(retained);
+      expect(res.changes).toEqual(["Removed nano-banana-pro from skills.allowBundled."]);
+    },
+  );
 
   it("migrates legacy web search provider config to plugin-owned config paths", () => {
     const res = normalizeCompatibilityConfigValues({
