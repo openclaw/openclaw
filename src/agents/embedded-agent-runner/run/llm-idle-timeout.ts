@@ -6,6 +6,7 @@ import {
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   asPositiveFiniteNumber,
   finiteSecondsToTimerSafeMilliseconds,
@@ -56,9 +57,7 @@ function isLocalProviderHostname(hostname: string): boolean {
   if (
     host === "localhost" ||
     host === "0.0.0.0" ||
-    host === "::1" ||
-    host === "::ffff:7f00:1" ||
-    host === "::ffff:127.0.0.1" ||
+    isLoopbackIpAddress(host) ||
     host.endsWith(".local")
   ) {
     return true;
@@ -76,9 +75,8 @@ function isLocalProviderHostname(hostname: string): boolean {
     return false;
   }
   const [a, b] = octets;
-  // Include all of 127/8, RFC 1918, and shared CGNAT/Tailscale addresses.
+  // Include RFC 1918 and shared CGNAT/Tailscale addresses.
   return (
-    a === 127 ||
     a === 10 ||
     (a === 172 && b !== undefined && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
