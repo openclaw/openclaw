@@ -1,5 +1,5 @@
 {
-  "oldestSupportedBaseline": "2026.6.34",
+  "oldestSupportedBaseline": "2026.7.1",
   "scenarios": [
     "base",
     "session-share",

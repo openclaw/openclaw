@@ -273,7 +273,7 @@ const file = process.env.FIXTURE_NPM_CALLS;
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.log(JSON.stringify(process.argv[4] === "dist-tags"
   ? [{ latest: "2026.9.2", "extended-stable": "2026.8.35" }]
-  : ["2026.6.34", "2026.7.1-2", "2026.8.1", "2026.8.33", "2026.8.35", "2026.9.1", "2026.9.2"]));
+  : ["2026.6.34", "2026.7.1", "2026.7.1-2", "2026.8.1", "2026.8.33", "2026.8.35", "2026.9.1", "2026.9.2"]));
 `,
     );
     writeExecutable(path.join(bin, "gh"), "#!/bin/sh\nexit 75\n");
@@ -316,7 +316,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
     });
     const expanded = entrypoint === "update-migration" || standaloneSelectors.has(entrypoint);
     const expectedBaselines = expanded
-      ? "openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.6.34"
+      ? "openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.7.1"
       : `openclaw@${entrypoint === "minimum" ? "2026.6.1" : "2026.7.1-2"}`;
     expect(readFileSync(output, "utf8")).toBe(
       `baselines=${expectedBaselines}\nbaseline_scope=${expanded ? "legacy-operator-state" : "all-scenarios"}\nbaseline=openclaw@2026.7.1-2\n`,
@@ -349,7 +349,7 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         ["openclaw@2026.9.2", "legacy-operator-state"],
         ["openclaw@2026.9.1", "legacy-operator-state"],
         ["openclaw@2026.8.35", "legacy-operator-state"],
-        ["openclaw@2026.6.34", "legacy-operator-state"],
+        ["openclaw@2026.7.1", "legacy-operator-state"],
         ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
       ]);
     }
@@ -367,8 +367,8 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       name: `supported lines with extended-stable ${extended}`,
       args: { requested: "supported-lines" },
       tags: { latest: "2026.9.2", ...(extended ? { "extended-stable": `2026.${extended}` } : {}) },
-      versions: yearVersions("6.34 8.33 8.35 9.1 9.2 9.3-beta.1 9.3"),
-      expected: yearVersions(`9.2 9.1${extended ? ` ${extended}` : ""} 6.34`),
+      versions: yearVersions("6.34 7.1 8.33 8.35 9.1 9.2 9.3-beta.1 9.3"),
+      expected: yearVersions(`9.2 9.1${extended ? ` ${extended}` : ""} 7.1`),
     })),
     {
       name: "supported lines excluding unpublished candidate",
@@ -378,8 +378,8 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
         "candidate-published": "false",
       },
       tags: { latest: "2026.9.3" },
-      versions: ["2026.6.34", "2026.8.33", "2026.9.2", "2026.9.3"],
-      expected: ["2026.9.2", "2026.6.34"],
+      versions: ["2026.6.34", "2026.7.1", "2026.8.33", "2026.9.2", "2026.9.3"],
+      expected: ["2026.9.2", "2026.7.1"],
     },
     baseline(
       "six supported stable releases, deduplicating explicit versions",
@@ -447,11 +447,14 @@ console.log(JSON.stringify(process.argv[4] === "dist-tags"
       error: "Upgrade pre-June installs through OpenClaw 2026.9.5 and run Doctor first",
     })),
     unsupportedLine({}, "8.33 9.2", "npm latest must name a published stable version"),
-    unsupportedLine({ latest: "2026.9.2", "extended-stable": "2026.8.99" }, "6.34 8.33 9.1 9.2"),
+    unsupportedLine(
+      { latest: "2026.9.2", "extended-stable": "2026.8.99" },
+      "6.34 7.1 8.33 9.1 9.2",
+    ),
     ...["9.1", "8.35-1", "8.35-beta.1"].map((extended) =>
       unsupportedLine(
         { latest: "2026.9.2", "extended-stable": `2026.${extended}` },
-        `6.34 8.33 9.1 9.2 ${extended}`,
+        `6.34 7.1 8.33 9.1 9.2 ${extended}`,
       ),
     ),
     unsupportedLine(
