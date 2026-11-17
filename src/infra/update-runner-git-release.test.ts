@@ -172,7 +172,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(result).toMatchObject({ status: "skipped", sourceRuntimePrepared: true });
   });
 
-  it("builds the first release from the serving worktree's commit, not the checkout's HEAD", async () => {
+  async function checkoutWithTwoCommits() {
     target.runtimeVerified = true;
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-conv-")));
     roots.push(dir);
@@ -193,17 +193,16 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await fs.writeFile(path.join(checkout, "package.json"), "{}");
     await git(checkout, "add", ".");
     const serving = await commit("1.0.0");
-    const worktree = path.join(dir, "serving");
-    await git(checkout, "worktree", "add", "-q", "--detach", worktree, serving);
-    await commit("2.0.0");
-    const runCommand: CommandRunner = (argv, options) =>
-      argv[1]?.endsWith("openclaw.mjs")
-        ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
-        : runCommandWithTimeout(argv, options);
+    return { dir, checkout, serving, pulled: () => commit("2.0.0") };
+  }
 
-    await updateGitRelease({
-      gitRoot: worktree,
-      runCommand,
+  const convert = (gitRoot: string) =>
+    updateGitRelease({
+      gitRoot,
+      runCommand: (argv, options) =>
+        argv[1]?.endsWith("openclaw.mjs")
+          ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
+          : runCommandWithTimeout(argv, options),
       defaultCommandEnv: undefined,
       timeoutMs: 10_000,
       startedAt: Date.now(),
@@ -216,8 +215,31 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       },
     });
 
+  it("builds the first release from the serving worktree's commit, not the checkout's HEAD", async () => {
+    const { dir, checkout, serving, pulled } = await checkoutWithTwoCommits();
+    const worktree = path.join(dir, "serving");
+    await git(checkout, "worktree", "add", "-q", "--detach", worktree, serving);
+    await pulled();
+
+    await convert(worktree);
+
     expect(target.conversionTargets).toEqual([serving]);
     // The healthy serving commit differs from the checkout, so the target is still built.
     expect(target.beforeRuntimeVerified).toEqual([false]);
+  });
+
+  it("builds the first release from the commit the checkout's dist was built from", async () => {
+    const { checkout, serving, pulled } = await checkoutWithTwoCommits();
+    // Built at 1.0.0, then pulled without rebuilding: the Gateway still serves 1.0.0.
+    await fs.mkdir(path.join(checkout, "dist"));
+    await fs.writeFile(
+      path.join(checkout, "dist", "build-info.json"),
+      JSON.stringify({ commit: serving }),
+    );
+    await pulled();
+
+    await convert(checkout);
+
+    expect(target.conversionTargets).toEqual([serving]);
   });
 });

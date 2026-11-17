@@ -6,6 +6,7 @@ import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   readBuiltGatewayBuildId,
+  readBuiltRuntimeCommit,
   readGitRuntimeArtifactIdentity,
   verifyGitUpdateRecovery,
 } from "./update-git-runtime.js";
@@ -75,7 +76,15 @@ export async function updateGitRelease(params: {
     await git(running, "rev-parse", "--path-format=absolute", "--git-common-dir")
   ).stdout.trim();
   const gitRoot = path.basename(commonDir) === ".git" ? path.dirname(commonDir) : params.gitRoot;
-  const runningHead = await git(running, "rev-parse", "HEAD");
+  // A checkout serves what its dist was built from, which can trail a pulled HEAD; the
+  // first release, the trial's fallback, must be that serving commit.
+  const builtCommit = converting ? await readBuiltRuntimeCommit(running) : null;
+  const runningHead = await git(
+    running,
+    "rev-parse",
+    "--verify",
+    `${builtCommit ?? "HEAD"}^{commit}`,
+  );
   const head = await git(gitRoot, "rev-parse", "HEAD");
   const runningSha = runningHead.stdout.trim() || null;
   const beforeSha = head.stdout.trim() || null;
