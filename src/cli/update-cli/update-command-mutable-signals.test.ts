@@ -371,7 +371,12 @@ it.skipIf(process.platform === "win32").for([
           }
           if (publicationMode) {
             expect(service?.transitions).toEqual(["stopped"]);
-            await expect(readyz()).rejects.toThrow();
+            // Proxied environments can return an HTTP error for a stopped listener.
+            const ready = await readyz().then(
+              (response) => response.ok,
+              () => false,
+            );
+            expect(ready, childDiagnostics()).toBe(false);
             if (mode === "publishing-compensation") {
               expect(fs.existsSync(installRoot)).toBe(false);
             } else {
