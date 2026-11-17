@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, For, Show } from "solid-js";
+import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { i18n } from "../../i18n/index.ts";
@@ -121,7 +121,6 @@ function TimeInput(props: {
   label: string;
   hour: number;
   minute: number;
-  step?: number;
   testId: string;
   onChange: (hour: number, minute: number) => void;
 }) {
@@ -130,16 +129,50 @@ function TimeInput(props: {
       <span>{props.label}</span>
       <input
         type="time"
-        step={props.step ?? 60}
+        step={60}
         data-test-id={props.testId}
         value={`${pad(props.hour)}:${pad(props.minute)}`}
         onChange={(event) => {
-          const match = /^(\d{2}):(\d{2})/u.exec(event.currentTarget.value);
+          const match = /^(\d{2}):(\d{2})$/u.exec(event.currentTarget.value);
           if (match) {
             props.onChange(Number(match[1]), Number(match[2]));
+          } else {
+            event.currentTarget.value = `${pad(props.hour)}:${pad(props.minute)}`;
           }
         }}
       />
+    </label>
+  );
+}
+
+function NumberChoice(props: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  text: (value: number) => string;
+  testId: string;
+  onChange: (value: number) => void;
+}) {
+  const values = createMemo(() => {
+    const min = props.min;
+    return Array.from({ length: props.max - min + 1 }, (_, index) => min + index);
+  });
+  return (
+    <label class="cron-sentence__field">
+      <span>{props.label}</span>
+      <select
+        data-test-id={props.testId}
+        onChange={(event) => props.onChange(Number(event.currentTarget.value))}
+      >
+        <For each={values()}>
+          {(value) => (
+            <option value={value} selected={value === props.value}>
+              {props.text(value)}
+            </option>
+          )}
+        </For>
+      </select>
     </label>
   );
 }
@@ -149,19 +182,25 @@ export function ScheduleSentence(
   props: CronProps & {
     frequency: SentenceFrequency;
     kinds: Kind[];
-    onCustom: (custom: boolean) => void;
+    onFrequencyPreference: (mode: "custom" | "daily" | null) => void;
   },
 ) {
   const id = createUniqueId();
-  const sentence = (): CronSentence | null =>
-    props.form.scheduleKind === "cron" && props.frequency !== "custom"
-      ? parseCronSentence(props.form.cronExpr)
-      : null;
+  const sentence = createMemo((): CronSentence | null => {
+    if (props.form.scheduleKind !== "cron" || props.frequency === "custom") {
+      return null;
+    }
+    const parsed = parseCronSentence(props.form.cronExpr);
+    if (props.frequency === "daily" && parsed?.frequency === "weekly") {
+      return { frequency: "daily", days: [parsed.day], hour: parsed.hour, minute: parsed.minute };
+    }
+    return parsed;
+  });
   const eventKind = () => props.kinds.find((kind) => kind.value === "event");
   const writeCron = (next: CronSentence) =>
     props.onFormChange({ cronExpr: formatCronSentence(next) });
   const chooseFrequency = (frequency: SentenceFrequency) => {
-    props.onCustom(frequency === "custom");
+    props.onFrequencyPreference(frequency === "custom" || frequency === "daily" ? frequency : null);
     if (frequency === "once") {
       props.onFormChange(scheduleKindPatch(props.form, "at"));
       return;
@@ -189,6 +228,9 @@ export function ScheduleSentence(
       : [...current.days, day];
     // A sentence always names at least one day.
     if (days.length > 0) {
+      if (current.frequency === "daily") {
+        props.onFrequencyPreference("daily");
+      }
       writeCron({ ...current, days });
     }
   };
@@ -230,6 +272,7 @@ export function ScheduleSentence(
                   label={kind().label}
                   testId="cron-schedule-frequency-event"
                   onSelect={() => {
+                    props.onFrequencyPreference(null);
                     props.onFormChange(scheduleKindPatch(props.form, "event"));
                     close();
                   }}
@@ -311,22 +354,15 @@ export function ScheduleSentence(
                 testId="cron-schedule-date"
               >
                 {() => (
-                  <label class="cron-sentence__field">
-                    <span>{t("cron.schedule.dayOfMonth")}</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="31"
-                      data-test-id="cron-schedule-date-input"
-                      value={monthly().dayOfMonth}
-                      onChange={(event) => {
-                        const value = Number(event.currentTarget.value);
-                        if (Number.isInteger(value) && value >= 1 && value <= 31) {
-                          writeCron({ ...monthly(), dayOfMonth: value });
-                        }
-                      }}
-                    />
-                  </label>
+                  <NumberChoice
+                    label={t("cron.schedule.dayOfMonth")}
+                    value={monthly().dayOfMonth}
+                    min={1}
+                    max={31}
+                    text={String}
+                    testId="cron-schedule-date-input"
+                    onChange={(dayOfMonth) => writeCron({ ...monthly(), dayOfMonth })}
+                  />
                 )}
               </Part>
             ) : undefined}
@@ -376,29 +412,27 @@ export function ScheduleSentence(
                     <Show when={hourly().hours}>
                       {(hours) => (
                         <div class="cron-sentence__range">
-                          <TimeInput
+                          <NumberChoice
                             label={t("cron.schedule.from")}
-                            hour={hours().from}
-                            minute={0}
-                            step={3600}
+                            value={hours().from}
+                            min={0}
+                            max={hours().until - 1}
+                            text={timeLabel}
                             testId="cron-schedule-from"
-                            onChange={(hour) => {
-                              if (hour < hours().until) {
-                                writeCron({ ...hourly(), hours: { ...hours(), from: hour } });
-                              }
-                            }}
+                            onChange={(from) =>
+                              writeCron({ ...hourly(), hours: { ...hours(), from } })
+                            }
                           />
-                          <TimeInput
+                          <NumberChoice
                             label={t("cron.schedule.until")}
-                            hour={hours().until}
-                            minute={0}
-                            step={3600}
+                            value={hours().until}
+                            min={hours().from + 1}
+                            max={23}
+                            text={timeLabel}
                             testId="cron-schedule-until"
-                            onChange={(hour) => {
-                              if (hour > hours().from) {
-                                writeCron({ ...hourly(), hours: { ...hours(), until: hour } });
-                              }
-                            }}
+                            onChange={(until) =>
+                              writeCron({ ...hourly(), hours: { ...hours(), until } })
+                            }
                           />
                         </div>
                       )}

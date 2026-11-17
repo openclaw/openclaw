@@ -1414,7 +1414,8 @@
   font-size: 13px;
 }
 
-.cron-sentence__field input {
+.cron-sentence__field input,
+.cron-sentence__field select {
   min-width: 0;
   width: 120px;
 }

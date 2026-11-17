@@ -44,6 +44,49 @@ function cronResponses(jobs: CronJob[], snapshotRevision: string, enabled = true
 }
 
 suite.define(() => {
+  it("keeps Daily editable and saves the selected whole-hour window", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const job = gardenJob({
+        schedule: { kind: "cron", expr: "30 9 * * 1", tz: "America/New_York", staggerMs: 0 },
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
+        methodResponses: { ...cronResponses([job], "garden-schedule-list"), "cron.update": job },
+      });
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await editAutomation(page, job.id);
+
+      const part = (name: string) => page.locator(`[data-test-id="cron-schedule-${name}"]`);
+      await part("frequency").click();
+      await part("frequency-daily").click();
+      await expect.poll(() => part("frequency").textContent()).toContain("Daily");
+      await part("days").click();
+      await part("day-5").click();
+      await part("day-1").click();
+      expect(await part("day-5").getAttribute("aria-pressed")).toBe("true");
+      expect(await part("frequency").textContent()).toContain("Daily");
+      await page.keyboard.press("Escape");
+
+      await part("frequency").click();
+      await part("frequency-hourly").click();
+      await part("hours").click();
+      await part("between").click();
+      const from = part("from");
+      expect(await from.locator('option[value="17"]').count()).toBe(0);
+      await from.selectOption("10");
+      await part("until").selectOption("18");
+      await page.keyboard.press("Escape");
+
+      await page.locator('[data-test-id="cron-submit"]').click();
+      expect((await gateway.waitForRequest("cron.update")).params).toMatchObject({
+        id: job.id,
+        patch: {
+          schedule: { kind: "cron", expr: "0 10-18 * * 5", tz: "America/New_York", staggerMs: 0 },
+        },
+      });
+    });
+  });
+
   it("requires an explicit delivery choice before saving an unrepaired job", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1000 } },

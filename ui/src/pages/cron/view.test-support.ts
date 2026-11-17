@@ -83,7 +83,6 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onFormChange: () => undefined,
     onRefresh: () => Promise.resolve(),
     onSubmit: () => undefined,
-    onSubmitRunNow: () => undefined,
     onSelectJob: () => undefined,
     onOpenCreate: () => undefined,
     onClosePanel: () => undefined,

@@ -109,12 +109,23 @@ export const TRAY_SCHEDULE_FIELDS = ["scheduleAt", "everyAmount", "cronExpr", "c
 /** The Repeat choice and its per-kind fields, compact enough to share the prompt's tray. */
 export function ScheduleControls(props: CronProps) {
   const form = () => props.form;
-  // Choosing Custom keeps an expression the sentence could say as an expression.
-  const [forcedCustom, setForcedCustom] = createSignal(false);
-  const frequency = () => {
+  // Weekly and single-day Daily have the same expression. Keep the editor's
+  // explicit mode for this draft, without adding a field to the saved schedule.
+  const [preference, setPreference] = createSignal<{
+    jobId: string | undefined;
+    mode: "custom" | "daily";
+  }>();
+  const frequency = createMemo(() => {
     const read = formSentenceFrequency(form());
-    return read && form().scheduleKind === "cron" && forcedCustom() ? "custom" : read;
-  };
+    const current = preference();
+    if (form().scheduleKind !== "cron" || !current || current.jobId !== props.editingJob?.id) {
+      return read;
+    }
+    if (current.mode === "custom") {
+      return "custom";
+    }
+    return read === "weekly" ? "daily" : read;
+  });
   const isOnExit = () => form().scheduleKind === "on-exit";
   const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
@@ -155,7 +166,9 @@ export function ScheduleControls(props: CronProps) {
           {...props}
           frequency={frequency()!}
           kinds={kinds()}
-          onCustom={setForcedCustom}
+          onFrequencyPreference={(mode) =>
+            setPreference(mode ? { jobId: props.editingJob?.id, mode } : undefined)
+          }
         />
       ) : (
         <SettingsSegmented<CronFormState["scheduleKind"]>
