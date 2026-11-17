@@ -134,9 +134,10 @@ describe.skipIf(!isLiveTestEnabled())(
         await pressKeyViaPlaywright({ cdpUrl, targetId, key: "Shift", ...strictPolicy });
         // Browser-initiated, as the address bar is: no page request and no referrer.
         await session.send("Page.navigate", { url: deniedUrl });
-        await expect
-          .poll(() => page.url(), { timeout: 5_000 })
-          .toBe("chrome-error://chromewebdata/");
+        await page.waitForURL("chrome-error://chromewebdata/", {
+          waitUntil: "commit",
+          timeout: 5_000,
+        });
         // Reloading the blocked page asks for the denied address again.
         await session.send("Page.reload");
         await sleep(delayMs);

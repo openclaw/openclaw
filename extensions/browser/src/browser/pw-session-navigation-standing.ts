@@ -108,9 +108,13 @@ export function createStandingNavigationPolicy() {
         if (!denialLogged) {
           denialLogged = true;
           // The URL is page-controlled content; the tab's first denial names only its kind.
-          log.warn(
-            `Stopped a document the page requested between browser actions (${error instanceof Error ? error.name : "error"}).`,
-          );
+          try {
+            log.warn(
+              `Stopped a document the page requested between browser actions (${error instanceof Error ? error.name : "error"}).`,
+            );
+          } catch {
+            // Diagnostics cannot prevent a denied request from being settled.
+          }
         }
       }
       // A page can imitate a browser-initiated navigation, so this only chooses how
