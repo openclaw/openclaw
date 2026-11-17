@@ -117,6 +117,66 @@ it("retains both missing-session authorities when they share first-use registrat
   }
 });
 
+it("retains missing-session authority when joining an opening without observers", async ({
+  state,
+}) => {
+  const cfg = { agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:late-first-use";
+  const prepared = await prepareMissing(cfg, sessionKey);
+  const database = { agentId: "main", path: resolveOpenClawAgentSqlitePath({ agentId: "main" }) };
+  const execution = await agentExecutions.captureOpenClawAgentDatabaseExecutionAsync(database);
+  const opening = createDeferredCore();
+  const releaseOpening = createDeferredCore();
+  const joined = createDeferredCore();
+  const open = workerStore.openAgentDatabaseSqliteWorkerStore;
+  const interception = vi
+    .spyOn(workerStore, "openAgentDatabaseSqliteWorkerStore")
+    .mockImplementation(async (...args) => {
+      opening.resolve();
+      await releaseOpening.promise;
+      return open(...args);
+    });
+  const prepare = replacementWorker.prepareSessionEntryReplacementDatabase;
+  const preparations = vi
+    .spyOn(replacementWorker, "prepareSessionEntryReplacementDatabase")
+    .mockImplementation((...args) => {
+      if (args[2] !== execution) {
+        joined.resolve();
+      }
+      return prepare(...args);
+    });
+  const receipt = vi.fn(prepared.followRegistration);
+  const initial = prepare(database, () => {}, execution);
+  let acquiring: ReturnType<ReturnType<typeof createSessionActorFactory>["acquire"]> | undefined;
+  try {
+    await opening.promise;
+    acquiring = createSessionActorFactory(database).acquire(
+      { database: { kind: "file" }, sessionKey },
+      { assertCurrent() {}, assertReadable() {} },
+      receipt,
+    );
+    await joined.promise;
+    releaseOpening.resolve();
+    await initial;
+    const actor = await acquiring;
+    try {
+      expect(receipt, "late observer receives the in-flight registration").toHaveBeenCalled();
+      expect(() => prepared.readCurrent(cfg)).not.toThrow();
+    } finally {
+      await actor.release();
+    }
+  } finally {
+    releaseOpening.resolve();
+    await Promise.allSettled([initial, acquiring]);
+    interception.mockRestore();
+    preparations.mockRestore();
+    await execution.release();
+    prepared.release();
+  }
+});
+
 it.for(["creation", "storage", "early-storage"] as const)(
   "observes failed %s opening through the lifecycle readiness chain",
   async (kind, { state, signal }) => {

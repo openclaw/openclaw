@@ -402,7 +402,7 @@ export function createAgentDatabaseExecution(
           throw new Error("Originally observed agent target requires creating admission first");
         }
         if (creationBorrowers && !fileIdentity && (!create || !creatingTarget)) {
-          throw new Error("Agent creation requires its captured reference");
+          throw new Error("Agent creation requires its captured creating reference");
         }
       };
       const borrowerLifetime = new AgentDatabaseExecutionLifetime();

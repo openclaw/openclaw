@@ -191,9 +191,6 @@ export function createAgentDatabaseRegistrationObservers() {
   const observers = new Set<(change: AgentDatabaseRegistryChange) => void>();
   return {
     bindSource(source: AgentDatabaseRequestExecutionSource): AgentDatabaseRequestExecutionSource {
-      if (observers.size === 0) {
-        return source;
-      }
       return {
         ...source,
         onRegistryChange(change) {
