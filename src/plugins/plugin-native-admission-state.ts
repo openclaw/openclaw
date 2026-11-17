@@ -182,11 +182,9 @@ export function queuePluginNativeAdmissionPublication(
     data,
     run: () =>
       publish(data)
-        .then((accepted) => {
+        .then(async (accepted) => {
           if (accepted) {
-            for (const root of roots) {
-              root.commit();
-            }
+            await Promise.all(roots.map(async (root) => root.commit()));
             if (state.publications.get(data.key) === publication) {
               state.publications.delete(data.key);
             }
