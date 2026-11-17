@@ -9,6 +9,7 @@ import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from 
 import { materializeManagedWorktree } from "./checkout-materialize.js";
 import { usesSourceOnlyWorktreeGit } from "./checkout-policy.js";
 import { addManagedWorktree } from "./checkout.js";
+import { hasWorktreeUnknownOutcome } from "./errors.js";
 import {
   requireGit,
   worktreePathExists,
@@ -17,6 +18,7 @@ import {
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
+import { releasePendingWorktree, reservePendingWorktree } from "./pending-slots.js";
 import { restoreProvisionedFiles } from "./provisioned-files.js";
 import { SNAPSHOT_CHUNK_BYTES } from "./provisioned-snapshot.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
@@ -45,7 +47,7 @@ import {
 } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot, type ExactStateSnapshot } from "./snapshot-exact-state.js";
 import {
-  clearExactRestoreReceipt,
+  clearCompletedExactRestoreReceipt,
   readExactRestoreReceipt,
   restoreExactSnapshotFallback,
 } from "./snapshot-restore-exact.js";
@@ -68,7 +70,7 @@ type RestoreInput = {
 type RestoreDependencies = {
   env: NodeJS.ProcessEnv;
   getConfig?: () => OpenClawConfig;
-  admitCapacity: () => Promise<void>;
+  admitCapacity: (reserve: (guard: WorktreeAllocationGuard) => Promise<void>) => Promise<void>;
 };
 type RestoreContext = Omit<RestoreDependencies, "admitCapacity"> & {
   registryContext: OpenClawStateWorkerContext;
@@ -76,6 +78,7 @@ type RestoreContext = Omit<RestoreDependencies, "admitCapacity"> & {
   admitCapacity: (requiredPaths: readonly string[], alreadyCounted: boolean) => Promise<void>;
   requireSpace: (target: string, repository: ResolvedRepository, bytes?: number) => Promise<void>;
   recoveryClaim?: string;
+  pendingId?: string;
 };
 
 async function settleRestoredProjection(
@@ -100,11 +103,13 @@ export async function restoreManagedWorktreeSnapshot(
 ): Promise<ManagedWorktreeRecord> {
   const { env } = dependencies;
   const registryContext = captureWorktreeRunEndContext(env);
-  // Queued removal can rebind the record before these allocation and checkout leases admit us.
+  const accept = captureWorktreeRegistryReadGuard(registryContext, "exact-owner");
+  // Queued removal can rebind the record before checkout custody admits us.
   const preparedRecord = requireManagedWorktreeRestoreRecord(
     input.id,
     await readRegistryWorktree(registryContext, input.id),
   );
+  const assertRecordCurrent = accept(preparedRecord);
   input.commitGuard();
   if (!(await worktreePathExists(preparedRecord.repoRoot))) {
     throw new Error(`source repository no longer exists: ${preparedRecord.repoRoot}`);
@@ -125,22 +130,42 @@ export async function restoreManagedWorktreeSnapshot(
       admitCapacity: async (requiredPaths, alreadyCounted) => {
         await retainSources(requiredPaths);
         if (!alreadyCounted) {
-          await dependencies.admitCapacity();
+          await dependencies.admitCapacity(async (allocation) => {
+            input.commitGuard();
+            allocation.commitGuard();
+            await reservePendingWorktree(
+              env,
+              { ...preparedRecord, removedAt: undefined },
+              {
+                ...allocation.workerAuthority,
+                predicates: [
+                  ...(allocation.workerAuthority.predicates ?? []),
+                  { kind: "exact-snapshot", record: preparedRecord },
+                ],
+              },
+            );
+            context.pendingId = preparedRecord.id;
+          });
         }
       },
       requireSpace: (target, sourceRepository, bytes) =>
         requireAllocationSpace(input, env, target, sourceRepository, bytes),
     };
     // An unfinished retirement still has a live row: retain its removal claim during recovery.
-    const accept = captureWorktreeRegistryReadGuard(registryContext, "exact-owner");
-    const record = requireManagedWorktreeRestoreRecord(
-      input.id,
-      await readRegistryWorktree(registryContext, input.id),
-    );
-    const assertRecordCurrent = accept(record);
+    const record = preparedRecord;
     input.commitGuard();
+    assertRecordCurrent();
     if (!input.recoverExactState || record.removedAt !== undefined) {
-      return await restoreSnapshot(input, context);
+      try {
+        return await restoreSnapshot(input, context);
+      } catch (error) {
+        if (context.pendingId && !hasWorktreeUnknownOutcome(error)) {
+          await releasePendingWorktree(env, context.pendingId, {
+            leaseSet: input.workerAuthority.leaseSet,
+          });
+        }
+        throw error;
+      }
     }
     const expected = exactStateRetirementSchema.parse(input.recoverExactState);
     assertExactStateOwner(record, expected);
@@ -205,9 +230,18 @@ async function restoreSnapshot(
   const assertSnapshotCurrent = accept(record);
   params.commitGuard();
   let capacityAdmitted = record.removedAt === undefined;
+  const callerGuard = params.commitGuard;
+  params = {
+    ...params,
+    commitGuard: () => {
+      callerGuard();
+      if (!finalized) {
+        assertSnapshotCurrent();
+      }
+    },
+  };
   if (record?.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-")) {
     const original = record;
-    const callerGuard = params.commitGuard;
     params = {
       ...params,
       workerAuthority: {
@@ -216,13 +250,6 @@ async function restoreSnapshot(
           ...(params.workerAuthority?.predicates ?? []),
           { kind: "exact-snapshot", record: original },
         ],
-      },
-      commitGuard: () => {
-        callerGuard?.();
-        if (finalized) {
-          return;
-        }
-        assertSnapshotCurrent();
       },
     };
   }
@@ -247,21 +274,7 @@ async function restoreSnapshot(
       throw commandError("git show-ref exact recovery", pending);
     }
     await requireExactWorktreeRepository(live, live.path, options);
-    const receipt = await readExactRestoreReceipt(live, options);
-    if (receipt) {
-      if (
-        receipt.snapshot !==
-        (await requireGit(live.repoRoot, ["rev-parse", live.snapshotRef + "^{commit}"], options))
-      ) {
-        throw new Error("Completed exact restore snapshot changed; source and receipt preserved");
-      }
-      const assertCurrent = () => {
-        params.commitGuard?.();
-        assertExactStateSourceIdentity(live.path, receipt);
-      };
-      assertCurrent();
-      await clearExactRestoreReceipt(live, receipt, { ...options, beforeRun: assertCurrent });
-    }
+    await clearCompletedExactRestoreReceipt(live, options);
     // Exact restore publishes this live row only after all recovery cleanup.
     // A lost acknowledgement after receipt deletion is therefore a completed retry.
     params.commitGuard?.();
@@ -385,7 +398,7 @@ async function restoreSnapshot(
   if (exact) {
     const restoreRecord = record;
     const finalize = async (identity: ExactStateSnapshot) => {
-      const callerGuard = params.commitGuard;
+      const finalizeGuard = params.commitGuard;
       const workerAuthority = params.workerAuthority;
       params = {
         ...params,
@@ -397,7 +410,7 @@ async function restoreSnapshot(
           },
         },
         commitGuard: () => {
-          callerGuard?.();
+          finalizeGuard?.();
           assertExactStateSourceIdentity(restoreRecord.path, identity);
         },
       };
@@ -620,7 +633,7 @@ async function restoreSnapshot(
 
 async function finishRestoredSnapshot(
   params: { id: string } & WorktreeAllocationGuard,
-  context: Pick<RestoreContext, "env" | "recoveryClaim">,
+  context: Pick<RestoreContext, "env" | "recoveryClaim" | "pendingId">,
   record: ManagedWorktreeRecord,
   restoredProvisionedPaths: string[],
   onFinalized: () => void,
@@ -680,7 +693,19 @@ async function finishRestoredSnapshot(
       // a live row until the next run-end cleanup records fresh truth.
       runEndCleanup: undefined,
     },
-    { assertCurrent: params.commitGuard, workerAuthority: params.workerAuthority },
+    {
+      assertCurrent: params.commitGuard,
+      workerAuthority: exact
+        ? params.workerAuthority
+        : {
+            ...params.workerAuthority,
+            predicates: [
+              ...(params.workerAuthority.predicates ?? []),
+              { kind: "exact-snapshot", record },
+            ],
+          },
+      pendingId: context.pendingId,
+    },
   );
   onFinalized();
   if (!exact) {

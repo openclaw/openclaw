@@ -172,18 +172,22 @@ describe("ManagedWorktreeService canonical paths", () => {
 
     const queued = createDeferred();
     const release = createDeferred();
-    const allocate = allocation.withWorktreeAllocationLease;
+    const mutate = allocation.withWorktreeMutationLease;
     const admission = vi
-      .spyOn(allocation, "withWorktreeAllocationLease")
+      .spyOn(allocation, "withWorktreeMutationLease")
       .mockImplementationOnce(async (params, run) => {
         queued.resolve();
         await release.promise;
-        return await allocate(params, run);
+        return await mutate(params, run);
       });
     const restoring = service.restore({ id: created.id });
     try {
       await withinTest(
-        awaitGateBeforeSettlement(queued.promise, restoring, "restore never reached allocation"),
+        awaitGateBeforeSettlement(
+          queued.promise,
+          restoring,
+          "restore never reached checkout custody",
+        ),
         signal,
       );
       const removed = await service.remove({

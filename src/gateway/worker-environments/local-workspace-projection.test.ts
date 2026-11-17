@@ -795,10 +795,10 @@ it("reports successful native eviction and restores accepted workspace contents"
   const authored = "accepted guest edit before native eviction\n";
   await writeText(projection, "source.txt", authored);
   await synchronize();
-  const { withWorktreeAllocationLease } = await import("../../agents/worktrees/allocation.js");
+  const { withWorktreeMutationLease } = await import("../../agents/worktrees/allocation.js");
   const { evictManagedWorktree } = await import("../../agents/worktrees/eviction.js");
   await expect(
-    withWorktreeAllocationLease({ env: process.env }, (guard) =>
+    withWorktreeMutationLease({ env: process.env, id: owner.worktree.id }, (guard) =>
       evictManagedWorktree({
         env: process.env,
         record: owner.worktree,

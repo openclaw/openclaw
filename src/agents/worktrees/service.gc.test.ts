@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
+import * as allocation from "./allocation.js";
 import {
   createWorktreeCapacityStatfs,
   useInProcessWorktreeCapacityTransport,
@@ -117,11 +118,34 @@ describe("ManagedWorktreeService garbage collection", () => {
       expect(acquire.mock.calls.length).toBe(0);
       const orphan = await fs.mkdtemp(path.join(path.dirname(registered.path), "orphan-"));
       expect((await service.gc()).orphansDeleted).toBe(1);
-      expect(acquire.mock.calls.length).toBe(1);
+      expect(acquire.mock.calls.length).toBe(2);
       await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
       expect(await fs.readFile(path.join(registered.path, "README.md"), "utf8")).toBe("base\n");
     } finally {
       acquire.mockRestore();
+    }
+  });
+
+  it("retries orphan cleanup after a concurrent inventory change without manual retry", async () => {
+    const registered = await materializeDownstreamFixture("retained");
+    const orphan = await fs.mkdtemp(path.join(path.dirname(registered.path), "orphan-"));
+    const allocate = allocation.withWorktreeAllocationLease;
+    const admission = vi
+      .spyOn(allocation, "withWorktreeAllocationLease")
+      .mockImplementationOnce(async (params, run) => {
+        await updateRegistryWorktree(env, registered.id, {
+          lastActiveAt: registered.lastActiveAt + 1,
+        });
+        return await allocate(params, run);
+      });
+    try {
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 0, failedCount: 1 });
+      expect(await fs.stat(orphan)).toBeTruthy();
+      expect(await service.gc()).toMatchObject({ orphansDeleted: 1, failedCount: 0 });
+      await expect(fs.stat(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(registered.path, "README.md"), "utf8")).toBe("base\n");
+    } finally {
+      admission.mockRestore();
     }
   });
 
@@ -174,7 +198,7 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   it("reports a failed orphan once, cleans its siblings, and retries only on request", async () => {
     const fingerprint = path.join(stateDir, "worktrees", "fingerprint");
-    const orphan = path.join(fingerprint, "blocked");
+    let orphan = path.join(fingerprint, "blocked");
     const sibling = path.join(fingerprint, "healthy");
     await fs.mkdir(orphan, { recursive: true });
     await fs.mkdir(sibling);
@@ -182,6 +206,13 @@ describe("ManagedWorktreeService garbage collection", () => {
     const remove = fs.rm;
     let attempts = 0;
     let blocked = true;
+    const rename = fs.rename;
+    const retirement = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+      await rename(source, target);
+      if (source === orphan) {
+        orphan = String(target);
+      }
+    });
     const removal = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
       if (target === orphan) {
         attempts += 1;
@@ -226,19 +257,21 @@ describe("ManagedWorktreeService garbage collection", () => {
       expect(attempts).toBe(3);
     } finally {
       removal.mockRestore();
+      retirement.mockRestore();
       warnings.cleanup();
     }
   });
 
   it("does not defer a replacement orphan after the previous directory fails removal", async () => {
-    const orphan = path.join(stateDir, "worktrees", "fingerprint", "replaced");
+    let orphan = path.join(stateDir, "worktrees", "fingerprint", "replaced");
     const retained = path.join(root, "retained-original");
     await fs.mkdir(orphan, { recursive: true });
     const remove = fs.rm;
     const removal = vi.spyOn(fs, "rm").mockImplementationOnce(async (target, options) => {
-      if (target !== orphan) {
+      if (!String(target).startsWith(path.dirname(orphan))) {
         return await remove(target, options);
       }
+      orphan = String(target);
       await fs.rename(orphan, retained);
       await fs.mkdir(orphan);
       await fs.writeFile(path.join(orphan, "replacement.txt"), "new incarnation\n");
@@ -261,10 +294,17 @@ describe("ManagedWorktreeService garbage collection", () => {
     "does not repair directory permissions for another owner",
     async () => {
       const orphan = path.join(stateDir, "worktrees", "fingerprint", "foreign");
-      const dependency = path.join(orphan, "node_modules", "package");
+      let dependency = path.join(orphan, "node_modules", "package");
       await fs.mkdir(dependency, { recursive: true });
       await fs.writeFile(path.join(dependency, "file.txt"), "retained\n");
       await fs.chmod(dependency, 0o555);
+      const rename = fs.rename;
+      const retirement = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        await rename(source, target);
+        if (source === orphan) {
+          dependency = path.join(String(target), "node_modules", "package");
+        }
+      });
       // Ownership mismatch uses real permissions without requiring privileged chown.
       const lstat = fs.lstat;
       const ownership = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -284,6 +324,7 @@ describe("ManagedWorktreeService garbage collection", () => {
         expect(await fs.readFile(path.join(dependency, "file.txt"), "utf8")).toBe("retained\n");
       } finally {
         ownership.mockRestore();
+        retirement.mockRestore();
         await fs.chmod(dependency, 0o755);
       }
     },

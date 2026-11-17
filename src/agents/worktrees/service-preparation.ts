@@ -168,7 +168,7 @@ export async function createWithWorktreeAllocation(
       const failures = [error];
       if (publication.pending) {
         try {
-          await withWorktreeAllocationLease(
+          await withWorktreeMutationLease(
             { env: params.env, id: publication.id },
             async (allocation) => {
               if (publication.pending && !(await worktreePathExists(publication.pending.path))) {
@@ -215,18 +215,18 @@ export async function createWithWorktreeAllocation(
       if (error instanceof WorktreePendingContentionError && !publication.record) {
         await withWorktreeMutationLease({ ...params, id: error.worktreeId }, async () => {});
         // The creator can die during the wait. Release checkout custody before allocation recovery.
-        await withWorktreeAllocationLease(params, async () => {
-          const pending = (await readPendingWorktrees(params.env)).find(
+        const pending = await withWorktreeAllocationLease(params, async () =>
+          (await readPendingWorktrees(params.env)).find(
             ({ record, state }) => record.id === error.worktreeId && state === "pending",
+          ),
+        );
+        if (pending) {
+          await requireNewWorktreeBranch(pending.record.repoRoot, pending.record.branch);
+          throw new Error(
+            "Worktree creation did not settle; run openclaw worktrees gc to recover its pending slot",
+            { cause: error },
           );
-          if (pending) {
-            await requireNewWorktreeBranch(pending.record.repoRoot, pending.record.branch);
-            throw new Error(
-              "Worktree creation did not settle; run openclaw worktrees gc to recover its pending slot",
-              { cause: error },
-            );
-          }
-        });
+        }
         continue;
       }
       if (error instanceof WorktreeCapacityContentionError && !publication.record) {

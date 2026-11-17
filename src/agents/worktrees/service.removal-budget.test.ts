@@ -659,9 +659,20 @@ describe("nested eviction", () => {
         "external checkout data",
       );
       config.worktreeMaxCount = 1;
-      await service.gc();
-      expect(registry(outer.id)?.removedAt).toEqual(expect.any(Number));
-      expect(await liveIds()).toEqual([replacement.id]);
+      const result = await service.gc();
+      expect(result).toMatchObject({
+        removed: [replacement.id],
+        outcome: "partial",
+        limitsSatisfied: true,
+        issues: [
+          { id: outer.id, reason: expect.stringContaining("cannot be snapshotted losslessly") },
+        ],
+      });
+      expect(registry(outer.id)?.removedAt).toBeUndefined();
+      expect(await liveIds()).toEqual([outer.id]);
+      expect(await requireGit(source, ["show", `${retired.snapshotRef}:unsaved.txt`])).toBe(
+        "external checkout data",
+      );
     },
   );
 

@@ -3,11 +3,7 @@ import { lstatSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import {
-  withWorktreeAllocationLease,
-  withWorktreeMutationLease,
-  type WorktreeAllocationGuard,
-} from "./allocation.js";
+import { withWorktreeMutationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
@@ -161,7 +157,7 @@ export async function verifyManagedWorktreeExactSnapshot(params: {
   );
 }
 
-/** Explicit retirement shares the same allocation owner as removal and GC. */
+/** Explicit retirement owns the same checkout as removal and restore. */
 export async function retireManagedWorktreeSnapshotById(
   input: RetireManagedWorktreeSnapshotParams,
   environment: NodeJS.ProcessEnv = process.env,
@@ -169,7 +165,7 @@ export async function retireManagedWorktreeSnapshotById(
   const context = captureWorktreeRunEndContext(environment);
   const env = { ...environment, ...context.environment };
   const params = { ...input };
-  return await withWorktreeAllocationLease({ ...params, env }, async (guard) => {
+  return await withWorktreeMutationLease({ ...params, env }, async (guard) => {
     const record = await readRegistryWorktree(context, params.id);
     guard.commitGuard();
     if (

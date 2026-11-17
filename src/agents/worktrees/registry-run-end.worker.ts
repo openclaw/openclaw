@@ -118,9 +118,23 @@ export function updateRegistryWorktreeInDatabase(
     onlyIfLive?: boolean;
     onlyIfActiveAt?: number;
     removalToken?: string;
+    pendingId?: string;
   },
+  leases?: readonly OpenClawStateLeaseIdentity[],
 ): void {
   const { id, patch } = input;
+  if (input.pendingId !== undefined) {
+    const record = getRegistryWorktreeInDatabase(db, id);
+    if (
+      !record ||
+      input.pendingId !== id ||
+      !("removedAt" in patch) ||
+      patch.removedAt !== undefined
+    ) {
+      throw new Error("Pending restore must publish its original worktree");
+    }
+    publishPendingWorktreeInDatabase(db, id, record, leases);
+  }
   const values: Partial<Selectable<DB["worktrees"]>> = {};
   if (patch.lastActiveAt !== undefined) {
     values.last_active_at = patch.lastActiveAt;
