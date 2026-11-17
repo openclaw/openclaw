@@ -763,10 +763,11 @@ fall into three groups.
   deferred plugin convergence, plugin cohort commit, Windows autostart
   restore, and the terminal record and ledger finish protect authority,
   readiness, cohort settlement, or state only this run can restore.
-- **Being measured.** Package backup retirement fails the command when a
-  backup link is retained or retirement throws, and a non-errno throw in Git
-  runtime backup or release collection does the same. These were read from
-  source and not reproduced through the command.
+- **Measured.** A previous npm link that cannot be removed is now a warning
+  ([#200613](https://github.com/openclaw/openclaw/pull/200613)); a link that
+  was replaced or cannot be read still fails the update. Release collection
+  was already a warning. A non-errno throw in the Git runtime backup only
+  arises from lost authority or an unconfirmed child, and stays blocking.
 
 ### B3: stop, publish, and rollback authority
 
