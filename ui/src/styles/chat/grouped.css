@@ -1039,7 +1039,7 @@ img.chat-avatar {
 .chat-bubble--tool-shell {
   align-self: stretch;
   width: 100%;
-  max-width: var(--chat-message-max-width, 760px);
+  max-width: var(--chat-message-max-width, 100%);
   padding: 0;
   border: 0;
   background: transparent;
