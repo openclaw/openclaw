@@ -15,7 +15,7 @@ export type GitReleaseTrial = {
   attempts: number;
   /** The resolved config path; a config outside the state directory is not in the scan. */
   config?: string;
-  /** Selected by the next service start instead of now (`--no-restart`). */
+  /** Selected by the next service start instead of now (`--no-restart`), without a fallback. */
   pending?: boolean;
   /** Written by the launcher before it restores anything: what the rollback restores. */
   restoring?: Array<{ suffix: string; files: string[] }>;
@@ -86,13 +86,20 @@ function writeTrial(record) {
 // predecessor. Undo those additions and retire both; the suffix restore covers the rest.
 function retirePlans(stateDir, generation) {
   const applied = path.join(stateDir, ".upgraded-" + generation + ".json");
+  let record;
   try {
-    for (const op of JSON.parse(fs.readFileSync(applied, "utf8")).ops ?? []) {
-      if (op.kind === "add") {
-        fs.rmSync(op.live, { force: true });
-      }
+    record = JSON.parse(fs.readFileSync(applied, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
     }
-  } catch {}
+  }
+  // A failed removal propagates and keeps the record, so the next start retries.
+  for (const op of record?.ops ?? []) {
+    if (op.kind === "add") {
+      fs.rmSync(op.live, { force: true });
+    }
+  }
   fs.rmSync(applied, { force: true });
   for (const entry of fs.readdirSync(stateDir)) {
     if (!entry.startsWith(".upgrade-" + generation + "-")) {
@@ -122,11 +129,15 @@ let trial;
 try {
   trial = JSON.parse(fs.readFileSync(trialFile, "utf8"));
 } catch {}
-// An update run with --no-restart leaves activation to the next service start.
-if (trial?.pending && counts && fs.readlinkSync(slot) === trial.previous) {
-  switchLink(trial.target);
-  delete trial.pending;
-  writeTrial(trial);
+// An update run with --no-restart leaves activation to the next service start. That start
+// is the operator's, with no updater to settle a trial (an older target cannot settle it
+// itself), so a deferred release is selected without the two-start fallback.
+if (trial?.pending && counts) {
+  if (fs.readlinkSync(slot) === trial.previous) {
+    switchLink(trial.target);
+  }
+  fs.rmSync(trialFile, { force: true });
+  trial = undefined;
 }
 if (trial && counts) {
   if (fs.readlinkSync(slot) !== trial.target) {

@@ -272,11 +272,38 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     expect(await fs.readlink(slot)).toBe(serving);
     expect(startGateway(prefix).stdout).toContain("next");
     expect(await fs.readlink(slot)).not.toBe(serving);
-    const trial = JSON.parse(
-      await fs.readFile(path.join(prefix, "releases", GIT_RELEASE_TRIAL), "utf8"),
+    // No updater settles an operator start, so later starts never count toward a switch-back.
+    await expect(fs.access(path.join(prefix, "releases", GIT_RELEASE_TRIAL))).rejects.toThrow();
+    startGateway(prefix);
+    expect(startGateway(prefix).stdout).toContain("next");
+  });
+
+  it("keeps the applied plan and the trial when removing an addition fails", async () => {
+    const { stateDir, prefix } = await setup();
+    const good = await release(prefix, "1.0.0", 'console.log("old");\n');
+    await publishGitRelease({ prefix, releaseRoot: good, trial: false });
+    const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
+    await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+    // An addition that cannot be removed (here a non-empty directory).
+    const stuck = path.join(stateDir, "client", "credentials.sqlite");
+    await fs.mkdir(stuck, { recursive: true });
+    await fs.writeFile(path.join(stuck, "blocker"), "");
+    const record = path.join(stateDir, ".upgraded-2.0.0.json");
+    await fs.writeFile(
+      record,
+      JSON.stringify({ appVersion: "2.0.0", ops: [{ kind: "add", live: stuck }] }),
     );
-    expect(trial).toMatchObject({ attempts: 1 });
-    expect(trial.pending).toBeUndefined();
+    const slot = gitReleaseSlot(prefix);
+    const target = await fs.readlink(slot);
+
+    startGateway(prefix);
+    startGateway(prefix);
+    expect(startGateway(prefix).status).not.toBe(0);
+
+    await expect(fs.access(record)).resolves.toBeUndefined();
+    expect(await fs.readlink(slot)).toBe(target);
+    await fs.rm(stuck, { recursive: true });
+    expect(startGateway(prefix).stdout).toContain("old");
   });
 
   it("stops counting once the trial release reports ready", async () => {
