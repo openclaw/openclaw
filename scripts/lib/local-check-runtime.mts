@@ -153,6 +153,11 @@ export function createDeclarationInputBoundary(cwd: string) {
   return {
     root,
     resolve,
+    /** An existing file reached only through a parent directory, not through a link. */
+    outside(file: string) {
+      const absolute = resolve(file);
+      return !contains(absolute) && !contains(fs.realpathSync.native(absolute));
+    },
     assert(file: string) {
       const absolute = resolve(file);
       // Generated declaration IDs do not exist yet, but their source directory does.

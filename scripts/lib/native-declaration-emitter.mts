@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { API, EmitOutputFile } from "typescript/async";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.ts";
+import { formatErrorMessage } from "./error-format.mts";
 import { createDeclarationInputBoundary, resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { createDeclarationFileSystem } from "./native-declaration-filesystem.mts";
 import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
@@ -383,6 +384,17 @@ async function compileDeclarationsWithCompilerCli({
       : /\r?\n/u;
     const lines = compiled.output.replace(/\r?\n$/u, "").split(separator);
     const read = lines.filter((line) => path.isAbsolute(line) && fs.existsSync(line));
+    // In a checkout nested inside another install, such as the updater's preflight
+    // worktree, optional SDK imports that climb parent directories read that install.
+    // The command line cannot deny those reads; the caller uses the bounded filesystem.
+    const escaped = read.find((file) => boundary.outside(file));
+    if (escaped) {
+      try {
+        admit(escaped);
+      } catch (escape) {
+        return { escape };
+      }
+    }
     const inputs = [...new Set(read.map((file) => admit(file)))].toSorted();
     if (compiled.failure) {
       const diagnostics = lines.filter((line) => !read.includes(line)).join("\n");
@@ -416,17 +428,32 @@ export async function emitNativeDeclarations(
   }
   // API baselines check only declaration diagnostics, sometimes with a historical
   // compiler; the command line reports every diagnostic, so they keep the API path.
+  // Nested checkouts also use it, with the checkout boundary the command line applies:
+  // its filesystem treats outside candidates as absent.
+  const baseline = options.diagnostics === "declarations";
+  const cli = baseline ? undefined : await compileDeclarationsWithCompilerCli(options);
+  const escape = cli && "escape" in cli ? cli.escape : undefined;
   const compilation =
-    options.diagnostics === "declarations"
-      ? await compileNativeProject({
+    cli && !("escape" in cli)
+      ? cli
+      : await compileNativeProject({
           ...options,
+          assertInput: baseline ? options.assertInput : (options.assertInput ?? ((file) => file)),
           compilerOptions: {
             ...options.compilerOptions,
             rootDir: fs.realpathSync.native(options.cwd),
             declarationMap: true,
           },
-        })
-      : await compileDeclarationsWithCompilerCli(options);
+        }).catch((error: unknown) => {
+          if (escape === undefined) {
+            throw error;
+          }
+          // A dependency that exists only outside the checkout fails the bounded compile
+          // as a missing module. Keep the compiler's error first and name the escape after.
+          throw new Error(`${formatErrorMessage(error)}\n${formatErrorMessage(escape)}`, {
+            cause: error,
+          });
+        });
   const inputs = new Set(compilation.inputs);
   for (const [file, output] of compilation.outputFiles) {
     if (!/\.d\.[cm]?ts$/u.test(file)) {
