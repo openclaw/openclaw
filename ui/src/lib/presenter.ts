@@ -114,11 +114,17 @@ export function formatCronCadence(job: Pick<CronJob, "schedule">) {
     return s.expr;
   }
   const minuteStep = step(minute);
-  if (minuteStep && hour === "*" && day === "*" && weekday === "*") {
+  if (
+    minuteStep &&
+    60 % Number(minuteStep) === 0 &&
+    hour === "*" &&
+    day === "*" &&
+    weekday === "*"
+  ) {
     return every(Number(minuteStep), "minute");
   }
   const hourStep = step(hour);
-  if (fixed(minute) && hourStep && day === "*" && weekday === "*") {
+  if (fixed(minute) && hourStep && 24 % Number(hourStep) === 0 && day === "*" && weekday === "*") {
     return every(Number(hourStep), "hour");
   }
   if (fixed(minute) && hour === "*" && day === "*" && weekday === "*") {

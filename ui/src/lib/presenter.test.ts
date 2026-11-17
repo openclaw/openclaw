@@ -159,6 +159,8 @@ describe("formatCronCadence", () => {
     expect(cron("0 6 1 * *")).toBe("Monthly");
     expect(cron("0 */6 * * *")).toBe("Every 6 hours");
     expect(cron("*/20 * * * *")).toBe("Every 20 minutes");
+    expect(cron("*/7 * * * *")).toBe("*/7 * * * *");
+    expect(cron("0 */5 * * *")).toBe("0 */5 * * *");
     expect(cadence({ kind: "every", everyMs: 5 * 3_600_000 })).toBe("Every 5 hours");
     expect(cron("0 9 1 1 *")).toBe("0 9 1 1 *");
     expect(cadence({ kind: "at", at: "2026-11-21T15:00:00.000Z" })).toBe("Once");
