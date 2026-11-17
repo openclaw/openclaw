@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor compares pending plugin migration obligations independently of
+plugin order and repair guidance. A changed owner, protected path, or migration
+requirement still refuses input publication; diagnostics name added or removed
+owners even when the displayed ID summary is truncated. The candidate must contain
+this repair; the installed updater needs no schema or protocol change.
+
 The candidate CLI and Matrix plugin keep explicit `matrix doctor inspect` and
 `matrix doctor recover --account <id> --accept-snapshot-rollback` available through
 the separate Doctor contract when an unfinished migration withholds normal Matrix
