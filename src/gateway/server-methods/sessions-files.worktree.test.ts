@@ -577,6 +577,10 @@ describe("sessions.files for managed-worktree sessions", () => {
         await import("../worker-environments/local-workspace-store.test-support.js");
       const row = await readLocalWorkspaceProjection(entry.worktree.id);
       expect(row?.pending_ref).toBeNull();
+      // The next guest turn must be able to prepare its sandbox workspace again.
+      await expect(
+        withLocalWorkspaceProjection(owner as any, (projectionState) => projectionState.prepare()),
+      ).resolves.toBeTruthy();
     });
   });
 
@@ -722,6 +726,9 @@ describe("sessions.files for managed-worktree sessions", () => {
         await import("../worker-environments/local-workspace-store.test-support.js");
       const row = await readLocalWorkspaceProjection(entry.worktree.id);
       expect(row?.pending_ref).toBeNull();
+      await expect(
+        withLocalWorkspaceProjection(owner as any, (projectionState) => projectionState.prepare()),
+      ).resolves.toBeTruthy();
     });
   });
 });
