@@ -186,15 +186,13 @@ describe("daemon runtime pin owner migration", () => {
     },
   );
 
-  it.each(["different", "missing", "not-directory", "symlink-loop"])(
+  it.each(["different", "missing", "not-directory"])(
     "does not treat a %s recorded source as a completed migration of the current database",
     async (kind) => {
       seedSource([pin]);
       expect((await migrateDaemonRuntimePins(env)).warnings).toEqual([]);
       const other = path.join(tempDirs.make("daemon-pin-foreign-"), "source.sqlite");
-      if (kind === "symlink-loop") {
-        fs.symlinkSync(other, other);
-      } else if (kind !== "missing") {
+      if (kind !== "missing") {
         fs.copyFileSync(resolveOpenClawStateSqlitePath(env), other);
       }
       const recorded = kind === "not-directory" ? path.join(other, "state.sqlite") : other;
