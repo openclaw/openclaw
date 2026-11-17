@@ -14,7 +14,6 @@ import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import {
   type ApplicationChatSubmissions,
   type RetainedChatSubmission,
@@ -498,10 +497,7 @@ export function selectChatInputDisplay(
       (input) =>
         (!input.queued || input.steerNow) && asNullableRecord(input.message)?.display !== false,
     ),
-    queuedInputs: unseenInputs.filter(
-      (input) =>
-        input.queued && !input.steerNow && !messageSubagentCompletions(input.message).length,
-    ),
+    queuedInputs: unseenInputs.filter((input) => input.queued && !input.steerNow),
   };
 }
 
