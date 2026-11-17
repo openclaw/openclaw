@@ -96,6 +96,9 @@ it
     const candidateRoot = path.join(anchor, "candidate");
     let now = Date.now() + (changed === "initially-fresh" ? 0 : 6_000);
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    if (!expectedPathExchangeRoute) {
+      publishWithoutPathExchange(); // A tried and refused exchange rereads one manifest.
+    }
     await withPublicationFence(f.packageRoot, async (fence) => {
       const prepared = await prepareFixtureActivation(f, fence);
       expect(prepared).toBeDefined();

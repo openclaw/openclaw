@@ -250,7 +250,7 @@ it.skipIf(process.platform === "win32").each(["activation", "publication", "reti
       const rename = fsp.rename.bind(fsp);
       vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
         await rename(from, to);
-        // The candidate leaves its staged name once, in either publication.
+        // The candidate leaves its staged name for the one it publishes under.
         if (boundary === "publication" && from === path.join(anchor, "candidate")) {
           change(String(to));
         }
@@ -621,9 +621,9 @@ it.skipIf(process.platform === "win32")(
         const anchor = resolvePackageActivationAnchor(f.packageRoot);
         const rename = fsp.rename.bind(fsp);
         let refused = false;
+        refusePathExchange("EPERM: operation not permitted");
         vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
-          // The package directory in a displacement, the waiting candidate in an exchange.
-          if (!refused && to === path.join(anchor, "previous")) {
+          if (!refused && from === f.packageRoot && to === path.join(anchor, "previous")) {
             refused = true;
             throw new Error("package displacement refused");
           }

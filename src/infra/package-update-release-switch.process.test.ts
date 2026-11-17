@@ -514,9 +514,7 @@ describe.skipIf(process.platform === "win32")("journaled publication killed by S
 
   it(
     "without an exchange tool: only the instant between the two moves has no package",
-    {
-      timeout: 300_000,
-    },
+    { timeout: 300_000 }, // The same sequential sweep as above.
     () =>
       fixtures.lifetime.run(async () => {
         const { killed, detail } = await killAtEveryBoundary("journal", "missing", journal);
