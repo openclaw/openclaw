@@ -24,10 +24,8 @@ suite.define(() => {
         // Cover both lazy-loaded and already-loaded shortcut/draft surfaces.
         for (let iteration = 0; iteration < 2; iteration += 1) {
           // A fixed rail control keeps the shortcut origin connected across navigation.
-          await page
-            .locator("openclaw-app-sidebar")
-            .getByRole("button", { name: "Sessions", exact: true })
-            .click();
+          // People is used because a repeated click on it never collapses or opens a menu.
+          await page.locator('openclaw-app-sidebar [data-navigation-view="online"]').click();
           await page.keyboard.press(`${modifier}+/`);
           const hint = page
             .locator("openclaw-keyboard-shortcuts-dialog .shortcut-row")

@@ -169,7 +169,7 @@ if (
 }
 type Scenario = {
   id: string;
-  routeId?: RouteId | "claws";
+  routeId?: RouteId;
   selector: string;
   shortcut?: string;
   trigger?: string;
@@ -179,13 +179,11 @@ const allScenarios: Scenario[] = [
     id: routeId,
     routeId,
     selector:
-      routeId === "templates"
-        ? ".templates-catalog-header"
-        : routeId === "activity"
-          ? "openclaw-activity-page .content-header"
-          : routeId === "dashboards"
-            ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
-            : `openclaw-${routeId}-page`,
+      routeId === "activity"
+        ? "openclaw-activity-page .content-header"
+        : routeId === "dashboards"
+          ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
+          : `openclaw-${routeId}-page`,
   })),
   {
     id: "new-session",
@@ -398,12 +396,7 @@ async function prepareTarget(
   if (scenario.routeId === "new-session") {
     return { scenario, target: page.locator(".sidebar-rail .sidebar-new-session") };
   }
-  const catalog = scenario.routeId === "templates";
-  const target = page.locator(
-    catalog
-      ? '.sidebar-pages :is([data-sidebar-entry="route:templates"], [data-sidebar-entry="route:claws"]) a'
-      : `.sidebar-pages [data-sidebar-entry="route:${scenario.routeId}"] a`,
-  );
+  const target = page.locator(`.sidebar-pages [data-sidebar-entry="route:${scenario.routeId}"] a`);
   if (!(await target.isVisible())) {
     await page
       .locator("openclaw-app-sidebar")
@@ -411,17 +404,6 @@ async function prepareTarget(
       .click();
   }
   await target.waitFor({ state: "visible" });
-  if (
-    catalog &&
-    (await target.evaluate((element) =>
-      element.closest("[data-sidebar-entry]")?.getAttribute("data-sidebar-entry"),
-    )) === "route:claws"
-  ) {
-    return {
-      scenario: { ...scenario, routeId: "claws", selector: ".claws-catalog-header" },
-      target,
-    };
-  }
   return { scenario, target };
 }
 

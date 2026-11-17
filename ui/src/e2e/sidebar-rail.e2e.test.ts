@@ -305,7 +305,8 @@ suite.define(() => {
         const installProfilePreferences = () =>
           installPreferenceServer(
             page,
-            { "ui.themeMode": "dark", "new-session.migration.v1": true },
+            // A saved empty rail; without one the rail starts with the default pins.
+            { "ui.themeMode": "dark", "new-session.migration.v1": true, "ui.railShortcuts": [] },
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();

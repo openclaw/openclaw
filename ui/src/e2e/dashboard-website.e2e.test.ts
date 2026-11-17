@@ -93,10 +93,17 @@ suite.define(() => {
         expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
           1,
         );
+        // The agent avatar is the rail's Sessions item.
         const showView = (name: "Pages" | "Sessions") =>
-          sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
+          name === "Sessions"
+            ? sidebar.locator('.sidebar-rail [data-navigation-view="sessions"]').first().click()
+            : sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
         // Pinned dashboards join the Sessions list's Pinned section, not the rail.
-        expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
+        expect(
+          await sidebar
+            .locator(`.sidebar-rail__pin[data-sidebar-entry="session:${sessionKey}"]`)
+            .count(),
+        ).toBe(0);
         await showView("Sessions");
         const pinned = sidebar
           .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)

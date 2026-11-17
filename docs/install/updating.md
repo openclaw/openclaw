@@ -2635,6 +2635,14 @@ evidence. Unknown process ownership stays conservative. The Doctor performing
 cleanup must contain this fix; it can reclaim runtimes left by older updaters
 without changing their markers or requiring privileged process inspection.
 
+Running node hosts (`openclaw node run`, including the CLI process their
+launcher starts), the macOS app, and its node worker never create updater
+runtimes, so they do not block reclamation on any platform unless they reference
+a runtime. On macOS, helpers that inherit the Gateway's service environment,
+such as credential agents or `adb`, are not OpenClaw processes. A CLI process
+whose title hides its command still preserves runtimes unless its launcher shows
+a command that never updates.
+
 On Windows, the same reclamation reads native process command lines and working
 directories. Processes owned by another account and protected system processes
 do not hold runtimes, matching unreadable foreign processes on macOS. A process
