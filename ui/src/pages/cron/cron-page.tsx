@@ -174,6 +174,9 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
       // `?new` is the sidebar's New automation entry.
       if (route.create) {
         page.actions.onOpenCreate();
+      } else if (!search && (page.cron().cronEditingJob || page.cron().cronCreateOpen)) {
+        // The section's own root, as choosing Automations again opens it, closes the panel.
+        page.actions.onClosePanel();
       }
     },
   );

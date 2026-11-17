@@ -13,7 +13,7 @@ import { formatCronCadence } from "../lib/presenter.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { createSectionSidebarPresence, sectionLocation } from "../lib/section-navigation.ts";
+import { sectionLocation } from "../lib/section-navigation.ts";
 import { resolveSessionNavigationAgentId } from "../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
@@ -68,7 +68,6 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
     }).catch(() => null);
     return result?.jobs ?? [];
   });
-  createSectionSidebarPresence("automations", () => props.host.navigationCollapsed);
   // The header's filter narrows and orders the list; sorting stays local to the loaded rows.
   const shown = createMemo(() => {
     const filter = automationsFilter();

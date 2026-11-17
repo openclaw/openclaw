@@ -910,6 +910,14 @@ div.shell.shell--onboarding {
   transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+/* A page without a sidebar drops it at once, and the next page with one opens it at once;
+   only the explicit collapse toggle animates. */
+.shell--nav-page-hidden,
+.shell--nav-page-hidden .shell-nav,
+.shell--nav-page-shown .shell-nav {
+  transition: none;
+}
+
 .shell-nav-backdrop {
   display: none;
 }
@@ -3990,8 +3998,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
       var(--content-inline-padding)
   );
 
-  /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(.content--toolbar-header, .content--plugin-embed) {
+  /* Stacked headers and pages without a toolbar clear floating chrome with padding. Only native
+     hosts float chrome there; on the web the rail holds those controls. */
+  :is(html.openclaw-native-macos, html.openclaw-native-nav)
+    &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 

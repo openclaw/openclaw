@@ -38,7 +38,7 @@ const entries = [
 ];
 
 suite.define(() => {
-  it("opens a touch-held pin without navigating or collapsing, while taps still navigate", async () => {
+  it("opens a touch-held pin without navigating, while taps still navigate", async () => {
     await suite.withPage(
       { hasTouch: true, viewport: { width: 1280, height: 800 } },
       async ({ page }) => {
@@ -80,7 +80,6 @@ suite.define(() => {
         // PointerEvent dispatch does not synthesize the compatibility click.
         await pin.dispatchEvent("click", { ...touch, detail: 1 });
         expect(page.url()).toBe(initialUrl);
-        expect(await page.locator(".shell--nav-collapsed").count()).toBe(0);
         await page.keyboard.press("Escape");
         await menu.waitFor({ state: "hidden" });
 
@@ -110,7 +109,6 @@ suite.define(() => {
         expect(page.url()).toBe(initialUrl);
         await pin.tap();
         await expect.poll(() => page.url()).toContain("design");
-        await page.locator(".shell--nav-collapsed").waitFor();
         expect(await menu.count()).toBe(0);
       },
     );
