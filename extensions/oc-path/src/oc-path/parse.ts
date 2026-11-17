@@ -154,6 +154,7 @@ function walkBlocks(
       // First inline at the item's own depth is the item text.
       let nestedDepth = 0;
       let text = "";
+      let textLine: number | null = null;
       for (let j = i + 1; j < blockTokens.length; j++) {
         const x = expectDefined(blockTokens[j], "item scan index is in bounds");
         if (x.type === "list_item_close" && nestedDepth === 0) {
@@ -165,6 +166,8 @@ function walkBlocks(
           nestedDepth--;
         } else if (x.type === "inline" && nestedDepth === 0 && text === "") {
           text = x.content;
+          textLine =
+            x.map === null ? null : bodyFileLine + expectDefined(x.map.at(0), "inline source line");
         }
       }
       const kv = parseMdItemKeyValue(text);
@@ -172,6 +175,7 @@ function walkBlocks(
         text,
         slug: slugify(kv?.key ?? text),
         line: bodyFileLine + expectDefined(t.map.at(0), "list item token map start"),
+        textLine,
         ...(kv === undefined ? {} : { kv }),
       });
     }

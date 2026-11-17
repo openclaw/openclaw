@@ -10,6 +10,15 @@ function edit(raw: string, address: string, value: string) {
 }
 
 describe("setOcPath", () => {
+  it("preserves fenced examples before the selected field", () => {
+    const raw = "## Tools\n- \x60\x60\x60\n  name: decoy\n  \x60\x60\x60\n\n  name: old\n";
+    expect(edit(raw, "tools/#0/name", "new").raw).toBe(raw.replace("name: old", "name: new"));
+  });
+  it("refuses an unmappable table field", () => {
+    expect(() => edit("## Tools\n- | name: example |\n  | --- |\n", "tools/#0/name", "x")).toThrow(
+      expect.objectContaining({ reason: "not-writable" }),
+    );
+  });
   it("replaces frontmatter while retaining unrelated pre-existing sentinel text", () => {
     const r = edit(
       `---\nname: github\ndescription: old desc\n---\nBody ${REDACTED_SENTINEL}.`,
