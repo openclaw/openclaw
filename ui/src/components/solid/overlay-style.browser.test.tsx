@@ -169,6 +169,19 @@ describe("native overlay presentation", () => {
     }
   });
 
+  it("keeps a scrolling menu's scrollbar off its rounded corners", async () => {
+    await page.viewport(800, 400);
+    mountMenu({ items: entries("Action", 24) });
+    await openMenu();
+    const menu = surface();
+    expect(menu.scrollHeight).toBeGreaterThan(menu.clientHeight);
+    const radius = getComputedStyle(menu).borderTopRightRadius;
+    expect(Number.parseFloat(radius)).toBeGreaterThan(0);
+    // Engines paint the bar over the radius, so the track must end where each corner begins.
+    const track = getComputedStyle(menu, "::-webkit-scrollbar-track");
+    expect([track.marginTop, track.marginBottom]).toEqual([radius, radius]);
+  });
+
   it.each([
     ["ltr", "low"],
     ["rtl", "low"],

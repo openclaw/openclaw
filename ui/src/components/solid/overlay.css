@@ -191,6 +191,13 @@
     overlay var(--oc-overlay-hide-duration, var(--menu-exit-duration)) allow-discrete;
 }
 
+/* A scroller's own scrollbar is not clipped by its border radius, so the thumb
+   travels only along the straight edge between the rounded corners. */
+.oc-menu::-webkit-scrollbar-track,
+.oc-popover::-webkit-scrollbar-track {
+  margin-block: var(--menu-radius);
+}
+
 /* Zero specificity: every caller's own size budget wins regardless of load order. */
 :where(.oc-menu) {
   --oc-overlay-max-height: calc(100dvh - 16px);
