@@ -1,5 +1,5 @@
 import { createRoot, createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
@@ -160,5 +160,44 @@ describe("promise dialog native focus and dismissal", () => {
     pending.resolve(null);
     await expect(result).resolves.toBe("Synthetic session");
     expect(document.activeElement).toBe(trigger);
+  });
+});
+
+describe("shared text-entry dialog composition", () => {
+  it("keeps an IME composition-confirm Enter from submitting the form", async () => {
+    const submit = vi.fn(async () => null);
+    const result = showInputDialog({
+      title: "Rename group",
+      signal: controller.signal,
+      submit,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    const input = modal.querySelector<HTMLInputElement>('input[name="value"]')!;
+    input.value = "に";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const confirmed = new CompositionEvent("compositionend", { bubbles: true });
+    input.dispatchEvent(confirmed);
+    const enterAfterConfirmation = (elapsedMs: number) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        keyCode: 13,
+        bubbles: true,
+        cancelable: true,
+      });
+      Object.defineProperty(event, "timeStamp", { value: confirmed.timeStamp + elapsedMs });
+      input.dispatchEvent(event);
+      return event;
+    };
+
+    // Safari can deliver the committing Enter with both composition flags cleared.
+    expect(enterAfterConfirmation(1).defaultPrevented).toBe(true);
+    expect(enterAfterConfirmation(99).defaultPrevented).toBe(true);
+    // A deliberate Enter outside the composition window still submits.
+    expect(enterAfterConfirmation(100).defaultPrevented).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
+
+    controller.abort();
+    await expect(result).resolves.toBeNull();
   });
 });
