@@ -753,6 +753,7 @@ jobs:
 
       - name: Run extension shard
         env:
+          BOAT_TEST_RUNNER: ${{ github.event_name != 'workflow_dispatch' && startsWith(matrix.runner_label || matrix.runner, 'boat') }}
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
@@ -769,13 +770,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          prefix=()
+          if [[ "$BOAT_TEST_RUNNER" == "true" ]]; then
+            # Boat CI runners inherit read/search bypass; tests need ordinary Unix permissions.
+            prefix=(setpriv --inh-caps=-dac_read_search --ambient-caps=-dac_read_search)
+          fi
           case "$OPENCLAW_EXTENSION_TASK" in
             extensions-batch)
               # The batch planner also uses exclusions when composing process targets.
               mapfile -t exclude_args < <(jq -r '.[] | "--exclude=" + .' <<< "$FRV_TEST_EXCLUDE_PATHS_JSON")
               exclusion_options=()
               if (( ${#exclude_args[@]} > 0 )); then exclusion_options=(--allow-empty-after-exclude); fi
-              node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- "${exclude_args[@]}"
+              "${prefix[@]}" node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH" "${exclusion_options[@]}" -- "${exclude_args[@]}"
               ;;
             extension-file-shard)
               include_file="${RUNNER_TEMP}/extension-test-include-${GITHUB_JOB}.json"
@@ -791,7 +797,7 @@ jobs:
           EOF
               OPENCLAW_TEST_PROJECTS_PARALLEL=2 \
                 OPENCLAW_VITEST_INCLUDE_FILE="$include_file" \
-                node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
+                "${prefix[@]}" node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test -- "$OPENCLAW_EXTENSION_VITEST_CONFIG"
               trap - EXIT
               rm -f -- "$include_file"
               ;;

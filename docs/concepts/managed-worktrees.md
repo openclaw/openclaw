@@ -259,6 +259,13 @@ prepared tree and checks the affected target paths for conflicts. It does not
 build another target manifest that the checkpoint would discard; rollback
 journals and pending-conflict recovery retain their existing ownership.
 
+Reconciliation journals contain the old bytes of changed paths needed for rollback,
+not a history of accepted checkpoints. Acceptance clears the journal together with
+publication of the accepted baseline. Large local rollback packs use a separate
+worker-prepared publication buffer transferred to the database worker; the original
+remains available for recovery. Oversized-mutation diagnostics inspect payloads in
+that worker, keeping pack serialization and diagnostic parsing off the Gateway thread.
+
 The hourly maintenance job owns manifest cleanup; archive-triggered passes do
 not repeat the global scan. Cleanup records pending work in the existing
 machine-state table when the workspace writer prepares content or changes a
@@ -706,6 +713,11 @@ policy changes invalidate the prepared source. The archive mutation still joins
 the writer queue and rechecks the current session and permissions before committing.
 
 Unarchiving, or an authorized human message that reopens the archived session, restores the original branch HEAD plus saved dirty and untracked files before admitting work. A restore failure leaves the session archived. If the original repository or its snapshot is missing, or the 30-day snapshot retention has expired, recover the original repository/snapshot or start a new task; OpenClaw does not substitute an empty checkout for the saved work.
+
+If an unarchived session's worktree was removed by cleanup or deletion, a new chat
+turn reports the removal before sandbox preparation. Use **Restore** on
+**Settings > Worktrees** (`worktrees.restore`), or start a new session. Sending
+another message does not automatically restore a removed checkout.
 
 `sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. For a Gateway source, New Session dispatches the completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation. The separate `repository: { url, ref? }` create input starts a remote-owned repository session without a Gateway path or `worktree: true`.
 

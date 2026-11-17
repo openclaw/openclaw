@@ -260,7 +260,7 @@ async function readSessionForkPin(
  * fork does not read the call as failed. The model view has no persistence target: these
  * results exist only in the fork.
  */
-export async function markRunningToolCalls(manager: SessionManager): Promise<void> {
+async function markRunningToolCalls(manager: SessionManager): Promise<void> {
   // The latest batch is the last assistant message plus the tool results recorded after it.
   const completed = new Set<string>();
   let batch: AssistantMessage | undefined;
@@ -574,7 +574,10 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.
-      toolExecutionAllow: [...params.tools],
+      // exec is not on the owner-only list, so a fork runs it only on the owner's own turn.
+      toolExecutionAllow: params.tools.filter(
+        (tool) => tool !== "exec" || params.requester?.senderIsOwner === true,
+      ),
       sessionForkRequest: {
         ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
         ...(pin ? { pin } : {}),

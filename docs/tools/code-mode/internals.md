@@ -64,6 +64,11 @@ preserving: active agent id, session id and key, sender and channel context,
 sandbox policy, approval policy, plugin `before_tool_call` hooks, abort
 signal, streaming updates where available, and trajectory/audit events.
 
+In-process catalog calls bind the run's watchdog owner even when a tool already
+has a hook wrapper. The reply watchdog honors the deadline published by the
+tool's execution owner, so a silent command can reach its own exec timeout and
+return its error to guest code without losing the reply at the quiet-tool window.
+
 Completed nested calls persist as bounded display-only activity, retaining
 their original parent and invocation ids across history reloads. Provider replay
 contains only the actual model calls; child activity adds no synthetic model turns.
@@ -94,6 +99,14 @@ undo actions a tool already performed. Follow the
 effects before choosing another action. Network-controlled tool output and errors
 retain their existing untrusted-content wrapping and sanitization; continuing
 after a failure does not grant new permissions or replay completed side effects.
+
+A suspended cell is parked, not abandoned: its pending calls keep running so
+`wait` can deliver their results. A rejected program, canceled cell, expired
+continuation, or closed catalog abandons pending results and aborts those calls.
+For worker-hosted Gateway tools, a transport wait that rejects (including a
+request timeout) also abandons that invocation and requests remote cancellation.
+This does not add a tool deadline or undo completed effects; tools must honor
+their abort signal to stop ongoing work and release resources.
 
 Nested calls honor each tool’s `executionMode`. A `"sequential"` tool waits for
 earlier catalog calls to finish and blocks later calls until its result has been

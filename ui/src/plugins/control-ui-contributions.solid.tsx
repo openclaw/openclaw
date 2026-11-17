@@ -172,7 +172,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         <span class="nav-item__icon" aria-hidden="true">
           <Show
             when={emojiIcon(link.item.entry)}
-            fallback={<Icon name={iconName(link.item.entry, link.fallbackIcon)} />}
+            fallback={
+              <Icon name={iconName(link.item.entry, link.fallbackIcon)} filled={link.item.active} />
+            }
           >
             {(icon) => <span class="session-glyph__emoji">{icon()}</span>}
           </Show>

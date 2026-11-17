@@ -149,6 +149,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** Execution owner's current deadline, without lane cleanup grace. */
+  getRunAbortDeadlineAtMs?: () => number | undefined;
   /** Policy-approved tool names unavailable here but usable in a child's own workspace. */
   additionalInheritedToolNamesRef?: string[];
   /** The host owns continuation policy when this factory builds only part of its tool surface. */

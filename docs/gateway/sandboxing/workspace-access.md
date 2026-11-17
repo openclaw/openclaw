@@ -55,6 +55,14 @@ project and admitted host checkouts retain their existing diff behavior.
 
 ## Managed project workspaces
 
+File tools serialize operations on the same physical file. Stopping a run cancels
+its queued file operations and signals active sandbox filesystem commands to stop.
+An operation waiting behind another file operation fails after three minutes with
+a busy-file error and the earlier operation's running time. Retry later or work on
+another file; if the file stays busy, ask the operator to restart the Gateway.
+The earlier operation retains its file reservation until it actually finishes,
+so a canceled or timed-out waiter cannot cause overlapping writes.
+
 A sandboxed session with a session-owned managed worktree uses a private Git
 checkout on Docker and Podman. A registered project may be outside the agent's
 configured workspace when it is selected with `worktree: true`. This authorizes
@@ -73,6 +81,12 @@ package lifecycle scripts still run.
 
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
+
+Sandbox tool calls and checkpoints for the same managed worktree take turns in
+arrival order within the Gateway. Waiting for workspace custody is limited to
+60 seconds; a timeout reports the workspace and asks you to retry after the
+current checkpoint or reconciliation finishes. An operation that already owns
+the workspace must release it before requesting another checkpoint.
 
 Rewind and branch switching keep that managed workspace and its accepted edits.
 OpenClaw settles pending sandbox edits and retires the old runtime before changing

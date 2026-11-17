@@ -114,6 +114,7 @@ import {
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
 import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
+import { inspectInterruptedUpdateRecovery } from "./update-plugin-cohort-settlement.js";
 
 export {
   recordUpdateCommandTarget,
@@ -604,6 +605,10 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
   // owner. Check both roots before config/autostart preparation or history.
   const packageActivationNotes: string[] = [];
   const packageActivationSteps: UpdateStepResult[] = [];
+  // Read a killed update's recovery before package settlement claims the installation.
+  const settleInterruptedUpdate = postCoreUpdateResume
+    ? undefined
+    : await inspectInterruptedUpdateRecovery(discoveredRoot, opts, packageActivationSteps);
   const admitPackageActivation = async (root: string) => {
     if (!postCoreUpdateResume) {
       const settled = await settlePendingPackageActivation(
@@ -690,6 +695,15 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       throw err;
     }
   }
+  // Every refusal above stands first. Settle under the state selection admission will use.
+  await settleInterruptedUpdate?.((invocationCwd) =>
+    resolveUpdateCommandAdmissionEnv({
+      opts,
+      root: packageAdmission.serviceRoot ?? discoveredRoot,
+      invocationCwd,
+      pkgOwnership,
+    }),
+  );
   return {
     startedAt,
     postCoreUpdateResume,
