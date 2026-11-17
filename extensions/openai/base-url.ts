@@ -14,8 +14,8 @@ export type OpenAICodexModelsEndpointContext = {
 };
 
 /**
- * ChatGPT model-list URL. The backend gates models on the client version, so
- * discovery reports the Codex binary this process's turns run.
+ * Versioned Codex catalog URL used to discover Platform access programs.
+ * Subscription model discovery uses a separate, broader query.
  */
 export async function resolveOpenAICodexModelsEndpoint(
   context: OpenAICodexModelsEndpointContext = {},

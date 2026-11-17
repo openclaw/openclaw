@@ -910,6 +910,14 @@ div.shell.shell--onboarding {
   transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+/* A page without a sidebar drops it at once, and the next page with one opens it at once;
+   only the explicit collapse toggle animates. */
+.shell--nav-page-hidden,
+.shell--nav-page-hidden .shell-nav,
+.shell--nav-page-shown .shell-nav {
+  transition: none;
+}
+
 .shell-nav-backdrop {
   display: none;
 }
@@ -2359,27 +2367,11 @@ div.shell.shell--onboarding {
   background: var(--danger);
 }
 
-/* Customize section: the hub's pages, then the installed plugins. */
+/* Customize section: the hub's pages. */
 .sidebar-customize {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.sidebar-customize__group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-block-start: 10px;
-}
-
-.sidebar-customize__heading {
-  padding: 4px 8px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 /* The people list's heading matches the Sessions group headings, without a toggle. */
@@ -3990,8 +3982,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
       var(--content-inline-padding)
   );
 
-  /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(.content--toolbar-header, .content--plugin-embed) {
+  /* Stacked headers and pages without a toolbar clear floating chrome with padding. Only native
+     hosts float chrome there; on the web the rail holds those controls. */
+  :is(html.openclaw-native-macos, html.openclaw-native-nav)
+    &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 

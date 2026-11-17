@@ -48,6 +48,8 @@ export type AppSidebarProps = {
   connectionPending?: boolean;
   navigationView: "automations" | "customize" | "sessions" | "online";
   navigationCollapsed: boolean;
+  /** The saved collapse choice; a page without a sidebar reads as collapsed without it. */
+  navigationCollapsedByChoice?: boolean;
   sidebarAgentsMode: "chip" | "roster";
   sidebarLiveActivity: boolean;
   pinnedAgentIds: readonly string[];
@@ -90,6 +92,7 @@ export const appSidebarProperties = {
   connectionPending: { default: false, attribute: false },
   navigationView: { default: "sessions", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
+  navigationCollapsedByChoice: { default: undefined, attribute: false },
   sidebarAgentsMode: { default: "chip", attribute: false },
   sidebarLiveActivity: { default: true, attribute: false },
   pinnedAgentIds: { default: [], attribute: false },
@@ -137,6 +140,7 @@ export abstract class AppSidebarBase {
   declare connectionPending: AppSidebarProps["connectionPending"];
   declare navigationView: AppSidebarProps["navigationView"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
+  declare navigationCollapsedByChoice: AppSidebarProps["navigationCollapsedByChoice"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
   declare sidebarLiveActivity: AppSidebarProps["sidebarLiveActivity"];
   declare pinnedAgentIds: AppSidebarProps["pinnedAgentIds"];
