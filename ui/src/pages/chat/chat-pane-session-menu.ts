@@ -385,7 +385,12 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!this.state || !this.ownsHeaderOutcome(owner)) {
       return;
     }
-    this.state.chatError = this.state.lastError = formatUiError(error);
+    // Callers pass their own explanation as text; a thrown value has none.
+    if (typeof error === "string") {
+      this.state.chatError = this.state.lastError = formatUiError(error);
+    } else {
+      this.state.setRecoverableChatError(formatUiError(error), error);
+    }
   }
 
   protected async revealHeaderWorkspace(row: GatewaySessionRow): Promise<void> {

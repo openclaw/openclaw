@@ -118,6 +118,17 @@
   stroke-width: 2px;
 }
 
+/* Reporting follows recovery as a quiet link, only for a failure without a named cause. */
+.chat-run-failure > .report-issue-link {
+  flex: none;
+  color: inherit;
+  font-weight: 400;
+}
+
+.chat-run-failure > .report-issue-link:hover {
+  color: var(--text-strong);
+}
+
 .oc-popover.chat-run-failure__panel {
   --oc-overlay-distance: 6px;
   --oc-popover-padding: 12px;

@@ -654,8 +654,7 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
       ) {
         return;
       }
-      state.lastError = formatUiError(error);
-      state.chatError = state.lastError;
+      state.setRecoverableChatError(formatUiError(error), error);
     }
   }
 

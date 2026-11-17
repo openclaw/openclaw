@@ -328,6 +328,8 @@ describe("pane reaction ownership", () => {
         rejected.reject(new Error("reaction denied"));
         await write;
         expect(pane.state.chatError).toBe("reaction denied");
+        // The raw failure rides along: the notice offers bug reporting only with it.
+        expect(pane.state.lastErrorDetail).toEqual(new Error("reaction denied"));
       }
       expect(pane.collaboration.reactions.get("message-1")).toEqual(peerReaction);
     },
