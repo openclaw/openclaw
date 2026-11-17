@@ -23,6 +23,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
+import { createPluginNativeCaptureState } from "./plugin-native-capture-state.js";
 import {
   pluginSourceCaptureMaintenance,
   pluginSourceCaptureOwnedRoots,
@@ -670,41 +671,27 @@ export function createPluginNativeCaptureRoot(
   const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
     const root = instance.createNativeDirectory();
-    let committed = false;
-    let disposed = false;
-    return {
+    return createPluginNativeCaptureState({
       directory: root.directory,
-      commit(): void {
-        if (disposed) {
-          throw new Error("Plugin native capture has been disposed");
+      commit: root.commit,
+      dispose(committed) {
+        if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
+          fs.rmSync(root.directory, { recursive: true, force: true });
         }
-        root.commit();
-        committed = true;
+        instance.release();
       },
-      dispose() {
-        if (!disposed) {
-          if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
-            fs.rmSync(root.directory, { recursive: true, force: true });
-          }
-          disposed = true;
+      async disposeAsync(committed) {
+        if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
+          const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
+          await removeTemporaryArtifacts(root.directory, "Plugin native capture");
+        }
+        if (retirementOwner === "native") {
           instance.release();
+        } else {
+          await instance.releaseAsync();
         }
       },
-      async disposeAsync() {
-        const { removeTemporaryArtifacts } = await import("../infra/temp-artifact-cleanup.js");
-        if (!disposed) {
-          if (!committed && !retainLoadedPluginSourceCapture(root.directory)) {
-            await removeTemporaryArtifacts(root.directory, "Plugin native capture");
-          }
-          disposed = true;
-          if (retirementOwner === "native") {
-            instance.release();
-          } else {
-            await instance.releaseAsync();
-          }
-        }
-      },
-    };
+    });
   } catch (error) {
     instance.release();
     throw error;

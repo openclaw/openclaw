@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   decodeNativeWorkerFailure,
@@ -15,6 +16,7 @@ import type {
   PluginCaptureRootAnnouncement,
 } from "./plugin-capture-native-resource.types.js";
 import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
+import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import {
   createPluginNativeCaptureRoot,
   createPluginSourceCaptureRoot,
@@ -79,6 +81,57 @@ export function createNativeWorkerResource(
   const execute = async ({ id, command }: PluginCaptureResourceRequest) => {
     if (closed) {
       throw new Error("Plugin capture resource has closed");
+    }
+    if (command.type === "recovery") {
+      const { copyPluginRecoveryFiles } = await import("./plugin-recovery-source-copy.js");
+      const { createPluginSourceCapture, withPluginSourceCaptureDirectory } =
+        await import("./plugin-package-metadata-capture.js");
+      const copyInput = command.input;
+      const createCapture = () => createPluginSourceCapture("native");
+      const capture = withPluginSourceCaptureStorage(copyInput.storage, () =>
+        copyInput.directory
+          ? withPluginSourceCaptureDirectory(
+              copyInput.directory.directory,
+              createCapture,
+              copyInput.directory.managedRoot,
+            )
+          : createCapture(),
+      );
+      const source = {
+        directory: capture.directory,
+        managedRoot: capture.outputRoot,
+        release: () => capture.disposeAsync(),
+      };
+      // Keep failed cleanup under the same custody as every other source root.
+      owned.sources.set(command.captureId, source);
+      try {
+        const steps = copyPluginRecoveryFiles(copyInput, source.directory);
+        let step = steps.next();
+        while (!step.done) {
+          await fs.promises.cp(...step.value);
+          step = steps.next();
+        }
+        return {
+          root: {
+            id: command.captureId,
+            directory: source.directory,
+            managedRoot: source.managedRoot,
+          },
+          copiedBytes: step.value,
+        };
+      } catch (error) {
+        try {
+          await source.release();
+          owned.sources.delete(command.captureId);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Plugin recovery copy and cleanup failed",
+            { cause: cleanupError },
+          );
+        }
+        throw error;
+      }
     }
     if (command.type === "source") {
       const source = createPluginSourceCaptureRoot(

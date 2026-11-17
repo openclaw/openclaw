@@ -16,6 +16,7 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { makePluginMetadataIndex } from "./current-plugin-metadata.test-support.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { createPluginGenerationNativeRoots } from "./plugin-generation-native-roots.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import * as captureDirectory from "./plugin-source-capture-directory.js";
@@ -397,6 +398,43 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   advanceAge();
   await sweepPluginSourceCapturesForTest(stateDir);
   expectExists(root);
+});
+
+it("retries confirmed native capture retirement instead of reporting a disposed wrapper", async () => {
+  const capture = createPluginNativeCaptureRoot(stateDir);
+  const generation = createPluginGenerationNativeRoots();
+  generation.allocate(capture);
+  const native = write(path.join(capture.directory, "module.node"), "committed native bytes");
+  capture.commit();
+  const root = path.dirname(path.dirname(capture.directory));
+  const payload = write(path.join(root, "captures/source.js"), "captured source");
+  const fault = interceptPluginCaptureReclamation(`
+    import promises from 'node:fs/promises';
+    const remove = promises.rm.bind(promises);
+    promises.rm = async (target, options) => {
+      if (target === ${JSON.stringify(path.join(root, "captures"))}) {
+        throw new Error('Fixture native retirement could not remove payload');
+      }
+      return remove(target, options);
+    };
+  `);
+  await using _ = cleanupStack([() => vi.restoreAllMocks(), () => generation.close()]);
+  await expect(generation.close()).rejects.toThrow(
+    "Fixture native retirement could not remove payload",
+  );
+  expectBytes(payload, "captured source");
+  expectBytes(native, "committed native bytes");
+  expect(() => capture.commit()).toThrow("Plugin native capture has been disposed");
+  fault.mockRestore();
+  await generation.close();
+  const successor = retainPluginSourceCaptureInstance(stateDir);
+  try {
+    expect(successor.createDirectory().startsWith(root + path.sep)).toBe(false);
+    expectBytes(native, "committed native bytes");
+    expectExists(payload);
+  } finally {
+    await successor.releaseAsync();
+  }
 });
 
 it.each([

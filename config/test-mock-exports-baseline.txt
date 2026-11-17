@@ -3176,7 +3176,6 @@
 ["src/commands/agent-command.test-mocks.ts","../acp/control-plane/manager.js","1cff3287c704d3d90c54fb09c21bd6712e6eb8f0c6e2b4dc0483512b1f471201",1]
 ["src/commands/agent-command.test-mocks.ts","../agents/harness/runtime-plugin.js","3eaecebc8d37fc12de22ef466eda8e426d6513306e2d71a4696bee8f4b25af8b",1]
 ["src/commands/agent-command.test-mocks.ts","../agents/model-catalog.js","70feebd5a79002ac6a07bc8a38cb95452b49c49c022a6801b3e32267b157209c",1]
-["src/commands/agent-command.test-mocks.ts","../agents/model-selection.js","19f4ec099c3eb521f6e87ab5f846f832ef859ac017f687b6bdd1c6ef59c0bb1a",1]
 ["src/commands/agent-command.test-mocks.ts","../agents/prepared-model-catalog.js","d6c9bac6992eba9e31a5adda5dd625eedee8d97256c7230185cf41dab6b43369",1]
 ["src/commands/agent-command.test-mocks.ts","../agents/runtime-plugins.js","12a2242ef515bf3f90e0efa12695c7b8e476684dde0f88f616c14048d81ba034",1]
 ["src/commands/agent-command.test-mocks.ts","../agents/subagents/announce/subagent-announce.js","0242a2b6dff9cb194e33d35f7dbc732b8eb2ddda1ca572683f763d1b55f19e43",1]
