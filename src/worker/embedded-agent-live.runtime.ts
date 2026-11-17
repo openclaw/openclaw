@@ -379,6 +379,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient) {
           call.input,
           call.signal,
           call.onUpdate,
+          // SAFETY: Worker catalogs contain four-argument host tools, without an extension context.
           undefined as never,
         ),
       );
