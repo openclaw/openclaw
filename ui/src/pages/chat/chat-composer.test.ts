@@ -490,10 +490,12 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
 
 it("shows an actionable error status and returns the microphone to idle on startup failure", async () => {
   openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
-  const { container, query } = await mountTalk({
-    realtime: { ready: true },
-    transcription: { ready: true },
-  });
+  // Dictation claims its Gateway session before the microphone opens.
+  const { container, query } = await mountTalk(
+    { realtime: { ready: true }, transcription: { ready: true } },
+    {},
+    true,
+  );
 
   const microphone = voiceButton(container);
   microphone.dispatchEvent(dictationPointer("pointerdown", 12));
