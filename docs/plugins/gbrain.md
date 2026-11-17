@@ -34,6 +34,8 @@ On the first Gateway start after install, the plugin:
 An existing GBrain service on the same machine is reused as it is. An
 `mcp.servers.gbrain` entry that points somewhere else, or that uses an
 environment template such as `${GBRAIN_MCP_TOKEN}`, is left as you configured it.
+When the plugin replaces its key or follows a port change, it updates only the URL,
+transport and `Authorization` header; your other settings on the entry stay.
 
 Agents find GBrain's tools through tool search when a turn needs them. To make agents
 check GBrain on every turn, run GBrain's own `gbrain setup openclaw`; it adds a

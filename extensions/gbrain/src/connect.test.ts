@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   connectGbrain,
+  withGbrainConnection,
   type CommandResult,
   type ConnectDeps,
   type GbrainMcpServerEntry,
@@ -28,6 +29,7 @@ function fakeHost(initial: {
   acceptedTokens?: string[];
 }) {
   const files = new Map(Object.entries(initial.files ?? {}));
+  const setFile = (file: string, content: string) => files.set(file, content);
   const executables = new Set(initial.executables ?? []);
   let health: Health = initial.health ?? { kind: "down" };
   let brain = initial.brain ?? false;
@@ -81,8 +83,8 @@ function fakeHost(initial: {
       return token;
     },
     readServer: () => server,
-    writeServer: async (entry) => {
-      server = entry;
+    writeServer: async ({ url, authorization }) => {
+      server = withGbrainConnection(server, url, authorization);
     },
     sleep: async () => {},
   };
@@ -93,6 +95,7 @@ function fakeHost(initial: {
       return server;
     },
     revoke: (token: string) => accepted.delete(token),
+    setFile,
     setHealth: (next: Health) => {
       health = next;
     },
@@ -141,6 +144,44 @@ describe("connectGbrain", () => {
     expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({ changed: true });
     expect(host.server?.headers).toEqual({ Authorization: "Bearer gbrain_minted2" });
     expect(host.commands).toEqual([]);
+  });
+
+  it("keeps the user's settings on the entry when it replaces a revoked key", async () => {
+    const host = fakeHost({
+      executables: [GBRAIN],
+      files: exposed,
+      health: { kind: "ok", version: "1" },
+      server: {
+        url: MCP_URL,
+        transport: "streamable-http",
+        enabled: false,
+        toolFilter: { include: ["recall"] },
+        headers: { Authorization: "Bearer gbrain_revoked", "X-Brain": "work" },
+      },
+    });
+    expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({ changed: true });
+    expect(host.server).toEqual({
+      url: MCP_URL,
+      transport: "streamable-http",
+      enabled: false,
+      toolFilter: { include: ["recall"] },
+      headers: { Authorization: "Bearer gbrain_minted1", "X-Brain": "work" },
+    });
+  });
+
+  it("follows GBrain to a new port after `gbrain mcp expose --port`", async () => {
+    const host = fakeHost({
+      executables: [GBRAIN],
+      files: exposed,
+      health: { kind: "ok", version: "1" },
+    });
+    await connectGbrain(host.deps, { allowSetup: true });
+    host.setFile(RECEIPT, JSON.stringify({ port: 4242, admin_token_file: ADMIN }));
+    expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({
+      state: "connected",
+      mcpUrl: "http://127.0.0.1:4242/mcp",
+    });
+    expect(host.server?.url).toBe("http://127.0.0.1:4242/mcp");
   });
 
   it("leaves a server entry it does not own untouched", async () => {

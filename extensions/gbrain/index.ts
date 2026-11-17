@@ -7,6 +7,7 @@ import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import {
   connectGbrain,
   GBRAIN_SERVER_NAME,
+  withGbrainConnection,
   type ConnectDeps,
   type ConnectOutcome,
 } from "./src/connect.js";
@@ -88,17 +89,17 @@ export default definePluginEntry({
       tokenAccepted: gbrainAcceptsToken,
       mintKey: mintGbrainKey,
       readServer: () => api.runtime.config.current().mcp?.servers?.[GBRAIN_SERVER_NAME],
-      writeServer: async (entry) => {
+      writeServer: async ({ url, authorization }) => {
         await api.runtime.config.mutateConfigFile({
           afterWrite: { mode: "auto" },
           mutate: (draft) => {
             draft.mcp ??= {};
             draft.mcp.servers ??= {};
-            draft.mcp.servers[GBRAIN_SERVER_NAME] = {
-              url: entry.url,
-              transport: "streamable-http",
-              headers: entry.headers as Record<string, string>,
-            };
+            draft.mcp.servers[GBRAIN_SERVER_NAME] = withGbrainConnection(
+              draft.mcp.servers[GBRAIN_SERVER_NAME],
+              url,
+              authorization,
+            );
           },
         });
       },

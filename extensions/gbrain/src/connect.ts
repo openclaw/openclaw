@@ -43,7 +43,8 @@ export type ConnectDeps = {
   tokenAccepted: (mcpUrl: string, token: string) => Promise<boolean>;
   mintKey: (baseUrl: string, adminToken: string, name: string) => Promise<string>;
   readServer: () => GbrainMcpServerEntry | undefined;
-  writeServer: (entry: GbrainMcpServerEntry) => Promise<void>;
+  /** Writes the connection with {@link withGbrainConnection}, under the config owner's lock. */
+  writeServer: (connection: { url: string; authorization: string }) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
 };
 
@@ -80,16 +81,39 @@ function bearer(entry: GbrainMcpServerEntry | undefined): string | undefined {
   return typeof value === "string" ? /^Bearer (gbrain_\S+)$/.exec(value)?.[1] : undefined;
 }
 
-/** An entry this plugin can manage: our URL, and either no credential or a literal GBrain key. */
-function isManaged(entry: GbrainMcpServerEntry | undefined, mcpUrl: string): boolean {
+/**
+ * An entry this plugin can manage: an HTTP `/mcp` URL on a host GBrain can serve from (any port,
+ * so `gbrain mcp expose --port` moves are followed), and either no credential or a literal GBrain key.
+ */
+function isManaged(entry: GbrainMcpServerEntry | undefined, hosts: string[]): boolean {
   if (!entry) {
     return true;
   }
-  if (entry.url !== mcpUrl) {
+  let url: URL;
+  try {
+    url = new URL(String(entry.url));
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" || url.pathname !== "/mcp" || !hosts.includes(url.hostname)) {
     return false;
   }
   const auth = entry.headers?.Authorization;
   return auth === undefined || bearer(entry) !== undefined;
+}
+
+/** The plugin owns only the URL, transport and bearer; the user's other settings on the entry stay. */
+export function withGbrainConnection<T extends { headers?: Record<string, unknown> }>(
+  entry: T | undefined,
+  url: string,
+  authorization: string,
+) {
+  return {
+    ...entry,
+    url,
+    transport: "streamable-http" as const,
+    headers: { ...entry?.headers, Authorization: authorization },
+  };
 }
 
 function parseJson(stdout: string): Record<string, unknown> | undefined {
@@ -203,8 +227,8 @@ export async function connectGbrain(
   let receipt = readReceipt(deps);
   const urls = deps.hosts.map((host) => `http://${host}:${receipt?.port ?? GBRAIN_DEFAULT_PORT}`);
   const current = deps.readServer();
-  if (current && !urls.some((url) => isManaged(current, `${url}/mcp`))) {
-    return { state: "external", url: typeof current.url === "string" ? current.url : "" };
+  if (!isManaged(current, deps.hosts)) {
+    return { state: "external", url: typeof current?.url === "string" ? current.url : "" };
   }
 
   let baseUrl = urls[0] ?? `http://127.0.0.1:${GBRAIN_DEFAULT_PORT}`;
@@ -272,10 +296,6 @@ export async function connectGbrain(
     );
   }
   const token = await deps.mintKey(baseUrl, adminToken, KEY_NAME);
-  await deps.writeServer({
-    url: mcpUrl,
-    transport: "streamable-http",
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  await deps.writeServer({ url: mcpUrl, authorization: `Bearer ${token}` });
   return { state: "connected", changed: true, version: health.version, mcpUrl };
 }
