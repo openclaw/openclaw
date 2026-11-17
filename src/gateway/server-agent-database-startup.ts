@@ -1,5 +1,4 @@
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
-import { readAuthProfileDatabaseIdentityAsync } from "../agents/auth-profiles/file-state.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { isPreparedModelRuntimePluginLifecycleFailure } from "../agents/prepared-model-runtime.errors.js";
 import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
@@ -8,7 +7,6 @@ import {
   resolveConfiguredAgentDatabaseTargets,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -96,27 +94,15 @@ export function activateGatewayAgentDatabaseStartup(params: {
         const { captureOpenClawAgentDatabaseExecution, prepareOpenClawAgentDatabaseExecution } =
           await import("../state/openclaw-agent-execution.js");
         await using prepared = new AsyncDisposableStack();
-        let preparationPaths = paths;
-        const cfg = params.getConfig();
-        if (getDatabaseEngineInput("agent") === undefined && listAgentIds(cfg).includes(agentId)) {
-          const pathname = resolveAuthProfileDatabasePath(resolveAgentDir(cfg, agentId, env));
-          if (
-            !paths.includes(pathname) &&
-            (await readAuthProfileDatabaseIdentityAsync(pathname))?.key.startsWith("path:")
-          ) {
-            // Read-first publication leaves first catalog birth to this writable owner.
-            preparationPaths = [...paths, pathname];
-          }
-        }
         const assertOpenCurrent = createPreparationGuard(
           agentId,
-          preparationPaths,
+          paths,
           env,
           signal,
           assertCurrent,
         );
         assertOpenCurrent();
-        for (const pathname of preparationPaths) {
+        for (const pathname of paths) {
           // Keep the existing owner out of idle eviction until this agent's publication settles.
           const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
           prepared.defer(() => execution.release());
