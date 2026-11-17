@@ -163,6 +163,33 @@ describe("sessions_yield tool", () => {
     expect(onYield).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["running", true, "yielded"],
+    ["running", false, "already_pending"],
+    ["paused", true, "already_pending"],
+  ] as const)(
+    "preserves a waiting acknowledgment only for an active armed completion (%s, %s)",
+    async (state, wakeArmed, status) => {
+      const pendingChildren = [
+        { runId: "earlier-child", childSessionKey: "agent:helper:child", state, wakeArmed },
+      ];
+      const acknowledgment = "The existing task is still running; I will report its result.";
+      const message = "PRIVATE_PENDING_WORK_CONTEXT";
+      const { onYield, execute } = setup({ claimYield: () => ({ pendingChildren }) });
+
+      const result = await execute({ message, acknowledgment });
+
+      expect(result.details).toMatchObject({ status, pendingChildren });
+      expect(JSON.stringify(result)).not.toContain(message);
+      if (status === "yielded") {
+        expect(result.details).toHaveProperty("acknowledgment", acknowledgment);
+        expect(onYield).toHaveBeenCalledExactlyOnceWith(message, acknowledgment, undefined);
+      } else {
+        expect(onYield).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("reports when waitFor was not applied because the turn yielded for its own children", async () => {
     const { tool } = setup({ sessionId: "runner-session", claimYield: () => true });
     const childWait = await tool.execute("child-wait", { waitFor: "message" });
