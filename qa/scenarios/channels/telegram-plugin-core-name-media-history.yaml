@@ -16,8 +16,8 @@ scenario:
     - music_generate runs from the run-owned fixture plugin, since no music provider gives the run a core tool of that name.
     - The first reply, delivered through the real Telegram plugin, names the plugin's image under the managed media store.
     - The second turn's final provider request carries no input_image or input_file part.
-    - The second message replies to the first reply, so the Telegram plugin keeps the chat window that existing plain DMs leave to the transcript.
-    - That window, replayed in the current turn's runtime context, carries the first reply as an OpenClaw line with the plugin path byte for byte.
+    - The second message replies to the first reply, so the Telegram plugin keeps its chat window, which existing plain DMs leave to the transcript.
+    - That window, replayed in the current turn's runtime context, carries the first reply as the bot's own `(you):` line with the plugin path byte for byte.
     - The earlier assistant message in that request carries the first reply unchanged too.
   docsRefs:
     - docs/channels/telegram.md
@@ -28,6 +28,7 @@ scenario:
     - src/agents/embedded-agent-tool-media.ts
     - src/agents/embedded-agent-runner/run/images.ts
     - src/channels/inbound-event/session-transcript-context.runtime.ts
+    - extensions/telegram/src/group-history-window.ts
     - extensions/qa-lab/src/providers/mock-openai/mock-openai-tool-plan.ts
   execution:
     kind: flow
@@ -220,9 +221,10 @@ flow:
         - set: history
           value:
             expr: "mockInput.extractCurrentRuntimeContextTexts(secondInput).join('\\n')"
+        # The window names the bot's own messages `<first_name> (you)`; the reply quote has no such line.
         - set: windowLine
           value:
-            expr: "`OpenClaw: ${firstReplyText}`"
+            expr: "` (you): ${firstReplyText}`"
         - assert:
             expr: history.includes(windowLine)
             message:
