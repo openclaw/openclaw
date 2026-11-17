@@ -259,7 +259,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
       const settled = execution.catch((error: unknown) => error);
       try {
         await started.promise;
-        await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
+        // Drive the owning watchdog boundary independently of bridge timers.
+        vi.setSystemTime(Date.now() + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
         await operation.watchdog.tick(Date.now());
         await vi.waitFor(() =>
           expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
