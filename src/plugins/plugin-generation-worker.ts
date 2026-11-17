@@ -1,5 +1,5 @@
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as nextTimer } from "node:timers/promises";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
@@ -460,6 +460,20 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       { cause: error },
     );
   }
+  /**
+   * After a capture times out, its slot can stay occupied behind a wedged
+   * command. Settlement gets this much grace before the shared worker is
+   * retired so the broker transport closes and custody unwedges instead of
+   * idling the caller forever (openclaw#178359).
+   */
+  const CAPTURE_SETTLEMENT_GRACE_MS = 30_000;
+  const retireStuckPreparationWorker = () => {
+    if (!owner.closing) {
+      void shared?.pool
+        ?.close(new Error("Plugin preparation worker was stuck in a timed-out capture"))
+        .catch(() => {});
+    }
+  };
   async function request(command: GenerationWorkerInput, sourceCapture = false): Promise<unknown> {
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
@@ -468,6 +482,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     const started = performance.now();
     pending++;
     let task: ReturnType<typeof pool.startTask> | undefined;
+    let settlementBounded = false;
     try {
       if (command.operation === "capture" && command.sourceSnapshot) {
         await preparePluginSourceSnapshotAdmission({
@@ -479,10 +494,8 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
           },
         });
       }
-      const captureTimeoutMs =
-        command.operation === "capture" || sourceCapture
-          ? resolvePluginCaptureTimeoutMs()
-          : 120_000;
+      const captureBudget = command.operation === "capture" || sourceCapture;
+      const captureTimeoutMs = captureBudget ? resolvePluginCaptureTimeoutMs() : 120_000;
       task = shared.startTask(
         { ...command, nativeLoads: [...pendingNativeLoads] },
         {
@@ -499,7 +512,8 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       try {
         reply = await task.result;
       } catch (error) {
-        if (error instanceof WorkerTaskError && error.code === "timeout") {
+        if (captureBudget && error instanceof WorkerTaskError && error.code === "timeout") {
+          settlementBounded = true;
           throw captureTimeoutError(error, captureTimeoutMs);
         }
         throw error;
@@ -512,7 +526,25 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     } finally {
       try {
         if (task) {
-          await shared.release(task).result;
+          if (settlementBounded) {
+            // A timed-out capture can leave its slot behind a wedged command.
+            // Give settlement a bounded grace, then retire the shared worker so
+            // the broker transport closes and the pending command rejects.
+            // Settlement failures never mask the original capture timeout.
+            await Promise.race([
+              shared.release(task).result.catch(() => {}),
+              nextTimer(CAPTURE_SETTLEMENT_GRACE_MS).then(() => "settlement-grace" as const),
+            ]).then(
+              (settled) => {
+                if (settled === "settlement-grace") {
+                  retireStuckPreparationWorker();
+                }
+              },
+              () => {},
+            );
+          } else {
+            await shared.release(task).result;
+          }
         }
       } finally {
         if (metrics) {
@@ -536,6 +568,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     const started = performance.now();
     pending++;
     let task: ReturnType<typeof pool.startTask> | undefined;
+    let settlementBounded = false;
     const join = <T>(operation: {
       service(): void;
       read():
@@ -573,7 +606,8 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       try {
         reply = join(task);
       } catch (error) {
-        if (error instanceof WorkerTaskError && error.code === "timeout") {
+        if (sourceCapture && error instanceof WorkerTaskError && error.code === "timeout") {
+          settlementBounded = true;
           throw captureTimeoutError(error, captureTimeoutMs);
         }
         throw error;
@@ -582,7 +616,31 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     } finally {
       try {
         if (task) {
-          join(shared.release(task));
+          if (settlementBounded) {
+            // Mirror the async path: settle within the grace, then retire the
+            // stuck worker in the background. Nothing thrown here may mask the
+            // original capture timeout error.
+            const graceDeadline = Date.now() + CAPTURE_SETTLEMENT_GRACE_MS;
+            try {
+              for (;;) {
+                const observed = Atomics.load(waitSignal, 0);
+                shared.release(task).service();
+                shared.service();
+                if (
+                  shared.release(task).read().status !== "pending" ||
+                  Date.now() >= graceDeadline
+                ) {
+                  break;
+                }
+                Atomics.wait(waitSignal, 0, observed, 2);
+              }
+            } catch {
+              // Settlement failures must not mask the capture timeout error.
+            }
+            retireStuckPreparationWorker();
+          } else {
+            join(shared.release(task));
+          }
         }
       } finally {
         if (metrics) {
