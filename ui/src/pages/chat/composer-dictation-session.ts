@@ -55,6 +55,56 @@ function formatDictationError(error: unknown): string {
   return formatUiError(error);
 }
 
+/**
+ * Stopped recordings that still await their final transcript. Each keeps its
+ * Gateway session until settled; results are delivered in capture order, even
+ * when a later recording's provider finishes first.
+ */
+export class ComposerDictationCommits {
+  private readonly sessions = new Set<ComposerDictationSession>();
+  private tail: Promise<unknown> = Promise.resolve();
+
+  get size(): number {
+    return this.sessions.size;
+  }
+
+  has(session: ComposerDictationSession): boolean {
+    return this.sessions.has(session);
+  }
+
+  /** Delivers once earlier recordings settle; a retired recording resolves false. */
+  add(
+    session: ComposerDictationSession,
+    deliver: (transcript: string) => boolean,
+  ): Promise<boolean> {
+    const previous = this.tail;
+    this.sessions.add(session);
+    const settled = session
+      .finish(true)
+      .catch(() => "")
+      .then(async (transcript) => {
+        await previous;
+        return this.sessions.delete(session) && deliver(transcript);
+      })
+      .catch(() => false);
+    this.tail = settled;
+    return settled;
+  }
+
+  markGatewayDisconnected(): void {
+    for (const session of this.sessions) {
+      session.markGatewayDisconnected();
+    }
+  }
+
+  retire(): void {
+    for (const session of this.sessions) {
+      void session.cancel().catch(() => undefined);
+    }
+    this.sessions.clear();
+  }
+}
+
 export function describeDictationStartError(error: unknown): [string, ComposerDictationFailure] {
   // Stopped recordings hold their Gateway sessions until transcribed; a full
   // connection refuses the next one before its microphone opens.
