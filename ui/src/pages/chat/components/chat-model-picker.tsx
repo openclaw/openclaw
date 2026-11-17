@@ -153,12 +153,11 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
             );
     const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
-    const selectedContextWindowOption = params.contextWindow?.options.find(
-      (option) => option.id === params.contextWindow?.selected,
-    );
-    const showContextWindowBadge =
-      selectedContextWindowOption !== undefined &&
-      params.contextWindow?.selected !== params.contextWindow?.defaultId;
+    const contextWindow = params.contextWindow;
+    const contextWindowBadge =
+      contextWindow?.selected === contextWindow?.defaultId
+        ? undefined
+        : contextWindow?.options.find((option) => option.id === contextWindow.selected);
     const triggerTitle = [
       params.triggerStatusLabel ?? params.triggerModelLabel,
       modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
@@ -167,8 +166,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       .join(" · ");
     return {
       triggerModelOption,
-      selectedContextWindowOption,
-      showContextWindowBadge,
+      contextWindowBadge,
       triggerTitle,
     };
   });
@@ -225,12 +223,12 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
           <span class="chat-controls__inline-select-label">
             {params.triggerStatusLabel ?? params.triggerModelLabel}
           </span>
-          {state().showContextWindowBadge ? (
+          {state().contextWindowBadge ? (
             <span
               class="chat-controls__locked-model-badge chat-controls__model-context-badge"
               data-chat-model-context-badge
             >
-              {state().selectedContextWindowOption?.label}
+              {state().contextWindowBadge?.label}
             </span>
           ) : undefined}
           <span class="chat-controls__inline-select-chevron" aria-hidden="true">

@@ -323,6 +323,33 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
+it("shows a context badge only for a known non-default selection", () => {
+  const params = pickerProps({ modelOptions: [option("fixture", "current")] });
+  const { container, update } = mountPicker(params);
+  const badge = () => control(container, "context-badge");
+  expect(badge()).toBeNull();
+  const contextWindow = {
+    options: [
+      { id: "standard", label: "272k", contextWindow: 272000 },
+      { id: "extended", label: "1M", contextWindow: 1000000 },
+    ],
+    selected: "standard",
+    defaultId: "standard",
+    disabled: false,
+    onSelect: vi.fn(async () => {}),
+  };
+  update({ ...params, contextWindow });
+  expect(badge()).toBeNull();
+  update({ ...params, contextWindow: { ...contextWindow, selected: "extended" } });
+  expect(badge()?.textContent).toBe("1M");
+  update({ ...params, contextWindow: { ...contextWindow, selected: "missing" } });
+  expect(badge()).toBeNull();
+  update({ ...params, contextWindow: { ...contextWindow, defaultId: undefined } });
+  expect(badge()?.textContent).toBe("272k");
+  update(params);
+  expect(badge()).toBeNull();
+});
+
 it("opens setup directly for a settled empty catalog and restores the picker when models arrive", async () => {
   const onModelSetup = vi.fn();
   const params = pickerProps({
