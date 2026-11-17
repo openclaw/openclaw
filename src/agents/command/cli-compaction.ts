@@ -250,6 +250,14 @@ export async function runCliTurnCompactionLifecycle(
       preemptiveCompaction.estimatedPromptTokens,
       floorPositiveFiniteNumber(resolveFreshSessionTotalTokens(params.sessionEntry)) ?? 0,
     );
+    // Post-turn maintenance fails the command only when the next prompt cannot fit.
+    const settleFailedMaintenance = (message: string) => {
+      assertActive();
+      if (exceedsContextWindow(currentTokenCount, contextTokenBudget)) {
+        throw new Error(message);
+      }
+      log.warn(`${message}; continuing because the next prompt fits the context window`);
+    };
     if (
       !preemptiveCompaction.shouldCompact &&
       currentTokenCount <= preemptiveCompaction.promptBudgetBeforeReserve
@@ -425,12 +433,8 @@ export async function runCliTurnCompactionLifecycle(
           nativeOutcome = await compactNativeHarnessCliTranscript();
           if (nativeOutcome.compacted) {
             compactionKind = "native-harness";
-          } else if (
-            !nativeOutcome.fallbackToContextEngine &&
-            nativeOutcome.failureReason &&
-            exceedsContextWindow(currentTokenCount, contextTokenBudget)
-          ) {
-            throw new Error(
+          } else if (!nativeOutcome.fallbackToContextEngine && nativeOutcome.failureReason) {
+            settleFailedMaintenance(
               `CLI native harness compaction failed for ${params.provider}/${params.model}: ${nativeOutcome.failureReason}`,
             );
           }
@@ -580,12 +584,8 @@ export async function runCliTurnCompactionLifecycle(
           contextCompactionOutcome = contextOutcome;
           compactionKind = contextOutcome.compacted ? "context-engine" : undefined;
           // Post-turn maintenance fails the command only when the next prompt cannot fit.
-          if (
-            !compactionKind &&
-            contextOutcome.failureReason &&
-            exceedsContextWindow(currentTokenCount, contextTokenBudget)
-          ) {
-            throw new Error(
+          if (!compactionKind && contextOutcome.failureReason) {
+            settleFailedMaintenance(
               `CLI transcript compaction failed for ${params.provider}/${params.model}: ${contextOutcome.failureReason}`,
             );
           }

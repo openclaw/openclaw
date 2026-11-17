@@ -200,6 +200,9 @@ export async function runEmbeddedAttemptExecutionPhase(
       pendingToolCalls: activeSession.agent.state.pendingToolCalls.size,
       itemLifecycle: preparedStream.subscription.getItemLifecycle(),
       asyncActivity: hasAsyncActivity(preparedStream.subscription.toolMetas),
+      parkedCodeModeRun: preparedStream.subscription.toolMetas.some(
+        (entry) => entry.codeModeSuspended === true,
+      ),
       approvalPromptSent: preparedStream.subscription.didSendDeterministicApprovalPrompt(),
     });
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);

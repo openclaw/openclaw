@@ -57,13 +57,15 @@ export function exceedsContextWindow(
  * A request boundary is safe for maintenance when stopping here and continuing
  * from the transcript is indistinguishable from sending the request: every
  * tool call has a recorded result, no tool item is still running, no tool
- * started background work that reports into this attempt, and no approval
- * prompt is waiting for the user.
+ * started background work that reports into this attempt, no Code Mode run is
+ * parked (its `wait` is bound to this session, which compaction may rotate),
+ * and no approval prompt is waiting for the user.
  */
 export function isToolBatchBoundarySafe(evidence: {
   pendingToolCalls: number;
   itemLifecycle: { startedCount: number; completedCount: number; activeCount: number };
   asyncActivity: boolean;
+  parkedCodeModeRun: boolean;
   approvalPromptSent: boolean;
 }): boolean {
   return (
@@ -71,6 +73,7 @@ export function isToolBatchBoundarySafe(evidence: {
     evidence.itemLifecycle.activeCount === 0 &&
     evidence.itemLifecycle.completedCount === evidence.itemLifecycle.startedCount &&
     !evidence.asyncActivity &&
+    !evidence.parkedCodeModeRun &&
     !evidence.approvalPromptSent
   );
 }

@@ -72,6 +72,7 @@ describe("isToolBatchBoundarySafe", () => {
     pendingToolCalls: 0,
     itemLifecycle: { startedCount: 2, completedCount: 2, activeCount: 0 },
     asyncActivity: false,
+    parkedCodeModeRun: false,
     approvalPromptSent: false,
   };
   it("accepts only a fully settled batch", () => {
@@ -86,5 +87,7 @@ describe("isToolBatchBoundarySafe", () => {
     // A background exec reports into this attempt.
     expect(isToolBatchBoundarySafe({ ...settled, asyncActivity: true })).toBe(false);
     expect(isToolBatchBoundarySafe({ ...settled, approvalPromptSent: true })).toBe(false);
+    // A parked Code Mode `wait` is bound to this session; compaction may rotate it.
+    expect(isToolBatchBoundarySafe({ ...settled, parkedCodeModeRun: true })).toBe(false);
   });
 });
