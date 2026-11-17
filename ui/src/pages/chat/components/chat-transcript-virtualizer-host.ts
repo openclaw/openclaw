@@ -228,7 +228,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         const moved = redraw && inner && this.layout.commitRange(inner, view.getTotalSize() + top);
         // Native resize delivery can read a fast scroll before its scroll event.
         // Keep its position, but replace observed rows outside the delivery cycle.
-        // A row landing before the flow already moved scrollTop; its flow must move this frame.
+        // A measured predecessor needs a geometry projection without another deferred turn.
         const defer =
           redraw && !(moved || flowMoved || this.canFollowEnd || offsetState.hasPendingAnchor);
         this.#presentation.commitChange(
