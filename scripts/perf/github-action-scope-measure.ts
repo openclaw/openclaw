@@ -331,8 +331,8 @@ if (values["large-fixture"]) {
 
 const fixtureTest = `// oxfmt-ignore
 import { createPublicationActionFixture, publicationCheckpoint } from "./github-publication-actions.test-support.js";
-${values["prepare-pr"] ? 'import { fixture as createPreparationFixture } from "./github-pr-workspace-preparation.test-support.js";' : ""}
-import { it, expect } from "vitest";
+${values["prepare-pr"] ? 'import { fixture as createPreparationFixture, mocks as preparationMocks } from "./github-pr-workspace-preparation.test-support.js";' : ""}
+import { it, expect, vi } from "vitest";
 import fs from "node:fs/promises";
 import { loadavg, devNull } from "node:os";
 import { Session } from "node:inspector/promises";
@@ -410,6 +410,13 @@ it("measures actions at the registered boundary with a large authority inventory
   i++;state.arm=arm;
   if(publication)await fs.writeFile(f.local!.cwd+"/artifact.txt",\`Publication fixture \${i}\\n\`);
   if(preparation)await f.advanceHead(Object.fromEntries(Array.from({length:${changedFiles}},(_,n)=>["bench-"+n+".txt","fixture revision "+i+" "+n+"\\n"])));
+  // Mock histories retain command payloads; keep fixture bookkeeping outside every measured action.
+  let mockHistory;
+  if(preparation){
+   const bytes=value=>typeof value==="string" ? Buffer.byteLength(value) : value?.byteLength??0;
+   mockHistory={calls:preparationMocks.runCommand.mock.calls.length,inputBytes:preparationMocks.runCommand.mock.calls.reduce((sum,[,options])=>sum+bytes(options?.input),0),outputBytes:preparationMocks.runCommand.mock.settledResults.reduce((sum,result)=>sum+(result.type==="fulfilled"?bytes(result.value?.stdout)+bytes(result.value?.stderr):0),0),heapBefore:process.memoryUsage().heapUsed};
+   vi.clearAllMocks();global.gc?.();mockHistory.heapAfter=process.memoryUsage().heapUsed;
+  }
   const counts={};
   const gitAssertions=[];
   state.gitAttempt=(run)=>{const attempt={};gitAssertions.push(attempt);return gitAttempts.run(attempt,run);};
@@ -446,7 +453,7 @@ it("measures actions at the registered boundary with a large authority inventory
   else if(action==="requester_runs")expect(result).toHaveLength(Math.ceil(runs/sessions));
   else expect(result.details).toHaveProperty("headCommit",f.publication.headCommit);
   for(const name of Object.keys(counts))counts[name]/=iterations;
-  const row={i,pair,slot,depth,iterations,control:control.kind,arm,action,wallMs:wallMs/iterations,cpuMs:(usage.user+usage.system)/1000/iterations,maxSegment,allocatedBytes:allocatedBytes===undefined?undefined:allocatedBytes/iterations,counts,gitAssertions,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
+  const row={i,pair,slot,depth,iterations,control:control.kind,arm,action,wallMs:wallMs/iterations,cpuMs:(usage.user+usage.system)/1000/iterations,maxSegment,allocatedBytes:allocatedBytes===undefined?undefined:allocatedBytes/iterations,counts,gitAssertions,mockHistory,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
  }
  } finally {for(const release of releases.toReversed())release();}
  }
