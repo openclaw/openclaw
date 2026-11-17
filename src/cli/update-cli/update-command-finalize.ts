@@ -544,6 +544,7 @@ async function updateFinalizeCommandInternal(
       (result) => result,
     );
     // A post-core child defers completion to its parent, which then owns owed steps too.
+    // Owed steps are reported beside the status, which parents read as the maintenance outcome.
     const owedSteps = opts.deferCompletionCache
       ? []
       : await settleOwedStepsAfterFinalization(
@@ -589,10 +590,7 @@ async function updateFinalizeCommandInternal(
       status:
         pluginUpdate.status === "error"
           ? "error"
-          : pluginUpdate.status === "warning" ||
-              doctorWarnings.length > 0 ||
-              owedSteps.length > 0 ||
-              retained
+          : pluginUpdate.status === "warning" || doctorWarnings.length > 0 || retained
             ? "warning"
             : "ok",
       mode: "finalize",

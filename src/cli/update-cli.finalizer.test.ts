@@ -207,11 +207,10 @@ describe("update-cli", () => {
       expect(readOwedUpdateSteps()).toEqual(
         owed.map((step) => ({ ...step, runId: repair?.runId })),
       );
-      const output = lastWriteJsonCall() as { status?: string; owedSteps?: unknown };
+      const output = lastWriteJsonCall() as { owedSteps?: unknown };
       expect(output).toMatchObject({ mode: "finalize", coreUpdate: "completed" });
       expect(output.owedSteps).toEqual(code ? owed : undefined);
       if (code) {
-        expect(output.status).toBe("warning");
         expect(getErrorOutput()).toContain(
           "Warning: Gateway service definition refresh is owed: install failed. Settled when `openclaw update` next refreshes the service definition; `openclaw update repair` rechecks it.",
         );

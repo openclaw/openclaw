@@ -11,6 +11,7 @@ import { createRetainedUpdateRecovery } from "../../infra/update-retained-recove
 import {
   createUpdateRun,
   getUpdateRun,
+  readOwedUpdateSteps,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
@@ -196,6 +197,12 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
   });
 
+  // A failed completion refresh stays owed, so those cases keep it out of the shared ledger.
+  const ownLedgerRun = () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("post-update-owed-") };
+    return { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  };
+
   registerForegroundFinalizationTests({ tempDirs, mocks });
   registerMaintenanceContentionTests(() => tempDirs.make("update-maintenance-contention-"), mocks);
   registerStaleSessionReceiptUpdateTest(mocks);
@@ -340,7 +347,9 @@ describe("successful update finalization ordering", () => {
       Object.assign(new Error("EACCES: completion profile read denied"), { code: "EACCES" }),
     );
 
-    await expect.soft(finishSuccessfulPackageSwitch()).resolves.toBeUndefined();
+    await expect
+      .soft(finishSuccessfulPackageSwitch({ restartEnvironment: process.env, run: ownLedgerRun() }))
+      .resolves.toBeUndefined();
 
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect.soft(output).toContain("Shell completion refresh failed");
@@ -362,6 +371,7 @@ describe("successful update finalization ordering", () => {
     await finishSuccessfulPackageSwitch({
       packageRoot: root,
       restartEnvironment: process.env,
+      run: ownLedgerRun(),
     });
 
     const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
@@ -384,9 +394,13 @@ describe("successful update finalization ordering", () => {
       usesSlowPattern: true,
     });
     mocks.ensureCompletionCache.mockResolvedValueOnce(false);
+    const run = ownLedgerRun();
 
-    await finishSuccessfulPackageSwitch();
+    await finishSuccessfulPackageSwitch({ restartEnvironment: process.env, run });
 
+    expect(readOwedUpdateSteps(run)).toEqual([
+      { id: "shell-completion", runId: run.runId, reason: "completion cache generation failed" },
+    ]);
     const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
     expect(output).toContain("completion cache generation failed");
     expect(output).toContain("Resolve the reported error before retrying");
