@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-const SHA_PINNED_BRANCH_PATTERN = /^release-ci\/[a-f0-9]{12}-[1-9][0-9]*$/u;
 const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
   /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const RELEASE_EVIDENCE_SCRIPT = "scripts/release-ci-summary.mjs";
@@ -76,111 +75,6 @@ export function retainedPublicationArtifactSource(manifest) {
     return null;
   }
   return retained;
-}
-
-export function validateTrustedProducerIdentity(
-  evidence,
-  client,
-  verifier,
-  trustedWorkflowRef,
-  trustedWorkflowFullRef,
-  trustedWorkflowSha,
-) {
-  const { manifest, parentRun } = evidence;
-  const trustedIdentity = resolveTrustedWorkflowIdentity(
-    trustedWorkflowRef,
-    trustedWorkflowFullRef,
-    trustedWorkflowSha,
-  );
-  const shaPinned = SHA_PINNED_BRANCH_PATTERN.test(manifest.workflowRef ?? "");
-  const protectedTagRoute = trustedIdentity.type === "tag";
-  let protectedTagWorkflowRefProof = "manifest-v3-protected-tag-exact-sha";
-  if (protectedTagRoute) {
-    let liveTag;
-    try {
-      liveTag = client.getRef(trustedIdentity.fullRef);
-    } catch (error) {
-      throw new Error(
-        `protected tooling tag is unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        { cause: error },
-      );
-    }
-    if (liveTag?.object?.sha !== trustedIdentity.sha) {
-      throw new Error("protected tooling tag moved after release validation was sealed");
-    }
-    if (!shaPinned) {
-      throw new Error("protected-tag release evidence must use a canonical release-ci branch");
-    }
-    if (manifest.workflowSha !== trustedIdentity.sha) {
-      const comparison = client.compareCommitLineage(manifest.workflowSha, trustedIdentity.sha);
-      if (
-        !["ahead", "identical"].includes(String(comparison.status)) ||
-        comparison.merge_base_commit?.sha !== manifest.workflowSha
-      ) {
-        throw new Error(
-          "protected-tag release evidence producer is not on the trusted tooling lineage",
-        );
-      }
-      protectedTagWorkflowRefProof = "manifest-v3-protected-tag-tooling-lineage";
-    }
-  } else if (manifest.workflowRef !== trustedWorkflowRef && !shaPinned) {
-    throw new Error(
-      `release evidence producer must run from trusted workflow ref: ${trustedWorkflowRef}`,
-    );
-  }
-  if (shaPinned) {
-    if (manifest.version < 3) {
-      throw new Error("SHA-pinned release evidence requires a v3+ manifest");
-    }
-    if (!manifest.workflowRef.startsWith(`release-ci/${manifest.workflowSha.slice(0, 12)}-`)) {
-      throw new Error("SHA-pinned release evidence branch does not match its workflow SHA");
-    }
-    if (manifest.targetRef !== manifest.targetSha) {
-      throw new Error("SHA-pinned release evidence target ref must equal its target SHA");
-    }
-  }
-  const expectedFullRef = `refs/heads/${manifest.workflowRef}`;
-  const runPath = String(parentRun.path ?? "");
-  const [runWorkflowPath, runWorkflowFullRef] = runPath.split("@", 2);
-  if (runWorkflowPath !== ".github/workflows/full-release-validation.yml") {
-    throw new Error("release evidence producer workflow path is not trusted");
-  }
-  if (runWorkflowFullRef && normalizeWorkflowPathRef(runWorkflowFullRef) !== expectedFullRef) {
-    throw new Error("release evidence producer workflow full ref is not trusted");
-  }
-
-  let workflowRefProof = "legacy-v2-main-ancestry";
-  if (manifest.version >= 3) {
-    if (manifest.workflowRefType !== "branch" || manifest.workflowFullRef !== expectedFullRef) {
-      throw new Error("release evidence producer workflow full ref is not trusted");
-    }
-    workflowRefProof = protectedTagRoute
-      ? protectedTagWorkflowRefProof
-      : shaPinned
-        ? "manifest-v3-sha-pinned-main-ancestry"
-        : "manifest-v3-branch";
-  }
-
-  if (!protectedTagRoute) {
-    const comparison = client.compareCommitLineage(manifest.workflowSha, verifier.sourceSha);
-    if (
-      !["ahead", "identical"].includes(String(comparison.status)) ||
-      comparison.merge_base_commit?.sha !== manifest.workflowSha
-    ) {
-      throw new Error("release evidence producer is not on the trusted main verifier lineage");
-    }
-  }
-
-  return {
-    producerOnTrustedMainLineage: !protectedTagRoute,
-    workflowFullRef: expectedFullRef,
-    workflowQualifiedPath: `${runWorkflowPath}@${expectedFullRef}`,
-    workflowRefProof,
-    workflowRefType: "branch",
-    workflowRunPath: runPath,
-  };
 }
 
 export function resolveVerifierIdentity(
