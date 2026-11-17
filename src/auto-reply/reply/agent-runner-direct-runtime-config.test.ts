@@ -14,6 +14,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import {
   clearMemoryPluginState,
   registerMemoryCapability,
@@ -485,9 +486,12 @@ describe("runReplyAgent runtime config", () => {
   it.each([
     { source: "current prepared", revokeDuring: undefined, kept: true },
     { source: "revoked during preflight", revokeDuring: "preflight", kept: false },
+    { source: "refused during preflight", revokeDuring: "refusal", kept: false },
+    { source: "stopped before authority revocation", revokeDuring: "stop", kept: false },
+    { source: "superseded before authority revocation", revokeDuring: "superseded", kept: false },
     { source: "revoked while resolving input", revokeDuring: "persist", kept: false },
-    { source: "revoked original input", revokeDuring: "source", kept: false },
-    { source: "original input revoked by its hook", revokeDuring: "hook", kept: false },
+    { source: "refused original input", revokeDuring: "source", kept: false },
+    { source: "original input refused by its hook", revokeDuring: "hook", kept: false },
   ] as const)(
     "keeps input through preparation only for a $source source",
     async ({ revokeDuring, kept }) => {
@@ -495,6 +499,7 @@ describe("runReplyAgent runtime config", () => {
         const { replyParams, followupRun, sessionEntry, storePath, scope } =
           await createStoredRuntime(tempDir);
         await appendTranscriptMessage(scope, { message: { role: "user", content: "earlier" } });
+        const revocation = new AbortController();
         let revoked = false;
         let sourceRevoked = revokeDuring === "source";
         const input = {
@@ -540,9 +545,12 @@ describe("runReplyAgent runtime config", () => {
           scopes: ["operator.admin"],
           gatewayAccessGrant: null,
           source: {},
+          signal: revocation.signal,
           assertCurrent: () => {
             if (revoked) {
-              throw new Error("operator access revoked");
+              throw revokeDuring === "refusal"
+                ? new GatewayOperatorAccessUnavailableError()
+                : new Error("operator access revoked");
             }
           },
         });
@@ -550,8 +558,20 @@ describe("runReplyAgent runtime config", () => {
           ...freshCfg,
           session: { store: storePath },
         });
-        runSessionCompactionIfNeededMock.mockImplementation(async () => {
-          revoked = revokeDuring === "preflight";
+        runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
+          revoked = revokeDuring === "preflight" || revokeDuring === "refusal";
+          if (revokeDuring === "stop") {
+            params.replyOperation.abortByUser();
+          } else if (revokeDuring === "superseded") {
+            params.replyOperation.supersede();
+          }
+          if (
+            revokeDuring === "preflight" ||
+            revokeDuring === "stop" ||
+            revokeDuring === "superseded"
+          ) {
+            revocation.abort(new Error("operator access revoked"));
+          }
           throw new Error("Preflight compaction required but failed: summarization_failed");
         });
 
@@ -564,11 +584,19 @@ describe("runReplyAgent runtime config", () => {
           );
           expect(runSessionCompactionIfNeededMock).not.toHaveBeenCalled();
           expect((await listSessionPendingInputs(scope)).total).toBe(0);
+        } else if (revokeDuring === "stop" || revokeDuring === "superseded") {
+          await expect(reply).resolves.toEqual({});
         } else {
           await expect(reply).resolves.toMatchObject({
             text: expect.stringContaining("couldn't shorten it"),
           });
         }
+        expect(followupRun.operatorAuthority.signal?.aborted).toBe(
+          revokeDuring === "preflight" ||
+            revokeDuring === "stop" ||
+            revokeDuring === "superseded" ||
+            revokeDuring === "persist",
+        );
         expect(executeAgentTurnMock).not.toHaveBeenCalled();
         const failedTurn = expect.objectContaining({
           role: "user",
