@@ -325,27 +325,50 @@ describe("already-pending yield after a delivered reply", () => {
     content: [{ type: "text" as const, text: '{"status":"already_pending"}' }],
     details: { status: "already_pending", pendingChildren: [] },
   };
-  it.each([true, false])("ends the turn only after a delivered reply (sent %s)", async (sent) => {
-    const f = fixture();
-    if (sent) {
-      await f.invoke({
-        args: { action: "send", message: "progress reply", final: false },
-        result: settledResult(true),
-      });
+  const progressSend = {
+    args: { action: "send", message: "progress reply", final: false },
+    result: settledResult(true),
+  };
+  // Invoke within the hook's current accepted input, as the agent runtime does.
+  function scoped(f: ReturnType<typeof fixture>) {
+    const completion = getInternalToolTurnCompletion(f.agent);
+    if (!completion) {
+      throw new Error("Message completion owner was not installed");
     }
-    const result = await f.invoke({ toolName: "sessions_yield", args: {}, result: alreadyPending });
+    return {
+      completion,
+      invoke(input: CallInput) {
+        const context = createAfterToolCallContext(input);
+        captureAgentToolInputScope(context, getInternalToolTurnInputScope(completion));
+        return f.agent.afterToolCall?.(context);
+      },
+    };
+  }
+
+  it.each([true, false])("ends the turn only after a delivered reply (sent %s)", async (sent) => {
+    const { invoke } = scoped(fixture());
+    if (sent) {
+      await invoke(progressSend);
+    }
+    const result = await invoke({ toolName: "sessions_yield", args: {}, result: alreadyPending });
     // Without a delivered reply, already_pending keeps the turn for its normal answer.
     expect(result).toEqual(sent ? { terminate: true } : undefined);
   });
 
-  it("keeps the turn for other yield results", async () => {
-    const f = fixture();
-    await f.invoke({
-      args: { action: "send", message: "progress reply", final: false },
-      result: settledResult(true),
-    });
+  it("keeps a later input's turn open when only an earlier input delivered", async () => {
+    const { completion, invoke } = scoped(fixture());
+    await invoke(progressSend);
+    commitInternalToolTurnInput(completion);
     await expect(
-      f.invoke({
+      invoke({ toolName: "sessions_yield", args: {}, result: alreadyPending }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps the turn for other yield results", async () => {
+    const { invoke } = scoped(fixture());
+    await invoke(progressSend);
+    await expect(
+      invoke({
         toolName: "sessions_yield",
         args: {},
         result: { content: [], details: { status: "nothing_pending" } },

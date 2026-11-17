@@ -108,7 +108,8 @@ export function installMessageToolTerminalHook(
   },
 ): void {
   const finalReplyInputs = new Set<object>();
-  let deliveredSourceReply = false;
+  // Per input: a steered or queued input must deliver its own reply before its yield ends it.
+  const deliveredReplyInputs = new WeakSet<object>();
   const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
   // Let sibling tools settle, then finish without another model request.
@@ -162,7 +163,9 @@ export function installMessageToolTerminalHook(
     } finally {
       delivered ||= isDelivered(hookResult);
       if (delivered) {
-        deliveredSourceReply = true;
+        if (inputScope) {
+          deliveredReplyInputs.add(inputScope);
+        }
         if (final && inputScope) {
           finalReplyInputs.add(inputScope);
         }
@@ -171,10 +174,11 @@ export function installMessageToolTerminalHook(
     }
     // The visible reply already went out and an earlier turn's wake resumes this session.
     const endsAfterPendingYield =
-      deliveredSourceReply &&
+      inputScope !== undefined &&
+      deliveredReplyInputs.has(inputScope) &&
       !context.isError &&
       isAlreadyPendingSessionsYieldResult(toolName, context.result);
-    if (endsAfterPendingYield && inputScope) {
+    if (endsAfterPendingYield) {
       finalReplyInputs.add(inputScope);
     }
     return (delivered && final) || endsAfterPendingYield

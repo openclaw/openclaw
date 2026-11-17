@@ -22,6 +22,8 @@ export function createSteeredCliMessageInjection(params: {
   signal: AbortSignal;
   assertCurrent: SessionSourceAssertion;
   cwd: string;
+  /** Native owns the steered input; tool tracking starts a new input's reply state. */
+  onInputSubmitted?: () => void;
 }): ReplyBackendMessageInjectionV2 {
   const queueMessage = async (
     text: string,
@@ -53,6 +55,7 @@ export function createSteeredCliMessageInjection(params: {
                 params.assertCurrent();
                 submit();
                 submitted = true;
+                params.onInputSubmitted?.();
               });
             });
           } catch (cause) {

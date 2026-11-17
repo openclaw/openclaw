@@ -44,15 +44,32 @@ export function createCliTurnInterruptRequest() {
 export function createCliYieldTurnEnd(
   turnInterrupt: ReturnType<typeof createCliTurnInterruptRequest>,
 ) {
+  let yielded = false;
+  // Per input: a steered input must deliver its own reply before its yield ends the turn.
+  let deliveredForInput = false;
   let pendingAfterSourceReply = false;
   return {
-    observe(toolName: string, call: { outcome: string; result?: unknown }, delivered: boolean) {
+    yielded: () => yielded,
+    /** A supported yield or source-reply interrupt owns the turn's end; later text is not a reply. */
+    suppressesAssistantOutput: () =>
+      (yielded || turnInterrupt.reason() === "source_reply") && turnInterrupt.isSupported(),
+    markYielded() {
+      yielded = true;
+    },
+    markDelivered(delivered: boolean) {
+      deliveredForInput ||= delivered;
+    },
+    beginInput() {
+      deliveredForInput = false;
+      pendingAfterSourceReply = false;
+    },
+    observe(toolName: string, call: { outcome: string; result?: unknown }) {
       pendingAfterSourceReply ||=
-        delivered &&
+        deliveredForInput &&
         call.outcome === "completed" &&
         isAlreadyPendingSessionsYieldResult(toolName, call.result);
     },
-    onToolResult(toolName: string, isError: boolean | undefined, yielded: boolean) {
+    onToolResult(toolName: string, isError: boolean | undefined) {
       if (isError || stripOpenClawMcpToolPrefix(toolName) !== "sessions_yield") {
         return;
       }
