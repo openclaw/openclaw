@@ -157,16 +157,41 @@ type UsageInsightStats = {
 };
 
 /**
+ * Active time for the current scope. Day selections narrow totals to those
+ * days, so the denominator must come from the matching dailyLatency buckets;
+ * without a day selection the full-range aggregate is already scoped right.
+ */
+export function usageActiveMs(
+  input: {
+    latency?: { count: number; avgMs: number };
+    dailyLatency?: ReadonlyArray<{ date: string; count: number; avgMs: number }>;
+  },
+  selectedDays: readonly string[],
+): number {
+  if (selectedDays.length > 0 && input.dailyLatency?.length) {
+    const days = new Set(selectedDays);
+    let activeMs = 0;
+    for (const day of input.dailyLatency) {
+      if (days.has(day.date) && day.count > 0) {
+        activeMs += day.avgMs * day.count;
+      }
+    }
+    return activeMs;
+  }
+  const { latency } = input;
+  return latency && latency.count > 0 ? latency.avgMs * latency.count : 0;
+}
+
+/**
  * Throughput divides by active time — the assistant-turn durations already
  * shipped in aggregates.latency — not the wall-clock session span, which also
  * counts every idle gap between turns.
  */
 export function usageThroughputStats(input: {
   totals: { totalTokens: number; totalCost: number } | null;
-  latency?: { count: number; avgMs: number };
+  activeMs: number;
 }): { throughputTokensPerMin?: number; throughputCostPerMin?: number } {
-  const { totals, latency } = input;
-  const activeMs = latency && latency.count > 0 ? latency.avgMs * latency.count : 0;
+  const { totals, activeMs } = input;
   return {
     throughputTokensPerMin:
       totals && activeMs > 0 ? totals.totalTokens / (activeMs / 60000) : undefined,

@@ -11,6 +11,7 @@ import {
   buildPeakErrorHours,
   formatHeadlineCost,
   formatUsageTokens,
+  usageActiveMs,
   usageThroughputStats,
 } from "./metrics.ts";
 import { UsageEmptyState } from "./page-shell.tsx";
@@ -140,10 +141,17 @@ function UsageView(props: UsageControlsProps & { loading: boolean; read: UsageRe
     const durationCount = analyticsData().overview?.durationCount ?? 0;
     const totals = analyticsTotals();
     const messages = activeAggregates().messages;
+    const activeMs = usageActiveMs(
+      {
+        latency: activeAggregates().latency,
+        dailyLatency: activeAggregates().dailyLatency,
+      },
+      props.filters.selectedDays,
+    );
     return {
       durationCount,
       avgDurationMs: durationCount ? durationMs / durationCount : 0,
-      ...usageThroughputStats({ totals, latency: activeAggregates().latency }),
+      ...usageThroughputStats({ totals, activeMs }),
       errorRate: messages.total ? messages.errors / messages.total : 0,
     };
   });
