@@ -5,6 +5,7 @@ export * from "./jcs.js";
 export * from "./keys.js";
 export * from "./crypto.js";
 export * from "./kit.js";
+export * from "./member-recovery-kit.js";
 export * from "./statements/index.js";
 export * from "./tunnel/index.js";
 export * from "./discovery/index.js";

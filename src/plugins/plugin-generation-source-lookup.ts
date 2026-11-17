@@ -48,6 +48,7 @@ type SourceCustody = {
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
   executionAliases: ReadonlyMap<string, string>;
   executionSources: ReadonlyMap<string, string>;
+  packageManifests: ReadonlyMap<string, Record<string, unknown> | null>;
   modules?: ReadonlyMap<string, PluginInspectedModule>;
 };
 /** Plain inspection facts; executable lookup callbacks stay with each consuming capture. */
@@ -186,7 +187,7 @@ export function createPluginSourceFacts(
       };
     },
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
-    captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
+    captureCustody: (capture: () => PluginRecoverySource) => ({
       source: capture(),
       files,
       executionAliases,

@@ -14,6 +14,10 @@ protocol copies, preserve valid role names and display unknown names without inv
 built-in role. Role names are not an enumerated field; new valid names do not change the
 protocol version.
 
+The display-only `member_browser_request` mailbox kind also revises v1-draft in place.
+Consumers update their canonical protocol copies together; this adds no signed statement,
+capability or admission rule. See `discovery.md` for its bounded, non-authoritative contract.
+
 This document says how the protocol changes after release: what carries a version, what a
 reader does with a version it does not implement, which changes need a new version, and how
 long an old version stays supported.

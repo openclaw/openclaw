@@ -12,7 +12,7 @@ import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   resolveIdentityPathViaExistingAncestor,
   resolveIdentityPathViaExistingAncestorSync,
-} from "./boundary-path.js";
+} from "./path-existence.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeWorkerGenerationUrl } from "./runtime-worker-generation.js";
 import { prepareSqliteDatabaseAdmissionAsync } from "./sqlite-database-admission.js";

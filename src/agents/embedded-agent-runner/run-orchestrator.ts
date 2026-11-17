@@ -3,8 +3,8 @@ import {
   createAgentLifecycleTerminalBackstop,
   resolveAgentLifecycleTerminalMetadata,
 } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
-import { prepareCronRootSessionGeneration } from "../../config/sessions/session-delivery-generation.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
+import { acquireCronRootTranscriptLease } from "../../config/sessions/transcript-lease.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { revokeMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -27,6 +27,7 @@ import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
@@ -257,14 +258,10 @@ async function runEmbeddedAgentForSession(
         if (cliDispatched) {
           return cliDispatched;
         }
-        const preReplyTarget = { ...runSessionTarget, ...params.sessionTarget };
-        const preReplyGeneration = await prepareCronRootSessionGeneration(
-          {
-            ...preReplyTarget,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? preReplyTarget.sessionKey,
-            lifecycleRevision: preReplyTarget.expectedLifecycleRevision,
-          },
+        const preReply = { ...runSessionTarget, ...params.sessionTarget };
+        const preReplyGeneration = await acquireCronRootTranscriptLease(
+          chatRef({ ...preReply, sessionKey: params.sessionKey ?? preReply.sessionKey }),
+          { sessionId: params.sessionId, lifecycleRevision: preReply.expectedLifecycleRevision },
           (reason) => laneController.laneTaskAbortController.abort(reason),
         );
         using _ = { [Symbol.dispose]: () => preReplyGeneration?.release() };
