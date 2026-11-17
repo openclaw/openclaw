@@ -13,6 +13,7 @@ import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS } from "./exec-spawn.js";
 import { createCommandTerminationController } from "./exec-termination.js";
 import * as adoptedChildren from "./scoped-child-reaper.js";
+import * as groupOwnership from "./supervisor/service-child-group-ownership.js";
 
 const isForceSignal = (signal: Parameters<typeof process.kill>[1]) =>
   signal === "SIGKILL" || signal === osConstants.signals.SIGKILL;
@@ -109,8 +110,10 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
     vi.useFakeTimers();
     vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockReturnValue(123);
     let gone = false;
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-      const code = gone ? "ESRCH" : "EPERM";
+    const census = vi.spyOn(groupOwnership, "isProcessGroupGoneByCensus");
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      // The denial canary's impossible group gets the kernel's ESRCH, so EPERM stays a kernel EPERM.
+      const code = gone || pid === -(4_194_304 + 1) ? "ESRCH" : "EPERM";
       throw Object.assign(new Error(code), { code });
     });
     const { child, kill: killChild } = mockTerminatingChild(exits ? null : 7);
@@ -147,7 +150,9 @@ describe.skipIf(process.platform === "win32")("command process-group settlement"
       expect(settled).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await expect(completion).resolves.toBe("uncertain");
-      expect(kill.mock.calls.every(([pid]) => pid === -4242)).toBe(true);
+      // Only the denial canary (a group beyond Linux PID_MAX_LIMIT) may probe another target.
+      expect(kill.mock.calls.every(([pid]) => pid === -4242 || pid === -4_194_305)).toBe(true);
+      expect(census).not.toHaveBeenCalled();
       expect(killChild).not.toHaveBeenCalled();
       expect(cancelController.signal.aborted).toBe(false);
     }
