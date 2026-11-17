@@ -289,10 +289,23 @@ Native settings under `agent` include `groupChat`, `sandbox`, `tools`,
 `memory`, `heartbeat`, and `humanDelay`. The native `tools.profile` field
 selects a built-in tool policy; its grants are bounded and frozen when Add
 creates the agent. Host policy still constrains every grant. A Template cannot
-set a model, provider, credentials, or named delegate agents. Exec mode
-(`tools.exec`) and cross-provider messaging (`tools.message`) are operator
-decisions, so a Template cannot set them either; after Add, set them on the new
-agent with `openclaw config set agents.entries.<id>.tools.exec ...`.
+configure a provider, credentials, or named delegate agents.
+
+Authors may optionally set `agent.model` to a preferred, fully qualified model:
+
+```yaml
+agent:
+  id: incident-triage
+  model: anthropic/claude-sonnet-4-5
+```
+
+At Add time, the receiving Gateway checks its ordinary model picker. If that
+exact model is available and permitted, the new agent uses it. Otherwise Add
+continues using the Gateway's default model; it does not install a provider,
+request credentials, or change the Gateway default. Omitting `model` keeps the
+existing default-inheritance behavior. Use `provider/model`, not a host-local
+alias or account pin. This is a one-time creation preference, not an ongoing
+Template-managed model selection; users can change the agent's model normally.
 
 ```yaml
 agent:
@@ -304,6 +317,10 @@ agent:
   sandbox: { mode: all, workspaceAccess: ro }
   memory: { search: { enabled: false } }
 ```
+
+Exec mode (`tools.exec`) and cross-provider messaging (`tools.message`) are
+operator decisions, so a Template cannot set them either; after Add, set them on
+the new agent with `openclaw config set agents.entries.<id>.tools.exec ...`.
 
 Set `enabled: false` on an automation to install it disabled; omitting the field
 keeps the enabled default. Jobs belong to the new agent. First-run instructions
