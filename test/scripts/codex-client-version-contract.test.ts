@@ -1,5 +1,5 @@
-// Codex Client Version Contract tests: ChatGPT model discovery reports the
-// version of the Codex binary that runs turns (#113615).
+// The Platform access-program lookup uses the managed Codex pin when there
+// is no selected runtime version.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
@@ -28,7 +28,7 @@ function readOpenAICodexClientVersion(): string {
 }
 
 describe("Codex client version contract", () => {
-  it("matches OpenAI model discovery to the managed Codex package", () => {
+  it("matches the Platform access-program fallback to the managed Codex package", () => {
     expect(readOpenAICodexClientVersion()).toBe(readManagedCodexVersion());
   });
 });

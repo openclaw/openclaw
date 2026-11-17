@@ -1141,6 +1141,7 @@ src/infra/home-display.ts
 src/infra/host-env-security-policy.js
 src/infra/host-env-security-policy.json
 src/infra/host-env-security.ts
+src/infra/host-memory.ts
 src/infra/http-body.ts
 src/infra/http-request-lifecycle.ts
 src/infra/http-response-body-timeout.ts
@@ -1242,6 +1243,7 @@ src/infra/runtime-process-script-file.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-profile.ts
 src/infra/runtime-worker-generation.ts
+src/infra/runtime-worker-loader.mjs
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
@@ -1339,6 +1341,7 @@ src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
 src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
+src/infra/sqlite-snapshot-exclusive-copy.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-publication-cleanup.ts
