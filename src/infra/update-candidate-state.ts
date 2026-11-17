@@ -89,6 +89,7 @@ export const UpdateCandidateSnapshotInventorySchema = z.object({
   databases: z
     .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
     .transform((entries) => new Map(entries)),
+  // Released parents budget all projected files through this historical field.
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
   // The installed driver budgets the candidate worker's copy lifecycle.
@@ -227,10 +228,12 @@ export async function readUpdateCandidateStateInventoryInProcess(
       sharedStatePluginIndex,
       onProgress,
     });
+    const coldArchives = await import("./update-candidate-cold-archives.js");
     await fs.writeFile(planPath, JSON.stringify(plugins));
     return {
       databases: files,
-      pluginBytes: plugins.bytes,
+      pluginBytes:
+        plugins.bytes + (await coldArchives.measureColdArchiveBytes(files, input.targetStateDir)),
       pluginPlan: UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME,
       warnings: plugins.warnings,
     };
@@ -541,8 +544,7 @@ export async function snapshotUpdateCandidateState(
   const { inspectSqliteSchemaHeaderInProcess } =
     await import("./sqlite-schema-header-inspection.js");
   const { createVerifiedSqliteSnapshot } = await import("./sqlite-snapshot.js");
-  const { embedSessionColdArchivesInSnapshot } =
-    await import("../config/sessions/session-cold-storage-backup.js");
+  const coldArchives = await import("./update-candidate-cold-archives.js");
   const { AGENT_FTS_SCHEMAS } = await import("../state/openclaw-agent-fts-schema.js");
   const { copyUpdateCandidatePlugins, UpdateCandidatePluginPlanSchema } =
     await import("./update-candidate-plugins.js");
@@ -656,8 +658,7 @@ export async function snapshotUpdateCandidateState(
       onProgress: progress.onProgress,
       transform: async (db: DatabaseSync) => {
         if (file !== shared) {
-          // Released updaters need cold payloads bound to the private copy's rows.
-          await embedSessionColdArchivesInSnapshot({ database: db, sourceStorePath: file });
+          await coldArchives.copyColdArchives(db, file, target);
           return;
         }
         contentVersion = readStateSchemaContentVersion(db);
