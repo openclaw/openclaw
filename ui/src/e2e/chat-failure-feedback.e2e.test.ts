@@ -79,15 +79,27 @@ suite.define(() => {
         await notice.locator('[role="dialog"][data-phase="open"]').waitFor();
         expect(await notice.locator(".chat-run-failure__log").textContent()).toBe(summary);
         const before = await takeControlUiScreenshotFrame(page, notice, [toggle, report], {
+          elements: [report],
           animations: "disabled",
         });
         await writeFile(path.join(suite.artifactDir, "default-feedback-clean.png"), before.png);
+        await writeFile(
+          path.join(suite.artifactDir, "default-feedback-bounds.json"),
+          JSON.stringify({
+            viewport: page.viewportSize(),
+            scale: await page.evaluate(() => window.devicePixelRatio),
+            target: before.elements[0]!.bounds,
+          }),
+        );
         await page.getByRole("button", { name: "Use plugin feedback", exact: true }).click();
         const receipt = notice.locator("[data-plugin-failure-feedback]");
         await expect
           .poll(() => receipt.textContent())
           .toContain("Synthetic report ID: fixture-report");
         expect(await report.count()).toBe(0);
+        // The header action is an outside click; reopen the ordinary details popover.
+        await toggle.click();
+        await notice.locator('[role="dialog"][data-phase="open"]').waitFor();
         expect(await toggle.getAttribute("aria-expanded")).toBe("true");
         expect(await notice.locator(".chat-run-failure__log").textContent()).toBe(summary);
         const request = await gateway.waitForRequest("fixture.failureFeedback");
@@ -101,9 +113,18 @@ suite.define(() => {
           await receipt.getByRole("link", { name: "Example log artifact" }).getAttribute("href"),
         ).toBe("https://example.invalid/synthetic-log.zip");
         const after = await takeControlUiScreenshotFrame(page, notice, [toggle, receipt], {
+          elements: [receipt],
           animations: "disabled",
         });
         await writeFile(path.join(suite.artifactDir, "plugin-feedback-clean.png"), after.png);
+        await writeFile(
+          path.join(suite.artifactDir, "plugin-feedback-bounds.json"),
+          JSON.stringify({
+            viewport: page.viewportSize(),
+            scale: await page.evaluate(() => window.devicePixelRatio),
+            target: after.elements[0]!.bounds,
+          }),
+        );
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("agent")).toHaveLength(0);
         await gateway.setMethodResponse("plugins.controlUi.list", {
