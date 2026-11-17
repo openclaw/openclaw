@@ -13,7 +13,7 @@ import {
   PLUGIN_AVAILABILITY_POLICY,
   type DegradedPlugin,
 } from "../plugins/runtime-degraded-state.js";
-import { resolveCompatibilityHostVersion } from "../version.js";
+import { resolveReleaseHostVersion } from "../version.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration-availability.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
@@ -136,7 +136,8 @@ export async function runDoctorPluginConvergence(params: {
       runPostCorePluginConvergence({
         cfg: params.cfg,
         env: params.env,
-        compatibilityHostVersion: resolveCompatibilityHostVersion(params.env),
+        // This handoff selects package cohorts; API checks map the baseline separately.
+        compatibilityHostVersion: resolveReleaseHostVersion(params.env),
       }),
     params.measure,
   );

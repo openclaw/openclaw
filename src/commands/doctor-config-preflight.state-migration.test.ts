@@ -39,6 +39,15 @@ const doctorMigrationOptions = {
 describe("runDoctorConfigPreflight state migration", () => {
   beforeEach(resetStateMigrationPreflightMocks);
 
+  it("preserves the release cohort when the API baseline differs", async () => {
+    await withEnvAsync({ OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.10.33" }, async () => {
+      await runDoctorConfigPreflight(doctorMigrationOptions);
+      expect(runPostCorePluginConvergence).toHaveBeenCalledWith(
+        expect.objectContaining({ compatibilityHostVersion: "2026.10.33" }),
+      );
+    });
+  });
+
   it("carries cron Codex runtime policy targets only during repair", async () => {
     collectCronCodexRuntimePolicyTargetsReadOnly.mockResolvedValueOnce({
       targets: [{ modelRef: "openai/gpt-5.6-sol" }],
