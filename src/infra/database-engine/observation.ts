@@ -23,6 +23,7 @@ export function attributesSqliteStatements(operationLabel: string): boolean {
     operationLabel.startsWith("session.transcript.") ||
     operationLabel.startsWith("sessions.transcript-") ||
     operationLabel.startsWith("session.metadata.") ||
+    operationLabel.startsWith("session.cold.") ||
     operationLabel.startsWith("trajectory.") ||
     operationLabel.startsWith("audit.writer.") ||
     operationLabel.startsWith("knowledge.") ||

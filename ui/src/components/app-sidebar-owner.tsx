@@ -14,6 +14,8 @@ import {
   SidebarAutomationsHeader,
   SidebarCustomizeHeader,
   SidebarOnlineHeader,
+  SidebarPageHeader,
+  SidebarPluginSectionHeader,
 } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
@@ -70,6 +72,9 @@ const SidebarCustomize = lazy(() => import("./app-sidebar-customize.tsx"), {
   export: "SidebarCustomize",
 });
 
+const SidebarPluginSection = lazy(() => import("./app-sidebar-pages.tsx"), {
+  export: "SidebarPluginSection",
+});
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
   export: "AppSidebarOnline",
 });
@@ -568,6 +573,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   <Match when={this.navigationView === "online"}>
                     <SidebarOnlineHeader host={this} />
                   </Match>
+                  <Match when={this.navigationView === "plugin"}>
+                    <SidebarPluginSectionHeader host={this} />
+                  </Match>
+                  <Match when={this.navigationView === "sessions" && this.contextualSidebar}>
+                    {(sidebar) => <SidebarPageHeader host={this} route={sidebar().key} />}
+                  </Match>
                 </Switch>
                 <div
                   ref={scrollRef}
@@ -610,6 +621,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       <SidebarViewBoundary>
                         <SidebarReady />
                         <SidebarOnline host={this} />
+                      </SidebarViewBoundary>
+                    </Match>
+                    <Match when={this.navigationView === "plugin"}>
+                      <SidebarViewBoundary>
+                        <SidebarReady />
+                        <SidebarPluginSection host={this} />
                       </SidebarViewBoundary>
                     </Match>
                   </Switch>
