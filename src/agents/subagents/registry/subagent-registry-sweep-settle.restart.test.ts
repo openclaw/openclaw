@@ -4,13 +4,12 @@ import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
-import {
-  settleRestartInterruptedSubagentRun,
-  SUBAGENT_RESTART_INTERRUPTED_ERROR,
-} from "./subagent-registry-sweep-settle.js";
+import { settleRestartInterruptedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+const SUBAGENT_RESTART_INTERRUPTED_ERROR =
+  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
 const PROCESS_STARTED_AT = 1_800_000_000_000;
 const NOW = PROCESS_STARTED_AT + 60_000;
 

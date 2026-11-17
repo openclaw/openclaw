@@ -127,7 +127,7 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   return true;
 }
 
-export const SUBAGENT_RESTART_INTERRUPTED_ERROR =
+const SUBAGENT_RESTART_INTERRUPTED_ERROR =
   "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
 
 /**

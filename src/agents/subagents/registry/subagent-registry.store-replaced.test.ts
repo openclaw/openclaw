@@ -53,10 +53,7 @@ import {
   loadSubagentRegistryFromSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
-import {
-  settleUnreachableYieldedSubagentRun,
-  SUBAGENT_RESTART_INTERRUPTED_ERROR,
-} from "./subagent-registry-sweep-settle.js";
+import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   initSubagentRegistry,
@@ -79,6 +76,8 @@ function expectNoSystemEvents(database: ReturnType<typeof openOpenClawStateDatab
   ).toEqual([]);
 }
 
+const SUBAGENT_RESTART_INTERRUPTED_ERROR =
+  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
 const retiredDelivery = {
   status: "suspended",
   disposition: "permanent_failure",
@@ -338,7 +337,7 @@ it("settles a running child restored from an earlier Gateway as interrupted", as
   await resetSubagentRegistryForTests({ persist: false });
   await closeOpenClawStateDatabaseAsync();
   await restoreSubagentRunsFromDisk({ runs: subagentRuns });
-  const restored = expectDefined(subagentRuns.get(subagent.runId));
+  const restored = expectDefined(subagentRuns.get(subagent.runId), "restored running child");
   expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
 
   await testing.sweepOnceForTests();
