@@ -64,6 +64,7 @@ import type { FeishuMessageEvent } from "./event-types.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { isFeishuBroadcastMention, normalizeMentions } from "./mention.js";
 import {
+  buildFeishuFetchedContextPolicy,
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
   resolveFeishuDmIngressAccess,
@@ -728,14 +729,13 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
     });
 
-    const fetchedContextPolicy = {
-      cfg,
+    const fetchedContextPolicy = buildFeishuFetchedContextPolicy({
+      cfg: effectiveCfg,
       accountId: account.accountId,
       chatId: ctx.chatId,
       isGroup,
-      allowFrom: effectiveGroupSenderAllowFrom,
-      mode: contextVisibilityMode,
-    };
+      feishuCfg,
+    });
 
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024;
     const mediaList = await resolveFeishuMediaListWithLookback({

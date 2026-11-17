@@ -246,8 +246,13 @@ export async function resolveFeishuMediaList(params: {
   maxBytes: number;
   log?: (msg: string) => void;
   accountId?: string;
+  /** Only download post attachments of these kinds (e.g. images-only lookback). */
+  allowedKinds?: Array<"image" | "file">;
+  /** Download at most this many post attachments, applied before any download. */
+  maxItems?: number;
 }): Promise<FeishuMediaInfo[]> {
-  const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
+  const { cfg, messageId, messageType, content, maxBytes, log, accountId, allowedKinds, maxItems } =
+    params;
   // Sticker keys are reusable, but Feishu does not expose their resource bytes.
   const mediaTypes = ["image", "file", "audio", "video", "media", "post"];
   if (!mediaTypes.includes(messageType)) {
@@ -263,12 +268,18 @@ export async function resolveFeishuMediaList(params: {
   }> = [];
   if (messageType === "post") {
     const { attachments } = parsePostContent(content);
-    if (attachments.length === 0) {
+    const wanted = attachments.filter(
+      (attachment) => !allowedKinds || allowedKinds.includes(attachment.kind),
+    );
+    // Cap before downloading: a post with 6 images and maxItems 5 must only
+    // download 5, and filtered-out kinds must not consume the budget.
+    const capped = maxItems === undefined ? wanted : wanted.slice(0, Math.max(0, maxItems));
+    if (capped.length === 0) {
       return [];
     }
-    log?.(`feishu: post message contains ${attachments.length} embedded attachment(s)`);
+    log?.(`feishu: post message contains ${capped.length} embedded attachment(s)`);
     const seenAttachments = new Set<string>();
-    for (const attachment of attachments) {
+    for (const attachment of capped) {
       const identity = `${attachment.kind}:${attachment.key}`;
       if (seenAttachments.has(identity)) {
         continue;

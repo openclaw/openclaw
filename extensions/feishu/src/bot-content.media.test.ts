@@ -7,13 +7,18 @@ vi.mock("./media.js", () => ({ saveMessageResourceFeishu }));
 import { resolveFeishuMediaList } from "./bot-content.js";
 
 const cfg = createFeishuTestConfig({ dmPolicy: "open" });
-const download = (content: unknown, messageType = "post") =>
+const download = (
+  content: unknown,
+  messageType = "post",
+  extra: { allowedKinds?: Array<"image" | "file">; maxItems?: number } = {},
+) =>
   resolveFeishuMediaList({
     cfg,
     messageId: "msg-files",
     messageType,
     content: JSON.stringify(content),
     maxBytes: 1024,
+    ...extra,
   });
 const document = (path: string, contentType: string) => ({
   path: `/tmp/${path}`,
@@ -95,5 +100,38 @@ describe("resolveFeishuMediaList post files[]", () => {
       document("usage.zip", "application/zip"),
     ]);
     expectFileDownload("file_usage", "usage.zip");
+  });
+
+  it("downloads at most maxItems images from a post", async () => {
+    const images = Array.from({ length: 6 }, (_, i) => ({ tag: "img", image_key: `img_${i}` }));
+    const result = await download({ title: "", content: [images] }, "post", { maxItems: 5 });
+    expect(result).toHaveLength(5);
+    expect(result.every((media) => media.kind === "image")).toBe(true);
+    expect(saveMessageResourceFeishu).toHaveBeenCalledTimes(5);
+    expect(saveMessageResourceFeishu.mock.calls.map(([request]) => request.fileKey)).not.toContain(
+      "img_5",
+    );
+  });
+
+  it("downloads only image attachments when allowedKinds is image-only", async () => {
+    const result = await download(
+      {
+        title: "",
+        content: [
+          [
+            { tag: "img", image_key: "img_1" },
+            { tag: "media", file_key: "file_vid" },
+          ],
+        ],
+        files: [{ file_key: "file_pdf", file_name: "report.pdf" }],
+      },
+      "post",
+      { allowedKinds: ["image"] },
+    );
+    expect(result).toEqual([{ path: "/tmp/img_1", contentType: "image/png", kind: "image" }]);
+    expect(saveMessageResourceFeishu).toHaveBeenCalledTimes(1);
+    expect(saveMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({ fileKey: "img_1", type: "image" }),
+    );
   });
 });

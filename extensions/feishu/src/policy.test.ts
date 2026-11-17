@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
+  buildFeishuFetchedContextPolicy,
   hasExplicitFeishuGroupConfig,
   resolveFeishuGroupSenderActivationIngressAccess,
   resolveFeishuGroupToolPolicy,
@@ -73,4 +74,41 @@ describe("Feishu policy", () => {
       ).toBe(decision);
     },
   );
+  it("prefers the group's allowFrom over the channel default", () => {
+    const feishuCfg = FeishuConfigSchema.parse({
+      groupSenderAllowFrom: ["ou-default"],
+      groups: { oc_1: { allowFrom: ["ou-group"] } },
+    });
+    expect(
+      buildFeishuFetchedContextPolicy({
+        cfg: createCfg(feishuCfg),
+        accountId: "default",
+        chatId: "oc_1",
+        isGroup: true,
+        feishuCfg,
+      }),
+    ).toEqual(expect.objectContaining({ allowFrom: ["ou-group"], mode: "all", isGroup: true }));
+  });
+  it("falls back to the channel sender allowlist without a group allowFrom", () => {
+    const feishuCfg = FeishuConfigSchema.parse({ groupSenderAllowFrom: ["ou-default"] });
+    expect(
+      buildFeishuFetchedContextPolicy({
+        cfg: createCfg(feishuCfg),
+        accountId: "default",
+        chatId: "oc_1",
+        isGroup: true,
+        feishuCfg,
+      }),
+    ).toEqual(expect.objectContaining({ allowFrom: ["ou-default"], mode: "all" }));
+  });
+  it("uses an empty allowlist outside groups", () => {
+    expect(
+      buildFeishuFetchedContextPolicy({
+        cfg: createCfg({ groupSenderAllowFrom: ["ou-default"] }),
+        accountId: "default",
+        chatId: "oc_1",
+        isGroup: false,
+      }),
+    ).toEqual(expect.objectContaining({ allowFrom: [], mode: "all" }));
+  });
 });
