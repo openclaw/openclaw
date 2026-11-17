@@ -13902,7 +13902,9 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions pinned Bun for Node-hosted standalone code generation", () => {
+  it("provisions pinned Bun for Node-hosted code generation and retained imports", () => {
+    const retainedImports = "src/infra/update-retained-runtime-imports.process.test.ts";
+    const infra = "test/vitest/vitest.infra.config.ts";
     const codegen = "test/scripts/bun-standalone-codegen.test.ts";
     const unrelated = "test/scripts/ci-git-owner.test.ts";
     const tooling = "test/vitest/vitest.tooling.config.ts";
@@ -13912,6 +13914,25 @@ describe("ci workflow guards", () => {
       { includePatterns: ["test/scripts/bun-*.test.ts"] },
       { groups: [{ configs: [tooling], includePatterns: [codegen] }] },
       { configs: [tooling] },
+      { configs: [infra], targets: [retainedImports] },
+      { configs: [infra], includePatterns: [retainedImports] },
+      { configs: [infra], includePatterns: ["src/infra/update-retained-*.test.ts"] },
+      {
+        groups: [
+          {
+            configs: [infra],
+            includePatterns: [retainedImports],
+            shard_name: "core-runtime-infra-system-runtime-hosted-2",
+          },
+        ],
+      },
+      { configs: [infra] },
+      { configs: [infra], includePatterns: ["src/infra/update-retained-runtime.test.ts"] },
+      {
+        groups: [
+          { configs: [infra], includePatterns: ["src/infra/update-retained-runtime.test.ts"] },
+        ],
+      },
       { includePatterns: [unrelated] },
       { groups: [{ configs: [tooling], includePatterns: [unrelated] }] },
       { configs: ["test/vitest/vitest.tooling-isolated.config.ts"] },
@@ -13936,7 +13957,7 @@ describe("ci workflow guards", () => {
     const rows = readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include;
     expect(rows).toHaveLength(selections.length);
     for (let index = 0; index < selections.length; index += 1) {
-      expect(Boolean(rows[index].requires_bun)).toBe(index < 5);
+      expect(Boolean(rows[index].requires_bun), JSON.stringify(selections[index])).toBe(index < 10);
       expect(rows[index].test_runtime_policy).toBe("node");
     }
   });
