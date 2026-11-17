@@ -271,7 +271,7 @@ it.each([
     const prepare = vi.fn(async (args: unknown) => args);
     const native =
       toolName === "sessions_spawn"
-        ? createSessionsSpawnTool({ agentSessionKey: "agent:main:main" })
+        ? createSessionsSpawnTool({ agentSessionKey: "agent:main:main", config: {} })
         : createAgentsWaitTool({ agentSessionKey: "agent:main:main" });
     native.execute = execute;
     native.prepareBeforeToolCallParams = prepare;

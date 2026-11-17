@@ -198,20 +198,38 @@ describe("fallback probe and deferred suspension guards", () => {
     },
   );
   it("restores deferred suspension when a later harness precheck fails", async () => {
-    await withSuspension(async (suspend) => {
-      const run = vi.fn().mockRejectedValueOnce(new Error("primary failed"));
-      await expect(
-        runProbe({
-          cfg: createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]),
-          run,
-          sessionId: "test-session",
-          resolveAgentHarnessRuntimeOverride: (provider) =>
-            provider === "anthropic" ? "missing-strict-harness" : undefined,
-          prepareAgentHarnessRuntime: () => undefined,
-        }),
-      ).rejects.toThrow('Requested agent harness "missing-strict-harness" is not registered.');
-      expect(run).toHaveBeenCalledOnce();
-      expect(suspend).toHaveBeenCalledWith(expect.objectContaining({ failedProvider: "openai" }));
+    await withOpenClawTestState({ label: "fallback-precheck" }, async (state) => {
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          "openai:probe": { type: "api_key", provider: "openai", key: "fixture-openai-key" },
+          "anthropic:probe": {
+            type: "api_key",
+            provider: "anthropic",
+            key: "fixture-anthropic-key",
+          },
+        },
+      });
+      await withSuspension(async (suspend) => {
+        const run = vi.fn().mockRejectedValueOnce(new Error("primary failed"));
+        await expect(
+          runProbe({
+            cfg: {
+              ...createModelFallbackConfig("openai/gpt-4.1-mini", ["anthropic/claude-haiku-3-5"]),
+              plugins: { enabled: false },
+            },
+            agentDir: state.agentDir(),
+            skipAuthProfileRuntime: false,
+            run,
+            sessionId: "test-session",
+            resolveAgentHarnessRuntimeOverride: (provider) =>
+              provider === "anthropic" ? "missing-strict-harness" : undefined,
+            prepareAgentHarnessRuntime: () => undefined,
+          }),
+        ).rejects.toThrow('Requested agent harness "missing-strict-harness" is not registered.');
+        expect(run).toHaveBeenCalledOnce();
+        expect(suspend).toHaveBeenCalledWith(expect.objectContaining({ failedProvider: "openai" }));
+      });
     });
   });
 });
