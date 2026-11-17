@@ -383,16 +383,13 @@
 }
 
 .cron-prompt__saved-text {
-  display: -webkit-box;
-  margin: 0;
-  overflow: hidden;
+  max-height: 8lh;
+  overflow: auto;
   color: var(--text-strong);
   font-size: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  -webkit-line-clamp: 8;
-  -webkit-box-orient: vertical;
 }
 
 .cron-prompt__name,
@@ -810,7 +807,6 @@
   white-space: pre;
 }
 
-
 .cron-form-status {
   border: 1px solid var(--danger-subtle);
   background: var(--danger-subtle);
@@ -1060,7 +1056,6 @@
   width: 15px;
   height: 15px;
 }
-
 
 .cron-run-entry {
   min-width: 0;

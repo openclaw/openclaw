@@ -205,7 +205,14 @@ function SavedPrompt(props: CronProps & { job: CronJob }) {
             />
           </pre>
         ) : (
-          <p class="cron-prompt__saved-text">{saved().payloadText}</p>
+          <div
+            class="cron-prompt__saved-text"
+            tabindex="0"
+            role="region"
+            aria-label={t("cron.form.promptPreview")}
+          >
+            {saved().payloadText}
+          </div>
         )}
       </div>
       <div class="cron-prompt__tray">

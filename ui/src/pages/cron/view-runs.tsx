@@ -535,10 +535,10 @@ function Run(props: {
       ? props.highlightedRunId
       : null,
   );
-  // A run reads as two lines; the rest of its record opens on demand. A linked run opens expanded.
-  // oxlint-disable-next-line solid/reactivity -- A linked run opens expanded once; the reader toggles it after.
-  const [expanded, setExpanded] = createSignal(Boolean(highlighted()));
-  const toggle = () => setExpanded((value) => !value);
+  // A linked run starts open unless the reader has chosen its disclosure state.
+  const [userExpanded, setUserExpanded] = createSignal<boolean>();
+  const expanded = () => userExpanded() ?? Boolean(highlighted());
+  const toggle = () => setUserExpanded(!expanded());
   let row!: HTMLDivElement;
   onSettled(() => props.onRunMount?.(row, () => props.entry));
   return (
