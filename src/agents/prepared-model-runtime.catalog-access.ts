@@ -664,10 +664,14 @@ export async function createFullModelCatalogAccess(
         // discard them. Native discovery starts from this accepted publication.
         attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
       }
-      if (includeNative) {
-        return await acquireNativeCatalog(nativeScope, undefined, options.refresh);
+      const catalog = includeNative
+        ? await acquireNativeCatalog(nativeScope, undefined, options.refresh)
+        : (published.catalog ?? staticCatalog);
+      // Completed discovery cannot satisfy a later refresh while generation custody settles.
+      if (pending) {
+        pending.refresh = false;
       }
-      return published.catalog ?? staticCatalog;
+      return catalog;
     }).finally(() => {
       pending = undefined;
       retryFailedDiscovery();
