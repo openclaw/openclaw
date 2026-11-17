@@ -265,11 +265,14 @@ describe("first-hop package fixtures", () => {
     },
   );
 
-  it.each([true])(
-    "packs distinct self-update targets without changing the candidate artifact (content inventory: %s)",
-    async (contentInventory) => {
+  it.each([
+    { sourceVersion: "2026.8.1", successor: "2026.8.2", contentInventory: true },
+    { sourceVersion: "2026.10.33", successor: "2026.11.5", contentInventory: true },
+  ])(
+    "packs distinct self-update targets from $sourceVersion without changing the candidate artifact",
+    async ({ sourceVersion, successor, contentInventory }) => {
       const root = tempDirs.make("openclaw-same-schema-fixtures-");
-      fs.cpSync(makePackageFixture(), path.join(root, "package"), { recursive: true });
+      fs.cpSync(makePackageFixture(sourceVersion), path.join(root, "package"), { recursive: true });
       const uiFiles = {
         "index.html": `<html data-openclaw-control-ui-build-id="old-build-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`,
         "assets/startup.js":
@@ -319,7 +322,7 @@ describe("first-hop package fixtures", () => {
           execFileSync("tar", ["-xOf", output, "package/dist/index.js"], { encoding: "utf8" }),
         ).toBe("export {};\n");
         expect(receipt.sourceVersion).toBe(
-          sequence === 0 ? "2026.8.1" : `2026.8.2-first-hop.${sequence - 1}`,
+          sequence === 0 ? sourceVersion : `${successor}-first-hop.${sequence - 1}`,
         );
         expect(receipt.members.changes.map((entry: { path: string }) => entry.path)).toEqual(
           [
@@ -369,9 +372,9 @@ describe("first-hop package fixtures", () => {
         receipts.push(receipt);
       }
       expect(receipts.map((receipt) => receipt.targetVersion)).toEqual([
-        "2026.8.2-first-hop.0",
-        "2026.8.2-first-hop.1",
-        "2026.8.2-first-hop.2",
+        `${successor}-first-hop.0`,
+        `${successor}-first-hop.1`,
+        `${successor}-first-hop.2`,
       ]);
       expect(new Set(receipts.map((receipt) => receipt.targetSha256)).size).toBe(3);
       expect(receipts[1]?.sourceSha256).toBe(receipts[0]?.targetSha256);

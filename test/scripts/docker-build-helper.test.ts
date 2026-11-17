@@ -5311,7 +5311,7 @@ process.exit(73);
     }
   });
 
-  it("selects one release-owned Windows helper mount", () => {
+  it("selects release-owned Windows and compatibility helper mounts", () => {
     const script = repoRootShell`
 export DOCKER_E2E_HARNESS_ROOT_DIR=/trusted-harness
 export DOCKER_E2E_WINDOWS_HELPERS_PATH=/selected/scripts/windows-cmd-helpers.mjs
@@ -5324,9 +5324,15 @@ done
     const mounts = execDockerSnippet(script)
       .trim()
       .split("\n")
-      .filter((mount) => mount.endsWith(":/app/scripts/windows-cmd-helpers.mjs:ro"));
+      .filter(
+        (mount) =>
+          mount.endsWith("/windows-cmd-helpers.mjs:ro") ||
+          mount.endsWith("/version-compatibility.ts:ro"),
+      );
 
     expect(mounts).toEqual([
+      "/trusted-harness/src/version-compatibility.ts:/app/src/version-compatibility.ts:ro",
+      "/trusted-harness/src/version-compatibility.ts:/tmp/openclaw-release-harness/src/version-compatibility.ts:ro",
       "/selected/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro",
     ]);
   });

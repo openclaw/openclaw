@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveReleaseCompatibilityVersion } from "../../../src/version-compatibility.ts";
 import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import {
   createPackageDistContentInventoryEntry,
@@ -238,7 +239,11 @@ function futureFixtureVersion(sourceVersion, sequence) {
   if (firstHop) {
     return `${firstHop[1]}.${firstHop[2]}.${firstHop[3]}-first-hop.${sequence}`;
   }
-  const release = /^(\d{4})\.(\d+)\.(\d+)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.exec(sourceVersion);
+  // A same-code successor must advance past the source API baseline, not just
+  // its release label; extended-stable labels can predate their bundled plugins.
+  const release = /^(\d{4})\.(\d+)\.(\d+)(?:-[a-z0-9]+(?:[.-][a-z0-9]+)*)?$/iu.exec(
+    resolveReleaseCompatibilityVersion(sourceVersion),
+  );
   if (!release) {
     throw new Error("future fixture requires a calendar-version source package");
   }

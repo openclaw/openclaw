@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveLoadedCommitHash } from "./infra/git-commit.js";
+import { resolveReleaseCompatibilityVersion } from "./version-compatibility.js";
 
 const CORE_PACKAGE_NAME = "openclaw";
 
@@ -189,10 +190,7 @@ export function resolveCompatibilityHostVersion(
   env: RuntimeVersionEnv = process.env,
   fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
-  const releaseVersion = resolveReleaseHostVersion(env, fallback);
-  // This extended-stable release contains the signed v2026.11.4 source baseline.
-  // Apply its API identity after resolving explicit post-core handoffs too.
-  return releaseVersion === "2026.10.33" ? "2026.11.4" : releaseVersion;
+  return resolveReleaseCompatibilityVersion(resolveReleaseHostVersion(env, fallback));
 }
 
 // Single source of truth for the current OpenClaw version.
