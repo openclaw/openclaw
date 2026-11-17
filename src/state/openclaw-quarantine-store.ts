@@ -19,7 +19,7 @@ import {
   sameSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
-import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-read.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   OpenClawQuarantineReadCleanupError,

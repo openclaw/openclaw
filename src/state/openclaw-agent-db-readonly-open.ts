@@ -15,7 +15,7 @@ import {
   runSqliteReadOperationSync,
 } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
-import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-read.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { loadOpenClawAgentCanonicalValidationReceipt } from "./openclaw-agent-canonical-validation-receipt.js";

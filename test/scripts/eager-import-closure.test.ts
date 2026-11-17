@@ -726,7 +726,12 @@ const deferredOwnerCases: Array<[string, string[], string[], boolean?]> = [
   [
     "persisted model catalog reader",
     ["src/agents/plugin-model-catalog-read.worker.ts"],
-    ["src/state/openclaw-agent-db-readonly.ts", "src/state/openclaw-agent-db-borrower.ts"],
+    [
+      "src/state/openclaw-agent-db-readonly.ts",
+      "src/state/openclaw-agent-db-borrower.ts",
+      "src/infra/sqlite-snapshot-staging-owner.ts",
+      "src/infra/worker-task-pool.ts",
+    ],
   ],
   [
     "canonical validation worker",
