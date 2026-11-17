@@ -10,6 +10,7 @@ import {
   discoverReusableReleaseChild,
   validateReusableReleaseChild,
 } from "../../scripts/lib/full-release-child-reuse.mjs";
+import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -431,6 +432,93 @@ describe("independent release child reuse", () => {
     trees.currentWorkflow.tree = workflows;
     trees.previousWorkflow.tree = workflows;
     expect(await discoverReusableReleaseChild(data.request, data.deps)).not.toBeNull();
+  });
+
+  it("reuses policy-waived evidence through the default log reader without hiding failures", async () => {
+    const version = "2026.11.6";
+    const leaf = "Run QA Lab live Telegram lane";
+    const waiver = {
+      targetVersion: version,
+      childRole: "releaseChecksCandidate",
+      jobName: leaf,
+      reason: "synthetic test fixture",
+    };
+    RELEASE_VALIDATION_WAIVERS.push(waiver);
+    try {
+      const data = await fixture("releaseChecksCandidate");
+      const original = await discoverReusableReleaseChild(data.request, data.deps);
+      if (!original) {
+        throw new Error("expected original receipt");
+      }
+      data.run.conclusion = "failure";
+      data.jobs[0]!.name = leaf;
+      data.jobs[1]!.name = "Verify release checks";
+      for (const job of data.jobs.slice(0, 2)) {
+        job.conclusion = "failure";
+      }
+      data.jobs[1]!.steps = [
+        { name: "Verify release check results", status: "completed", conclusion: "failure" },
+      ];
+      data.receipt.workloadConclusion = "failure";
+      data.receipt.jobs = data.receipt.jobs.map((job, index) => ({
+        ...job,
+        name: data.jobs[index]!.name,
+        conclusion: "failure",
+      }));
+      data.receipt.compositeJobsSha256 = jsonDigest({
+        effectiveRunAttempt: data.receipt.effectiveRunAttempt,
+        plannedRunAttempt: data.receipt.plannedRunAttempt,
+        jobs: data.receipt.jobs,
+      });
+      await data.seal();
+      const selection = {
+        ...original,
+        receiptSha256: data.receipt.sha256,
+        artifact: {
+          ...original.artifact,
+          digest: data.artifact.digest,
+          sizeInBytes: data.artifact.size_in_bytes,
+        },
+      };
+      const root = tempDirs.make("frv-waiver-log-");
+      writeFileSync(join(root, "package.json"), '{"type":"commonjs"}');
+      const gh = join(root, "gh");
+      writeFileSync(
+        gh,
+        "#!" +
+          process.execPath +
+          "\nif (process.argv.slice(2).join(' ') !== 'api repos/openclaw/openclaw/actions/jobs/2/logs --allow-escape-sequences') process.exit(2);\nprocess.stdout.write('##[error]qa_live_telegram_release_checks ended with failure');\n",
+      );
+      chmodSync(gh, 0o755);
+      vi.stubEnv("PATH", root + delimiter + (process.env.PATH ?? ""));
+      await expect(
+        validateReusableReleaseChild(selection, data.request, data.deps),
+      ).rejects.toThrow("current successful attempt");
+      const request = { ...data.request, policyTargetVersion: version };
+      const recovered = await validateReusableReleaseChild(selection, request, data.deps);
+      expect(recovered.run.conclusion).toBe("failure");
+      expect(recovered.receipt.workloadConclusion).toBe("failure");
+      expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+      expect(await discoverReusableReleaseChild(request, data.deps)).toMatchObject({
+        runId: "101",
+        receiptSha256: data.receipt.sha256,
+      });
+      await expect(
+        validateReusableReleaseChild(selection, request, {
+          ...data.deps,
+          getJobLog: async () => "##[error]artifact integrity failed",
+        }),
+      ).rejects.toThrow("unwaived failure");
+      await expect(
+        validateReusableReleaseChild(
+          selection,
+          { ...request, policyTargetVersion: "2026.11.7" },
+          data.deps,
+        ),
+      ).rejects.toThrow();
+    } finally {
+      RELEASE_VALIDATION_WAIVERS.splice(RELEASE_VALIDATION_WAIVERS.indexOf(waiver), 1);
+    }
   });
 
   it("accepts candidate-owned evidence outside main ancestry", async () => {

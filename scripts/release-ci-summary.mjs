@@ -2256,6 +2256,7 @@ async function validateStrictChildRun({
         repository,
         role: child.manifestKey,
         targetSha: parentEvidence.manifest.targetSha,
+        policyTargetVersion: parentEvidence.manifest.validationInputs?.targetVersion,
         workflowSha: parentEvidence.manifest.workflowSha,
       })
     : undefined;
@@ -2443,7 +2444,7 @@ async function validateStrictChildRun({
 }
 
 function qualificationReuseIdentity(admission) {
-  const { request, producer } = admission;
+  const { request } = admission;
   const envelope = JSON.parse(request.inputs.trusted_workflow_json);
   if (
     !isDeepStrictEqual(envelope.trustedWorkflow, {
@@ -2454,20 +2455,12 @@ function qualificationReuseIdentity(admission) {
   ) {
     throw new Error("Qualification reuse transport differs from its authenticated Q identity");
   }
-  // Each receipt authenticates its own dispatch locator. Only that locator and
-  // the admission run tuple may differ; policy, complete inputs and C/Q/P may not.
+  // Each receipt authenticates its own P and dispatch locator. Reuse binds the
+  // candidate qualification and coverage, not the revision that evaluates it.
   return {
     candidateSha: request.candidateSha,
     qualificationSha: request.qualificationSha,
     repository: request.repository,
-    publisher: {
-      repository: producer.repository,
-      workflowPath: producer.workflowPath,
-      workflowEvent: producer.workflowEvent,
-      workflowHeadBranch: producer.workflowHeadBranch,
-      workflowFullRef: producer.workflowFullRef,
-      workflowSha: producer.workflowSha,
-    },
     inputs: {
       ...request.inputs,
       trusted_workflow_json: JSON.stringify(
@@ -2500,42 +2493,12 @@ function qualificationReusePolicyIdentity(admission) {
       trustedWorkflow: { sha: qualificationSha },
     }),
   );
-  // A main-dispatched admission always runs at the main tip, so a changelog
-  // descendant is admitted by a newer P. The caller proves that P descends
-  // from the selected P; coverage, baselines and source digests stay exact.
-  const publisher =
-    identity.publisher.workflowFullRef === "refs/heads/main"
-      ? { ...identity.publisher, workflowSha: "<trusted-main-descendant>" }
-      : identity.publisher;
   return {
     ...identity,
     candidateSha: "<candidate>",
     qualificationSha,
-    publisher,
     inputs,
   };
-}
-
-function isTrustedMainDescendantAdmission(evidenceClient, selectedAdmission, requestedAdmission) {
-  const selected = selectedAdmission.producer;
-  const requested = requestedAdmission.producer;
-  if (selected.workflowSha === requested.workflowSha) {
-    return true;
-  }
-  if (
-    selected.workflowFullRef !== "refs/heads/main" ||
-    requested.workflowFullRef !== "refs/heads/main"
-  ) {
-    return false;
-  }
-  const comparison = evidenceClient.compareCommitLineage(
-    selected.workflowSha,
-    requested.workflowSha,
-  );
-  return (
-    String(comparison.status) === "ahead" &&
-    comparison.merge_base_commit?.sha === selected.workflowSha
-  );
 }
 
 /**
@@ -2781,8 +2744,7 @@ export async function validateReleaseRunEvidence(
       isDeepStrictEqual(
         qualificationReusePolicyIdentity(selectedAdmission),
         qualificationReusePolicyIdentity(requestedAdmission),
-      ) &&
-      isTrustedMainDescendantAdmission(evidenceClient, selectedAdmission, requestedAdmission);
+      );
     if (
       (reuseRequest !== undefined &&
         reuseRequest.targetSha !== requestedAdmission.request.candidateSha) ||
@@ -2793,7 +2755,7 @@ export async function validateReleaseRunEvidence(
       requestedAdmission.producer.workflowFullRef !== trustedIdentity.fullRef ||
       (!exactQualification && !admittedChangelogDescendant)
     ) {
-      throw new Error("Qualification reuse requires exact admitted C/Q/P, coverage and inputs");
+      throw new Error("Qualification reuse requires exact admitted C/Q, coverage and inputs");
     }
   }
 
@@ -2930,7 +2892,7 @@ export async function validateReleaseRunEvidence(
         qualificationReuseIdentity(qualification),
       )
     ) {
-      throw new Error("Qualification reuse requires exact admitted C/Q/P, coverage and inputs");
+      throw new Error("Qualification reuse requires exact admitted C/Q, coverage and inputs");
     }
     const currentArtifacts = currentEvidence.manifest.publicationArtifacts;
     const rootArtifacts = rootEvidence.manifest.publicationArtifacts;

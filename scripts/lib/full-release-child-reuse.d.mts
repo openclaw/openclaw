@@ -1,6 +1,8 @@
 export interface ReusableReleaseChildRequest {
   repository: string;
   targetSha: string;
+  /** Current admitted candidate version for trusted release policy evaluation. */
+  policyTargetVersion?: string;
   workflowSha: string;
   role: string;
   inputs: Record<string, string | boolean | number>;
@@ -33,6 +35,7 @@ export interface ReusableReleaseChildSelection {
 
 export interface ReusableReleaseChildDependencies {
   report?: (message: string) => void;
+  getJobLog?: (jobId: number | string) => Promise<string>;
   github?: (endpoint: string) => Promise<unknown>;
   downloadArchive?: (input: Record<string, unknown>) => Promise<{
     artifactMetadata: unknown;
