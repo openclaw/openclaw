@@ -606,7 +606,7 @@ export async function captureGatewayOperatorContinuation(
   // Carry only that owner's revocation, never the accepting request/turn checks.
   const deviceRevocation = new AbortController();
   const stopDeviceRevocation = onGatewayDeviceSourceRevoked(inherited.assertCurrent, () => {
-    deviceRevocation.abort(new Error("Gateway continuation authority is no longer active"));
+    deviceRevocation.abort(new Error("Gateway device authorization was revoked"));
   });
   const authority = createAdmittedRunOperatorAuthority({
     ...restored.authority,
