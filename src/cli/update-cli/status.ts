@@ -42,6 +42,7 @@ import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
 import {
   formatUpdateOwedStep,
+  listUpdateOwedSteps,
   selectUpdateOwedSteps,
   UPDATE_OWED_STEP_HISTORY,
   type UpdateOwedStep,
@@ -682,8 +683,9 @@ async function inspectUpdateStatus(
       defaultRuntime.log("");
     }
     // The displayed run's report already lists what that run owes.
+    const reported = new Set(run ? listUpdateOwedSteps(run).map((step) => step.id) : []);
     for (const step of owedSteps ?? []) {
-      if (step.runId !== run?.runId) {
+      if (!reported.has(step.id)) {
         printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
       }
     }

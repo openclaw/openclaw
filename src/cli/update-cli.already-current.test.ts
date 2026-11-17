@@ -278,10 +278,13 @@ describe("update-cli", () => {
       const result = output();
       const owed = [...completion, { id: "service-definition", reason: "install failed" }];
       expect(readOwedUpdateSteps()).toEqual(owed.map((step) => ({ ...step, runId: result.runId })));
-      // The earlier run settled or handed over every step, so its own report stops saying owed.
-      expect(renderUpdateRunReport(modules.getUpdateRun(earlier)!).lines.join("\n")).not.toContain(
-        " is owed: ",
+      // A settled step leaves the earlier run's report. One this run still owes stays on it too,
+      // so the earlier run owes it again if this run fails.
+      const earlierReport = renderUpdateRunReport(modules.getUpdateRun(earlier)!).lines.join("\n");
+      expect(earlierReport.includes("Shell completion refresh is owed: ")).toBe(
+        completion.length > 0,
       );
+      expect(earlierReport).toContain("Gateway service definition refresh is owed: install failed");
       expect(result.status).not.toBe("error");
       expect(
         result.steps.flatMap((step) =>

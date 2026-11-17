@@ -31,7 +31,9 @@ type OwedStepRetries = Partial<
 >;
 
 /**
- * Records the step on this run, which then holds it instead of an earlier run.
+ * Records the step on this run. The newest run that mentions a step decides it, so this run now
+ * holds it. An earlier run's row is left as it is: that run owes the step again if this update
+ * fails and stops deciding.
  * Best effort: the caller's own warning already reports the failure when history is unavailable.
  */
 export function recordOwedUpdateStep(run: OwedRun | undefined, step: OwedStep): boolean {
@@ -39,16 +41,7 @@ export function recordOwedUpdateStep(run: OwedRun | undefined, step: OwedStep): 
     return false;
   }
   try {
-    const earlier = readOwedUpdateSteps(run).find(
-      (held) => held.id === step.id && held.runId !== run.runId,
-    );
-    if (!recordUpdateRunOwedStep(run.runId, step.id, step.reason, run)) {
-      return false;
-    }
-    if (earlier) {
-      settleUpdateRunOwedStep(earlier.runId, step.id, run);
-    }
-    return true;
+    return recordUpdateRunOwedStep(run.runId, step.id, step.reason, run);
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
@@ -85,10 +78,15 @@ export async function retryOwedUpdateSteps(
 ): Promise<OwedStep[]> {
   const stillOwed: OwedStep[] = [];
   try {
+    const heldByRun = new Map<string, UpdateOwedStep[]>();
     for (const held of readOwedUpdateSteps(run)) {
+      heldByRun.set(held.runId, [...(heldByRun.get(held.runId) ?? []), held]);
+    }
+    // This run's own rows were reported when recorded.
+    heldByRun.delete(run.runId);
+    for (const held of [...heldByRun.values()].flat()) {
       const retry = isUpdateOwedStepId(held.id) ? retries[held.id] : undefined;
-      // This run's own rows were reported when recorded.
-      if (!isUpdateOwedStepId(held.id) || !retry || held.runId === run.runId) {
+      if (!isUpdateOwedStepId(held.id) || !retry) {
         continue;
       }
       // A retry that could not run proves nothing: the step stays owed for its recorded reason.
