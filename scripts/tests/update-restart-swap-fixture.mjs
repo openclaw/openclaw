@@ -41,6 +41,9 @@ export async function createDiskSwap(sourceRoot, base) {
     createUpdateFailureFact: (value) => value,
     resolveRuntimeProcessEntrypointUrl,
     resolveRuntimeWorkerThreadExecArgv,
+    // The context below reports a platform that may not be the host's, so no host
+    // exchange call may run under it. This fixture's subject is the two moves.
+    supportsPathExchange: () => false,
   };
   const context = vm.createContext({
     // Model an unowned npm prefix; OS package-manager ownership is a separate contract.
@@ -61,6 +64,7 @@ export async function createDiskSwap(sourceRoot, base) {
     "infra/mutation-authority",
     "infra/package-update-backup-paths",
     "infra/package-update-swap",
+    "infra/package-update-swap-publish",
     "infra/package-update-swap-results",
     "infra/package-update-swap-target",
     "infra/package-update-swap-retirement",

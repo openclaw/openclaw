@@ -24,16 +24,14 @@ import { TemplateAddMutationError } from "./add.js";
 import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
 import { digestTemplateValue } from "./digest.js";
+import { createTemplateAgentFromChat, selectChatTemplateAgentId } from "./gateway-add-chat.js";
 import {
-  createTemplateAgentFromChat,
-  selectChatTemplateAgentId,
-  type ChatTemplateAddInput,
-} from "./gateway-add-chat.js";
-import {
+  refuseAdmittedTemplateAgent,
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
   type PreparedAgentChat,
 } from "./gateway-add-continuation.js";
+import type { ChatTemplateAddInput } from "./gateway-add-input.js";
 import {
   buildGatewayTemplateAddPlan,
   projectGatewayTemplateAddPlan,
@@ -50,6 +48,7 @@ import { bindTemplatePluginInstallConsent } from "./gateway-plugin-consent.js";
 import { bindTemplateSkillWarningConsent } from "./gateway-skill-consent.js";
 import { assertTemplatesLabsEnabled } from "./labs-gate.js";
 import { assertTemplatePluginRequirementsEnabled } from "./plugin-runtime.js";
+import { continueTemplateSetup } from "./setup-continuation.js";
 import type { TemplateAddPlan } from "./types.js";
 
 export class TemplateGatewayPlanChangedError extends Error {
@@ -75,7 +74,9 @@ export async function applyTemplateAddForGateway(
      * agent's own conversation continues setup; see `createTemplateAgentFromChat`.
      */
     mode?: "chat";
+    resume?: true;
     onAgentCreated?: ChatTemplateAddInput["onAgentCreated"];
+    onDependenciesSettled?: ChatTemplateAddInput["onDependenciesSettled"];
     planIntegrity?: string;
     acknowledgeClawHubRisk?: boolean;
     acknowledgeCapabilities?: readonly TemplatePluginAcknowledgement[];
@@ -137,6 +138,12 @@ export async function applyTemplateAddForGateway(
     };
   };
   try {
+    if (input.mode === "chat" && input.agentId) {
+      const resumed = await continueTemplateSetup(input, input.agentId, stateContext);
+      if (resumed) {
+        return resumed;
+      }
+    }
     // A reviewed UI target is an ordinary creation request, not trust in Template bytes.
     // Local durable identity and an empty guarded chat precede all remote source reads.
     if (input.agentId && input.prepareAgentChat && input.waitForAgentRuntime) {
@@ -682,6 +689,9 @@ export async function applyTemplateAddForGateway(
     if (settledResult) {
       defaultRuntime.log("Template source cleanup failed after Add; cached files may remain.");
       return settledResult;
+    }
+    if (error instanceof TemplateGatewayPlanBlockedError) {
+      await refuseAdmittedTemplateAgent(admitted, input, stateContext, error);
     }
     if (admitted) {
       return {

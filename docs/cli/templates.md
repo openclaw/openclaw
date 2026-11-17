@@ -18,7 +18,9 @@ Template again creates another agent.
 After Add, manage the agent with [agent commands](/cli/agents), its automations
 with [cron commands](/automation/cron-jobs), and shared dependencies with their
 ordinary plugin or MCP controls. There are no Template status, update, remove, or
-export commands. To use a newer release, Add it as another agent.
+export commands. To use a newer release, Add it as another agent. Agents enrolled
+by the earlier installed-Template lifecycle can be
+[released to ordinary agents](#agents-from-the-earlier-lifecycle).
 
 Enable **Templates** in **Settings → Labs** before adding one. On a headless installation, set
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
@@ -287,7 +289,23 @@ Native settings under `agent` include `groupChat`, `sandbox`, `tools`,
 `memory`, `heartbeat`, and `humanDelay`. The native `tools.profile` field
 selects a built-in tool policy; its grants are bounded and frozen when Add
 creates the agent. Host policy still constrains every grant. A Template cannot
-set a model, provider, credentials, or named delegate agents.
+configure a provider, credentials, or named delegate agents.
+
+Authors may optionally set `agent.model` to a preferred, fully qualified model:
+
+```yaml
+agent:
+  id: incident-triage
+  model: anthropic/claude-sonnet-4-5
+```
+
+At Add time, the receiving Gateway checks its ordinary model picker. If that
+exact model is available and permitted, the new agent uses it. Otherwise Add
+continues using the Gateway's default model; it does not install a provider,
+request credentials, or change the Gateway default. Omitting `model` keeps the
+existing default-inheritance behavior. Use `provider/model`, not a host-local
+alias or account pin. This is a one-time creation preference, not an ongoing
+Template-managed model selection; users can change the agent's model normally.
 
 ```yaml
 agent:
@@ -299,6 +317,10 @@ agent:
   sandbox: { mode: all, workspaceAccess: ro }
   memory: { search: { enabled: false } }
 ```
+
+Exec mode (`tools.exec`) and cross-provider messaging (`tools.message`) are
+operator decisions, so a Template cannot set them either; after Add, set them on
+the new agent with `openclaw config set agents.entries.<id>.tools.exec ...`.
 
 Set `enabled: false` on an automation to install it disabled; omitting the field
 keeps the enabled default. Jobs belong to the new agent. First-run instructions
@@ -392,18 +414,41 @@ agent's pending chat immediately, and the Gateway creates the agent:
 5. It installs the declared skills, from ClawHub or bundled in the package.
 6. It installs plugins bundled in the package.
 7. It adds the declared MCP servers.
-8. It adds `automations`, `plugins`, and `message` to the agent's tool allowlist
-   when the Template's allowlist leaves them out. A tool the Template denies
-   stays denied.
+8. It grants `read`, `automations`, `plugins`, and `message` additively for setup.
+   Explicit Template denies and operator policy ceilings still apply.
 
-The agent's first response starts after these steps finish. Sending becomes
-available then; a message you type earlier stays in the composer.
+After creation, the Gateway starts one hidden setup turn in that chat, with the
+agent's ordinary tools. The agent reads declarations from the persisted `CLAW.md`
+and responds in this order:
 
-This Add does not create the Template's automations. It also does not install,
-enable, download, or inspect plugins the Template references on ClawHub, so a
-plugin that is missing, disabled, blocked by policy, or at another version never
-stops it. Set those up with the agent in its chat, or from **Plugins** and
-**Automations**.
+1. A brief greeting in its own voice.
+2. Declared automations, created **paused**, bound to this conversation. Existing
+   matching automations are left unchanged, including ones you already enabled.
+3. Added MCP servers and any sign-in needed in **Settings → MCP**.
+4. Plugin state and exact-package ClawHub cards for missing plugins. Official
+   cards offer **Install**; community cards offer **View details** for normal
+   plugin review. Unknown packages produce a not-found result, not a card.
+5. Creation failures, by name and reason. Successful skills are not listed.
+6. The author's opening from `BOOTSTRAP.md`, last in the same turn.
+
+Neither creation nor this turn installs or enables a plugin referenced on
+ClawHub, or enables an automation. A missing or disabled referenced plugin never
+stops agent creation. You choose installation or enabling afterwards.
+This path creates declared `automations` (`cronJobs` in older manifests); it
+does not convert legacy `agent.heartbeat` settings into a heartbeat automation.
+
+Intermediate text and card sends are non-final; the final reply closes setup.
+Sending becomes available when setup finishes; a message typed earlier stays in
+the composer.
+
+If that first turn fails or is interrupted, **Retry setup** runs only that turn
+with a fresh run ID in the existing chat. It does not re-create the agent,
+rewrite its files, fetch the Template again, or reinstall dependencies. The
+ordinary session retains the creation report until the turn completes; a retry
+cannot start a second setup while the first still owns the agent's setup lease.
+Retry explicitly targets the admitted agent. If setup completed while the client
+was disconnected, Retry reconciles that existing chat without adding another copy.
+The CLI Add flow and its no-tools opening are unchanged.
 
 If the Gateway cannot fetch the Template or write its workspace files, it removes
 the new agent and chat, and the catalog shows the error on that Template's card.
@@ -466,6 +511,28 @@ Shared plugins, MCP servers, and other host-level integrations remain installed;
 remove them separately through their ordinary controls when no longer needed.
 There is no Template ownership record or reverse-install operation.
 
+## Agents from the earlier lifecycle
+
+Agents created by the earlier `claws add` or `claws migrate` commands still carry
+a Template consent record. OpenClaw refuses to run such an agent after its
+configuration changes, for example after
+`openclaw config set agents.entries.<id>.tools.exec '{"mode":"full"}'`, and the
+error names the agent. Undo the change, or release the agent with the Gateway
+stopped:
+
+```bash
+openclaw gateway stop
+openclaw templates release <agent-id>
+openclaw gateway start
+```
+
+Release shows the agent's tool settings and asks for confirmation; pass `--yes`
+in scripts. It removes the Template consent and ownership records only. The
+agent, its workspace, sessions, plugins, MCP servers, and automations stay, and
+from then on it is an ordinary agent whose settings you manage with
+`openclaw config` and the agent commands. Release refuses to run while the
+Gateway is running.
+
 ## Command reference
 
 | Command                              | Purpose                                           |
@@ -477,6 +544,7 @@ There is no Template ownership record or reverse-install operation.
 | `templates build [path] --out <tgz>` | Build a deterministic package artifact.           |
 | `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.         |
 | `templates add <source>`             | Create a new agent and install its requirements.  |
+| `templates release <agent-id>`       | Make an earlier Template-managed agent ordinary.  |
 
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.
@@ -490,6 +558,7 @@ and project paths. `--json` retains the original field values for machine proces
 
 ## See also
 
+- [Agents and Templates](/concepts/agents-and-templates)
 - [Agents](/cli/agents)
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)

@@ -16,7 +16,8 @@ import { PROXY_ENV_KEYS } from "../../infra/net/proxy-env.js";
 import { generateLocalProxyLeaf } from "../../proxy-capture/ca.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { acquireTestPortBlock, type TestPortClaim } from "../../test-utils/port-claims.js";
+import { reserveTestPortListener, type TestPortClaim } from "../../test-utils/port-claims.js";
+import * as testPorts from "../../test-utils/ports.js";
 import {
   mintSecretSentinel,
   resolveSecretSentinel,
@@ -28,6 +29,13 @@ import {
   type SecretEgressProxyAuditEvent,
   type SecretEgressProxyHandle,
 } from "./proxy-server.js";
+import {
+  basicProxyAuth,
+  copyInitialCa,
+  RAW_UPSTREAM_RESPONSES,
+  readProxyResponse,
+  registeredPassword,
+} from "./proxy-server.test-support.js";
 
 describe("secret egress proxy", () => {
   type OriginRequest = {
@@ -62,49 +70,15 @@ describe("secret egress proxy", () => {
     return targetProxy.registerProcess([{ name: "SERVICE_API_KEY", sentinel, allowedHosts }]).env;
   }
 
-  function copyInitialCa(sourceDir: string, targetDir: string): void {
-    for (const file of ["root-ca.pem", "root-ca-key.pem", "leaf-key.pem"]) {
-      fs.copyFileSync(path.join(sourceDir, file), path.join(targetDir, file));
-    }
-  }
-
   async function listen(server: Server, host = "127.0.0.1"): Promise<number> {
-    const claim = await acquireTestPortBlock({ offsets: [0] });
+    const { claim } = await reserveTestPortListener({
+      offsets: [0],
+      host,
+      createListener: () => server,
+    });
     portClaims.push(claim);
     servers.push(server);
-    server.listen(claim.port, host);
-    await once(server, "listening");
     return claim.port;
-  }
-
-  function basicProxyAuth(password: string): string {
-    return `Basic ${Buffer.from(`openclaw:${password}`).toString("base64")}`;
-  }
-
-  const registeredPassword = (env: Record<string, string>) =>
-    new URL(env.HTTPS_PROXY ?? "").password;
-
-  async function readProxyResponse(socket: Socket, headersOnly = false, onContinue?: () => void) {
-    let output = "";
-    if (!headersOnly) {
-      socket.setEncoding("utf8");
-    }
-    for await (const chunk of socket.iterator({ destroyOnReturn: false })) {
-      output += chunk.toString();
-      if (output.startsWith("HTTP/1.1 100 Continue\r\n\r\n")) {
-        onContinue?.();
-      }
-      const headEnd = output.indexOf("\r\n\r\n");
-      const length = /(?:^|\r\n)content-length:\s*(\d+)/iu.exec(output.slice(0, headEnd));
-      if (
-        headEnd >= 0 &&
-        (headersOnly ||
-          (length && Buffer.byteLength(output.slice(headEnd + 4)) >= Number(length[1])))
-      ) {
-        return output;
-      }
-    }
-    return output;
   }
 
   async function rawConnect(params: {
@@ -123,25 +97,6 @@ describe("secret egress proxy", () => {
     const response = await readProxyResponse(socket, true);
     return { response, socket };
   }
-
-  // Raw upstream bytes: Node's own server cannot emit a Content-Length before a
-  // UTF-8 Content-Disposition, which is the order real upstreams commonly send.
-  const RAW_UPSTREAM_RESPONSES = new Map<string, Buffer>([
-    [
-      "/cjk-attachment",
-      Buffer.concat([
-        Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Disposition: attachment; "),
-        Buffer.from('filename="附件_2026-09-21.log"', "utf8"),
-        Buffer.from("\r\nConnection: close\r\n\r\nfile"),
-      ]),
-    ],
-    [
-      "/invalid-trailer",
-      Buffer.from(
-        "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nTrailer: Expires\r\nConnection: close\r\n\r\nfile",
-      ),
-    ],
-  ]);
 
   async function requestThroughProxy(params: {
     mode?: "tls" | "plaintext" | "forward";
@@ -362,6 +317,25 @@ describe("secret egress proxy", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
     vi.unstubAllEnvs();
+  });
+
+  it("serves through an origin whose port probe was won by an unclaimed listener", async () => {
+    const competing = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => createServer(),
+    });
+    servers.push(competing.listener);
+    // Keep the real socket after releasing its cooperative claim, modeling a probe race.
+    await competing.claim.release();
+    vi.spyOn(testPorts, "getDeterministicFreePortBlock").mockResolvedValueOnce(
+      competing.claim.port,
+    );
+    originPort = await listen(createHttpsServer(originLeaf, recordOrigin));
+
+    expect(originPort).not.toBe(competing.claim.port);
+    await expect(requestThroughProxy({})).resolves.toMatchObject({ status: 200, body: "ok" });
+    expect(originRequests.map(({ url }) => url)).toEqual(["/"]);
+    expect(competing.listener.listening).toBe(true);
   });
 
   it.each([
