@@ -5,6 +5,7 @@ import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-work
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerChatSystemNoticeEnglish } from "../../i18n/locales/en-chat-system-notice.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
@@ -18,6 +19,7 @@ import {
 } from "./system-notice-kinds.ts";
 
 registerChatSessionEnglish();
+registerChatSystemNoticeEnglish();
 
 type SubmittedModel = { provider: string; model: string };
 
@@ -91,17 +93,6 @@ export function createSubmittedModelNoticeProjector() {
   return Object.assign(project, { state });
 }
 
-const pendingEndCauseKeys: Readonly<Partial<Record<string, string>>> = {
-  "user-stop": "chat.pendingInputs.endCause.userStop",
-  delete: "chat.pendingInputs.endCause.delete",
-  reset: "chat.pendingInputs.endCause.reset",
-  revoked: "chat.pendingInputs.endCause.revoked",
-  "restart-unrecoverable": "chat.pendingInputs.endCause.restartUnrecoverable",
-  overflow: "chat.pendingInputs.endCause.overflow",
-  "policy-refused": "chat.pendingInputs.endCause.policyRefused",
-  failed: "chat.pendingInputs.endCause.failed",
-};
-
 /** Pending custody and persisted history share the same system-turn presentation. */
 export function projectChatSystemNotice(
   item: Extract<ChatItem, { kind: "message" }>,
@@ -135,8 +126,13 @@ export function projectChatSystemNotice(
   const agentUpdate = provenance?.kind === "inter_session";
   const cancelled = pending?.status === "cancelled";
   const causeKey =
-    cancelled && pending.endCause && Object.hasOwn(pendingEndCauseKeys, pending.endCause)
-      ? pendingEndCauseKeys[pending.endCause]
+    cancelled &&
+    pending.endCause &&
+    Object.hasOwn(
+      registerChatSystemNoticeEnglish.catalog.chat.pendingInputs.endCause,
+      pending.endCause,
+    )
+      ? `chat.pendingInputs.endCause.${pending.endCause}`
       : undefined;
   const pendingText =
     pending && pending.status !== "queued" && !(cancelled && pending.endCause === "user-stop")
