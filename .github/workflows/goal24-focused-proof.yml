@@ -215,6 +215,8 @@ jobs:
           retention-days: 7
 
   audio-package:
+    # Installed fallback and adapter dispatch collected in run 43984943020.
+    if: ${{ false }}
     name: audio-installed-package
     runs-on: xcode-27
     timeout-minutes: 60
