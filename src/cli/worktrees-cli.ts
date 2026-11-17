@@ -160,7 +160,7 @@ export function registerWorktreesCli(program: Command): void {
               ? "missing (retirement candidate)"
               : record.removedAt
                 ? "restorable"
-                : "active",
+                : (record.gcProtection ?? "active"),
           })),
         }).trimEnd(),
       );
