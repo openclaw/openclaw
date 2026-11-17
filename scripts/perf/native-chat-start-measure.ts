@@ -201,9 +201,15 @@ export async function measureNativeChatStart(options: {
       selected.fallbacks === undefined ||
         (Array.isArray(selected.fallbacks) && !selected.fallbacks.length),
     );
+    const entries = agents?.entries;
     assert(
-      agents?.entries === undefined ||
-        (isRecord(agents.entries) && !Object.keys(agents.entries).length),
+      entries === undefined ||
+        (isRecord(entries) &&
+          (Object.keys(entries).length === 0 ||
+            (Object.keys(entries).length === 1 &&
+              isRecord(entries.main) &&
+              Object.keys(entries.main).length === 0))),
+      "Use only defaults or the released empty main entry; agent overrides are not this fixture",
     );
     assert(defaults?.utilityModel === undefined, "Do not route utility work outside the fixture");
     assert(agents?.list === undefined, "Do not use a legacy agent roster in this fixture");

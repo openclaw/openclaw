@@ -65,6 +65,8 @@ starts or reconfigures a Gateway. Use `--write-config <new-file> --gateway-port
 <port> --mock-port <port>` to generate its synthetic input, then set the guest-owned
 workspace before launch. The existing `scripts/e2e/mock-openai-server.mjs` supplies
 the loopback provider; the driver verifies unique replies and mock request counts.
+The config guard permits the released empty `agents.entries.main` materialization,
+but rejects agent-specific overrides and additional agents.
 
 Copy the self-contained `scripts/perf/native-chat-start-preload.mjs` into the
 task-owned runtime's readable staging directory. Before launch, run it with
@@ -82,6 +84,10 @@ the driver verifies the connected PID and requests targeted graceful shutdown
 after the turns. A scheduled shutdown is not completion: join the foreground
 process and retrieve its capture through the runtime owner before reducing it.
 Do not treat host invocation cancellation or forced termination as graceful exit.
+An externally supervised packaged process refuses this stop request by design.
+Any self-owned foreground experiment must select that lifecycle before launch,
+retain package repair/update and native-isolation policy, use fresh state, and
+be labeled separately from externally supervised package lifecycle evidence.
 
 `node scripts/perf/native-chat-start-report.mjs --client <receipts>
 --capture-dir <retrieved-captures>` requires complete, same-process monotonic

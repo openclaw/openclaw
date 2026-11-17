@@ -17,6 +17,10 @@ it.each([
   "missing mock receipt",
   "rejected ACK",
   "wrong stop PID",
+  "released materialized main",
+  "main runtime override",
+  "main model override",
+  "additional agent",
 ])("validates the %s fixture before recording native-identity receipts", async (kind) => {
   let providerRequests = 0;
   const reservation = await reserveTestPortListener({
@@ -68,6 +72,18 @@ it.each([
         );
         assert(config.models?.providers?.openai);
         config.models.providers.openai.apiKey = "__OPENCLAW_REDACTED__";
+        assert(config.agents);
+        if (kind === "released materialized main") {
+          config.agents.entries = { main: {} };
+        } else if (kind === "main runtime override") {
+          config.agents.entries = {
+            main: { models: { "openai/gpt-4.1": { agentRuntime: { id: "codex" } } } },
+          };
+        } else if (kind === "main model override") {
+          config.agents.entries = { main: { model: { primary: "openai/other" } } };
+        } else if (kind === "additional agent") {
+          config.agents.entries = { main: {}, other: {} };
+        }
         if (kind === "external provider") {
           config.models.providers.openai.baseUrl = "https://api.openai.com/v1";
         }
@@ -132,7 +148,10 @@ it.each([
     timeoutMs: 5000,
     stopTarget: { pid: 123, ownerId: "synthetic-owner", port: reservation.claim.port },
   });
-  if (kind === "external provider" || kind === "wrong runtime") {
+  if (["main runtime override", "main model override", "additional agent"].includes(kind)) {
+    await expect(measurement).rejects.toThrow("agent overrides are not this fixture");
+    expect(methods).toEqual(["connect", "config.get"]);
+  } else if (kind === "external provider" || kind === "wrong runtime") {
     await expect(measurement).rejects.toThrow();
     expect(methods).toEqual(["connect", "config.get"]);
   } else if (kind === "missing mock receipt") {
