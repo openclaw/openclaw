@@ -101,6 +101,15 @@ and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` res
 candidate/execution. Checked-in list is authoritative; retain release-specific
 authorization/diagnostics in PR or handoff.
 
+Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
+inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
+receipts, including failures covered by current exact waivers. Accepted receipts
+return before dispatching another child workflow; a required initial run is still
+necessary. Failed parents without final manifests are recovered through child
+receipts, not relabeled successful. The fresh parent still must complete admission,
+collection, and final verification. Missing, expired, or incompatible evidence
+requires fresh work.
+
 Land policy, pin P, run/revalidate FRV with unchanged C/Q. Candidate workflows must
 route state operations to admitted P; changing P cannot retrofit old workflows.
 State/manifest/summary retain raw failures/reasons. Grants neither skip tests nor

@@ -109,6 +109,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
+  "ui/src/e2e/sidebar-publication-tasks.e2e.test.ts",
   "ui/src/e2e/skill-workshop-plugin-enable.real-gateway.e2e.test.ts",
   "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
   "ui/src/e2e/template-chat-review-source.e2e.test.ts",

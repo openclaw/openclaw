@@ -192,10 +192,14 @@ describe("update-cli", () => {
       const earlier = update.createUpdateRun({ trigger: "cli" }).runId;
       recordUpdateRunOwedStep(earlier, "shell-completion", "EACCES: permission denied");
       recordUpdateRunOwedStep(earlier, "service-definition", "install failed");
+      recordUpdateRunOwedStep(earlier, "plugin-convergence", "plugin registry exploded");
+      recordUpdateRunOwedStep(earlier, "post-plugin-doctor", "state database is locked");
       finishUpdateRun(earlier, { status: "succeeded" });
 
       await runCli(["repair", "--json", "--yes"]);
 
+      // Repair runs full Doctor and then completes plugin convergence, which settles both
+      // plugin steps whatever happens to the completion cache and the service definition.
       const repair = update.listUpdateRuns({ limit: 1 })[0];
       expect(repair, getErrorOutput()).toMatchObject({ status: "succeeded" });
       const owed = code

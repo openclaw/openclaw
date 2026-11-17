@@ -12,7 +12,7 @@ import {
   isSystemAgentSensitiveConfigValue,
   redactSystemAgentConfigPath,
 } from "./config-redaction.js";
-import type { SystemAgentOperation } from "./operation-types.js";
+import type { SystemAgentOperation, SystemAgentPluginCapabilityReview } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE, isInvalidConfigSetOperation } from "./operations-internal.js";
 import type { loadSystemAgentOverview } from "./overview.js";
 import {
@@ -31,7 +31,7 @@ export type SystemAgentOperationResult = {
   agentId?: string;
   exitsInteractive?: boolean;
   message?: string;
-  pluginCapabilityReview?: import("./operation-types.js").SystemAgentPluginCapabilityReview;
+  pluginCapabilityReview?: SystemAgentPluginCapabilityReview;
   nextInput?: string;
   /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
   returnToShell?: boolean;

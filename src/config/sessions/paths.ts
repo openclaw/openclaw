@@ -119,16 +119,36 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   return resolveSessionTranscriptsDirForAgent(opts?.agentId ?? "");
 }
 
-function resolvePathFromAgentSessionsDir(
+type SessionPathProbe = { kind: "realpath" | "existing"; path: string };
+type SessionPathResolution<T> = Generator<SessionPathProbe, T, string | undefined>;
+
+// Keep containment and restored-root policy identical for sync and async callers.
+function resolveSessionPathSync<T>(steps: SessionPathResolution<T>): T {
+  let step = steps.next();
+  while (!step.done) {
+    const probe = step.value;
+    step = steps.next(
+      probe.kind === "realpath"
+        ? (safeRealpathSync(probe.path) ?? undefined)
+        : fs.existsSync(probe.path)
+          ? probe.path
+          : undefined,
+    );
+  }
+  return step.value;
+}
+
+function* resolvePathFromAgentSessionsDir(
   agentSessionsDir: string,
   candidateAbsPath: string,
-): string | undefined {
+): SessionPathResolution<string | undefined> {
   const agentBase =
-    safeRealpathSync(path.resolve(agentSessionsDir)) ?? path.resolve(agentSessionsDir);
+    (yield { kind: "realpath", path: path.resolve(agentSessionsDir) }) ??
+    path.resolve(agentSessionsDir);
   const relative = path.relative(agentBase, candidateAbsPath);
   // The caller already resolved the candidate; resolve this fallback root for containment.
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    return resolveRerootedSessionPath(agentBase, candidateAbsPath);
+    return yield* resolveRerootedSessionPath(agentBase, candidateAbsPath);
   }
   return path.resolve(agentBase, relative);
 }
@@ -139,10 +159,10 @@ function resolvePathFromAgentSessionsDir(
 // `agents/<id>/sessions/<suffix>` tail onto the current sessions dir, but only
 // when the file exists there: genuine cross-root layouts keep their foreign
 // path via the structural fallback.
-function resolveRerootedSessionPath(
+function* resolveRerootedSessionPath(
   agentSessionsDir: string,
   candidateAbsPath: string,
-): string | undefined {
+): SessionPathResolution<string | undefined> {
   const parsed = resolveAgentSessionsPathParts(candidateAbsPath);
   if (!parsed) {
     return undefined;
@@ -156,7 +176,7 @@ function resolveRerootedSessionPath(
   if (!contained || contained.startsWith("..") || path.isAbsolute(contained)) {
     return undefined;
   }
-  return fs.existsSync(rerooted) ? rerooted : undefined;
+  return yield { kind: "existing", path: rerooted };
 }
 
 function resolveSiblingAgentSessionsDir(
@@ -225,35 +245,42 @@ function resolveStructuralSessionFallbackPath(
   return path.normalize(path.resolve(candidateAbsPath));
 }
 
-function resolvePathWithinSessionsDir(
+function* resolvePathWithinSessionsDir(
   sessionsDir: string,
   candidate: string,
   opts?: { agentId?: string },
-): string {
+): SessionPathResolution<string> {
   const trimmed = candidate.trim();
   if (!trimmed) {
     throw new Error("Session file path must not be empty");
   }
   const resolvedBase = path.resolve(sessionsDir);
-  const realBase = safeRealpathSync(resolvedBase) ?? resolvedBase;
+  const realBase = (yield { kind: "realpath", path: resolvedBase }) ?? resolvedBase;
   // Normalize absolute paths that are within the sessions directory.
   // Older versions stored absolute sessionFile paths in sessions.json;
   // convert them to relative so the containment check passes.
-  const realTrimmed = path.isAbsolute(trimmed) ? (safeRealpathSync(trimmed) ?? trimmed) : trimmed;
+  const realTrimmed = path.isAbsolute(trimmed)
+    ? ((yield { kind: "realpath", path: trimmed }) ?? trimmed)
+    : trimmed;
   const normalized = path.isAbsolute(realTrimmed)
     ? path.relative(realBase, realTrimmed)
     : realTrimmed;
   if (normalized.startsWith("..") && path.isAbsolute(realTrimmed)) {
-    const tryAgentFallback = (agentId: string): string | undefined => {
+    const tryAgentFallback = function* (
+      agentId: string,
+    ): SessionPathResolution<string | undefined> {
       const normalizedAgentId = normalizeAgentId(agentId);
       const siblingSessionsDir = resolveSiblingAgentSessionsDir(realBase, normalizedAgentId);
       if (siblingSessionsDir) {
-        const siblingResolved = resolvePathFromAgentSessionsDir(siblingSessionsDir, realTrimmed);
+        const siblingResolved = yield* resolvePathFromAgentSessionsDir(
+          siblingSessionsDir,
+          realTrimmed,
+        );
         if (siblingResolved) {
           return siblingResolved;
         }
       }
-      return resolvePathFromAgentSessionsDir(
+      return yield* resolvePathFromAgentSessionsDir(
         resolveSessionTranscriptsDirForAgent(normalizedAgentId),
         realTrimmed,
       );
@@ -261,14 +288,14 @@ function resolvePathWithinSessionsDir(
 
     const explicitAgentId = opts?.agentId?.trim();
     if (explicitAgentId) {
-      const resolvedFromAgent = tryAgentFallback(explicitAgentId);
+      const resolvedFromAgent = yield* tryAgentFallback(explicitAgentId);
       if (resolvedFromAgent) {
         return resolvedFromAgent;
       }
     }
     const extractedAgentId = extractAgentIdFromAbsoluteSessionPath(realTrimmed);
     if (extractedAgentId) {
-      const resolvedFromPath = tryAgentFallback(extractedAgentId);
+      const resolvedFromPath = yield* tryAgentFallback(extractedAgentId);
       if (resolvedFromPath) {
         return resolvedFromPath;
       }
@@ -289,11 +316,11 @@ function resolvePathWithinSessionsDir(
   return path.resolve(realBase, normalized);
 }
 
-export function resolveSessionTranscriptPathInDir(
+function* resolveSessionTranscriptPathInDirSteps(
   sessionId: string,
   sessionsDir: string,
   topicId?: string | number,
-): string {
+): SessionPathResolution<string> {
   const safeSessionId = validateSessionId(sessionId);
   const safeTopicId =
     typeof topicId === "string"
@@ -308,7 +335,17 @@ export function resolveSessionTranscriptPathInDir(
   if (Buffer.byteLength(fileName, "utf8") > 255) {
     throw new Error(`Invalid session transcript filename: ${fileName}`);
   }
-  return resolvePathWithinSessionsDir(sessionsDir, fileName);
+  return yield* resolvePathWithinSessionsDir(sessionsDir, fileName);
+}
+
+export function resolveSessionTranscriptPathInDir(
+  sessionId: string,
+  sessionsDir: string,
+  topicId?: string | number,
+): string {
+  return resolveSessionPathSync(
+    resolveSessionTranscriptPathInDirSteps(sessionId, sessionsDir, topicId),
+  );
 }
 
 export function resolveSessionTranscriptPath(
@@ -322,11 +359,11 @@ export function resolveSessionTranscriptPath(
     topicId,
   );
 }
-export function resolveSessionFilePathCore(
+export function* resolveSessionFilePathCoreSteps(
   sessionId: string,
   entry?: object,
   opts?: SessionFilePathOptions,
-): string {
+): SessionPathResolution<string> {
   const sessionsDir = resolveSessionsDir(opts);
   const candidate =
     entry && "sessionFile" in entry && typeof entry.sessionFile === "string"
@@ -337,12 +374,22 @@ export function resolveSessionFilePathCore(
       return candidate;
     }
     try {
-      return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
+      return yield* resolvePathWithinSessionsDir(sessionsDir, candidate, {
+        agentId: opts?.agentId,
+      });
     } catch {
       // Keep handlers alive when persisted metadata is stale/corrupt.
     }
   }
-  return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);
+  return yield* resolveSessionTranscriptPathInDirSteps(sessionId, sessionsDir);
+}
+
+export function resolveSessionFilePathCore(
+  sessionId: string,
+  entry?: object,
+  opts?: SessionFilePathOptions,
+): string {
+  return resolveSessionPathSync(resolveSessionFilePathCoreSteps(sessionId, entry, opts));
 }
 
 export class SessionStoreAgentIdRequiredError extends Error {

@@ -55,18 +55,26 @@ it.each([false, true])("rejects removal with a live lease (snapshot retry: %s)",
     await expect(remove()).rejects.toThrow(snapshotFailure);
   }
   const lease = await acquireWorktreeRunLease(created.id, { env });
-  const removalError = await remove(retry || undefined)
-    .then(() => undefined)
-    .catch((error: unknown) => error);
-  expect(removalError).toBeInstanceOf(Error);
-  expect((removalError as Error).message).toContain("worktree is busy");
-  expect(classifyWorktreeRemovalError(removalError)).toBe("busy");
-  expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-  expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
-  expect(await fs.stat(created.path)).toBeTruthy();
-
-  await lease.release();
+  try {
+    const removalError = await service
+      .remove({
+        id: created.id,
+        reason: "manual-delete",
+        allowSnapshotLoss: retry,
+        retryPreserved: retry,
+      })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+    expect(removalError).toBeInstanceOf(Error);
+    expect((removalError as Error).message).toContain("worktree is busy");
+    expect(classifyWorktreeRemovalError(removalError)).toBe("busy");
+    expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeUndefined();
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+    expect(hasLiveWorktreeRunLease(env, created.id)).toBe(true);
+    expect(await fs.stat(created.path)).toBeTruthy();
+  } finally {
+    await lease.release();
+  }
   if (!retry) {
     expect((await remove()).removed).toBe(true);
     await expectGone();
