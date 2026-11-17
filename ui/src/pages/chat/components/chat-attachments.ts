@@ -142,6 +142,37 @@ export function appendChatAttachmentFiles(
   return files.length;
 }
 
+// Chromium drops a native paste, after beforeinput and without input, when the
+// system clipboard changes while the paste event runs. Dictation tools such as
+// Wispr Flow restore the previous clipboard right after their Cmd+V, so the
+// event's own snapshot is the only reliable copy of the text. Replacing the
+// original selection again is idempotent when the native insert did land.
+// Like native paste, the recovered insert keeps to maxlength.
+// Accepted edge case: the recovered insert is outside the native undo stack.
+function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
+  const target = e.target;
+  if (!text || !(target instanceof HTMLTextAreaElement)) {
+    return;
+  }
+  const { value, selectionStart: start, selectionEnd: end } = target;
+  setTimeout(() => {
+    if (
+      e.defaultPrevented ||
+      target.value !== value ||
+      target.disabled ||
+      target.readOnly ||
+      target.ownerDocument.activeElement !== target
+    ) {
+      return;
+    }
+    const room = target.maxLength < 0 ? text.length : target.maxLength - value.length + end - start;
+    target.setRangeText(text.slice(0, Math.max(0, room)), start, end, "end");
+    target.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertFromPaste", data: null }),
+    );
+  }, 0);
+}
+
 export function handleChatAttachmentPaste(
   e: ClipboardEvent,
   props: ChatAttachmentControlsProps,
@@ -154,12 +185,15 @@ export function handleChatAttachmentPaste(
     const hasFiles = Array.from(e.clipboardData.items ?? []).some(
       (item) => item.kind === "file" || item.type.startsWith("image/"),
     );
-    const hasInlineImage = /^data:image\//i.test(e.clipboardData.getData("text/plain").trim());
+    const text = e.clipboardData.getData("text/plain");
+    const hasInlineImage = /^data:image\//i.test(text.trim());
     if (hasFiles || hasInlineImage) {
       e.preventDefault();
       showToast({ message: uploadsDisabledMessage() });
+      return;
     }
     // Large text remains ordinary native paste instead of becoming a file.
+    recoverDroppedTextPaste(e, text);
     return;
   }
   const imageFiles = Array.from(e.clipboardData.items ?? [])
@@ -178,6 +212,7 @@ export function handleChatAttachmentPaste(
       text.length <= LARGE_PASTE_TEXT_THRESHOLD ||
       !(props.getDraft?.() ?? props.draft ?? "")
     ) {
+      recoverDroppedTextPaste(e, text ?? "");
       return;
     }
     e.preventDefault();
