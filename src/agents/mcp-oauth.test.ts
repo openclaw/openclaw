@@ -46,7 +46,7 @@ const metadataUrl = () => new URL("https://mcp.example.com/.well-known/oauth-pro
 const readStore = () => readStoreFor(REMOTE_IDENTITY.storeKey);
 const storedTokens = () => withProvider(async (provider) => provider.tokens());
 const loginInstruction =
-  "Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.";
+  "Sign in from Settings → MCP, or from the Gateway's terminal: run openclaw mcp login 'Remote Docs' (works while the Gateway runs), or ask the agent to connect in a direct chat.";
 
 const resolveRemoteToken = (options: Omit<Parameters<typeof resolveToken>[0], "identity"> = {}) =>
   resolveToken({ identity: REMOTE_IDENTITY, ...options });
@@ -201,18 +201,21 @@ describe("MCP OAuth provider", () => {
     expect(await readStore()).toEqual(before);
   });
 
-  itWithHome("names terminal sign-in only for servers defined under mcp.servers", async () => {
-    const url = "https://mcp.example.com/mcp";
-    const missingToken = (cfg: OpenClawConfig) =>
-      resolveToken({ identity: operatorMcpOAuthIdentity("Remote Docs", url, cfg) });
-    await expect(missingToken({ mcp: { servers: { "Remote Docs": { url } } } })).rejects.toThrow(
-      `MCP server "Remote Docs" requires OAuth authorization. Sign in from Settings → MCP, or from the Gateway's terminal: stop the Gateway with openclaw gateway stop, run openclaw mcp login 'Remote Docs', then start the Gateway again.`,
-    );
-    // A plugin-declared server is absent from mcp.servers; the CLI cannot resolve it.
-    await expect(missingToken({})).rejects.toThrow(
-      `MCP server "Remote Docs" requires OAuth authorization. Select Connect on the plugin's page in Settings to sign in again.`,
-    );
-  });
+  itWithHome(
+    "offers online terminal sign-in for configured and plugin-declared servers",
+    async () => {
+      const url = "https://mcp.example.com/mcp";
+      const missingToken = (cfg: OpenClawConfig) =>
+        resolveToken({ identity: operatorMcpOAuthIdentity("Remote Docs", url, cfg) });
+      await expect(missingToken({ mcp: { servers: { "Remote Docs": { url } } } })).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. ${loginInstruction}`,
+      );
+      // Plugin-declared servers are not listed in Settings → MCP; they sign in from their plugin page.
+      await expect(missingToken({})).rejects.toThrow(
+        `MCP server "Remote Docs" requires OAuth authorization. Select Connect on the plugin's page in Settings, or from the Gateway's terminal: run openclaw mcp login 'Remote Docs' (works while the Gateway runs), or ask the agent to connect in a direct chat.`,
+      );
+    },
+  );
 
   itWithHome("preserves insufficient scope through reauthorization", async () => {
     await saveTokens(makeTokens("decoy-token", "test-auth-token"));
@@ -225,7 +228,7 @@ describe("MCP OAuth provider", () => {
         scope: "docs.write",
       }),
     ).rejects.toThrow(
-      `MCP server "Remote Docs" requires additional OAuth authorization. Sign in again from Settings: select Connect on the plugin's page, or Sign in on the MCP page.`,
+      `MCP server "Remote Docs" requires additional OAuth authorization. ${loginInstruction}`,
     );
     expect(authMock).not.toHaveBeenCalled();
     expect(await storedTokens()).toMatchObject({

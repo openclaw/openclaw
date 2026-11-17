@@ -2,6 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
+import { readMcpOAuthStore } from "../agents/mcp-oauth-store.js";
+import { seedMcpOAuthStoreForTest } from "../agents/mcp-oauth.test-support.js";
+import { readConfigFileSnapshotForWrite, replaceConfigFile } from "../config/config.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import { GatewayClient } from "../gateway/client.js";
 import { startGatewayServer } from "../gateway/server.js";
 import { GATEWAY_TEST_ENV_KEYS } from "../gateway/test-helpers.env.js";
@@ -135,6 +143,109 @@ describe("config mutations against a running Gateway", () => {
     await lock?.release();
     await claim?.release();
     restoreEnv.restore();
+  });
+
+  it("routes MCP set, configure, tools, unset, and add through the live Gateway", async () => {
+    const routed = { command: process.execPath, enabled: false };
+    const set = await run(env, ["mcp", "set", "routed", JSON.stringify(routed)]);
+    expect(set.code, set.stderr).toBe(0);
+    expect(set.stdout).toContain('Saved MCP server "routed"');
+    expect((await gatewayConfig()).mcp.servers.routed).toEqual(routed);
+
+    const configure = await run(env, ["mcp", "configure", "routed", "--timeout", "12"]);
+    expect(configure.code, configure.stderr).toBe(0);
+    const tools = await run(env, ["mcp", "tools", "routed", "--include", "search"]);
+    expect(tools.code, tools.stderr).toBe(0);
+    expect((await gatewayConfig()).mcp.servers.routed).toEqual({
+      ...routed,
+      requestTimeoutMs: 12_000,
+      toolFilter: { include: ["search"] },
+    });
+
+    const unset = await run(env, ["mcp", "unset", "routed"]);
+    expect(unset.code, unset.stderr).toBe(0);
+    expect((await gatewayConfig()).mcp?.servers?.routed).toBeUndefined();
+    const add = await run(env, [
+      "mcp",
+      "add",
+      "routed",
+      "--command",
+      process.execPath,
+      "--disabled",
+      "--no-probe",
+    ]);
+    expect(add.code, add.stderr).toBe(0);
+    expect((await gatewayConfig()).mcp.servers.routed).toEqual(routed);
+    const cleanup = await run(env, ["mcp", "unset", "routed"]);
+    expect(cleanup.code, cleanup.stderr).toBe(0);
+    expectGatewayKeptRunning();
+  });
+
+  it.each([
+    [
+      "URL replacement",
+      ["set", "mcp.servers.oauthCleanup.url", "https://replacement.example/mcp"],
+      false,
+    ],
+    ["removal", ["unset", "mcp.servers.oauthCleanup"], false],
+    ["hosted direct URL replacement", null, false],
+    [
+      "unchanged OAuth identity",
+      ["set", "mcp.servers.oauthCleanup.requestTimeoutMs", "12000"],
+      true,
+    ],
+  ] as const)("cleans online config credentials after %s", async (_name, mutation, retained) => {
+    const url = "https://oauth.example/mcp";
+    const oauthServer = {
+      url,
+      transport: "streamable-http",
+      auth: "oauth",
+      enabled: false,
+    } as const;
+    const setup = await run(env, [
+      "config",
+      "set",
+      "mcp.servers.oauthCleanup",
+      JSON.stringify(oauthServer),
+      "--strict-json",
+    ]);
+    expect(setup.code, setup.stderr).toBe(0);
+    const identity = operatorMcpOAuthIdentity("oauthCleanup", url);
+    seedMcpOAuthStoreForTest(identity.storeKey, {
+      tokens: { access_token: "synthetic-online-mcp-token", token_type: "Bearer" },
+    });
+
+    if (mutation === null) {
+      // The system agent writes in the Gateway process, without a config RPC.
+      const { snapshot, writeOptions } = await readConfigFileSnapshotForWrite();
+      const application = createRuntimeConfigWriteApplication();
+      await replaceConfigFile({
+        sourceConfig: {
+          ...snapshot.sourceConfig,
+          mcp: {
+            ...snapshot.sourceConfig.mcp,
+            servers: {
+              ...snapshot.sourceConfig.mcp?.servers,
+              oauthCleanup: { ...oauthServer, url: "https://replacement.example/mcp" },
+            },
+          },
+        },
+        baseHash: snapshot.hash ?? undefined,
+        writeOptions: attachRuntimeConfigWriteApplication(writeOptions, application),
+      });
+      await expect(application.result).resolves.toBe("applied");
+    } else {
+      const changed = await run(env, ["config", ...mutation]);
+      expect(changed.code, changed.stderr).toBe(0);
+    }
+    expect((await readMcpOAuthStore(identity.storeKey)).tokens?.access_token).toBe(
+      retained ? "synthetic-online-mcp-token" : undefined,
+    );
+    if (mutation?.[0] !== "unset") {
+      const cleanup = await run(env, ["config", "unset", "mcp.servers.oauthCleanup"]);
+      expect(cleanup.code, cleanup.stderr).toBe(0);
+    }
+    expectGatewayKeptRunning();
   });
 
   it("suspends and restores gateway.reload.mode through the Gateway without a restart", async () => {
