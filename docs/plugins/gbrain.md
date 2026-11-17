@@ -48,25 +48,27 @@ container next to the Gateway. Add the overlay when you start Compose:
 docker compose -f docker-compose.yml -f deploy/gbrain/compose.yaml up -d
 ```
 
-The `gbrain` service installs GBrain's stable release into a volume, creates the
-brain, runs `gbrain mcp expose --no-tailscale --yes`, and then runs GBrain's server.
-Compose restarts it. It shares the Gateway container's network, so the plugin finds it
-at `127.0.0.1:3131`. The Gateway mounts GBrain's data read-only to create its key; it
-never opens the brain. Recreate the `gbrain` service whenever you recreate
-`openclaw-gateway`, because it uses the Gateway container's network.
+Compose builds a small image on first start (Bun plus `git`, which `gbrain upgrade`
+uses). The `gbrain` service installs GBrain's stable release into a volume, creates the
+brain, runs `gbrain mcp expose --no-tailscale --yes` for its owner credential, and
+then runs `gbrain serve --http` as the container's main process. Compose restarts it.
+In a container the plugin looks for GBrain at `127.0.0.1` and then at the `gbrain`
+Compose service on the project network, so Gateway and GBrain restarts do not affect
+each other. Nothing is published on the host. The Gateway mounts GBrain's data
+read-only to create its key; it never opens the brain.
 
 ## Status and recovery
 
 The plugin rechecks every minute and reports problems as plugin health in the Control
 UI and in `openclaw plugins inspect gbrain --runtime --json`.
 
-| You see                                                       | Cause                                                                                    | What to do                                                                                                     |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| GBrain needs Bun 1.4.4 or newer                               | `gbrain` and `bun` are both missing                                                      | Install Bun (`curl -fsSL https://bun.sh/install \| bash`). Setup finishes within a minute.                     |
-| GBrain is not running next to this container                  | Docker without the overlay                                                               | Start Compose with `deploy/gbrain/compose.yaml`.                                                               |
-| GBrain's service is not answering                             | The service stopped or crashed                                                           | `gbrain mcp expose --status`; GBrain's supervisor restarts it.                                                 |
-| Another program answers on 127.0.0.1:3131                     | Port taken                                                                               | Free the port, or `gbrain mcp expose --no-tailscale --yes --port <port>`; the plugin follows GBrain's receipt. |
-| The gbrain memory server is running but cannot open its brain | Another `gbrain serve` (for example a stdio entry in another app) holds the PGLite brain | Stop that process. GBrain rechecks every 5 seconds.                                                            |
+| You see                                                       | Cause                                                                                    | What to do                                                                                                                 |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| GBrain needs Bun 1.4.4 or newer                               | `gbrain` and `bun` are both missing                                                      | Install Bun (`curl -fsSL https://bun.sh/install \| bash`; on Linux it also needs `unzip`). Setup finishes within a minute. |
+| GBrain is not running next to this container                  | Docker without the overlay                                                               | Start Compose with `deploy/gbrain/compose.yaml`.                                                                           |
+| GBrain's service is not answering                             | The service stopped or crashed                                                           | `gbrain mcp expose --status`; GBrain's supervisor restarts it.                                                             |
+| Another program answers on 127.0.0.1:3131                     | Port taken                                                                               | Free the port, or `gbrain mcp expose --no-tailscale --yes --port <port>`; the plugin follows GBrain's receipt.             |
+| The gbrain memory server is running but cannot open its brain | Another `gbrain serve` (for example a stdio entry in another app) holds the PGLite brain | Stop that process. GBrain rechecks every 5 seconds.                                                                        |
 
 A revoked or rotated OpenClaw key is replaced automatically within a minute.
 `gbrain upgrade` needs no OpenClaw change.

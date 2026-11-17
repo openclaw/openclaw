@@ -2,18 +2,17 @@
 #
 #   docker compose -f docker-compose.yml -f deploy/gbrain/compose.yaml up -d
 #
-# GBrain runs its own `gbrain serve --http` here; Compose keeps it running and
-# OpenClaw only connects to it. The service shares the Gateway's network
-# namespace, so the brain is at 127.0.0.1:3131 inside the Gateway as on a
-# normal machine, and nothing new is published on the host. The Gateway reads
-# GBrain's receipt and owner credential from the shared volume (read-only) to
-# create its own MCP key; it never opens the brain itself.
+# GBrain runs its own `gbrain serve --http` here as the container entrypoint
+# (GBrain's documented container shape); Compose keeps it running and OpenClaw
+# only connects to it at http://gbrain:3131 on this project's network. Nothing
+# is published on the host. The Gateway reads GBrain's receipt and owner
+# credential from the shared volume (read-only) to create its own MCP key; it
+# never opens the brain itself.
 services:
   gbrain:
-    image: docker.io/oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
-    network_mode: "service:openclaw-gateway"
-    depends_on:
-      - openclaw-gateway
+    image: openclaw-gbrain:local
+    build:
+      context: ./deploy/gbrain
     init: true
     environment:
       HOME: /home/node
@@ -25,9 +24,10 @@ services:
     volumes:
       - gbrain-home:/home/node/.gbrain
       - gbrain-bun:/home/node/.bun
-    # Volumes start root-owned; hand them to the Gateway's user (uid 1000),
-    # then run GBrain as that user. GBrain is installed once into the bun
-    # volume and keeps its own upgrade path (`gbrain upgrade`).
+    # Volumes start root-owned; hand them to the Gateway's user (uid 1000), then
+    # run GBrain as that user. GBrain is installed once into the bun volume and
+    # keeps its own upgrade path (`gbrain upgrade`). `gbrain mcp expose` writes
+    # the owner credential and receipt; the server binds the project network.
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - |
@@ -35,11 +35,14 @@ services:
         chown 1000:1000 /home/node /home/node/.gbrain /home/node/.bun
         exec setpriv --reuid=1000 --regid=1000 --init-groups /bin/sh -ec '
           command -v gbrain >/dev/null 2>&1 || bun install -g "$$GBRAIN_INSTALL_SPEC"
-          if gbrain mcp expose --no-tailscale --yes --json > /tmp/expose.json; then :; elif grep -q no_brain_config /tmp/expose.json; then
+          if ! gbrain mcp expose --no-tailscale --yes --json > /tmp/expose.json && grep -q no_brain_config /tmp/expose.json; then
             gbrain init --pglite --no-embedding
             gbrain mcp expose --no-tailscale --yes --json > /tmp/expose.json || true
           fi
-          exec "$$HOME/.gbrain/serve/gbrain-serve.sh"
+          if [ -f "$$HOME/.gbrain/env" ]; then set -a; . "$$HOME/.gbrain/env"; set +a; fi
+          GBRAIN_ADMIN_BOOTSTRAP_TOKEN="$$(cat "$$HOME/.gbrain/serve/admin-token")"
+          export GBRAIN_ADMIN_BOOTSTRAP_TOKEN
+          exec gbrain serve --http --bind 0.0.0.0 --port 3131 --surface full --advertise verbs
         '
     healthcheck:
       test:

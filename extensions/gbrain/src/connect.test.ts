@@ -12,6 +12,7 @@ const RECEIPT = `${HOME}/.gbrain/serve/expose.json`;
 const ADMIN = `${HOME}/.gbrain/serve/admin-token`;
 const GBRAIN = `${HOME}/.bun/bin/gbrain`;
 const BUN = `${HOME}/.bun/bin/bun`;
+const BUN_GLOBAL_BIN = `${HOME}/.cache/.bun/bin`;
 const MCP_URL = "http://127.0.0.1:3131/mcp";
 
 /** A host with a fake GBrain: commands change the fake's state the way the real CLI does. */
@@ -22,6 +23,8 @@ function fakeHost(initial: {
   server?: GbrainMcpServerEntry;
   brain?: boolean;
   inContainer?: boolean;
+  /** Host GBrain's server answers on; other hosts read as down. */
+  serverHost?: string;
   acceptedTokens?: string[];
 }) {
   const files = new Map(Object.entries(initial.files ?? {}));
@@ -36,14 +39,19 @@ function fakeHost(initial: {
   const deps: ConnectDeps = {
     home: HOME,
     env: {},
+    hosts: initial.inContainer ? ["127.0.0.1", "gbrain"] : ["127.0.0.1"],
     inContainer: initial.inContainer ?? false,
     readFile: (file) => files.get(file),
     findExecutable: (name, candidates) =>
       [...candidates, `/usr/bin/${name}`].find((file) => executables.has(file)),
     run: async (argv) => {
       commands.push(argv.slice(1).join(" "));
+      // Bun links global binaries where its settings say (here XDG_CACHE_HOME), not ~/.bun/bin.
+      if (argv[0] === BUN && argv[1] === "pm") {
+        return ok(`${BUN_GLOBAL_BIN}\n`);
+      }
       if (argv[0] === BUN) {
-        executables.add(GBRAIN);
+        executables.add(`${BUN_GLOBAL_BIN}/gbrain`);
         return ok();
       }
       if (argv[1] === "init") {
@@ -62,7 +70,8 @@ function fakeHost(initial: {
       health = { kind: "ok", version: "0.60.733.0" };
       return ok(JSON.stringify({ status: "ok" }));
     },
-    health: async () => health,
+    health: async (baseUrl) =>
+      new URL(baseUrl).hostname === (initial.serverHost ?? "127.0.0.1") ? health : { kind: "down" },
     tokenAccepted: async (_url, token) => accepted.has(token),
     mintKey: async (_base, adminToken) => {
       expect(adminToken).toBe("admin-secret");
@@ -106,6 +115,7 @@ describe("connectGbrain", () => {
       mcpUrl: MCP_URL,
     });
     expect(host.commands).toEqual([
+      "pm bin -g",
       "install -g github:garrytan/gbrain#stable",
       "mcp expose --no-tailscale --yes --json",
       "init --pglite --no-embedding",
@@ -184,5 +194,19 @@ describe("connectGbrain", () => {
       reason: "setup-pending",
     });
     expect([...setUp.commands, ...fresh.commands]).toEqual([]);
+  });
+
+  it("connects to the gbrain Compose service from a container without running GBrain commands", async () => {
+    const host = fakeHost({
+      inContainer: true,
+      serverHost: "gbrain",
+      files: exposed,
+      health: { kind: "ok", version: "1" },
+    });
+    expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({
+      state: "connected",
+      mcpUrl: "http://gbrain:3131/mcp",
+    });
+    expect(host.commands).toEqual([]);
   });
 });

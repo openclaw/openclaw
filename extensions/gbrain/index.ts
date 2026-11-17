@@ -56,19 +56,24 @@ export default definePluginEntry({
     ];
     const findExecutable = (name: string, candidates: string[]) =>
       [...candidates, ...searchPath.map((dir) => path.join(dir, name))].find(isExecutable);
-    // GBrain's commands get a plain user environment, never the Gateway's own service identity.
-    const childEnv: NodeJS.ProcessEnv = {
-      HOME: home,
-      PATH: [...new Set(searchPath)].join(path.delimiter),
-      ...(env.LANG ? { LANG: env.LANG } : {}),
-      ...(env.GBRAIN_HOME ? { GBRAIN_HOME: env.GBRAIN_HOME } : {}),
-      ...(env.BUN_INSTALL ? { BUN_INSTALL: env.BUN_INSTALL } : {}),
-    };
-
+    // GBrain's commands get the user's session (XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS
+    // decide whether GBrain can install its systemd user unit), never the Gateway's own
+    // service identity or credentials.
+    const childEnv: NodeJS.ProcessEnv = Object.fromEntries(
+      Object.entries(env).filter(
+        ([key]) =>
+          !key.startsWith("OPENCLAW_") && !/(TOKEN|SECRET|PASSWORD|API_KEY|_KEY)$/i.test(key),
+      ),
+    );
+    childEnv.HOME = home;
+    childEnv.PATH = [...new Set(searchPath)].join(path.delimiter);
+    const inContainer = existsSync("/.dockerenv") || existsSync("/run/.containerenv");
     const deps: ConnectDeps = {
       home,
       env,
-      inContainer: existsSync("/.dockerenv") || existsSync("/run/.containerenv"),
+      // In Docker, GBrain runs as the `gbrain` Compose service (deploy/gbrain/compose.yaml).
+      hosts: inContainer ? ["127.0.0.1", "gbrain"] : ["127.0.0.1"],
+      inContainer,
       readFile: (file) => {
         try {
           return readFileSync(file, "utf8");

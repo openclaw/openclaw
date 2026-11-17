@@ -33,6 +33,8 @@ export type CommandResult = { code: number | null; stdout: string; stderr: strin
 export type ConnectDeps = {
   home: string;
   env: NodeJS.ProcessEnv;
+  /** Hosts to look for GBrain's server on, in order: loopback, then the `gbrain` Compose service in a container. */
+  hosts: string[];
   inContainer: boolean;
   readFile: (file: string) => string | undefined;
   findExecutable: (name: string, candidates: string[]) => string | undefined;
@@ -128,11 +130,18 @@ async function ensureCli(deps: ConnectDeps): Promise<string | ConnectOutcome> {
   if (!bun) {
     return blocked(
       "bun-missing",
-      "GBrain needs Bun 1.4.4 or newer. Install it (curl -fsSL https://bun.sh/install | bash); OpenClaw finishes the GBrain setup within a few minutes.",
+      "GBrain needs Bun 1.4.4 or newer. Install it with: curl -fsSL https://bun.sh/install | bash (on Linux, Bun's installer also needs unzip). OpenClaw finishes the GBrain setup within a minute.",
     );
   }
+  // Bun links global binaries where its own settings say (BUN_INSTALL_BIN, XDG_CACHE_HOME, ...).
+  const globalBin = (await deps.run([bun, "pm", "bin", "-g"], 30_000)).stdout.trim();
+  const bunCandidates = [...candidates, ...(globalBin ? [path.join(globalBin, "gbrain")] : [])];
+  const linked = deps.findExecutable("gbrain", bunCandidates);
+  if (linked) {
+    return linked;
+  }
   const install = await deps.run([bun, "install", "-g", GBRAIN_INSTALL_SPEC], 10 * 60_000);
-  const installed = deps.findExecutable("gbrain", candidates);
+  const installed = deps.findExecutable("gbrain", bunCandidates);
   if (install.code !== 0 || !installed) {
     return blocked(
       "gbrain-install-failed",
@@ -192,14 +201,22 @@ export async function connectGbrain(
   options: ConnectOptions,
 ): Promise<ConnectOutcome> {
   let receipt = readReceipt(deps);
-  let baseUrl = `http://127.0.0.1:${receipt?.port ?? GBRAIN_DEFAULT_PORT}`;
-  let mcpUrl = `${baseUrl}/mcp`;
+  const urls = deps.hosts.map((host) => `http://${host}:${receipt?.port ?? GBRAIN_DEFAULT_PORT}`);
   const current = deps.readServer();
-  if (!isManaged(current, mcpUrl)) {
-    return { state: "external", url: typeof current?.url === "string" ? current.url : "" };
+  if (current && !urls.some((url) => isManaged(current, `${url}/mcp`))) {
+    return { state: "external", url: typeof current.url === "string" ? current.url : "" };
   }
 
-  let health = await deps.health(baseUrl);
+  let baseUrl = urls[0] ?? `http://127.0.0.1:${GBRAIN_DEFAULT_PORT}`;
+  let health: Health = { kind: "down" };
+  for (const url of urls) {
+    health = await deps.health(url);
+    if (health.kind !== "down") {
+      baseUrl = url;
+      break;
+    }
+  }
+  let mcpUrl = `${baseUrl}/mcp`;
   if (health.kind === "down" && receipt) {
     // GBrain's supervisor (launchd, systemd, Compose) owns restarts; OpenClaw only reports.
     return blocked(

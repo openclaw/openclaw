@@ -41,7 +41,7 @@ fail() {
 oc() { openclaw "$@"; }
 
 ensure_node() {
-  if command -v node >/dev/null 2>&1 && node -e 'process.exit(+process.versions.node.split(".")[0] >= 24 ? 0 : 1)'; then
+  if command -v node >/dev/null 2>&1 && node -e 'const [a,b,c]=process.versions.node.split(".").map(Number);process.exit(a>24||(a===24&&(b>22||(b===22&&c>=1)))?0:1)'; then
     return 0
   fi
   local arch platform version=v24.22.1
@@ -89,7 +89,7 @@ turn() {
   local key="$1" message="$2" codeword="$3"
   oc agent --agent main --session-key "agent:main:$key" --message "$message" --json --timeout 300 >"$WORK/logs/turn-$key.json" 2>&1 || return 1
   node -e '
-    const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    const raw = require("fs").readFileSync(process.argv[1], "utf8"); const r = JSON.parse(raw.slice(raw.indexOf("{")));
     const text = JSON.stringify(r.result?.payloads ?? r.result ?? r);
     const tools = r.result?.meta?.agentMeta?.terminalReceipt?.successfulToolNames ?? [];
     const ok = text.includes(process.argv[2]) && tools.some((t) => t.startsWith("gbrain__"));
@@ -154,7 +154,13 @@ installed_index_has_gbrain() {
 }
 
 no_gbrain_record() { ! installed_index_has_gbrain; }
-
+inspect_loaded() {
+  openclaw plugins inspect gbrain --runtime --json 2>/dev/null | node -e '
+    const raw = require("fs").readFileSync(0, "utf8");
+    const r = JSON.parse(raw.slice(raw.indexOf("{")));
+    console.log(JSON.stringify({ status: r.plugin.status, imported: r.plugin.imported, activated: r.plugin.activated }));
+    process.exit(r.plugin.status === "loaded" ? 0 : 1);'
+}
 # 1. OpenClaw, isolated to this user, with a real model.
 step node ensure_node || fail "node"
 step install-openclaw npm install -g --prefix "$WORK/prefix" "$OC_TGZ" || fail "install openclaw"
@@ -169,15 +175,34 @@ step model-default oc config set agents.defaults.model "\"$MODEL\"" --strict-jso
 step gateway-start gateway_start || fail "gateway start"
 
 # 2. One install request, as the Control UI sends it. A clean host has no Bun: record what the user sees.
-step plugin-install oc gateway call plugins.install --timeout 600000 --json \
-  --params "{\"source\":\"npm-pack\",\"archivePath\":\"$PLUGIN_TGZ\",\"enable\":true}" || fail "plugins.install"
+# The Gateway answers `retryable: true` ("Another plugin or config operation is already
+# running") while its own startup work holds the plugin lock; retry like a second click.
+install_plugin() {
+  local out attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    out="$(oc gateway call plugins.install --timeout 600000 --json \
+      --params "{\"source\":\"npm-pack\",\"archivePath\":\"$PLUGIN_TGZ\",\"enable\":true}" 2>&1)" && {
+      printf '%s\n' "$out"
+      echo "attempt=$attempt"
+      return 0
+    }
+    printf '%s\n' "$out"
+    grep -q '"retryable": true' <<<"$out" || return 1
+    sleep 3
+  done
+  return 1
+}
+step plugin-install install_plugin || fail "plugins.install"
 if ! command -v bun >/dev/null 2>&1; then
   sleep 10
   step bun-missing-message grep -m1 'GBrain needs Bun' "$WORK/logs/gateway.out" || fail "no Bun message"
+  if [ "$OS" = Linux ] && ! command -v unzip >/dev/null 2>&1; then
+    step unzip-install bash -c 'sudo apt-get install -y -qq unzip' || fail "unzip install"
+  fi
   step bun-install bash -c 'curl -fsSL https://bun.sh/install | bash' || fail "bun install"
 fi
 step connect wait_connected 600 || fail "plugin did not connect"
-step inspect-runtime bash -c 'openclaw plugins inspect gbrain --runtime --json | node -e "const r=JSON.parse(require(\"fs\").readFileSync(0,\"utf8\"));console.log(JSON.stringify({status:r.plugin.status,imported:r.plugin.imported,activated:r.plugin.activated}));process.exit(r.plugin.status===\"loaded\"?0:1)"' || fail "inspect"
+step inspect-runtime inspect_loaded || fail "inspect"
 
 # 3. Seed a codeword no session has seen, restart, probe offline, recall without saying where to look.
 CW1="$(codeword)"
@@ -243,8 +268,8 @@ for _ in $(seq 1 90); do
 done
 step fault-rotate-reminted test "$(key_hash)" != "$BEFORE" || fail "key not re-minted"
 CW7="$(codeword)"
-seed "Project Avocet" "The Avocet seal is $CW7." >/dev/null 2>&1
-step fault-rotate-recovered turn "e2e-after-rotate-$RANDOM" "What is the Avocet seal?" "$CW7" || fail "recall after rotation"
+seed "Project Avocet" "Our Avocet seal code is $CW7." >/dev/null 2>&1
+step fault-rotate-recovered turn "e2e-after-rotate-$RANDOM" "What is our Avocet seal code?" "$CW7" || fail "recall after rotation"
 
 # 6. gbrain upgrade with no plugin change: go back one release, then let GBrain upgrade itself.
 PREV="$(gbrain --version)"
@@ -252,8 +277,8 @@ step upgrade-downgrade bash -c 'bun install -g "github:garrytan/gbrain#v0.60.732
 step upgrade-run bash -c 'gbrain upgrade; gbrain --version'
 health_ok 120
 CW8="$(codeword)"
-seed "Project Godwit" "The Godwit beacon is $CW8." >/dev/null 2>&1
-step upgrade-recall turn "e2e-after-upgrade-$RANDOM" "What is the Godwit beacon?" "$CW8" || fail "recall after gbrain upgrade (was $PREV)"
+seed "Project Godwit" "Our Godwit beacon code is $CW8." >/dev/null 2>&1
+step upgrade-recall turn "e2e-after-upgrade-$RANDOM" "What is our Godwit beacon code?" "$CW8" || fail "recall after gbrain upgrade (was $PREV)"
 
 # 7. Uninstall: no install record; GBrain's service and brain untouched.
 step uninstall oc plugins uninstall gbrain --force || fail "uninstall"
