@@ -228,6 +228,17 @@ openclaw gateway --verbose --ws-log compact
 openclaw gateway --verbose --ws-log full
 ```
 
+### Reply watchdog failures
+
+When the reply watchdog stops a run, the existing `lane task error` record includes
+`staleReason` (`no_activity` or `rate_limited`) and `pendingTools`. The latter lists
+at most the first five pending tools in start order, each with `toolName`,
+`toolCallId`, and `elapsedMs` measured at the stop. These facts survive abort
+cleanup; tool arguments, results, and message content are excluded. Code Mode
+host calls carry their own tool name and call ID, including on worker turns.
+Automation run history appends these pending-tool details to its recovery cause;
+provider rate-limit text keeps precedence.
+
 ### Operator authority failures
 
 The existing `lane task error` record carries three additional fields when a
