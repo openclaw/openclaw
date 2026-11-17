@@ -1,5 +1,8 @@
 import type { SessionsStorageStatusResult } from "../../packages/gateway-protocol/src/index.js";
-import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
+import {
+  resolveMaintenanceConfigFromInput,
+  resolveSessionColdStorageConfig,
+} from "../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
@@ -18,7 +21,7 @@ const owners = new WeakMap<() => OpenClawConfig, MaintenanceOwner>();
 function hasTranscriptMaintenanceWork(config: OpenClawConfig): boolean {
   const maintenance = resolveMaintenanceConfigFromInput(config.session?.maintenance);
   return (
-    config.session?.maintenance?.coldStorage?.enabled === true ||
+    resolveSessionColdStorageConfig(config.session?.maintenance).enabled ||
     (maintenance.mode === "enforce" && maintenance.resetArchiveRetentionMs != null)
   );
 }

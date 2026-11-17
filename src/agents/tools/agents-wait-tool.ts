@@ -15,7 +15,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
 import { capFrozenResultText } from "../subagents/registry/subagent-registry-helpers.js";
 import { subscribeSubagentRunChanges } from "../subagents/registry/subagent-registry-publication.js";
-import { matchesSubagentRequesterSession } from "../subagents/registry/subagent-registry-queries.js";
 import { prepareSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 import { markCollectorReaderTool } from "../subagents/swarm/swarm-collector-capability.js";
@@ -103,7 +102,6 @@ type CollectorOwnerScope = {
   currentSessionKeys: ReadonlySet<string>;
   currentAgentId?: string;
   config?: OpenClawConfig;
-  expectedRequester?: { sessionId: string; lifecycleRevision?: string };
 };
 
 // Hooks see the call ID and may invoke other tools with it. The per-tool marker
@@ -147,11 +145,8 @@ export function readNativeSubagentCollection(details: unknown) {
 
 function ownsRun(
   entry: SubagentRunRecord,
-  { currentSessionKeys, currentAgentId, config, expectedRequester }: CollectorOwnerScope,
+  { currentSessionKeys, currentAgentId, config }: CollectorOwnerScope,
 ): boolean {
-  if (expectedRequester && !matchesSubagentRequesterSession(entry, expectedRequester)) {
-    return false;
-  }
   const owner = entry.swarmRequesterSessionKey?.trim();
   if (!owner) {
     return false;
@@ -531,7 +526,6 @@ async function collectNativeSubagentResults(
     waitForAll: params.awaitResults,
     signal: params.signal,
     assertCurrent: params.assertCurrent,
-    expectedRequester: params.expectedRequester,
     abortError: () => createAbortError("agents_wait aborted."),
   });
   const noAuthorizedTargets =

@@ -10,6 +10,8 @@
  * --lineage records baseline A/A at depth 1/4/16/64 through real principal and
  * admitted-run owners. --large-fixture <root> reflinks a completed synthetic
  * database and workspace/ into the isolated test fixture (requires btrfs or APFS).
+ * --team-fixture imports the agent roster from team-shape-fixture.ts output.
+ * --compare-role-selection compares the role lookup owner within lineage calls.
  * This is boundary/owner evidence, not a running Gateway transport measurement.
  */
 import assert from "node:assert/strict";
@@ -33,6 +35,8 @@ const { values } = parseArgs({
     "active-runs": { type: "boolean" },
     depths: { type: "string", default: "1,4,16,64" },
     "large-fixture": { type: "string" },
+    "team-fixture": { type: "string" },
+    "compare-role-selection": { type: "boolean" },
     sessions: { type: "string", default: "2000" },
     runs: { type: "string", default: "20000" },
     roles: { type: "string", default: "2000" },
@@ -61,31 +65,39 @@ const readSource = (relative: string) =>
 const output = path.resolve(values.output);
 fs.mkdirSync(output);
 const key = 'globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]';
-const variants: [string, string, string][] = values.lineage
-  ? []
-  : [
-      ["src/gateway/github-publication-actions.ts", "performSessionGitHubAction", ""],
+const variants: [string, string, string][] = values["compare-role-selection"]
+  ? [
       [
-        "src/gateway/github-publication-action-target.ts",
-        "preparePublishingSession",
-        "\nexport function pullRequestState",
+        "src/gateway/operator-role-policy.ts",
+        "resolveOperatorRoleSelection",
+        "\n/** An enabled role boundary",
       ],
-      [
-        "src/gateway/github-publication-requester.ts",
-        "prepareRequesterPolicy",
-        "\nfunction prepareRequesterSource",
-      ],
-      [
-        "src/gateway/github-publication-inspect.ts",
-        "readOwnGitHubPullRequest",
-        "\nexport async function performSessionGitHubInspection",
-      ],
-      [
-        "src/agents/subagents/registry/subagent-registry-read.ts",
-        "listSubagentRunsForRequester",
-        "\nexport async function getLatestSubagentRunByChildSessionKey",
-      ],
-    ];
+    ]
+  : values.lineage
+    ? []
+    : [
+        ["src/gateway/github-publication-actions.ts", "performSessionGitHubAction", ""],
+        [
+          "src/gateway/github-publication-action-target.ts",
+          "preparePublishingSession",
+          "\nexport function pullRequestState",
+        ],
+        [
+          "src/gateway/github-publication-requester.ts",
+          "prepareRequesterPolicy",
+          "\nfunction prepareRequesterSource",
+        ],
+        [
+          "src/gateway/github-publication-inspect.ts",
+          "readOwnGitHubPullRequest",
+          "\nexport async function performSessionGitHubInspection",
+        ],
+        [
+          "src/agents/subagents/registry/subagent-registry-read.ts",
+          "listSubagentRunsForRequester",
+          "\nexport async function getLatestSubagentRunByChildSessionKey",
+        ],
+      ];
 const hashes: Record<string, { baseline: string; candidate: string }> = {};
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 function region(source: string, name: string, end: string) {
@@ -201,6 +213,7 @@ const counters: [string, string, string][] = [
     "sharing.filter",
   ],
   [query, "): LatestSubagentRunReadIndex<T> {", "runs.index"],
+  ["src/gateway/operator-role-policy.ts", "Object.keys(assignments)", "role.enumerations"],
 ];
 const rewritten = new Set(variants.map(([relative]) => relative).concat(query));
 for (const [relative] of counters) {
@@ -218,11 +231,13 @@ if (values.counts) {
       file,
       source.replaceAll(
         needle,
-        counter === "sharing.deepEqual"
-          ? `${key}?.count?.(${JSON.stringify(counter)});\n${needle}`
-          : counter === "sharing.currency"
-            ? `${needle}\n${key}?.count?.(${JSON.stringify(counter)});\n${key}?.currency?.(readCurrent);`
-            : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
+        counter === "role.enumerations"
+          ? `(${key}?.count?.(${JSON.stringify(counter)}), ${needle})`
+          : counter === "sharing.deepEqual"
+            ? `${key}?.count?.(${JSON.stringify(counter)});\n${needle}`
+            : counter === "sharing.currency"
+              ? `${needle}\n${key}?.count?.(${JSON.stringify(counter)});\n${key}?.currency?.(readCurrent);`
+              : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
       ),
     );
   }
@@ -292,7 +307,8 @@ it("measures actions at the registered boundary with a large authority inventory
  for(let i=0;i<runs;i++) subagentRuns.set(\`fixture-\${i}\`,createSubagentRunRecord({runId:\`fixture-\${i}\`,childSessionKey:\`agent:main:subagent:fixture-\${i}\`,requesterSessionKey:\`agent:main:fixture:\${i%sessions}\`,completionRequesterSessionId:\`fixture-\${i%sessions}\`,requesterDisplayKey:"fixture",task:"fixture",cleanup:"keep",createdAt:i+1,...(${Boolean(values["active-runs"])} ? {} : {endedAt:i+2})}));
  await using visitors = await startVisitorPublicationFixture(f);
  const current=currentGitHubPublicationConfig();
- const config={...current,agents:{...current.agents,defaults:{...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
+ const team=${values["team-fixture"] ? `JSON.parse(await fs.readFile(${JSON.stringify(path.join(path.resolve(values["team-fixture"]), "openclaw.json"))},"utf8"))` : "undefined"};
+ const config={...current,agents:{...current.agents,entries:{...team?.agents?.entries,...current.agents?.entries},defaults:{...team?.agents?.defaults,...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
  setRuntimeConfigSnapshot(config);
  prepareGatewayConnectOperatorAccess(f.guestSource.client);
  const rows=[];
@@ -302,7 +318,8 @@ it("measures actions at the registered boundary with a large authority inventory
  const state = {arm:"baseline",count:undefined,currency:undefined};
  const censusHook=process.env.LANE2450_COUNTS==="1" ? createHook({before(){}}).enable():undefined;
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
- const pairs=[{kind:"warmup",arms:lineage?["baseline","baseline"]:["baseline","candidate"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(lineage ? [] : Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})))];
+ const compare=${Boolean(values["compare-role-selection"])} || !lineage;
+ const pairs=[{kind:"warmup",arms:compare?["baseline","candidate"]:["baseline","baseline"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(compare ? Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})) : [])];
  let i=0;
  for(const depth of lineage ? ${JSON.stringify(values.depths.split(",").map(Number))} : [0]) {
  const releases=[];
@@ -369,7 +386,7 @@ it("measures actions at the registered boundary with a large authority inventory
  }
  heap?.disconnect();censusHook?.disable();subagentRuns.clear();
  delete globalThis[Symbol.for("openclaw.benchmark.githubActionScope")];
- await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,rows},null,2));
+ await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,agents:Object.keys(config.agents.entries).length,rows},null,2));
 },600000);
 `;
 const testPath = "src/gateway/github-publication-actions.test.ts";
@@ -388,9 +405,13 @@ fs.writeFileSync(
       publication: Boolean(values.publication),
       lineage: Boolean(values.lineage),
       largeFixture: values["large-fixture"],
-      acceptance: values.lineage
-        ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
-        : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
+      teamFixture: values["team-fixture"],
+      compareRoleSelection: Boolean(values["compare-role-selection"]),
+      acceptance: values["compare-role-selection"]
+        ? "Warm registered-action CPU and allocation improve at least 20%; no latency or max-segment regression of 20%. A/A controls bound noise; five interleaved A/B pairs. Role assignment enumerations become zero on exact hits; authority assertions remain unchanged."
+        : values.lineage
+          ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
+          : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
     },
     null,
     2,

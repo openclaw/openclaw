@@ -42,6 +42,7 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { SubagentCompletion } from "../../shared/subagent-completion.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
@@ -153,6 +154,7 @@ export async function prepareAgentRunUserTurn(params: {
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  subagentCompletions?: readonly SubagentCompletion[];
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
   request: AgentRunRequest;
@@ -332,11 +334,11 @@ export async function prepareAgentRunUserTurn(params: {
           config: params.cfgForAgent ?? params.cfg,
         };
       };
-      const privateTarget = params.privateCompletion ? await resolveTarget() : undefined;
+      const completionTarget = trackRequesterCompletion ? await resolveTarget() : undefined;
       const senderFields = gatewayClientSenderFields(params.client);
-      if (privateTarget) {
+      if (completionTarget) {
         const submitted = await readSessionSubmittedInput(
-          privateTarget,
+          completionTarget,
           buildRunUserTurnIdempotencyKey(params.runId),
         );
         params.assertCurrent();
@@ -354,6 +356,7 @@ export async function prepareAgentRunUserTurn(params: {
         }
       }
       const input: UserTurnInput = {
+        subagentCompletions: params.subagentCompletions,
         ...(params.privateCompletion ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
         isSubagentCoordinationInputProvenance(params.inputProvenance)
@@ -384,10 +387,10 @@ export async function prepareAgentRunUserTurn(params: {
         trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: params.privateCompletion
+        target: trackRequesterCompletion
           ? () => {
               params.assertCurrent();
-              return privateTarget;
+              return completionTarget;
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",

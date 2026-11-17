@@ -14,7 +14,7 @@ import {
 } from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { projectAgentToolDefinition } from "../prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { TOOL_CALL_RAW_TOOL_NAME, createToolSearchTools } from "../tool-search.js";

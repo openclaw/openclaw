@@ -95,6 +95,7 @@ const runtimeOnlyUnitFiles = new Set([
   "test/scripts/lint-suppressions.test.ts",
   "test/scripts/plugin-sdk-surface-report.test.ts",
   "test/scripts/pr-wrapper-source-closure.test.ts",
+  "test/scripts/runtime-process-build-graph.test.ts",
   "test/scripts/type-suppression-inventory.test.ts",
   "test/skill-usage.codex.integration.test.ts",
   "test/slack-outbound-permanent-rejection-loopback.test.ts",
@@ -128,6 +129,7 @@ const toolingOnlyUnitFiles = new Set([
   "test/scripts/eager-import-closure.test.ts",
   "test/scripts/personal-credential-writer-guard.test.ts",
   "test/scripts/pr-wrapper-source-closure.test.ts",
+  "test/scripts/runtime-process-build-graph.test.ts",
   "test/scripts/update-restart-module-outcome.test.ts",
   "test/scripts/vitest-isolated.test.ts",
   "test/scripts/vitest-runtime-worker-selection.test.ts",
@@ -334,10 +336,7 @@ export function shouldPrepareVitestCoreWorkers(
       ? ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts"]
       : []),
   ];
-  const gatewayStartupWorkers = [
-    "src/gateway/server-runtime-subscriptions.test.ts",
-    "src/gateway/server-runtime-config.test.ts",
-  ];
+  const gatewayStartupWorkers = ["src/gateway/server-runtime-config.test.ts"];
   const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
   return (
     workers.some((file) =>

@@ -29,6 +29,7 @@ import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { gatewayPersonPrincipalAuthError } from "./auth.js";
 import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
 import {
+  bindGatewayDeviceRevocation,
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
 } from "./device-revocation.js";
@@ -52,14 +53,15 @@ import {
   sourceRolePolicy,
 } from "./operator-role-source-policy.js";
 import {
-  bindGatewayOperatorContinuationAuthority,
   captureChannelOperatorRunAuthority,
+  captureGatewayOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
 import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
+import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
@@ -395,34 +397,22 @@ async function restoreGatewayOperatorSnapshot(params: {
     const originalModels = snapshot.modelPolicy
       ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
       : undefined;
-    const retainPolicy = () => {
-      assertPolicy();
-      references += 1;
-      return releaseHold();
-    };
-    const policyAuthority = createAdmittedRunOperatorAuthority({
-      ...live,
-      signal: signal.signal,
-      recoverySnapshot: snapshot,
-      retain: retainPolicy,
-      get modelPolicy() {
-        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
-      },
-    });
     const authority = createAdmittedRunOperatorAuthority({
-      ...policyAuthority,
+      ...live,
+      recoverySnapshot: snapshot,
       signal: AbortSignal.any([signal.signal, claim.signal]),
       assertCurrent: assertRecoveryCurrent,
       retain: () => {
         claim.signal.throwIfAborted();
         assertCurrent();
-        return retainPolicy();
+        assertPolicy();
+        references += 1;
+        return releaseHold();
       },
       get modelPolicy() {
-        return policyAuthority.modelPolicy;
+        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
       },
     });
-    bindGatewayOperatorContinuationAuthority(authority, policyAuthority);
     authority.assertCurrent();
     const profile = readResidentUserProfileRevision(snapshot.profileId, profileCatalogPath({}));
     if (!profile) {
@@ -462,7 +452,8 @@ export async function restoreGatewayOperatorSource(params: {
           onSessionIdentityMutation((mutation) => {
             if (
               mutation.agentId === target.agentId &&
-              (mutation.previous.sessionId === target.sessionId ||
+              ((target.sessionId !== undefined &&
+                mutation.previous.sessionId === target.sessionId) ||
                 mutation.previous.sessionKeys.includes(target.sessionKey))
             ) {
               revoke();
@@ -587,4 +578,56 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     release();
     throw error;
   }
+}
+
+/** Accepted work runs on its origin's saved facts and current policy, not its accepting request. */
+export async function captureGatewayOperatorContinuation(
+  input: Parameters<typeof captureGatewayOperatorRunAuthority>[0],
+): ReturnType<typeof captureGatewayOperatorRunAuthority> {
+  const inherited = input.client?.internal?.operatorRunAuthority;
+  const context = input.context.resolveGatewayContext?.();
+  const facts = inherited && captureQueuedOperatorRecoverySource(inherited);
+  if (!inherited || !context || !facts || facts.kind === "unavailable") {
+    // A source without saved facts keeps its live authority.
+    return await captureGatewayOperatorRunAuthority(input);
+  }
+  // Other holders of the inherited object keep it until this work ends; its checks do not gate it.
+  const releaseInherited = inherited.retain?.();
+  const restored = await restoreGatewayQueuedOperatorRecovery({
+    source: facts,
+    context,
+    assertCurrent: () => {},
+  }).catch((error: unknown) => {
+    releaseInherited?.();
+    throw error;
+  });
+  // A tokenless source has no credential in its recovery snapshot, but an
+  // in-process continuation still belongs to its explicitly revocable device.
+  // Carry only that owner's revocation, never the accepting request/turn checks.
+  const deviceRevocation = new AbortController();
+  const stopDeviceRevocation = onGatewayDeviceSourceRevoked(inherited.assertCurrent, () => {
+    deviceRevocation.abort(new Error("Gateway device authorization was revoked"));
+  });
+  const authority = createAdmittedRunOperatorAuthority({
+    ...restored.authority,
+    signal: AbortSignal.any([
+      deviceRevocation.signal,
+      ...(restored.authority.signal ? [restored.authority.signal] : []),
+    ]),
+    // One origin keeps one comparable source identity, as completion batches require.
+    source: inherited.source,
+    scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
+    get modelPolicy() {
+      return restored.authority.modelPolicy;
+    },
+  });
+  bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
+  return {
+    authority,
+    release: () => {
+      stopDeviceRevocation?.();
+      restored.release();
+      releaseInherited?.();
+    },
+  };
 }

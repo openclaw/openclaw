@@ -11,6 +11,7 @@ import { waitForSessionRunEnd } from "../../../sessions/session-controller.nativ
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { createLazyPromise } from "../../../shared/lazy-promise.js";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
@@ -124,7 +125,6 @@ type SubagentAnnounceFlowParams = Omit<PendingFinalDeliveryPayload, "requesterDi
   roundOneReply?: string;
   /** Cached pre-wake result for legacy runs without terminal facts. */
   fallbackReply?: string;
-  completionRequesterLifecycleRevision?: string;
   /** Deliver only frozen terminal facts; never inspect or mutate the child session. */
   suppressChildSessionEffects?: boolean;
   /** Refresh database currency before child-session reads or effects. */
@@ -584,6 +584,13 @@ async function runSubagentAnnounceFlowBound(
           requesterAgentId: targetRequesterAgentId,
           triggerMessage,
           internalEvents,
+          subagentCompletions: [
+            subagentCompletionForOutcome(
+              { runId: params.childRunId, sessionKey: params.childSessionKey, label: params.label },
+              outcome.status,
+              killed,
+            ),
+          ].filter((completion) => completion !== undefined),
           requesterSessionOrigin: targetRequesterOrigin,
           completionDirectOrigin,
           directOrigin,
@@ -597,8 +604,6 @@ async function runSubagentAnnounceFlowBound(
           requesterIsSubagent,
           expectsCompletionMessage,
           completionTarget: params.completionTarget,
-          completionRequesterSessionId: params.completionRequesterSessionId,
-          completionRequesterLifecycleRevision: params.completionRequesterLifecycleRevision,
           directIdempotencyKey,
           onDeliveryResult: reportDeliveryResult,
           signal: params.signal,

@@ -81,7 +81,9 @@ without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
 
 After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
-and output pipes. On macOS and Linux, any remaining referenced handles get a
+and output pipes. Shared-state leases finish their cleanup before the SQLite worker
+host closes. Completed orderly cleanup preserves exit status 0; cleanup failures
+still produce a failed exit. On macOS and Linux, any remaining referenced handles get a
 one-second final drain before the process logs remaining handle types and re-raises
 `SIGTERM`. Failed or retained
 cleanup keeps its existing deadline and exit-status handling.
@@ -626,7 +628,9 @@ stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
 conversation. The resume input inherits no old browser connection, approval, or
 requester authority snapshot; on a Gateway without roles it uses only the current,
-revalidated authority of the person's recorded device.
+revalidated authority of the person's recorded device. A resumed Control UI task
+can update pinned dashboard widgets under that admitted authority without a
+connected browser. Inline widgets still require a connected capable client.
 
 Only accepted user messages whose IDs were captured in the graceful-shutdown
 marker follow the resume input, in FIFO order. Older queued rows left by a crash

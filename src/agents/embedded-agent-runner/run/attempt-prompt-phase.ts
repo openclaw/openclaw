@@ -15,10 +15,8 @@ import {
   resolvePendingRuntimeContextReplay,
 } from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
-import {
-  createCompactionRequestBudget,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
+import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import {
   SAFETY_MARGIN,
   createFixedRequestTokenEstimator,

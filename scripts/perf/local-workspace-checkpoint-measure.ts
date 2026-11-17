@@ -25,6 +25,8 @@
  * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
  * --reconcile-random-bytes 7420 writes deterministic incompressible changed files;
  * allocation mode reports main and matched worker allocation for each reconcile burst.
+ * --reconcile-profile (Node 26+) adds all-worker allocation/CPU profiles and a
+ * one-second allocation timeline. Run this diagnostic separately from timing samples.
  * It also reports uncompressed patch field bytes and journal counts (no paths/content).
  * --build-input-files 24997 --files 3 --file-bytes 32 creates 25k files with a
  * retained build-input inventory; two edited root files still produce a delta journal.
@@ -203,6 +205,7 @@ const { values } = parseArgs({
     "all-mutating": { type: "boolean", default: false },
     "tools-per-turn": { type: "string", default: "10" },
     "reconcile-traffic": { type: "boolean", default: false },
+    "reconcile-profile": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
     "reconcile-random-bytes": { type: "string", default: "0" },
@@ -576,6 +579,13 @@ for (const value of [requests, burst, files, port, worktrees]) {
 }
 assert(port >= 40000 && port <= 65535);
 assert(["timing", "allocation", "retention"].includes(values.instrument!));
+assert(
+  !values["reconcile-profile"] ||
+    (reconcile &&
+      values.instrument === "allocation" &&
+      Number(process.versions.node.split(".")[0]) >= 26),
+  "Reconcile profiles require reconcile allocation mode and Node 26+",
+);
 const retentionMs = Number(values["retention-ms"]);
 assert(Number.isSafeInteger(retentionMs) && retentionMs >= 0);
 const workers = new Set<Worker>();
@@ -644,7 +654,7 @@ const summarizeWorkerAllocation = (
       "Samples are outside CPU/latency timing. Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
   };
 };
-const startSerialWorkerProfiles = async () => {
+const startSerialWorkerProfiles = async (allWorkers = false) => {
   const { sampleTrackedWorkerMemory } = await import("../../src/infra/worker-cpu.js");
   const snapshot = sampleTrackedWorkerMemory({ refresh: false });
   const identities = new Map(
@@ -655,7 +665,7 @@ const startSerialWorkerProfiles = async () => {
   );
   const existing = new Set(workers);
   const selected = [...existing].filter(
-    (worker) => identities.get(worker.threadId) === "git-operation.worker.js",
+    (worker) => allWorkers || identities.get(worker.threadId) === "git-operation.worker.js",
   );
   assert(selected.length <= 16, "Allocation proof supports at most 16 existing Git workers");
   const captures: {
@@ -674,7 +684,16 @@ const startSerialWorkerProfiles = async () => {
         cpu: await worker.startCpuProfile(),
       };
       captures.push(capture);
-      captures.at(-1)!.heap = await worker.startHeapProfile();
+      captures.at(-1)!.heap = await worker.startHeapProfile(
+        allWorkers
+          ? {
+              sampleInterval: 32_768,
+              stackDepth: 32,
+              includeObjectsCollectedByMajorGC: true,
+              includeObjectsCollectedByMinorGC: true,
+            }
+          : undefined,
+      );
       captures.at(-1)!.cpuBefore = await worker.cpuUsage().catch(() => undefined);
     }
   } catch (error) {
@@ -700,7 +719,7 @@ const startSerialWorkerProfiles = async () => {
         const heap = await capture.heap!.stop().catch(failed);
         const cpu = await capture.cpu.stop().catch(failed);
         const exited = !workers.has(capture.worker);
-        const prefix = `${values.report}.${phase}.git-worker-${capture.threadId}`;
+        const prefix = `${values.report}.${phase}.${allWorkers ? "worker" : "git-worker"}-${capture.threadId}`;
         if (!discard && heap) {
           fs.writeFileSync(path.join(output, `${prefix}.heapprofile`), heap);
         }
@@ -709,14 +728,20 @@ const startSerialWorkerProfiles = async () => {
         }
         const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
           node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
-        const parsedCpu = cpu ? JSON.parse(cpu) : undefined;
+        let parsedCpu;
+        try {
+          parsedCpu = cpu ? JSON.parse(cpu) : undefined;
+        } catch (error) {
+          failed(error);
+        }
         profiles.push({
           threadId: capture.threadId,
-          script: "git-operation.worker.js",
-          sourcePath: path.join(sourceRoot, "src/infra/git-operation.worker.ts"),
+          script: identities.get(capture.threadId),
           exited,
           errors,
-          sampledLiveAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null,
+          ...(allWorkers
+            ? { sampledAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null }
+            : { sampledLiveAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null }),
           workerCpuMs:
             !exited && cpuAfter && capture.cpuBefore
               ? (cpuAfter.user +
@@ -747,8 +772,9 @@ const startSerialWorkerProfiles = async () => {
         newWorkerThreadIds: [...workers]
           .filter((worker) => !existing.has(worker))
           .map((worker) => worker.threadId),
-        accounting:
-          "Existing Git workers only, at most 16, using native profiler defaults. Qualified Node 24 uses 512 KiB heap sampling, depth 16 and no sampling flags: GC-sensitive live allocations only, not total allocation or native memory. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
+        accounting: allWorkers
+          ? "All existing workers, 32 KiB sampling, depth 32, includes minor/major collected objects. Diagnostic pass only. New/exited workers and child processes are unmeasured."
+          : "Existing Git workers only, at most 16, using native profiler defaults. Qualified Node 24 uses 512 KiB heap sampling, depth 16 and no sampling flags: GC-sensitive live allocations only, not total allocation or native memory. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
       };
     } finally {
       clearInterval(stopKeepAlive);
@@ -1096,7 +1122,7 @@ registerHooks({
       );
     }
     if (
-      values["reconcile-traffic"] &&
+      (values["reconcile-traffic"] || values["reconcile-profile"]) &&
       relative === "src/gateway/worker-environments/local-workspace-projection-operation.ts"
     ) {
       code = fs.readFileSync(path.join(root, relative), "utf8");
@@ -1498,7 +1524,6 @@ const checkpoint = () =>
 const { collectRetiredWorktreeArtifacts } =
   await import("../../src/agents/worktrees/gc-artifacts.js");
 const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
-const { withWorktreeAllocationLease } = await import("../../src/agents/worktrees/allocation.js");
 // A populated default root with only registered checkouts is the recurring idle case.
 const maintained: LocalWorkspaceOwner["worktree"][] = [];
 if (values.mode === "maintenance") {
@@ -1961,7 +1986,7 @@ measurement: try {
       expiresBefore: 0,
       progress,
       orphanFailures: new Map(),
-      withAllocationLease: (run) => withWorktreeAllocationLease({ env: process.env }, run),
+      guard: {},
     });
     assert.equal(
       progress.result.outcome,
@@ -2901,6 +2926,24 @@ measurement: try {
     (nativeTurns || reconcile) && values.instrument === "allocation"
       ? await sampleWorkerAllocation()
       : undefined;
+  const stopReconcileProfiles = values["reconcile-profile"]
+    ? await startSerialWorkerProfiles(true)
+    : undefined;
+  const allocationTimeline: unknown[] = [];
+  let timelinePending = Promise.resolve();
+  const timelineStart = performance.now();
+  const timelineTimer = values["reconcile-profile"]
+    ? setInterval(() => {
+        timelinePending = timelinePending.then(async () => {
+          allocationTimeline.push({
+            elapsedMs: performance.now() - timelineStart,
+            phase: reconcilePhase,
+            main: getHeapStatistics(),
+            workers: await sampleWorkerAllocation(),
+          });
+        });
+      }, 1000)
+    : undefined;
   const nativeWorkerStartsBefore = workerStarts,
     nativeWorkerExitsBefore = workerExits;
   const readCgroupCpuUs = () => {
@@ -3027,6 +3070,9 @@ measurement: try {
           workerExits - nativeWorkerExitsBefore,
         )
       : undefined;
+  clearInterval(timelineTimer);
+  await timelinePending;
+  const reconcileProfiles = await stopReconcileProfiles?.("reconcile");
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -3039,6 +3085,12 @@ measurement: try {
     fs.writeFileSync(
       path.join(output, `${values.report}.cpuprofile`),
       JSON.stringify(cpuProfile.profile),
+    );
+  }
+  if (profile && values["reconcile-profile"]) {
+    fs.writeFileSync(
+      path.join(output, `${values.report}.heapprofile`),
+      JSON.stringify(profile.profile),
     );
   }
   inspector?.disconnect();
@@ -3148,6 +3200,8 @@ measurement: try {
       ? "main-isolate V8 total allocated bytes, including background work; excludes workers"
       : "V8 total allocation counter unavailable; use separate sampled allocation pass",
     workerAllocation: nativeWorkerAllocation,
+    reconcileProfiles,
+    allocationTimeline: values["reconcile-profile"] ? allocationTimeline : undefined,
     reusedFixture: reuseFixture,
     revision: values.revision ?? "candidate",
     instrument: values.instrument,
