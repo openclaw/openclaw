@@ -147,14 +147,9 @@ export function checkpointLocalWorkspace(
     (beginCapture) =>
       withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
-        let snapshotCapture = false;
         if (
           !options.knownMutation &&
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"], (entries, elapsedMs) => {
-            // A probe stops at its first edit. The accepted inventory also covers
-            // large trees whose changed file happens to sort first.
-            snapshotCapture = entries >= 20_000 || elapsedMs >= 500;
-          }))
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"]))
         ) {
           await removeLocalWorkspaceCheckpointCapture(store.get()!.projection_path, {
             signal: store.signal,
@@ -173,7 +168,7 @@ export function checkpointLocalWorkspace(
                 quiescence &&
                 (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
             }),
-          { reason: "checkpoint", snapshotCapture },
+          { reason: "checkpoint" },
         );
       }),
     options,
@@ -403,12 +398,8 @@ export function reuseLocalWorkspaceProjection(
           beginCapture?.();
         }
         return (
-          (await probeUnchangedLocalWorkspace(
-            owner,
-            store,
-            ["canonical", "projection"],
-            undefined,
-            (target) => markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical", "projection"], (target) =>
+            markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
           )) ??
           (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
             reason: "preparation",
@@ -428,7 +419,6 @@ async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   targets: readonly ("canonical" | "projection")[],
-  observeProbe?: (entries: number, elapsedMs: number) => void,
   markProbe?: (target: "canonical" | "projection") => void,
 ) {
   let row = store.get();
@@ -448,7 +438,6 @@ async function probeUnchangedLocalWorkspace(
   for (const target of targets) {
     markProbe?.(target);
     const selected = row;
-    const started = performance.now();
     const snapshot = await timeWorktreePreparationPhase(
       target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
       async () => {
@@ -465,10 +454,6 @@ async function probeUnchangedLocalWorkspace(
           return undefined;
         }
       },
-    );
-    observeProbe?.(
-      snapshot?.kind === "rescan" ? (snapshot.entryCount ?? 0) : 0,
-      performance.now() - started,
     );
     store.assertCurrent();
     if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {

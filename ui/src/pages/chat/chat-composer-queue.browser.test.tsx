@@ -1,6 +1,7 @@
 import { createSignal, type ComponentProps } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { subagentCompletionMessage } from "../../../../src/shared/subagent-completion.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { buildPendingInputQueueItems } from "./chat-pending-inputs.ts";
@@ -77,6 +78,29 @@ describe("queued message action menu", () => {
     expect(onEdit).not.toHaveBeenCalled();
     expect(container.querySelector(".chat-queue__edit-input")).toBeNull();
   });
+});
+
+it("renders only the human prompt when completion receipts share the server queue", () => {
+  const displayQueue = buildPendingInputQueueItems(
+    [
+      { role: "user", content: "Check the example" },
+      subagentCompletionMessage({}, [
+        { runId: "child-run", sessionKey: "agent:main:subagent:child" },
+      ]),
+    ].map((message, index) => ({
+      id: `input-${index}`,
+      runId: `run-${index}`,
+      state: "queued" as const,
+      queued: true,
+      acceptedAt: index,
+      message,
+    })),
+  );
+  const { container } = drawQueue(null, { displayQueue });
+
+  expect(
+    Array.from(container.querySelectorAll(".chat-queue__text"), (row) => row.textContent),
+  ).toEqual(["Check the example"]);
 });
 
 it.each([1, 2].flatMap((count) => [false, true].map((server) => ({ count, server }))))(

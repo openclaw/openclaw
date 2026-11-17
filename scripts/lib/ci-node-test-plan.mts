@@ -4647,10 +4647,22 @@ export function createSelectedNodeTestShardBundles(
       canonicalFamilies.set(projectedGroup, compactStripeFamily(group));
       return [projectedGroup];
     });
+    // A full-plan default is redundant only when every selected child is already as narrow.
+    const env = { ...shard.env };
+    if (
+      groups.every(
+        (group) =>
+          group.env?.OPENCLAW_VITEST_MAX_WORKERS !== undefined &&
+          Number(group.env.OPENCLAW_VITEST_MAX_WORKERS) <= Number(env.OPENCLAW_VITEST_MAX_WORKERS),
+      )
+    ) {
+      delete env.OPENCLAW_VITEST_MAX_WORKERS;
+    }
     return groups.length
       ? [
           {
             ...shard,
+            env: Object.keys(env).length > 0 ? env : undefined,
             checkName: `checks-node-changed-${shard.shardName}`,
             shardName: `changed-${shard.shardName}`,
             groups,

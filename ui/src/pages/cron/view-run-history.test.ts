@@ -9,7 +9,7 @@ import {
 
 function renderView(props: Parameters<typeof renderCronView>[0] = {}, scope = "overview") {
   return renderCronView({
-    listTab: "activity",
+    activityOpen: true,
     detailTab: "history",
     editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
     ...props,

@@ -10,6 +10,7 @@ import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-ca
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   withOpenClawTestState,
@@ -34,6 +35,23 @@ export async function configureEventState(
   await state.writeConfig(config);
   openOpenClawStateDatabase();
   return config;
+}
+
+export async function recordWatchEvents(child: string, sessionId: string) {
+  const input = {
+    sessionKey: child,
+    sessionId,
+    agentId: "main",
+    kind: "human_direct_message" as const,
+    actorType: "human" as const,
+    summary: "Other actor changed the watched session",
+    watcherSessionKeys: [],
+  };
+  return {
+    child,
+    frozen: expectDefined(await recordSessionStateEventAsync(input), "frozen event"),
+    newer: expectDefined(await recordSessionStateEventAsync(input), "newer event"),
+  };
 }
 
 export async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) {

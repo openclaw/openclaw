@@ -23,11 +23,9 @@ import {
 import { listOwedPluginSteps } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
-  markControlPlaneUpdateRestartSentinelFailureBestEffort,
   prepareUpdateServiceResult,
   recordServiceReconciliationWarning,
   UpdateCommandPendingRecoveryFailure,
-  UpdateCommandFailure,
 } from "./update-command-result.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -184,15 +182,8 @@ export async function completePostUpdateMaintenance(
   params: FinishUpdateParams,
   result: UpdateRunResult,
   assertCurrent: () => void,
-  context: {
-    root: string;
-    activationVerified: boolean;
-    sentinel: Omit<
-      Parameters<typeof markControlPlaneUpdateRestartSentinelFailureBestEffort>[0],
-      "reason"
-    >;
-  },
-): Promise<{ result: UpdateRunResult; detail: string } | undefined> {
+  context: { root: string },
+): Promise<void> {
   const run = params.opts.run;
   const plugins = result.postUpdate?.plugins;
   // Plugin work runs before activation. What it left undone is owed only now, on a kept result.
@@ -234,7 +225,7 @@ export async function completePostUpdateMaintenance(
   if (params.coreAlreadyCurrent) {
     // A current core refreshes completion only when an earlier update still owes it, unprompted.
     await retryOwedSteps(() => refreshShellCompletion(true));
-    return undefined;
+    return;
   }
   const startedAt = performance.now();
   using _ = {
@@ -255,31 +246,28 @@ export async function completePostUpdateMaintenance(
   }
   await retryOwedSteps(async () => completionFailure);
   if (!params.installKindChanged || result.mode === "git") {
-    return undefined;
+    return;
   }
   const retirement = await retireStandaloneGitWrapper({
     previousRoot: params.previousInstallRoot ?? params.root,
     assertCurrent,
   });
   if (!retirement.error) {
-    return undefined;
+    return;
   }
-  defaultRuntime.error(retirement.error);
-  if (context.activationVerified) {
-    throw new UpdateCommandFailure(
-      { ...result, status: "error", reason: "wrapper-retirement-failed" },
-      1,
-      retirement.error,
-    );
-  }
-  await markControlPlaneUpdateRestartSentinelFailureBestEffort({
-    ...context.sentinel,
-    reason: "wrapper-retirement-failed",
+  // The package install is kept. No later command knows which file to retry, so this is a
+  // warning and not an owed step. Ownership and authority refusals throw instead.
+  result.steps.push({
+    name: "git-wrapper-retirement",
+    command: "openclaw update",
+    cwd: context.root,
+    durationMs: 0,
+    exitCode: 0,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message: `Could not finish removing the previous Git checkout's openclaw wrapper: ${retirement.error.replace(/\.$/u, "")}. The package install is kept. If \`openclaw\` still starts the old checkout, remove its wrapper from PATH.`,
+    },
   });
-  return {
-    result: { ...result, status: "error", reason: "wrapper-retirement-failed" },
-    detail: retirement.error,
-  };
 }
 
 export async function settlePostUpdateWindowsAutoStartFailure(

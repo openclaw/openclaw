@@ -26,6 +26,7 @@ import {
   forwardedPhotoUpdate,
   forwardedTextUpdate,
   textUpdate,
+  voiceUpdate,
 } from "./telegram-ingress-coalescing.test-support.js";
 
 const downstreamTurns = vi.hoisted(() =>
@@ -181,6 +182,149 @@ describe("Telegram durable ingress coalescing", () => {
       await writeTelegramSpooledUpdate({ stateDir, update });
     }
   }
+
+  // Incident 2026-11-17: getFile never answered while getMe and sends still worked.
+  function createHangingGetFileTransport() {
+    const getFileCalls: string[] = [];
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+      if (!url.includes("/getFile")) {
+        return Response.json({ ok: true, result: true });
+      }
+      getFileCalls.push(url);
+      return await new Promise<Response>((_resolve, reject) => {
+        const requestSignal = init?.signal;
+        if (requestSignal?.aborted) {
+          reject(new Error("getFile aborted"));
+        }
+        requestSignal?.addEventListener("abort", () => reject(new Error("getFile aborted")), {
+          once: true,
+        });
+      });
+    }) as unknown as typeof fetch;
+    return {
+      getFileCalls,
+      telegramTransport: { fetch: fetchImpl, sourceFetch: fetchImpl, close: async () => {} },
+    };
+  }
+
+  /** Advance the clock while staying inside the 300 s adoption stall watchdog. */
+  async function advanceInsideWatchdog(totalMs: number, signal: AbortSignal) {
+    for (let elapsedMs = 0; elapsedMs < totalMs; elapsedMs += 5_000) {
+      await withinTest(vi.advanceTimersByTimeAsync(5_000), signal);
+    }
+  }
+
+  it("delivers a voice note whose getFile hangs as text and does not hold the chat behind it", async ({
+    signal,
+  }) => {
+    // The monitor captures Date.now at construction, so install the clock first.
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+    });
+    const { getFileCalls, telegramTransport } = createHangingGetFileTransport();
+    const { monitor } = await createMonitor({
+      telegramTransport,
+      adoptionStallTimeoutMs: 300_000,
+      pollIntervalMs: 60_000,
+      onRuntimeError: vi.fn(),
+    });
+    const queue = openTelegramIngressQueue({ stateDir });
+    try {
+      monitor.start();
+      await withinTest(monitor.admit(voiceUpdate({ updateId: 901, messageId: 1 })), signal);
+      await withinTest(
+        monitor.admit(textUpdate({ updateId: 902, messageId: 2, text: "are you there?" })),
+        signal,
+      );
+      await withinTest(
+        vi.waitFor(() => expect(getFileCalls).toHaveLength(1)),
+        signal,
+      );
+      // Each getFile attempt times out; only the media owner's own outcome can settle it.
+      await advanceInsideWatchdog(130_000, signal);
+      expect(getFileCalls).toHaveLength(3);
+      await withinTest(
+        vi.waitFor(
+          async () => {
+            monitor.requestDrain();
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(await queue.listPending({ limit: "all" })).toEqual([]);
+            expect(await queue.listClaims()).toEqual([]);
+          },
+          { timeout: 10_000 },
+        ),
+        signal,
+      );
+      // No replay: the voice note was delivered once, as text with a notice.
+      expect(getFileCalls).toHaveLength(3);
+      const bodies = downstreamTurns.mock.calls.map(([ctx]) => ctx.Body).join("\n");
+      expect(bodies).toContain("[media unavailable: download failed]");
+      expect(bodies).toContain("are you there?");
+      await tombstones(901, 902);
+    } finally {
+      await monitor.stop();
+    }
+  });
+
+  it("delivers an album whose every getFile hangs before the adoption watchdog fires", async ({
+    signal,
+  }) => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date", "performance"],
+    });
+    const { getFileCalls, telegramTransport } = createHangingGetFileTransport();
+    const { monitor } = await createMonitor({
+      telegramTransport,
+      adoptionStallTimeoutMs: 300_000,
+      pollIntervalMs: 60_000,
+      onRuntimeError: vi.fn(),
+    });
+    const queue = openTelegramIngressQueue({ stateDir });
+    const album = [911, 912, 913, 914].map((updateId, index) => {
+      const update = photoUpdate({
+        updateId,
+        messageId: index + 1,
+        ...(index === 0 ? { caption: "four photos" } : {}),
+      });
+      update.message.media_group_id = "album-hanging";
+      return update;
+    });
+    try {
+      monitor.start();
+      for (const update of album) {
+        await withinTest(monitor.admit(update), signal);
+      }
+      await withinTest(
+        vi.waitFor(async () => {
+          await vi.advanceTimersByTimeAsync(40);
+          expect(getFileCalls).toHaveLength(1);
+        }),
+        signal,
+      );
+      // Four members at ~93 s each would outlive the watchdog; one album shares one budget.
+      await advanceInsideWatchdog(140_000, signal);
+      await withinTest(
+        vi.waitFor(
+          async () => {
+            monitor.requestDrain();
+            await vi.advanceTimersByTimeAsync(1_000);
+            expect(await queue.listPending({ limit: "all" })).toEqual([]);
+            expect(await queue.listClaims()).toEqual([]);
+          },
+          { timeout: 10_000 },
+        ),
+        signal,
+      );
+      expect(downstreamTurns).toHaveBeenCalledOnce();
+      expect(downstreamTurns.mock.calls[0]?.[0].Body).toContain(
+        "[media unavailable: 4 of 4 attachments could not be downloaded]",
+      );
+      await tombstones(911, 912, 913, 914);
+    } finally {
+      await monitor.stop();
+    }
+  });
 
   it("keeps a timed-out update retryable while its original middleware is still waiting", async ({
     signal,
@@ -706,11 +850,10 @@ describe("Telegram durable ingress coalescing", () => {
     await telegramTransport.close();
   });
 
-  it("keeps a forwarded burst pending when its deferred attachment download fails transiently", async () => {
-    const downloadError = new MediaFetchError("http_error", "Telegram file download HTTP 502", {
-      status: 502,
-    });
-    saveRemoteMedia.mockRejectedValueOnce(downloadError);
+  it("delivers a forwarded burst without its attachment when the deferred download fails", async () => {
+    saveRemoteMedia.mockRejectedValueOnce(
+      new MediaFetchError("http_error", "Telegram file download HTTP 502", { status: 502 }),
+    );
     await spool(
       forwardedTextUpdate({ updateId: 601, messageId: 1, text: "Forwarded context" }),
       forwardedPhotoUpdate({ updateId: 602, messageId: 2 }),
@@ -731,25 +874,8 @@ describe("Telegram durable ingress coalescing", () => {
     }
 
     expect(saveRemoteMedia).toHaveBeenCalledOnce();
-    expect(downstreamTurns).not.toHaveBeenCalled();
-    const queue = openTelegramIngressQueue({ stateDir });
-    await expectOnlyPending(queue, [
-      { id: telegramQueueEventId(601), attempts: 1, lastError: downloadError.message },
-      { id: telegramQueueEventId(602), attempts: 1, lastError: downloadError.message },
-    ]);
-    // Released dispatch claims let the replay process both messages again.
-    const replayGuard = messageDispatchDedupe.createTelegramMessageDispatchReplayGuard();
-    for (const update of [
-      forwardedTextUpdate({ updateId: 601, messageId: 1, text: "Forwarded context" }),
-      forwardedPhotoUpdate({ updateId: 602, messageId: 2 }),
-    ]) {
-      expect(
-        await replayGuard.hasRecent({
-          accountId: "default",
-          botUserId: telegramBotInfoForTest.id,
-          msg: update.message,
-        }),
-      ).toBe(false);
-    }
+    expect(downstreamTurns).toHaveBeenCalledOnce();
+    expect(downstreamTurns.mock.calls[0]?.[0].Body).toContain("Forwarded context");
+    await tombstones(601, 602);
   });
 });
