@@ -68,8 +68,11 @@ evidence remain unchanged; direct backports do not authorize publication.
 Prefer the [shared hotfix ledger](references/hotfix-ledger-management.md) for
 backport discovery, selection, and outcomes, including Tideclaw-owned releases.
 Reuse candidates, add discoveries from main/sibling releases, and update each
-release's assessments. If access is unavailable, keep local evidence and sync
-later. This is recommended bookkeeping, not another release gate.
+release's assessments immediately after every backport adaptation, including
+new validation failures and their resolution. Parallel release owners may need
+the same fix or adaptation before this release finishes. If access is
+unavailable, keep each pending update in local evidence and sync later. This is
+recommended bookkeeping, not another release gate.
 
 ## Shared release boundaries
 
@@ -102,7 +105,15 @@ A deliberate tooling-code waiver requires FRV validation under the new pinned P,
 not a publisher override. An unwaived flake that remains red blocks publication.
 Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
-flakes for the release.
+flakes for the release. A job that passed in the previous run and is unlikely
+to be affected by intervening changes is presumed flaky, unless its failure
+indicates a race that could affect production users. Apparent infrastructure
+failures and test flakes may use the full bounded retry budget until contrary
+evidence establishes a deterministic defect or production-impacting race;
+repeated failure alone is not that evidence. Record the prior run and input
+comparison; exact-same-SHA success is not required for this classification.
+Follow the CI skill's [retry and proactive cancellation rules](../release-openclaw-ci/SKILL.md#parent-ownership-and-cancellation)
+when a deterministic repair makes the current FRV obsolete.
 
 Dependency advisories never delay a release. A newly published advisory is
 never a reason to re-cut, change tooling, or rerun validation. Record it in the
