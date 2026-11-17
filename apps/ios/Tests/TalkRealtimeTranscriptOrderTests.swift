@@ -12,11 +12,14 @@ final class TalkRealtimeTranscriptOrderTests: XCTestCase {
         let saved = try await Self.persistedTranscripts(after: [
             #"{"type":"input_audio_buffer.speech_started","item_id":"user-1"}"#,
             #"{"type":"input_audio_buffer.committed","item_id":"user-1","previous_item_id":null}"#,
-            #"{"type":"conversation.item.added","item":{"id":"user-1","type":"message","role":"user","content":[{"type":"input_audio"}]}}"#,
-            #"{"type":"conversation.item.added","item":{"id":"reply-1","type":"message","role":"assistant","content":[]}}"#,
+            #"{"type":"conversation.item.added","item":{"id":"user-1","type":"message","role":"user","#
+                + #""content":[{"type":"input_audio"}]}}"#,
+            #"{"type":"conversation.item.added","item":{"id":"reply-1","type":"message","#
+                + #""role":"assistant","content":[]}}"#,
             // The race from the phone trace: the reply's final lands first.
             #"{"type":"response.output_audio_transcript.done","item_id":"reply-1","transcript":"Hey Peter."}"#,
-            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"user-1","transcript":"Hey, Chatting."}"#,
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"user-1","#
+                + #""transcript":"Hey, Chatting."}"#,
         ], expecting: 2)
         XCTAssertEqual(saved.map(\.role), ["user", "assistant"])
         XCTAssertEqual(saved.map(\.text), ["Hey, Chatting.", "Hey Peter."])
@@ -38,7 +41,8 @@ final class TalkRealtimeTranscriptOrderTests: XCTestCase {
     func testFinalsInConversationOrderStillPersistImmediately() async throws {
         let saved = try await Self.persistedTranscripts(after: [
             #"{"type":"input_audio_buffer.committed","item_id":"user-1"}"#,
-            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"user-1","transcript":"First."}"#,
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"user-1","#
+                + #""transcript":"First."}"#,
             #"{"type":"conversation.item.added","item":{"id":"reply-1","type":"message","role":"assistant"}}"#,
             #"{"type":"response.output_audio_transcript.done","item_id":"reply-1","transcript":"Second."}"#,
         ], expecting: 2)
@@ -155,6 +159,7 @@ private final class TranscriptOrderDelegate: TalkRealtimeWebRTCSessionDelegate {
     func realtimeSession(_: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript text: String) {
         self.onTranscript?(text)
     }
+
     func realtimeSession(
         _: TalkRealtimeWebRTCSession,
         didFailTranscriptPersistenceForEntry _: String,
