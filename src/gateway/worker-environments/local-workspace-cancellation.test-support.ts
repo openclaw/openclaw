@@ -99,7 +99,7 @@ async function proveQueuedLocalWorkspaceCheckpoint(
           ...store,
           manifest: async (...args) => {
             const result = await store.manifest(...args);
-            if (result.kind === "scan") {
+            if (result.kind === "scan" && !(args[1].kind === "scan" && args[1].prehash)) {
               void capture(...args);
               const afterScan = afterCapture;
               afterCapture = undefined;
