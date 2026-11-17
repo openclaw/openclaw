@@ -1489,6 +1489,7 @@ describe("prepareCliRunContext", () => {
       agentId: "main",
       trigger: "user",
       prompt: "foreign reply text",
+      approvalReviewerDeviceId: "device-1",
       inputProvenance: {
         kind: "inter_session",
         sourceSessionKey: "agent:main:slack:dm:U123",
@@ -1507,6 +1508,7 @@ describe("prepareCliRunContext", () => {
       expect.anything(),
       expect.objectContaining({
         trigger: "user",
+        requesterDeviceId: "device-1",
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:slack:dm:U123",
