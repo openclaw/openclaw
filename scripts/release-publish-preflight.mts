@@ -515,7 +515,7 @@ export async function runReleasePublishPreflight(
       warn(
         "plugin-npm.token-liveness",
         `${registry.bootstrapCandidates.length} package(s) are not visible in npm and may need the repository NPM_TOKEN bootstrap path; token liveness is unverified locally.`,
-        "Ask the repository NPM_TOKEN credential owner to confirm credential readiness and scope/package-creation access; follow .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token. No standalone repository-token probe workflow is available. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
+        "Ask the release credential owner to confirm NPM_TOKEN readiness; see .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token. Do not publish or rotate credentials during preflight.",
       );
     }
   }

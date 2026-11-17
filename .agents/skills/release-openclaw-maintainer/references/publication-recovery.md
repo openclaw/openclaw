@@ -486,19 +486,7 @@ verify packaging after publish; it does not authorize republishing.
 
 ## Check the bootstrap token
 
-No standalone workflow currently probes the repository's `NPM_TOKEN`. The
-`plugin-npm.token-liveness` warning records that limitation; it is not a command
-to dispatch an undocumented job or use publication as an authentication probe.
-
-Before bootstrap dispatch, ask the repository `NPM_TOKEN` credential owner to
-confirm credential readiness and scope/package-creation access through their
-established credential-management process. Record the owner's assessment and
-any verification limitations in release evidence. Keep token liveness unverified
-unless there is evidence for the actual repository token: a local npm login or
-secret update time is not a substitute. Do not retrieve, print, upload, or rotate
-credentials as part of this read-only preflight.
-
-Credential readiness does not approve publication. The existing protected
-`plugin-npm-release.yml` bootstrap path still requires its exact package,
-artifact, parent approval, and runtime authority checks; follow
-[first-package registry preparation](first-package.md) with the release owner.
+Ask the release credential owner to confirm the repository `NPM_TOKEN` is ready
+with scope/package-creation access before bootstrap dispatch. No standalone token
+probe exists: keep liveness unverified without evidence for that token, and do
+not publish or rotate credentials to test it.

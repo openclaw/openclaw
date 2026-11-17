@@ -249,7 +249,7 @@ export async function observeReleaseNpmState(input: {
             : supersededBy
               ? "No publication or dist-tag move; the newer release keeps the selector. Retain the exact selection."
               : bootstrap
-                ? "If a recent run may have published this package, reconcile its registry readback first. Otherwise verify bootstrap approval eligibility and ask the repository NPM_TOKEN credential owner to confirm credential readiness and scope/package-creation access before dispatch; token liveness remains unverified by this preflight."
+                ? "Reconcile any recent publication first. Otherwise verify bootstrap approval eligibility and ask the release credential owner to confirm NPM_TOKEN readiness and scope/package-creation access."
                 : published && pkg.packageName === "openclaw"
                   ? "Supply openclaw_npm_resume_run_id for the verified original successful publisher; resume rechecks immutable tarball identity."
                   : published

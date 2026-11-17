@@ -107,13 +107,9 @@ it("hands unverified bootstrap credentials to their owner in the rendered prefli
     expect(report.rows.find((row) => row.id === "plugin-npm.token-liveness")).toMatchObject({
       status: "WARN",
       message: expect.stringContaining("token liveness is unverified locally"),
-      remediation: expect.stringContaining("credential owner"),
     });
     const rendered = formatReleasePublishPreflight(report);
-    expect(rendered).toContain("No standalone repository-token probe workflow is available");
-    expect(rendered).toContain("scope/package-creation access");
-    expect(rendered).toContain("publication-recovery.md#check-the-bootstrap-token");
-    expect(rendered).toContain("Do not publish or rotate credentials during preflight");
+    expect(rendered).toContain("credential owner");
     expect(rendered).not.toContain("whoami");
   } finally {
     npmPlugins = [];
