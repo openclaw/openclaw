@@ -2,6 +2,7 @@ import type {
   ChannelThreadingContext,
   ChannelThreadingToolContext,
 } from "openclaw/plugin-sdk/channel-contract";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { telegramMessagingTargetsMatch } from "./normalize.js";
 import { parseTelegramTarget } from "./targets.js";
@@ -15,9 +16,14 @@ export function buildTelegramThreadingToolContext(params: {
   const threadId =
     params.context.MessageThreadId ??
     (currentChannelId ? parseTelegramTarget(currentChannelId).messageThreadId : undefined);
+  const currentMessageId = params.context.CurrentMessageId;
   return {
     currentChannelId,
     currentThreadTs: threadId != null ? String(threadId) : undefined,
+    // Session-event turns carry internal UUIDs as message ids; Telegram reply targets are
+    // positive integers, so the message tool must not inherit anything else.
+    currentMessageId:
+      parseStrictPositiveInteger(currentMessageId) === undefined ? undefined : currentMessageId,
     hasRepliedRef: params.hasRepliedRef,
   };
 }
