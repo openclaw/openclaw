@@ -1,4 +1,4 @@
-import { createSignal, onSettled, untrack } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context-types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -35,17 +35,19 @@ export function rememberSectionLocation(
     return;
   }
   const scope = gatewayPresentationScope(gateway);
-  const current = untrack(opened).get(section);
-  // Writing the same location again would wake every reader for nothing.
-  if (
-    current?.scope === scope &&
-    current.location.route === location.route &&
-    current.location.options.search === location.options.search &&
-    current.location.options.pathname === location.options.pathname
-  ) {
-    return;
-  }
-  setOpened((entries) => new Map(entries).set(section, { scope, location }));
+  setOpened((entries) => {
+    const current = entries.get(section);
+    // Writing the same location again would wake every reader for nothing.
+    if (
+      current?.scope === scope &&
+      current.location.route === location.route &&
+      current.location.options.search === location.options.search &&
+      current.location.options.pathname === location.options.pathname
+    ) {
+      return entries;
+    }
+    return new Map(entries).set(section, { scope, location });
+  });
 }
 
 /** Choosing a section again starts it over, whichever Gateway it was opened on. */
