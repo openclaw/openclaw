@@ -279,18 +279,15 @@ export function applySessionForkRequest(
  * the session's pinned system prompt and tool definitions from its transcript.
  */
 export function readLiveSessionForkRequest(params: {
-  agentId: string;
-  sessionId: string;
   sessionKey: string;
   model: { provider: string; model: string };
 }): { promptCacheKey?: string; preparedRequest?: Record<string, unknown> } | undefined {
-  // SQLite-backed runs register under the canonical key, not the legacy transcript path.
+  // SQLite-backed runs register under the canonical key, not the legacy transcript path. A
+  // request from a later generation of the key cannot match the fork's history, so the
+  // replay falls back to the fork's rebuilt request.
   const attachment = resolveActiveEmbeddedRunBySessionFile(params.sessionKey);
   const live =
-    attachment &&
-    attachment.sessionId === params.sessionId &&
-    attachment.agentId === params.agentId &&
-    isCurrentEmbeddedRunAttachment(attachment)
+    attachment && isCurrentEmbeddedRunAttachment(attachment)
       ? attachment.handle.readSessionForkContext?.()
       : undefined;
   const sameRoute = (model: Model | undefined) =>

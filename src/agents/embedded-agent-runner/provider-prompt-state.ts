@@ -225,6 +225,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
         if (finalPayload && typeof finalPayload === "object" && !Array.isArray(finalPayload)) {
+          // SAFETY: the guard above admits only a plain, non-array request object.
           params.finalizePayload?.(finalPayload as Record<string, unknown>);
           // Shallow: transports reassign top-level fields after the hook; items stay shared.
           preparedRequests.set(params.state, { model: payloadModel, body: { ...finalPayload } });

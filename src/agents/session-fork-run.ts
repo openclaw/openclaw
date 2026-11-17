@@ -239,15 +239,48 @@ async function readSessionForkPin(
   const route = isRecord(data) ? parseSystemPromptRouteKey(data.routeKey) : undefined;
   const historyId =
     entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ?? null;
-  return isRecord(data) &&
-    typeof data.prefix === "string" &&
-    Array.isArray(data.tools) &&
-    data.historyId === historyId &&
-    route?.provider === model.provider &&
-    route.model === model.model
-    ? // SAFETY: the session prompt owner alone writes the checkpoint's tool definitions.
-      { prefix: data.prefix, tools: data.tools as SessionForkPin["tools"] }
-    : undefined;
+  if (
+    !isRecord(data) ||
+    typeof data.prefix !== "string" ||
+    !Array.isArray(data.tools) ||
+    data.historyId !== historyId ||
+    route?.provider !== model.provider ||
+    route.model !== model.model
+  ) {
+    return undefined;
+  }
+  // SAFETY: the session prompt owner alone writes the checkpoint's tool definitions.
+  const tools = data.tools as SessionForkPin["tools"];
+  return { prefix: data.prefix, tools };
+}
+
+/**
+ * A tool call still running at the fork's anchor gets a non-error result saying so, so the
+ * fork does not read the call as failed. The model view has no persistence target: these
+ * results exist only in the fork.
+ */
+export async function markRunningToolCalls(manager: SessionManager): Promise<void> {
+  const leaf = manager.getBranch().at(-1);
+  if (leaf?.type !== "message" || leaf.message.role !== "assistant") {
+    return;
+  }
+  for (const block of leaf.message.content) {
+    if (block.type === "toolCall") {
+      await manager.appendMessageAsync({
+        role: "toolResult",
+        toolCallId: block.id,
+        toolName: block.name,
+        content: [
+          {
+            type: "text",
+            text: "This tool call is still running. Its result is not available yet.",
+          },
+        ],
+        isError: false,
+        timestamp: Date.now(),
+      });
+    }
+  }
 }
 
 /**
@@ -468,15 +501,11 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
   });
   const agentDir = resolveAgentDir(config, agentId);
 
-  const live = readLiveSessionForkRequest({
-    agentId,
-    sessionId: source.sessionId,
-    sessionKey,
-    model: params.model,
-  });
+  const live = readLiveSessionForkRequest({ sessionKey, model: params.model });
   // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
   // request carry the session's system prompt and tool definitions too.
   const pin = await readSessionForkPin(sessionManager, scoped, params.model, abortSignal);
+  await markRunningToolCalls(sessionManager);
   // Background runs stay out of the Control UI and never project into a user session.
   registerAgentRunContext(runId, {
     agentId,

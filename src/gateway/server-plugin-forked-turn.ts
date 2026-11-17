@@ -140,7 +140,7 @@ export async function runPluginForkedTurn<T>(
             ),
           ),
           assertCurrent,
-          run: execution.run,
+          run: (work) => execution.run(work),
           onSettled: (outcome) => params.onSettled(outcome),
         });
       },
@@ -193,9 +193,12 @@ export async function forkPluginSession<T>(input: {
     sessionKey: session.key,
     storePath: session.storePath,
   };
+  // Only messages anchor a fork; the leaf may be a custom entry such as the prompt checkpoint.
   const entryId =
     input.entryId ??
-    (await SessionManager.openModelContextAsync(scope, { signal: input.abortSignal })).getLeafId();
+    (await SessionManager.openModelContextAsync(scope, { signal: input.abortSignal }))
+      .getBranch()
+      .findLast((entry) => entry.type === "message")?.id;
   assertCurrent();
   if (!entryId) {
     throw new Error(`No active session context for "${session.key}".`);
@@ -208,12 +211,13 @@ export async function forkPluginSession<T>(input: {
   // The anchored turn supplies its own requester and model, never the plugin.
   const turn = await readSessionForkTurn(source, input.abortSignal);
   assertCurrent();
-  if (!turn) {
-    // Without the turn's own requester, sender-specific policy cannot be checked.
+  if (!turn && input.tools.length > 0) {
+    // Without the turn's own requester, sender-specific tool policy cannot be checked. A
+    // tool-free fork runs nothing, so it proceeds on the session's own facts.
     throw new Error(`Session "${session.key}" no longer holds the input of entry "${entryId}".`);
   }
   const sessionModel = resolveSessionModelRef(cfg, session.entry, agentId);
-  const turnModel = turn.model ?? sessionModel;
+  const turnModel = turn?.model ?? sessionModel;
   const override = input.override ? splitTrailingAuthProfile(input.override.model) : undefined;
   // On the session's own provider the fork runs on the credential the session's turns use (a
   // user pin or an automatic rotation): its internal session has no stored selection, so
@@ -248,7 +252,7 @@ export async function forkPluginSession<T>(input: {
     tools: input.tools,
     model,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
-    ...(turn.requester ? { requester: turn.requester } : {}),
+    ...(turn?.requester ? { requester: turn.requester } : {}),
     ...(input.runtimePluginToolGrant
       ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
       : {}),
@@ -270,7 +274,7 @@ export async function forkPluginSession<T>(input: {
         owner: `plugin:${input.pluginId}`,
         model,
         workspaceDir: prepared.workspaceDir,
-        ...(turn.requester ? { requester: turn.requester } : {}),
+        ...(turn?.requester ? { requester: turn.requester } : {}),
         ...(input.runtimePluginToolGrant
           ? { runtimePluginToolGrant: input.runtimePluginToolGrant }
           : {}),

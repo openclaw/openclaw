@@ -1073,6 +1073,11 @@ describe("plugin forked turns through the real Gateway", () => {
             ok: false,
             message: expect.stringContaining("no longer holds the input"),
           });
+          // A tool-free fork runs nothing, so it proceeds on the session's own facts.
+          await expect(fixture.fork(orphan, { tools: [] })).resolves.toMatchObject({
+            ok: true,
+            result: { status: "settled" },
+          });
         },
       );
     },
