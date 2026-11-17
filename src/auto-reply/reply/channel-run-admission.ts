@@ -2,6 +2,7 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
   type PreparedAgentRunAdmission,
@@ -167,15 +168,14 @@ export function prepareChannelRunAdmission(params: {
               params.ingressKind === "channel" &&
               !params.operatorAuthority
             ) {
-              admitUnlinkedChannelRequester(
-                params.sourceContext,
-                context.operationalRunInstance,
-                () => {
-                  if (!getAdmittedRunDelegatedAuthority(context)) {
-                    throw new Error("Original channel run is no longer active.");
-                  }
-                },
-              );
+              const assertRunCurrent = resolveAdmittedRunActiveAssertion(context);
+              if (assertRunCurrent) {
+                admitUnlinkedChannelRequester(
+                  params.sourceContext,
+                  context.operationalRunInstance,
+                  assertRunCurrent,
+                );
+              }
             }
             params.onAdmitted?.(context);
           },
