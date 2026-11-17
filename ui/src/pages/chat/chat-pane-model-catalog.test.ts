@@ -395,6 +395,7 @@ describe("chat pane composer controls", () => {
         client,
         connectionEpoch: 1,
         sessionKey: "main",
+        chatModelCatalogInitialized: false,
         sessionsResult: { ...createSessionsListResult(), sessions: [session] },
       }) as unknown as ChatPageHost;
       state.chatModelSwitchPromises = {};
