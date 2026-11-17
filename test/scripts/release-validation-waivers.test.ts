@@ -323,67 +323,110 @@ it.each([
   ).resolves.toBeUndefined();
 });
 
-describe("2026.10.33 iOS screenshot exception", () => {
-  const names = ["ios-screenshots-iphone", "ios-screenshots-ipad-13"];
-  const iosJobs = names.map((name, id) => ({ ...failedJob, id, name }));
-  const iosChild = { ...child, jobs: [...iosJobs, gate] };
-  const input = { child: iosChild, targetVersion: "2026.10.33" };
+describe("2026.10.33 mobile validation exception", () => {
+  const names = [
+    "ios-screenshots-iphone",
+    "ios-screenshots-ipad-13",
+    "ios-screenshots",
+    "ios-screenshot-evidence",
+    "ios-build (release)",
+    "ios-build (tests)",
+    "ios-build (smoke)",
+    "ios-release-e2e / qualify",
+    "android-release-e2e / qualify",
+    "android-test-play",
+    "android-test-third-party",
+    "android-test-wear",
+    "android-build-play",
+    "android-build-wear",
+    "android-ktlint",
+    "android-screenshots",
+    "android-access-native (4096, google_apis)",
+    "android-access-native (16384, google_apis_ps16k)",
+  ];
+  const causes = [
+    "ios-screenshot-shard",
+    "ios-screenshot-capture",
+    "ios-screenshot-evidence",
+    "ios-build",
+    "ios-release-e2e",
+    "android-release-e2e",
+    "android",
+    "android-screenshots",
+    "android-access-native",
+  ].map((name) => name + " finished with failure (selected=true)");
+  const mobileJobs = names.map((name, id) => ({ ...failedJob, id: id + 100, name }));
+  const mobileChild = { ...child, jobs: [...mobileJobs, gate] };
+  const input = { child: mobileChild, targetVersion: "2026.10.33" };
 
-  it("accepts only the two authorized screenshot jobs and preserves raw failures", () => {
+  it("accepts the authorized mobile jobs only, preserving raw failures and required execution", () => {
     const policy = evaluateReleaseChildPolicy(input);
     expect(policy.waivers.map((row) => row.jobName)).toEqual(names);
-    expect(terminalPolicyPass(iosChild, input.targetVersion)).toBe(true);
-    expect(iosChild.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    expect(terminalPolicyPass(mobileChild, input.targetVersion)).toBe(true);
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        validationInputs: { targetVersion: input.targetVersion },
+        childEvidence: { normalCi: mobileChild },
+      }),
+    ).not.toThrow();
+    expect(mobileChild.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    expect(releaseQualificationExemptions(input.targetVersion, "stable")).toEqual([]);
     expect(evaluateReleaseChildPolicy({ ...input, targetVersion: "2026.10.34" }).waivers).toEqual(
       [],
     );
     expect(
       evaluateReleaseChildPolicy({
         ...input,
-        child: { ...iosChild, key: "releaseChecksCandidate" },
+        child: { ...mobileChild, key: "releaseChecksCandidate" },
       }).waivers,
     ).toEqual([]);
     for (const name of [
-      "ios-build",
-      "ios-screenshot-evidence",
+      "macos-node",
+      "macos-swift (tests)",
       "docker-seed-e2e",
       "Seal artifact producer receipt",
     ]) {
       expect(
         terminalPolicyPass(
-          { ...iosChild, jobs: [...iosChild.jobs, { ...failedJob, name }] },
+          { ...mobileChild, jobs: [...mobileChild.jobs, { ...failedJob, name }] },
           input.targetVersion,
         ),
       ).toBe(false);
     }
-    for (const conclusion of ["cancelled", "timed_out"]) {
-      expect(
-        terminalPolicyPass(
-          { ...iosChild, jobs: [{ ...iosJobs[0], conclusion }] },
-          input.targetVersion,
-        ),
-      ).toBe(false);
+    for (const conclusion of ["cancelled", "timed_out", "skipped"]) {
+      const incomplete = {
+        ...mobileChild,
+        jobs: [{ ...failedJob, name: "ios-build (tests)", conclusion }],
+      };
+      expect(evaluateReleaseChildPolicy({ ...input, child: incomplete }).waivers).toEqual([]);
+      if (conclusion !== "skipped") {
+        expect(terminalPolicyPass(incomplete, input.targetVersion)).toBe(false);
+      }
     }
   });
 
-  it("requires the exact screenshot aggregate cause without excusing other failures", async () => {
+  it("requires the exact mobile aggregate cause union without excusing other failures", async () => {
     const policy = evaluateReleaseChildPolicy(input);
-    expect(policy.waivers).toHaveLength(2);
-    const log =
-      "::error title=CI job did not succeed::ios-screenshot-shard finished with failure (selected=true)";
+    const log = causes.map((cause) => "::error title=CI job did not succeed::" + cause).join("\n");
     await expect(
-      validateReleaseWaiverAggregates({ policy, jobs: iosChild.jobs, getJobLog: () => log }),
+      validateReleaseWaiverAggregates({ policy, jobs: mobileChild.jobs, getJobLog: () => log }),
     ).resolves.toBeUndefined();
-    await expect(
-      validateReleaseWaiverAggregates({
-        policy,
-        jobs: iosChild.jobs,
-        getJobLog: () => log + "\n##[error]docker-seed-e2e finished with failure (selected=true)",
-      }),
-    ).rejects.toThrow("unwaived failure");
-    await expect(
-      validateReleaseWaiverAggregates({ policy, jobs: iosChild.jobs, getJobLog: () => "" }),
-    ).rejects.toThrow("unwaived failure");
+    for (const invalid of [
+      "",
+      causes
+        .slice(1)
+        .map((cause) => "##[error]" + cause)
+        .join("\n"),
+      log + "\n##[error]docker-seed-e2e finished with failure (selected=true)",
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({
+          policy,
+          jobs: mobileChild.jobs,
+          getJobLog: () => invalid,
+        }),
+      ).rejects.toThrow("unwaived failure");
+    }
   });
 });
 
