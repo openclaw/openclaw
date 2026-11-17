@@ -448,15 +448,29 @@ export function isConfiguredAgentDatabaseTarget(
   agentId: string | undefined,
   pathname: string,
 ): boolean {
+  // The boot preflight calls this once per candidate row, so the file probe must not sit on the
+  // per-target path: an exact configured path answers from the strings alone, and the row itself
+  // is stat'd at most once instead of once per target.
+  const owns = (target: { agentId?: string }) =>
+    agentId === undefined || target.agentId === undefined || target.agentId === agentId;
+  if (targets.some((target) => owns(target) && target.path === pathname)) {
+    return true;
+  }
   // Only concrete files prove aliases; preserve exact configured claims for inspection.
-  return targets.some(
-    (target) =>
-      (agentId === undefined || target.agentId === undefined || target.agentId === agentId) &&
-      (target.path === pathname ||
-        (fsSync.statSync(target.path, { throwIfNoEntry: false }) &&
-          fsSync.statSync(pathname, { throwIfNoEntry: false }) &&
-          isSameOpenClawAgentDatabasePath(target.path, pathname))),
-  );
+  let pathnameExists: boolean | undefined;
+  for (const target of targets) {
+    if (!owns(target) || !fsSync.statSync(target.path, { throwIfNoEntry: false })) {
+      continue;
+    }
+    pathnameExists ??= Boolean(fsSync.statSync(pathname, { throwIfNoEntry: false }));
+    if (!pathnameExists) {
+      return false;
+    }
+    if (isSameOpenClawAgentDatabasePath(target.path, pathname)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Resolves session store targets from explicit CLI-style selection options. */
