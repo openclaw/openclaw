@@ -570,9 +570,22 @@ something the source showed.
   journal's schema, version, and stored fields are unchanged. Without an
   exchange the two moves run, the step says so, and the window is two
   boundaries instead of seven.
-  Still open: after a kill before the exchange, the old package serves but the
-  journal stays open, and whether the next update settles it without a person
-  is being measured.
+  After a kill, measured in an installed package on Linux: the old package
+  served, but the next `openclaw update` and `openclaw update repair` both
+  exited 1 with `Package publication is incomplete`, and only the printed
+  recovery command got out.
+  [#200550](https://github.com/openclaw/openclaw/pull/200550) lets the next
+  update or repair resume the killed publication itself. It runs the printed
+  command's own recovery under a claim in the recorded lease store, which is
+  what proves the original updater gone. It keeps an installed previous
+  package and aborts, or publishes the recorded candidate when no package is
+  installed. It still refuses for a live updater or helper, a removed or
+  replaced lease store (a reboot), an edited package, a relinked launcher, a
+  rollback in progress, and a helper sealed by another build.
+  Still open: after that settlement the same update stops at a second check,
+  `Update <id> has unfinished recovery`, until one `openclaw update repair`
+  runs. Whether update admission can reconcile a dead run itself is being
+  measured.
 - **Local overrides** replay into the candidate release before the link names
   it, so a selected release is still written once.
 - **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
