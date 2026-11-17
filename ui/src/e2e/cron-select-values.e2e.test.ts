@@ -148,14 +148,14 @@ suite.define(() => {
       expect(await page.locator("#cron-delivery-channel").count()).toBe(0);
 
       await action.click();
-      await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
+      await page.getByRole("option", { name: "Post to main session", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
       await expect
         .poll(() =>
           page
             .getByText(
-              "Main adds the task to the agent’s timeline. Isolated starts a reply in a separate session.",
+              "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
               { exact: true },
             )
             .isVisible(),

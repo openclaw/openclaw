@@ -218,7 +218,7 @@ const enCron = {
       mainSession: "Main session",
       isolatedSession: "Isolated session",
       sessionHelp:
-        "Main adds the task to the agent’s timeline. Isolated starts a reply in a separate session.",
+        "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
       wakeMode: "Wake mode",
       now: "Now",
       nextHeartbeat: "Next heartbeat",
@@ -247,7 +247,7 @@ const enCron = {
       script: "Script",
       readOnlyPayloadHelp:
         "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
-      systemEvent: "Post to main timeline",
+      systemEvent: "Post to main session",
       agentTurn: "Run agent task",
       systemEventHelp: "Adds your text to the agent’s main timeline for reminders.",
       agentTurnHelp: "Starts an agent reply in a separate session using your prompt.",
