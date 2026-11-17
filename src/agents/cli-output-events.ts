@@ -25,71 +25,14 @@ import {
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
 import {
-  updateLiveEditDiffProgressFromInput,
-  type LiveEditDiffProgressState,
-} from "./embedded-agent-live-edit-diff.js";
-
-type PendingToolUse = Pick<CliToolUseStartDelta, "toolCallId" | "name" | "kind"> & {
-  inputJsonParts: string[];
-  inputJsonLength: number;
-  /**
-   * Complete input carried on `content_block_start`. Some CLI backends send the
-   * whole tool input there and never emit `input_json_delta` chunks, so without
-   * this the start event reports empty args and the later complete copy is
-   * dropped by the `startedIds` dedup in `emitToolStartOnce`.
-   */
-  blockInput?: Record<string, unknown>;
-};
-
-type ToolUseTracker = ReturnType<typeof createToolUseTracker>;
-
-export function createToolUseTracker() {
-  return {
-    pendingByIndex: new Map<number, PendingToolUse>(),
-    inputProgressById: new Map<string, LiveEditDiffProgressState>(),
-    nameById: new Map<string, string>(),
-    startedIds: new Set<string>(),
-    resultDeliveredIds: new Set<string>(),
-  };
-}
-
-function emitToolStartOnce(
-  tracker: ToolUseTracker,
-  toolCallId: string,
-  name: string,
-  kind: CliToolUseStartDelta["kind"],
-  args: Record<string, unknown>,
-  onToolUseStart?: (delta: CliToolUseStartDelta) => void,
-): void {
-  tracker.inputProgressById.delete(toolCallId);
-  // Streaming and final assistant records may both describe the same tool call.
-  if (tracker.startedIds.has(toolCallId)) {
-    return;
-  }
-  tracker.startedIds.add(toolCallId);
-  tracker.nameById.set(toolCallId, name);
-  onToolUseStart?.({ toolCallId, name, kind, args });
-}
-
-function emitToolResultOnce(
-  tracker: ToolUseTracker,
-  toolCallId: string,
-  isError: boolean,
-  result: unknown,
-  onToolResult?: (delta: CliToolResultDelta) => void,
-): void {
-  // Tool results can arrive as assistant result blocks or echoed user tool_result blocks.
-  if (tracker.resultDeliveredIds.has(toolCallId)) {
-    return;
-  }
-  tracker.resultDeliveredIds.add(toolCallId);
-  onToolResult?.({
-    toolCallId,
-    name: tracker.nameById.get(toolCallId) ?? "",
-    isError,
-    result,
-  });
-}
+  appendPendingToolInput,
+  beginPendingToolUse,
+  emitToolResultOnce,
+  emitToolStartOnce,
+  releasePendingToolUse,
+  type ToolUseTracker,
+} from "./cli-output-tool-tracker.js";
+import { updateLiveEditDiffProgressFromInput } from "./embedded-agent-live-edit-diff.js";
 
 export type CliEventProjectionState = {
   assistantText: string;
@@ -278,8 +221,10 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.content_block)
     ) {
       const block = event.content_block;
-      const previous = tracker.pendingByIndex.get(event.index);
-      tracker.pendingByIndex.delete(event.index);
+      // Released rather than deleted: a superseded block's buffered input is
+      // charged to the tracker's aggregate bound and has to be refunded, or the
+      // cap drifts down by every block a restart replaces.
+      const previous = releasePendingToolUse(tracker, event.index);
       const nextToolCallId = typeof block.id === "string" ? block.id.trim() : "";
       if (previous && previous.toolCallId !== nextToolCallId) {
         tracker.inputProgressById.delete(previous.toolCallId);
@@ -288,12 +233,10 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
         if (toolCallId && name) {
-          tracker.pendingByIndex.set(event.index, {
+          beginPendingToolUse(tracker, event.index, {
             toolCallId,
             name,
             kind: block.type,
-            inputJsonParts: [],
-            inputJsonLength: 0,
             ...(isRecord(block.input) ? { blockInput: block.input } : {}),
           });
         }
@@ -308,28 +251,24 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
       isRecord(event.delta)
     ) {
       if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
+        appendPendingToolInput(tracker, event.index, event.delta.partial_json);
         const pending = tracker.pendingByIndex.get(event.index);
-        if (pending) {
-          pending.inputJsonParts.push(event.delta.partial_json);
-          pending.inputJsonLength += event.delta.partial_json.length;
-          if (params.onToolInputDelta && !tracker.startedIds.has(pending.toolCallId)) {
-            const progress = updateLiveEditDiffProgressFromInput(tracker.inputProgressById, {
-              toolCallId: pending.toolCallId,
-              name: pending.name,
-              partialJsonLength: pending.inputJsonLength,
-              readPartialJson: () => pending.inputJsonParts.join(""),
-            });
-            if (progress) {
-              params.onToolInputDelta(progress);
-            }
+        if (pending && params.onToolInputDelta && !tracker.startedIds.has(pending.toolCallId)) {
+          const progress = updateLiveEditDiffProgressFromInput(tracker.inputProgressById, {
+            toolCallId: pending.toolCallId,
+            name: pending.name,
+            partialJsonLength: pending.inputJsonLength,
+            readPartialJson: () => pending.inputJsonParts.join(""),
+          });
+          if (progress) {
+            params.onToolInputDelta(progress);
           }
         }
       }
       return;
     }
     if (event.type === "content_block_stop" && typeof event.index === "number") {
-      const pending = tracker.pendingByIndex.get(event.index);
-      tracker.pendingByIndex.delete(event.index);
+      const pending = releasePendingToolUse(tracker, event.index);
       if (pending) {
         // Delta presence, not key count, decides the winner: a no-argument call
         // arrives as an explicit `{}` delta, so keying on key count would let the

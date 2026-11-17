@@ -28,6 +28,7 @@ export function buildToolTracking(): CliToolTracking {
     shouldSuppressAssistantOutput: vi.fn(() => false),
     handleCliToolUseStart: vi.fn(),
     handleCliToolResult: vi.fn(),
+    dropRetainedToolArgs: vi.fn(),
     resolveCliLoopbackTerminalOutcome: vi.fn(() => undefined),
     resolveCliLoopbackBrowserTab: vi.fn(() => undefined),
     beginGatewayCapture: vi.fn(),

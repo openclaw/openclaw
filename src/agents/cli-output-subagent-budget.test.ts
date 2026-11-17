@@ -44,25 +44,33 @@ function runTurn(parentToolUseId: string | null, records: number, chars: number)
     type: "assistant",
     message: { id: "final-message", content: [{ type: "text", text: "completed" }] },
   });
+  // A spent budget is fatal only while the turn's outcome is unknown, so the
+  // bound is observable here, before the terminal result recovers the turn.
+  const errorBeforeResult = parser.getErrorText();
   push({ type: "result", subtype: "success", result: "completed" });
   parser.finish();
-  return { parser, progress };
+  return { parser, progress, errorBeforeResult };
 }
 
 describe("Claude subagent output budget", () => {
   it("keeps the parent reply after subagent traffic far beyond the raw limit", () => {
     // 12 MiB of forwarded subagent tool results, which the parser never keeps.
-    const { parser, progress } = runTurn(AGENT_CALL, 300, 40 * 1024);
+    const { parser, progress, errorBeforeResult } = runTurn(AGENT_CALL, 300, 40 * 1024);
+    expect(errorBeforeResult).toBeNull();
     expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutputTruncationText()).toBeNull();
     expect(parser.getOutput()?.text).toBe("completed");
     expect(progress.length).toBe(300);
     expect(new Set(progress)).toEqual(new Set([AGENT_CALL]));
   });
 
   it("still bounds the same volume in the parent conversation", () => {
-    const { parser } = runTurn(null, 300, 40 * 1024);
-    expect(parser.getErrorText()).toMatch(/exceeded 8388608 characters/);
-    expect(parser.getOutput()?.text).toBe("");
+    const { parser, errorBeforeResult } = runTurn(null, 300, 40 * 1024);
+    expect(errorBeforeResult).toMatch(/exceeded 8388608 characters/);
+    // The finished turn is kept and the spent bound is reported as truncation.
+    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutputTruncationText()).toMatch(/exceeded 8388608 characters/);
+    expect(parser.getOutput()?.text).toBe("completed");
   });
 
   it("charges retained child-attributed text deltas against the parent budget", () => {
@@ -85,7 +93,10 @@ describe("Claude subagent output budget", () => {
   });
 
   it("still bounds a subagent flood by frames", () => {
-    const { parser } = runTurn(AGENT_CALL, 20_001, 1);
-    expect(parser.getErrorText()).toMatch(/exceeded 20000 lines/);
+    const { parser, errorBeforeResult } = runTurn(AGENT_CALL, 20_001, 1);
+    expect(errorBeforeResult).toMatch(/exceeded 20000 lines/);
+    expect(parser.getErrorText()).toBeNull();
+    expect(parser.getOutputTruncationText()).toMatch(/exceeded 20000 lines/);
+    expect(parser.getOutput()?.text).toBe("completed");
   });
 });

@@ -106,13 +106,55 @@ describe("CLI stream-json output limit", () => {
     },
   );
 
-  it("ends a plugin-owned turn with the output limit error once the budget is spent", async () => {
-    const context = buildClaudeStreamJsonRunContext("run-limit-plugin");
+  it("leaves a supervised CLI running past a spent turn budget and delivers its result", async () => {
+    const waiting = createDeferred();
+    const exited = createDeferred();
+    const exit = createSuccessfulProcessExit();
+    const managedRun = createManagedRun(exit);
+    managedRun.wait.mockImplementation(async () => {
+      waiting.resolve();
+      await exited.promise;
+      return exit;
+    });
+    let spawnInput: SupervisorSpawnInput | undefined;
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      spawnInput = input;
+      return managedRun;
+    });
+    const padding = {
+      type: "system",
+      subtype: "fixture_padding",
+      padding: "x".repeat(1024 * 1024),
+    };
+    const paddingLine = `${JSON.stringify(padding)}\n`;
+
+    const run = executePreparedCliRun(buildClaudeStreamJsonRunContext("run-budget-supervised"));
+    await waiting.promise;
+    for (let sent = 0; sent * paddingLine.length <= maxTurnRawChars; sent += 1) {
+      spawnInput?.onStdout?.(paddingLine);
+    }
+    // The budget is spent, but the turn can still finish: the CLI is not killed.
+    expect(managedRun.cancel).not.toHaveBeenCalled();
+    spawnInput?.onStdout?.(
+      `${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "done" })}\n`,
+    );
+    exited.resolve();
+
+    await expect(run).resolves.toMatchObject({ text: "done" });
+    expect(managedRun.cancel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { outcome: "recovers the finished turn", finishes: true },
+    { outcome: "fails a turn that never finishes", finishes: false },
+  ])("keeps a plugin-owned turn running past a spent budget and $outcome", async ({ finishes }) => {
+    const context = buildClaudeStreamJsonRunContext(`run-limit-plugin-${finishes}`);
     const record = { type: "system", subtype: "fixture_padding", padding: "x".repeat(1024 * 1024) };
     const recordChars = JSON.stringify(record).length + 1;
     let yielded = 0;
     let closed = false;
     let aborted = false;
+    let abortedWhileStreaming: boolean | undefined;
     // Plugin transports still resolve the backend executable; keep that off the host PATH.
     context.preparedBackend.backend.command = process.execPath;
     context.executionTarget = {
@@ -122,26 +164,33 @@ describe("CLI stream-json output limit", () => {
           aborted = true;
         });
         try {
-          // The baseline keeps pulling these records after the turn is already lost.
+          // Twelve records cross the 8 MiB budget; the CLI is still working past it.
           while (yielded < 12) {
             yielded += 1;
             yield record;
           }
-          yield { type: "result", subtype: "success", is_error: false, result: "done" };
+          abortedWhileStreaming = aborted;
+          if (finishes) {
+            yield { type: "result", subtype: "success", is_error: false, result: "done" };
+          }
         } finally {
           closed = true;
         }
       },
     };
 
-    await expect(executePreparedCliRun(context)).rejects.toMatchObject({
-      name: "FailoverError",
-      reason: "format",
-      message: `CLI JSONL output exceeded ${maxTurnRawChars} characters; refusing to parse output.`,
-    });
-    // The record that crosses the budget is the last one pulled from the CLI.
-    expect(yielded).toBe(Math.floor(maxTurnRawChars / recordChars) + 1);
-    expect(aborted).toBe(true);
+    const run = executePreparedCliRun(context);
+    if (finishes) {
+      // Assembly stopped at the budget, yet the terminal result still lands.
+      await expect(run).resolves.toMatchObject({ text: "done" });
+    } else {
+      // Without a terminal result the outcome is unknowable, so the turn fails.
+      await expect(run).rejects.toThrow("CLI plugin runtime completed without a terminal result.");
+    }
+    // The budget is spent well before the last record, and none of them is cut off.
+    expect(Math.floor(maxTurnRawChars / recordChars) + 1).toBeLessThan(yielded);
+    expect(yielded).toBe(12);
+    expect(abortedWhileStreaming).toBe(false);
     expect(closed).toBe(true);
   });
 });

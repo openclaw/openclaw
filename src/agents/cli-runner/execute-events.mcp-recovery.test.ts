@@ -33,7 +33,10 @@ it("keeps a managed Claude MCP call alive through its enforced response timeout"
     timeoutMs: 5_000_000,
   });
   context.managedMcpToolTimeoutMs = 3_610_000;
-  const toolTracking = { handleCliToolUseStart: vi.fn() } as unknown as CliToolTracking;
+  const toolTracking = {
+    handleCliToolUseStart: vi.fn(),
+    dropRetainedToolArgs: vi.fn(),
+  } as unknown as CliToolTracking;
   const handlers = createCliEventHandlers({
     context,
     toolTracking,

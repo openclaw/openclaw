@@ -11,6 +11,15 @@ export type MessagingToolSend = {
   text?: string;
   mediaUrls?: string[];
   hasRichContent?: true;
+  /**
+   * Comparison digest of a `text` a bounded retention holder had to drop.
+   * Reply dedupe (`reply-payloads-dedupe.ts`) recognizes an already-delivered
+   * reply by comparing this send's exported `text`; a producer that drops the
+   * body to stay inside its retention budget keeps route-scoped exact-repeat
+   * suppression working by exporting this digest in its place. Digest of
+   * `normalizeTextForComparison(text)`.
+   */
+  textComparisonDigest?: string;
   /** Current-source progress (`false`) or completed reply (`true`). */
   sourceReplyFinal?: boolean;
 };
