@@ -132,6 +132,18 @@ export function withDaemonRuntimePinStore<T>(
   });
 }
 
+/** A different spelling can reuse a completed receipt only for the same existing source. */
+export function daemonRuntimePinMigrationSourcesMatch(recorded: string, current: string): boolean {
+  if (recorded === current) {
+    return true;
+  }
+  try {
+    return fs.realpathSync.native(recorded) === fs.realpathSync.native(current);
+  } catch {
+    return false;
+  }
+}
+
 /** The versioned receipt is independent of pin-data admission until a pin is used. */
 export function readDaemonRuntimePinMigrationReceipt(env: NodeJS.ProcessEnv) {
   return withDaemonRuntimePinDatabase(env, false, (db) => {
