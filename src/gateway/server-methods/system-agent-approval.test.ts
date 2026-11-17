@@ -336,7 +336,9 @@ describe("Full Access delegated chat", () => {
         const capabilitiesRequested = createDeferred();
         const sourceApplied = createDeferred();
         fixture.broadcast.mockImplementation((event, payload) => {
-          if (event === "openclaw.approval.requested") capabilitiesRequested.resolve();
+          if (event === "openclaw.approval.requested") {
+            capabilitiesRequested.resolve();
+          }
           if (
             event === "openclaw.approval.resolved" &&
             expect

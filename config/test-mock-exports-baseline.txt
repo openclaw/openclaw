@@ -5980,7 +5980,6 @@
 ["src/system-agent/operations.gateway-lifecycle.test.ts","./audit.js","6fa1f68b330983c7dc9ced78761dc672bb2098692216b5f294440cd9b2ce763b",1]
 ["src/system-agent/operations.setup.test.ts","../config/config.js","4517188ebdc6f3f669844c2e9c2f7debcecdd1136c68370cae08ef312d87ce2c",1]
 ["src/system-agent/operations.test.ts","../cli/daemon-cli/lifecycle.js","977da7ff941ffba297aed5c570daee8be771f661e9295f11a0968f0d5b43efd2",1]
-["src/system-agent/operations.test.ts","../cli/plugins-install-command.js","fa38408e652f5149a44257388ad0c2398577623c390f0c1b2dc6edc5c0405255",1]
 ["src/system-agent/operations.test.ts","../config/config.js","afe715dda1474bc3340845f55c21d9224a5f410d42cadd882e4e5cddc52156b6",1]
 ["src/system-agent/operations.test.ts","./overview.js","b7ed45bf7ceb4cf11317fd3197d221ee746a87141b85ee39cc273c06e60e2078",1]
 ["src/system-agent/plugin-artifact.test.ts","../config/config.js","38ba9986a0b492e2123c590c9cf076182d4cbd421dce4ca677cdd27059c3b956",1]

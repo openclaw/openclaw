@@ -482,7 +482,9 @@ describe("system agent operations", () => {
     );
     const audit = readLastAuditEntry();
     expect(JSON.stringify(audit)).not.toContain("SYNTHETIC_AUDIT_CREDENTIAL");
-    expect(audit?.details?.spec).toContain("github.com/example/plugin.git@main");
+    expect(audit).toMatchObject({
+      details: { spec: expect.stringContaining("github.com/example/plugin.git@main") },
+    });
   });
 
   it.each([
