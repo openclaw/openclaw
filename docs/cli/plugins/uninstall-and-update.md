@@ -99,6 +99,12 @@ before retrying; data migrations require `openclaw doctor --fix`. Disabled plugi
 keep their pending inputs without running state migrations; unrelated pending
 migrations remain preserved.
 
+When a repair moves a setting, updates retain authored environment references
+such as `${LISTENER_HOST}`, including settings in a single owned `$include` file.
+The replacement plugin's Doctor contract handles both the resolved value and the
+authored reference before the config is saved. Values already saved as literals
+stay literals; the updater cannot recover a reference that an earlier update lost.
+
 Recovery keeps the published package generation when config rollback is not
 confirmed. The command reports the failure without claiming runtime activation.
 

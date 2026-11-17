@@ -91,6 +91,14 @@ export async function preparePluginUpdateConfigMigration(params: {
         restoreDoctorConfigEnvRefs(
           migrated.config,
           prepareDoctorConfigReferenceSource(params.snapshot),
+          undefined,
+          {
+            // Policy migration must not send reference replay to the prior package generation.
+            pluginCompatibility: {
+              pluginIds: [...selectedIds],
+              manifestRegistry: metadata.manifestRegistry,
+            },
+          },
         ),
       );
       return { config, selectedIds, selectedPending, inspected };
