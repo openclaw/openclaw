@@ -84,6 +84,6 @@ export function resolveRuntimeWorkerThreadExecArgv(
   execPath = process.execPath,
 ): string[] {
   return url.protocol === "file:" && runtimeNeedsTypeScriptLoader(fileURLToPath(url), execPath)
-    ? ["--import", import.meta.resolve("tsx/esm")]
+    ? ["--import", new URL("./runtime-worker-loader.mjs", import.meta.url).href]
     : [];
 }
