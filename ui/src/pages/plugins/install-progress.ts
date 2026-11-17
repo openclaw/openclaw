@@ -9,6 +9,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import type { PluginInstallRequest, PluginMutationResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readPluginInstallPolicyWarning } from "./install-policy-warning.ts";
@@ -68,14 +69,28 @@ class PluginInstallOperations {
   }
   private readonly listeners = new Set<(event: { identity?: string; settled: boolean }) => void>();
   constructor(private readonly gateway: ApplicationGateway) {
+    const connection = createGatewayConnectionLifecycle(gateway.snapshot);
     let client = gateway.snapshot.client;
-    // This application owner has the same lifetime as the Gateway store.
     gateway.subscribe((snapshot) => {
-      if (snapshot.client !== client) {
-        client = snapshot.client;
-        this.entries.clear();
-        this.publish(undefined, true);
+      const clientChanged = snapshot.client !== client;
+      const connectionChanged = connection.transition(snapshot);
+      client = snapshot.client;
+      if (!connectionChanged) {
+        return;
       }
+      if (clientChanged) {
+        this.entries.clear();
+      } else {
+        // Only policy reviews finish without a failure: reconnect retires their
+        // acknowledgement scope, not admitted writes or saved/uncertain outcomes.
+        for (const [identity, progress] of this.entries) {
+          if (progress.finishedAt !== undefined && !progress.failure) {
+            this.entries.delete(identity);
+          }
+        }
+      }
+      // Gateway subscribers already own the reconnect refresh.
+      this.publish();
     });
   }
 

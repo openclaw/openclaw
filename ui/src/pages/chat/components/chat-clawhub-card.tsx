@@ -48,7 +48,7 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
                   type="button"
                   onClick={() => openListing()}
                 >
-                  <span class="chat-clawhub-card__icon skeleton" aria-hidden="true" />
+                  <span class="chat-clawhub-card__icon muted skeleton" aria-hidden="true" />
                   <span class="chat-clawhub-card__identity">
                     <span class="card-title chat-clawhub-card__name">
                       <span>{card().name}</span>{" "}
@@ -63,7 +63,7 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
                         </span>
                       </Show>
                     </span>
-                    <span class="chat-clawhub-card__status" aria-live="polite">
+                    <span class="chat-clawhub-card__status muted" aria-live="polite">
                       <span class="chat-clawhub-card__status-skeleton">
                         <span class="btn__spinner" aria-hidden="true" />
                         <span>{t("common.loading")}</span>
@@ -71,7 +71,7 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
                     </span>
                   </span>
                 </button>
-                <div class="chat-clawhub-card__actions" />
+                <div class="chat-clawhub-card__actions" style={{ "min-width": "170px" }} />
               </div>
             )}
           </Show>

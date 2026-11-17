@@ -293,23 +293,22 @@ export function ChatClawHubCardBody(
       })(),
     );
   }
+  function onInstallProgress(event: { identity?: string; settled: boolean }) {
+    if (
+      !event.identity ||
+      event.identity === "install:" + state.presentation?.id ||
+      event.identity === "plugin:" + state.presentation?.pluginId
+    ) {
+      notify();
+      if (event.settled) {
+        load(true);
+      }
+    }
+  }
   onSettled(() => {
     // Connection edges retire request generations and icon URLs before later replies arrive.
     const stop = subscribeClawHubCardUpdates(context.gateway, document, load);
-    // Ordered operation receipts refresh only on settlement, not a reactive computation.
-    // oxlint-disable-next-line solid/reactivity
-    const stopInstallations = installations.subscribe((event) => {
-      if (
-        !event.identity ||
-        event.identity === "install:" + state.presentation?.id ||
-        event.identity === "plugin:" + state.presentation?.pluginId
-      ) {
-        notify();
-        if (event.settled) {
-          load(true);
-        }
-      }
-    });
+    const stopInstallations = installations.subscribe(onInstallProgress);
     return () => {
       active = false;
       ++generation;
@@ -508,7 +507,7 @@ export function ChatClawHubCardBody(
               onClick={() => props.onOpenListing()}
             >
               <span
-                class={["chat-clawhub-card__icon", { skeleton: iconPending() }]}
+                class={["chat-clawhub-card__icon muted", { skeleton: iconPending() }]}
                 aria-hidden="true"
               >
                 <Show
@@ -542,7 +541,7 @@ export function ChatClawHubCardBody(
                   <span>{current().name}</span>{" "}
                   <Show when={current().author}>
                     {(author) => (
-                      <span class="plugin-card-author">@{author().replace(/^@+/, "")}</span>
+                      <span class="plugin-card-author muted">@{author().replace(/^@+/, "")}</span>
                     )}
                   </Show>
                   <Show when={current().official}>
@@ -556,7 +555,7 @@ export function ChatClawHubCardBody(
                     </span>
                   </Show>
                 </span>
-                <span class="chat-clawhub-card__status" aria-live="polite">
+                <span class="chat-clawhub-card__status muted" aria-live="polite">
                   <Loading fallback={statusSkeleton}>
                     <Show
                       when={
@@ -595,7 +594,7 @@ export function ChatClawHubCardBody(
                                 readyStatus()?.connection === "connected")
                             }
                           >
-                            <Icon name="check" />
+                            <Icon name="check" style={{ width: "16px", height: "16px" }} />
                           </Show>
                           <span>{statusLabel()}</span>
                         </span>
