@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { formatUiError, UserFacingError } from "../lib/format-error.ts";
+import { clearCompositionEnd, isComposingKeyboardEvent, recordCompositionEnd } from "../lib/ime.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
@@ -178,6 +179,14 @@ function renderInputDialog(
               disabled={saving()}
               aria-invalid={!saving() && invalid() ? "true" : undefined}
               onInput={(event) => setRawValue(event.currentTarget.value)}
+              onCompositionEnd={recordCompositionEnd}
+              onKeyUp={clearCompositionEnd}
+              onBlur={clearCompositionEnd}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && isComposingKeyboardEvent(event)) {
+                  event.preventDefault();
+                }
+              }}
               autofocus
             />
           </label>
