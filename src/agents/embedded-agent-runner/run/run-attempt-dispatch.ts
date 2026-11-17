@@ -640,6 +640,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
     toolExecutionAllow: params.toolExecutionAllow,
+    sessionForkRequest: params.sessionForkRequest,
     // Authorized prompt enrichment needs the exact prepared turn policy identity.
     toolAuthorityFingerprint: params.toolAuthorityFingerprint,
     sessionPersistence: params.sessionPersistence,

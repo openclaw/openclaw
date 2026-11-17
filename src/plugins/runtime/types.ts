@@ -57,8 +57,8 @@ export type SubagentForkedTurnSource = {
 };
 
 /**
- * `cancelled` marks an expected stop (the caller's signal, a Gateway restart drain, yielding to
- * foreground work, or the source session changing); any other failure is a real error.
+ * `cancelled` marks an expected stop (the caller's signal, a Gateway restart drain, or the
+ * source session changing); any other failure is a real error.
  */
 type SubagentForkedTurnOutcome = {
   runId: string;
@@ -76,8 +76,10 @@ export type SubagentForkedTurnParams<T> = {
   through: { sessionId: string; entryId: string };
   prompt: string;
   /**
-   * Tools the calling plugin registered. Core tools and tools another plugin registered are
-   * refused; the session's tool policy must also allow each one, or the run is not admitted.
+   * Tools the calling plugin registered that the fork may run. Every tool the session lists
+   * stays visible to the model so the provider serves the session's cached prefix; only these
+   * run. Core tools and tools another plugin registered are refused; the session's tool policy
+   * must also allow each one, or the run is not admitted.
    */
   tools: readonly string[];
   /** Full provider/model override; requires the same trust as `subagent.run` overrides. */
@@ -87,6 +89,8 @@ export type SubagentForkedTurnParams<T> = {
   runId?: string;
   /** Defaults to 120 seconds; a larger value runs longer (the agent timeout, for example). */
   timeoutMs?: number;
+  /** Output token limit; the session's own when omitted. */
+  maxTokens?: number;
   signal?: AbortSignal;
   /**
    * Runs after the fork stops, inside the same Gateway work admission, so a graceful restart
@@ -272,7 +276,10 @@ export type PluginRuntime = PluginRuntimeCore & {
     native?: NativeSubagentRuntime;
     /** Fresh, tool-free background inference under the existing subagent model policy. */
     complete: (params: SubagentCompleteParams) => Promise<{ text: string }>;
-    /** Ephemeral session-context inference on the session's model, with tool execution denied. */
+    /**
+     * Tool-free fork of the session's current conversation on its model: sends the session's
+     * own request plus `message`, so the provider serves its cached prefix.
+     */
     forkSession: (params: {
       sessionKey: string;
       message: string;
@@ -280,8 +287,9 @@ export type PluginRuntime = PluginRuntimeCore & {
       timeoutMs?: number;
     }) => Promise<{ text: string; usage?: LlmCompleteUsage }>;
     /**
-     * Hidden background turn over a bounded copy of a stored session, through one completed
-     * entry, with only the caller's own tools. Never writes the source transcript.
+     * Hidden background turn on a copy of a stored session, through one completed entry. Sends
+     * the session's own request; only the caller's own tools run. Never writes the source
+     * transcript.
      */
     runForkedTurn: <T>(params: SubagentForkedTurnParams<T>) => Promise<SubagentForkedTurnResult<T>>;
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;

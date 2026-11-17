@@ -43,6 +43,7 @@ import {
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
+import { applySessionForkRequest } from "../session-fork-request.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -539,9 +540,19 @@ export async function prepareEmbeddedAttemptTransport(input: {
   };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
+  const sessionFork = attempt.sessionForkRequest;
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+    ...(sessionFork
+      ? {
+          finalizePayload: (payload: Record<string, unknown>) =>
+            applySessionForkRequest(payload, sessionFork, {
+              api: attempt.model.api,
+              allowedTools: attempt.toolExecutionAllow ?? [],
+            }),
+        }
+      : {}),
   });
   session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
     streamFn: session.agent.streamFn,
