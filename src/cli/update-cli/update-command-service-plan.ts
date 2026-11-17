@@ -489,7 +489,7 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
       params.rebind !== false &&
       process.platform !== "win32" &&
       canPreserveGatewayServiceDefinitionOverrides(command) &&
-      inspected?.verdict.refreshDefinition === true
+      inspected.verdict.refreshDefinition
     ) {
       plan.serviceRoot = serviceRoot;
     } else {
