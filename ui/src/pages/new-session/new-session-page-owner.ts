@@ -193,11 +193,14 @@ export class NewSessionPageOwner {
       },
       onSubmit: () => void this.submit(),
     });
-    // Dictation receipts reconcile draft availability before the page projection reads it.
+    // An older pending recording can fail while a newer microphone is connecting.
+    let wasConnecting = false;
     this.dictation.subscribe(() => {
-      if (this.dictation.dictation?.connecting) {
+      const connecting = this.dictation.dictation?.connecting === true;
+      if (connecting && !wasConnecting) {
         this.dictationError = null;
       }
+      wasConnecting = connecting;
       this.changed();
     });
   }

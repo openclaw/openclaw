@@ -239,7 +239,15 @@ it("shows the same microphone guidance while dictation waits for access", async 
   const dismissRecovery = vi.fn();
   const { container, query } = mountComposer({
     gatewayClient: {
-      request: vi.fn(async () => ({ transcription: { ready: true } })),
+      request: vi.fn(async (method: string) =>
+        method === "talk.session.create"
+          ? {
+              sessionId: "dictation-test",
+              audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+            }
+          : { transcription: { ready: true } },
+      ),
+      addEventListener: () => () => {},
     } as unknown as GatewayBrowserClient,
     onToggleRealtimeTalk: vi.fn(),
     realtimeTalkStatus: "error",
@@ -483,10 +491,12 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
 
 it("shows an actionable error status and returns the microphone to idle on startup failure", async () => {
   openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
-  const { container, query } = await mountTalk({
-    realtime: { ready: true },
-    transcription: { ready: true },
-  });
+  // Dictation claims its Gateway session before the microphone opens.
+  const { container, query } = await mountTalk(
+    { realtime: { ready: true }, transcription: { ready: true } },
+    {},
+    true,
+  );
 
   const microphone = voiceButton(container);
   microphone.dispatchEvent(dictationPointer("pointerdown", 12));

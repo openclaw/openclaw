@@ -184,7 +184,7 @@ export function ComposerDictationStatus(props: {
 }) {
   const content = createMemo(() => {
     const dictation = props.readDictation();
-    if (!dictation?.active) {
+    if (!dictation?.active && !dictation?.transcribing) {
       return null;
     }
     if (dictation.connecting) {
@@ -192,21 +192,25 @@ export function ComposerDictationStatus(props: {
         <ChatVoiceStatus status="connecting" detail={t("chat.composer.microphoneAccessPending")} />
       );
     }
+    const finalizing = dictation.finalizing || !dictation.active;
     return (
       <div class="agent-chat__composer-status-stack">
         <div
+          role={finalizing ? "status" : undefined}
+          aria-live={finalizing ? "polite" : undefined}
+          aria-atomic={finalizing ? "true" : undefined}
           class={[
             "agent-chat__dictation-status",
-            { "agent-chat__dictation-status--finalizing": dictation.finalizing },
+            { "agent-chat__dictation-status--finalizing": finalizing },
           ]}
         >
           <span
             class={[
               "agent-chat__dictation-phase",
-              { "agent-chat__dictation-phase--listening": !dictation.finalizing },
+              { "agent-chat__dictation-phase--listening": !finalizing },
             ]}
           >
-            {dictation.finalizing
+            {finalizing
               ? t("chat.composer.dictationFinalizing")
               : t("chat.composer.dictationListening")}
           </span>
