@@ -233,7 +233,7 @@ describe.skipIf(process.platform === "win32")("Gateway terminal installation", (
         vi.mocked(replaceFileAtomic).mockImplementation((options) =>
           replace({
             ...options,
-            beforeRename: () => {
+            beforeRename: async () => {
               if (options.filePath === file) {
                 throw new Error("fixture publication refusal");
               }
