@@ -74,6 +74,12 @@ package lifecycle scripts still run.
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
 
+Sandbox tool calls and checkpoints for the same managed worktree take turns in
+arrival order within the Gateway. Waiting for workspace custody is limited to
+60 seconds; a timeout reports the workspace and asks you to retry after the
+current checkpoint or reconciliation finishes. An operation that already owns
+the workspace must release it before requesting another checkpoint.
+
 Rewind and branch switching keep that managed workspace and its accepted edits.
 OpenClaw settles pending sandbox edits and retires the old runtime before changing
 the conversation history. The next turn reuses the same private checkout under
@@ -398,7 +404,12 @@ and stopped containers do not increment it; counters restart with the Gateway.
 Release records `Local workspace unpause` with the same `reason`, elapsed
 `durationMs`, `dominantPhase`, and `dominantPhaseMs`. The bounded JSON field
 `phaseDurationsMs` lists every cumulative phase lasting at least one second;
-shorter phases are omitted. Resume inspection, generation validation, and unpause
+shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
+verification, pristine source checks, canonical snapshot preparation, and commit
+bookkeeping during base refresh. These use the same exclusive timing field;
+they include awaited worker and Git work, not
+just Gateway CPU time. Initial workspace-lease acquisition precedes the pause.
+Resume inspection, generation validation, and unpause
 are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
 times include broker admission, transport, and command completion, not just engine
 execution. All runtime targets are inspected before the first runtime is paused;
@@ -413,7 +424,15 @@ The `agents/worktrees` warning `Local workspace oversized mutation` samples at m
 once per minute per process. It reports serialized and wire bytes, top-level field
 bytes, fingerprint blob count and bytes, and journal entry/directory counts and tree
 reference bytes. Field string sizes are UTF-8 bytes; fingerprint bytes count the
-base64 strings. It contains no paths, identifiers, or document contents. Prepared
+base64 strings. Journal samples include 16-hex SHA-256 prefixes of the exact pack
+and JSON bytes. Correlation fields contain hashed workspace and durable plan IDs,
+an attempt UUID, 12-hex base/target Git commit IDs, target side, and lifecycle reason.
+Each reconciliation apply attempt logs one start and finish with that correlation;
+outcomes are `applied`, `replayed` (no file mutations), `conflict`, or `aborted`
+(the attempt threw; this does not prove rollback or absence of committed effects).
+The plan stays the same across retries and both sides of a base refresh; the attempt
+changes. A missing finish indicates an interrupted process. These logs contain no
+paths, raw workspace identifiers, or document contents. Prepared
 mutations report their already-compressed wire size and available publication fields.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,

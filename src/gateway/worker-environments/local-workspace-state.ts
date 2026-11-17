@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
 import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
@@ -16,8 +17,9 @@ import {
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
-  createLocalWorkspaceCheckpointAcceptance,
+  applyLocalWorkspaceCheckpoint,
   type LocalWorkspaceSyncOptions,
+  type LocalWorkspaceCheckpointUpdate,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
@@ -51,10 +53,7 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
-import {
-  applyStagedWorkerWorkspace,
-  recoverWorkerWorkspaceReconciliation,
-} from "./workspace-reconcile.js";
+import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   hasWorkerWorkspaceResultRef,
@@ -77,6 +76,7 @@ export function projectionOperations(
     capture: NonNullable<LocalWorkspaceSyncOptions["capture"]>;
     markPhase: (phase: LocalWorkspacePausePhase) => void;
   },
+  reason: LocalWorkspacePauseReason = "reconcile",
 ) {
   const signal = store.signal;
   let row = initialRow;
@@ -95,11 +95,8 @@ export function projectionOperations(
   // Subprocess input admission requires an undefined result.
   const assertCurrent = () => void current();
   const workerAuthority = bindLocalWorkspaceAuthority(owner, store.workerAuthority, selectCurrent);
-  const update = async (
-    patch: Parameters<typeof store.update>[1],
-    manifest?: Parameters<typeof store.update>[3],
-  ) => {
-    row = await store.update(current(), patch, owner.workerAuthority, manifest);
+  const update: LocalWorkspaceCheckpointUpdate = async (patch, manifest, publicationPack) => {
+    row = await store.update(current(), patch, owner.workerAuthority, manifest, publicationPack);
   };
   const rejection = createLocalWorkspaceCheckpointRejection({
     current,
@@ -401,7 +398,6 @@ export function projectionOperations(
           buildCacheInputs: checkpoint?.buildCacheInputs ?? (await buildCacheInputs()),
         },
         async (snapshot) => {
-          current();
           if (
             refresh &&
             (!snapshot.current.baseCommit ||
@@ -416,28 +412,30 @@ export function projectionOperations(
           ) {
             throw new Error("Local workspace checkpoint payload changed");
           }
-          await applyStagedWorkerWorkspace({
-            root: targetPath(target),
-            stagingRoot: snapshot.stagingRoot,
-            baseManifestRef: snapshot.baseManifestRef,
-            currentManifestRef: snapshot.currentManifestRef,
-            reconciliation: snapshot.reconciliation,
-            current: snapshot.current,
-            assertCurrent,
-            workerAuthority,
-            freezeTarget: target === "projection" ? quiescence?.pause : undefined,
-            onPhase: quiescence?.markPhase,
-            ...createLocalWorkspaceCheckpointAcceptance({
-              current,
-              update,
-              replaceBaseline,
-              checkpoint,
-              target,
-              refreshBaseCommit: refresh ? snapshot.current.baseCommit! : undefined,
-              rawManifest: snapshot.currentManifestRaw,
-              manifestRef: snapshot.currentManifestRef,
-              beforeCommit: () => quiescence?.markPhase("acceptance"),
-            }),
+          await applyLocalWorkspaceCheckpoint({
+            selected,
+            reason,
+            application: {
+              root: targetPath(target),
+              stagingRoot: snapshot.stagingRoot,
+              baseManifestRef: snapshot.baseManifestRef,
+              currentManifestRef: snapshot.currentManifestRef,
+              reconciliation: snapshot.reconciliation,
+              current: snapshot.current,
+              assertCurrent,
+              workerAuthority,
+              freezeTarget: target === "projection" ? quiescence?.pause : undefined,
+              onPhase: quiescence?.markPhase,
+            },
+            current,
+            update,
+            replaceBaseline,
+            checkpoint,
+            target,
+            refreshBaseCommit: refresh ? snapshot.current.baseCommit! : undefined,
+            rawManifest: snapshot.currentManifestRaw,
+            manifestRef: snapshot.currentManifestRef,
+            beforeCommit: () => quiescence?.markPhase("acceptance"),
           });
           if (!refresh || !current().pending_target) {
             await quiescence?.resume();

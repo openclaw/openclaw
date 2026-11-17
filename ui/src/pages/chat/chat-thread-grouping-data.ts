@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
   readChatThreadMessageIdentity,
@@ -23,6 +24,7 @@ import {
   chatItemStartsUserTurn,
   hasForwardedSource,
   isInterSessionMessage,
+  messageStartsProjectedTurnBoundary,
   readAutomationRun,
 } from "./chat-turn-boundary.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
@@ -339,7 +341,18 @@ export function groupPreparedChatMessages(
       item.replyToMessage = message;
     }
   }
-  return result;
+  let activityBoundary = false;
+  return result.flatMap((item) => {
+    if (item.kind === "notice" && item.activityBoundary) {
+      activityBoundary = true;
+      return [];
+    }
+    if (activityBoundary && item.kind === "group") {
+      activityBoundary = false;
+      return [{ ...item, startsActivityGroup: true as const }];
+    }
+    return [item];
+  });
 }
 
 function groupChatItemSegment(
@@ -402,6 +415,7 @@ function groupChatItemSegment(
       key: item.key,
       ...(normalized.replyTarget ? { replyTarget: normalized.replyTarget } : {}),
       hasVisibleContent:
+        messageSubagentCompletions(item.message).length > 0 ||
         hasVisibleReasoning ||
         (showReasoning && role === "assistant" && Boolean(extractThinkingCached(item.message))) ||
         visibleContent === "non-text" ||
@@ -434,7 +448,7 @@ function groupChatItemSegment(
     const startsProjectedTurn =
       item.startsTurn === true ||
       rowsAfterHiddenTurn?.has(item.key) === true ||
-      asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
+      messageStartsProjectedTurnBoundary(item.message);
     const splitsAssistantKind =
       role === "assistant" &&
       currentGroup?.role === "assistant" &&

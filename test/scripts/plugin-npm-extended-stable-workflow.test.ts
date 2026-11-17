@@ -682,12 +682,13 @@ fs.appendFileSync(process.env.EVENTS, JSON.stringify({ command: "npm", args, byt
 );
 
 it.each([
-  ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true],
-  ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false],
-  ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false],
+  ["main-pinned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, true, true, "a"],
+  ["candidate-owned transport", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, true, "b"],
+  ["mismatched transport", `refs/heads/release-ci/${"c".repeat(12)}-123`, true, false, "a"],
+  ["untrusted tooling", `refs/heads/release-ci/${"b".repeat(12)}-123`, false, false, "a"],
 ])(
   "admits extended-stable FRV preflight through %s",
-  (_label, workflowRef, toolingReachable, admitted) => {
+  (_label, workflowRef, toolingReachable, admitted, sourcePrefix) => {
     const root = tempDirs.make("plugin-extended-stable-preflight-");
 
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.8.33" }));
@@ -700,7 +701,7 @@ class GitFailure(Exception):
 target = os.environ["SOURCE_REF"]
 def git_output(_workspace, *args):
     if args[0] == "rev-parse":
-        return target
+        return args[1] if args[1] == os.environ["WORKFLOW_SHA"] else target
     raise RuntimeError("unexpected git_output call")
 def run_git(_workspace, *args, **_kwargs):
     if args[0] == "merge-base":
@@ -722,6 +723,7 @@ sys.modules["ci_git_owner"] = types.SimpleNamespace(
       {
         REQUIRE_NPM_PUBLISH_ENVIRONMENT: "false",
         WORKFLOW_REF: workflowRef,
+        SOURCE_REF: sourcePrefix.repeat(40),
         TOOLING_REACHABLE: String(toolingReachable),
         PREFLIGHT_ONLY: "true",
         NPM_DIST_TAG: "extended-stable",

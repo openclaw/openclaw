@@ -11,6 +11,7 @@ import type {
   TemplatesAddApplyParams,
   TemplatesAddPlanParams,
 } from "../../../packages/gateway-protocol/src/schema/templates.js";
+import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveConfigPath } from "../../config/paths.js";
@@ -43,6 +44,7 @@ import {
   assertTemplatesLabsEnabled,
   TemplatesLabsDisabledError,
 } from "../../templates/labs-gate.js";
+import { resolveTemplatePreferredModel } from "../../templates/preferred-model.js";
 import { buildTemplateOpeningMessage } from "../../templates/setup-prompt.js";
 import { measureTemplateAddStage, withTemplateAddTimings } from "../../templates/timings.js";
 import type { TemplateAddPlan } from "../../templates/types.js";
@@ -93,6 +95,22 @@ export function reportTemplateAddFailure(error: unknown, operation: "plan" | "ap
     : "Could not add this Template. Review Gateway logs before retrying.";
 }
 
+/** Uses published picker facts, never new provider discovery during Add. */
+function preferredModelResolver(context: GatewayRequestHandlerOptions["context"]) {
+  return (requested: string, targetAgentId: string) =>
+    resolveTemplatePreferredModel(requested, async () => {
+      const config = context.getRuntimeConfig();
+      // Chat Add has already admitted this agent and prepared its model owner.
+      // A reviewed preview has no new agent yet, so it uses the host's ambient view.
+      const agentId = config.agents?.entries?.[targetAgentId]
+        ? targetAgentId
+        : resolveAmbientOwnerAgentId(config);
+      const params = { agentId, params: { includeDetails: true }, includeManualSelection: true };
+      const result = await context.readPreparedModelsList?.(params);
+      return result?.models ?? [];
+    });
+}
+
 /** Shared request owner: callers retain their original administrator and lifetime. */
 export async function planTemplateAddForRequest(
   options: GatewayRequestHandlerOptions & { params: TemplatesAddPlanParams },
@@ -108,6 +126,7 @@ export async function planTemplateAddForRequest(
     source: params.source,
     ...(params.agentId ? { agentId: params.agentId } : {}),
     config,
+    resolvePreferredModel: preferredModelResolver(context),
     sourceMcpServers: async () => {
       const listedMcp = await listConfiguredMcpServers();
       if (!listedMcp.ok) {
@@ -271,6 +290,7 @@ export async function applyTemplateAddForRequest(
           assertTemplatesLabsEnabled(config);
           return {
             config,
+            resolvePreferredModel: preferredModelResolver(context),
             sourceMcpServers: async () => {
               const listedMcp = await listConfiguredMcpServers();
               assertCurrent();

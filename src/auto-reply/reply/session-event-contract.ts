@@ -94,6 +94,8 @@ export type SessionEventOptions = {
     | "hook"
     | "restart"
     | "session"
+    // Watcher reconciliation is model-only input, unlike generic system-event wakes.
+    | "session_state"
     | "device"
     | "plugin"
     // A yielded tool's result resuming its own conversation; hidden from chat display.
@@ -185,6 +187,8 @@ export type ScheduledSessionAutomation = {
 
 /** Producer callbacks stay bound to the queued occurrence, not a later dispatcher. */
 export type SessionEventExecution = {
+  /** Admitted restart continuations can pin without an inline renderer. */
+  pinnedWidgetAuthoring?: true;
   /** Admit the prepared input to the occurrence's durable custody before queueing. */
   prepareInput?: (recorder: UserTurnTranscriptRecorder) => Promise<void>;
   /** Original command custody survives process eviction and deferred reply execution. */

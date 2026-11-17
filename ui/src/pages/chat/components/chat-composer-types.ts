@@ -297,6 +297,8 @@ export type ChatComposerState = {
   // Stable refs keep layout observers attached across frame updates.
   composerInputRef: ((element?: Element) => void) | null;
   textareaRef: ((element?: Element) => void) | null;
+  // The mounted composer's Escape stop policy, for Escape pressed outside the composer.
+  stopRunFromEscape: (() => boolean) | null;
   dictation: ComposerDictationOwner | null;
   composerDraftScope: { key: string } | null;
   dictationSelection: { start: number; end: number; value: string } | null;

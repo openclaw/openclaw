@@ -60,7 +60,10 @@ async function executeCronRunOwned(params: CronRunExecutionParams): Promise<Cron
   let modelSwitchRetries = 0;
   let promptMediaTaskIds: ReadonlySet<string> = new Set();
   let execution: CronCompletedPromptRun;
-  using execYield = openExecYieldResume(params.runId);
+  using execYield = openExecYieldResume({
+    agentId: params.agentId,
+    sessionKey: params.runSessionKey,
+  });
   let prompt = params.commandBody;
   while (true) {
     try {

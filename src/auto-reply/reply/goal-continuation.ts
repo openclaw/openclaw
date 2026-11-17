@@ -83,8 +83,6 @@ export function isGoalContinuationCurrent(
   const goal = entry && accountSessionGoalUsage(entry, Date.now());
   return Boolean(
     entry &&
-    entry.sessionId === continuation.sessionId &&
-    entry.lifecycleRevision === continuation.lifecycleRevision &&
     goal?.id === continuation.goalId &&
     goal.status === "active" &&
     !entry.abortedLastRun &&

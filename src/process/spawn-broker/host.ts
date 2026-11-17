@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn, type ChildProcess, type SendHandle } from "node:child_process";
-import { rmSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { serialize } from "node:v8";
@@ -34,6 +34,7 @@ import {
   type BrokerCommandRequest as Request,
 } from "./commands.js";
 import { BrokerFileReads } from "./file-reads.js";
+import type { SpawnBrokerHost } from "./host-contract.js";
 import { BrokerIpcAdmissionError, createBrokerReceiver, createBrokerSender } from "./ipc.js";
 import {
   childCapacityError,
@@ -59,12 +60,12 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 
-export type { BrokerNativeResourceLease } from "./resource-host.js";
+export type { SpawnBrokerHost };
 
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
 
-export class SpawnBrokerHost {
+class BrokerHost implements SpawnBrokerHost {
   private readonly unregisterExitCleanup: () => void;
   readonly entryPath: string;
   private readonly workerUrl: URL;
@@ -94,8 +95,7 @@ export class SpawnBrokerHost {
   private readonly cleanups = new Set<ReturnType<typeof terminateLostBrokerChild>>();
   private readonly cleanupErrors: Error[] = [];
   private readonly resourceClaims: BrokerResourceClaims | undefined;
-  private readonly resourceDirectory: string | undefined;
-  private readonly resourceAuthority: { endpoint: string; secret: string } | undefined;
+  private readonly resourceAuthority: ReturnType<typeof createNativeResourceAuthority> | undefined;
   private startupDeadline = 0;
   private serviceStartup: (() => void) | undefined;
   private markNativeReady: ((pid: number, generation: number) => void) | undefined;
@@ -121,9 +121,7 @@ export class SpawnBrokerHost {
       options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
     this.entryPath = fileURLToPath(this.workerUrl);
     if (options.nativeResources) {
-      const { directory, ...authority } = createNativeResourceAuthority();
-      this.resourceDirectory = directory;
-      this.resourceAuthority = authority;
+      this.resourceAuthority = createNativeResourceAuthority();
       this.resourceClaims = new BrokerResourceClaims({
         transmit: async (request) => {
           if (!this.available) {
@@ -141,19 +139,18 @@ export class SpawnBrokerHost {
       });
     }
     void this.readiness.promise.catch(() => {});
-    try {
-      this.start();
-    } catch (error) {
-      if (this.resourceDirectory) {
-        rmSync(this.resourceDirectory, { recursive: true, force: true });
-      }
-      throw error;
-    }
+    this.start();
     this.unregisterExitCleanup = registerProcessExitCleanup(this.onParentExit);
   }
 
   get pid(): number | undefined {
     return this.process?.pid;
+  }
+  get hasOpenNativeResourceClaims(): boolean {
+    return this.resourceClaims?.hasOpenClaims ?? false;
+  }
+  get nativeResourceAdmissionClosed(): boolean {
+    return this.resourceClaims?.admissionClosed ?? false;
   }
   ready(): Promise<void> {
     return this.closing
@@ -186,7 +183,8 @@ export class SpawnBrokerHost {
         runtimeNeedsTypeScriptLoader(fileURLToPath(input.moduleUrl))
           ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
           : {}),
-        ...this.resourceAuthority,
+        endpoint: this.resourceAuthority.endpoint,
+        secret: this.resourceAuthority.secret,
         generation: this.generation - 1,
         startupDeadline: this.available ? undefined : this.startupDeadline,
         id: ++this.sequence,
@@ -479,6 +477,8 @@ export class SpawnBrokerHost {
           request.result?.reject(error);
           request.child.fail(error);
         }
+        // Retained error stacks can keep this callback context alive after settlement.
+        requests.clear();
         // A failed transport is not a writer-close receipt. Join its native owner and
         // retained child cleanup before callers can remove or reuse output paths.
         if (outputRequests.length) {
@@ -490,6 +490,7 @@ export class SpawnBrokerHost {
               request.output?.reject(error);
               request.child.settleFileOutput();
             }
+            outputRequests.length = 0;
           });
         }
         if (
@@ -725,8 +726,8 @@ export class SpawnBrokerHost {
       try {
         await this.waitForCleanup();
       } finally {
-        if (this.resourceDirectory) {
-          rmSync(this.resourceDirectory, { recursive: true, force: true });
+        if (this.resourceAuthority?.directory && this.hasBeenReady) {
+          await rm(this.resourceAuthority.directory, { recursive: true, force: true });
         }
       }
     } finally {
@@ -737,7 +738,7 @@ export class SpawnBrokerHost {
 }
 
 export function createSpawnBrokerHost(
-  options?: ConstructorParameters<typeof SpawnBrokerHost>[0],
+  options?: ConstructorParameters<typeof BrokerHost>[0],
 ): SpawnBrokerHost {
-  return new SpawnBrokerHost(options);
+  return new BrokerHost(options);
 }

@@ -10,7 +10,6 @@ import {
   registerSessionResourceCleanup,
   type SessionResourceOwner,
 } from "../session-resources.js";
-import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import {
@@ -23,6 +22,7 @@ import {
   replayResponsesReasoningUpdates,
   type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
+import { normalizeOpenAIResponsesToolArguments } from "./openai-responses-replay.js";
 import { retainedJsonBytes } from "./openai-responses-retained-bytes.js";
 import {
   normalizeOpenAIResponsesFunctionCallId,
@@ -199,8 +199,9 @@ function normalizeAssistantReplayInput(
   input: readonly unknown[],
   fromResponse = false,
   ignoreCachedItemIds = false,
+  replayedInput?: readonly unknown[],
 ): unknown[] {
-  return input.map((item) => {
+  return input.map((item, index) => {
     if (!isRecord(item)) {
       return item;
     }
@@ -254,9 +255,11 @@ function normalizeAssistantReplayInput(
       stableItem.call_id = canonicalizeToolCallId(stableItem.call_id, itemId);
     }
     if (fromResponse && item.type === "function_call") {
-      // Only provider output crosses terminal admission; sent arguments must retain real type edits.
-      const args = parseJsonObjectPreservingUnsafeIntegers(stableItem.arguments);
-      stableItem.arguments = args ? JSON.stringify(args) : stableItem.arguments;
+      // Already-sent input stays strict so a real edit cannot reuse an old response.
+      stableItem.arguments = normalizeOpenAIResponsesToolArguments(
+        stableItem.arguments,
+        replayedInput?.[index],
+      );
     }
     if (item.type === "message" && Array.isArray(stableItem.content)) {
       stableItem.content = stableItem.content.map((part) => {
@@ -421,7 +424,7 @@ export function responsesContinuationPrefixFingerprint(
         digest,
         [
           ...normalizeAssistantReplayInput(input.slice(length)),
-          ...normalizeAssistantReplayInput(output, true),
+          ...normalizeAssistantReplayInput(output, true, false, output),
         ],
         length,
       );
@@ -431,7 +434,7 @@ export function responsesContinuationPrefixFingerprint(
   return sha256StableValue(
     projectJsonObject([
       ...normalizeAssistantReplayInput(input),
-      ...normalizeAssistantReplayInput(output, true),
+      ...normalizeAssistantReplayInput(output, true, false, output),
     ]),
   ).digest;
 }
@@ -482,7 +485,12 @@ export function resolveResponsesContinuationRequest(
   const historyToolRoundUnchanged = [false, true].some((ignoreCachedItemIds) =>
     jsonValuesEqual(
       replayedToolRound,
-      normalizeAssistantReplayInput(continuation.lastResponseItems, true, ignoreCachedItemIds),
+      normalizeAssistantReplayInput(
+        continuation.lastResponseItems,
+        true,
+        ignoreCachedItemIds,
+        replayedToolRoundInput,
+      ),
     ),
   );
   if (!historyToolRoundUnchanged) {

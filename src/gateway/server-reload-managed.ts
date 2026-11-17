@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { clearRetiredMcpOAuth } from "../agents/mcp-config-mutation.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -308,6 +309,8 @@ export function startManagedGatewayConfigReloader(
     });
 
   let committedRuntimeConfig = params.initialConfig;
+  // Start from the boot source: restarting alone must not retire MCP credentials.
+  let acceptedMcpServers = (params.initialCompareConfig ?? params.initialConfig).mcp?.servers;
   let configCandidatePending = false;
   const configReloader = startGatewayConfigReloader({
     scheduler: params.scheduler,
@@ -411,6 +414,10 @@ export function startManagedGatewayConfigReloader(
       } else {
         await acceptance.publishSource?.();
       }
+      // The accepted source diff covers every writer, including system-agent writes and hand
+      // edits, even when reload mode skipped the runtime.
+      await clearRetiredMcpOAuth(acceptedMcpServers, sourceConfig.mcp?.servers);
+      acceptedMcpServers = sourceConfig.mcp?.servers;
       await transactionOwnership.checkpoint();
       assertReloadPublicationCurrent(transactionOwnership.isCurrent(), false);
       if (acceptedRestart && !sameRestart && acceptance.runtimeApplied) {
