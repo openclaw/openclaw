@@ -137,7 +137,10 @@ never needs the agent.
   their saved order; widening the board restores their saved column widths.
 - **Automatic height.** HTML widgets adjust their height to fit their content.
   Resizing by handle or choosing a size preset fixes the height. Choose
-  **Auto height** from the widget menu to fit the content again.
+  **Auto height** from the widget menu to fit the content again. On touch layouts,
+  long Auto widgets grow within the board so the board handles vertical scrolling.
+  Fixed-height widgets keep their saved size, and dragging or resizing a neighbor
+  preserves the expanded Auto widgets.
 - **Tabs.** A board can have several pages — say, an overview tab and a
   focused tab with one big widget. Each tab remembers its widget layout.
   Visited tabs stay loaded while the dashboard is retained, preserving local

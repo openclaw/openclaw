@@ -69,16 +69,18 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     const widgets = (snapshot?.widgets ?? []).filter(
       (widget) => owner.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
+    // Use the same content-fitting bound for touch layout and gesture previews.
+    const fitAutoContent = owner.fitAutoContent();
     const rects = tabs.flatMap((tab) =>
       layout(
         (tab.tabId === activeTabId && state.gesture.name ? state.previewItems : null) ??
           boardWidgetGridItems(
             widgets.filter((widget) => widget.tabId === tab.tabId),
             owner.contentHeights,
-            props.fitAutoContent,
+            fitAutoContent,
             props.pageWidgetName,
           ),
-        props.fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
+        fitAutoContent ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined,
       ),
     );
     const activeNames = new Set(activeWidgets.map((widget) => widget.name));
@@ -110,7 +112,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           boardRevision: snapshot?.revision ?? 0,
           rect,
           contentHeightPx: owner.contentHeights.get(rect.name),
-          fitAutoContent: props.fitAutoContent,
+          fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
           tabs,
           session: props.session,
