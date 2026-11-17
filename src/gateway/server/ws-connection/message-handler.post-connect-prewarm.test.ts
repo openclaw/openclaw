@@ -96,16 +96,19 @@ vi.mock("./connect-node-session.js", async (importOriginal) => {
   return { ...actual, prepareGatewayNodeConnect: prepareGatewayNodeConnectMock };
 });
 
-vi.mock("../../server-history-prewarm.js", () => ({
+vi.mock("../../server-history-prewarm.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../server-history-prewarm.js")>()),
   prewarmGatewaySessionHistory: prewarmGatewaySessionHistoryMock,
 }));
 
-vi.mock("../../../config/config.js", () => ({
+vi.mock("../../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/config.js")>()),
   getRuntimeConfig: loadConfigMock,
   loadConfig: loadConfigMock,
 }));
 
-vi.mock("../../../config/io.js", () => ({
+vi.mock("../../../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/io.js")>()),
   getRuntimeConfig: loadConfigMock,
 }));
 vi.mock("../../../config/runtime-snapshot.js", async (importOriginal) => ({
@@ -119,11 +122,13 @@ vi.mock("../../../infra/system-presence.js", async (importOriginal) => ({
   listSystemPresence: vi.fn(() => []),
 }));
 
-vi.mock("../../server-methods.js", () => ({
+vi.mock("../../server-methods.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../server-methods.js")>()),
   handleGatewayRequest: vi.fn(),
 }));
 
-vi.mock("../health-state.js", () => ({
+vi.mock("../health-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../health-state.js")>()),
   buildGatewaySnapshot: buildGatewaySnapshotMock,
   getHealthCache: getHealthCacheMock,
   getHealthVersion: getHealthVersionMock,

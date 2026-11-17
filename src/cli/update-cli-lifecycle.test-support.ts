@@ -14,6 +14,7 @@ import * as taskProbe from "../daemon/schtasks-state-probe.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import * as sqliteHeaderProbe from "../infra/sqlite-header-probe.js";
+import * as sqliteSnapshotStaging from "../infra/sqlite-snapshot-staging.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import * as updateTempRoot from "../infra/tmp-openclaw-dir.js";
 import * as stateMetadata from "../infra/update-candidate-state.sizes.js";
@@ -139,6 +140,10 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
           },
         };
       },
+    );
+    const stageSnapshot = sqliteSnapshotStaging.createSqliteSnapshotStagingDirectory;
+    vi.spyOn(sqliteSnapshotStaging, "createSqliteSnapshotStagingDirectory").mockImplementation(
+      (...args) => onHostPlatform(() => stageSnapshot(...args)),
     );
     const captureBaseline = updateRecoveryBaseline.captureUpdateRecoveryBaseline;
     vi.spyOn(updateRecoveryBaseline, "captureUpdateRecoveryBaseline").mockImplementation(
