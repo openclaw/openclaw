@@ -101,6 +101,15 @@ and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` res
 candidate/execution. Checked-in list is authoritative; retain release-specific
 authorization/diagnostics in PR or handoff.
 
+Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
+inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
+receipts, including failures covered by current exact waivers. Accepted receipts
+return before dispatching another child workflow; a required initial run is still
+necessary. Failed parents without final manifests are recovered through child
+receipts, not relabeled successful. The fresh parent still must complete admission,
+collection, and final verification. Missing, expired, or incompatible evidence
+requires fresh work.
+
 Land policy, pin P, run/revalidate FRV with unchanged C/Q. Candidate workflows must
 route state operations to admitted P; changing P cannot retrofit old workflows.
 State/manifest/summary retain raw failures/reasons. Grants neither skip tests nor
@@ -172,7 +181,8 @@ reconciliation completes; this command never dispatches tests or artifact prepar
   waivers. Recheck exact aggregate causes, retain raw conclusions, seal matched waivers;
   strict readers recompute and reject added/omitted grants. Reused children keep dispatch
   origin; verify original parent's exact reuse-digest witness with ordinary aggregation
-  validator. Ordinary green-only child reuse is unchanged.
+  validator. Ordinary child reuse follows current admitted-P policy while preserving
+  original producer receipts.
 - Missing payloads, incomplete history, changed attempts, or lost authority fail closed.
   Per-child complete rerun-history budget: ten minutes; ordinary reuse: two. Job-inventory
   timeouts/retry limits unchanged. No test/preparation dispatch; Actions/content read-only.

@@ -209,7 +209,24 @@ Its id must match the plugin manifest. Register contributions through
 | `registerAccessory`                     | Session header content.                                                                                                                 |
 | `registerInlineView`                    | Data-populated native views in the chat transcript.                                                                                     |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
-| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
+| `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, `tool-result`, or `run-failure-feedback`.                                        |
+
+The `run-failure-feedback` replacement occupies only the feedback action beside
+an existing terminal run failure. Its props are `{ sessionKey, agentId, runId,
+repeatCount }`; `runId` identifies the displayed failed run, not the currently
+running reply. The host preserves the original error details, copying, and
+recovery controls. No replacement, a disabled plugin, or a failed mount keeps
+the built-in **Report a bug** link available; `context.mountDefault(container)`
+can also delegate to that link.
+
+Plugins can render their own feedback actions and status receipts in this slot
+without appending a transcript message or starting a model turn. Rendering the
+slot does not establish reporting eligibility or authorize a report: keep
+classification, privacy checks, durable idempotency, delivery state, and any
+report submission in the plugin's backend. Changing the agent, session, or
+failed run retires the view and its host handles. Check `context.signal` before
+publishing an asynchronous result, and retain only verified report identifiers
+and links.
 
 Panels can supply an optional `icon` with a fixed host icon-registry name, such as
 `bookOpenText`, `barChart`, `activity`, or `terminal`:

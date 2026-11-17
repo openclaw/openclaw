@@ -113,6 +113,12 @@ export type ControlUiSurfaceProps = {
     stream: string | null;
     loading: boolean;
   };
+  /** Only the feedback action/receipt beside a terminal run failure, not its details or recovery. */
+  "run-failure-feedback": BoardGetParams & {
+    /** The exact displayed failure, including when adjacent failures are grouped. */
+    runId: string;
+    repeatCount: number;
+  };
   "tool-result": BoardGetParams & {
     toolName: string;
     toolCallId: string;

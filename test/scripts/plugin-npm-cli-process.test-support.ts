@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -20,7 +20,6 @@ import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fix
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 import { addRecoveryGraph } from "./plugin-npm-cli-recovery.test-support.mjs";
-import { writeResponses } from "./plugin-npm-cli-transport.test-support.mjs";
 import { packNpmFixture } from "./plugin-npm-publication-readback.test-support.js";
 
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -416,7 +415,7 @@ export async function createNpmCliProcessFixture(
     }
     Object.assign(responses, ordinaryResponses);
   }
-  const responseFile = join(root, "responses");
+  const responseDirectory = join(root, "responses");
   const log = join(root, "requests.jsonl");
   const gh = join(root, "gh");
   writeFileSync(
@@ -428,7 +427,14 @@ export async function createNpmCliProcessFixture(
       ";\nrunGh(process.argv.slice(2));\n",
     { mode: 0o755 },
   );
-  const save = () => writeResponses(responseFile, responses);
+  const save = () => {
+    // Every CLI call is synchronous, so no reader remains while the fixture changes.
+    rmSync(responseDirectory, { recursive: true, force: true });
+    mkdirSync(responseDirectory);
+    for (const [route, response] of Object.entries(responses)) {
+      writeFileSync(join(responseDirectory, digest(route) + ".json"), JSON.stringify(response));
+    }
+  };
   save();
   const env = {
     ...process.env,
@@ -452,7 +458,7 @@ export async function createNpmCliProcessFixture(
     PREPARED_NPM_DIST_TAG: "default",
     PREPARED_NPM_EVIDENCE_ID: "",
     PREPARED_NPM_EVIDENCE_DIGEST: "",
-    NPM_CLI_RESPONSES: responseFile,
+    NPM_CLI_RESPONSES_DIR: responseDirectory,
     NPM_CLI_REQUEST_LOG: log,
     NPM_CLI_ENTRYPOINT: cli,
   };

@@ -2,33 +2,10 @@
 // No release owner is replaced: all authentication and archive checks run in CLI.
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-
-const responsePath = (directory, route) =>
-  join(directory, createHash("sha256").update(route).digest("hex"));
-
-// Read one external response per request, not every archive in the fixture.
-export function writeResponses(directory, responses) {
-  rmSync(directory, { recursive: true, force: true });
-  mkdirSync(directory);
-  for (const [route, value] of Object.entries(responses)) {
-    writeFileSync(responsePath(directory, route), JSON.stringify(value));
-  }
-}
-function readResponse(route) {
-  const path = responsePath(process.env.NPM_CLI_RESPONSES, route);
-  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : undefined;
-}
 
 const callsite = () =>
   new Error().stack
@@ -45,6 +22,24 @@ function record(value) {
       ...value,
     }) + "\n",
   );
+}
+
+function responsePath(route) {
+  return join(
+    process.env.NPM_CLI_RESPONSES_DIR,
+    createHash("sha256").update(route).digest("hex") + ".json",
+  );
+}
+
+function readResponse(route) {
+  try {
+    return JSON.parse(readFileSync(responsePath(route), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 function response(route, transport) {
@@ -65,11 +60,10 @@ function response(route, transport) {
   if (value.after) {
     const after = value.after;
     delete value.after;
-    writeFileSync(responsePath(process.env.NPM_CLI_RESPONSES, key), JSON.stringify(value));
-    writeFileSync(
-      responsePath(process.env.NPM_CLI_RESPONSES, after.route),
-      JSON.stringify(after.value),
-    );
+    writeFileSync(responsePath(after.route), JSON.stringify(after.value));
+    if (after.route !== key) {
+      writeFileSync(responsePath(key), JSON.stringify(value));
+    }
     record({ kind: "external-change", route });
   }
   if (/^actions\/runs\/[0-9]+\/artifacts$/u.test(path)) {
