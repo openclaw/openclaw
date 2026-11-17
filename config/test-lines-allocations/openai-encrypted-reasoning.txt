@@ -1,0 +1,2 @@
+4
+# Preserve encrypted reasoning wire identity and cold-prefix regression expectations for #200163.
