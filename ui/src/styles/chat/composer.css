@@ -5244,7 +5244,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
   &:hover {
     color: var(--text-strong);
-    background: var(--menu-hover);
   }
 
   @media (prefers-reduced-motion: no-preference) {
