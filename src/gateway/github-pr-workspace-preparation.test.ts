@@ -77,6 +77,52 @@ describe("existing PR preparation through the registered agent action", () => {
     },
   );
 
+  it("imports a publisher-authored PR for its linked coauthor without a prior session receipt", async () => {
+    const f = await fixture();
+    f.pr.user = { id: 42, login: "roboclaw-bot" };
+    overrideCommands((argv) => {
+      if (!argv.includes("graphql")) {
+        return undefined;
+      }
+      return commandResult(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: f.headCommit,
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        id: "commit-node",
+                        authors: {
+                          nodes: [{ user: { databaseId: 42 } }, { user: { databaseId: 101 } }],
+                          pageInfo: { hasNextPage: false, endCursor: null },
+                        },
+                        committer: { user: { databaseId: 42 } },
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      );
+    });
+    await expect(f.invoke()).resolves.toMatchObject({
+      status: "prepared",
+      headCommit: f.headCommit,
+    });
+    expect(f.readSession().worktree?.githubPullRequest?.origin).toBe("external-pr");
+    expect(await fs.readFile(path.join(f.projection, "pr.txt"), "utf8")).toBe(
+      "original PR contents\n",
+    );
+    expect(f.writes).toEqual([]);
+    expect(f.externalWrites).toEqual([]);
+  });
+
   it("records a maintainer's foreign publisher-authored PR as imported", async () => {
     const f = await fixture({ linked: false });
     f.pr.user = { id: 42, login: "roboclaw-bot" };

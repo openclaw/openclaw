@@ -10,6 +10,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
   runId: string | null;
+  /** `?new` opens the create panel, as the sidebar's New automation does. */
+  create?: true;
   session?: { sessionKey: string; sessionAgentId: string };
 } {
   const params = new URLSearchParams(search);
@@ -19,6 +21,7 @@ export function resolveCronRouteData(search: string): {
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
+    ...(!jobId && params.has("new") ? { create: true as const } : {}),
     ...(!jobId && sessionKey && agentId
       ? { session: { sessionKey, sessionAgentId: agentId } }
       : {}),

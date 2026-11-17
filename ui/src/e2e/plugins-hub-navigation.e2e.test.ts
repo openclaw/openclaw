@@ -160,27 +160,16 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   }[active];
   const header = page.locator(".plugins-hub-header");
   expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
-  // All three routes share the settings-style header. Allow subtitle wrapping
-  // to change its height, but keep the visible title and tabs left-aligned.
   // The phone's floating header carries the title, leaving it for assistive tech.
   const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
   await expect
     .poll(() =>
       header.evaluate((element) => {
         const title = element.querySelector(".page-title")?.getBoundingClientRect();
-        const intro = element.querySelector(".hub-page-header__title")?.getBoundingClientRect();
-        const tabs = element.querySelector(".hub-page-header__tabs")?.getBoundingClientRect();
-        if (!title || !intro || !tabs) {
-          return null;
-        }
-        return {
-          visibleTitle: title.width > 1 && title.height > 1,
-          leftAligned: Math.abs(tabs.left - title.left) <= 1,
-          tabsBelowIntro: tabs.top >= intro.bottom,
-        };
+        return title ? title.width > 1 && title.height > 1 : null;
       }),
     )
-    .toEqual({ visibleTitle: !floatingHeader, leftAligned: true, tabsBelowIntro: true });
+    .toBe(!floatingHeader);
   expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
   expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
     expected.docs,
@@ -210,16 +199,35 @@ async function captureScreenshot(page: Page, name: string) {
   await writeFile(
     path.join(proofDir, name),
     await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-      page.locator(".plugins-hub-tabs"),
+      page.locator(".plugins-hub-header"),
     ]),
   );
 }
 
-async function expectActivePanelLabel(page: Page, labelId: string) {
-  const panel = page.locator("#plugins-hub-panel");
-  await panel.waitFor({ state: "visible" });
-  expect(await panel.getAttribute("aria-labelledby")).toBe(labelId);
-  expect(await page.locator(`#${labelId}`).count()).toBe(1);
+// The Customize sidebar lists the hub's pages; a mobile layout keeps it in the drawer.
+function customizeSidebar(page: Page, mobile: boolean) {
+  const sidebar = page.locator("openclaw-app-sidebar .sidebar-customize");
+  const expand = () =>
+    mobile
+      ? page.getByRole("button", { name: "Expand sidebar", exact: true }).click()
+      : Promise.resolve();
+  return {
+    sidebar,
+    row: (name: string) => sidebar.getByRole("link", { name, exact: true }),
+    // Choosing Customize from the page menu selects its sidebar.
+    select: async () => {
+      await expand();
+      await page.locator("openclaw-app-sidebar [data-rail-more]").click();
+      await page
+        .locator(".sidebar-pages-menu")
+        .getByRole("link", { name: "Customize", exact: true })
+        .click();
+    },
+    open: async (name: string) => {
+      await expand();
+      await sidebar.getByRole("link", { name, exact: true }).click();
+    },
+  };
 }
 
 suite.define(() => {
@@ -517,85 +525,44 @@ suite.define(() => {
         await captureScreenshot(page, `${label}-01-installed-plugins.png`);
         expect(pluginsHeader.title).toBe("Plugins");
         await expectHeaderCopy(page, "plugins");
-        expect(await page.locator(".plugins-hub-tabs").getByRole("tab").count()).toBe(3);
-        expect(
-          await page.getByRole("tab", { name: "Plugins", exact: true }).getAttribute("active"),
-        ).not.toBeNull();
-        expect(await page.getByRole("tab", { name: /Installed|Discover/u }).count()).toBe(0);
-        expect(await page.locator(".plugins-tabs").count()).toBe(1);
-        expect(await page.locator(".plugins-tabs.oc-segmented").count()).toBe(0);
-        const tabBox = await page.locator(".plugins-tabs").boundingBox();
-        const pluginTabBox = await page
-          .getByRole("tab", { name: "Plugins", exact: true })
-          .boundingBox();
-        expect(tabBox).not.toBeNull();
-        expect(pluginTabBox).not.toBeNull();
-        expect(pluginTabBox?.height ?? 0).toBeLessThanOrEqual(36);
-        await expectActivePanelLabel(page, "plugins-tab-plugins");
+        // The Customize sidebar replaces the hub's tabs.
+        expect(await page.getByRole("tab").count()).toBe(0);
         const pluginInstallPresentation = await installButtonPresentation(page);
+        const mobile = viewport.width <= 900;
+        const customize = customizeSidebar(page, mobile);
 
-        const skillsTab = page
-          .locator(".plugins-hub-tabs")
-          .getByRole("tab", { name: "Skills", exact: true });
-        await skillsTab.focus();
-        await page.keyboard.press("Enter");
+        await customize.open("Skills");
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
-        // Phone arrival keeps keyboard focus on the tab instead of opening the text keyboard.
-        if (viewport.width <= 768) {
-          await expect
-            .poll(() => page.evaluate(() => document.activeElement?.id))
-            .toBe("plugins-tab-skills");
-        } else {
-          await expect
-            .poll(() =>
-              page
-                .getByRole("searchbox", { name: "Search skills", exact: true })
-                .evaluate((input) => input === document.activeElement),
-            )
-            .toBe(true);
-        }
+        // Phone arrival keeps the text keyboard closed; wider layouts focus the search.
+        await expect
+          .poll(() =>
+            page
+              .getByRole("searchbox", { name: "Search skills", exact: true })
+              .evaluate((input) => input === document.activeElement),
+          )
+          .toBe(viewport.width > 768);
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
-        await expectActivePanelLabel(page, "plugins-tab-skills");
         expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
         await captureScreenshot(page, `${label}-02-skills.png`);
 
-        const workshopTab = page.getByRole("tab", { name: "Skill workshop", exact: true });
-        await workshopTab.focus();
-        await page.keyboard.press("Enter");
+        await customize.open("Skill workshop");
         await waitForControlUiRoute(page, {
           pathname: "/skills/workshop",
           routeId: "skill-workshop",
         });
-        await expect
-          .poll(() =>
-            page.evaluate(
-              () =>
-                document.activeElement?.id ||
-                document.activeElement?.getAttribute("aria-label") ||
-                document.activeElement?.tagName,
-            ),
-          )
-          .toBe("plugins-tab-skill-workshop");
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skill-workshop");
-        await expectActivePanelLabel(page, "plugins-tab-skill-workshop");
-        expect(
-          await page
-            .getByRole("tab", { name: "Skill workshop", exact: true })
-            .getAttribute("active"),
-        ).not.toBeNull();
+        if (!mobile) {
+          expect(await customize.row("Skill workshop").getAttribute("aria-current")).toBe("page");
+        }
         await captureScreenshot(page, `${label}-03-workshop.png`);
 
-        await page
-          .locator(".plugins-hub-tabs")
-          .getByRole("tab", { name: "Skills", exact: true })
-          .click();
+        await customize.open("Skills");
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
-        await expectActivePanelLabel(page, "plugins-tab-skills");
-        await page.getByRole("tab", { name: "Plugins", exact: true }).click();
+        await customize.open("Plugins");
         await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "plugins");
@@ -604,6 +571,49 @@ suite.define(() => {
       }
     },
   );
+  it("lists the Customize pages and installed plugins in its sidebar", async () => {
+    const context = await createContext({ width: 1280, height: 800 });
+    const page = await context.newPage();
+    const config = { gateway: { controlUi: { experimental: { templates: true } } } };
+    await installMockGateway(page, {
+      featureMethods: ["config.get", "plugins.list", "plugins.catalog.browse"],
+      methodResponses: {
+        ...methodResponses,
+        "config.get": {
+          ...methodResponses["config.get"],
+          config,
+          sourceConfig: config,
+          raw: JSON.stringify(config),
+        },
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await waitForControlUiRoute(page, { routeId: "chat" });
+      const customize = customizeSidebar(page, false);
+      await customize.select();
+      await waitForControlUiRoute(page, { pathname: "/plugins", routeId: "plugins" });
+      await customize.row("Templates").waitFor();
+      expect(
+        await customize.sidebar
+          .locator(":scope > .nav-item")
+          .evaluateAll((rows) => rows.map((row) => row.textContent)),
+      ).toEqual(["Plugins", "Skills", "Skill workshop", "Templates"]);
+      expect(await customize.row("Plugins").getAttribute("aria-current")).toBe("page");
+      // Templates follows its experimental flag; selection follows the open page.
+      await customize.open("Templates");
+      await waitForControlUiRoute(page, { pathname: "/templates", routeId: "templates" });
+      expect(await customize.row("Templates").getAttribute("aria-current")).toBe("page");
+      expect(await customize.row("Plugins").getAttribute("aria-current")).toBeNull();
+      // An installed plugin opens its settings page, which returns to Plugins.
+      await customize.open("Workboard");
+      await expect
+        .poll(() => new URL(page.url()).pathname + new URL(page.url()).search)
+        .toBe("/settings/plugins/workboard?from=plugins");
+    } finally {
+      await context.close();
+    }
+  });
   it.each([
     {
       locale: "en",

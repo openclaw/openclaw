@@ -144,6 +144,7 @@ async function setup(
   const queue: MailboxMessage[] = [first];
   let wake: (() => void) | undefined;
   let reads = 0;
+  let deliveredBatches = 0;
   let shared: Uint8Array;
   let transcript: Uint8Array;
   let matching: string | undefined;
@@ -202,7 +203,10 @@ async function setup(
             wake = resolve;
           });
         }
-        return { status: 200, body: JSON.stringify({ messages: queue.splice(0), cursor: "1" }) };
+        return {
+          status: 200,
+          body: JSON.stringify({ messages: queue.splice(0), cursor: String(++deliveredBatches) }),
+        };
       }
       if (params.operation === "send") {
         const { payload } = JSON.parse(params.body as string);
@@ -266,8 +270,7 @@ async function setup(
         device_pub: formatEd25519PublicKey(device.publicKey),
         peer_key: formatIrohEndpointKey(device.publicKey),
       };
-      const before = reads;
-      queue.push({
+      const replacement: MailboxMessage = {
         ...first,
         received_at: receivedAt,
         from: { ...first.from, device_fp: await fingerprint(next.device_pub) },
@@ -281,9 +284,18 @@ async function setup(
             commit: await sasCommitment(ephN.publicKey, next),
           },
         },
-      });
+      };
+      const cursor = String(deliveredBatches + 1);
+      queue.push(replacement);
       wake?.();
-      await vi.waitFor(() => expect(reads).toBeGreaterThan(before));
+      // The next poll acknowledges this batch only after every message has been handled.
+      await vi.waitFor(() =>
+        expect(mockClient.request).toHaveBeenCalledWith(
+          "openclawId.authority",
+          expect.objectContaining({ operation: "receive", after: cursor }),
+          expect.anything(),
+        ),
+      );
       return next.request_id;
     },
     recoveryUses,

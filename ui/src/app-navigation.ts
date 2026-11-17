@@ -15,8 +15,9 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // Pages derives its built-in catalog from these destinations. Personal rail
 // pins reference the catalog without changing its availability. Chat has the
 // Sessions view; Settings/Docs remain in the profile menu.
-// Skills, Skill Workshop and Templates are reached from the Customize workspace, not sidebar items.
-// Apps is reached from the profile menu and the command palette.
+// Skills, Skill Workshop and Templates are reached from the Customize sidebar, not sidebar items.
+// Apps is reached from the profile menu and the command palette; Activity is the
+// rail's People section.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
@@ -25,14 +26,13 @@ export const SIDEBAR_NAV_ROUTES = [
   "cron",
   "sessions",
   "systems",
-  "activity",
   "meetings",
   "plugins",
   "portals",
 ] as const satisfies readonly NavigationRouteId[];
 
-// Routes presented as tabs of the Customize (Plugins) hub. The sidebar highlights
-// the Customize entry for all of them, mirroring how config covers settings routes.
+// Pages of the Customize section, listed in its sidebar. The rail highlights the
+// Customize entry for all of them, mirroring how config covers settings routes.
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
   return (
     routeId === "plugins" ||
@@ -40,6 +40,19 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
     routeId === "skill-workshop" ||
     routeId === "templates"
   );
+}
+
+/** Section pages own a sidebar of their own; other pages run full width. */
+export function sidebarSectionForRoute(
+  route: NavigationRouteId,
+): "automations" | "customize" | "online" | undefined {
+  return route === "cron"
+    ? "automations"
+    : isPluginsHubRoute(route)
+      ? "customize"
+      : route === "activity"
+        ? "online"
+        : undefined;
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
@@ -60,8 +73,9 @@ export type SidebarZoneEntry =
   | { type: "session"; key: string; rail?: true }
   | { type: "person"; profileId: string };
 
-// The rail starts clean; only user-added shortcuts occupy the pins region.
-export const DEFAULT_SIDEBAR_ENTRIES: string[] = [];
+// Below the fixed Users item, the rail starts with Automations, Customize and
+// Usage; every other page waits in the "more" menu until it is pinned.
+export const DEFAULT_SIDEBAR_ENTRIES: string[] = ["route:cron", "route:plugins", "route:usage"];
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -124,6 +138,14 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
   return entry.type === "plugin"
     ? `plugin:${entry.key}`
     : `${entry.rail ? "session-rail" : "session"}:${entry.key}`;
+}
+
+/**
+ * Native section pins lead the rail, above the Pages control and its separator;
+ * plugin, session and person pins always follow it, bundled plugins included.
+ */
+export function isRailSectionPin(entry: string): boolean {
+  return entry.startsWith("route:");
 }
 
 /** Personal session pins render in the Sessions list's Pinned section, not the rail. */

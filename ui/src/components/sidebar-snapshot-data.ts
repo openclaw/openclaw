@@ -100,9 +100,7 @@ export const sidebarSnapshotSchema = json.object({
   roster: json.nullable(bootRosterSchema),
   mode: json.enumeration(["chip", "roster"]),
   grouping: json.optional(json.enumeration(["none", "category", "person", "project"])),
-  navigationView: json.enumeration(["pages", "sessions", "online"]),
-  pages: json.array(session),
-  pageScopeId: json.nullable(text),
+  navigationView: json.enumeration(["automations", "customize", "sessions", "online"]),
   pinnedSessions: json.array(session),
   entries: json.array(
     json.refine(
@@ -242,7 +240,6 @@ export function removeSidebarSnapshotSession(
     ...model,
     windowKeys: model.windowKeys.filter((value) => retain({ key: value })),
     pinnedSessions: prune(model.pinnedSessions),
-    pages: prune(model.pages),
     entries: model.entries.filter(
       (entry) => !entry.startsWith("session:") || retain({ key: entry.slice(8) }),
     ),
