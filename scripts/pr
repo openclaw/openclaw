@@ -1352,10 +1352,10 @@ if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
     trap 'pr_retire_created_anchor "$pr_bootstrap_anchor" || true' EXIT
     pr_start_dependency_lifetime || exit 1
   fi
-  # Older parents pin only their own dependency set. The anchored child owns
-  # completing its installation before any loader, supervisor, or lock starts.
+  # The selected workflow owns its dependency revision independently of bootstrap.
+  # Complete its pins before any loader, supervisor, or lock starts.
   pr_materialize_dependencies "$script_parent_dir/pr-lib/materialize-dependencies.mjs" \
-    "$script_parent_dir/../node_modules" "$pr_bootstrap_revision"
+    "$script_parent_dir/../node_modules" "${PR_WORKFLOW_SOURCE_REVISION:-$pr_bootstrap_revision}"
 elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
   # Establish recovery authority before bootstrap or cleanup can import helpers.

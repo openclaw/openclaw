@@ -2577,6 +2577,98 @@ closeSync(fd);
     },
   );
 
+  itPosix("repairs lost workflow pins during creator-owned anchored reentry", () => {
+    const fixture = makeFrozenDependencyFixture();
+    fixture.git(fixture.canonical, ["checkout", "main"]);
+    const reviewPath = "scripts/pr-lib/review.sh";
+    fixture.write(
+      reviewPath,
+      `${readScript(join(fixture.canonical, reviewPath))}
+review_guard() {
+  pr_git show-ref --verify --quiet refs/openclaw/pr-operation-locks/123 || return 1
+  [ ! -e /dev/fd/8 ] && [ ! -e /dev/fd/9 ] || return 1
+  printf 'workflow=%s\\nbootstrap=%s\\n' "$PR_WORKFLOW_SOURCE_REVISION" "\${pr_bootstrap_revision:-}"
+}
+`,
+    );
+    fixture.commit([reviewPath], true);
+    const workflow = fixture.gitText(["rev-parse", "HEAD"]);
+    const workflowManifest = readScript(join(fixture.canonical, "package.json"));
+    useOfficialOrigin(fixture);
+    const canonicalTsx = join(fixture.canonical, "node_modules/tsx");
+    rmSync(canonicalTsx);
+    symlinkSync(fixture.expected, canonicalTsx, "dir");
+    const initial = runWrapper(fixture, ["review-guard", "123"], "canonical");
+    expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+    expect(existsSync(fixture.calls)).toBe(false);
+    const bindingRef = "refs/openclaw/pr-workflow-bindings/123";
+    const binding = fixture.gitText(["rev-parse", bindingRef]);
+
+    fixture.write(
+      "package.json",
+      JSON.stringify({ ...JSON.parse(workflowManifest), description: "new bootstrap manifest" }),
+    );
+    fixture.commit(["package.json"], true);
+    const bootstrap = fixture.gitText(["rev-parse", "HEAD"]);
+    expect(bootstrap).not.toBe(workflow);
+    expect(fixture.gitText(["merge-base", workflow, bootstrap])).toBe(workflow);
+    expect(fixture.gitText(["rev-parse", `${bootstrap}:package.json`])).not.toBe(
+      fixture.gitText(["rev-parse", `${workflow}:package.json`]),
+    );
+    rmSync(canonicalTsx);
+    symlinkSync(fixture.stale, canonicalTsx, "dir");
+
+    const lostPin = join(fixture.root, "lost-workflow-pin");
+    // Inject projection loss at the real exec boundary while the same creator
+    // retains FD9 and both authenticated source revisions.
+    writeExecutable(
+      join(fixture.bin, "bash"),
+      `#!/bin/sh
+if [ "\${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] &&
+   [ "\${OPENCLAW_PR_ANCHOR_FD:-}" = 9 ] && [ ! -e "$PR_TEST_LOST_PIN" ]; then
+  case "$1" in
+    "$TMPDIR"/openclaw-pr-anchor-v3.*/scripts/pr)
+      anchor=\${1%/scripts/pr}
+      [ "$anchor" -ef /dev/fd/9 ] || exit 97
+      [ -L "$anchor/node_modules/tsx" ] || exit 98
+      rm "$anchor/node_modules/tsx" || exit 99
+      printf '%s\\n' "$anchor" > "$PR_TEST_LOST_PIN"
+      ;;
+  esac
+fi
+exec /bin/bash "$@"
+`,
+    );
+    const result = runWrapper(fixture, ["review-guard", "123"], "linked", {
+      env: { ...fixture.env, PR_TEST_LOST_PIN: lostPin },
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toContain(`workflow=${workflow}\nbootstrap=${bootstrap}\n`);
+    expect(result.stderr).toContain("Using frozen scripts/pr dependency installation:");
+    expect(result.stderr).not.toContain("Dependency manifest differs from verified anchor");
+    expect(existsSync(lostPin)).toBe(true);
+    expect(fixture.gitText(["rev-parse", bindingRef])).toBe(binding);
+    expect(jsonLines(fixture.calls)).toHaveLength(1);
+    const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies/v3");
+    const entries = prCacheEntries(cache);
+    expect(entries).toHaveLength(1);
+    const installation = join(cache, entries[0]!);
+    expect(readScript(join(installation, "package.json"))).toBe(workflowManifest);
+    expect(realpathSync(join(installation, "node_modules/tsx"))).toBe(fixture.expected);
+    expect(realpathSync(canonicalTsx)).toBe(fixture.stale);
+    collectFinishedDependencies(fixture);
+    expect(existsSync(readScript(lostPin).trim())).toBe(false);
+    expect(readPrCacheState(installation)).toMatchObject({ anchors: [], settled: true });
+    expect(
+      fixture.gitText([
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/openclaw/pr-operation-locks/123",
+      ]),
+    ).toBe("");
+  });
+
   itPosix(
     "shares one frozen install across source revisions with independent anchor lifetimes",
     () => {
