@@ -330,13 +330,13 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
               ).toBeUndefined();
               expect(warn).toHaveBeenCalledWith(
                 expect.stringContaining(
-                  `Skipped restart resume for ${legacyScope.sessionKey}: GatewayOperatorRecoveryAuthorizationError: Session principal has no current run authority.`,
+                  `Skipped restart resume for ${legacyScope.sessionKey}: Error: Session principal has no current run authority.`,
                 ),
               );
             }
             expect(warn).toHaveBeenCalledWith(
               expect.stringContaining(
-                `Skipped restart resume for ${scope.sessionKey}: GatewayOperatorRecoveryAuthorizationError: Session principal has no current run authority.`,
+                `Skipped restart resume for ${scope.sessionKey}: Error: Session principal has no current run authority.`,
               ),
             );
           }
