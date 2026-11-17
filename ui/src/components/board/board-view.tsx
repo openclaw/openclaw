@@ -4,7 +4,6 @@ import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-docume
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
-  boardChromeRowPx,
   boardWidgetGridItems,
   FINE_POINTER_QUERY,
   layout,
@@ -73,7 +72,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     // Touch layouts reserve a chrome row. Let ordinary long auto-height HTML
     // use the existing document bound instead of requiring an inner-to-board
     // scroll handoff; fixed-height widgets still use their saved rows.
-    const fitAutoContent = props.fitAutoContent || boardChromeRowPx() > 0;
+    const fitAutoContent = owner.fitAutoContent();
     const positions = new Map<string, number>();
     const rects = tabs.flatMap((tab) => {
       const tabRects = layout(

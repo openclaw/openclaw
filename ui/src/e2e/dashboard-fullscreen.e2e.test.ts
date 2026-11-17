@@ -501,7 +501,7 @@ suite.define(() => {
               .section{height:168px;margin-bottom:12px;padding:16px;border:1px solid #466}
               footer{padding:24px;background:#a4ebcb;color:#123}</style>
               <main>${Array.from(
-                { length: 28 },
+                { length: 10 },
                 (_, i) =>
                   `<section class="section"><h2>Dashboard section ${i + 1}</h2>Ordinary content outside nested controls.</section>`,
               ).join(
@@ -531,6 +531,13 @@ suite.define(() => {
                   widgets: [
                     { ...widget, heightMode: "auto" },
                     { ...widget, name: "fixed", heightMode: "fixed", sizeH: 4, position: 1 },
+                    {
+                      ...widget,
+                      name: "second-auto",
+                      title: "Second Auto",
+                      heightMode: "auto",
+                      position: 2,
+                    },
                   ],
                 },
               },
@@ -625,6 +632,76 @@ suite.define(() => {
               `${suite.artifactDir}/touch-grid-final-row.png`,
               after.elements[0]!.png,
             );
+            const autoCards = board.locator(
+              '[data-widget-name="status"], [data-widget-name="second-auto"]',
+            );
+            const heights = () =>
+              autoCards.evaluateAll((cards) =>
+                cards.map((card) => card.getBoundingClientRect().height),
+              );
+            await expect.poll(async () => Math.min(...(await heights()))).toBeGreaterThan(1350);
+            const originalHeights = await heights();
+            const expectSeparated = async () => {
+              const cards = await board
+                .locator('[data-test-id="board-widget"]')
+                .evaluateAll((nodes) =>
+                  nodes.map((node) => {
+                    const { top, bottom } = node.getBoundingClientRect();
+                    return { top, bottom };
+                  }),
+                );
+              expect(cards[1]!.top).toBeGreaterThanOrEqual(cards[0]!.bottom + 11);
+              expect(cards[2]!.top).toBeGreaterThanOrEqual(cards[1]!.bottom + 11);
+              expect(await heights()).toEqual(originalHeights);
+            };
+            for (const gesture of ["drag", "resize"]) {
+              const handle = board.locator(
+                `[data-widget-name="fixed"] .board-widget__${gesture}-handle`,
+              );
+              await handle.scrollIntoViewIfNeeded();
+              const bounds = await handle.boundingBox();
+              if (!bounds) {
+                throw new Error("Gesture handle disappeared");
+              }
+              const point = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+              await cdp.send("Input.dispatchTouchEvent", {
+                type: "touchStart",
+                touchPoints: [point],
+              });
+              try {
+                await expect.poll(() => board.locator(".board-widget--dragging").count()).toBe(1);
+                const preview = await takeControlUiScreenshotFrame(page, board, [board], {
+                  elements: [board],
+                  animations: "disabled",
+                });
+                await writeFile(
+                  `${suite.artifactDir}/touch-gesture-${gesture}.png`,
+                  preview.elements[0]!.png,
+                );
+                await expectSeparated();
+                await cdp.send("Input.dispatchTouchEvent", {
+                  type: "touchMove",
+                  touchPoints: [{ x: point.x, y: point.y + (gesture === "resize" ? 68 : 8) }],
+                });
+                if (gesture === "resize") {
+                  await expect
+                    .poll(() =>
+                      board
+                        .locator(".board-widget--dragging")
+                        .evaluate((card) => getComputedStyle(card).height),
+                    )
+                    .toBe("328px");
+                }
+                await expectSeparated();
+              } finally {
+                await cdp.send("Input.dispatchTouchEvent", {
+                  type: "touchCancel",
+                  touchPoints: [],
+                });
+              }
+              await expect.poll(() => board.locator(".board-widget--dragging").count()).toBe(0);
+              await expectSeparated();
+            }
           },
         );
       } finally {
