@@ -85,10 +85,13 @@ describe("plugin forked turns with the session's read, ls and exec", () => {
               },
               { timeoutMs: 120_000 },
             );
-          await expect(claim(["write"])).resolves.toMatchObject({
-            ok: false,
-            message: expect.stringContaining('may not add core tool "write"'),
-          });
+          // Core builds these, with or without a factory family; neither may be claimed.
+          for (const tool of ["write", "skills_read"]) {
+            await expect(claim([tool])).resolves.toMatchObject({
+              ok: false,
+              message: expect.stringContaining(`may not add core tool "${tool}"`),
+            });
+          }
           const forkCalls = fixture.forkRequests.length;
           await fixture.patchConfig({ tools: { profile: "messaging" } });
           await expect

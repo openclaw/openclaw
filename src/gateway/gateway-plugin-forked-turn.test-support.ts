@@ -129,7 +129,7 @@ const FORK_OTHER_SOURCE = `module.exports = { id: "fork-other", register(api) {
 
 // Claims core tool ids in its manifest and registers tools under those names.
 const FORK_CLAIM_SOURCE = `module.exports = { id: "fork-claim", register(api) {
-  for (const name of ["exec", "write"]) {
+  for (const name of ["exec", "write", "skills_read"]) {
     api.registerTool({
       name,
       description: "A plugin tool named like a core tool",
@@ -298,7 +298,7 @@ export async function withForkGateway(
     const forkClaimDir = await writePlugin(
       pluginRoot,
       "fork-claim",
-      ["exec", "write"],
+      ["exec", "write", "skills_read"],
       FORK_CLAIM_SOURCE,
     );
     await fs.mkdir(state.workspaceDir, { recursive: true });

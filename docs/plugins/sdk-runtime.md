@@ -240,9 +240,9 @@ if (result.status === "refused") {
   for approval: a command the agent's exec approvals would ask about is denied,
   and nothing is queued for approval. Allowlist entries and full-permission exec
   apply as they do for the session's own turns.
-- A manifest's `contracts.tools` may claim a core catalog id only when core
-  builds no tool for it (as `browser` and `skill_workshop`); claiming `exec`,
-  `read` or another core-built tool grants nothing.
+- A manifest's `contracts.tools` may claim a core catalog id only when the
+  catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
+  `exec`, `read` or another core-built tool grants nothing.
 - `through.sessionId` must still be the session's current id, and the entry must
   be on its active transcript; otherwise the call fails. A reset that keeps the
   session id does not refuse the fork. `outcome.source` reports the
