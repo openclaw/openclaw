@@ -237,6 +237,14 @@ if (
     "The main validation tier requires canonical same-revision manual or scheduled validation with full scope",
   );
 }
+// Extended-stable ships only the Gateway, not candidate-source mobile apps.
+const candidateVersion = parseReleaseVersion(String(packageJson.version ?? ""));
+const skipMobileValidation =
+  eventName === "workflow_dispatch" &&
+  !releaseGate &&
+  isCanonicalRepository &&
+  candidateVersion !== null &&
+  classifyReleaseTrain(candidateVersion) === "extended-stable";
 const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
 // Stable tags also ship the macOS app, and its post-tag validation is too late
 // to block the tag, so only beta defers macOS Swift proof.
@@ -446,6 +454,7 @@ const runMacosSwift =
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
+  !skipMobileValidation &&
   !nativeGeneratedOnly &&
   scopeEnabled(process.env.OPENCLAW_CI_RUN_IOS_BUILD) &&
   !releaseFastLane &&
@@ -455,6 +464,7 @@ const iosBuildScope =
   (!frozenTarget || supportsCurrentIosCi || (releaseCandidateTarget && supportsIosBuild));
 const runIosBuild = !ordinaryPullRequest && iosBuildScope;
 const runAndroid =
+  !skipMobileValidation &&
   !nativeGeneratedOnly &&
   scopeEnabled(process.env.OPENCLAW_CI_RUN_ANDROID) &&
   !npmQualification &&
@@ -1926,6 +1936,7 @@ if (runCheckPlan && runNodeFull && !releaseFastLane) {
 
 const manifest = {
   release_scope: releaseScope,
+  skip_mobile_validation: skipMobileValidation,
   release_fast_lane: releaseFastLane,
   validation_tier: validationTier,
   docs_only: docsOnly,
@@ -1937,7 +1948,9 @@ const manifest = {
   run_macos: runMacos,
   run_android: runAndroid,
   run_android_screenshots:
-    !ordinaryPullRequest && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
+    !skipMobileValidation &&
+    !ordinaryPullRequest &&
+    parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS),
   run_skills_python: runSkillsPython,
   run_windows: runWindows,
   run_build_artifacts: runBuildArtifacts,
@@ -2255,8 +2268,13 @@ if (hybridHostedEligible) {
     // and release rows require a different dispatch admission.
     "macos-swift": count(manifest.run_macos_swift, 3),
     "ios-build": count(manifest.run_ios_build),
-    "ios-screenshot-capture": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS), 1),
-    "ios-screenshot-evidence": count(parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS)),
+    "ios-screenshot-capture": count(
+      !skipMobileValidation && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+      1,
+    ),
+    "ios-screenshot-evidence": count(
+      !skipMobileValidation && parseCiEnvFlag(process.env.OPENCLAW_CI_RUN_IOS_SCREENSHOTS),
+    ),
     "android-screenshots": count(manifest.run_android_screenshots),
     "android-access-native": count(manifest.run_android_access_native, 2),
     "docker-seed-e2e": count(

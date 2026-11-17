@@ -10206,6 +10206,75 @@ describe("ci workflow guards", () => {
     },
   );
 
+  it.each([false, true])(
+    "omits extended-stable mobile validation (frozen target: %s)",
+    (frozen) => {
+      const options = {
+        bundledPlanner: true,
+        historicalCompatibility: frozen,
+        scopeEnv: {
+          OPENCLAW_CI_WORKFLOW_REVISION: (frozen ? "b" : "a").repeat(40),
+          OPENCLAW_CI_RUN_UI_TESTS: "true",
+          OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS: "true",
+        },
+      };
+      const regular = runCiManifestFixture({ ...options, packageVersion: "2026.9.1" });
+      const extended = runCiManifestFixture({ ...options, packageVersion: "2026.9.33" });
+      expect(regular.status, regular.output).toBe(0);
+      expect(extended.status, extended.output).toBe(0);
+      expect(regular.outputs.run_ios_build).toBe("true");
+      expect(regular.outputs.run_android_job).toBe("true");
+      expect(extended.outputs).toEqual({
+        ...regular.outputs,
+        skip_mobile_validation: "true",
+        run_ios_build: "false",
+        run_ios_voice_cleanup_tests: "false",
+        run_ios_lifecycle_tests: "false",
+        ios_simulator_selection: JSON.stringify({
+          mode: "not-selected",
+          voice: { selected: false, reasons: ["iOS job not selected"] },
+          lifecycle: { selected: false, reasons: ["iOS job not selected"] },
+        }),
+        run_android: "false",
+        run_android_job: "false",
+        run_android_access_native: "false",
+        run_android_screenshots: "false",
+        android_matrix: JSON.stringify({ include: [] }),
+      });
+      const context = { preflightOutputs: extended.outputs };
+      for (const job of [
+        "ios-build",
+        "android",
+        "ios-release-e2e",
+        "android-release-e2e",
+        "ios-screenshot-capture",
+        "ios-screenshot-evidence",
+        "android-screenshots",
+      ]) {
+        const condition = readCiWorkflow().jobs[job].if;
+        expect(
+          evaluateWorkflow(
+            condition.startsWith("${{") ? condition : `\${{ ${condition} }}`,
+            context,
+          ),
+          job,
+        ).toBe(false);
+      }
+      for (const output of [
+        "run_node",
+        "run_macos_node",
+        "run_macos_swift",
+        "run_checks_windows",
+        "run_build_artifacts",
+        "run_protocol_event_coverage",
+        "run_ui_tests",
+        "run_native_i18n",
+      ]) {
+        expect(extended.outputs[output], output).toBe("true");
+      }
+    },
+  );
+
   it.skipIf(process.platform === "win32").each([
     { label: "base branch correction", context: "branch", direct: "a", accepted: true },
     { label: "base tag correction", context: "tag", direct: "a", accepted: true },
@@ -14554,6 +14623,11 @@ describe("ci workflow guards", () => {
       label: "hourly main excludes screenshots even with screenshot scope",
       context: { eventName: "schedule", preflightOutputs: { validation_tier: "main" } },
       expected: { "ios-build": true, "ios-screenshot-capture": false },
+    },
+    {
+      label: "extended-stable excludes mobile screenshots",
+      context: { preflightOutputs: { skip_mobile_validation: "true" } },
+      expected: { "ios-screenshot-capture": false, "android-screenshots": false },
     },
     {
       label: "ordinary manual screenshot override",
