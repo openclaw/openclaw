@@ -85,7 +85,9 @@ or apply to Codex-native Code Mode.
   trusted tool provides an output schema. It omits descriptions, full schemas,
   MCP entries, and overflow entries. Callable `catalog.search(...)` results are
   the fallback. Input hints retain integer and numeric bounds as comments, such
-  as `offset?: number /* integer, >= 1 */`. Other validation details remain in
+  as `offset?: number /* integer, >= 1 */`. A hint that overflows its budget
+  shows only required arguments, at every level, and ends each object that
+  dropped optional ones with `...`; required types shorten further if needed. Other validation details remain in
   the full schema available through `describe()`. These hints do not change
   tool validation or output contracts. Core file and shell tool signatures stay
   first in the bounded index, followed by tools with declared output hints, so
