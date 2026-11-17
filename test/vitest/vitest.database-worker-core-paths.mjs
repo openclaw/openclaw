@@ -836,6 +836,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/update-cli/update-command-doctor-authority-callers.test.ts",
   "src/cli/update-cli/update-command-doctor-capability.test.ts",
   "src/cli/update-cli/update-command-finalize-refusal.test.ts",
+  "src/cli/update-cli/update-command-killed-run.process.test.ts",
   "src/cli/update-cli/update-command-plugin-caller.test.ts",
   "src/cli/update-cli/update-command-plugins.degradation.test.ts",
   "src/cli/update-cli/update-command-service-publication.test.ts",
