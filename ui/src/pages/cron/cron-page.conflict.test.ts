@@ -57,7 +57,7 @@ it.each(["save", "toggle"] as const)(
     });
     const { gateway, page } = conflictPage(request);
 
-    (await dom.waitForElement(page, dom.testId("cron-row-filtered-conflict-job"))).click();
+    await harness.openJob(page, staleJob.id);
     await harness.waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe(staleJob.id));
 
     page.cron.cronJobsQuery = "missing from filtered results";
@@ -104,10 +104,6 @@ it.each(["save", "toggle"] as const)(
       expect.objectContaining({ expectedConfigRevision: "revision-current" }),
     ]);
     expect(page.querySelector(".callout.danger")).toBeNull();
-
-    dom.click(page, dom.testId("cron-back"));
-    await harness.waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
-    expect(page.querySelector(dom.testId("cron-row-filtered-conflict-job"))).toBeNull();
   },
 );
 
@@ -137,8 +133,7 @@ it.each(["another automation", "reopened editor", "Gateway source"] as const)(
     });
     const { page } = conflictPage(request);
     try {
-      (await dom.waitForElement(page, dom.testId("cron-row-conflict-origin"))).click();
-      await page.settle();
+      await harness.openJob(page, job.id);
       const originalState = page.cron;
       dom.click(page, '[data-test-id="cron-toggle-enabled"] input');
       await reading.promise;

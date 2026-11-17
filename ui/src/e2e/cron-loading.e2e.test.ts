@@ -175,8 +175,7 @@ suite.define(() => {
       const gateway = await installCronGateway(page, {
         "cron.runs": runsPage([oldRun], 51, 0, 50),
       });
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await page.goto(`${suite.server.baseUrl}cron?activity`);
       await page.getByText(oldRun.summary, { exact: true }).waitFor();
       await gateway.deferNext("cron.runs");
       await gateway.setMethodResponse("cron.runs", runsPage([secondRun], 2, 50, null));

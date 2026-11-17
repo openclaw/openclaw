@@ -4,6 +4,7 @@ import type { ControlUiNavigationItem } from "../../../../src/plugin-sdk/control
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { isRailSectionPin } from "../../app-navigation.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { selectSidebarView } from "../app-sidebar-setup.ts";
@@ -163,8 +164,10 @@ it.each([
   drag(source, target);
   await sidebar.updateComplete;
   expect(onUpdate).toHaveBeenCalled();
+  // The saved order follows the drop; plugin pins still render below section pins.
+  expect(sidebar.sidebarEntries).toEqual(["plugin:logbook/logbook", "route:cron"]);
   const ordered = entryOrder(sidebar, ".sidebar-rail [data-sidebar-entry]");
-  expect(ordered.indexOf("plugin:logbook/logbook")).toBeLessThan(ordered.indexOf("route:cron"));
+  expect(ordered.indexOf("route:cron")).toBeLessThan(ordered.indexOf("plugin:logbook/logbook"));
   zoneEntry(sidebar, "plugin:logbook/logbook").querySelector<HTMLAnchorElement>("a")?.click();
   const location = new URL(href, window.location.origin);
   expect(navigate).toHaveBeenCalledWith("plugin", {
@@ -201,26 +204,14 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
   await selectSidebarView(sidebar, "pages");
   await waitForFast(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
   const pages = domProbe(dom.query(".sidebar-pages")!);
-  const entries = [...pages.all<HTMLElement>('[data-sidebar-entry^="plugin:example/"]')];
   const settled = (entry: Element) =>
     entry.querySelector<SolidBridgeElement<object>>("openclaw-plugin-contributions")!
       .updateComplete;
+  // Pages lists the parent alone; its children live in the parent's own sidebar.
+  const entries = [...pages.all<HTMLElement>('[data-sidebar-entry^="plugin:example/"]')];
   await Promise.all(entries.map(settled));
-  expect(entries.map((entry) => entry.dataset.sidebarEntry)).toEqual(
-    ids.map((id) => `plugin:example/${id}`),
-  );
-  expect(
-    entries.flatMap((entry) =>
-      [...entry.querySelectorAll("a")].map((link) => link.getAttribute("href")),
-    ),
-  ).toEqual(ids.map((id) => `/plugin?plugin=example&id=${id}`));
+  expect(entries.map((entry) => entry.dataset.sidebarEntry)).toEqual(["plugin:example/boards"]);
   expect(pages.all(".nav-item-group, .nav-item__children, .nav-item--child")).toHaveLength(0);
-  expect(pages.all('[aria-current="page"]')).toHaveLength(1);
-  const selected = entries[2]!.querySelector<HTMLAnchorElement>('a[aria-current="page"]')!;
-  expect(selected.getAttribute("aria-label")).toBe("notes");
-  expect(selected.classList.contains("nav-item--active")).toBe(true);
-  selected.click();
-  expect(openPage).toHaveBeenCalledExactlyOnceWith({ id: "notes" });
   for (const entry of entries) {
     const row = entry.closest<HTMLElement>(".sidebar-pages__entry")!;
     const pin = row.querySelector<HTMLButtonElement>(".sidebar-pages__pin")!;
@@ -229,6 +220,22 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
     expect(getComputedStyle(row)).toMatchObject({ display: "flex", alignItems: "center" });
     expect(getComputedStyle(entry)).toMatchObject({ display: "flex", flexGrow: "1" });
   }
+  // A child's page shows the parent's sidebar: the parent, then each child, the open one current.
+  sidebar.activeRouteId = "plugin";
+  sidebar.activePluginTabId = "example/notes";
+  await waitForFast(() => expect(dom.query(".sidebar-plugin-section")).not.toBeNull());
+  const section = domProbe(dom.query(".sidebar-plugin-section")!);
+  const listed = [...section.all<HTMLElement>('[data-sidebar-entry^="plugin:example/"]')];
+  await Promise.all(listed.map(settled));
+  // Children follow the plugin's order, then their labels.
+  expect(listed.map((entry) => entry.dataset.sidebarEntry)).toEqual(
+    ["boards", "notes", "review"].map((id) => `plugin:example/${id}`),
+  );
+  expect(section.all('[aria-current="page"]')).toHaveLength(1);
+  const selected = section.query<HTMLAnchorElement>('a[aria-current="page"]')!;
+  expect(selected.getAttribute("aria-label")).toBe("notes");
+  selected.click();
+  expect(openPage).toHaveBeenCalledExactlyOnceWith({ id: "notes" });
   for (const id of ["boards", "notes"]) {
     const railEntry = pluginEntry(sidebar, `example/${id}`, "rail")!;
     await settled(railEntry);
@@ -237,7 +244,10 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
     expect(rail.attr("a", "aria-label")).toBe(id);
     expect(rail.present(".nav-item__children")).toEqual([false]);
   }
-  expect(entryOrder(sidebar, ".sidebar-rail__pin")).toEqual(sidebar.sidebarEntries);
+  expect(entryOrder(sidebar, ".sidebar-rail__pin")).toEqual([
+    ...pins.filter(isRailSectionPin),
+    ...pins.filter((entry) => !isRailSectionPin(entry)),
+  ]);
   expect(sidebar.sidebarEntries).toEqual(pins);
 });
 

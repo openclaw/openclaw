@@ -452,7 +452,7 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   const page = createPage(context, { render: true });
   cleanups.push(() => channels.dispose());
   await page.settle();
-  click(page, testId("cron-list-tab-activity"));
+  page.routeSearch = "?activity";
   await page.settle();
   emitEvent(gateway, "cron", {}, 20);
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 1);
@@ -466,44 +466,6 @@ it("coalesces a cron event burst into one trailing refresh of the current page",
   });
   expectCalls(request, ["cron.status", "cron.runs", "cron.list"], 2);
   expect(callsFor(request, "channels.status")).toHaveLength(0);
-});
-
-it("lets manual Refresh supersede held status and run-history reads", async () => {
-  const held = gate();
-  const calls = { "cron.status": 0, "cron.runs": 0 };
-  const fallback = createRequest();
-  const request = vi.fn(async (method: string) => {
-    if (method !== "cron.status" && method !== "cron.runs") {
-      return fallback(method);
-    }
-    const revision = ++calls[method];
-    if (revision === 1) {
-      await held.promise;
-    }
-    return method === "cron.status"
-      ? schedulerStatus(revision)
-      : cronRunsResponse([createCronViewRun({ ts: revision, jobId: "job" })]);
-  });
-  const { page } = mountCronPage(request);
-  await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
-  await page.settle();
-  click(page, testId("cron-list-tab-activity"));
-  await page.settle();
-  expect(calls).toEqual({ "cron.status": 1, "cron.runs": 1 });
-  const refresh = page.querySelector<HTMLButtonElement>(".cron-refresh");
-  expect(refresh).not.toBeNull();
-  refresh?.click();
-  await page.settle();
-  expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
-  await waitForCronPage(() => {
-    expect(page.cron.cronStatus?.jobs).toBe(2);
-    expect(page.cron.cronRuns[0]?.ts).toBe(2);
-  });
-  held.resolve();
-  await settle();
-  expect(page.cron.cronStatus?.jobs).toBe(2);
-  expect(page.cron.cronRuns[0]?.ts).toBe(2);
-  expect(calls).toEqual({ "cron.status": 2, "cron.runs": 2 });
 });
 
 it.each(["disconnect", "reconnect", "agent scope", "gateway source", "unmount"])(

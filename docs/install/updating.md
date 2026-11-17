@@ -53,6 +53,30 @@ backup.
 
 ## Update implementation contract
 
+Service reconciliation recognizes a deleted pnpm store generation only when it
+belongs to the same global root as a verified active pnpm install. This repairs
+older service definitions without adopting another global installation. The
+candidate also retains the post-activation predicate imported by supported
+2026.9 extended-stable updaters.
+
+The candidate CLI and Matrix plugin keep explicit `matrix doctor inspect` and
+`matrix doctor recover --account <id> --accept-snapshot-rollback` available through
+the separate Doctor contract when an unfinished migration withholds normal Matrix
+commands. Recovery retains snapshot validation and exclusive crypto custody. It
+never runs automatically or settles the deferred migration: after explicit
+recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
+the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
+
+When a package baseline's final rescan detects stat drift, the update still
+refuses package replacement. Local failure output and `openclaw update status --json`
+diagnostics identify the first entry relative to the package root (`.` for the
+root), changed stat fields, and their before/after values. Public failure reports
+retain only the changed field names. An unavailable original inode still refuses
+inspection, identifying the entry and zero inode locally and only the closed
+unavailable-inode classification publicly. These observations do not identify the writer
+or establish why a Windows update failed. The installed updater must contain this
+diagnostic change; a newer candidate cannot change an older updater's scan.
+
 Candidate Doctor compares pending plugin migration obligations independently of
 plugin order and repair guidance. A changed owner, protected path, or migration
 requirement still refuses input publication; diagnostics name added or removed
@@ -483,9 +507,13 @@ For released updaters that still rehearse Doctor on private state, the candidate
 snapshot worker preserves file-backed cold transcript rows and projects their
 payloads into the private `sessions/cold/` directories. Immutable regular files
 use hard links, with a reflink or byte copy when linking is unavailable. Existing
-files are never rewritten or chmodded through those links. Rehearsal reads keep
-the normal archive integrity checks; a corrupt payload remains corrupt in the
-copy, and a missing referenced file refuses capture. The candidate inventory
+files are never rewritten or chmodded through those links. Windows always copies,
+because removing a hard link on a filesystem without POSIX delete semantics, such
+as an SMB share, clears the read-only attribute of the shared live file.
+Rehearsal reads keep the normal archive integrity checks; a corrupt payload
+remains corrupt in the copy, and a referenced file already missing from live
+state stays missing. Capture continues with a snapshot warning, so only a Doctor
+repair that reads that archive fails, as it would on live state. The candidate inventory
 adds cold-file bytes to the historical `pluginBytes` allowance so released
 parents budget the full copy fallback and its I/O time. Inventory reads archive
 names from a read-only database snapshot and measures the referenced files;
@@ -2630,6 +2658,14 @@ including root, does not block cleanup without positive OpenClaw or runtime-path
 evidence. Unknown process ownership stays conservative. The Doctor performing
 cleanup must contain this fix; it can reclaim runtimes left by older updaters
 without changing their markers or requiring privileged process inspection.
+
+Running node hosts (`openclaw node run`, including the CLI process their
+launcher starts), the macOS app, and its node worker never create updater
+runtimes, so they do not block reclamation on any platform unless they reference
+a runtime. On macOS, helpers that inherit the Gateway's service environment,
+such as credential agents or `adb`, are not OpenClaw processes. A CLI process
+whose title hides its command still preserves runtimes unless its launcher shows
+a command that never updates.
 
 On Windows, the same reclamation reads native process command lines and working
 directories. Processes owned by another account and protected system processes

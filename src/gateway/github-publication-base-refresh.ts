@@ -28,7 +28,6 @@ import {
   prepareManagedWorkspaceReviewBase,
   readManagedSandboxGitState,
 } from "./github-publication-workspace-review.js";
-import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
 import {
@@ -390,32 +389,14 @@ export async function integrateManagedWorkspaceSource(
           if (state.current().base_commit !== baseCommit) {
             const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-base-refresh-"));
             try {
-              const mergedCommit = await git(
-                ["commit-tree", "--no-gpg-sign", tree, "-p", sourceHead],
-                "Prepare selected base integration\n",
-              );
-              for (const [name, commit] of [
-                ["before", sourceHead],
-                ["after", mergedCommit],
-              ]) {
-                const destination = path.join(temporary, name!);
-                await prepareLocalWorkspaceCheckout({
-                  source: cwd,
-                  destination,
-                  temporaryRoot: temporary,
-                  baseCommit: commit!,
-                  branch: "refresh",
-                  signal: new AbortController().signal,
-                  assertCurrent: check,
-                  workerAuthority: state.workerAuthority,
-                });
-              }
               const buildCacheInputs = await state.buildCacheInputs();
               const baseline = await state.baselineDocument();
               const current = await prepareWorkspaceBaseRefresh(
                 {
-                  beforeRoot: path.join(temporary, "before"),
-                  afterRoot: path.join(temporary, "after"),
+                  root: cwd,
+                  beforeTree: sourceHead,
+                  afterTree: tree,
+                  temporaryRoot: temporary,
                   baseCommit,
                   baseRaw: baseline.rawManifest,
                   baseRef: baseline.manifestRef,

@@ -8,11 +8,7 @@ import {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  OPENAI_API_BASE_URL,
-  OPENAI_CODEX_RESPONSES_BASE_URL,
-  resolveOpenAICodexModelsEndpoint,
-} from "./base-url.js";
+import { OPENAI_API_BASE_URL, OPENAI_CODEX_RESPONSES_BASE_URL } from "./base-url.js";
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -505,7 +501,9 @@ describe("buildOpenAIProvider", () => {
         maxTokens: 64_000,
       });
       expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(fetchSpy.mock.calls[0]?.[0]).toBe(await resolveOpenAICodexModelsEndpoint());
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe(
+        "https://chatgpt.com/backend-api/codex/models?client_version=99.0.0",
+      );
       const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
       expect(headers).toBeInstanceOf(Headers);
       if (!(headers instanceof Headers)) {
