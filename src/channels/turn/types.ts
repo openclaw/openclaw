@@ -164,20 +164,18 @@ export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-o
 
 export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
-  | "deps"
-  | "formatting"
-  | "identity"
-  | "mediaAccess"
-  | "replyToMode"
-  | "retryAmbiguousFinalText"
-  | "silent"
-  | "threadId"
+  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
 > & {
   /** Validate the admitted sender or restore its account view from current Gateway config. */
   prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
+  /**
+   * @deprecated Ignored. Core marks every durable final itself; an ordinary final text is
+   * resent once after an unconfirmed send on every channel that cannot reconcile it.
+   */
+  retryAmbiguousFinalText?: true;
 };
 
 type ChannelDeliveryAdapterBase = {
