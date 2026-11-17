@@ -229,7 +229,6 @@ export type ChatPanelMenuContentProps = {
   controls: MenuControls;
   readMenu: () => MenuHandle | undefined;
   onReady: (handlers: ChatPanelMenuHandlers | undefined) => void;
-  renderItems: (items: () => readonly MenuEntry[]) => Element;
 };
 
 /** Keep registered content and initial focus owned by the same panel menu. */
@@ -268,7 +267,9 @@ function createPanelMenu() {
         onSettled(focusReady);
       }
     },
-    onSelect: (item: MenuItem, event: CustomEvent<MenuItem>) => handlers()?.select(item, event),
+    get onSelect() {
+      return handlers()?.select;
+    },
     read: () => menu,
     bind(this: void, handle: MenuHandle) {
       menu = handle;
@@ -364,8 +365,8 @@ export function ChatDashboardMenu(
                 controls={controls}
                 readMenu={menu.read}
                 onReady={menu.onReady}
-                renderItems={() => renderItems(menu.items)}
               />
+              {renderItems(menu.items)}
             </ChatPanelMenuBoundary>
           ),
         },
@@ -454,8 +455,8 @@ export function ChatPaneLayoutMenu(props: ChatPaneLayoutMenuProps) {
                   controls={controls}
                   readMenu={menu.read}
                   onReady={menu.onReady}
-                  renderItems={() => renderItems(menu.items)}
                 />
+                {renderItems(menu.items)}
               </ChatPanelMenuBoundary>
             ),
           },
