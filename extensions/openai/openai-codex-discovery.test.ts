@@ -32,14 +32,18 @@ async function discoverCodexModels(models: Record<string, unknown>[]) {
 describe("OpenAI discovered subscription models", () => {
   beforeEach(() => clearLiveCatalogCacheForTests());
   afterEach(() => vi.restoreAllMocks());
-  it("reports the Codex binary version that runs turns as client_version", async () => {
-    codexClient.resolveCodexClientVersion.mockResolvedValueOnce("0.162.1");
-    const { fetch } = await discoverCodexModels([{ slug: "gpt-5.5", visibility: "list" }]);
+  it.each([undefined, "0.162.1"])(
+    "uses the broad subscription catalog regardless of the selected Codex version (%s)",
+    async (runtimeVersion) => {
+      codexClient.resolveCodexClientVersion.mockResolvedValue(runtimeVersion);
+      const { fetch } = await discoverCodexModels([{ slug: "gpt-5.5", visibility: "list" }]);
 
-    expect(fetch.mock.calls.map(([{ url }]) => url)).toEqual([
-      "https://chatgpt.com/backend-api/codex/models?client_version=0.162.1",
-    ]);
-  });
+      expect(fetch.mock.calls.map(([{ url }]) => url)).toEqual([
+        "https://chatgpt.com/backend-api/codex/models?client_version=99.0.0",
+      ]);
+      expect(codexClient.resolveCodexClientVersion).not.toHaveBeenCalled();
+    },
+  );
   it.each([128_000, undefined])(
     "preserves the active window %s and enabled reasoning for discovered GPT-6.1 Sol",
     async (contextWindow) => {

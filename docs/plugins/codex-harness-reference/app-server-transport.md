@@ -66,29 +66,15 @@ or `Codex app-server: using bundled 0.162.1 (installed /usr/local/bin/codex 0.15
 If the selected Codex later fails to start, fails `initialize`, or reports
 another version (for example after an in-place upgrade), OpenClaw starts the
 shipped binary for that request before any thread or turn exists, logs one
-warning, and keeps using the shipped binary until the Gateway restarts. ChatGPT
-model discovery reports the selected binary's version as `client_version`, so
-the model list matches the binary that runs turns. A Gateway restart repeats the
-selection, which picks up Codex installs, upgrades, and removals.
-
-The model list can briefly disagree with the binary after such a fallback. A
-fallback only happens after the installed binary already passed the selection
-handshake, so these windows are rare:
-
-- A model-list refresh that started before the fallback, including one still
-  queued for a catalog worker, finishes with the installed version's list.
-- A list fetched before the fallback stays cached until the ChatGPT model rows
-  expire (about a minute) and the next refresh runs. A model only the installed
-  version offers can be picked in that window, and its turn then runs on the
-  shipped binary.
-- `openclaw models list --refresh` without a running Gateway selects a binary
-  in its own process, so its list can differ from a Gateway started later, for
-  example after installing or upgrading Codex in between.
+warning, and keeps using the shipped binary until the Gateway restarts. A Gateway
+restart repeats the selection, which picks up Codex installs, upgrades, and
+removals. [ChatGPT subscription model discovery](/plugins/codex-harness-reference/model-discovery#model-discovery)
+is independent of this selection, so a model in the picker may require a newer
+binary than the one running the turn.
 
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
-always win; discovery then keeps reporting the shipped version. Login-status
-checks, node exec-servers, and the Doctor package check always use the shipped
-binary.
+always win. Login-status checks, node exec-servers, and the Doctor package check
+always use the shipped binary.
 
 Ordinary managed turns with the default isolated agent home prefer this package
 selection even when a macOS desktop bundle is installed. When
@@ -98,8 +84,7 @@ the desktop app binary that owns the required macOS permissions. The same
 desktop-first rule applies when an isolated agent home's effective Codex config
 enables native Computer Use. If no desktop app bundle is installed, OpenClaw
 falls back to the package selection. A desktop-first start that finds the
-desktop app does not check `PATH`: the shipped binary is its fallback, and
-ChatGPT model discovery for that agent keeps reporting the shipped version.
+desktop app does not check `PATH`: the shipped binary is its fallback.
 
 Before cutting over a staged OpenClaw package, run the opt-in managed-binary
 check against the candidate installation:
