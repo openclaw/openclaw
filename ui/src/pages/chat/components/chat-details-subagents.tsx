@@ -26,7 +26,7 @@ export type ChatDetailsSubagentsProps = {
   mobile: boolean;
   /** Render in the section header's trailing slot when its body is collapsed. */
   collapsed?: boolean;
-  /** Localized “Working”, without the ellipsis used by common.working. */
+  /** Localized “Working” label. */
   workingLabel: string;
   onOpenSubagent: (key: string) => void;
   /** Must request the collection explicitly, clearing any previously selected child. */

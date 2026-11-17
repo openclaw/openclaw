@@ -2818,8 +2818,10 @@ describe("ci workflow guards", () => {
       ) as Array<{
         vitest_max_workers: number;
       }>;
-      expect(controlRows).toHaveLength(release ? 12 : 6);
-      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(24);
+      expect(controlRows).toHaveLength(release ? 12 : 9);
+      expect(controlRows.reduce((total, row) => total + row.vitest_max_workers, 0)).toBe(
+        release ? 24 : 36,
+      );
       for (const family of [
         "run_build_artifacts",
         "run_ios_build",
@@ -8836,6 +8838,65 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it.each(["bun-all", "dual-all"])("schedules independent required %s runtime jobs", (policy) => {
+    const targets = ["src/cli/cli-process-diagnostics.test.ts", "src/utils/fixture.test.ts"];
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      bunTestRuntime: true,
+      bunUiTestRuntime: true,
+      runtimeJobs: true,
+      targetFiles: ["ui/src/pages/chat/chat-pane-retention.test.ts"],
+      historicalCompatibility: false,
+      releaseGate: false,
+      eventName: "workflow_dispatch",
+      scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_RUN_UI_TESTS: "true" },
+      nodeTestShards: [
+        {
+          checkName: "checks-node-runtime-proof",
+          shardName: "runtime-proof",
+          configs: ["fixture-bun.config.ts"],
+          targets,
+          requiresDist: false,
+          runner: "ubuntu-24.04",
+          timeoutMinutes: 20,
+        },
+      ],
+      changedPaths: [
+        "scripts/lib/ci-node-test-plan.mts",
+        "ui/src/pages/chat/chat-pane-retention.test.ts",
+      ],
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    const rows = readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include;
+    expect(rows.map((row: { check_name: string }) => row.check_name)).toEqual([
+      "checks-node-runtime-proof (node)",
+      "checks-node-runtime-proof (bun)",
+    ]);
+    expect(rows.map((row: { base_check_name: string }) => row.base_check_name)).toEqual([
+      "checks-node-runtime-proof",
+      "checks-node-runtime-proof",
+    ]);
+    for (const row of rows) {
+      expect(row).toMatchObject({ targets, timeout_minutes: 20, test_runtime_policy: policy });
+      expect(row.requires_bun).toBe(row.test_runtime === "bun");
+      const job = readCiWorkflow().jobs["checks-node-core-test-nondist-shard"];
+      expect(job.strategy["fail-fast"]).toBe(false);
+      const run = requiredWorkflowStep(job.steps, "Run Node test shard");
+      expect(
+        evaluateWorkflowExpression(run.env.OPENCLAW_CI_TEST_RUNTIME, {
+          matrix: row,
+          repository: "openclaw/openclaw",
+          eventName: "workflow_dispatch",
+          runAttempt: 1,
+        }),
+      ).toBe(row.test_runtime);
+    }
+    expect(readJsonOutput(manifest.outputs, "ui_test_matrix").include).toHaveLength(3);
+    const gate = readCiWorkflow().jobs["ci-gate"];
+    expect(gate.needs).toContain("checks-node-core-test-nondist-shard");
+    expect(gate.needs).toContain("checks-ui");
+  });
+
   it.each([
     {
       eventName: "pull_request",
@@ -8904,7 +8965,7 @@ describe("ci workflow guards", () => {
       bun: true,
     },
   ] as const)(
-    "routes test runtimes without adding jobs ($eventName, capability=$capability)",
+    "routes legacy test runtimes without adding jobs ($eventName, capability=$capability)",
     (scenario) => {
       const { eventName, capability, uiCapability, policy, uiPolicy, bun } = scenario;
       const manifest = runCiManifestFixture({
@@ -11671,15 +11732,15 @@ describe("ci workflow guards", () => {
       }
       const rows = readJsonOutput(manifest.outputs, "ui_e2e_matrix").include;
       expect(rows.map((row: { shard: number }) => row.shard)).toEqual([
-        ...(control ? [1, 2, 3, 4, 5, 6] : []),
+        ...(control ? [1, 2, 3, 4, 5, 6, 7, 8, 9] : []),
         ...(browser && manifest.outputs.reuse_browser_extension_build !== "true"
-          ? [control ? 7 : 1]
+          ? [control ? 10 : 1]
           : []),
       ]);
       for (const row of rows) {
         expect(row).toMatchObject({
-          shard_count: control ? 7 : 1,
-          vitest_shard_count: control ? 6 : 0,
+          shard_count: control ? 10 : 1,
+          vitest_shard_count: control ? 9 : 0,
           vitest_max_workers: 4,
         });
       }
@@ -12002,7 +12063,7 @@ describe("ci workflow guards", () => {
     const expectedUiE2eMatrices = (
       [
         [8, 3],
-        [6, 4],
+        [9, 4],
         [12, 2],
       ] as const
     ).map(([vitestShardCount, workers]) => ({
@@ -13450,6 +13511,7 @@ describe("ci workflow guards", () => {
     const normalEnv = {
       CI: "true",
       GITHUB_ACTIONS: "true",
+      OPENCLAW_CI_TEST_RUNTIME: "node",
       OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
       // The enclosing test runner owns these filters; ordinary CI shards do not inherit them.
       OPENCLAW_VITEST_INCLUDE_FILE: "",

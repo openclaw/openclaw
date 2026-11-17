@@ -1010,7 +1010,7 @@ src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
 src/agents/agent-command.ts	1
-src/agents/agent-hooks/compaction-safeguard.ts	4
+src/agents/agent-hooks/compaction-safeguard.ts	3
 src/agents/agent-project-settings-snapshot.ts	3
 src/agents/agent-run-terminal-delivery.ts	1
 src/agents/agent-run-terminal-receipt.ts	1
@@ -1092,7 +1092,6 @@ src/agents/embedded-agent-runner/model.provider-hooks.ts	8
 src/agents/embedded-agent-runner/model.registry-resolution.ts	2
 src/agents/embedded-agent-runner/model.ts	3
 src/agents/embedded-agent-runner/openrouter-model-capabilities.ts	2
-src/agents/embedded-agent-runner/replay-history.ts	14
 src/agents/embedded-agent-runner/run-entry.ts	2
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/attempt-client-tools.ts	1
@@ -1130,7 +1129,7 @@ src/agents/embedded-agent-runner/run/terminal-resolution.ts	1
 src/agents/embedded-agent-runner/run/tool-activity-heartbeat.ts	1
 src/agents/embedded-agent-runner/stream-resolution.ts	2
 src/agents/embedded-agent-runner/thinking-replay-repair.ts	1
-src/agents/embedded-agent-runner/thinking.ts	6
+src/agents/embedded-agent-runner/thinking.ts	3
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	5
@@ -1221,7 +1220,7 @@ src/agents/sessions/extensions/runner.ts	13
 src/agents/sessions/keybindings.ts	2
 src/agents/sessions/resolve-config-value.ts	1
 src/agents/sessions/sdk.ts	1
-src/agents/sessions/session-manager-codec.ts	5
+src/agents/sessions/session-manager-codec.ts	4
 src/agents/sessions/session-manager-core.ts	1
 src/agents/sessions/session-manager-entries.ts	2
 src/agents/sessions/session-manager.ts	2

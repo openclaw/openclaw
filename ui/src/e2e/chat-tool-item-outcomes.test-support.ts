@@ -57,7 +57,7 @@ export function registerItemOnlyOutcomeTest(
           await summary.waitFor();
           await expect
             .poll(() => summary.locator(".chat-activity-group__label").textContent())
-            .toBe(title + "…");
+            .toBe(title);
           expect(await summary.textContent()).not.toContain("unknown");
           await captureToolActivityProof(page, "lifecycle-" + stage);
         };

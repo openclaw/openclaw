@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, lstatSync, realpathSync, type BigIntStats } from "node:fs";
+import { constants, fstatSync, lstatSync, realpathSync, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -114,7 +114,9 @@ async function readWorkspaceFile(
   try {
     signal?.throwIfAborted();
     const { memo: hashMemo, metrics, owner = "gateway" } = activeWorkspaceHashContext() ?? {};
-    const before = await handle.stat({ bigint: true });
+    const before = isMainThread
+      ? await handle.stat({ bigint: true })
+      : fstatSync(handle.fd, { bigint: true });
     const realPath = await resolveOpenedFileRealPathForHandle(handle, expectedPath);
     if (!before.isFile() || (root && !isPathInside(root, realPath))) {
       throw new Error("Gateway workspace file changed while it was being read");
@@ -164,7 +166,9 @@ async function readWorkspaceFile(
         metrics.contentHashCount += 1;
       }
     }
-    const after = await handle.stat({ bigint: true });
+    const after = isMainThread
+      ? await handle.stat({ bigint: true })
+      : fstatSync(handle.fd, { bigint: true });
     signal?.throwIfAborted();
     if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
       throw new Error("Gateway workspace file changed while it was being read");
@@ -293,24 +297,23 @@ export async function scanActualWorkspaceManifest(
   const discoveryBatchSize = 32;
   let metadataReads = 0;
   let metadataYield: Promise<void> | undefined;
-  const readMetadata =
-    params.btrfsSnapshot && !isMainThread
-      ? async (absolute: string): Promise<BigIntStats> => {
-          if (metadataYield) {
-            await metadataYield;
-          }
-          scanSignal.throwIfAborted();
-          const stats = lstatSync(absolute, { bigint: true });
-          // All discovery workers share the yield: even an included-path depth must
-          // service cancellation messages after at most one batch of synchronous reads.
-          if (++metadataReads % discoveryBatchSize === 0) {
-            metadataYield = setImmediate().then(() => {
-              metadataYield = undefined;
-            });
-          }
-          return stats;
+  const readMetadata = !isMainThread
+    ? async (absolute: string): Promise<BigIntStats> => {
+        if (metadataYield) {
+          await metadataYield;
         }
-      : (absolute: string) => fs.lstat(absolute, { bigint: true });
+        scanSignal.throwIfAborted();
+        const stats = lstatSync(absolute, { bigint: true });
+        // All discovery workers share the yield: even an included-path depth must
+        // service cancellation messages after at most one batch of synchronous reads.
+        if (++metadataReads % discoveryBatchSize === 0) {
+          metadataYield = setImmediate().then(() => {
+            metadataYield = undefined;
+          });
+        }
+        return stats;
+      }
+    : (absolute: string) => fs.lstat(absolute, { bigint: true });
   // Nested discovery batches must not replace their first failure with a later caller abort.
   let taskFailureWasFirst = false;
   const runScans = async (

@@ -85,21 +85,13 @@ export async function captureManagedWorktreeSnapshot(params: {
       const missing = await missingCommitObjects(record.path, "HEAD", options);
       if (missing.length > 0) {
         try {
-          // Retirement must distinguish promised contents from lost local data.
-          // Git scans every promisor pack for this proof; creation does not need it.
-          await requireGit(
-            record.path,
-            [
-              "rev-list",
-              "--objects",
-              "--quiet",
-              "--missing=allow-promisor",
-              "--max-count=1",
-              "HEAD",
-            ],
-            { ...options, env: { ...options.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" } },
-          );
           await hydrateCommitObjects(record.path, "HEAD", missing, options);
+          // Prove local custody, not promisor membership (which scans every promisor pack).
+          // A successful fetch alone cannot prove a clean snapshot is offline-restorable.
+          const remaining = await missingCommitObjects(record.path, "HEAD", options);
+          if (remaining.length > 0) {
+            throw new Error(`Worktree snapshot has missing blob ${remaining[0]}`);
+          }
         } catch (cause) {
           params.signal?.throwIfAborted();
           params.assertCurrent?.();

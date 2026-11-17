@@ -178,11 +178,14 @@ endpoints outside that path. Unknown identities are rejected on supported hosts;
 hosts without native birth-identity support and other platforms leave existing
 processes untouched. PID 1 can itself be a live owner on Linux.
 
-For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
+For a subprocess that requires Node.js, await `resolveNodeRuntimeExecutableAsync` from
 the same subpath. It reuses the current Node executable when supported by OpenClaw,
 or finds a supported Node binary, skipping older Node versions and Bun's `node`
 shim. An unavailable supported Node runtime returns `undefined`; the caller
 reports the missing requirement.
+Cold discovery creates and removes its probe script and waits for the child asynchronously.
+The synchronous `resolveNodeRuntimeExecutable` remains available for CLI tooling;
+Gateway request paths should use the async form.
 
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
 It owns platform-specific terminal creation. On macOS and Linux, Bun uses its

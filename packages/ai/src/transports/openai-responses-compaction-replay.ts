@@ -122,7 +122,6 @@ export function captureOpenAIResponsesCompaction(
     model: metadata.model,
     baseUrlHash: metadata.baseUrlHash,
     ...(metadata.sessionHash ? { sessionHash: metadata.sessionHash } : {}),
-    ...(metadata.authProfileHash ? { authProfileHash: metadata.authProfileHash } : {}),
     ...(compactedOutput
       ? {
           compactedWindow: {
@@ -142,7 +141,7 @@ export function captureOpenAIResponsesCompaction(
 export function suppressOpenAIResponsesCompaction(
   output: Pick<AssistantMessage, "providerReplay">,
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected" | "sessionId">,
+  options?: Pick<BaseOpenAIStreamOptions, "onCompactionRejected" | "sessionId">,
   rejectedCheckpoint?: CompactionReplayRejection,
   itemRecovery?: string,
 ): void {
@@ -214,7 +213,7 @@ export function isSafeResponsesReplayItemId(id: unknown): id is string {
 export function resolveNewestOpenAIResponsesCompactionReplay(
   messages: Context["messages"],
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
 ):
   | {
       owner: AssistantMessage;
@@ -243,7 +242,16 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
     if (replay?.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE) {
       // A successful encrypted-content fallback records this provider-owned
       // tombstone so later turns never retry an already rejected compaction.
-      if (providerReplayContextMatches(replay, context)) {
+      // Item repair belongs to the copied history, including internal-session forks.
+      // Encrypted checkpoints and ordinary suppression remain session-bound.
+      if (
+        providerReplayContextMatches(
+          replay,
+          typeof replay.itemRecovery === "string"
+            ? { ...context, sessionHash: replay.sessionHash }
+            : context,
+        )
+      ) {
         return typeof replay.itemRecovery === "string"
           ? { owner: message, mode: "item-recovery", anchor: replay.itemRecovery }
           : undefined;
@@ -331,7 +339,7 @@ export class CompactionReplayRefreshRequiredError extends Error {
 export function buildOpenAIResponsesCompactionReplayPlan(
   messages: Context["messages"],
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId"> & {
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId"> & {
     mode?: OpenAIResponsesReplayMode;
   },
 ): OpenAIResponsesCompactionReplayPlan {
@@ -397,7 +405,7 @@ export function buildOpenAIResponsesCompactionReplayPlan(
 
 export function buildOpenAIResponsesReasoningReplayMetadata(
   model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "sessionId">,
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
 ): OpenAIResponsesReasoningReplayMetadata {
   return {
     v: 1,
