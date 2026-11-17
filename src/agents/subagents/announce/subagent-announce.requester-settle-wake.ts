@@ -15,6 +15,10 @@ import {
   getFollowupForCohort,
   withFollowupSuccessor,
 } from "../completion/session-followup-completion.js";
+import {
+  hasConsumedRequesterInput,
+  resolveRequesterDeliveryOutcome,
+} from "../registry/subagent-delivery-state.js";
 import { withSubagentProgressDraft } from "../registry/subagent-progress-draft.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { selectConnectedSettledSubagentWave } from "../registry/subagent-registry-queries.js";
@@ -57,10 +61,8 @@ import { createRequesterSettleReceiptAdmission } from "./subagent-announce.reque
 import {
   readSharedBatchState,
   createRequesterSettleBatchCompletion,
-  REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS,
   needsRequesterSettleFindings,
   isRequesterSettleMemberReady,
-  resolveRequesterSettleRetryState,
   captureRequesterRunOwner,
   isRequesterSettleDeliveryClosed,
   resolveRequesterSettlePolicy,
@@ -230,20 +232,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     return true;
   };
   const selectedState = readSharedBatchState(settledBatch);
-  if ((selectedState.nextAttemptAt ?? 0) > Date.now()) {
-    return false;
-  }
-  if (
-    selectedState.status === "pending" &&
-    selectedState.attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS
-  ) {
-    await completeBatch(settledBatch, selectedState, {
-      delivered: false,
-      path: "none",
-      error: selectedState.lastError ?? "requester settle wake attempts exhausted",
-    });
-    return false;
-  }
 
   // Keep the batch members themselves in the settle check, including paused work.
   const readRequesterDescendants = createRequesterDescendantReader({
@@ -649,32 +637,34 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (delivery.disposition !== "session_queued") {
       retireUnadoptedInput();
     }
-    if (delivery.delivered) {
+    // Results committed to the requester transcript are never replayed: settle what the turn did.
+    const currentBatch = readCurrentBatch() ?? settledBatch;
+    delivery = resolveRequesterDeliveryOutcome(currentBatch, delivery)!;
+    if (delivery.delivered || currentBatch.every(hasConsumedRequesterInput)) {
       await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
-      return true;
+      return delivery.delivered;
     }
     // The controller mailbox owns a queued handoff and settles it itself.
     if ((await settleRevokedBatch()) || delivery.disposition === "session_queued") {
       return false;
     }
-    const retryState = resolveRequesterSettleRetryState({
-      state: dispatchState,
-      delivery,
-      attemptCount,
-      now: Date.now(),
-    });
-    if (!retryState) {
-      await completeBatch(
-        settledBatch,
-        state,
-        delivery.disposition === "retryable"
-          ? { ...delivery, disposition: "permanent_failure" }
-          : delivery,
-        requesterEntry.sessionId,
-      );
+    // A permanent refusal withholds the result visibly; it stays readable in the child session.
+    if (delivery.disposition === "permanent_failure") {
+      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
       return false;
     }
-    await params.transitionBatch(settledBatch, retryState, refreshBatch);
+    // Any other uncommitted result stays owed; the sweeper wakes it again. Nothing expires it.
+    await params.transitionBatch(
+      settledBatch,
+      {
+        ...dispatchState,
+        status: "pending",
+        attemptCount,
+        nextAttemptAt: Date.now(),
+        lastError: delivery.error ?? delivery.reason ?? "undelivered",
+      },
+      refreshBatch,
+    );
     return false;
   } finally {
     if (controllerInput) {

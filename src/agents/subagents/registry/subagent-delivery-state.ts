@@ -228,23 +228,48 @@ export function recordRequesterDelivery(
   }
 }
 
+/** A result committed to the requester transcript is never replayed. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
+}
+
+/** A private result is delivered by its committed input; a yielded final also owes an answer. */
 export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
-    entry.delivery?.requesterDelivery?.state === "consumed" &&
+    hasConsumedRequesterInput(entry) &&
     entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
     (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
   );
 }
 
-/** A cancelled private continuation cannot unconsume its committed input. */
+// The requester turn itself stopped; no answer exists to deliver.
+const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]>([
+  "requester_aborted",
+  "requester_timed_out",
+  "requester_preparation_changed",
+  "requester_state_conflict",
+  "requester_transcript_conflict",
+]);
+
+/**
+ * A committed result is delivered when its turn failed before answering. A turn that answered,
+ * or ended for a recorded reason, keeps its own outcome: a missed send stays a failure.
+ */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
   outcome: SubagentAnnounceDeliveryResult | undefined,
 ): SubagentAnnounceDeliveryResult | undefined {
+  const turnFailedBeforeAnswer =
+    outcome?.finalAssistantVisibleText === undefined &&
+    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
   return outcome &&
     !outcome.delivered &&
     entries.length > 0 &&
-    entries.every(hasConsumedPrivateRequesterInput)
+    entries.every(
+      (entry) =>
+        hasConsumedPrivateRequesterInput(entry) ||
+        (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry)),
+    )
     ? { delivered: true, path: "direct" }
     : outcome;
 }

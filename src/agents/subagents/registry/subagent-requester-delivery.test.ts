@@ -118,3 +118,72 @@ it.for([
     }
   },
 );
+
+it.for([
+  { name: "turn failed before answering", outcome: { error: "provider 529" }, status: "delivered" },
+  {
+    name: "answer missed its channel",
+    outcome: { error: "send failed", finalAssistantVisibleText: "" },
+    status: "failed",
+  },
+  {
+    name: "recorded reason",
+    outcome: { reason: "message_tool_delivery_missing", disposition: "permanent_failure" },
+    status: "failed",
+  },
+  {
+    name: "yielded private final failed before answering",
+    yieldedFinal: true,
+    outcome: { error: "provider 529" },
+    status: "delivered",
+  },
+  {
+    name: "yielded private final missed its channel",
+    yieldedFinal: true,
+    outcome: { error: "send failed", finalAssistantVisibleText: "" },
+    status: "failed",
+  },
+] as const)("settles a committed result by what its turn did: $name", async (testCase) => {
+  const { outcome, status } = testCase;
+  const yieldedFinal = "yieldedFinal" in testCase;
+  const batch = [raw(), { ...raw(), runId: "second-result" }].map((entry) =>
+    Object.assign(entry, {
+      completionTarget: yieldedFinal ? ("parent" as const) : undefined,
+      requesterSettleWake: {
+        status: "dispatching" as const,
+        attemptCount: 1,
+        batchRunIds: [raw().runId, "second-result"],
+        ...(yieldedFinal
+          ? { requesterYieldBatch: true, yieldedFinalDeliverable: true as const }
+          : {}),
+      },
+    }),
+  );
+  saveSubagentRegistryToSqlite(new Map(batch.map((entry) => [entry.runId, entry])));
+  const database = openOpenClawStateDatabase();
+  runOpenClawStateWriteTransaction(
+    () =>
+      mutateSubagentCompletionInDatabase(database, {
+        kind: "requesterWake",
+        entries: batch.map((subagent) => ({ subagent })),
+        operation: { kind: "requesterDelivery", fact: { state: "consumed", runId, at: 50 } },
+      }),
+    { database },
+  );
+  const result = runOpenClawStateWriteTransaction(
+    () =>
+      mutateSubagentCompletionInDatabase(database, {
+        kind: "requesterBatch",
+        entries: batch.map((entry) => ({ subagent: readSubagentRun(database, entry.runId)! })),
+        now: 100,
+        outcome: { delivered: false, path: "direct", ...outcome },
+      }),
+    { database },
+  );
+  for (const { subagent } of result.records) {
+    expect(subagent.delivery).toMatchObject({
+      status,
+      requesterDelivery: { state: "consumed", runId },
+    });
+  }
+});
