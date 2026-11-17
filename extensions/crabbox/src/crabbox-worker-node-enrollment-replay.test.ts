@@ -43,7 +43,7 @@ async function replay(
     },
   });
   const command =
-    failure === "argv"
+    failure === "argv" || failure === "eperm"
       ? "unrelated-process"
       : failure === "original-argv"
         ? `/usr/bin/node ${cli} connect --ephemeral`
@@ -73,7 +73,14 @@ async function replay(
     getuid: () => 501,
     env: { ...setup.forwardedEnv, LC_ALL: "fr_FR.UTF-8" },
     umask: vi.fn(),
-    kill: vi.fn(),
+    kill: vi.fn((pid?: number) => {
+      if (failure === "eperm") {
+        throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      }
+      if (failure === "gone" && pid === 123) {
+        throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      }
+    }),
     exitCode: 0,
   };
   const fs = {
@@ -81,6 +88,8 @@ async function replay(
     chmodSync: vi.fn(),
     symlinkSync: vi.fn(),
     unlinkSync: vi.fn(),
+    renameSync: vi.fn(),
+    rmSync: vi.fn(),
     writeFileSync: vi.fn<(...args: unknown[]) => void>(),
     openSync: vi.fn(() => 11),
     closeSync: vi.fn(),
@@ -98,7 +107,7 @@ async function replay(
       (file === interruptedPath && interrupted !== "dangling-runtime") ||
       (file === path.join(stateDir, "node.pid") &&
         !interrupted &&
-        (!launch || (launched && launch === "ready"))),
+        (!launch || (launch === "ready" && (platform === "linux" || launched)))),
     readFileSync: (file: string) => {
       if (file === path.join(runtimeDir, "node_modules", "openclaw", "package.json")) {
         return JSON.stringify({ name: "openclaw", version: "2026.8.1" });
@@ -132,6 +141,9 @@ async function replay(
       }
       if (failure === "unavailable") {
         throw new Error("Unreadable process identity");
+      }
+      if (failure === "gone") {
+        throw Object.assign(new Error("Process disappeared"), { code: "ENOENT" });
       }
       if (file === "/proc/123/cmdline") {
         return failure === "original-argv" ? `/usr/bin/node\0${cli}\0connect\0` : command + "\0";
@@ -264,29 +276,42 @@ async function replay(
   });
   if (launch) {
     const logPath = path.join(stateDir, "node.log");
-    expect(spawn, output.join("\n")).toHaveBeenCalledExactlyOnceWith(
-      "/bin/bash",
-      [
-        "-c",
-        expect.any(String),
-        "openclaw-gui",
-        ..."/usr/bin/open -n -g -W -a /Applications/OpenClawCloudWorker.app --stdin /dev/null --stdout".split(
-          " ",
-        ),
-        logPath,
-        "--stderr",
-        logPath,
-        "--args",
-        ...hostArguments.slice(1),
-      ],
-      expect.objectContaining({ cwd: runtimeDir, detached: true, stdio: ["ignore", 11, 11] }),
-    );
-    expect(fs.openSync).toHaveBeenCalledWith(logPath, "a", 0o600);
-    expect(fs.closeSync).toHaveBeenCalledWith(11);
+    if (platform === "darwin") {
+      expect(spawn, output.join("\n")).toHaveBeenCalledExactlyOnceWith(
+        "/bin/bash",
+        [
+          "-c",
+          expect.any(String),
+          "openclaw-gui",
+          ..."/usr/bin/open -n -g -W -a /Applications/OpenClawCloudWorker.app --stdin /dev/null --stdout".split(
+            " ",
+          ),
+          logPath,
+          "--stderr",
+          logPath,
+          "--args",
+          ...hostArguments.slice(1),
+        ],
+        expect.objectContaining({ cwd: runtimeDir, detached: true, stdio: ["ignore", 11, 11] }),
+      );
+      expect(fs.openSync).toHaveBeenCalledWith(logPath, "a", 0o600);
+      expect(fs.closeSync).toHaveBeenCalledWith(11);
+    } else {
+      expect(spawn, output.join("\n")).toHaveBeenCalledExactlyOnceWith(
+        "/usr/bin/node",
+        expect.arrayContaining([cli, "connect", "--target-file"]),
+        expect.objectContaining({ cwd: runtimeDir, detached: true, stdio: ["ignore", 11, 11] }),
+      );
+      expect(fs.openSync).toHaveBeenCalledWith(logPath, "a", 0o600);
+    }
     const writtenFiles = fs.writeFileSync.mock.calls.map((call) => call[0]);
     expect(writtenFiles).not.toContain(path.join(stateDir, "node.pid"));
     expect(writtenFiles).not.toContain(path.join(stateDir, "node-launch.json"));
-    expect(processFixture.kill).not.toHaveBeenCalled();
+    if (failure === "gone") {
+      expect(processFixture.kill).toHaveBeenCalledExactlyOnceWith(123, 0);
+    } else {
+      expect(processFixture.kill).not.toHaveBeenCalled();
+    }
   } else {
     expect(spawn).not.toHaveBeenCalled();
   }
@@ -322,12 +347,18 @@ describe.each(["linux", "darwin"] as const)("%s node enrollment replay", (platfo
   it.each(["argv", "cwd", "state", "unavailable"])(
     "refuses %s mismatch or missing identity",
     async (failure) => {
-      expectRefusal(
-        await replay(platform, failure),
-        platform === "linux" && failure === "unavailable"
-          ? "Unreadable process identity"
-          : undefined,
-      );
+      expectRefusal(await replay(platform, failure));
+    },
+  );
+  it("treats a permission-denied liveness probe as a live mismatched process", async () => {
+    expectRefusal(await replay(platform, "eperm"));
+  });
+  it.skipIf(platform !== "linux")(
+    "restarts when a Linux process disappears during identity reads",
+    async () => {
+      expect(await replay(platform, "gone", false, undefined, undefined, "ready")).toMatchObject({
+        code: 0,
+      });
     },
   );
 });

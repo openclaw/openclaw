@@ -105,16 +105,26 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
     if (!/^[1-9][0-9]*$/.test(pidText)) throw new Error("Cloud worker node PID is invalid; release and reprovision the worker");
     const pid = Number(pidText);
     let alive = true;
-    try { process.kill(pid, 0); } catch (error) { if (error.code !== "ESRCH") throw error; alive = false; }
+    try {
+      process.kill(pid, 0);
+    } catch (error) {
+      if (error.code === "ESRCH") alive = false;
+      else if (error.code !== "EPERM") throw error;
+    }
     if (alive) {
       let verified = false;
       if (process.platform === "linux") {
-        const args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
-        const env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
-        // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
-        const title = args[0];
-        const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
-        verified = nodeInvocation && fs.realpathSync(path.join("/proc", pidText, "cwd")) === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
+        try {
+          const args = fs.readFileSync(path.join("/proc", pidText, "cmdline"), "utf8").split("\\0");
+          const env = fs.readFileSync(path.join("/proc", pidText, "environ"), "utf8").split("\\0");
+          // OpenClaw changes process.title; the immutable install cwd survives that argv rewrite.
+          const title = args[0];
+          const nodeInvocation = args[1] === cli || ["openclaw", "openclaw-connect", "openclaw-node"].includes(title);
+          verified = nodeInvocation && fs.realpathSync(path.join("/proc", pidText, "cwd")) === runtimeDir && env.includes("OPENCLAW_STATE_DIR=" + stateDir);
+        } catch (error) {
+          if (error.code === "ENOENT" || error.code === "ESRCH") alive = false;
+          else throw new Error("Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker");
+        }
       } else if (process.platform === "win32") {
         try {
           const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
@@ -136,10 +146,10 @@ ${desktopTarget === "windows/normal" ? createCrabboxWindowsDesktopNodeLauncher()
           verified = desktopTarget === "macos" ? verifyMacosNode(launch, pid) : verifyDarwinNode(launch, pid);
         } catch { /* Missing launch or process identity must never authorize replay. */ }
       }
-      if (!verified) {
+      if (alive && !verified) {
         throw new Error("Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker");
       }
-      return true;
+      if (alive) return true;
     }
     if (desktopTarget === "macos") {
       const launch = JSON.parse(fs.readFileSync(launchFile, "utf8"));
