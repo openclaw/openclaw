@@ -157,6 +157,8 @@ export async function backupDoctorMigrationDatabases(params: {
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   /** Only the version-phase owner may select a table-scoped checkpoint. */
   versionMigrationsOnly?: boolean;
+  /** Pre-consent capture must refuse rather than repair live session rows. */
+  allowSessionWindowRepair?: boolean;
   check?: "quick" | "full";
   repair?: { key: string; validate?: (database: DatabaseSync) => void };
 }): Promise<
@@ -321,6 +323,12 @@ export async function backupDoctorMigrationDatabases(params: {
       )
     ) {
       throw error;
+    }
+    if (params.allowSessionWindowRepair === false) {
+      throw new Error(
+        "Pre-migration SQLite backups could not be verified without repairing live session data. No session repair was attempted.",
+        { cause: error },
+      );
     }
     const { repairDoctorSessionWindowsBeforeMigration } =
       await import("../infra/state-migrations.session-window-repair.js");

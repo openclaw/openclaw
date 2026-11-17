@@ -60,6 +60,12 @@ export async function admitDoctorRepairSchemaMigration(params: {
   ) {
     return;
   }
+  const consequence = `Installed OpenClaw ${installedVersion} will not be able to read state/agent databases after this repair by ${repairingVersion}.`;
+  const command = (args: string) =>
+    formatCliCommand(`openclaw ${args}`, params.env).replace(
+      /^openclaw\b/u,
+      `${quoteCliArg(process.execPath)} ${quoteCliArg(path.join(params.root, "openclaw.mjs"))}`,
+    );
   try {
     const { prepareDoctorDatabasePreflight } = await import("./doctor-database-preflight.js");
     const schemas = await prepareDoctorDatabasePreflight();
@@ -84,14 +90,10 @@ export async function admitDoctorRepairSchemaMigration(params: {
       pendingDatabasePaths: schemas.pendingMigrations.map((migration) => migration.path),
       pendingMigrations: schemas.pendingMigrations,
       versionMigrationsOnly: true,
+      allowSessionWindowRepair: params.yes,
     });
     const { classifyDoctorMigrationBackupPath } =
       await import("./doctor-migration-backup-names.js");
-    const command = (args: string) =>
-      formatCliCommand(`openclaw ${args}`, params.env).replace(
-        /^openclaw\b/u,
-        `${quoteCliArg(process.execPath)} ${quoteCliArg(path.join(params.root, "openclaw.mjs"))}`,
-      );
     const restore = (backups.snapshots ?? []).map(({ sourcePath, path: backupPath }) =>
       classifyDoctorMigrationBackupPath(sourcePath, backupPath) === "scoped"
         ? command(
@@ -100,7 +102,7 @@ export async function admitDoctorRepairSchemaMigration(params: {
         : `sqlite3 ${quoteCliArg(sourcePath)} ${quoteCliArg(`.restore ${JSON.stringify(backupPath)}`)}`,
     );
     const message = [
-      `Installed OpenClaw ${installedVersion} will not be able to read state/agent databases after this repair by ${repairingVersion}.`,
+      consequence,
       ...backups.changes,
       ...backups.warnings,
       "To restore, stop the Gateway and other OpenClaw processes, preserve the repaired databases, restore every original listed above, and use the matching installed release.",
@@ -132,10 +134,16 @@ export async function admitDoctorRepairSchemaMigration(params: {
     if (cause instanceof DoctorRepairSchemaConsentRefusal) {
       throw cause;
     }
-    throw new DoctorRepairSchemaConsentRefusal(
+    const message = [
+      consequence,
       `Cross-version repair admission failed before schema migration: ${formatErrorMessage(cause)}`,
-      installedRoot,
-      { cause },
-    );
+      ...(!params.yes
+        ? [
+            `Rerun ${command("update repair --yes")} to consent to normal Doctor repair, including repairs needed to verify backups.`,
+          ]
+        : []),
+    ].join("\n");
+    params.runtime.log(message);
+    throw new DoctorRepairSchemaConsentRefusal(message, installedRoot, { cause });
   }
 }

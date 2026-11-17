@@ -291,12 +291,16 @@ it.each([
   "same-version",
   "compatible-schemas",
   "unknown",
+  "finalize",
+  "orphan-unconsented",
+  "orphan-consented",
 ] as const)(
   "admits repair before the candidate Doctor can migrate databases (%s)",
   async (scenario) => {
     native.contend = false;
     native.unknownService = scenario === "unknown" || scenario === "installation-fact";
     const interactive = scenario === "interactive";
+    const orphan = scenario === "orphan-unconsented" || scenario === "orphan-consented";
     tty.set(interactive);
     vi.mocked(confirm).mockClear().mockResolvedValueOnce(true);
     await fs.writeFile(
@@ -304,6 +308,54 @@ it.each([
       JSON.stringify({ name: "openclaw", version: VERSION }),
     );
     const databasePath = resolveOpenClawStateSqlitePath();
+    const agentPath = path.join(
+      process.env.OPENCLAW_STATE_DIR!,
+      "agents/main/agent/openclaw-agent.sqlite",
+    );
+    const readHistory = (database: DatabaseSync) => ({
+      windows: database.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
+      events: database.prepare("SELECT * FROM transcript_events ORDER BY session_id, seq").all(),
+      fts: database.prepare("SELECT rowid, * FROM session_transcript_fts ORDER BY rowid").all(),
+      ftsRows: database.prepare("SELECT * FROM session_transcript_fts_rows ORDER BY id").all(),
+    });
+    if (orphan) {
+      await fs.mkdir(path.dirname(agentPath), { recursive: true });
+      using database = new DatabaseSync(agentPath);
+      database.exec(
+        await fs.readFile(
+          new URL("../../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
+          "utf8",
+        ),
+      );
+      database.exec(`
+        PRAGMA user_version = 26;
+        INSERT INTO schema_meta
+          (meta_key, role, schema_version, agent_id, created_at, updated_at)
+        VALUES ('primary', 'agent', 26, 'main', 1, 1);
+        PRAGMA foreign_keys = OFF;
+        INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('retained', 'retained', '{"sessionId":"retained","updatedAt":1}', 1),
+               ('orphan', 'orphan', '{"sessionId":"orphan","updatedAt":1}', 1);
+        INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+        VALUES ('retained', 'retained', 1, 1), ('orphan', 'orphan', 1, 1);
+        INSERT INTO transcript_events (session_id, seq, event_json, created_at)
+        VALUES ('retained', 1, '{"type":"message","message":{"role":"user","content":"keep"}}', 1),
+               ('orphan', 1, '{"type":"message","message":{"role":"user","content":"preserve in recovery"}}', 1);
+        INSERT INTO session_transcript_fts(rowid, text, session_id, message_id, role, timestamp)
+        VALUES (1, 'keep', 'retained', 'm1', 'user', 1),
+               (2, 'preserve in recovery', 'orphan', 'm2', 'user', 1);
+        INSERT INTO session_transcript_fts_rows(id, session_id, message_id)
+        VALUES (1, 'retained', 'm1'), (2, 'orphan', 'm2');
+        DELETE FROM session_nodes WHERE session_key = 'orphan';
+      `);
+    }
+    const originalHistory = orphan
+      ? (() => {
+          using database = new DatabaseSync(agentPath, { readOnly: true });
+          expect(database.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
+          return readHistory(database);
+        })()
+      : undefined;
     await closeOpenClawStateDatabaseAsync();
     {
       using database = new DatabaseSync(databasePath);
@@ -323,7 +375,7 @@ it.each([
         openclaw: {
           schemaVersions: {
             state: OPENCLAW_STATE_SCHEMA_VERSION - Number(scenario !== "compatible-schemas"),
-            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+            agent: orphan ? 26 : OPENCLAW_AGENT_SCHEMA_VERSION,
           },
         },
       }),
@@ -356,6 +408,7 @@ it.each([
       "mixed-backups",
       "interactive",
       "installation-fact",
+      "orphan-consented",
     ].includes(scenario);
     native.serviceRoot =
       native.unknownService || scenario === "installed-package" ? undefined : serviceRoot;
@@ -369,18 +422,51 @@ it.each([
               : undefined,
       },
       () =>
-        updateRepairCommand({
+        (scenario === "finalize" ? updateFinalizeCommand : updateRepairCommand)({
           json: !interactive,
-          yes: scenario === "consented" || scenario === "mixed-backups",
+          yes:
+            scenario === "consented" ||
+            scenario === "mixed-backups" ||
+            scenario === "orphan-consented",
         }),
     );
-    if (scenario === "unconsented" || scenario === "installation-fact") {
+    if (
+      scenario === "unconsented" ||
+      scenario === "installation-fact" ||
+      scenario === "orphan-unconsented"
+    ) {
       await expect(repair).rejects.toThrow("Installed OpenClaw 2026.9.7 will not be able to read");
       expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).not.toHaveBeenCalled();
     } else {
       await expect(repair).rejects.toBe(childReached);
     }
     const output = vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n");
+    if (orphan) {
+      using database = new DatabaseSync(agentPath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
+      const history = readHistory(database);
+      if (scenario === "orphan-unconsented") {
+        expect(history).toEqual(originalHistory);
+        expect(output).toContain("could not be verified without repairing live session data");
+        expect(output).not.toContain("Saved pre-migration");
+        expect(output).not.toContain("Reused pre-migration");
+      } else {
+        for (const key of ["windows", "events", "fts", "ftsRows"] as const) {
+          expect(history[key]).toEqual(
+            originalHistory![key].filter((row) => row.session_id === "retained"),
+          );
+        }
+        const recovery = (await fs.readdir(path.dirname(agentPath))).find((name) =>
+          name.startsWith("openclaw-session-window-recovery-"),
+        );
+        expect(recovery).toBeDefined();
+        using backup = new DatabaseSync(
+          path.join(path.dirname(agentPath), recovery!, "database.sqlite"),
+          { readOnly: true },
+        );
+        expect(readHistory(backup)).toEqual(originalHistory);
+      }
+    }
     if (scenario === "mixed-backups") {
       expect(output).toContain(postgresBackup);
       expect(output).toContain("https://docs.openclaw.ai/install/backups");
@@ -398,7 +484,7 @@ it.each([
           : `sqlite3 ${databasePath}`,
       );
       expect(output).toContain("--yes");
-    } else {
+    } else if (scenario !== "orphan-unconsented") {
       expect(output).not.toContain("will not be able to read");
     }
     using database = new DatabaseSync(databasePath, { readOnly: true });

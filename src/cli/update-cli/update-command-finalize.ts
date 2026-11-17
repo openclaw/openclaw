@@ -417,21 +417,20 @@ async function updateFinalizeCommandInternal(
       serviceInspectionDeadlineAtMs,
       // An update-owned stop is restored below; Doctor only reports other stopped services.
       reportStoppedService: lifecycle.ownsUpdateRepairRun && !interruptedGateway,
-      beforeStateMutation:
-        recoveryRunIds !== undefined
-          ? async (context) => {
-              const { admitDoctorRepairSchemaMigration } =
-                await import("../../commands/doctor-repair-schema-admission.js");
-              await admitDoctorRepairSchemaMigration({
-                ...context,
-                root,
-                yes: opts.yes === true,
-                json: opts.json === true,
-                fullIntegrityCheck: opts.fullIntegrityCheck,
-                runtime: { ...defaultRuntime, log: defaultRuntime.error },
-              });
-            }
-          : undefined,
+      beforeStateMutation: lifecycle.ownsUpdateRepairRun
+        ? async (context) => {
+            const { admitDoctorRepairSchemaMigration } =
+              await import("../../commands/doctor-repair-schema-admission.js");
+            await admitDoctorRepairSchemaMigration({
+              ...context,
+              root,
+              yes: opts.yes === true,
+              json: opts.json === true,
+              fullIntegrityCheck: opts.fullIntegrityCheck,
+              runtime: { ...defaultRuntime, log: defaultRuntime.error },
+            });
+          }
+        : undefined,
     });
     lifecycle.serviceUpdateVerdict = maintenance?.serviceUpdateVerdict;
     // Fresh Doctor owns database fences; the parent retains service custody.
