@@ -85,3 +85,11 @@ const pluginExecutionContext = resolveGlobalSingleton(
 export const pluginInstanceInvocation = pluginExecutionContext.invocation;
 export const getPluginExecutionFrame = pluginExecutionContext.getFrame;
 export const runWithPluginExecutionFrame = pluginExecutionContext.runFrame;
+
+/** Background runner of the active plugin call, for work that outlives the request that started it. */
+export function captureCurrentPluginBackgroundRunner(): <T>(run: () => T) => T {
+  return (
+    pluginInstanceInvocation.getStore()?.instance.lifecycle.runInBackgroundContext ??
+    ((run) => run())
+  );
+}
