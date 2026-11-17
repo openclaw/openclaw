@@ -124,8 +124,11 @@ the subsequent correctness read is excluded.
 Use `--checkpoint-changed-files 10,100,1000,5000` to rotate changed-set sizes in
 command-checkpoint traces. Each changed file contains `--file-bytes` bytes
 (at least 64 bytes) of deterministic incompressible data, seeded uniquely for
-each process. Unique contents keep prior runs' Git objects from hiding object
-write cost. Every changed file is checked after finalization. Use at least two
+each process. The seed is printed before execution and included in the report;
+`--checkpoint-seed <seed>` replays the same content for failure diagnosis. Reset
+both arms to the same isolated fixture state for matched seed replays. Unique
+contents keep prior runs' Git objects from hiding object write cost in timing
+comparisons. Every changed file is checked after finalization. Use at least two
 measured turns per process to cover all four sizes, excluding warmup; retain the
 raw `changedFiles`, `pausedDurationMs`, and `maxPauseDurationMs` samples. Compare
 changed-command pause percentiles separately from unchanged commands' zero pauses.

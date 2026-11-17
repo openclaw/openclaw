@@ -205,6 +205,7 @@ const { values } = parseArgs({
     "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
     "checkpoint-changed-files": { type: "string", default: "1" },
+    "checkpoint-seed": { type: "string" },
     "tools-per-turn": { type: "string", default: "10" },
     "mutation-segments": { type: "boolean", default: false },
     "reconcile-traffic": { type: "boolean", default: false },
@@ -230,7 +231,7 @@ const { values } = parseArgs({
     "retention-ms": { type: "string", default: "0" },
   },
 });
-const processInstance = randomUUID();
+const processInstance = values["checkpoint-seed"] ?? randomUUID();
 const harnessSha256 = createHash("sha256")
   .update(fs.readFileSync(fileURLToPath(import.meta.url)))
   .digest("hex");
@@ -473,6 +474,9 @@ assert(!reconcileRandomBytes || reconcile);
 assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
 assert(!reconcile || reconcileChangedFiles < Number(values.files));
 const checkpointChangedFiles = values["checkpoint-changed-files"].split(",").map(Number);
+if (turnLoop) {
+  console.log(JSON.stringify({ checkpointSeed: processInstance, hostLoad: loadavg() }));
+}
 assert(
   checkpointChangedFiles.every(
     (count) => Number.isSafeInteger(count) && count > 0 && count < Number(values.files),
@@ -3201,6 +3205,7 @@ measurement: try {
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
           checkpointChangedFiles,
+          checkpointSeed: processInstance,
           snapshotCaptures: checkpointPhases.filter(
             (phase) => phase.name === "nativeWorktreeFilesystem:copy",
           ).length,
