@@ -8,6 +8,7 @@ import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { CLI_STREAM_JSON_OUTPUT_LIMITS } from "../cli-output-stream-limits.js";
 import { runPreparedCliAgent as runPreparedCliAgentImpl } from "../cli-runner.js";
 import * as cliTranscript from "../command/attempt-execution.helpers.js";
+import { hasModelFallbackStop } from "../failover-error.js";
 import { buildContext } from "./execute-events.tool-result-args.test-support.js";
 import {
   createManagedRun,
@@ -138,11 +139,14 @@ describe("CLI stream-json output limit", () => {
       },
     };
 
-    await expect(runPreparedCliAgent(context)).rejects.toMatchObject({
+    const failure = await runPreparedCliAgent(context).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
       name: "FailoverError",
       reason: "format",
       message: `CLI JSONL output exceeded ${maxTurnRawChars} characters; refusing to parse output.`,
     });
+    // No tool ran, so model fallback may replay the prompt.
+    expect(hasModelFallbackStop(failure)).toBe(false);
     // The fallback retry resumes this refused first turn's native session.
     expect(context.params.persistStoppedFirstCliSession).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "native-first-turn" }),
@@ -151,5 +155,50 @@ describe("CLI stream-json output limit", () => {
     expect(yielded).toBe(Math.floor(maxTurnRawChars / recordChars) + 1);
     expect(aborted).toBe(true);
     expect(closed).toBe(true);
+  });
+
+  it("stops model fallback when a turn that already ran a tool exceeds the output limit", async () => {
+    const context = buildClaudeStreamJsonRunContext("run-limit-after-tool");
+    const padding = {
+      type: "system",
+      subtype: "fixture_padding",
+      padding: "x".repeat(1024 * 1024),
+    };
+    context.preparedBackend.backend.command = process.execPath;
+    context.executionTarget = {
+      kind: "plugin",
+      async *execute() {
+        yield { type: "system", subtype: "init", session_id: "native-tool-turn" };
+        yield {
+          type: "assistant",
+          message: {
+            id: "msg-tool",
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "toolu-1", name: "exec", input: { command: "true" } },
+            ],
+          },
+        };
+        yield {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "toolu-1", content: "ok" }],
+          },
+        };
+        for (let i = 0; i < 12; i += 1) {
+          yield padding;
+        }
+        yield { type: "result", subtype: "success", is_error: false, result: "done" };
+      },
+    };
+
+    const failure = await runPreparedCliAgent(context).catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      name: "FailoverError",
+      message: `CLI JSONL output exceeded ${maxTurnRawChars} characters; refusing to parse output.`,
+    });
+    // Another model replaying the prompt would run the completed tool again (#200744).
+    expect(hasModelFallbackStop(failure)).toBe(true);
   });
 });
