@@ -203,7 +203,13 @@ export async function captureSessionEventTargetForHost(
     }
     toolsAllow = intersectSessionEventToolsAllow(toolsAllow, options.producerPolicy?.toolsAllow);
     const destinationSettings = entry
-      ? { permissionMode: entry.permissionMode, toolOverrides: entry.toolOverrides }
+      ? {
+          permissionMode: entry.permissionMode,
+          toolOverrides: entry.toolOverrides,
+          // Host-captured native conversation identity; session-event turns
+          // must surface it so same-conversation authority keeps matching.
+          nativeChannelId: entry.nativeChannelId,
+        }
       : undefined;
     const callerSettings = callerAgentMatches ? caller?.sessionEventSettings : undefined;
     const producerSettings =
