@@ -39,10 +39,9 @@ suite.define(() => {
         expect(plus!.x).toBeGreaterThan(filter!.x + filter!.width);
         expect(plus!.x + plus!.width).toBeLessThan(collapse!.x);
         expect(await create.getAttribute("href")).toBe("/new?agent=main");
-        for (const view of ["pages", "online"]) {
-          await sidebar.locator('[data-navigation-view="' + view + '"]').click();
-          expect(await sidebar.locator(".sidebar-new-session").count()).toBe(0);
-        }
+        await sidebar.locator('[data-navigation-view="online"]').click();
+        await sidebar.locator(".sidebar-online").waitFor();
+        expect(await sidebar.locator(".sidebar-new-session").count()).toBe(0);
         await sidebar.locator('[data-navigation-view="sessions"]').click();
         await create.waitFor();
         await header.getByRole("button", { name: "Collapse sidebar", exact: true }).click();

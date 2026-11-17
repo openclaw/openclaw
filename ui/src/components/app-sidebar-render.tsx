@@ -27,7 +27,6 @@ import { t } from "../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
-import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { SidebarAttention } from "./sidebar-attention.tsx";
@@ -50,7 +49,6 @@ export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
-  renderPinnedSidebarSession(session: () => SidebarRecentSession): SolidJSX.Element;
   toggleSection(sectionId: string): void;
 };
 

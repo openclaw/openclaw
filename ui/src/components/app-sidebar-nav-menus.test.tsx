@@ -300,14 +300,11 @@ describe("sidebar rail pin menu", () => {
       [
         ...sidebar
           .querySelector(".sidebar-rail__pins")!
-          .querySelectorAll(
-            "[data-sidebar-entry], [data-navigation-view], .sidebar-rail__separator",
-          ),
+          .querySelectorAll("[data-sidebar-entry], [data-rail-more], .sidebar-rail__separator"),
       ].map(
         (element) =>
           element.getAttribute("data-sidebar-entry") ??
-          element.getAttribute("data-navigation-view") ??
-          "separator",
+          (element.hasAttribute("data-rail-more") ? "pages" : "separator"),
       );
     await sidebar.updateComplete;
     // A new rail: Automations, Customize and Usage, then the "more" menu.
@@ -322,6 +319,27 @@ describe("sidebar rail pin menu", () => {
     expect(order()).toEqual(["route:usage", "pages"]);
   });
 
+  it("opens Activity and the people list from the People rail item", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    sidebar.navigationCollapsed = true;
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(navigate).toHaveBeenCalledWith("activity");
+    expect(sidebar).toMatchObject({ navigationView: "online", navigationCollapsed: false });
+    const overview = sidebar.querySelector<HTMLAnchorElement>(".sidebar-online__overview a")!;
+    expect(overview.textContent).toContain("Activity");
+    expect(overview.getAttribute("href")).toBe("/activity");
+  });
+
   it("opens Sessions, then the sidebar, then the agent menu from the rail avatar", async () => {
     const { sidebar } = await mountSidebar(
       createGateway(createTestGatewayClient(createGatewayRequestMock())),
@@ -329,7 +347,7 @@ describe("sidebar rail pin menu", () => {
       "panel",
       TWO_AGENTS,
     );
-    sidebar.navigationView = "pages";
+    sidebar.navigationView = "automations";
     sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
     await sidebar.updateComplete;
     const agent = sidebar.querySelector<HTMLButtonElement>(
@@ -348,7 +366,7 @@ describe("sidebar rail pin menu", () => {
       sidebar.navigationCollapsed,
       sidebar.querySelector(".sidebar-agent-menu") !== null,
     ];
-    expect(state()).toEqual(["Molty · Sessions", "false", "pages", false, false]);
+    expect(state()).toEqual(["Molty · Sessions", "false", "automations", false, false]);
     // Outside Sessions: go to Sessions.
     await click();
     expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, false]);

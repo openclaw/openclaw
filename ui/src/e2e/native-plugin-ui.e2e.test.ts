@@ -727,7 +727,12 @@ suite.define(() => {
         expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
         expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
       }
-      await page.locator('[data-navigation-view="pages"]').click();
+      // The rail menu stays usable without leaving the plugin while reconnecting.
+      await navigationSidebar.locator("[data-rail-more]").click();
+      const pagesMenu = page.locator(".sidebar-pages-menu");
+      await pagesMenu.waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+      await pagesMenu.waitFor({ state: "hidden" });
       await expectPluginLoading(page);
       await gateway.resolveDeferred("connect");
       const reconnected = await gateway.waitForRequest("plugins.controlUi.report", {

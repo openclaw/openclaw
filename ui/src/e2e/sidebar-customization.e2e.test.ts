@@ -241,6 +241,8 @@ suite.define(() => {
                 const operationsPage = pages.locator(".sidebar-pages__entry").filter({
                   has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
                 });
+                // Choosing a page closed the menu; pinning keeps it open.
+                await openSidebarPages(page);
                 await operationsPage.getByRole("button", { name: "Pin", exact: true }).click();
                 const shortcut = sidebar.locator(
                   '.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/board-ops"]',
@@ -253,6 +255,7 @@ suite.define(() => {
                 await openSidebarPages(page);
                 await pages.getByRole("link", { name: "Workboard", exact: true }).click();
                 await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
+                await openSidebarPages(page);
                 await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
                 await expect.poll(() => shortcut.count()).toBe(0);
                 expect(await operationsEntry.getByRole("link").count()).toBe(1);
@@ -604,12 +607,14 @@ suite.define(() => {
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);
       // The transient selected view resets, but saved personal pins do not.
-      await expect.poll(() => pagesButton.getAttribute("aria-pressed")).toBe("false");
+      await expect.poll(() => pagesButton.getAttribute("aria-expanded")).toBe("false");
       pages = await openSidebarPages(page);
       expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
       const pinMenu = await openSidebarPinMenu(page, "route:usage");
       await pinMenu.getByRole("menuitem", { name: "Unpin", exact: true }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual([]);
+      // The pin menu took the pointer, so the page menu closed; Usage stays listed there.
+      pages = await openSidebarPages(page);
       expect(await pages.getByRole("link", { name: "Usage", exact: true }).isVisible()).toBe(true);
 
       // The rail search button is the command palette entry point.

@@ -1,12 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show, onSettled } from "solid-js";
+import { createMemo, createSignal, For, lazy, Show, onSettled } from "solid-js";
 import {
   SESSION_ICON_GLYPH_IDS,
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import {
   isRailSectionPin,
+  isSettingsTakeover,
   normalizeSidebarEntries,
+  sidebarSectionForRoute,
   parseSidebarEntry,
   serializeSidebarEntry,
   titleForRoute,
@@ -20,6 +22,7 @@ import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presen
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
 import {
   renderSidebarAgentCard,
   renderAppSidebarFooterBar,
@@ -29,7 +32,9 @@ import {
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
+import { SidebarViewBoundary } from "./sidebar-view-boundary.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
 
@@ -42,6 +47,37 @@ type RailPinTouchPress = {
   opened: boolean;
 };
 
+const SidebarPagesMenu = lazy(() => import("./app-sidebar-pages.tsx"), {
+  export: "SidebarPagesMenu",
+});
+
+/**
+ * After a rail or menu destination is chosen: a section page opens its own sidebar
+ * (clicking the open section's item closes it); any other page runs full width.
+ */
+function revealDestination(host: AppSidebarRenderHost, entry: SidebarZoneEntry) {
+  if (host.onExitSettings) {
+    return;
+  }
+  const section = entry.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+  // The drawer closes on navigation; the route's section picks its list for next time.
+  if (isMobileNavLayout()) {
+    return;
+  }
+  if (!section) {
+    if (!host.navigationCollapsed) {
+      host.onToggleSidebar?.();
+    }
+    return;
+  }
+  const current = host.navigationView === section && !host.navigationCollapsed;
+  host.navigationView = section;
+  if (current || host.navigationCollapsed) {
+    host.onToggleSidebar?.();
+  }
+  host.invalidate();
+}
+
 export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
@@ -52,54 +88,37 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   // Saved order is kept; the rail shows native sections first, then everything else.
   const sectionPins = createMemo(() => pins().filter(isRailSectionPin));
   const otherPins = createMemo(() => pins().filter((entry) => !isRailSectionPin(entry)));
-  // The agent avatar above is the Sessions item; Pages is the "more" control below the sections.
-  type View = "pages" | "online";
-  const viewLabel = (view: View) => (view === "pages" ? t("nav.pages") : t("presence.usersTitle"));
-  const viewPressed = (view: View) =>
+  // The agent avatar above is the Sessions item; "more" below the sections opens a page menu.
+  const peoplePressed = () =>
     host.navigationVisible &&
     !host.onExitSettings &&
     !host.navigationCollapsed &&
-    host.navigationView === view;
-  const ViewButton = (props: { view: View }) => (
-    <openclaw-tooltip prop:content={viewLabel(props.view)}>
-      <button
-        ref={[
-          elementRef((element: HTMLButtonElement) => {
-            host.navigationViewElements.set(props.view, element);
-            return () => {
-              if (host.navigationViewElements.get(props.view) === element) {
-                host.navigationViewElements.delete(props.view);
-              }
-            };
-          }),
-        ]}
-        type="button"
-        class="sidebar-rail__button"
-        data-navigation-view={props.view}
-        aria-label={viewLabel(props.view)}
-        aria-pressed={viewPressed(props.view) ? "true" : "false"}
-        onClick={() => {
-          const active = host.navigationView === props.view;
-          host.navigationView = props.view;
-          if (host.onExitSettings) {
-            host.onExitSettings();
-          } else if (
-            !isMobileNavLayout() &&
-            ((active && props.view !== "online") || host.navigationCollapsed)
-          ) {
-            host.onToggleSidebar?.();
-          }
-          host.invalidate();
-        }}
-      >
-        <Icon
-          name={props.view === "pages" ? "moreHorizontal" : "users"}
-          filled={viewPressed(props.view)}
-        />
-      </button>
-    </openclaw-tooltip>
-  );
-  return (
+    host.navigationView === "online";
+  let pagesMenu: PopoverHandle | undefined;
+  let moreButton: HTMLButtonElement | undefined;
+  const [pagesMenuOpen, setPagesMenuOpen] = createSignal(false);
+  // "More" carries the current-item fill while the open page has no item of its own on the rail.
+  const moreCurrent = createMemo(() => {
+    const route = host.activeRouteId;
+    if (
+      !route ||
+      route === "chat" ||
+      route === "new-session" ||
+      isSettingsTakeover(route) ||
+      // People is Activity's own rail item.
+      sidebarSectionForRoute(route) === "online"
+    ) {
+      return false;
+    }
+    if (route === "plugin") {
+      return !pins().includes(`plugin:${host.activePluginTabId}`);
+    }
+    return !pins().some((entry) => {
+      const pinned = parseSidebarEntry(entry);
+      return pinned?.type === "route" && isSidebarRouteActive(route, pinned.route);
+    });
+  });
+  return [
     <nav
       class="sidebar-rail"
       aria-label={t("nav.pages")}
@@ -108,7 +127,41 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     >
       {renderSidebarAgentCard(host)}
       <div class="sidebar-rail__views">
-        <ViewButton view="online" />
+        <openclaw-tooltip prop:content={t("presence.usersTitle")}>
+          <button
+            ref={[
+              elementRef((element: HTMLButtonElement) => {
+                host.navigationViewElements.set("online", element);
+                return () => {
+                  if (host.navigationViewElements.get("online") === element) {
+                    host.navigationViewElements.delete("online");
+                  }
+                };
+              }),
+            ]}
+            type="button"
+            class="sidebar-rail__button"
+            data-navigation-view="online"
+            aria-label={t("presence.usersTitle")}
+            aria-pressed={peoplePressed() ? "true" : "false"}
+            onClick={() => {
+              // People is the Users section: Activity in the content, people in the sidebar.
+              host.navigationView = "online";
+              if (host.onExitSettings) {
+                host.onExitSettings();
+              } else if (!isMobileNavLayout() && host.navigationCollapsed) {
+                host.onToggleSidebar?.();
+              }
+              // The mobile drawer closes on navigation, so there People only opens the list.
+              if (!isMobileNavLayout()) {
+                host.onNavigate?.("activity");
+              }
+              host.invalidate();
+            }}
+          >
+            <Icon name="users" filled={peoplePressed()} />
+          </button>
+        </openclaw-tooltip>
       </div>
       <div
         class={[
@@ -118,15 +171,12 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         aria-label={t("nav.customize")}
         onClick={(event) => {
           if (
-            !isMobileNavLayout() &&
-            !host.onExitSettings &&
-            !host.navigationCollapsed &&
-            event.button === 0 &&
-            !event.metaKey &&
-            !event.ctrlKey &&
-            !event.shiftKey &&
-            !event.altKey &&
-            event
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey ||
+            !event
               .composedPath()
               .some(
                 (target) =>
@@ -134,7 +184,17 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                   target.matches("a[href], button:not([disabled], [data-navigation-view])"),
               )
           ) {
-            host.onToggleSidebar?.();
+            return;
+          }
+          const pin = event
+            .composedPath()
+            .find(
+              (target): target is Element =>
+                target instanceof Element && target.hasAttribute("data-sidebar-entry"),
+            );
+          const entry = pin ? parseSidebarEntry(pin.getAttribute("data-sidebar-entry")) : null;
+          if (entry) {
+            revealDestination(host, entry);
           }
         }}
         onDragOver={(event) => host.sessionOrganizer.handleSidebarZoneDragOver(event)}
@@ -144,15 +204,57 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         <For each={sectionPins()}>
           {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}
         </For>
-        <ViewButton view="pages" />
+        <openclaw-tooltip prop:content={t("nav.pages")}>
+          <button
+            ref={(element) => (moreButton = element)}
+            type="button"
+            class={[
+              "sidebar-rail__button sidebar-rail__more",
+              { "nav-item--active": moreCurrent() },
+            ]}
+            data-rail-more=""
+            aria-label={t("nav.pages")}
+            aria-haspopup="dialog"
+            aria-controls="sidebar-pages-menu"
+            aria-expanded={pagesMenuOpen() ? "true" : "false"}
+            onClick={() => (pagesMenuOpen() ? pagesMenu?.hide() : pagesMenu?.show())}
+          >
+            <Icon name="moreHorizontal" />
+          </button>
+        </openclaw-tooltip>
         <Show when={otherPins().length > 0}>
           <span class="sidebar-rail__separator" aria-hidden="true" />
         </Show>
         <For each={otherPins()}>{(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}</For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
-    </nav>
-  );
+    </nav>,
+    // Outside the rail so its rows keep full Pages styling instead of icon-only rail controls.
+    <Popover
+      id="sidebar-pages-menu"
+      label={t("nav.pages")}
+      class="sidebar-pages-menu-popover"
+      anchor={moreButton}
+      placement="right-start"
+      lazy
+      dismissOutsidePointer
+      dismissOutsideFocus
+      onOpenChange={setPagesMenuOpen}
+      ref={(handle) => (pagesMenu = handle)}
+    >
+      <SidebarViewBoundary>
+        <SidebarPagesMenu
+          host={host}
+          onNavigate={(entry) => {
+            pagesMenu?.hide();
+            if (entry) {
+              revealDestination(host, entry);
+            }
+          }}
+        />
+      </SidebarViewBoundary>
+    </Popover>,
+  ];
 }
 
 function renderRailPin(
