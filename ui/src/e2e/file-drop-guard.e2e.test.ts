@@ -74,7 +74,7 @@ suite.define(() => {
           target.dispatchEvent(type, { dataTransfer: transfer });
         const overlay = () =>
           input.evaluate((element) => {
-            const style = getComputedStyle(element, "::after");
+            const style = getComputedStyle(element, "::before");
             return {
               content: style.content,
               opacity: Number(style.opacity),
