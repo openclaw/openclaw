@@ -66,7 +66,10 @@ it("loads personal files and quarantines an untrusted tool write", () =>
     expect(await load()).toEqual(["Shared preferences", "Personal preferences"]);
     expect(warnings).toEqual([]);
     const operations = withMemoryWriteProvenance(
-      { readFile: fs.readFile, writeFile: fs.writeFile },
+      {
+        readFile: (file, signal?: AbortSignal) => fs.readFile(file, { signal }),
+        writeFile: (file, content, signal?: AbortSignal) => fs.writeFile(file, content, { signal }),
+      },
       createMemoryWriteProvenanceObserver({
         mutationRoot: workspaceDir,
         workspaceDir,

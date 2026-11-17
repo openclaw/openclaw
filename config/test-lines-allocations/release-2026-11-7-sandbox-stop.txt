@@ -1,0 +1,3 @@
+225
+# Bounded sandbox-stop adaptation: five bridge cancellation cases, queue cancellation/timeout
+# ownership regression, and two existing provenance fixtures adapted to signal arguments.
