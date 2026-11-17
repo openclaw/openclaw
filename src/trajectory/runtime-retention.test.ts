@@ -88,6 +88,9 @@ vi.mock("../state/openclaw-agent-execution.js", () => ({
       path: "unused-retention-execution",
       fileIdentity: undefined,
       onTerminal: () => () => {},
+      observeRegistration() {
+        throw new Error("Unexpected registration observation");
+      },
       assertCurrent() {},
       captureGenerationClaim() {
         throw new Error("Unexpected generation capture");
