@@ -141,9 +141,11 @@ and scene readiness; it does not compare pixels against a baseline.
 Pull requests and automatic main CI use the pinned Bun fork. The planner
 selects `bun-all` for every Linux test lane routed through
 `scripts/lib/ci-test-runtime.mts`, including Control UI Chromium unit shards and
-plugin prerelease extension batches. Full Release Validation uses `dual-all`:
-the complete Node selection runs first, followed by its Bun portion in the same
-runner slots. Either runtime failing fails the job.
+plugin prerelease extension batches. Full Release Validation uses `dual-all`.
+Root test shards and plugin extension batches run the complete Node selection
+and its Bun portion in independent matrix jobs on separate runners; Control UI
+retains colocated runtime execution. Either required runtime failing fails the existing CI gate.
+Matrix fail-fast stays disabled, so one runtime cannot cancel its sibling.
 
 Manual dispatches retain the optional `test_runtime_policy` override: `node`,
 `bun-all`, or `dual-all`. Leaving it empty uses the event default: Bun for daily
@@ -165,13 +167,24 @@ Every selected Bun process checks its revision against
 the job identity and setup instruction. The existing `setup-test-bun` action
 installs the pinned fork for jobs that need it.
 
-The workflows retain their job definitions, matrix shapes, runner classes, and
-concurrency caps. Both runtime passes reuse the selected runner; there are no
-per-runtime duplicate jobs. Runtime-specific timing estimates can repack selected
-tests within the existing planner caps. `dual-all` doubles
-each selected Linux test row's deadline, including the default 60-minute budget,
-to cover its sequential runtime passes. `bun-all` keeps the original deadline.
-macOS and Windows runtime policies remain unchanged.
+For full manual validation, the existing matrix owners emit a `(node)` or `(bun)` job for each runtime
+selected by the runtime owner. The policy still owns exact file membership:
+`bun-all` emits a Node companion only for selected Node exceptions or both-host
+contracts; `dual-all` retains the complete Node selection without duplicating
+those exceptions. Each job uses the original per-runtime deadline, runner class,
+and worker limits. Full dispatch reuses one bounded complete-inventory compact plan, then expands
+its runtime membership into independent rows below GitHub’s matrix limit.
+Automatic daily and pull-request CI keep their existing colocation and job caps.
+Control UI keeps its original three colocated jobs and auxiliary checks. Its
+three-slot concurrency limit offers no general extra runtime capacity, so this
+change does not duplicate browser setup. Root and plugin runtime jobs repeat
+setup in exchange for independent execution and retries; macOS and Windows runtime policies remain unchanged.
+
+Stable runtime-specific job names let GitHub retry only the failed runtime. FRV
+composes evidence by that exact name, retaining a successful sibling from its
+original attempt. Frozen targets without the runtime-job capability keep their
+historical sequential execution and deadline multiplier; current harness code
+does not retrofit their runtime contract.
 
 The following direct-entrypoint lanes still use Node and remain follow-up work:
 
@@ -191,16 +204,17 @@ The following direct-entrypoint lanes still use Node and remain follow-up work:
 | `openclaw-performance`                                       | Add runtime identity to benchmark artifacts, isolate runs, and compare matching workloads before changing performance baselines. |
 
 The protected cache warmer continues to publish its existing Node/Bun inventory.
-Timing learning, refit, and refresh keep separate identities for Node,
-`bun-all`, and `dual-all`. A `bun-all` measurement covers its complete envelope:
-Bun/Vitest, native Bun, and any named Node companions. A `dual-all` measurement
-records the combined wall time of its sequential runtime passes. Old `bun:`
-timings from qualified partial selections are not reused. Per-runtime pruning
-cannot remove the other policies' samples, and failed or incomplete measurements
-never become timing samples.
+Timing learning, refit, and refresh distinguish runtime jobs from legacy
+combined policy envelopes. A split job cannot overwrite a combined `bun-all` or
+`dual-all` timing sample with a partial measurement. Bun/Vitest and native Bun
+remain within the selected Bun job. Old `bun:` timings from qualified partial
+selections are not reused. Per-runtime pruning cannot remove another identity's
+samples, and failed or incomplete measurements never become timing samples.
 Until matching policy measurements exist, scheduling retains historical Node or
 release-envelope estimates. Measured runtime-placement observations never fall
-back across policies.
+back across policies. Readers distinguish policy and runtime when a runtime is
+selected; the shared full-dispatch plan continues to use combined-policy costs.
+The complete `dual-all` Node pass continues to share ordinary Node history.
 
 Five paired main trials established the switch: runs
 [38870726251](https://github.com/openclaw/openclaw/actions/runs/38870726251),
@@ -219,10 +233,10 @@ node scripts/ci-compare-test-runtimes.mjs <run-id>
 ```
 
 The comparison downloads logs once and reports each shard's Node and Bun wall
-time, failures, and incomplete measurements. Dual validation reuses the selected
-jobs and their runner registrations. The `dual-all` deadline multiplier budgets both serial
-runs; a silence-watchdog failure or exhausted budget remains failed or incomplete
-evidence and is never treated as a timing sample.
+time, failures, and incomplete measurements. Root and plugin full dual validation
+use independent runtime jobs; UI and historical combined jobs retain their serial timing
+interpretation. A silence-watchdog failure or exhausted budget remains failed or
+incomplete evidence and is never treated as a timing sample.
 
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
@@ -278,8 +292,9 @@ the repository tsconfig, and the shared test deadline. It disables automatic env
 file loading and runs one test process inside the existing plan and worker budget.
 The shared process owner retains output watchdogs, interruption handling, and
 joined descendant cleanup. Release validation runs the complete Node selection
-before the Bun/Vitest and native Bun portions in that same slot;
-every result remains required. Native execution adds no CI jobs or worker fanout.
+in its own job, alongside the Bun job. Bun/Vitest and native Bun remain sequential
+within that Bun job; every result remains required. Native execution itself adds
+no extra CI jobs or worker fanout.
 
 The runtime owner's named Node routes cover documented Node/V8 contracts and
 confirmed fork defects. They remain exact-file exceptions even for broad or
@@ -292,7 +307,8 @@ Control UI uses three native shards and three workers per row, including
 exact-target Full Release Validation dispatches. The runtime partition applies
 after Vitest selects a shard, preserving original file ownership. Files with
 Node-only heap or WeakRef contracts keep Node coverage; the remaining selection
-uses Bun. `dual-all` runs the original shard on Node before its Bun portion.
+uses Bun. UI `dual-all` keeps the original Node pass followed by its Bun portion
+in the same job to preserve the three-slot capacity and avoid duplicate browser setup.
 Partitions without browser files retain browser discovery for native sharding
 but omit Chromium version checking and Playwright's speculative browser startup.
 Historical targets without runtime-selection support retain their original Node

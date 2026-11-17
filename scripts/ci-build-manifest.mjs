@@ -582,6 +582,13 @@ const testRuntimeMode = testRuntimePolicy
       ? "dual-all"
       : "bun-all")
   : "node";
+// Preserve deliberate daily/PR colocation and capacity. Only full manual validation
+// pays duplicate runtime setup for independent execution and retries.
+const splitRuntimeJobs =
+  eventName === "workflow_dispatch" &&
+  !runtimePullRequest &&
+  !mainValidation &&
+  typeof testRuntimePolicy?.ciTestShardRuntimes === "function";
 // Timing readers and the executor must price the same runtime before planning.
 process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
@@ -817,8 +824,8 @@ const publishedDriverUpdate =
     : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
-// main have no branch-protection consumers. Dispatch (release
-// validation) keeps the full named matrix.
+// main have no branch-protection consumers. Dispatch keeps the complete
+// inventory; runtime-capable full dispatches share the existing bounded packer.
 const compactPlanMode = !isCanonicalRepository
   ? undefined
   : runtimePullRequest
@@ -1146,9 +1153,15 @@ const rawNodeTestShards = runNodeFull
           // Keep the legacy boolean for historical targets. Hourly main uses
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
-          compactMode: mainValidation ? "pull-request" : compactPlanMode,
+          compactMode: mainValidation
+            ? "pull-request"
+            : (compactPlanMode ??
+              (splitRuntimeJobs && testRuntimeMode !== "node" ? "pull-request" : undefined)),
           mainValidation,
-          compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
+          compactNodeJobCap:
+            splitRuntimeJobs && testRuntimeMode !== "node"
+              ? undefined
+              : nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
         ...nodeWorkerE2eShards,
@@ -1272,6 +1285,7 @@ const uiTestRuntimePolicy =
   )
     ? testRuntimeMode
     : "node";
+
 const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
 const knownToolingConfigs = new Set([
   goToolingConfig,
@@ -1299,7 +1313,11 @@ const nodeTestShards = targetNodeTestShards
       Number(b.runner === "runson-c8i-8xlarge") - Number(a.runner === "runson-c8i-8xlarge") ||
       (b.predictedSeconds ?? 0) - (a.predictedSeconds ?? 0),
   )
-  .map((shard) => {
+  .flatMap((shard) => {
+    const runtimes =
+      !shard.requiresDist && splitRuntimeJobs
+        ? testRuntimePolicy.ciTestShardRuntimes(shard, testRuntimeMode)
+        : null;
     const groups =
       shard.groups?.map(projectNodeTestGroup) ??
       (nodeTestGroupsCodec && shard.configs?.length && !shard.targets?.length
@@ -1320,7 +1338,9 @@ const nodeTestShards = targetNodeTestShards
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       requires_bun:
         !shard.requiresDist &&
-        Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
+        (runtimes
+          ? runtimes.includes("bun")
+          : Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode))),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
@@ -1332,7 +1352,7 @@ const nodeTestShards = targetNodeTestShards
       requires_dist: shard.requiresDist,
       runner: shard.runner,
       timeout_minutes:
-        !shard.requiresDist && testRuntimeMode === "dual-all"
+        !shard.requiresDist && testRuntimeMode === "dual-all" && !splitRuntimeJobs
           ? 2 * (shard.timeoutMinutes ?? 60)
           : shard.timeoutMinutes,
       plan_concurrency: shard.planConcurrency,
@@ -1397,10 +1417,20 @@ const nodeTestShards = targetNodeTestShards
         delete row.shard_name;
       }
     }
+    const rows = runtimes
+      ? runtimes.map((runtime) =>
+          Object.assign({}, row, {
+            base_check_name: row.check_name,
+            check_name: `${row.check_name} (${runtime})`,
+            test_runtime: runtime,
+            requires_bun: runtime === "bun",
+          }),
+        )
+      : [row];
     if (packedGroups) {
-      packedNodeTestRows.push({ row, groups });
+      packedNodeTestRows.push(...rows.map((runtimeRow) => ({ row: runtimeRow, groups })));
     }
-    return row;
+    return rows;
   });
 const nodeTestGroupPools = {};
 if (

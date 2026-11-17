@@ -49,15 +49,28 @@ function normalizeTimingLog(text: string): string {
 }
 
 function timingNamespace(key: string): string {
+  const owner = /"OPENCLAW_CI_TEST_RUNTIME","(node|bun)"/u.exec(key)?.[1];
+  const policy = /"OPENCLAW_CI_TEST_RUNTIME_POLICY","([^"]+)"/u.exec(key)?.[1];
+  if (owner && policy) {
+    return `${policy}:${owner}`;
+  }
   return (
-    /^(bun-all|bun-native|node-subset|dual-all|bun):/u.exec(key)?.[1] ??
+    /^(bun-all:(?:node|bun)|dual-all:bun|bun-all|bun-native|node-subset|dual-all|bun):/u.exec(
+      key,
+    )?.[1] ??
     /"OPENCLAW_CI_TEST_RUNTIME_POLICY","([^"]+)"/u.exec(key)?.[1] ??
     "node"
   );
 }
 
-function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[] {
+function splitRuntimeTimingLogs(
+  text: string,
+): { text: string; prefix: string; runtime?: string }[] {
   const policy = readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY");
+  const owner = readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME");
+  if (owner === null || (owner && owner !== "node" && owner !== "bun")) {
+    return [];
+  }
   if (policy !== "bun-all" && policy !== "dual-all") {
     return [{ text, prefix: "" }];
   }
@@ -75,7 +88,7 @@ function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[
         return [line];
       }
       const runtime = /^(?:bun:|bun-native:|node-subset:)/u.exec(shard[1]!)?.[0] ?? "";
-      if (!(runtime ? includeBun : includeNode)) {
+      if (!(runtime && !(owner && runtime === "node-subset:") ? includeBun : includeNode)) {
         return [];
       }
       return [line.replace(`[shard:${runtime}`, "[shard:")];
@@ -109,6 +122,12 @@ function splitRuntimeTimingLogs(text: string): { text: string; prefix: string }[
       })
       .join("\n");
   };
+  // A split leg is not the historical serial envelope. Only dual-all
+  // has a full Node pass that can reuse the original Node costs.
+  if (owner) {
+    const prefix = owner === "node" && policy === "dual-all" ? "" : `${policy}:${owner}:`;
+    return [{ text: collapse(owner === "node", owner === "bun"), prefix, runtime: owner }];
+  }
   return policy === "bun-all"
     ? [{ text: collapse(true, true), prefix: "bun-all:" }]
     : [
@@ -477,6 +496,7 @@ function readPackedReleaseLog(text: string, labels: string[], samples: Samples) 
   if (
     !labels.includes("ubuntu-24.04") ||
     labels.some((label) => label === "self-hosted" || /^(?:blacksmith-|runson)/u.test(label)) ||
+    readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME") ||
     readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY") !== "dual-all" ||
     resources?.requestedPlans !== 1 ||
     resources.admittedPlans !== 1 ||
@@ -1213,7 +1233,10 @@ export function refitTestTimings(
             for (const [identity, values] of runtime[profile]) {
               const observation = descriptors.get(identity)!;
               if (runtimeLog.prefix) {
-                observation.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = runtimeLog.prefix.slice(0, -1);
+                observation.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = runtimeLog.prefix.split(":")[0]!;
+                if (runtimeLog.runtime) {
+                  observation.env.OPENCLAW_CI_TEST_RUNTIME = runtimeLog.runtime;
+                }
               }
               const key = runtimePlacementTimingIdentity(observation);
               runtimeDescriptors.set(key, observation);
