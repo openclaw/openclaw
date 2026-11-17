@@ -203,24 +203,24 @@ describe("prepareCodexServerNotification", () => {
     },
   );
 
-  it.each([{ url: "https://example.com/audio.wav" }, { fileId: "file-audio-1" }])(
-    "retains terminal snapshots containing audio input %j",
-    (source) => {
-      const snapshot = {
-        id: "turn-1",
-        status: "failed",
-        error: { message: "Model unavailable", codexErrorInfo: "modelNotFound" },
-        items: [{ id: "input-1", type: "userMessage", content: [{ type: "audio", ...source }] }],
-      };
-      expect(
-        prepareCodexServerNotification({
-          method: "turn/completed",
-          params: { threadId: "thread-1", turn: snapshot },
-        }).completedTurn,
-      ).toEqual(snapshot);
-      expect(assertCodexTurnStartResponse({ turn: snapshot })).toEqual({ turn: snapshot });
-    },
-  );
+  it.each<{ url: string } | { fileId: string }>([
+    { url: "https://example.com/audio.wav" },
+    { fileId: "file-audio-1" },
+  ])("retains terminal snapshots containing audio input %j", (source) => {
+    const snapshot = {
+      id: "turn-1",
+      status: "failed",
+      error: { message: "Model unavailable", codexErrorInfo: "modelNotFound" },
+      items: [{ id: "input-1", type: "userMessage", content: [{ type: "audio", ...source }] }],
+    };
+    expect(
+      prepareCodexServerNotification({
+        method: "turn/completed",
+        params: { threadId: "thread-1", turn: snapshot },
+      }).completedTurn,
+    ).toEqual(snapshot);
+    expect(assertCodexTurnStartResponse({ turn: snapshot })).toEqual({ turn: snapshot });
+  });
 
   it("does not merge defaults from unrelated thread item union branches", () => {
     const snapshot = prepareCodexServerNotification({
