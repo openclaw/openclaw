@@ -48,7 +48,7 @@ export async function runCodexAppServerAttempt(
     const fittedPrompt =
       (await connection.params.hostCapabilities.fitCurrentInput?.({
         prompt: connection.params.prompt,
-        runtimeMaxChars: CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
+        maxChars: CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
         stageAttachment: (maxChars, media) =>
           connection.prepareInputAttachments({
             maxChars,

@@ -113,20 +113,8 @@ export function bindHarnessMedia(params: {
   const prepareReplyMedia = bindHarnessReplyMedia(params);
   const fitCurrentInput: AgentHarnessHostCapabilities["fitCurrentInput"] = async (request) => {
     assertActive();
-    const { fitOversizedCurrentInput, resolveCurrentInputBudget } =
-      await import("./current-input-budget.js");
-    const budget = resolveCurrentInputBudget({
-      runtimeMaxChars: request.runtimeMaxChars,
-      contextTokens: attempt.contextTokenBudget ?? attempt.model?.contextWindow,
-      maxOutputTokens: attempt.model?.maxTokens,
-    });
-    return budget
-      ? await fitOversizedCurrentInput({
-          prompt: request.prompt,
-          budget,
-          ...(request.stageAttachment ? { stageAttachment: request.stageAttachment } : {}),
-        })
-      : request.prompt;
+    const { fitOversizedCurrentInput } = await import("./current-input-budget.js");
+    return await fitOversizedCurrentInput(request);
   };
   return {
     capabilities: {

@@ -194,8 +194,6 @@ export function createCodexAppServerAgentHarness(
     },
     delegatedExecutionPluginIds: ["voice-call"],
     contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
-    // codex-rs/protocol/src/user_input.rs MAX_USER_INPUT_TEXT_CHARS; turn/start rejects more.
-    maxInputTextChars: 1 << 20,
     conversationToolPolicySupport: "exact",
     nativeModelPolicySupport: "exact",
     conversationToolPolicySafeDenyTools: CODEX_TOOL_POLICY_SAFE_DENY_NAMES,

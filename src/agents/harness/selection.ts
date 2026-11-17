@@ -43,7 +43,6 @@ import {
   type ContextEngineAssemblySnapshot,
 } from "./context-engine-assembly-attempt.js";
 import { beginContextEngineLogicalTurn } from "./context-engine-turn-begin.js";
-import { fitCurrentInputPrompt, resolveCurrentInputBudget } from "./current-input-budget.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import {
   assertAgentHarnessExecutionEnvironment,
@@ -430,22 +429,10 @@ export async function runAgentHarnessAttempt(
                   : undefined,
                 pluginAttempt.setToolPolicyScope,
               );
-          const policyAttemptParams =
+          const effectiveAttemptParams =
             hostOpenClawAuthority && preparedParams.pluginHarnessToolPolicyRestricted
               ? { ...preparedParams, pluginHarnessToolPolicyRestricted: false }
               : preparedParams;
-          // Plugin harnesses fit their own input under their execution placement.
-          const effectiveAttemptParams = selection.builtIn
-            ? await fitCurrentInputPrompt(
-                policyAttemptParams,
-                resolveCurrentInputBudget({
-                  contextTokens:
-                    policyAttemptParams.contextTokenBudget ??
-                    policyAttemptParams.model?.contextWindow,
-                  maxOutputTokens: policyAttemptParams.model?.maxTokens,
-                }),
-              )
-            : policyAttemptParams;
           assertPluginHarnessConversationToolPolicySupport(
             harness,
             effectiveAttemptParams.pluginHarnessToolPolicyRestricted === true &&

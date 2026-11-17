@@ -131,17 +131,14 @@ export type AgentHarnessHostCapabilities = Readonly<{
     signal?: AbortSignal;
   }) => Promise<string | undefined>;
   /**
-   * Fits an oversized current request for this attempt's model window and the
-   * runtime's per-turn cap. The harness passes its own placement-aware preparer,
-   * so the full request becomes an attachment only where the runtime can read it.
+   * Fits a current request over the runtime's hard per-turn text cap. The harness
+   * passes its own placement-aware preparer, so the full request becomes an
+   * attachment only where the runtime can read it; otherwise its middle is cut.
    */
   fitCurrentInput?: (request: {
     prompt: string;
-    runtimeMaxChars?: number;
-    stageAttachment?: (
-      noteMaxChars: number,
-      media: import("../../media/media-facts.js").MediaFact[],
-    ) => Promise<string | undefined>;
+    maxChars: number;
+    stageAttachment?: import("./current-input-budget.js").StageCurrentInputAttachment;
   }) => Promise<string>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (
