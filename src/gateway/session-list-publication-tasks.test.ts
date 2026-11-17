@@ -46,7 +46,7 @@ it("classifies deployed publication tasks across cold reads without hiding ordin
           ...(index === 5 ? { createdSurface: "github-publication" as const } : {}),
           createdActor:
             index === 4 || index === 0
-              ? { type: "human", id: "publication-reader" }
+              ? { type: "human", source: "profile", id: "publication-reader" }
               : { type: "agent", id: "main" },
           // A renamed backing task stays internal; a human's label never identifies custody.
           label: labels[index],
