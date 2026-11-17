@@ -14,7 +14,8 @@ import { createTerminalStoreFixture } from "./task-store.test-support.js";
 
 type InboundParams = Parameters<typeof dispatchA2aInbound>[0];
 type InboundTurn = Parameters<InboundParams["channelRuntime"]["inbound"]["dispatch"]>[0];
-function dispatched(turn: InboundTurn, deferred = false) {
+type DeferredMode = false | "followup" | "steer";
+function dispatched(turn: InboundTurn, deferred: DeferredMode = false) {
   return {
     admission: { kind: "dispatch" as const },
     dispatched: true,
@@ -22,7 +23,7 @@ function dispatched(turn: InboundTurn, deferred = false) {
     routeSessionKey: turn.route.sessionKey,
     dispatchResult: {
       ...createA2aDispatchResult(),
-      ...(deferred ? { deferredToActiveRun: "followup" as const } : {}),
+      ...(deferred ? { deferredToActiveRun: deferred } : {}),
     },
   };
 }
@@ -156,13 +157,39 @@ describe("A2A channel inbound dispatch", () => {
     },
   );
 
+  it("settles a steered task when the consuming run completes", async () => {
+    registerChannel();
+    fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "steer"));
+    await fixture.run();
+    // The consuming run settles long after the steered dispatch returns.
+    const turn = fixture.dispatch.mock.calls[0]![0];
+    turn.replyOptions?.onAgentRunTerminalOutcome?.("completed");
+    await fixture.store.wait(fixture.task, 0);
+    expect(fixture.task.status).toMatchObject({ state: "TASK_STATE_COMPLETED" });
+    expect(fixture.task.artifacts).toEqual([]);
+  });
+
+  it("settles a steered task when the consuming run fails", async () => {
+    registerChannel();
+    fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "steer"));
+    await fixture.run();
+    const turn = fixture.dispatch.mock.calls[0]![0];
+    turn.replyOptions?.onAgentRunTerminalOutcome?.("failed");
+    await fixture.store.wait(fixture.task, 0);
+    expect(fixture.task.status).toMatchObject({
+      state: "TASK_STATE_FAILED",
+      message: { parts: [{ text: "Agent run failed" }] },
+    });
+    expect(fixture.task.artifacts).toEqual([]);
+  });
+
   it.each(["hermes", "crew"])(
     "correlates interleaved same-context replies from %s",
     async (peerName) => {
       fixture.params.account.config.peers!.crew = { token: "second-token" };
       const second = fixture.store.create(fixture.task.contextId, peerName, "second");
       fixture.store.start(second.id);
-      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, true));
+      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "followup"));
       const config = { session: { dmScope: "per-channel-peer" as const } };
       await Promise.all([
         fixture.run({ config }),
@@ -217,7 +244,7 @@ describe("A2A channel inbound dispatch", () => {
   ])(
     "settles a queued %s only on its task and never reopens it",
     async (_label, completion, payloads, state, text) => {
-      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, true));
+      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, "followup"));
       await fixture.run();
       const other = fixture.store.create(fixture.task.contextId, "hermes", "next-task");
       fixture.store.start(other.id);
