@@ -12,10 +12,11 @@ import {
 export function withPreparedSqliteWriteScope<T>(
   scope: Parameters<typeof withPreparedSqliteScope>[0],
   run: (resolved: ResolvedSqliteScope, sharedWriteReserved: boolean) => T | Promise<T>,
+  signal?: AbortSignal,
 ): T | Promise<T> {
   const admission = isMainThread ? resolveSqliteWriteAdmissionScope(scope) : undefined;
   if (!admission?.shared) {
-    return withPreparedSqliteScope(scope, (resolved) => run(resolved, false));
+    return withPreparedSqliteScope(scope, (resolved) => run(resolved, false), signal);
   }
   const env = cloneEnvWithPlatformSemantics(scope.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -23,10 +24,16 @@ export function withPreparedSqliteWriteScope<T>(
   return runOpenClawAgentPathWriteAdmission(
     admission.path,
     (_identity, assertCurrent) =>
-      withPreparedSqliteScope(captured, (resolved) => {
-        assertCurrent();
-        return run(resolved, true);
-      }),
+      withPreparedSqliteScope(
+        captured,
+        (resolved) => {
+          assertCurrent();
+          return run(resolved, true);
+        },
+        signal,
+      ),
     true,
+    undefined,
+    signal,
   );
 }

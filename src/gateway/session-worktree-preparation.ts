@@ -513,9 +513,11 @@ export async function prepareSessionWorktree(params: {
         ...(rollback ? { rollback } : {}),
         ...(withSource
           ? {
-              withCommit: async <T>(run: (assertCurrent: SessionSourceAssertion) => Promise<T>) =>
+              withCommit: async <T>(
+                run: (assertCurrent: SessionSourceAssertion, signal?: AbortSignal) => Promise<T>,
+              ) =>
                 await withWorktreeSourceWait(withSource!, waitBudget, (current) =>
-                  run(current.assertCurrent),
+                  run(current.assertCurrent, current.signal),
                 ),
             }
           : {}),
@@ -615,7 +617,7 @@ export async function prepareSessionWorktreeCreation(params: {
     ? async (run) =>
         await withWorktreeSourceWait(withSource, waitBudget, (current) => {
           current.assertCurrent();
-          return run(current.assertCurrent);
+          return run(current.assertCurrent, current.signal);
         })
     : undefined;
   const workspace =
