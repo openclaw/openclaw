@@ -23,9 +23,16 @@ import {
   resolveManagedUpdateLeaseDatabasePath,
 } from "../../infra/update-managed-service-handoff-lease.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
-import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
+import {
+  inspectUpdateRunAbandonment,
+  needsPostCoreRepair,
+} from "../../infra/update-run-activity.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import {
+  isAbandonedUpdateRun,
+  isAcknowledgedAbandonedUpdateRun,
+} from "../../infra/update-run-record.js";
 import {
   assertUpdateRecoveryAdmission,
   inspectPluginCohortRecoveryAdmission,
@@ -195,19 +202,23 @@ export async function settleManagedHandoffPluginCohort(
 /**
  * A killed `openclaw update` leaves its plugin cohort reserved, and recovery
  * admission then refuses every later update. A fresh update settles that cohort
- * with repair's settlement when repair would have nothing left to finish and no
- * operator judgement is needed: update history shows a command-line update whose
- * driver exited without leaving the Gateway stopped, the update lease store still
- * holds that driver's lease, so claiming the installation proves its processes
- * and their children gone, and the outcome is a rollback onto the original core
- * or the commit of a candidate that was verified serving. Inspect before package
- * settlement, whose own claim retires that lease, and run the returned settlement
- * after it. The settlement throws for recovery this update leaves to repair;
- * recovery that repair cannot settle either stays with admission's refusal.
+ * with repair's settlement when no operator judgement is needed: update history
+ * shows a command-line update whose driver exited, and the update lease store still
+ * holds that driver's lease, so claiming the installation proves its processes and
+ * their children gone. When that update had replaced the installed version without
+ * confirming it, had begun rolling back on it, or left the Gateway stopped, this
+ * update then finishes it as repair does before deciding anything about its own
+ * core; a stopped Gateway only when this update would restart it anyway. Inspect
+ * before package settlement, whose own claim retires that lease, and run the
+ * returned settlement after it. The settlement throws for recovery this update
+ * leaves to repair; recovery that repair cannot settle stays with admission's refusal.
  */
 export async function inspectInterruptedUpdateRecovery(
   root: string,
-  opts: Pick<UpdateCommandOptions, "dryRun" | "run" | "recovery" | "timeout">,
+  opts: Pick<
+    UpdateCommandOptions,
+    "dryRun" | "run" | "recovery" | "timeout" | "restart" | "json" | "yes" | "fullIntegrityCheck"
+  >,
   /** The steps this update hands its run for what admission settled. */
   steps: UpdateStepResult[],
 ): Promise<
@@ -258,6 +269,38 @@ export async function inspectInterruptedUpdateRecovery(
       next = `Run ${repair}, then retry ${update}.`,
       cause: unknown = pending,
     ) => new Error([pending.message, why, next].filter(Boolean).join(" "), { cause });
+    /**
+     * The stage finishes only the killed run. Repair would also finish any other run
+     * the history still owes recovery, including another update's pending Gateway stop.
+     */
+    const refuseOtherRecovery = () => {
+      const history = listUpdateRuns({ limit: 100 }, options);
+      const since = getUpdateRun(pair.cohort.runId, options)?.createdAtMs ?? 0;
+      const stop = findUpdateGatewayStop(history);
+      const others = new Set(
+        history
+          .filter(
+            (run) =>
+              run.status === "running" ||
+              (!isAcknowledgedAbandonedUpdateRun(run) &&
+                (isAbandonedUpdateRun(run) ||
+                  (run.status === "failed" &&
+                    run.createdAtMs >= since &&
+                    needsPostCoreRepair(run)))),
+          )
+          .map((run) => run.runId),
+      );
+      if (stop?.started === false) {
+        others.add(stop.runId);
+      }
+      others.delete(pair.cohort.runId);
+      // A full page cannot show that nothing older still owes recovery.
+      return others.size || history.length === 100
+        ? refuse(
+            `Other update history also needs repair${others.size ? ` (${[...others].join(", ")})` : ""}.`,
+          )
+        : undefined;
+    };
     /** What the installation and update history say; read again under the claim. */
     const inspectHistory = () => {
       if (installKind !== "package") {
@@ -288,17 +331,20 @@ export async function inspectInterruptedUpdateRecovery(
           `Wait for it to finish; if it has stopped, run ${repair}, then retry ${update}.`,
         );
       }
-      // An update that finds its core already current would leave that Gateway stopped.
-      return findUpdateGatewayStop([run])?.started === false
+      if (findUpdateGatewayStop([run])?.started !== false) {
+        return run;
+      }
+      // History cannot tell that update's stop from an operator's deliberate one.
+      return opts.restart === false
         ? refuse(
-            "That update stopped the Gateway and did not start it again.",
+            "That update stopped the Gateway and did not start it again, and this update was asked not to restart it.",
             `Run ${repair} to settle it and restart the Gateway, then retry ${update}.`,
           )
-        : run;
+        : (refuseOtherRecovery() ?? run);
     };
     const history = inspectHistory();
     if (history instanceof Error) {
-      return { pair, refuse, inspectHistory, refused: history };
+      return { pair, refuse, inspectHistory, refuseOtherRecovery, refused: history };
     }
     // Claiming the installation shows the dead updater's children gone only in the
     // store that recorded them: the one still holding the lease of that very process.
@@ -319,6 +365,7 @@ export async function inspectInterruptedUpdateRecovery(
       pair,
       refuse,
       inspectHistory,
+      refuseOtherRecovery,
       store,
       refused: recorded
         ? undefined
@@ -332,7 +379,7 @@ export async function inspectInterruptedUpdateRecovery(
   if (!inspected) {
     return undefined;
   }
-  const { pair, refuse, inspectHistory, refused, store } = inspected;
+  const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, store } = inspected;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
     const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
@@ -346,7 +393,7 @@ export async function inspectInterruptedUpdateRecovery(
       throw refuse("A dry run changes nothing.", `Run ${update} to settle it and update.`);
     }
     const startedAt = Date.now();
-    const action = await withEngine(() =>
+    const settled = await withEngine(() =>
       withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const ownership = await executor.enter(pair.cohort.installKey).catch((cause: unknown) => {
           // The executor's own refusal usually names what to wait for and run.
@@ -369,8 +416,13 @@ export async function inspectInterruptedUpdateRecovery(
         if (history instanceof Error) {
           throw history;
         }
-        let unfinished: Error | undefined;
-        return await settleInterruptedUpdatePluginCohort({
+        // What repair's finalization finishes and an already-current update would not.
+        const gatewayStopped = findUpdateGatewayStop([history])?.started === false;
+        const unfinished = gatewayStopped
+          ? ["That update stopped the Gateway and did not start it again."]
+          : [];
+        let blocked: Error | undefined;
+        const action = await settleInterruptedUpdatePluginCohort({
           expected: pair,
           root,
           options,
@@ -381,44 +433,92 @@ export async function inspectInterruptedUpdateRecovery(
             }
           },
           admit: ({ action: outcome, originalCore, rollbackStarted }) => {
-            // Repair also finishes the installed candidate; an update that finds it
-            // already current would not, so a rollback over it leaves it half updated.
-            // That includes a commit the cohort owner would turn back into a rollback.
-            const why =
-              outcome === "rollback" && !originalCore
-                ? `That update replaced OpenClaw ${pair.reservation.from.version} and was not confirmed finished.`
-                : outcome === "commit" && rollbackStarted
-                  ? "That update had begun rolling its plugin changes back on the version it installed."
-                  : undefined;
-            if (why) {
-              unfinished = refuse(why, `Run ${repair} to finish it, then retry ${update}.`);
-              throw unfinished;
+            // A rollback over the installed candidate leaves it half updated, including
+            // a commit the cohort owner turns back into a rollback.
+            if (outcome === "rollback" && !originalCore) {
+              unfinished.push(
+                `That update replaced OpenClaw ${pair.reservation.from.version} and was not confirmed finished.`,
+              );
+            } else if (outcome === "commit" && rollbackStarted) {
+              unfinished.push(
+                "That update had begun rolling its plugin changes back on the version it installed.",
+              );
+            }
+            // Refuse before anything is restored when finishing would leave other history.
+            blocked = unfinished.length ? refuseOtherRecovery() : undefined;
+            if (blocked) {
+              throw blocked;
             }
           },
         }).catch((cause: unknown) => {
           throw (
-            unfinished ??
+            blocked ??
             refuse(`It could not be settled (${formatErrorMessage(cause)}).`, undefined, cause)
           );
         });
+        return { action, unfinished, gatewayStopped };
       }),
     );
-    if (!action || action === "settled") {
+    if (!settled || settled === "settled") {
       return;
     }
-    const note = `Settled interrupted update ${pair.cohort.runId}: its plugin and configuration changes were ${
-      action === "commit"
-        ? "kept, because its Gateway was verified on the installed version"
-        : "rolled back, because the previous version is still installed"
-    }; update can proceed past recovery admission.`;
+    const { action, unfinished, gatewayStopped } = settled;
+    const runId = pair.cohort.runId;
+    const note = unfinished.length
+      ? `Settled interrupted update ${runId}: ${unfinished.join(" ")} Its plugin and configuration changes were settled as ${repair} settles them, and this update finishes the installed version the same way before it continues.`
+      : `Settled interrupted update ${runId}: its plugin and configuration changes were ${
+          action === "commit"
+            ? "kept, because its Gateway was verified on the installed version"
+            : "rolled back, because the previous version is still installed"
+        }; update can proceed past recovery admission.`;
     defaultRuntime.error(note);
-    steps.push({
-      name: "interrupted-update-recovery",
-      command: "settle interrupted update",
-      cwd: root,
-      durationMs: Date.now() - startedAt,
-      exitCode: 0,
-      warnings: [note],
+    const settledAt = Date.now();
+    const step = (name: string, command: string, sinceMs: number, warning: string) =>
+      steps.push({
+        name,
+        command,
+        cwd: root,
+        durationMs: Date.now() - sinceMs,
+        exitCode: 0,
+        warnings: [warning],
+      });
+    step("interrupted-update-recovery", "settle interrupted update", startedAt, note);
+    if (!unfinished.length) {
+      return;
+    }
+    // Repair's own stage, after the settlement claim is released as in repair. It
+    // re-admits recovery, Doctor re-admits the recorded drivers, and Gateway
+    // restoration claims the installation again; Doctor and plugin convergence run
+    // without that claim, as in repair. Its record is its own run: this update's does
+    // not exist until target resolution, which must read the config this stage rewrites.
+    // Capabilities this update was allowed to accept were not consented for that version.
+    const failed = (detail: string, cause?: unknown) =>
+      new Error(
+        `Interrupted update ${runId} was settled, but finishing its installed version as ${repair} does failed: ${detail} Run ${repair}, then retry ${update}.`,
+        { cause },
+      );
+    const { finishInterruptedUpdate } = await import("./update-command-finalize.js");
+    const finished = await finishInterruptedUpdate(
+      {
+        json: opts.json,
+        yes: opts.yes,
+        timeout: opts.timeout,
+        fullIntegrityCheck: opts.fullIntegrityCheck,
+      },
+      [runId],
+    ).catch((cause: unknown) => {
+      throw failed(formatErrorMessage(cause), cause);
     });
+    // Repair can finish with a warning that leaves the Gateway stopped; this update would not start it.
+    const stillStopped = async () =>
+      findUpdateGatewayStop(listUpdateRuns({ limit: 100 }, options))?.started === false;
+    if (gatewayStopped && (await withEngine(stillStopped)) !== false) {
+      throw failed(
+        `the Gateway that update stopped is still not running (update run ${finished.runId}, ${finished.status}).`,
+      );
+    }
+    const pointer = `Finished interrupted update ${runId} as ${repair} does (Doctor, plugin convergence and Gateway restoration); recorded as update run ${finished.runId} (${finished.status}).`;
+    defaultRuntime.error(pointer);
+    step("interrupted-update-finalization", "finish interrupted update", settledAt, pointer);
   };
 }

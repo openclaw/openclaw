@@ -328,12 +328,17 @@ while a surviving Doctor process finishes; retry when that process exits. Run
 remains pending.
 
 The next `openclaw update` settles the plugin recovery a killed command-line
-update reserved, and continues without a repair, when the previous version is
-still installed or the Gateway was already verified on the new one. Otherwise
-it refuses and names the command to run, in most cases `openclaw update repair`:
-for example when the installed version was not confirmed finished, the Gateway
-is still stopped, the Gateway started that update, an update may still be
-running, or the update lease store no longer holds that update's lease. See
+update reserved, and continues without a repair. When the killed update had
+replaced the installed version without confirming it, had begun rolling back on
+it, or left the Gateway stopped, the update first finishes that version the way
+`openclaw update repair` does: Doctor, plugin convergence, and a Gateway restart.
+That work is recorded on its own repair run, and the update's history names it.
+A stopped Gateway is restarted only when the update would restart it anyway.
+The update refuses and names the command to run, in most cases
+`openclaw update repair`, when the update ran with `--no-restart` and the
+Gateway is still stopped, when finishing the installed version fails, when the
+Gateway started that update, when an update may still be running, or when the
+update lease store no longer holds that update's lease. See
 [how updates run](/cli/update/how-updates-run#replacing-the-package-directory).
 
 ### Interrupted state restore
