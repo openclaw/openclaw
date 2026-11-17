@@ -154,6 +154,31 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     );
   }
 
+  it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const exec = tool(reviewer(), "allowlist");
+    const control = await exec.execute("literal-builtin", { command: ": benign; pwd" });
+    expect(control.details.status).toBe("completed");
+    expect(control.details).toMatchObject({ exitCode: 0, aggregated: root });
+    expect(boundary.spawn.mock.calls.length).toBe(1);
+    boundary.spawn.mockClear();
+    const marker = path.join(root, "arithmetic-marker");
+    for (const command of [
+      String.raw`: "$[ x[$'\x24\x28touch ${marker};printf 0\x29'] ]"`,
+      String.raw`: "$(( x[$'\044\050touch ${marker};printf 0\051'] ))"`,
+    ]) {
+      await expect(exec.execute("arithmetic-builtin", { command })).rejects.toThrow(
+        /allowlist|approval/i,
+      );
+      expect(boundary.spawn.mock.calls.length).toBe(0);
+      expect(fs.existsSync(marker)).toBe(false);
+    }
+  });
+
   it.skipIf(!python3).each([
     { mode: "auto", command: "python probe.py *.txt", shadowed: true },
     { mode: "ask", command: "python probe.py approved.txt", shadowed: false },
