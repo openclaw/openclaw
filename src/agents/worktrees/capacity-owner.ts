@@ -11,6 +11,7 @@ import { WorktreePendingContentionError } from "./errors.js";
 import { evictManagedWorktree } from "./eviction.js";
 import { indexWorktreeEvictionDependencies } from "./gc-dependencies.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
+import type { ManagedWorktreeGcParams } from "./gc-removal.js";
 import type {
   GitWorktreeOperations,
   WorktreeEvictionCandidate,
@@ -22,10 +23,14 @@ import {
   readWorktreeCleanupState,
 } from "./registry-read.js";
 import { worktreeGcRevision } from "./registry-read.kernel.js";
+import { worktreeCleanupProtection } from "./registry-retirement.js";
 import { worktreeRunLeaseScope } from "./run-lease-owner.js";
-import type { CreateManagedWorktreeParams, ManagedWorktreeRecord } from "./types.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
-type WorktreeCapacityGuard = Pick<CreateManagedWorktreeParams, "signal" | "commitGuard">;
+type WorktreeCapacityGuard = Pick<
+  ManagedWorktreeGcParams,
+  "signal" | "commitGuard" | "retryDeferred"
+>;
 type RepositoryInventory =
   GitWorktreeOperations["worktree.eviction-repositories"]["output"][number];
 const DEFAULT_WORKTREE_MAX_COUNT = 4096;
@@ -144,6 +149,7 @@ export function createWorktreeCapacityOwner({
     const idle: ManagedWorktreeRecord[] = [];
     const leased = new Set<string>();
     for (const record of records) {
+      const protection = worktreeCleanupProtection(record, Date.now(), guard.retryDeferred);
       if (live.has(worktreeRunLeaseScope(record.id))) {
         leased.add(record.id);
         if (progress.start(record.id)) {
@@ -151,6 +157,8 @@ export function createWorktreeCapacityOwner({
           progress.protect("limits", record.id, "live-refused", `${owner} has an active run lease`);
           log.info(`Worktree eviction live-refused: ${record.id}; owner ${owner}`);
         }
+      } else if (protection) {
+        progress.protect("limits", record.id, protection);
       } else {
         idle.push(record);
       }
@@ -216,6 +224,7 @@ export function createWorktreeCapacityOwner({
                 env: env ?? process.env,
                 record,
                 reason: reasons.get(record.id) ?? "idle-age",
+                retryDeferred: guard.retryDeferred,
                 guard: checkout,
                 getConfig,
               }),

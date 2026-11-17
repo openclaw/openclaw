@@ -800,7 +800,7 @@ export class ManagedWorktreeService {
             env: this.env,
             id: record.id,
             ...timing.removalProgress(),
-            reason,
+            ...reason,
             now: Date.now(),
             previousAttempts: record.gcRetry?.attempts ?? 0,
             claimToken,

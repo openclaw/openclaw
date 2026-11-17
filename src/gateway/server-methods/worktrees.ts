@@ -124,10 +124,14 @@ function worktreeHandler<T>(
 }
 
 export const worktreesHandlers: GatewayRequestHandlers = {
-  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond }) => {
+  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond, client }) => {
     respond(
       true,
-      { worktrees: (await managedWorktrees.list()).map((record) => publicWorktreeRecord(record)) },
+      {
+        worktrees: (await managedWorktrees.list()).map((record) =>
+          publicWorktreeRecord(record, client?.connect.scopes?.includes(ADMIN_SCOPE)),
+        ),
+      },
       undefined,
     );
   }),

@@ -53,7 +53,7 @@ Optional positive integer limiting live [managed worktrees](/concepts/managed-wo
 }
 ```
 
-The cap is enforced: cleanup purges merged or squashed branches first, then idle worktrees by last-used age, including manual checkouts and unsaved data. Eviction requires a completed, locally recoverable snapshot; snapshot failure preserves the checkout and reports the failure. Lowering the cap can therefore remove existing checkouts. Live runs remain protected; if no other checkout can be evicted, creation fails with the cap and live owners in the error. Resolve reported snapshot failures, raise `worktreeMaxCount`, or let active runs finish before retrying.
+The cap is enforced: cleanup purges merged or squashed branches first, then idle worktrees by last-used age, including manual checkouts and unsaved data. Cap eviction requires a successful recovery snapshot; a failed snapshot preserves the checkout, and recorded retry or terminal preservation receipts protect it from automatic eviction. Lowering the cap can therefore remove existing checkouts. Live runs remain protected; if no other checkout can be evicted, creation fails with the cap and live owners in the error. Raise `worktreeMaxCount` or let those runs finish before retrying.
 
 Background maintenance and creation use the same eviction owner. Concurrent creates cannot each claim the final slot. Disk-space admission remains a separate guard even when the configured count leaves room.
 
