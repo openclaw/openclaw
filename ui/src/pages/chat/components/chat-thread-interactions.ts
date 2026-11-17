@@ -57,7 +57,11 @@ import {
   removeChatSelectionPopup,
 } from "./chat-selection-popup.tsx";
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar-content-types.ts";
-import { mountThreadMenu, type ThreadMenuAction } from "./chat-thread-menu.tsx";
+import {
+  mountThreadMenu,
+  moveThreadMenuFocus,
+  type ThreadMenuAction,
+} from "./chat-thread-menu.tsx";
 import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 import type { ChatWelcomeIdentityProps } from "./chat-welcome.tsx";
 
@@ -709,6 +713,18 @@ export function handleTranscriptContextMenu(
         nextEvent.stopPropagation();
         removeReplyContextMenu();
         props.onFocusComposer?.();
+        return;
+      }
+      // The menu declares menu/menuitem semantics, so it must offer menu
+      // keyboard behavior: Arrow/Home/End move among enabled items (wrapping,
+      // skipping disabled), and Tab dismisses the menu (see #127321).
+      if (nextEvent.key === "Tab") {
+        removeReplyContextMenu();
+        return;
+      }
+      if (moveThreadMenuFocus(menu, nextEvent.key)) {
+        nextEvent.preventDefault();
+        nextEvent.stopPropagation();
       }
     };
     const { signal } = owner.listeners;

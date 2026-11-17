@@ -11,6 +11,35 @@ export type ThreadMenuAction = {
   onClick: (event: Event, label?: HTMLSpanElement) => void;
 };
 
+/**
+ * Roving focus for the menu's `role="menuitem"` buttons: Arrow keys step with
+ * wrapping, Home/End jump to the edges, and disabled or detached actions are
+ * skipped. Returns true when the key was a menu navigation key.
+ */
+export function moveThreadMenuFocus(menu: Element, key: string): boolean {
+  if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") {
+    return false;
+  }
+  const enabledItems = [
+    ...menu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]'),
+  ].filter((button) => !button.disabled && button.isConnected);
+  if (enabledItems.length === 0) {
+    return false;
+  }
+  const currentIndex = enabledItems.findIndex((item) => item === document.activeElement);
+  let nextTarget: HTMLButtonElement | undefined;
+  if (key === "Home" || (key === "ArrowDown" && currentIndex === -1)) {
+    nextTarget = enabledItems[0];
+  } else if (key === "End" || (key === "ArrowUp" && currentIndex === -1)) {
+    nextTarget = enabledItems[enabledItems.length - 1];
+  } else {
+    const delta = key === "ArrowDown" ? 1 : -1;
+    nextTarget = enabledItems[(currentIndex + delta + enabledItems.length) % enabledItems.length];
+  }
+  nextTarget?.focus();
+  return true;
+}
+
 export function mountThreadMenu(
   actions: readonly ThreadMenuAction[],
   parent: Element,

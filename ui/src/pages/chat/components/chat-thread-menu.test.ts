@@ -7,11 +7,100 @@ import {
   handleTranscriptContextMenu,
   resetThreadPresentation,
 } from "./chat-thread-interactions.ts";
+import { moveThreadMenuFocus } from "./chat-thread-menu.tsx";
 
 afterEach(() => {
   resetThreadPresentation();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+});
+
+function mountMenuKeyboardFixture(options: { runWorking?: boolean } = {}) {
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    callback(0);
+    return 0;
+  });
+  const group = document.body.appendChild(document.createElement("div"));
+  group.className = "chat-group user";
+  const bubble = group.appendChild(document.createElement("div"));
+  bubble.className = "chat-bubble";
+  bubble.dataset.entryId = "entry-1";
+  bubble.dataset.messageId = "message-1";
+  Object.assign(bubble, {
+    messageActions: { replyTarget: { messageId: "message-1", text: "hello" } },
+  });
+  const props = {
+    paneId: "menu-keyboard",
+    onSetReply: vi.fn(),
+    onRewindMessage: vi.fn(() => true),
+    onForkMessage: vi.fn(),
+    ...(options.runWorking ? { runWorking: true } : {}),
+  };
+  bubble.addEventListener("contextmenu", (event) => handleTranscriptContextMenu(event, props));
+  bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  const items = [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '.chat-reply-context-menu button[role="menuitem"]',
+    ),
+  ];
+  return { bubble, items, props };
+}
+
+function press(key: string) {
+  document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+}
+
+it("moves menu focus with Arrow keys, Home, and End with wrapping", () => {
+  const { items } = mountMenuKeyboardFixture();
+
+  expect(items.map((button) => button.textContent?.trim())).toEqual([
+    "Reply",
+    "Rewind to here",
+    "Fork from here",
+  ]);
+  expect(document.activeElement).toBe(items[0]);
+
+  press("ArrowDown");
+  expect(document.activeElement).toBe(items[1]);
+  press("ArrowDown");
+  expect(document.activeElement).toBe(items[2]);
+  press("ArrowDown");
+  expect(document.activeElement).toBe(items[0]);
+  press("ArrowUp");
+  expect(document.activeElement).toBe(items[2]);
+  press("Home");
+  expect(document.activeElement).toBe(items[0]);
+  press("End");
+  expect(document.activeElement).toBe(items[2]);
+});
+
+it("skips disabled menu items and wraps around them", () => {
+  const menu = document.body.appendChild(document.createElement("div"));
+  menu.setAttribute("role", "menu");
+  const buttons = ["Reply", "Rewind", "Fork"].map((label, index) => {
+    const button = menu.appendChild(document.createElement("button"));
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.textContent = label;
+    button.disabled = index === 1;
+    return button;
+  });
+  const [reply, , fork] = buttons.map((button) => expectDefined(button, "menu item"));
+
+  reply.focus();
+  expect(moveThreadMenuFocus(menu, "ArrowDown")).toBe(true);
+  expect(document.activeElement).toBe(fork);
+  expect(moveThreadMenuFocus(menu, "ArrowUp")).toBe(true);
+  expect(document.activeElement).toBe(reply);
+  expect(moveThreadMenuFocus(menu, "Escape")).toBe(false);
+});
+
+it("dismisses the menu on Tab", () => {
+  mountMenuKeyboardFixture();
+
+  expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+  press("Tab");
+  expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
 });
 
 it("keeps failed context-copy feedback visible and retries before dismissing the menu", async () => {
