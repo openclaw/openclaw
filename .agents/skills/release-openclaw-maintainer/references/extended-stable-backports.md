@@ -14,6 +14,8 @@ extended-stable package and publication constraints.
 
 ## Boundaries
 
+- Generally select only P0 and P1 hotfixes; use the shared
+  [release-track selection policy](backport-discovery.md#select-by-release-track).
 - Read `docs/reference/RELEASING.md`,
   `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
   workflows from a pinned current `origin/main` before resolving the line.
