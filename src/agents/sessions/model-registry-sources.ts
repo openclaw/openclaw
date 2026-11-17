@@ -198,21 +198,19 @@ export function readGeneratedPluginModelCatalogProviders<
   }
   return Object.fromEntries(
     Object.entries(providers).map(([providerKey, provider]) => {
+      if (!provider.models?.length) {
+        return [providerKey, provider];
+      }
       const providerId = normalizeProviderId(providerKey);
-      const rows = provider.models?.length
-        ? planEffectiveModelCatalogRows({
-            registry: { plugins: [plugin] },
-            config: params.config ?? {},
-            providerFilter: providerId,
-          }).rows.filter((row) => row.provider === providerId)
-        : [];
+      const rows = planEffectiveModelCatalogRows({
+        registry: { plugins: [plugin] },
+        config: params.config ?? {},
+        providerFilter: providerId,
+      }).rows.filter((row) => row.provider === providerId);
       const catalogRows = new Map(rows.map((row) => [row.id, row]));
       const catalogModels = new Map(
         buildEffectiveManifestProviderConfig(rows)?.models.map((model) => [model.id, model]),
       );
-      if (catalogModels.size === 0 || !provider.models) {
-        return [providerKey, provider];
-      }
       const models = provider.models.map((model) => {
         const row = catalogRows.get(model.id);
         const catalogModel = catalogModels.get(model.id);
