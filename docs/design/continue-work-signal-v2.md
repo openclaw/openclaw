@@ -650,7 +650,8 @@ The routing distinction matters. Spawned sub-agents run with `deliver: false` an
 The system prompt branches on tool availability in `src/agents/system-prompt.ts`:
 
 - when tools are present, the prompt teaches the tool path first and labels response tokens as fallback;
-- when tools are absent, the prompt teaches response tokens only.
+- when tools are absent, the prompt teaches response tokens only;
+- each visible continuation tool gets a core `## Tooling` slot beside `sessions_yield`, with a one-line action (`src/agents/system-prompt-tool-list.ts`). When Tool Search or Code Mode catalogs them, as Tool Search does by default, they leave `## Tooling` and the model finds them in that catalog instead.
 
 This keeps the agent’s taught interface aligned with the actual capability surface.
 
