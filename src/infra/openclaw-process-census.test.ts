@@ -206,18 +206,35 @@ it.each([
   expectPids([], undefined, free);
 });
 
-it("releases runtimes from Gateway processes without artifact evidence", () => {
+it("releases runtimes from non-updater processes without artifact evidence", () => {
   const runtime = "/tmp/openclaw-update-runtime-Held01";
   const alias = "/tmp/runtime-alias/dist/worker.js";
   realpath.mockImplementation((file: string) =>
     file === alias ? `${runtime}/dist/worker.js` : file,
   );
-  // A Gateway's process title erases its script path.
+  // Gateway and node-host titles erase their script paths.
   processRow(peer, ["openclaw-gateway"], { cwd: "/" });
   processRow(peer + 1, ["node", "/app/dist/index.js", "gateway", "--port", "18789"]);
   processRow(peer + 2, ["node", "/app/dist/process/spawn-broker/worker.js"]);
   processRow(peer + 3, ["node", "/app/dist/infra/directory-watch-host.worker.js", `${peer + 1}`]);
-  // Title-erased CLIs, update, Doctor's git update, and update workers may be its creator.
+  const nodeLauncher = peer + 20;
+  const updateLauncher = peer + 21;
+  const parented = [
+    [nodeLauncher, ["node", "/app/openclaw.mjs", "--profile", "work", "node", "run"], 1],
+    // The respawned CLI erases its title; its launcher keeps the command.
+    [peer + 22, ["openclaw", "", ""], nodeLauncher],
+    [peer + 23, ["openclaw-node-worker"], 1],
+    // Title-erased CLIs launched by an update, or by a titled Gateway whose
+    // `update.run` spawns one, may be its creator.
+    [updateLauncher, ["node", "/app/openclaw.mjs", "update", "--yes"], 1],
+    [peer + 24, ["openclaw"], updateLauncher],
+    [peer + 25, ["openclaw"], peer],
+  ] as const;
+  for (const [pid, argv, ppid] of parented) {
+    processRow(pid, [...argv], { ppid, cwd: "/" });
+  }
+  const launched = [updateLauncher, peer + 24, peer + 25];
+  // Other title-erased CLIs, update, Doctor's git update, and update workers may be too.
   const updaters: string[][] = [
     ["openclaw"],
     ["node", "/app/dist/index.js", "update", "--yes"],
@@ -236,8 +253,8 @@ it("releases runtimes from Gateway processes without artifact evidence", () => {
     processRow(peer + 4 + index, argv, { cwd: "/" });
     return peer + 4 + index;
   });
-  expectPids(holders, undefined, runtime);
-  expectPids([peer, peer + 1, peer + 2, peer + 3, ...holders]);
+  expectPids([...launched, ...holders], undefined, runtime);
+  expectPids([peer, peer + 1, peer + 2, peer + 3, ...parented.map(([pid]) => pid), ...holders]);
 });
 
 it.each([
@@ -569,6 +586,18 @@ it("classifies title-erased Darwin runtimes whose environment is unbounded", () 
       `Could not verify runtime custody for PID ${peer + 2}: process command is unavailable`,
     ],
   });
+});
+
+it("releases runtimes from the macOS app but not from a CLI command it starts", () => {
+  const app = "/Applications/OpenClaw.app/Contents/MacOS/OpenClaw";
+  processRow(peer, [app, "--attach-only"]);
+  processRow(peer + 1, ["openclaw", "", ""], { ppid: peer });
+  mockDarwinBatch({ status: 0, stdout: "" });
+  darwinCommand.mockImplementation((pid: number) => ({
+    argv: rows.get(pid)!.argv,
+    executable: pid === peer ? app : "/Applications/OpenClaw.app/Contents/Resources/bin/bun",
+  }));
+  expectPids([peer + 1], undefined, "/tmp/openclaw-update-runtime-Held01");
 });
 
 it("retains Darwin cwd holders from one partial batch without trusting other PID records", () => {
