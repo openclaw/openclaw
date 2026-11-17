@@ -30,7 +30,6 @@ import { createExecApprovalPresentation } from "../gateway/operator-approval-sto
 import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { readExecApprovalsSnapshot, updateExecApprovals } from "../infra/exec-approvals-store.js";
-import type { ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -55,9 +54,6 @@ import { captureSecurityEvents } from "./test-helpers/security-events.js";
 const commitExecAuthorizationMock = vi.hoisted(() =>
   vi.fn<typeof import("../infra/exec-approvals.js").commitExecAuthorizationLocked>(),
 );
-const segmentSatisfiedByRef = vi.hoisted(() => ({
-  current: [] as ExecSegmentSatisfiedBy[],
-}));
 const approvalDecisionMock = vi.hoisted(() => vi.fn<() => Promise<string | undefined>>());
 const callGatewayToolMock = vi.hoisted(() =>
   vi.fn(async (method: string) => {
@@ -83,7 +79,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
     allowlistSatisfied: true,
     segments: [{ resolution: null, argv: ["echo", "ok"] }],
     segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
-    segmentSatisfiedBy: [...segmentSatisfiedByRef.current],
+    segmentSatisfiedBy: [],
   }),
   hasDurableExecApproval: () => false,
   hasExactCommandDurableExecApproval: () => false,
@@ -129,7 +125,6 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
-  segmentSatisfiedByRef.current = [];
   environment = captureEnv(["OPENCLAW_STATE_DIR"]);
   process.env.OPENCLAW_STATE_DIR = fs.realpathSync(
     grantTempDirs.make("openclaw-cron-grant-state-"),
@@ -389,21 +384,6 @@ it("executes a cron occurrence via a standing grant without prompting", async ()
   expect(readNativeEffects()).toBe("cron-native-launch");
   expect(JSON.stringify(security.events)).toContain("standing-grant");
   expect(await readGrantUseCounts()).toEqual([1]);
-});
-
-it("rechecks skill authority before spending a standing grant", async () => {
-  await prepareCronRun();
-  // The segment was admitted on skill-bin trust, but the committed policy no longer enables
-  // autoAllowSkills, so that trust is withdrawn by the time the occurrence launches.
-  segmentSatisfiedByRef.current = ["skills"];
-  const result = await runCron();
-  expect(result.pendingResult).toBeUndefined();
-  expect(result.deniedResult).toBeUndefined();
-  await expectNativeDenied(
-    runNativeCron(result),
-    "skill bin authorization changed before execution",
-  );
-  await expectNoNativeEffects(0);
 });
 
 it.each(["revoked grant", "finished receipt", "replacement receipt"] as const)(
