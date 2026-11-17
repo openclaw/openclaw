@@ -236,12 +236,17 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
     });
 
-    it("restores a config outside the state directory named with ~", async () => {
+    it("restores a symlinked config outside the state directory named with ~", async () => {
       const { prefix } = await setup();
       // Outside the state directory, so the state scan cannot find it.
       const home = (await setup()).stateDir;
       const config = path.join(home, "cfg", "openclaw.json");
       await fs.mkdir(path.dirname(config), { recursive: true });
+      // The backup of a symlinked config is a symlink; its dotfile predates the trial.
+      await fs.writeFile(path.join(home, "dotfile.json"), "old config");
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1100);
+      });
       vi.stubEnv("HOME", home);
       vi.stubEnv("OPENCLAW_HOME", home);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", "~/cfg/openclaw.json");
@@ -253,7 +258,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       } finally {
         vi.unstubAllEnvs();
       }
-      await fs.writeFile(`${config}.pre-2.0.0`, "old config");
+      await fs.symlink(path.join(home, "dotfile.json"), `${config}.pre-2.0.0`);
       await fs.writeFile(config, "new config");
       const env = { HOME: home, OPENCLAW_HOME: home, OPENCLAW_CONFIG_PATH: "~/cfg/openclaw.json" };
 

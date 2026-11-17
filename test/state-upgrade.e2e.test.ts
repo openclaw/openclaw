@@ -12,7 +12,7 @@ import { UPGRADE_SET_ASIDE_SCOPE } from "../src/state/sqlite-copy-swap.js";
 import { createDoctorChain } from "../src/state/state-upgrade-doctor.js";
 import { ChainStepError } from "../src/state/state-upgrade-validate.js";
 import { upgradeStateDirectory } from "../src/state/state-upgrade.js";
-import { VERSION } from "../src/version.js";
+import { resolveRuntimeServiceBuildId, VERSION } from "../src/version.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 const corpusDir = fileURLToPath(new URL("./fixtures/state-corpus-populated/", import.meta.url));
@@ -239,15 +239,13 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         }
         await instance.stopGateway();
 
-        // The old bytes survive unchanged under the name of the build that replaced them.
-        const builtBy = JSON.parse(
-          fs.readFileSync(
-            fileURLToPath(new URL("../dist/build-info.json", import.meta.url)),
-            "utf8",
-          ),
-        ) as { buildId?: string };
+        // The old bytes survive under the build that upgraded them: this process, or the Gateway's dist.
+        const builtBy = failStep
+          ? resolveRuntimeServiceBuildId()
+          : JSON.parse(fs.readFileSync(new URL("../dist/build-info.json", import.meta.url), "utf8"))
+              .buildId;
         for (const [file, digest] of before) {
-          expect(sha256(`${file}.pre-${builtBy.buildId ?? VERSION}`), file).toBe(digest);
+          expect(sha256(`${file}.pre-${builtBy ?? VERSION}`), file).toBe(digest);
         }
         const state = new DatabaseSync(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
           readOnly: true,

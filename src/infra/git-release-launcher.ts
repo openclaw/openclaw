@@ -51,7 +51,7 @@ function collectPreserved(dir, suffix, since, depth, found) {
       if (depth > 0 && !["git-install", "npm", "node_modules", "tmp", "logs"].includes(entry.name)) {
         collectPreserved(file, suffix, since, depth - 1, found);
       }
-    } else if (entry.name.endsWith(suffix) && fs.statSync(file).ctimeMs >= since) {
+    } else if (entry.name.endsWith(suffix) && fs.lstatSync(file).ctimeMs >= since) {
       found.push(file.slice(0, -suffix.length));
     }
   }
@@ -156,7 +156,7 @@ if (trial && counts) {
         const suffix = ".pre-" + generation;
         const files = collectPreserved(path.dirname(prefix), suffix, since, 4, []);
         const config = trial.config;
-        if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= since) {
+        if (config && !files.includes(config) && (fs.lstatSync(config + suffix, { throwIfNoEntry: false })?.ctimeMs ?? 0) >= since) {
           files.push(config);
         }
         trial.restoring.push({ suffix, files });
