@@ -84,6 +84,20 @@ struct GatewayErrorsTests {
         #expect(problem.pauseReconnect)
     }
 
+    @Test func `missing trusted proxy header gets typed actionable recovery`() throws {
+        let error = GatewayConnectAuthError(
+            message: "missing proxy header",
+            detailCode: "AUTH_IDENTITY_HEADER_REQUIRED",
+            canRetryWithDeviceToken: false)
+        #expect(error.detail == .authIdentityHeaderRequired)
+        #expect(error.isNonRecoverable)
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+        #expect(problem.owner == .gateway)
+        #expect(problem.title == "Trusted-proxy identity header missing")
+        #expect(problem.message.contains("trusted reverse proxy"))
+        #expect(problem.docsURL?.absoluteString == "https://docs.openclaw.ai/gateway/trusted-proxy-auth")
+    }
+
     @Test func `connect auth error preserves structured metadata`() {
         let error = GatewayConnectAuthError(
             message: "pairing required",

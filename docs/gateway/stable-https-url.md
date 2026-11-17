@@ -68,6 +68,8 @@ It does not authenticate HTTP API endpoints, remove browser device identity requ
 
 A single Gateway can accept Cloudflare Access on its ordinary trusted-proxy listener and verified Tailscale identities for Control UI on its dedicated managed Serve listener when `gateway.auth.allowTailscale=true`. **This does not enroll or authorize a native macOS node via Tailscale identity.** Nodes on the Serve route must supply an authorized device credential (or another supported explicit authentication path), and pairing still applies.
 
+**Separate trust boundary:** A verified Serve identity is admitted independently of Cloudflare Access. Cloudflare's `trustedProxy.allowUsers` restricts the Cloudflare listener; it does **not** restrict users admitted through managed Serve. Limit Serve access with narrow tailnet grants/ACLs, and enable `allowTailscale` only for tailnet users you intend to trust with the Gateway’s Control UI. Existing Control UI device policy still applies; Tailscale identity never grants node-role access.
+
 The macOS **primary** remote connection opens both a Control UI and a node connection. If the node does not yet have a valid stored device token for this Gateway, the Tailscale URL alone cannot complete primary onboarding. Use the SSH tunnel transport with the Gateway's configured local-direct password to bootstrap and approve the device, or keep the Cloudflare Access connection as a separate saved Gateway. A pairing approval without a usable device credential does not fix repeated unauthorized node handshakes. No general remote password fallback is enabled.
 
 ## 2. Allow HTTPS in your tailnet policy

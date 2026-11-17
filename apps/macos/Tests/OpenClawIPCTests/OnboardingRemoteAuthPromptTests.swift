@@ -49,6 +49,48 @@ struct OnboardingRemoteAuthPromptTests {
         #expect(RemoteGatewayAuthIssue(error: unknown) == nil)
     }
 
+    @Test func `trusted proxy identity failure gives native recovery guidance`() {
+        let error = GatewayConnectAuthError(
+            message: "missing proxy header",
+            detailCode: GatewayConnectAuthDetailCode.authIdentityHeaderRequired.rawValue,
+            canRetryWithDeviceToken: false)
+        let issue = RemoteGatewayAuthIssue(error: error)
+
+        #expect(issue == .trustedProxyIdentityRequired)
+        #expect(issue?.body.contains("Cloudflare Access") == true)
+        #expect(issue?.body.contains("SSH tunnel") == true)
+        #expect(issue?.body.contains("device token") == true)
+        #expect(issue?.statusMessage.contains("Trusted-proxy") == true)
+    }
+
+    @Test func `Tailscale identity errors explain the separate node credential`() {
+        for detail in [
+            GatewayConnectAuthDetailCode.authTailscaleIdentityMissing,
+            .authTailscaleProxyMissing,
+            .authTailscaleWhoisFailed,
+            .authTailscaleIdentityMismatch,
+        ] {
+            let error = GatewayConnectAuthError(
+                message: "identity check failed",
+                detailCode: detail.rawValue,
+                canRetryWithDeviceToken: false)
+            let issue = RemoteGatewayAuthIssue(error: error)
+            #expect(issue == .tailscaleIdentityUnavailable)
+            #expect(issue?.body.contains("Tailscale Serve") == true)
+            #expect(issue?.body.contains("device credential") == true)
+        }
+    }
+
+    @Test func `new remote auth issues have onboarding presentation styles`() {
+        for issue in [
+            RemoteGatewayAuthIssue.trustedProxyIdentityRequired,
+            .tailscaleIdentityUnavailable,
+        ] {
+            let style = OnboardingView.remoteAuthPromptStyle(for: issue)
+            #expect(style.systemImage.contains("network"))
+        }
+    }
+
     @Test func `password detail family maps to password required issue`() {
         let mismatch = GatewayConnectAuthError(
             message: "password mismatch",

@@ -524,6 +524,10 @@ extension OnboardingView {
             ("lock.slash.fill", .orange)
         case .pairingRequired:
             ("link.badge.plus", .orange)
+        case .trustedProxyIdentityRequired:
+            ("network.badge.shield.half.filled", .orange)
+        case .tailscaleIdentityUnavailable:
+            ("network.slash", .orange)
         }
     }
 
