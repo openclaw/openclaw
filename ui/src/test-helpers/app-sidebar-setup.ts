@@ -94,7 +94,10 @@ export function setupSidebarTest() {
     }
     for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
       // jsdom has no layout, so no list end enters view; browser tests own that proof.
-      if (globalThis[name] === undefined || name === "IntersectionObserver") {
+      if (
+        globalThis[name] === undefined ||
+        (name === "IntersectionObserver" && !("__vitest_browser__" in globalThis))
+      ) {
         defineGlobal(
           name,
           class {
