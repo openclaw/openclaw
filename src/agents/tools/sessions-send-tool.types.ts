@@ -16,9 +16,14 @@ export type SessionsSendToolOptions = {
   onYield?: import("./sessions-yield-tool.js").SessionsYieldCallback;
   senderIsOwner?: boolean;
   scheduledToolTargets?: import("../../cron/execution-context-registry.js").ScheduledToolTargets;
-  expectedTargetLifecycleRevision?: string | null;
-  /** A retained replay whose target had a task when it was held. */
-  expectTargetTask?: boolean;
+  expectedTargetTask?: Omit<
+    import("../../gateway/in-process-subagent-resume.js").TrustedSubagentResume,
+    "caller"
+  >;
+  expectedTargetRun?: Pick<
+    import("../subagents/registry/subagent-registry.types.js").SubagentRunRecord,
+    "runId" | "taskRunId" | "generation" | "createdAt"
+  > | null;
   /** A retained replay uses its host-owned source assertion and cannot ask for fresh approval. */
   retainedReplay?: true;
   workerPlacement?: boolean;
