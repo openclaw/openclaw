@@ -70,13 +70,10 @@ function readReceipt(deps: ConnectDeps): Receipt | undefined {
   if (!raw) {
     return undefined;
   }
-  try {
-    const receipt = JSON.parse(raw) as { port?: unknown; admin_token_file?: unknown };
-    if (typeof receipt.port === "number" && typeof receipt.admin_token_file === "string") {
-      return { port: receipt.port, adminTokenFile: receipt.admin_token_file };
-    }
-  } catch {
-    // A torn or foreign file reads as no receipt; expose rewrites it.
+  // A torn or foreign file reads as no receipt; expose rewrites it.
+  const receipt = parseJson(raw);
+  if (typeof receipt?.port === "number" && typeof receipt.admin_token_file === "string") {
+    return { port: receipt.port, adminTokenFile: receipt.admin_token_file };
   }
   return undefined;
 }
@@ -122,32 +119,35 @@ export function authoredGbrainEntry(
 ): GbrainMcpServerEntry | "foreign" | undefined {
   let node = parsed;
   for (const key of ["mcp", "servers", GBRAIN_SERVER_NAME]) {
-    node = node && typeof node === "object" ? (node as Record<string, unknown>)[key] : undefined;
+    node = asRecord(node)?.[key];
   }
   if (!node || typeof node !== "object") {
     return resolved ? "foreign" : undefined;
   }
+  // SAFETY: the entry equals the resolved `mcp.servers.gbrain`, which config validation admitted.
   return isDeepStrictEqual(node, resolved) ? (node as GbrainMcpServerEntry) : "foreign";
 }
 
 /** The plugin owns only the URL, transport and bearer; the user's other settings on the entry stay. */
-export function withGbrainConnection<T extends { headers?: Record<string, unknown> }>(
-  entry: T | undefined,
+export function applyGbrainConnection(
+  entry: { url?: unknown; transport?: unknown; headers?: Record<string, unknown> },
   url: string,
   authorization: string,
-) {
-  return {
-    ...entry,
-    url,
-    transport: "streamable-http" as const,
-    headers: { ...entry?.headers, Authorization: authorization },
-  };
+): void {
+  entry.url = url;
+  entry.transport = "streamable-http";
+  entry.headers = { ...entry.headers, Authorization: authorization };
 }
 
-function parseJson(stdout: string): Record<string, unknown> | undefined {
+/** A JSON object's fields, each still `unknown` until the caller checks it. */
+export function asRecord(value: unknown): Record<string, unknown> | undefined {
+  // SAFETY: any non-null object can be read by key; every read value stays `unknown`.
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function parseJson(text: string): Record<string, unknown> | undefined {
   try {
-    const value: unknown = JSON.parse(stdout);
-    return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+    return asRecord(JSON.parse(text));
   } catch {
     return undefined;
   }

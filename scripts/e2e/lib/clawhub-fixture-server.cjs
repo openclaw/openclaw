@@ -170,33 +170,6 @@ function startPrepublishArtifactServer() {
       return;
     }
     requestLog.push(`${request.method} ${url.pathname}${url.search}`);
-    // The Control UI catalog detail page reads one package detail document.
-    const detail = /^\/api\/v1\/packages\/([^/]+)\/detail$/u.exec(url.pathname);
-    const detailEntry = detail ? artifacts.get(decodeURIComponent(detail[1])) : undefined;
-    if (request.method === "GET" && detailEntry) {
-      json(response, {
-        package: {
-          name: detailEntry.name,
-          displayName: detailEntry.displayName ?? detailEntry.name,
-          family: "code-plugin",
-          runtimeId: detailEntry.runtimeId,
-          channel: "official",
-          isOfficial: true,
-          latestVersion: detailEntry.version,
-          tags: { latest: detailEntry.version },
-          ...(detailEntry.summary ? { summary: detailEntry.summary } : {}),
-        },
-        owner: { handle: "openclaw", displayName: "OpenClaw", official: true },
-        version: { version: detailEntry.version, distTags: ["latest"], createdAt: 0 },
-        versions: {
-          items: [
-            { version: detailEntry.version, createdAt: 0, changelog: "", distTags: ["latest"] },
-          ],
-          nextCursor: null,
-        },
-      });
-      return;
-    }
     const match =
       /^\/api\/v1\/packages\/([^/]+)(?:\/versions\/([^/]+)(?:\/(artifact(?:\/download)?|security))?)?$/u.exec(
         url.pathname,

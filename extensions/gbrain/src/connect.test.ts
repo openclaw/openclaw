@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   authoredGbrainEntry,
   connectGbrain,
-  withGbrainConnection,
+  applyGbrainConnection,
   type CommandResult,
   type ConnectDeps,
   type GbrainMcpServerEntry,
@@ -85,7 +85,8 @@ function fakeHost(initial: {
     },
     readServer: async () => server,
     writeServer: async ({ url, authorization }) => {
-      server = withGbrainConnection(server, url, authorization);
+      server ??= {};
+      applyGbrainConnection(server, url, authorization);
     },
     sleep: async () => {},
   };

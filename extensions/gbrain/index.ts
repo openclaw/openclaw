@@ -6,10 +6,10 @@ import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import {
+  applyGbrainConnection,
   authoredGbrainEntry,
   connectGbrain,
   GBRAIN_SERVER_NAME,
-  withGbrainConnection,
   type ConnectDeps,
   type ConnectOutcome,
 } from "./src/connect.js";
@@ -103,8 +103,8 @@ export default definePluginEntry({
           mutate: (draft) => {
             draft.mcp ??= {};
             draft.mcp.servers ??= {};
-            draft.mcp.servers[GBRAIN_SERVER_NAME] = withGbrainConnection(
-              draft.mcp.servers[GBRAIN_SERVER_NAME],
+            applyGbrainConnection(
+              (draft.mcp.servers[GBRAIN_SERVER_NAME] ??= {}),
               url,
               authorization,
             );

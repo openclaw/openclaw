@@ -2,7 +2,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import type { Health } from "./connect.js";
+import { asRecord, type Health } from "./connect.js";
 
 const HEALTH_TIMEOUT_MS = 3000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -45,17 +45,15 @@ export async function readGbrainHealth(baseUrl: string): Promise<Health> {
   } catch {
     return { kind: "down" };
   }
-  const body = response.body as
-    | { status?: unknown; version?: unknown; user_message?: unknown; fix?: { command?: unknown } }
-    | undefined;
+  const body = asRecord(response.body);
+  const fixCommand = asRecord(body?.fix)?.command;
   if (response.ok && body?.status === "ok" && typeof body.version === "string") {
     return { kind: "ok", version: body.version };
   }
   if (response.status === 503 && body?.status === "unavailable") {
-    const fix =
-      typeof body.fix?.command === "string" ? ` Run on the GBrain host: ${body.fix.command}` : "";
+    const fix = typeof fixCommand === "string" ? ` Run on the GBrain host: ${fixCommand}` : "";
     const message =
-      typeof body.user_message === "string"
+      typeof body?.user_message === "string"
         ? body.user_message
         : "The GBrain server is running but cannot open its brain.";
     return { kind: "status-only", message: `${message}${fix}` };
@@ -135,9 +133,7 @@ export async function mintGbrainKey(
     async (response) => ({
       ok: response.ok,
       status: response.status,
-      body: (await response.json().catch(() => undefined)) as
-        | { token?: unknown; message?: unknown }
-        | undefined,
+      body: asRecord(await response.json().catch(() => undefined)),
     }),
   );
   const body = mint.body;
