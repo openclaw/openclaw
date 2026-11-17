@@ -99,6 +99,13 @@ keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
 
+Transcript-facts backfill discovery and covered-window probes use the session-store
+read worker, independently of writer admission. Only bounded fact-publication
+batches reserve the writer, at background priority after queued foreground work.
+Read delays scale with their own elapsed request time; write delays include
+preparation, commit and reply delivery, with the existing bounded contention backoff.
+The in-memory position cursor and transactional coverage checks preserve resumability.
+
 Shared-state worker contexts carry installed-service migration restrictions only
 for the admitted database. An unrelated older global installation does not change
 an isolated Gateway's actor policy during cron startup or configuration reload.
