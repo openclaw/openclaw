@@ -357,7 +357,7 @@ openclaw_resolve_frozen_session_cold_storage_contract() {
 
   # Stable cuts before cold navigation restore archives on reads. Bind that dialect
   # to its committed archive writer, never infer it from missing or empty SQL rows.
-  has_navigation="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'retainSessionColdNavigationInTransaction(database, sessionId)')" || return 2
+  has_navigation="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'retainSessionColdNavigationInTransaction(')" || return 2
   has_legacy_archival="$(openclaw_frozen_target_source_flag contains "$source_root" src/config/sessions/session-cold-storage-worker.ts 'db.deleteFrom("transcript_events").where("session_id", "=", sessionId)')" || return 2
   case "$has_navigation:$has_legacy_archival" in
     1:0) ;;

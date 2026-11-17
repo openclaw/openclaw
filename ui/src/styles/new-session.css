@@ -1539,7 +1539,8 @@ span.new-session-page__select {
 
   /* The picker holds the track while its chip hugs the label. Anchor the
      chevron beside the actions so background catalog names do not move it. */
-  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger {
+  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger,
+  .new-session-page [data-chat-model-setup] {
     display: flex;
     width: fit-content;
     margin-inline-start: auto;

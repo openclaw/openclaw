@@ -711,22 +711,12 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest();
       await gateway.waitForRequest("connect", { after: connected });
+      // A plugin page shows only the rail, which stays usable while reconnecting.
+      await page.locator("openclaw-app-sidebar .sidebar-rail").waitFor({ state: "visible" });
+      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+      expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
       const navigationSidebar = page.locator("openclaw-app-sidebar");
-      for (const collapsed of [false, true]) {
-        if (collapsed) {
-          await navigationSidebar
-            .getByRole("button", { name: "Collapse sidebar", exact: true })
-            .click();
-        }
-        await navigationSidebar.locator(".sidebar-shell").waitFor({
-          state: collapsed ? "hidden" : "visible",
-        });
-        // Web collapse keeps navigation in the rail; the native control cluster can be empty.
-        await navigationSidebar.locator(".sidebar-rail").waitFor({ state: "visible" });
-        expect(await page.locator(".connection-action-block").count()).toBe(0);
-        expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
-        expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
-      }
       // The rail menu stays usable without leaving the plugin while reconnecting.
       await navigationSidebar.locator("[data-rail-more]").click();
       const pagesMenu = page.locator(".sidebar-pages-menu");

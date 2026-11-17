@@ -7,7 +7,10 @@ import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-
 import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
-import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
+import {
+  isInlineUpdateCompatibilityExport,
+  readUpdateCompatibilityInventory,
+} from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import {
@@ -1039,6 +1042,10 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
     `${left.module}:${left.symbol}`.localeCompare(`${right.module}:${right.symbol}`),
   );
   for (const [index, origin] of origins.entries()) {
+    // Inline historical implementations consume no current source binding.
+    if (isInlineUpdateCompatibilityExport(origin)) {
+      continue;
+    }
     const sourceFile = path.join(rootDir, origin.module);
     if (graph.names(sourceFile).includes(origin.symbol)) {
       imports.push(

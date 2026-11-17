@@ -39,6 +39,7 @@ it
     "busy-requester",
     "retrying-requester",
     "unmarked-requester",
+    "stale-settle-requester",
   ] as const)(
   "recovers session completion custody through a real Gateway restart (%s)",
   { timeout: 180_000 },
@@ -474,7 +475,7 @@ it
             execution: { outcome: { status: "error", error: "Gateway stopped" } },
           });
         }
-        if (kind === "unmarked-requester") {
+        if (kind === "unmarked-requester" || kind === "stale-settle-requester") {
           // Recreate the persisted incident state: a settled, unmarked requester still owes
           // this real child result. Change only the stopped fixture's requester markers.
           const db = openNodeSqliteDatabase(
@@ -484,12 +485,23 @@ it
             db.prepare(
               "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.lifecycleRunId', '$.resumeAfterRestart', '$.mainRestartRecovery') WHERE session_key = ?",
             ).run(rootKey);
+            if (kind === "stale-settle-requester") {
+              db.prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRunId', ?, '$.resumeAfterRestart', json(?)) WHERE session_key = ?",
+              ).run(
+                "announce:requester-settle:main:retired-cohort:yield-1",
+                JSON.stringify({ queuedInputIds: [], operatorSource: { kind: "unavailable" } }),
+                rootKey,
+              );
+            }
           } finally {
             db.close();
           }
           const current = readRestartSession(instance.state.agentDir("main"), rootKey);
-          expect(current?.lifecycleRunId).toBeUndefined();
-          expect(current?.resumeAfterRestart).toBeUndefined();
+          if (kind === "unmarked-requester") {
+            expect(current?.lifecycleRunId).toBeUndefined();
+            expect(current?.resumeAfterRestart).toBeUndefined();
+          }
           expect(current?.mainRestartRecovery).toBeUndefined();
           expect(readCapturedInputs()).toHaveLength(0);
           expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
@@ -537,6 +549,13 @@ it
         }
         expect(readRun(capturedRunId)).toMatchObject({ delivery: { status: "delivered" } });
         expect(instance.logs()).not.toContain("idempotency key conflicts");
+        if (kind === "stale-settle-requester") {
+          expect(
+            readRestartSession(instance.state.agentDir("main"), rootKey)?.resumeAfterRestart,
+          ).toBeUndefined();
+          expect(instance.logs()).not.toContain("Queued operator authority cannot be recovered");
+          expect(rootReceivedRecovery).toBe(false);
+        }
         expect(readCapturedInputs()).toHaveLength(1);
         if (interruptAnnounce) {
           expect(completedReplies).toBe(1);
