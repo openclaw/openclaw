@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #200326: typed Stop from stale/empty views, successor work isolation, retained reset/delete settlement before replay and after preparation, real persisted transcript successor, and foreign agent/store controls. Existing live authority and writer settlement checks retained.
+36

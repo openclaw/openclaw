@@ -20,7 +20,6 @@ export type SessionsSendToolOptions = {
     import("../../gateway/in-process-subagent-resume.js").TrustedSubagentResume,
     "caller"
   >;
-  expectedTargetLifecycleRevision?: string | null;
   expectedTargetRun?: Pick<
     import("../subagents/registry/subagent-registry.types.js").SubagentRunRecord,
     "runId" | "taskRunId" | "generation" | "createdAt"

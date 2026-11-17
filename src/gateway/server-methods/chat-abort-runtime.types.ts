@@ -30,8 +30,6 @@ export type ChatSessionAbortParams = {
   controllerTargets?: readonly SessionTarget[];
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
-  /** Prepare persisted request facts immediately before the synchronous cancellation effects. */
-  beforeAbort?: () => Promise<void>;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
   /** Current session lifecycle owner; reporting only, never descendant selection. */

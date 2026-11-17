@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { clearSessionResetRuntimeState } from "../../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -28,6 +29,7 @@ import {
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { PluginInstance, type PluginReplacementOutcome } from "../../plugins/plugin-instance.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -107,13 +109,14 @@ async function refuseSelfHeldAdmission(cause: unknown) {
 }
 
 it.each([
-  [true, false, false],
-  [false, false, false],
-  [false, true, false],
-  [false, false, true],
+  [true, false, false, false],
+  [false, false, false, false],
+  [false, true, false, false],
+  [false, false, true, false],
+  [false, false, false, true],
 ] as const)(
-  "classifies the real factory caller before retention (parent-owned=%s, unobserved async=%s, implicit resume=%s)",
-  async (parentOwned, unobserved, implicitResume) =>
+  "classifies the real factory caller before retention (parent-owned=%s, unobserved async=%s, implicit resume=%s, target successor=%s)",
+  async (parentOwned, unobserved, implicitResume, successor) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {} } },
@@ -261,6 +264,13 @@ it.each([
               }
             : { status: "started", retained: { acceptance: "not_accepted" } },
         );
+        if (successor) {
+          await replaceSessionEntry(target, {
+            sessionId: "compacted-target-session",
+            lifecycleRevision: "compacted-target-revision",
+            updatedAt: 2,
+          });
+        }
         release();
         consumer.release();
         settled.resolve({ kind: "applied", committed: true, unavailablePluginIds: [] });
@@ -273,7 +283,7 @@ it.each([
         expect(onYield).toHaveBeenCalledTimes(parentOwned ? 0 : 1);
         expect(effect).not.toHaveBeenCalled();
         expect(dispatch).toHaveBeenCalledOnce();
-        if (implicitResume) {
+        if (implicitResume || successor) {
           assert(work?.run);
           const replayed = await withGatewayToolCallerIdentity(caller, () =>
             work!.run!({
@@ -282,12 +292,18 @@ it.each([
             }),
           );
           expect(replayed, JSON.stringify(replayed)).toMatchObject({
-            outcomes: [{ status: "accepted", mode: "resume", completion: "task" }],
+            outcomes: [
+              implicitResume
+                ? { status: "accepted", mode: "resume", completion: "task" }
+                : { status: "accepted" },
+            ],
           });
-          expect(timeout.mock.calls.at(-1)).toEqual([
-            expect.objectContaining({ mode: "resume", timeoutSeconds: 0, watch: undefined }),
-            "resume",
-          ]);
+          if (implicitResume) {
+            expect(timeout.mock.calls.at(-1)).toEqual([
+              expect.objectContaining({ mode: "resume", timeoutSeconds: 0, watch: undefined }),
+              "resume",
+            ]);
+          }
           expect(effect).toHaveBeenCalledOnce();
           expect(dispatch).toHaveBeenCalledTimes(2);
           for (const invalid of [{ timeoutSeconds: 1 }, { watch: true }]) {
@@ -325,6 +341,11 @@ it.each([
 
 // Handoff/opaque replay are ports here; the guard fact, batch and policy state machine are real.
 it.each([
+  "target-reset",
+  "target-delete",
+  "target-reset-preparation",
+  "target-other-store",
+  "target-other-agent",
   "uncertain",
   "policy-denied",
   "sender-denied",
@@ -400,6 +421,19 @@ it.each([
         if (boundary.startsWith("sandbox-admission-")) {
           await removeOptOut();
         }
+        if (boundary === "target-reset-preparation") {
+          clearSessionResetRuntimeState(["agent:main:target"], {
+            cause: "reset",
+            agentId: "main",
+            sessionKey: "agent:main:target",
+            controllerTarget: captureSessionTarget({
+              storeScope: "/fixture/store",
+              sessionKey: "agent:main:target",
+              agentId: "main",
+            }),
+            assertCurrent() {},
+          });
+        }
         return result;
       });
     const handle = createEmbeddedRunHandle({ runId: "retainer-run" });
@@ -467,7 +501,6 @@ it.each([
         args: { message: "original" },
         sessionKey: "agent:main:target",
         targetAgentId: "main",
-        sessionId: "target-id",
         storePath: "/fixture/store",
         targetRun: null,
         requesterParentOwned: false,
@@ -509,6 +542,23 @@ it.each([
           selfHold: { why: "different-requester" },
         });
         expect(handoffs).toHaveBeenCalledOnce();
+      }
+      if (
+        ["target-reset", "target-delete", "target-other-store", "target-other-agent"].includes(
+          boundary,
+        )
+      ) {
+        clearSessionResetRuntimeState([send.sessionKey], {
+          cause: boundary === "target-reset" ? "reset" : "deleted",
+          agentId: boundary === "target-other-agent" ? "other" : "main",
+          controllerTarget: captureSessionTarget({
+            storeScope: boundary === "target-other-store" ? "/fixture/other" : send.storePath,
+            sessionKey: send.sessionKey,
+            agentId: "main",
+          }),
+          sessionKey: send.sessionKey,
+          assertCurrent() {},
+        });
       }
       release();
       consumer.release();
@@ -568,6 +618,24 @@ it.each([
       assert(work?.run);
       const scope = { signal: new AbortController().signal, assertCurrent: () => {} };
       const replayResult = await work.run(scope);
+      if (
+        boundary === "target-reset" ||
+        boundary === "target-delete" ||
+        boundary === "target-reset-preparation"
+      ) {
+        expect(replayResult).toEqual({
+          outcomes: [
+            {
+              runId: "original-send",
+              status: "not_delivered",
+              stopCause: boundary === "target-delete" ? "deleted" : "reset",
+            },
+          ],
+        });
+        expect(replay).not.toHaveBeenCalled();
+        expect(await work.run(scope)).toEqual({ outcomes: [] });
+        return;
+      }
       expect(replayResult, JSON.stringify(replayResult)).toMatchObject({
         outcomes: [
           {
@@ -731,7 +799,6 @@ it.each([false, true])(
                     args: { message: id },
                     sessionKey: "agent:main:target",
                     targetAgentId: "main",
-                    sessionId: "target",
                     storePath: "/fixture/store",
                     targetRun: null,
                     requesterParentOwned: false,

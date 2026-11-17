@@ -144,31 +144,9 @@ function appendStopCanary(
   ).toBe(true);
 }
 
-it.each([
-  {
-    name: "stale leaf",
-    key: "agent:ops:guarded-parent",
-    expectedLeafEntryId: "stale",
-    accepted: false,
-  },
-  {
-    name: "copied leaf from another session",
-    key: "agent:ops:guarded-parent",
-    expectedLeafEntryId: "current-leaf",
-    sessionId: "previous-session",
-    accepted: false,
-  },
-  {
-    name: "steer compatibility",
-    key: "agent:ops:guarded-parent",
-    expectedLeafEntryId: "stale",
-    sessionId: "old",
-    queueMode: "steer",
-    accepted: true,
-  },
-])(
-  "typed Stop honors $name without touching the other owner",
-  async ({ name, key, accepted, ...extra }) => {
+it.each([null, "stale"] as const)(
+  "typed Stop stops current work from an empty or stale view (%s)",
+  async (expectedLeafEntryId) => {
     const test = createGuardedStopFixture();
     const selected = test.parent;
     appendStopCanary(selected, "current-leaf", "selected conversation");
@@ -182,24 +160,19 @@ it.each([
     });
     registerRpcSource("parent", active);
     registerRpcSource("queued", queued);
-    const respond = await test.send(key, extra);
+    const respond = await test.send(selected.sessionKey, {
+      expectedLeafEntryId,
+      sessionId: "previous-session",
+    });
 
-    if (accepted) {
-      expect(respond).toHaveBeenCalledWith(true, {
-        ok: true,
-        aborted: true,
-        runIds: ["queued", "parent"],
-      });
-    } else {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
-    }
-    expect(active.input.abortSignal.aborted, name).toBe(accepted);
-    expect(queued.input.abortSignal.aborted, name).toBe(accepted);
-    expect(rpcSourceTesting.has("queued")).toBe(!accepted);
+    expect(respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      aborted: true,
+      runIds: ["queued", "parent"],
+    });
+    expect(active.input.abortSignal.aborted).toBe(true);
+    expect(queued.input.abortSignal.aborted).toBe(true);
+    expect(rpcSourceTesting.has("queued")).toBe(false);
     expect(test.otherRun.input.abortSignal.aborted).toBe(false);
     expect(loadSessionEntryReadOnly(test.other)?.sessionId).toBe(test.other.sessionId);
     expect(await loadTranscriptEvents(selected)).toEqual(before);
@@ -207,7 +180,7 @@ it.each([
 );
 
 it.each(["replacement", "branch"] as const)(
-  "typed Stop fences descendants after a parent %s and settles only its captured output",
+  "typed Stop does not cancel work started after it (parent %s) and settles only its captured output",
   async (change) => {
     const test = createGuardedStopFixture();
     const child = await test.child("original-child");
@@ -259,23 +232,21 @@ it.each(["replacement", "branch"] as const)(
       await changed.promise;
       expect(callbackError).toBeUndefined();
       expect(parent.input.abortSignal.aborted).toBe(true);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-      );
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
       expect(successor?.input.abortSignal.aborted).toBe(false);
       expect(successorQueue?.input.abortSignal.aborted).toBe(false);
       expect(test.otherRun.input.abortSignal.aborted).toBe(false);
       expect(rpcSourceTesting.get("successor")).toBe(successor);
       expect(rpcSourceTesting.get("successor-queued")).toBe(successorQueue);
       const successorDescendant = await expectDefined(successorChild, "successor descendant");
-      for (const selected of [child, successorDescendant]) {
-        expect((await getSubagentRunByChildSessionKey(selected.sessionKey))?.execution.status).toBe(
-          "queued",
-        );
-        expect(selected.start).not.toHaveBeenCalled();
-      }
+      // The child started before the Stop; the successor's child started after it.
+      expect((await getSubagentRunByChildSessionKey(child.sessionKey))?.execution.status).toBe(
+        "terminal",
+      );
+      expect(
+        (await getSubagentRunByChildSessionKey(successorDescendant.sessionKey))?.execution.status,
+      ).toBe("queued");
+      expect(successorDescendant.start).not.toHaveBeenCalled();
       const events = await loadTranscriptEvents(replacement);
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -298,9 +269,9 @@ it.each(["replacement", "branch"] as const)(
         releaseSwarmRun(`${run.runId}-capacity`);
       }
       await vi.waitFor(() => {
-        expect(child.start).toHaveBeenCalledOnce();
         expect(successorDescendant.start).toHaveBeenCalledOnce();
       });
+      expect(child.start).not.toHaveBeenCalled();
     } finally {
       try {
         await successorChild;
@@ -314,7 +285,7 @@ it.each(["replacement", "branch"] as const)(
   },
 );
 
-it("typed Stop settles child cancellation accepted before its parent guard changes", async () => {
+it("typed Stop settles child cancellation when the parent gets a new message meanwhile", async () => {
   const test = createGuardedStopFixture();
   const child = test.seed("agent:ops:subagent:authority-child", "ops", "authority-child-session");
   const runId = "authority-child";
@@ -347,11 +318,7 @@ it("typed Stop settles child cancellation accepted before its parent guard chang
       sessionId: test.parent.sessionId,
     });
     expect(parent.input.abortSignal.aborted).toBe(true);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
-    );
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }));
     expect(controller.signal.aborted).toBe(true);
     expect(abort).toHaveBeenCalledOnce();
     const retained = expectDefined(loadSubagentRegistryFromSqlite().get(runId), "retained child");
@@ -364,7 +331,7 @@ it("typed Stop settles child cancellation accepted before its parent guard chang
   }
 });
 
-it("typed Stop cannot acquire a replacement collector after cancellation preparation yields", async () => {
+it("typed Stop cannot cancel a replacement collector after cancellation preparation yields", async () => {
   const test = createGuardedStopFixture();
   const collector = await test.child("collector");
   expect(isSubagentRunQueued(getLatestLiveSubagentRunByChildSessionKey(collector.sessionKey))).toBe(
@@ -422,7 +389,7 @@ it("typed Stop cannot acquire a replacement collector after cancellation prepara
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ details: { reason: "active-leaf-changed" } }),
+      expect.objectContaining({ code: "UNAVAILABLE" }),
     );
     for (const run of [old, successor, queued, test.otherRun]) {
       expect(run.input.abortSignal.aborted).toBe(false);

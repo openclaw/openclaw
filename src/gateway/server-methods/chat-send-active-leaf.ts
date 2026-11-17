@@ -1,6 +1,4 @@
-import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { GatewaySessionEntryRead } from "../session-utils.js";
 
 export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
@@ -32,46 +30,4 @@ export function assertExpectedLeafActive(
   if (!matchesRequestedSession || !matchesActivePath) {
     throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
   }
-}
-
-/** Read the current row and active path in one existing worker snapshot before a Stop effect. */
-export async function assertExpectedLeafActiveAsync(
-  session: Pick<GatewaySessionEntryRead, "canonicalKey" | "entry" | "storePath">,
-  agentId: string,
-  expectedLeafEntryId: string | null,
-  requestedSessionId: string | undefined,
-): Promise<void> {
-  if (isIncognitoSessionKey(session.canonicalKey)) {
-    assertExpectedLeafActive(session, expectedLeafEntryId, requestedSessionId);
-    return;
-  }
-  await withSessionEntriesFromStoresInWorker(
-    [
-      {
-        agentId,
-        storePath: session.storePath,
-        sessionKeys: [session.canonicalKey],
-        transcript: {
-          sessionKey: session.canonicalKey,
-          agentId,
-          entryIds: [],
-          activePathEntryId: expectedLeafEntryId,
-        },
-      },
-    ],
-    ([owner]) => {
-      owner!.assertCurrent();
-      assertExpectedLeafActive(
-        {
-          canonicalKey: session.canonicalKey,
-          storePath: session.storePath,
-          entry: owner!.result.entries[0]?.entry,
-          transcript: owner!.result.transcript,
-        },
-        expectedLeafEntryId,
-        requestedSessionId,
-      );
-    },
-    { ordered: true },
-  );
 }

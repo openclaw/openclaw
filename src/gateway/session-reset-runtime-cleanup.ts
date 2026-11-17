@@ -21,6 +21,8 @@ export async function ensureSessionRuntimeCleanup(params: {
   target: GatewaySessionStoreTarget;
   sessionId?: string;
   sessionLifecycleRevision?: string;
+  /** Why the chat's work stops; a reset unless the chat is deleted. */
+  cause?: "deleted";
   assertCurrent?: () => void;
 }) {
   let cleanup: Awaited<ReturnType<typeof prepareSessionResetCleanupGuard>>;
@@ -81,6 +83,7 @@ export async function ensureSessionRuntimeCleanup(params: {
   // output or hide a background process whose owner has not confirmed exit.
   clearFinishedSessionsForScopes([...queueKeys, params.key]);
   clearSessionResetRuntimeState(queueKeys, {
+    cause: params.cause ?? "reset",
     controllerTarget: captureSessionTarget({
       storeScope: params.target.storePath,
       sessionKey: params.target.canonicalKey,
