@@ -113,6 +113,24 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
+/**
+ * A non-writing native open after every index user exits rebuilds the WAL index over the
+ * retained frames: iChange restarts at zero while the last frame checksum survives. Any
+ * commit after the rebuild increments iChange again.
+ */
+export function hasRebuiltWalIndexOverFrames(pathname: string): boolean {
+  const wal = fs.lstatSync(`${pathname}-wal`, { bigint: true, throwIfNoEntry: false });
+  if (!wal?.isFile() || wal.size === 0n) {
+    return false;
+  }
+  try {
+    const header = readWalIndexHeader(pathname);
+    return header !== null && header.readUInt32LE(8) === 0 && header.readBigUInt64LE(24) !== 0n;
+  } catch {
+    return false;
+  }
+}
+
 /** Without journal data or WAL frames, the verified family proves no commit; the index can come or go. */
 function sameWalCommitPublication(
   before: Buffer | null,
