@@ -30,7 +30,11 @@ it.each([
         response.setHeader("content-type", "application/json");
         response.end(
           JSON.stringify({
-            requests: { id: "synthetic-mock-instance", ingress: { responses: providerRequests } },
+            requests: {
+              id: "synthetic-mock-instance",
+              ingress: { responses: providerRequests, embeddings: 0 },
+              accounting: { version: 1 },
+            },
           }),
         );
       }),

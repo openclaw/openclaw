@@ -67,6 +67,9 @@ workspace before launch. The existing `scripts/e2e/mock-openai-server.mjs` suppl
 the loopback provider; the driver verifies unique replies and mock request counts.
 The config guard permits the released empty `agents.entries.main` materialization,
 but rejects agent-specific overrides and additional agents.
+Start the mock with `MOCK_NATIVE_CHAT_ACCOUNTING=1` to retain its bounded,
+content-free route/ordinal and synthetic request-correlation ledger. Background
+utility behavior remains enabled; do not assume one total request per turn.
 
 Copy the self-contained `scripts/perf/native-chat-start-preload.mjs` into the
 task-owned runtime's readable staging directory. Before launch, run it with
@@ -89,13 +92,23 @@ Any self-owned foreground experiment must select that lifecycle before launch,
 retain package repair/update and native-isolation policy, use fresh state, and
 be labeled separately from externally supervised package lifecycle evidence.
 
+After the Gateway exits, save the mock's final `/health` JSON without changing
+the instance. Wrap it as `{mock: <health>, completion: {mainPid,
+foregroundExitCode: 0, listenerClosed: true, observedStoppedPids: [...]}}` only
+after joining the foreground, verifying listener teardown, and observing every
+captured PID stopped; these are recorded host observations, not guessed defaults.
 `node scripts/perf/native-chat-start-report.mjs --client <receipts>
---capture-dir <retrieved-captures>` requires complete, same-process monotonic
-anchors, no dropped observations, and one mock request per turn. It rejects
-incomplete shutdown, retries and ambiguous joins rather than assigning time
-silently. Loader instrumentation is diagnostic overhead, not uninstrumented
-performance evidence. Raw network first byte, paint and supervised-service
-lifecycle remain separate claims; no client or runtime authorization is widened.
+--capture-dir <retrieved-captures> --mock-final <final-health>` requires one
+provider chain per measured run and a one-to-one match between every Responses
+request and a measured or explicitly purpose-tagged background chain. It reports
+background calls and observed overlap separately; unrelated extra traffic,
+retries, lost observations and incomplete measured shutdown fail explicitly.
+Embeddings are endpoint-counted separately, not assigned invented completion
+owners or latency. An unjoined helper with no installed owner or mark can only
+be excluded from the exhaustively accounted main-process Responses scope, never
+certified as clean process-tree shutdown. Loader instrumentation is diagnostic
+overhead, not uninstrumented performance evidence. Raw network first byte, paint
+and supervised-service lifecycle remain separate claims; authorization is unchanged.
 
 ## Interrupted Control UI builds
 

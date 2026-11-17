@@ -1,6 +1,7 @@
 // Task-only source/bundle instrumentation. No production files or public timing policy change.
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomUUID } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
 import {
   appendFileSync,
@@ -20,6 +21,23 @@ import { isMainThread } from "node:worker_threads";
 
 const key = 'globalThis[Symbol.for("openclaw.perf.native-chat-start")]';
 const probes = [
+  {
+    name: "completion-owner",
+    marker:
+      /async function runIsolatedCompletion\(\s*params(?:\s*:\s*RunIsolatedCompletionParams)?[,]?\s*\)(?:\s*:\s*Promise<IsolatedCompletionResult>)?\s*\{/gu,
+    replace: true,
+    code: `async function runIsolatedCompletion(params) {
+      return ${key}.withOwner(params.purpose, () => __nativeChatOwnedCompletion(params));
+    }
+    async function __nativeChatOwnedCompletion(params) {`,
+  },
+  {
+    name: "request-correlation",
+    owner: "function createModelLifecycle(",
+    marker: /modelRequestBodyState\(requestOptions\)\.onBytes\s*=/gu,
+    before: true,
+    code: `${key}.headers(requestOptions, ctx.runId, callId);`,
+  },
   {
     name: "acknowledged",
     marker: /diagnostics\.acknowledge\([^;\r\n]*\);/gu,
@@ -46,7 +64,7 @@ const probes = [
     name: "provider-headers",
     owner: "function createModelLifecycle(",
     marker: /observer\.state\.responseStatus\s*=\s*response\.status;/gu,
-    code: `${key}("provider-headers", ctx.runId, callId);`,
+    code: `${key}("provider-headers", ctx.runId, callId, response.status);`,
   },
   {
     name: "provider-output",
@@ -81,7 +99,13 @@ export function instrumentNativeChatStartModule(source) {
       1,
       `Ambiguous native chat capture anchor: ${probe.name}`,
     );
-    transformed = transformed.replace(probe.marker, (matched) => `${matched}\n${probe.code}`);
+    transformed = transformed.replace(probe.marker, (matched) =>
+      probe.replace
+        ? probe.code
+        : probe.before
+          ? `${probe.code}\n${matched}`
+          : `${matched}\n${probe.code}`,
+    );
   }
   return { source: transformed, anchors: selected.map((probe) => probe.name) };
 }
@@ -90,10 +114,19 @@ if (isMainThread && process.env.OPENCLAW_PERF_CHAT_CAPTURE_DIR) {
   const directory = path.resolve(process.env.OPENCLAW_PERF_CHAT_CAPTURE_DIR);
   assert(process.env.OPENCLAW_PERF_CHAT_OWNER_ROOT, "Capture requires an explicit owner root");
   const root = realpathSync(process.env.OPENCLAW_PERF_CHAT_OWNER_ROOT);
+  const entry = process.argv[1] ? path.resolve(process.argv[1]) : undefined;
+  const relativeEntry = entry ? path.relative(root, entry) : undefined;
+  const payloadEntry =
+    relativeEntry !== undefined &&
+    !relativeEntry.startsWith("..") &&
+    !path.isAbsolute(relativeEntry);
   mkdirSync(directory, { recursive: true });
   const output = path.join(directory, `native-chat-${process.pid}.jsonl`);
   const installed = new Set();
   const observed = new Set();
+  const completionOwner = new AsyncLocalStorage();
+  const agentRuns = new Set();
+  const purposes = new Set(["session-activity-summary", "session-observer", "session-title"]);
   const pending = [];
   let scheduled = false;
   let count = 0;
@@ -135,11 +168,16 @@ if (isMainThread && process.env.OPENCLAW_PERF_CHAT_CAPTURE_DIR) {
       architecture: process.arch,
       platform: process.platform,
       clock: "process-local performance.now",
+      role: process.argv.includes("gateway") && process.argv.includes("run") ? "gateway" : "helper",
+      entryKind: entry ? (payloadEntry ? "payload-module" : "external-module") : "inline",
+      ...(payloadEntry && existsSync(entry)
+        ? { entrySha256: createHash("sha256").update(readFileSync(entry)).digest("hex") }
+        : {}),
       instrumentation: "private loader hooks; not uninstrumented performance evidence",
     })}\n`,
     { flag: "wx" },
   );
-  globalThis[Symbol.for("openclaw.perf.native-chat-start")] = (phase, runId, relatedId) => {
+  globalThis[Symbol.for("openclaw.perf.native-chat-start")] = (phase, runId, relatedId, status) => {
     // Only UUIDs from this synthetic workload; never persist message/model/path values.
     const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
     if (
@@ -154,13 +192,69 @@ if (isMainThread && process.env.OPENCLAW_PERF_CHAT_CAPTURE_DIR) {
       return;
     }
     const identity = `${phase}:${runId}:${relatedId ?? ""}`;
+    if (phase === "run-start") {
+      agentRuns.add(relatedId);
+    }
     if (phase === "provider-output") {
       if (observed.has(identity)) {
         return;
       }
       observed.add(identity);
     }
-    record({ type: "mark", phase, runId, ...(relatedId ? { relatedId } : {}) });
+    if (
+      phase === "provider-headers" &&
+      !(Number.isInteger(status) && status >= 100 && status <= 599)
+    ) {
+      unclassifiedIdentities++;
+      return;
+    }
+    record({
+      type: "mark",
+      phase,
+      runId,
+      ...(relatedId ? { relatedId } : {}),
+      ...(phase === "provider-headers" ? { status } : {}),
+      ...(phase === "provider-start"
+        ? agentRuns.has(runId)
+          ? { owner: "agent-turn" }
+          : {
+              owner: completionOwner.getStore()?.purpose ?? "unattributed",
+              ...(completionOwner.getStore()
+                ? { ownerOperationId: completionOwner.getStore().operationId }
+                : {}),
+            }
+        : {}),
+    });
+  };
+  const tracker = globalThis[Symbol.for("openclaw.perf.native-chat-start")];
+  tracker.withOwner = (purpose, run) =>
+    completionOwner.run(
+      {
+        purpose: purposes.has(purpose) ? purpose : "unattributed",
+        operationId: randomUUID(),
+      },
+      run,
+    );
+  tracker.headers = (options, runId, callId) => {
+    const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/iu;
+    if (
+      typeof runId !== "string" ||
+      !uuid.test(runId) ||
+      typeof callId !== "string" ||
+      !(
+        uuid.test(callId) ||
+        (callId.startsWith(`${runId}:model:`) && /^[1-9]\d*$/u.test(callId.slice(runId.length + 7)))
+      )
+    ) {
+      unclassifiedIdentities++;
+      return;
+    }
+    options.headers = {
+      ...options.headers,
+      "x-openclaw-perf-pid": String(process.pid),
+      "x-openclaw-perf-run": runId,
+      "x-openclaw-perf-call": callId,
+    };
   };
   const callers = new Set([
     "session-manager.write",
@@ -257,6 +351,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     "src/gateway/server-methods/chat-send-input-dispatch.ts",
     "src/gateway/server-methods/chat-send-agent-dispatch.ts",
     "src/agents/embedded-agent-runner/run/attempt.model-diagnostic-lifecycle.ts",
+    "src/agents/isolated-completion.ts",
   ];
   const source = existsSync(path.join(root, ...sourceOwners[0].split("/")));
   const directory = source ? root : path.join(root, "dist");

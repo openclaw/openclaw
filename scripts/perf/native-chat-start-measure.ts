@@ -83,9 +83,15 @@ export async function measureNativeChatStart(options: {
     const value: unknown = await response.json();
     assert(isRecord(value) && isRecord(value.requests) && isRecord(value.requests.ingress));
     assert(typeof value.requests.id === "string");
+    assert(
+      isRecord(value.requests.accounting) && value.requests.accounting.version === 1,
+      "Enable content-free MOCK_NATIVE_CHAT_ACCOUNTING=1 before starting the mock",
+    );
     const count = value.requests.ingress.responses;
     assert(typeof count === "number" && Number.isSafeInteger(count) && count >= 0);
-    return { id: value.requests.id, count };
+    const embeddings = value.requests.ingress.embeddings;
+    assert(typeof embeddings === "number" && Number.isSafeInteger(embeddings) && embeddings >= 0);
+    return { id: value.requests.id, responses: count, embeddings };
   };
   const ready = createDeferredCore();
   const samples: Array<{
@@ -95,6 +101,8 @@ export async function measureNativeChatStart(options: {
     firstAssistantDeltaMs: number;
     completedMs: number;
     mockRequests: number;
+    mockBefore: Awaited<ReturnType<typeof mockState>>;
+    mockAfter: Awaited<ReturnType<typeof mockState>>;
   }> = [];
   let active:
     | {
@@ -214,6 +222,7 @@ export async function measureNativeChatStart(options: {
     assert(defaults?.utilityModel === undefined, "Do not route utility work outside the fixture");
     assert(agents?.list === undefined, "Do not use a legacy agent roster in this fixture");
 
+    const mockInitial = await mockState();
     const sessionKey = `agent:main:gateway-perf-${randomUUID()}`;
     for (let sample = 0; sample < options.samples; sample++) {
       const before = await mockState();
@@ -257,14 +266,17 @@ export async function measureNativeChatStart(options: {
       assert(active.completedMs !== undefined);
       const after = await mockState();
       assert.equal(after.id, before.id, "Mock provider restarted during the sample");
-      assert(after.count > before.count, "No matching mock-provider request was observed");
+      assert.equal(before.id, mockInitial.id, "Mock provider changed during the campaign");
+      assert(after.responses > before.responses, "No matching mock-provider request was observed");
       samples.push({
         sample,
         runId: active.runId,
         acknowledgedMs,
         firstAssistantDeltaMs: active.firstAssistantDeltaMs,
         completedMs: active.completedMs,
-        mockRequests: after.count - before.count,
+        mockRequests: after.responses - before.responses,
+        mockBefore: before,
+        mockAfter: after,
       });
       active = undefined;
     }
@@ -308,6 +320,7 @@ export async function measureNativeChatStart(options: {
         completedMs: "matching final frame received, not model completion or durable settlement",
       },
       samples,
+      mockInitial,
       ...(shutdownRequest ? { shutdownRequest } : {}),
       ...(shutdownFailure ? { shutdownFailure, stopTarget: options.stopTarget } : {}),
       unavailable: [
