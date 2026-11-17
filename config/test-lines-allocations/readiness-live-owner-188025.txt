@@ -1,0 +1,2 @@
+# Gateway readiness live-owner regression forbids whole agent-database inspection copies.
+27

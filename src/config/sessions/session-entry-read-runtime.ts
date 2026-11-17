@@ -539,7 +539,10 @@ export async function withSessionStoreReaderInWorker<T>(
   preparedSource?.assertCurrent();
   logical?.assertCurrent?.();
   const onReadError = logical?.onReadError;
-  const inspection = isArtifactPreservingStateRead("agent");
+  // Artifact-preserving reads qualify paths off the Gateway thread; only agent
+  // inspection (Doctor) reads a private copy of the source.
+  const inspection = isArtifactPreservingStateRead();
+  const privateCopy = isArtifactPreservingStateRead("agent");
   let selection: Awaited<ReturnType<typeof prepareSessionStoreReaderCandidates>>;
   try {
     selection = await prepareSessionStoreReaderCandidates(storePath, {
@@ -612,7 +615,7 @@ export async function withSessionStoreReaderInWorker<T>(
       const preparedDatabase = {
         ...database,
         env: { ...env },
-        readIdentity: inspection ? sourceIdentity : undefined,
+        readIdentity: privateCopy ? sourceIdentity : undefined,
       };
       let sourcePrepared = false;
       const prepareRead = () => {
@@ -633,8 +636,8 @@ export async function withSessionStoreReaderInWorker<T>(
           requestedPaths: [storePath, sourcePath],
           env,
           prepareRead,
-          readIdentity: inspection ? sourceIdentity : undefined,
-          readSourcePath: inspection ? sourcePath : undefined,
+          readIdentity: privateCopy ? sourceIdentity : undefined,
+          readSourcePath: privateCopy ? sourcePath : undefined,
         },
         async (reader) => {
           const assertCapturedCurrent = () => {

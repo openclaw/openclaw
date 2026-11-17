@@ -594,8 +594,7 @@ export async function handleGatewayRequest(
   await runWithGatewayObservationScope(
     req.method,
     req.method === "sessions.github.readiness"
-      ? (retainRoot) =>
-          withArtifactPreservingStateReads(() => dispatch(retainRoot), { agentDatabases: true })
+      ? (retainRoot) => withArtifactPreservingStateReads(() => dispatch(retainRoot))
       : dispatch,
     [signal, client?.connectionSignal],
     (error) => {
