@@ -82,7 +82,7 @@ function fakeHost(initial: {
       accepted.add(token);
       return token;
     },
-    readServer: () => server,
+    readServer: async () => server,
     writeServer: async ({ url, authorization }) => {
       server = withGbrainConnection(server, url, authorization);
     },

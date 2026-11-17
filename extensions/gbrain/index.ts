@@ -2,11 +2,13 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import {
   connectGbrain,
   GBRAIN_SERVER_NAME,
+  type GbrainMcpServerEntry,
   withGbrainConnection,
   type ConnectDeps,
   type ConnectOutcome,
@@ -88,7 +90,27 @@ export default definePluginEntry({
       health: readGbrainHealth,
       tokenAccepted: gbrainAcceptsToken,
       mintKey: mintGbrainKey,
-      readServer: () => api.runtime.config.current().mcp?.servers?.[GBRAIN_SERVER_NAME],
+      readServer: async () => {
+        const { parsed } = await readConfigFileSnapshot({
+          observe: false,
+          pluginValidation: "core-only",
+        });
+        // The plugin writes only into the root file; MCP config from an `$include` is the user's.
+        let node: unknown = parsed;
+        for (const key of ["mcp", "servers", GBRAIN_SERVER_NAME]) {
+          if (!node || typeof node !== "object") {
+            return undefined;
+          }
+          const record = node as Record<string, unknown>;
+          if (!(key in record)) {
+            return "$include" in record ? "foreign" : undefined;
+          }
+          node = record[key];
+        }
+        return node && typeof node === "object" && !("$include" in node)
+          ? (node as GbrainMcpServerEntry)
+          : "foreign";
+      },
       writeServer: async ({ url, authorization }) => {
         await api.runtime.config.mutateConfigFile({
           afterWrite: { mode: "auto" },

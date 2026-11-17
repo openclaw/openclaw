@@ -42,7 +42,11 @@ export type ConnectDeps = {
   health: (baseUrl: string) => Promise<Health>;
   tokenAccepted: (mcpUrl: string, token: string) => Promise<boolean>;
   mintKey: (baseUrl: string, adminToken: string, name: string) => Promise<string>;
-  readServer: () => GbrainMcpServerEntry | undefined;
+  /**
+   * The entry as authored in the config file (no `${ENV}` substitution), so ownership and the
+   * bearer come from what the user wrote; an entry outside the root file reads as foreign.
+   */
+  readServer: () => Promise<GbrainMcpServerEntry | "foreign" | undefined>;
   /** Writes the connection with {@link withGbrainConnection}, under the config owner's lock. */
   writeServer: (connection: { url: string; authorization: string }) => Promise<void>;
   sleep: (ms: number) => Promise<void>;
@@ -226,8 +230,9 @@ export async function connectGbrain(
 ): Promise<ConnectOutcome> {
   let receipt = readReceipt(deps);
   const urls = deps.hosts.map((host) => `http://${host}:${receipt?.port ?? GBRAIN_DEFAULT_PORT}`);
-  const current = deps.readServer();
-  if (!isManaged(current, deps.hosts)) {
+  const authored = await deps.readServer();
+  const current = authored === "foreign" ? undefined : authored;
+  if (authored === "foreign" || !isManaged(current, deps.hosts)) {
     return { state: "external", url: typeof current?.url === "string" ? current.url : "" };
   }
 
