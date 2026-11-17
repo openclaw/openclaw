@@ -5245,9 +5245,7 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               print(f"started={time.monotonic()}", file=output)
           PYTHON
-
       - *platform_checkout_step
-
       - &select_xcode_step
         name: Select Xcode
         id: select-xcode
@@ -5255,7 +5253,6 @@ jobs:
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
           select_xcode_toolchain
-
       - name: Setup Node environment for Apple assets
         id: macos-node-assets
         if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
@@ -5265,7 +5262,6 @@ jobs:
           cache-mode: off
           install-bun: "false"
           install-deps: "false"
-
       - name: Install native asset dependencies
         if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         env:
@@ -5274,7 +5270,7 @@ jobs:
         run: |
           set -euo pipefail
           native_install_args=(install --frozen-lockfile --prefer-offline --optional)
-          # Settings imports cross root-manifest edges and need the full workspace.
+          # Settings: full workspace.
           if [[ "$MACOS_NATIVE_PHASE" != "mlx-settings" ]]; then
             native_install_args+=(--filter '@openclaw/mermaid-renderer...' --filter '@openclaw/gateway-protocol...')
             if [[ "$MACOS_NATIVE_PHASE" == "tests" && -f apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift ]]; then
@@ -5286,20 +5282,17 @@ jobs:
             --config.engine-strict=false \
             --config.enable-pre-post-scripts=true \
             --config.side-effects-cache=true
-
       - name: Setup Node.js for native test tooling
         id: macos-node-tooling
         if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') == ''
         env:
           REQUESTED_NODE_VERSION: ${{ env.NODE_VERSION }}
         run: *ensure_node_run
-
       - &apple_mermaid_cache_key
         name: Identify Apple Mermaid inputs
         if: matrix.phase != 'mlx' && hashFiles('scripts/prepare-apple-mermaid.mjs') != '' && env.HISTORICAL_TARGET != 'true' && needs.preflight.outputs.frozen_target != 'true'
         id: apple-mermaid-inputs
         run: echo "key=$(node scripts/prepare-apple-mermaid.mjs --cache-key)" >> "$GITHUB_OUTPUT"
-
       - &apple_mermaid_cache_restore
         name: Restore Apple Mermaid assets
         if: steps.apple-mermaid-inputs.outputs.key != '' && needs.preflight.outputs.cache_mode != 'off'
@@ -5308,7 +5301,6 @@ jobs:
         with:
           path: apps/shared/mermaid/assets
           key: apple-mermaid-v1-${{ steps.apple-mermaid-inputs.outputs.key }}
-
       - name: Prepare Apple Mermaid assets
         id: macos-native-assets
         if: matrix.phase != 'mlx'
@@ -5322,7 +5314,6 @@ jobs:
             echo "Current CI targets must provide scripts/prepare-apple-mermaid.mjs." >&2
             exit 1
           fi
-
       - &apple_mermaid_cache_save
         name: Save Apple Mermaid assets
         if: steps.apple-mermaid-inputs.outputs.key != '' && steps.apple-mermaid-cache.outputs.cache-hit != 'true' && needs.preflight.outputs.cache_write_allowed == 'true' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule"]'), github.event_name)
@@ -5332,7 +5323,6 @@ jobs:
         with:
           path: apps/shared/mermaid/assets
           key: ${{ steps.apple-mermaid-cache.outputs.cache-primary-key }}
-
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         id: macos-swift-tools
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == env.MACOS_PRIMARY_PHASE }}
@@ -5346,7 +5336,6 @@ jobs:
             "$swift_tools_dir/swiftformat" --version
             "$swift_tools_dir/swiftlint" version
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
-            # Match reviewed legacy formatter contracts; reject unknown minimums.
             brew update
             brew install xcodegen swiftlint
             swiftformat_min_version="$(awk '$1 == "--min-version" { print $2; exit }' config/swiftformat)"
@@ -5385,7 +5374,6 @@ jobs:
             echo "Current CI targets must provide scripts/install-xcodegen.sh and scripts/install-swift-tools.sh." >&2
             exit 1
           fi
-
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
         if: contains(fromJSON('["release","tests"]'), matrix.phase)
@@ -5395,7 +5383,6 @@ jobs:
           swift_version="$(swift --version | head -n 1)"
           toolchain_key="$(printf '%s\n%s\n' "$xcode_version" "$swift_version" | shasum -a 256 | awk '{print $1}')"
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
-
       - name: Restore SwiftPM cache
         id: swiftpm-cache
         if: needs.preflight.outputs.cache_mode != 'off'
@@ -5405,7 +5392,6 @@ jobs:
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
           restore-keys: |
             ${{ runner.os }}-swiftpm-
-
       - name: Restore Swift build directory cache
         id: swift-build-cache
         if: contains(fromJSON('["release","tests"]'), matrix.phase) && needs.preflight.outputs.cache_mode != 'off'
@@ -5415,7 +5401,6 @@ jobs:
           key: ${{ runner.os }}-swift-build-${{ matrix.phase == 'tests' && 'v7' || 'v6' }}-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
           restore-keys: |
             ${{ runner.os }}-swift-build-${{ matrix.phase == 'tests' && 'v7' || 'v6' }}-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
-
       - name: Validate Swift build cache
         id: validate-swift-build-cache
         if: contains(fromJSON('["release","tests"]'), matrix.phase)
@@ -5429,17 +5414,14 @@ jobs:
             cache_valid=false
           fi
           echo "cache-valid=$cache_valid" >> "$GITHUB_OUTPUT"
-
       - name: Restore Swift build input timestamps
         if: steps.validate-swift-build-cache.outputs.cache-valid == 'true' && env.HISTORICAL_TARGET != 'true'
         run: python3 -I -S scripts/swift-build-cache-metadata.py restore
-
       - name: Show toolchain
         run: |
           sw_vers
           xcodebuild -version
           swift --version
-
       - name: Native state schema version contract
         if: ${{ !cancelled() && (steps.macos-node-assets.outcome == 'success' || steps.macos-node-tooling.outcome == 'success') && matrix.phase == env.MACOS_PRIMARY_PHASE }}
         run: |
@@ -5451,7 +5433,6 @@ jobs:
             echo "Current CI targets must provide scripts/check-native-state-schema-version.mjs." >&2
             exit 1
           fi
-
       - name: Swift lint
         if: ${{ !cancelled() && steps.macos-swift-tools.outcome == 'success' && matrix.phase == env.MACOS_PRIMARY_PHASE }}
         run: |
@@ -5467,7 +5448,6 @@ jobs:
             exit 1
           fi
           finish_checks
-
       - name: Swift build (release)
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'release' }}
         run: |
@@ -5475,13 +5455,11 @@ jobs:
           if swift build --package-path apps/macos --product OpenClaw --configuration release; then
             exit 0
           fi
-
           sparkle_framework="apps/macos/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework"
           [[ -d "$sparkle_framework" && ! -f "$sparkle_framework/Info.plist" ]] || exit 1
           echo "::warning::SwiftPM did not produce complete Sparkle metadata; resetting once before retry."
           swift package --package-path apps/macos reset
           swift build --package-path apps/macos --product OpenClaw --configuration release
-
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' }}
         run: |
@@ -5495,12 +5473,12 @@ jobs:
             exit 1
           fi
           swift build --package-path apps/shared/OpenClawKit --scratch-path "$openclawkit_scratch" --target OpenClawKit --disable-default-traits --disable-index-store -Xswiftc -gline-tables-only
-
-      # openclawkit-tests-contract-v1: the target owns an independently runnable package suite.
+      # openclawkit-tests-contract-v1
       - name: OpenClawKit tests
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true' }}
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           openclawkit_test_args=(
             --package-path apps/shared/OpenClawKit
             --scratch-path "${OPENCLAWKIT_SCRATCH:?OpenClawKit scratch was not prepared}"
@@ -5511,12 +5489,10 @@ jobs:
           else
             openclawkit_test_args+=(--no-parallel)
           fi
-          swift test "${openclawkit_test_args[@]}"
-
+          run_apple_command_logged "$RUNNER_TEMP/openclaw-native-test-logs/openclawkit.log" swift test "${openclawkit_test_args[@]}"
       - name: Clean OpenClawKit build scratch
         if: always() && env.OPENCLAWKIT_SCRATCH != ''
         run: rm -rf "$OPENCLAWKIT_SCRATCH"
-
       - name: Swabble tests
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' && env.HISTORICAL_TARGET != 'true' }}
         run: |
@@ -5524,7 +5500,6 @@ jobs:
           swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
           trap 'rm -rf "$swabble_scratch"' EXIT
           swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --disable-index-store -Xswiftc -gline-tables-only --no-parallel
-
       - name: MLX TTS helper build and tests
         id: mlx-helper
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'mlx' && env.HISTORICAL_TARGET != 'true' }}
@@ -5541,7 +5516,6 @@ jobs:
             mlx_args+=(--extended)
           fi
           python3 -I -S scripts/test-macos-mlx-native.py "${mlx_args[@]}"
-
       - name: Upload MLX TTS resolution
         if: ${{ always() && matrix.phase == 'mlx' && steps.mlx-helper.outputs.proof-path != '' }}
         uses: *upload_artifact_v7
@@ -5550,7 +5524,6 @@ jobs:
           path: ${{ steps.mlx-helper.outputs.proof-path }}
           if-no-files-found: error
           retention-days: 7
-
       - name: MLX retained settings upgrade
         id: mlx-settings
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'mlx-settings' && needs.preflight.outputs.run_mlx_native_proof == 'true' }}
@@ -5562,7 +5535,6 @@ jobs:
           settings_proof="$(mktemp -d "$RUNNER_TEMP/openclaw-mlx-settings-proof.XXXXXX")"
           echo "proof-path=$settings_proof" >> "$GITHUB_OUTPUT"
           node scripts/test-macos-mlx-settings.mts "$settings_proof" "$NATIVE_STARTED" "$CHECKOUT_SHA"
-
       - name: Upload MLX settings proof
         if: ${{ always() && matrix.phase == 'mlx-settings' && steps.mlx-settings.outputs.proof-path != '' }}
         uses: *upload_artifact_v7
@@ -5571,16 +5543,14 @@ jobs:
           path: ${{ steps.mlx-settings.outputs.proof-path }}
           if-no-files-found: error
           retention-days: 7
-
       - name: Build Swift tests
         id: swift-test-build
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' }}
         run: |
           set -euo pipefail
-          # Keep native backend until swiftlang/swift-package-manager#10394 fixes Sparkle rpaths.
+          # Native: Sparkle rpaths (swiftlang/swift-package-manager#10394).
           swift build --package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --build-tests
           echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
-
       - name: Download runtime for native policy tests
         id: native-runtime-download
         if: ${{ !cancelled() && steps.swift-test-build.outcome == 'success' && matrix.phase == 'tests' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}
@@ -5589,14 +5559,12 @@ jobs:
           artifact-ids: ${{ env.NATIVE_RUNTIME_ARTIFACT_ID }}
           merge-multiple: true
           path: .artifacts/macos-native-runtime
-
       - name: Prepare native test CLI
         id: native-test-cli
         if: ${{ !cancelled() && steps.native-runtime-download.outcome == 'success' }}
         env:
           TARGET_SHA: *checkout_sha
         run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs restore .artifacts/macos-native-runtime "$TARGET_SHA" >> "$GITHUB_PATH"
-
       - name: Swift test
         id: swift-test
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' && steps.swift-test-build.outcome == 'success' && (hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') == '' || steps.native-test-cli.outcome == 'success') }}
@@ -5616,7 +5584,7 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            # Isolate app activation and menu focus from parallel suites.
+            # Isolate parallel activation/menu focus.
             if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/QuickChatCatalogPresentationTests.swift ]]; then
               run_check "macOS default profile" run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests|DashboardExperienceTests"
               if [[ "$HISTORICAL_TARGET" != "true" || -f apps/macos/Tests/OpenClawIPCTests/DashboardExperienceTests.swift ]]; then
@@ -5635,16 +5603,14 @@ jobs:
             exit 1
           fi
           finish_checks
-
       - name: Upload macOS native test logs
-        if: ${{ always() && matrix.phase == 'tests' }}
+        if: ${{ always() && (matrix.phase == 'tests' || matrix.phase == 'packages') }}
         uses: *upload_artifact_v7
         with:
-          name: macos-native-test-logs
+          name: ${{ matrix.phase == 'packages' && 'macos-package-test-logs' || 'macos-native-test-logs' }}
           path: ${{ runner.temp }}/openclaw-native-test-logs/*.log
           if-no-files-found: ignore
           retention-days: 7
-
       - name: Upload default-profile chat menu captures
         if: ${{ always() && steps.swift-test.outputs.menu-default-artifact-path != '' }}
         uses: *upload_artifact_v7
@@ -5657,7 +5623,6 @@ jobs:
             ${{ runner.temp }}/openclaw-menu-default-*/capture-export.json
           if-no-files-found: error
           retention-days: 7
-
       - name: Upload named-profile chat menu captures
         if: ${{ always() && steps.swift-test.outputs.menu-named-artifact-path != '' }}
         uses: *upload_artifact_v7
@@ -5670,7 +5635,6 @@ jobs:
             ${{ steps.swift-test.outputs.menu-named-artifact-path }}/capture-export.json
           if-no-files-found: error
           retention-days: 7
-
       - name: Setup bundled recovery runtime build
         id: recovery-runtime-setup
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && hashFiles('scripts/test-macos-app-host.sh') != '' && steps.swift-test-build.outputs.debug-tests-built == 'true' && steps.swift-test.outcome == 'success' }}
@@ -5680,19 +5644,16 @@ jobs:
           cache-mode: *cache_mode
           install-bun: "false"
           build-all-cache-scope: full
-
       - name: Build bundled recovery runtime
         id: recovery-runtime-build
         if: ${{ !cancelled() && steps.recovery-runtime-setup.outcome == 'success' }}
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
-
       - name: Prove bundled app recovery and relaunch
         id: bundled-recovery
         if: ${{ !cancelled() && steps.recovery-runtime-build.outcome == 'success' }}
         run: bash scripts/test-macos-app-host.sh
-
       - name: Upload bundled app recovery proof
         if: ${{ always() && steps.bundled-recovery.outputs.recovery-artifact-path != '' }}
         uses: *upload_artifact_v7
@@ -5701,12 +5662,10 @@ jobs:
           path: ${{ steps.bundled-recovery.outputs.recovery-artifact-path }}
           if-no-files-found: error
           retention-days: 7
-
       - name: Render isolated macOS health fixtures
         id: health-render
         if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test-build.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
-
       - name: Upload macOS health component renders
         if: ${{ always() && steps.health-render.outputs.artifact-path != '' }}
         uses: *upload_artifact_v7
@@ -5720,7 +5679,6 @@ jobs:
             ${{ steps.health-render.outputs.artifact-path }}/probe-permission.png
           if-no-files-found: error
           retention-days: 7
-
       - name: Check Swift cache save budget
         id: swift-cache-budget
         if: contains(fromJSON('["release","tests"]'), matrix.phase) && needs.preflight.outputs.cache_write_allowed == 'true'
@@ -5742,7 +5700,6 @@ jobs:
           if not allowed:
               print("::notice::Skipping optional Swift cache saves: insufficient or unknown job budget.")
           PYTHON
-
       - name: Save SwiftPM cache
         continue-on-error: true
         timeout-minutes: 1
@@ -5751,14 +5708,12 @@ jobs:
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ steps.swiftpm-cache.outputs.cache-primary-key }}
-
       - name: Record Swift build input timestamps
         id: record-swift-build-cache-metadata
         continue-on-error: true
         timeout-minutes: 1
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swift-build-cache.outputs.cache-hit != 'true' && steps.swift-cache-budget.outputs.allowed == 'true' && env.HISTORICAL_TARGET != 'true'
         run: python3 -I -S scripts/swift-build-cache-metadata.py record
-
       - name: Save Swift build directory cache
         continue-on-error: true
         timeout-minutes: 2
@@ -5767,7 +5722,6 @@ jobs:
         with:
           path: apps/macos/.build
           key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
-
   # Release compilation and package tests do not consume the Linux runtime.
   macos-swift-packages:
     permissions:
@@ -6903,23 +6857,19 @@ jobs:
             image: google_apis_ps16k
     steps:
       - *android_checkout_step
-
       - *android_toolchain_checkout_step
-
       - name: Setup Node environment for native resources
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
-          # A full workspace store competes with the emulator image for hosted disk.
+          # Avoid store/emulator disk contention.
           cache-mode: "off"
           install-bun: "false"
           install-deps: "false"
-
       - name: Setup Android toolchain
         uses: ./.ci-harness/.github/actions/setup-android-toolchain
         with:
           cache-mode: *cache_mode
           install-native-deps: "true"
-
       - name: Run packaged Access crypto and production TLS on Android
         shell: bash
         env:
@@ -6940,12 +6890,12 @@ jobs:
             -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           )
-          # Keep compilation off the emulator's boot path and reuse those exact APK inputs.
+          # Prebuild; reuse exact APKs.
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest "${gradle_args[@]}"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
-          # Bound disposable userdata so the hosted runner can boot after SDK setup.
-          # The strict 16 KiB image exhausts its default 2560 MiB during instrumentation.
+          # Bound userdata disk.
+          # 16 KiB tests need >2560 MiB RAM.
           /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -memory 4096 -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
@@ -6955,7 +6905,7 @@ jobs:
             trap - EXIT
             cp "$RUNNER_TEMP/access-emulator.log" "$trust_evidence/access-emulator.log" || status=1
             tail -n 100 "$trust_evidence/access-emulator.log" || status=1
-            # Preserve actual app/test output metadata and hashes even on native failure.
+            # Retain failure APK metadata/hashes.
             if [[ -d apps/android/app/build/outputs/apk ]]; then
               find apps/android/app/build/outputs/apk -type f -name '*.apk' -print0 | sort -z | xargs -0 -r sha256sum > "$trust_evidence/APK.sha256" || status=1
               while IFS= read -r -d '' apk_output; do
@@ -6971,7 +6921,7 @@ jobs:
               status=1
             fi
             /usr/bin/timeout --signal=TERM --kill-after=2s 10s adb -s emulator-5554 emu kill >"$trust_evidence/emulator-disposal.txt" 2>&1 || status=1
-            # The owned timeout forwards TERM, then kills its emulator group after 5s.
+            # TERM; timeout kills its group after 5s.
             kill -TERM "$emulator_pid" 2>/dev/null || true
             wait "$emulator_pid" || true
             if /usr/bin/timeout --signal=TERM --kill-after=2s 15s avdmanager delete avd --name openclaw-access >>"$trust_evidence/emulator-disposal.txt" 2>&1; then
@@ -6983,7 +6933,7 @@ jobs:
             exit "$status"
           }
           trap cleanup EXIT
-          # Bound boot, root reconnection and trust admission together; cleanup stays in the parent.
+          # Bound boot/root/trust; parent cleanup.
           /usr/bin/timeout --signal=TERM --kill-after=2s 180s bash -c '
             set -euo pipefail
             trust_evidence=$1
@@ -6992,7 +6942,7 @@ jobs:
             until [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done
             test "$(adb -s emulator-5554 shell getconf PAGE_SIZE | tr -d "\r")" = "$EXPECTED_PAGE_SIZE"
             if [[ "$EXPECTED_PAGE_SIZE" == 16384 ]]; then
-              # ps16k simulates 16 KiB pages on x86_64; compat mode must not hide loader failures.
+              # ps16k: expose x86_64 loader failures.
               adb -s emulator-5554 shell setprop bionic.linker.16kb.app_compat.enabled false
               adb -s emulator-5554 shell setprop pm.16kb.app_compat.disabled true
               test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d "\r")" = false
@@ -7051,7 +7001,6 @@ jobs:
           PY
           )"
           "$ANDROID_SDK_ROOT/build-tools/37.0.0/zipalign" -c -P 16 -v 4 "$apk"
-
       - name: Upload Access native test reports
         if: ${{ !cancelled() }}
         uses: *upload_artifact_v7
@@ -7064,7 +7013,6 @@ jobs:
             ${{ runner.temp }}/access-emulator.log
           if-no-files-found: error
           retention-days: 14
-
   published-driver-update:
     permissions:
       contents: read
