@@ -3368,7 +3368,6 @@
 ["src/commands/doctor-auth.shared-health.test.ts","../agents/cli-credentials.js","bda2896037e4db33a9fe7044ae35b2b96c804dbcab0b78eff9d586ab4a7100bb",1]
 ["src/commands/doctor-backup-scratch.test.ts","../../packages/terminal-core/src/note.js","f5864cdeb859b12765491a2066778d233cade85ee0bc133481fa4580397b105b",1]
 ["src/commands/doctor-backup-scratch.test.ts","../state/backup-run-records.js","feb738a9aed71914210163f39fe22d2af176d14327367a0fd46f0146ab1a45d5",1]
-["src/commands/doctor-browser.facade.test.ts","../plugin-sdk/facade-loader.js","89624e65c05e1540f4edf426d62bb0933161416e36340e4e061dc0a79900bad9",1]
 ["src/commands/doctor-bun-cli-launcher.test.ts","../../packages/terminal-core/src/note.js","336fc791de8ce9b19eba2b7bc282f83250c9743ee50617878e94ae793b1f1113",1]
 ["src/commands/doctor-bun-cli-launcher.test.ts","./onboard-helpers.js","ed6f5a9370cf07ee6c03c34b04609666e431bb8e78408b1d4a588865af720eab",1]
 ["src/commands/doctor-config-analysis.test.ts","../../packages/terminal-core/src/note.js","f7728f47733c668d94d0312020d268eabdce30b0460d3672b9c074c38a5deb15",1]
