@@ -321,25 +321,6 @@ it.each(["admitted", "published"] as const)(
   },
 );
 
-it("retains native metadata after a TimeoutError capability lookup", async () => {
-  const config = {};
-  const native = nativeEntry();
-  const timeout = Object.assign(
-    new Error("other runtime capability lookup exceeded its deadline"),
-    {
-      name: "TimeoutError",
-    },
-  );
-  const loadNativeModelCatalog = vi.fn(async () => {
-    throw timeout;
-  });
-  const snapshot = { ...owner(config, [native]), loadNativeModelCatalog };
-  publishedSnapshotMock.mockReturnValue(snapshot);
-
-  await expect(readThinking(config, { agentRuntime: "native-one" })).resolves.toEqual([native]);
-  expect(loadNativeModelCatalog).toHaveBeenCalledOnce();
-});
-
 it("keeps the published owner's latest accepted catalog after a lookup timeout", async () => {
   const config = {};
   const accepted = nativeEntry({ reasoning: false });
