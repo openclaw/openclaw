@@ -2,12 +2,22 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyCliProfileEnv, parseCliProfileArgs } from "../cli/profile.js";
+import { resolveExecutablePath } from "../infra/executable-path.js";
 import { installGatewayTerminalCli } from "./terminal-cli.js";
 
+vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/atomic")>();
+  return { ...actual, replaceFileAtomic: vi.fn(actual.replaceFileAtomic) };
+});
+
 const roots: string[] = [];
+const fishExecutable = resolveExecutablePath("fish");
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.mocked(replaceFileAtomic).mockReset();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
@@ -16,12 +26,20 @@ async function fixture(profile = "default", shell = "/bin/bash") {
   roots.push(root);
   const home = path.join(root, "home with '$ characters");
   await fs.mkdir(home);
-  const entrypoint = path.join(root, "cli with ' quote.mjs");
+  const packageRoot = path.join(root, "package with ' quote");
+  await fs.mkdir(packageRoot);
+  await fs.writeFile(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+  const entrypoint = path.join(packageRoot, "openclaw.mjs");
   await fs.writeFile(
     entrypoint,
     'console.log(JSON.stringify({profile: process.env.OPENCLAW_PROFILE, args: process.argv.slice(2)})); process.exitCode = process.argv.includes("fail") ? 23 : 0;',
   );
-  const env = { HOME: home, SHELL: shell, PATH: "/usr/bin:/bin", OPENCLAW_PROFILE: profile };
+  const env: NodeJS.ProcessEnv = {
+    HOME: home,
+    SHELL: shell,
+    PATH: "/usr/bin:/bin",
+    OPENCLAW_PROFILE: profile,
+  };
   const warnings: string[] = [];
   const install = (selected = profile, entry = entrypoint) =>
     installGatewayTerminalCli({
@@ -40,6 +58,207 @@ async function fixture(profile = "default", shell = "/bin/bash") {
 }
 
 describe.skipIf(process.platform === "win32")("Gateway terminal installation", () => {
+  it.each([
+    ["default", ".local/bin"],
+    ["default", "npm/bin"],
+    ["new", ".local/bin"],
+    ["new", "npm/bin"],
+  ])("keeps the selected operator command for %s in %s", async (profile, directory) => {
+    const f = await fixture(profile);
+    const bin = path.join(f.home, directory);
+    await fs.mkdir(bin, { recursive: true });
+    const operator = path.join(bin, "openclaw");
+    await fs.writeFile(operator, "#!/bin/sh\necho operator\n", { mode: 0o755 });
+    f.env.PATH = bin + ":/usr/bin:/bin";
+    await f.install();
+    const output = execFileSync("/bin/bash", ["-ic", "openclaw qr"], {
+      env: f.env,
+      encoding: "utf8",
+    });
+    expect(output.trim()).toBe("operator");
+    expect(f.warnings.join("\n")).toContain("Terminal default unchanged");
+    await expect(fs.lstat(path.join(f.home, ".openclaw/bin/openclaw"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("does not adopt an opaque service wrapper that recursively invokes openclaw", async () => {
+    const f = await fixture();
+    const wrapper = path.join(f.root, "service-wrapper");
+    await fs.writeFile(
+      wrapper,
+      '#!/bin/sh\n[ -z "$WRAPPED" ] || exit 44\nexport WRAPPED=1\nexec openclaw "$@"\n',
+      { mode: 0o755 },
+    );
+    await installGatewayTerminalCli({
+      env: f.env,
+      command: { programArguments: [wrapper, "gateway"] },
+      warn: (m) => f.warnings.push(m),
+    });
+    await expect(fs.lstat(path.join(f.home, ".openclaw/bin/openclaw"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(f.warnings.join("\n")).toContain("no reusable CLI entrypoint");
+  });
+
+  it("does not let a fresh default installation claim an offline named selection", async () => {
+    const f = await fixture();
+    const other = path.join(f.home, ".openclaw-first");
+    await fs.mkdir(other);
+    await fs.writeFile(path.join(other, "openclaw.json"), "{}");
+    await f.install();
+    await expect(fs.lstat(path.join(f.home, ".openclaw/bin/openclaw"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(f.warnings.join("\n")).toContain("another profile is configured");
+  });
+
+  it.skipIf(process.platform !== "darwin").each(["-ic", "-lic"])(
+    "survives normal zsh PATH reset in %s startup without shadowing later operator setup",
+    async (mode) => {
+      const f = await fixture("work", "/bin/zsh");
+      await fs.writeFile(path.join(f.home, ".zshrc"), "export PATH=/usr/bin:/bin\n");
+      await fs.writeFile(path.join(f.home, ".zprofile"), "export PATH=/usr/bin:/bin\n");
+      await f.install();
+      const run = () =>
+        execFileSync("/bin/zsh", [mode, "openclaw qr"], {
+          env: { HOME: f.home, PATH: "/usr/bin:/bin" },
+          encoding: "utf8",
+        });
+      expect(JSON.parse(run())).toEqual({ profile: "work", args: ["qr"] });
+      const bin = path.join(f.home, "nvm/bin");
+      await fs.mkdir(bin, { recursive: true });
+      await fs.writeFile(path.join(bin, "openclaw"), "#!/bin/sh\necho version-manager\n", {
+        mode: 0o755,
+      });
+      await fs.appendFile(path.join(f.home, ".zshrc"), '\nexport PATH="$HOME/nvm/bin:$PATH"\n');
+      await f.install();
+      expect(run().trim()).toBe("version-manager");
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "uses explicitly configured external ZDOTDIR for real zsh startup",
+    async () => {
+      const f = await fixture("zdot", "/bin/zsh");
+      const directory = path.join(f.root, "zsh config");
+      await fs.mkdir(directory);
+      f.env.ZDOTDIR = directory;
+      await f.install();
+      const output = execFileSync("/bin/zsh", ["-ic", "openclaw qr"], {
+        env: { HOME: f.home, PATH: "/usr/bin:/bin", ZDOTDIR: directory },
+        encoding: "utf8",
+      });
+      expect(JSON.parse(output)).toEqual({ profile: "zdot", args: ["qr"] });
+      await expect(fs.lstat(path.join(f.home, ".zshrc"))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
+  it("does not follow a launcher replaced by an operator symlink after inspection", async () => {
+    const f = await fixture();
+    await f.install();
+    const launcher = path.join(f.home, ".openclaw/bin/openclaw");
+    const canary = path.join(f.root, "operator");
+    await fs.writeFile(canary, "operator data", { mode: 0o600 });
+    const { replaceFileAtomic: replace } = await vi.importActual<
+      typeof import("@openclaw/fs-safe/atomic")
+    >("@openclaw/fs-safe/atomic");
+    let replaced = false;
+    vi.mocked(replaceFileAtomic).mockImplementation((options) =>
+      replace({
+        ...options,
+        beforeRename: async () => {
+          if (options.filePath === launcher && !replaced) {
+            replaced = true;
+            await fs.unlink(launcher);
+            await fs.symlink(canary, launcher);
+          }
+        },
+      }),
+    );
+    const upgrade = path.join(path.dirname(f.entrypoint), "dist/index.js");
+    await fs.mkdir(path.dirname(upgrade));
+    await fs.copyFile(f.entrypoint, upgrade);
+    await f.install("default", upgrade);
+    expect(replaced).toBe(true);
+    expect(await fs.readFile(canary, "utf8")).toBe("operator data");
+    expect((await fs.stat(canary)).mode & 0o777).toBe(0o600);
+    expect(f.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("preserves a concurrent operator shell edit at atomic publication", async () => {
+    const f = await fixture();
+    const file = path.join(f.home, ".bashrc");
+    await fs.writeFile(file, "# initial settings\n", { mode: 0o600 });
+    const { replaceFileAtomic: replace } = await vi.importActual<
+      typeof import("@openclaw/fs-safe/atomic")
+    >("@openclaw/fs-safe/atomic");
+    let edited = false;
+    vi.mocked(replaceFileAtomic).mockImplementation((options) =>
+      replace({
+        ...options,
+        beforeRename: async () => {
+          if (options.filePath === file && !edited) {
+            edited = true;
+            await fs.appendFile(file, "# concurrent operator edit\n");
+          }
+        },
+      }),
+    );
+    await f.install();
+    expect(edited).toBe(true);
+    expect(await fs.readFile(file, "utf8")).toBe(
+      "# initial settings\n# concurrent operator edit\n",
+    );
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+    expect(f.warnings.join("\n")).toContain("Shell PATH setup skipped");
+  });
+
+  it("makes the CLI available after a real interactive Bash PATH reset", async () => {
+    const f = await fixture("bash");
+    await fs.writeFile(path.join(f.home, ".bashrc"), "export PATH=/usr/bin:/bin\n");
+    await f.install();
+    const output = execFileSync("/bin/bash", ["-ic", "openclaw qr"], {
+      env: { HOME: f.home, PATH: "/usr/bin:/bin" },
+      encoding: "utf8",
+    });
+    expect(JSON.parse(output)).toEqual({ profile: "bash", args: ["qr"] });
+  });
+
+  it.skipIf(!fishExecutable).each([false, true])(
+    "discovers the CLI after real fish startup with custom config=%s",
+    async (external) => {
+      if (!fishExecutable) {
+        throw new Error("fish is unavailable");
+      }
+      const f = await fixture("fish", fishExecutable);
+      const configRoot = external
+        ? path.join(f.root, "external config")
+        : path.join(f.home, ".config");
+      if (external) {
+        f.env.XDG_CONFIG_HOME = configRoot;
+      }
+      await fs.mkdir(path.join(configRoot, "fish"), { recursive: true });
+      const file = path.join(configRoot, "fish/config.fish");
+      await fs.writeFile(file, "set -gx PATH /usr/bin /bin\n");
+      await f.install();
+      const env = { HOME: f.home, PATH: "/usr/bin:/bin", XDG_CONFIG_HOME: configRoot };
+      const output = execFileSync(fishExecutable, ["-ic", "openclaw qr"], {
+        env,
+        encoding: "utf8",
+      });
+      expect(JSON.parse(output)).toEqual({ profile: "fish", args: ["qr"] });
+      const bin = path.join(f.home, "operator/bin");
+      await fs.mkdir(bin, { recursive: true });
+      await fs.writeFile(path.join(bin, "openclaw"), "#!/bin/sh\necho operator\n", { mode: 0o755 });
+      await fs.appendFile(file, '\nset -gx PATH "$HOME/operator/bin" $PATH\n');
+      await f.install();
+      expect(
+        execFileSync(fishExecutable, ["-ic", "openclaw qr"], { env, encoding: "utf8" }).trim(),
+      ).toBe("operator");
+    },
+  );
+
   it.each(["default", "work"])(
     "makes a fresh %s installation discoverable through Bash startup files",
     async (profile) => {
@@ -95,10 +314,14 @@ describe.skipIf(process.platform === "win32")("Gateway terminal installation", (
   it("keeps the first named default across later installs and upgrades its owned launcher", async () => {
     const f = await fixture("first");
     await f.install();
+    await fs.chmod(path.join(f.home, ".openclaw-first/bin/openclaw"), 0o644);
+    await f.install();
+    expect(f.run().profile).toBe("first");
     await f.install("second");
     await f.install("default");
     expect(f.run().profile).toBe("first");
-    const next = path.join(f.root, "new-cli.mjs");
+    const next = path.join(path.dirname(f.entrypoint), "dist/entry.js");
+    await fs.mkdir(path.dirname(next));
     await fs.writeFile(
       next,
       'console.log(JSON.stringify({profile: process.env.OPENCLAW_PROFILE, args: ["upgraded"]}));',
