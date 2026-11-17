@@ -26,6 +26,22 @@ const STABLE_114_D843_CI_FAILURES = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  {
+    targetVersion: "2026.10.33",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized all performance/Kova failures for " +
+      "2026.10.33 on 2026-11-17 at 02:49 UTC after reviewing FRV 43995308737/1, " +
+      "child 43995795283/1 and the retained 2026.11.4 comparison. This accepts " +
+      "the observed RSS, CPU, event-loop and pre-provider latency failures, " +
+      "including higher many-plugin CPU; lower Gateway RSS is not a claim of " +
+      "overall non-regression. This release-wide grant covers the named terminal " +
+      "failed Kova job across candidates and attempts. Preserve raw results and " +
+      "required execution; no threshold changes or not-run exemption. Other " +
+      "jobs, missing or cancelled evidence, native tests, integrity, install/update " +
+      "and publication gates remain blocking.",
+  },
   ...["ios-screenshots-iphone", "ios-screenshots-ipad-13"].map((jobName) => ({
     targetVersion: "2026.10.33",
     childRole: "normalCi",
