@@ -18,6 +18,40 @@ enum OpenClawSidebarPalette {
             : UIColor(white: 0, alpha: 0.08)
     })
 
+    /// Portable theme tokens for the embedded conversation, resolved from the
+    /// same native owners as the sidebar, never from a separate web preference.
+    @MainActor
+    static var conversationTheme: [String: [String: String]] {
+        ["light": self.conversationPalette(.light), "dark": self.conversationPalette(.dark)]
+    }
+
+    @MainActor
+    private static func conversationPalette(_ style: UIUserInterfaceStyle) -> [String: String] {
+        let traits = UITraitCollection(userInterfaceStyle: style)
+        func css(_ color: Color) -> String {
+            let resolved = UIColor(color).resolvedColor(with: traits)
+            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+            resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+            return String(
+                format: "#%02x%02x%02x%02x",
+                Int((red * 255).rounded()),
+                Int((green * 255).rounded()),
+                Int((blue * 255).rounded()),
+                Int((alpha * 255).rounded()))
+        }
+        return [
+            "background": css(self.background), "foreground": css(self.text),
+            "card": css(self.elevated), "card-foreground": css(self.textStrong),
+            "popover": css(self.elevated), "popover-foreground": css(self.textStrong),
+            "primary": css(OpenClawBrand.accentFill), "primary-foreground": css(.white),
+            "secondary": css(self.selection), "secondary-foreground": css(self.text),
+            "muted": css(self.selection), "muted-foreground": css(self.muted),
+            "accent": css(self.accent), "accent-foreground": css(self.background),
+            "destructive": css(OpenClawBrand.danger), "destructive-foreground": css(self.background),
+            "border": css(self.hairline), "input": css(self.selection), "ring": css(self.accent),
+        ]
+    }
+
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
         Color(uiColor: UIColor { traits in
             let value = traits.userInterfaceStyle == .dark ? dark : light

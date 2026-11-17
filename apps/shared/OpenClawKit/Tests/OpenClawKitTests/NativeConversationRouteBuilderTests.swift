@@ -13,6 +13,8 @@ struct NativeConversationRouteBuilderTests {
             NativeConversationRoute(sessionKey: "agent:work:notes", agentID: "work"))
         #expect(route != route.replacingSessionKey("main"))
         #expect(NativeConversationRoute(sessionKey: "global", agentID: " \n").agentID == nil)
+        #expect(NativeConversationRoute(sessionKey: "global", agentID: "  ") ==
+            NativeConversationRoute(sessionKey: "global", agentID: nil))
     }
 
     @Test(arguments: [
@@ -36,9 +38,13 @@ struct NativeConversationRouteBuilderTests {
 
     @Test(arguments: [
         (" main ", " Work ", "/chat/work"),
+        ("Main", "research", "/chat/research"),
         ("GLOBAL", "work", "/chat/work"),
         ("AGENT:WORK:Main", "ignored", "/chat/work"),
         ("agent:work:global", "main", "/chat/work/~key/global"),
+        ("agent:research:Global", "main", "/chat/research/~key/Global"),
+        ("AGENT:RESEARCH:GlObAl", "main", "/chat/research/~key/GlObAl"),
+        ("agent:research:global:notes", "main", "/chat/research/global/notes"),
         ("agent:work:deadbeef", "main", "/chat/work/~key/deadbeef"),
         ("notes", "work", "/chat/work/~key/notes"),
         ("agent:work:thread:child", "main", "/chat/work/thread/child"),
@@ -61,18 +67,25 @@ struct NativeConversationRouteBuilderTests {
         ])
     }
 
-    @Test func `private entry preserves draft bytes without requesting composer focus`() throws {
+    @Test(arguments: [
+        ("agent:work:notes", "/control/chat/work/~key/notes"),
+        ("agent:work:topic/+?#%", "/control/chat/work/~key/topic%2F%2B%3F%23%25"),
+    ])
+    func `private entry preserves exact sessions and rich drafts without requesting composer focus`(
+        sessionKey: String, expectedPath: String) throws
+    {
         let base = try #require(URL(string: "https://gateway.invalid/control/"))
         let draft = "C++ +, &, ?, #, %, and\na second line 🦞"
         let url = try #require(NativeConversationRoute.documentURL(
-            sessionKey: "agent:work:notes", agentID: nil, draft: draft, baseURL: base))
+            sessionKey: sessionKey, agentID: nil, draft: draft, baseURL: base))
         let entry = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
         let path = try #require(entry.queryItems?.first { $0.name == "path" }?.value)
         let destination = try #require(URLComponents(string: path))
         #expect(entry.queryItems?.count == 1)
-        #expect(destination.percentEncodedPath == "/control/chat/work/~key/notes")
+        #expect(destination.percentEncodedPath == expectedPath)
         #expect(destination.queryItems == [.init(name: "draft", value: draft)])
         #expect(path.contains("C%2B%2B%20%2B"))
+        #expect(!path.contains("__openclawComposerFocus"))
         #expect(destination.fragment == nil)
     }
 
