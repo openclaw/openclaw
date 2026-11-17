@@ -15,6 +15,7 @@ import {
   mergeStatusPluginHealthSnapshots,
 } from "./status-plugin-health.js";
 import type {
+  BlockedPluginHookRecord,
   ChannelPluginFailureRecord,
   PluginCompatibilityHealthNotice,
   PluginDiagnosticRecord,
@@ -40,6 +41,18 @@ function normalizeDiagnostic(diagnostic: PluginDiagnosticRecord): PluginDiagnost
     message: diagnostic.message,
     ...(diagnostic.pluginId ? { pluginId: diagnostic.pluginId } : {}),
     ...(diagnostic.code ? { code: diagnostic.code } : {}),
+  };
+}
+
+function normalizeBlockedHook(
+  blocked: import("../plugins/registry-types.js").PluginRegistry["blockedHooks"][number],
+): BlockedPluginHookRecord {
+  return {
+    pluginId: blocked.pluginId,
+    hookName: blocked.hookName,
+    reason: blocked.reason,
+    severity: blocked.severity,
+    message: blocked.message,
   };
 }
 
@@ -142,6 +155,7 @@ export async function collectRuntimePluginHealthSnapshot(): Promise<StatusPlugin
     channelPluginFailures: collectChannelPluginFailures({
       diagnostics,
     }),
+    blockedHooks: (registry?.blockedHooks ?? []).map(normalizeBlockedHook),
     runtimeLoadedPluginIds,
   };
 }

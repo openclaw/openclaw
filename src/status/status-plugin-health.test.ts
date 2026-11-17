@@ -3,6 +3,7 @@ import {
   formatCompactPluginHealthLine as compact,
   formatDetailedPluginHealth as detailed,
   mergeStatusPluginHealthSnapshots as merge,
+  type BlockedPluginHookRecord,
   type PluginHealthRecord,
   type StatusPluginHealthSnapshot,
 } from "./status-plugin-health.js";
@@ -181,6 +182,122 @@ it.each([true, false])(
     ).toBe(matched ? "⚠️ Plugins: 1 channel plugin failure" : "⚠️ Plugins: 1 diagnostic error");
   },
 );
+
+const blockedHook = (patch: Partial<BlockedPluginHookRecord> = {}): BlockedPluginHookRecord => ({
+  pluginId: "openclaw-beads",
+  hookName: "before_prompt_build",
+  reason: "conversation-access-missing",
+  severity: "error",
+  message: "was NOT registered",
+  ...patch,
+});
+
+it("counts implicitly blocked hooks in the compact line but not operator-chosen ones", () => {
+  expect(compact(snapshot({ blockedHooks: [blockedHook()] }))).toBe("⚠️ Plugins: 1 blocked hook");
+
+  // A hook the operator deliberately denied is steady state, not a problem.
+  expect(
+    compact(
+      snapshot({
+        blockedHooks: [
+          blockedHook({
+            pluginId: "chatty-plugin",
+            reason: "prompt-injection-denied",
+            severity: "warn",
+            message: "blocked by plugins.entries.chatty-plugin.hooks.allowPromptModification=false",
+          }),
+        ],
+      }),
+    ),
+  ).toBeUndefined();
+});
+
+it("lists blocked hooks in detailed health without double-reporting their diagnostic", () => {
+  const message =
+    'typed hook "before_prompt_build" from non-bundled plugin "openclaw-beads" was NOT registered: ' +
+    "set plugins.entries.openclaw-beads.hooks.allowConversationAccess to true";
+  const text = detail({
+    diagnostics: [
+      { level: "error", pluginId: "openclaw-beads", code: "hook-registration-blocked", message },
+    ],
+    blockedHooks: [blockedHook({ message })],
+  });
+
+  expect(text).toContain("Blocked plugin hooks: 1");
+  expect(text).toContain(
+    `- ERROR openclaw-beads before_prompt_build [conversation-access-missing]: ${message}`,
+  );
+  // The diagnostic is the same fact; it must not also appear in Diagnostics.
+  expect(text).not.toContain("Diagnostics:");
+  expect(text).toContain("⚠️ Plugins: 1 blocked hook");
+});
+
+it("still reports a hook-blocked diagnostic that has no matching blocked-hook record", () => {
+  const text = detail({
+    diagnostics: [
+      {
+        level: "error",
+        pluginId: "ghost-plugin",
+        code: "hook-registration-blocked",
+        message: "orphaned blocked-hook diagnostic",
+      },
+    ],
+  });
+
+  expect(text).toContain("Diagnostics: 1 errors · 0 warnings");
+  expect(text).toContain("- ERROR ghost-plugin: orphaned blocked-hook diagnostic");
+  expect(text).not.toContain("Blocked plugin hooks:");
+});
+
+it("caps the blocked hook list and reports the overflow", () => {
+  const text = detail({
+    blockedHooks: Array.from({ length: 10 }, (_unused, index) =>
+      blockedHook({
+        pluginId: `plugin-${index}`,
+        hookName: "agent_end",
+        message: `blocked ${index}`,
+      }),
+    ),
+  });
+
+  expect(text).toContain("Blocked plugin hooks: 10");
+  expect(text).toContain("- +2 more blocked hooks");
+});
+
+it("keeps repeat registrations of one hook distinct through the merge", () => {
+  // A plugin may call api.on() for the same hook several times (distinct
+  // registrationId, priority or trigger eligibility). When the policy refuses
+  // them, every one of those handlers is dead, so plugin+hook+reason is not a
+  // unique key. Deduping on it made the merged detailed view under-count them
+  // while compact status read the raw runtime records and counted them all.
+  const blocked = blockedHook({
+    pluginId: "repeat-hooks",
+    hookName: "before_agent_reply",
+    message: 'typed hook "before_agent_reply" was NOT registered',
+  });
+  const runtime = snapshot({ blockedHooks: [blocked, blocked] });
+
+  const merged = merge(snapshot(), runtime);
+
+  expect(merged.blockedHooks).toStrictEqual([blocked, blocked]);
+  // The two surfaces must report the same number of dead handlers.
+  expect(compact(merged)).toBe("⚠️ Plugins: 2 blocked hooks");
+  expect(compact(runtime)).toBe(compact(merged));
+  expect(detailed(merged)).toContain("Blocked plugin hooks: 2");
+});
+
+it("does not double-count a single blocked hook through the merge", () => {
+  // The merge concatenates both sides; the installed disk scan never attempts
+  // registration, so a lone runtime refusal must stay exactly one row.
+  const merged = merge(
+    snapshot(),
+    snapshot({ blockedHooks: [blockedHook({ pluginId: "single-hook" })] }),
+  );
+
+  expect(merged.blockedHooks).toHaveLength(1);
+  expect(compact(merged)).toBe("⚠️ Plugins: 1 blocked hook");
+  expect(detailed(merged)).toContain("Blocked plugin hooks: 1");
+});
 
 it("uses installed loaded status only without runtime provenance", () => {
   const text = detail({ plugins: [plugin("a"), plugin("b")] });

@@ -58,6 +58,7 @@ export type PluginDiagnosticCode =
   | "configured-plugin-path-unavailable"
   | "dashboard-declaration-invalid"
   | "explicit-config-plugin-selection"
+  | "hook-registration-blocked"
   | "plugin-state-migration"
   | "plugin-source-snapshot-invalid"
   | "plugin-verification"

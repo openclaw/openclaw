@@ -263,6 +263,35 @@ describe("runtime plugin health snapshot", () => {
     }),
   );
 
+  it("projects blocked hook registrations from the active runtime registry", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.blockedHooks.push({
+      pluginId: "openclaw-beads",
+      hookName: "before_prompt_build",
+      reason: "conversation-access-missing",
+      severity: "error",
+      configPath: "plugins.entries.openclaw-beads.hooks.allowConversationAccess",
+      message: 'typed hook "before_prompt_build" was NOT registered',
+      source: "/tmp/openclaw-beads/index.js",
+    });
+    activate(registry, "openclaw-beads");
+
+    // `source` is a host path; it stays out of the chat-facing snapshot.
+    expect((await collectRuntime()).blockedHooks).toEqual([
+      {
+        pluginId: "openclaw-beads",
+        hookName: "before_prompt_build",
+        reason: "conversation-access-missing",
+        severity: "error",
+        message: 'typed hook "before_prompt_build" was NOT registered',
+      },
+    ]);
+  });
+
+  it("reports no blocked hooks when there is no active runtime registry", async () => {
+    expect((await collectRuntime()).blockedHooks).toEqual([]);
+  });
+
   it("does not inspect configured channel plugins for compact runtime health", async () => {
     const registry = createEmptyPluginRegistry();
     registry.diagnostics.push({

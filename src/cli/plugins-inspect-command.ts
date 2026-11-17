@@ -4,6 +4,7 @@ import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { isBlockedHookDiagnosticReported } from "../plugins/blocked-hook-diagnostics.js";
 import { normalizePluginId } from "../plugins/config-state.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createInstalledPluginOwnershipResolver } from "../plugins/installed-plugin-package-ownership.js";
@@ -317,6 +318,14 @@ export async function runPluginsInspectCommand(
         "Custom hooks",
         inspect.customHooks.map((entry) => `${entry.name}: ${entry.events.join(", ")}`),
       );
+      // Refused registrations. api.on() returns void, so this section is the only
+      // way the plugin's owner can see that a handler never went live.
+      appendSection(
+        "Blocked hooks",
+        inspect.blockedHooks.map(
+          (entry) => `${entry.severity.toUpperCase()} ${entry.hookName}: ${entry.message}`,
+        ),
+      );
       appendSection(
         "Tools",
         inspect.tools.map((entry) => {
@@ -366,7 +375,12 @@ export async function runPluginsInspectCommand(
       appendSection("Policy", policyLines);
       appendSection(
         "Diagnostics",
-        inspect.diagnostics.map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
+        // The Blocked hooks section above already reports each refusal with its hook
+        // name and config key, so repeating the diagnostic copy here only doubles the
+        // text. A refusal diagnostic with no matching record is still shown.
+        inspect.diagnostics
+          .filter((entry) => !isBlockedHookDiagnosticReported(entry, inspect.blockedHooks))
+          .map((entry) => `${entry.level.toUpperCase()}: ${entry.message}`),
       );
       if (install) {
         const installLines = [`Source: ${install.source}`];
