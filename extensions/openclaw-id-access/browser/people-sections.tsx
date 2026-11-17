@@ -195,6 +195,7 @@ function MemberRow(props: {
   onRemove: (member: Member) => void;
   error?: PeopleOperationError | null;
   readOnly?: boolean;
+  selectedDevice?: string;
 }) {
   const [confirming, setConfirming] = createSignal(false);
   const [editing, setEditing] = createSignal(false);
@@ -271,6 +272,9 @@ function MemberRow(props: {
           >
             Remove
           </button>
+        </Show>
+        <Show when={props.member.recoveryKit}>
+          <span class="chip ocid-access__kit-badge">Recovery kit saved</span>
         </Show>
         <span class="chip">{roleName(props.member.role)}</span>
       </div>
@@ -357,6 +361,7 @@ function MemberRow(props: {
         readOnly={props.readOnly}
         nowMs={props.nowMs}
         onRemove={props.onRemoveDevice}
+        selectedDevice={props.selectedDevice}
       />
       <div class="ocid-access__row-error">
         <OperationError
@@ -369,6 +374,9 @@ function MemberRow(props: {
 
 /** Members: the owner, each member with devices and activity, and open invites. */
 export function Members(props: {
+  selectedMember?: string;
+  selectedDevice?: string;
+  navigation: ControlUiHost["navigation"];
   motion: PeopleMotion;
   members: Member[];
   components: ControlUiHost["components"];
@@ -386,14 +394,29 @@ export function Members(props: {
   error?: PeopleOperationError | null;
   readOnly?: boolean;
 }) {
-  const open = () => props.invites.filter((invite) => invite.status === "open");
+  const open = () =>
+    props.selectedMember ? [] : props.invites.filter((invite) => invite.status === "open");
+  const members = () =>
+    props.members.filter(
+      (member) => !props.selectedMember || member.accountId === props.selectedMember,
+    );
   return (
     <section class="ocid-access__section" aria-labelledby="ocid-access-members">
       <h3 id="ocid-access-members">Members</h3>
-      <p class="ocid-access__hint">
-        Who can open this claw. Members can approve their own additional devices. Only you can
-        invite or remove people.
-      </p>
+      <Show when={props.selectedMember}>
+        <a href={props.navigation.pageHref({ id: "access" })}>All members</a>
+        <Show when={members().length === 0}>
+          <p class="ocid-access__empty" role="status">
+            This member has been removed. Their devices no longer have access.
+          </p>
+        </Show>
+      </Show>
+      <Show when={!props.selectedMember}>
+        <p class="ocid-access__hint">
+          Who can open this claw. Members can approve their own additional devices. Only you can
+          invite or remove people.
+        </p>
+      </Show>
       <OperationError
         error={
           props.error?.target.startsWith("member:") &&
@@ -403,9 +426,13 @@ export function Members(props: {
         }
       />
       <For
-        each={props.invites.filter(
-          (invite) => invite.status === "approved" && invite.existingProfile?.fallbackReason,
-        )}
+        each={
+          props.selectedMember
+            ? []
+            : props.invites.filter(
+                (invite) => invite.status === "approved" && invite.existingProfile?.fallbackReason,
+              )
+        }
         keyed={(invite) => invite.inviteId}
       >
         {(invite) => (
@@ -414,62 +441,73 @@ export function Members(props: {
           </p>
         )}
       </For>
-      <ul class="ocid-access__list" ref={props.motion.group()}>
-        <li class="ocid-access__row ocid-access__row--owner">
-          <Avatar name="You" />
-          <div class="ocid-access__person">
-            <div class="ocid-access__title">You</div>
-            <div class="ocid-access__hint">{countDevices(props.ownerDevices.length)}</div>
-          </div>
-          <span class="chip">Owner</span>
-        </li>
-        <For each={open()} keyed={(invite) => invite.inviteId}>
-          {(invite) => (
-            <li class="ocid-access__row ocid-access__row--invited" ref={props.motion.enter()}>
-              <Avatar name={invite().label} />
+      <Show when={!props.selectedMember || members().length || props.notice}>
+        <ul class="ocid-access__list" ref={props.motion.group()}>
+          <Show when={!props.selectedMember}>
+            <li class="ocid-access__row ocid-access__row--owner">
+              <Avatar name="You" />
               <div class="ocid-access__person">
-                <div class="ocid-access__title">{invite().label}</div>
-                <div class="ocid-access__hint">
-                  Not accepted yet · expires {formatDay(invite().expiresAt, props.locale)}
-                </div>
+                <div class="ocid-access__title">You</div>
+                <div class="ocid-access__hint">{countDevices(props.ownerDevices.length)}</div>
               </div>
-              <span class="chip">{roleName(invite().role)}</span>
+              <span class="chip">Owner</span>
             </li>
-          )}
-        </For>
-        <For each={props.members} keyed={(member) => member.accountId}>
-          {(member, index) => (
-            <>
-              <Show when={props.notice && props.notice.index === index()}>
-                <li class="ocid-access__notice" role="status">
-                  {props.notice?.message}
-                </li>
-              </Show>
-              <MemberRow
-                motion={props.motion}
-                member={member()}
-                ownerDevices={props.ownerDevices}
-                onRemoveDevice={props.onRemoveDevice}
-                components={props.components}
-                roles={props.roles}
-                locale={props.locale}
-                onChangeRole={props.onChangeRole}
-                error={props.error}
-                readOnly={props.readOnly}
-                disabled={props.disabled}
-                nowMs={props.nowMs}
-                sessionTitle={props.sessionTitle}
-                onRemove={props.onRemove}
-              />
-            </>
-          )}
-        </For>
-        <Show when={props.notice && props.notice.index >= props.members.length}>
-          <li class="ocid-access__notice" role="status">
-            {props.notice?.message}
-          </li>
-        </Show>
-      </ul>
+          </Show>
+          <For each={open()} keyed={(invite) => invite.inviteId}>
+            {(invite) => (
+              <li class="ocid-access__row ocid-access__row--invited" ref={props.motion.enter()}>
+                <Avatar name={invite().label} />
+                <div class="ocid-access__person">
+                  <div class="ocid-access__title">{invite().label}</div>
+                  <div class="ocid-access__hint">
+                    Not accepted yet · expires {formatDay(invite().expiresAt, props.locale)}
+                  </div>
+                </div>
+                <span class="chip">{roleName(invite().role)}</span>
+              </li>
+            )}
+          </For>
+          <For each={members()} keyed={(member) => member.accountId}>
+            {(member) => (
+              <>
+                <Show
+                  when={
+                    props.notice &&
+                    props.notice.index ===
+                      props.members.findIndex((row) => row.accountId === member().accountId)
+                  }
+                >
+                  <li class="ocid-access__notice" role="status">
+                    {props.notice?.message}
+                  </li>
+                </Show>
+                <MemberRow
+                  motion={props.motion}
+                  member={member()}
+                  selectedDevice={props.selectedMember ? props.selectedDevice : undefined}
+                  ownerDevices={props.ownerDevices}
+                  onRemoveDevice={props.onRemoveDevice}
+                  components={props.components}
+                  roles={props.roles}
+                  locale={props.locale}
+                  onChangeRole={props.onChangeRole}
+                  error={props.error}
+                  readOnly={props.readOnly}
+                  disabled={props.disabled}
+                  nowMs={props.nowMs}
+                  sessionTitle={props.sessionTitle}
+                  onRemove={props.onRemove}
+                />
+              </>
+            )}
+          </For>
+          <Show when={props.notice && props.notice.index >= props.members.length}>
+            <li class="ocid-access__notice" role="status">
+              {props.notice?.message}
+            </li>
+          </Show>
+        </ul>
+      </Show>
     </section>
   );
 }

@@ -3,10 +3,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isEmbeddedStandaloneModule, resolveStandaloneNpmCliPath } from "../../cli-invocation.mjs";
-import {
-  pluginRuntimeProcessManifest,
-  runtimeProcessDependencyEntrypoints,
-} from "./runtime-process-manifest.ts";
+import { runtimeProcessDependencyEntrypoints } from "./runtime-process-dependency-manifest.ts";
+import { pluginRuntimeProcessManifest } from "./runtime-process-manifest.ts";
 
 /** Resolve dependency programs from the calling package, preserving its installed dependencies. */
 export function resolveRuntimeDependencyEntrypointUrl(

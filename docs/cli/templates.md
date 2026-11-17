@@ -18,7 +18,9 @@ Template again creates another agent.
 After Add, manage the agent with [agent commands](/cli/agents), its automations
 with [cron commands](/automation/cron-jobs), and shared dependencies with their
 ordinary plugin or MCP controls. There are no Template status, update, remove, or
-export commands. To use a newer release, Add it as another agent.
+export commands. To use a newer release, Add it as another agent. Agents enrolled
+by the earlier installed-Template lifecycle can be
+[released to ordinary agents](#agents-from-the-earlier-lifecycle).
 
 Enable **Templates** in **Settings → Labs** before adding one. On a headless installation, set
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
@@ -287,7 +289,23 @@ Native settings under `agent` include `groupChat`, `sandbox`, `tools`,
 `memory`, `heartbeat`, and `humanDelay`. The native `tools.profile` field
 selects a built-in tool policy; its grants are bounded and frozen when Add
 creates the agent. Host policy still constrains every grant. A Template cannot
-set a model, provider, credentials, or named delegate agents.
+configure a provider, credentials, or named delegate agents.
+
+Authors may optionally set `agent.model` to a preferred, fully qualified model:
+
+```yaml
+agent:
+  id: incident-triage
+  model: anthropic/claude-sonnet-4-5
+```
+
+At Add time, the receiving Gateway checks its ordinary model picker. If that
+exact model is available and permitted, the new agent uses it. Otherwise Add
+continues using the Gateway's default model; it does not install a provider,
+request credentials, or change the Gateway default. Omitting `model` keeps the
+existing default-inheritance behavior. Use `provider/model`, not a host-local
+alias or account pin. This is a one-time creation preference, not an ongoing
+Template-managed model selection; users can change the agent's model normally.
 
 ```yaml
 agent:
@@ -299,6 +317,10 @@ agent:
   sandbox: { mode: all, workspaceAccess: ro }
   memory: { search: { enabled: false } }
 ```
+
+Exec mode (`tools.exec`) and cross-provider messaging (`tools.message`) are
+operator decisions, so a Template cannot set them either; after Add, set them on
+the new agent with `openclaw config set agents.entries.<id>.tools.exec ...`.
 
 Set `enabled: false` on an automation to install it disabled; omitting the field
 keeps the enabled default. Jobs belong to the new agent. First-run instructions
@@ -521,6 +543,28 @@ Shared plugins, MCP servers, and other host-level integrations remain installed;
 remove them separately through their ordinary controls when no longer needed.
 There is no Template ownership record or reverse-install operation.
 
+## Agents from the earlier lifecycle
+
+Agents created by the earlier `claws add` or `claws migrate` commands still carry
+a Template consent record. OpenClaw refuses to run such an agent after its
+configuration changes, for example after
+`openclaw config set agents.entries.<id>.tools.exec '{"mode":"full"}'`, and the
+error names the agent. Undo the change, or release the agent with the Gateway
+stopped:
+
+```bash
+openclaw gateway stop
+openclaw templates release <agent-id>
+openclaw gateway start
+```
+
+Release shows the agent's tool settings and asks for confirmation; pass `--yes`
+in scripts. It removes the Template consent and ownership records only. The
+agent, its workspace, sessions, plugins, MCP servers, and automations stay, and
+from then on it is an ordinary agent whose settings you manage with
+`openclaw config` and the agent commands. Release refuses to run while the
+Gateway is running.
+
 ## Command reference
 
 | Command                              | Purpose                                           |
@@ -532,6 +576,7 @@ There is no Template ownership record or reverse-install operation.
 | `templates build [path] --out <tgz>` | Build a deterministic package artifact.           |
 | `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.         |
 | `templates add <source>`             | Create a new agent and install its requirements.  |
+| `templates release <agent-id>`       | Make an earlier Template-managed agent ordinary.  |
 
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.

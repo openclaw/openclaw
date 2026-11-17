@@ -69,7 +69,10 @@ import {
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import {
+  captureSessionRestartOperatorSource,
+  prepareSessionSystemTurnAuthority,
+} from "./session-system-turn-authority.js";
 
 const GATEWAY_RESTART_RESUME_TEXT =
   "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
@@ -85,6 +88,7 @@ type SessionIdentity = {
   sessionId?: string;
   needsResume: boolean;
   parked?: boolean;
+  operatorSource?: NonNullable<InternalSessionEntry["resumeAfterRestart"]>["operatorSource"];
 };
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
@@ -142,9 +146,13 @@ async function persistRunningSessions(
         sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
         needsResume: input.needsResume !== false,
         parked: input.parked,
+        operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
       });
     } else {
       existing.needsResume ||= !input.parked && input.needsResume !== false;
+      if (root.sessionKey === input.sessionKey && input.operatorSource) {
+        existing.operatorSource = input.operatorSource;
+      }
     }
   };
   for (const operation of activeSessionOperations()) {
@@ -165,6 +173,7 @@ async function persistRunningSessions(
       agentId: operation.agentId,
       sessionId: operation.sessionId,
       storePath: target?.physicalStorePath ?? target?.storeScope,
+      operatorSource: captureSessionRestartOperatorSource(operation),
       // Completed replies can retain execution custody only to settle workspace uploads.
       needsResume:
         (!operation.result || restartAborted) && !hasCommittedReplyOperationOutcome(operation),
@@ -249,6 +258,8 @@ async function persistRunningSessions(
                 resumeAfterRestart: {
                   queuedInputIds: queued.queuedInputIds,
                   queuedInputSources: queued.queuedInputSources,
+                  operatorSource:
+                    session.operatorSource ?? entry.resumeAfterRestart?.operatorSource,
                 },
               },
             });
@@ -596,6 +607,7 @@ async function resumeRestartStore(
               sessionKey,
               sessionId: entry.sessionId,
               preserveRecordedSource: true,
+              operatorSource: marker.operatorSource,
               assertCurrent: () => signal.throwIfAborted(),
             });
             admissionStage = "target";

@@ -43,10 +43,9 @@ itUnix.each(["before-recovery", "service-inspection"] as const)(
 );
 
 itUnix.each([
-  ...(["before", "prepared", "publishing", "after"] as const).map((interruptedUpdate) => ({
-    interruptedUpdate,
-    updaterStopped: undefined,
-  })),
+  ...(["before", "prepared", "exchanging", "publishing", "after"] as const).map(
+    (interruptedUpdate) => ({ interruptedUpdate, updaterStopped: undefined }),
+  ),
   { interruptedUpdate: "before" as const, updaterStopped: "legacy" as const },
   ...(["before", "publishing", "after"] as const).map((interruptedUpdate) => ({
     interruptedUpdate,

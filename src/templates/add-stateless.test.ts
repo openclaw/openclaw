@@ -800,6 +800,28 @@ describe("stateless Template Add", () => {
     expect(existsSync(path.join(plan.agent.workspace, "USER.md"))).toBe(true);
   });
 
+  it("removes the new agent from the config file when runtime activation fails", async () => {
+    const plan = await buildPlan();
+    const result = await apply(plan, {
+      commitConfig: undefined,
+      waitForAgentRuntime: async () => {
+        throw new Error("runtime unavailable");
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: false,
+      workspaceCreated: false,
+      error: { code: "add_failed", message: "runtime unavailable" },
+    });
+    const written = JSON.parse(await readFile(path.join(stateDir, "openclaw.json"), "utf8"));
+    expect(Object.keys(written.agents.entries)).toEqual(["main"]);
+    expect(existsSync(plan.agent.workspace)).toBe(false);
+    config = written;
+    expect((await buildPlan()).agent.finalId).toBe(plan.agent.finalId);
+  });
+
   it("does not touch shared requirements when agent publication fails", async () => {
     const plan = await buildPlan();
     plan.actions.push({

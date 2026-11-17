@@ -885,6 +885,49 @@ when they invoke the new version's `update finalize`. Older parents may omit the
 warning from their own summary; the finalizer prints it and records it in update
 history.
 
+#### Owed steps
+
+Some follow-up steps are not needed for the new version to run. When one of them
+fails and the update otherwise succeeds, the update records the step as owed,
+with its reason, prints it as a warning, and exits 0. In `--json` output the
+warning is an advisory step, and the `run` record lists the owed step. Two steps
+can be owed:
+
+- **Shell completion refresh** (`shell-completion`): the completion cache or the
+  shell profile could not be refreshed after a core update.
+- **Gateway service definition refresh** (`service-definition`): the service
+  installer failed and the update continued on the previous definition, or the
+  definition still points outside the updated installation after the refresh.
+
+Required database migrations, refused or invalid configuration, Doctor refusals,
+and Gateway readiness are never owed. They still block completion. A failed or
+rolled-back update owes nothing, including a step recorded before it failed.
+
+Later commands settle what is owed:
+
+- The next `openclaw update` refreshes shell completion again, including when the
+  core is already current, where it does not prompt. A shell profile that still
+  loads completion the slow way keeps the step owed until an interactive update or
+  `openclaw completion --install` upgrades it.
+- An update settles an owed service definition refresh only when it refreshes the
+  service definition itself, as a core update with a restart does. Otherwise the
+  step stays owed and the update repeats the warning.
+- `openclaw update repair` refreshes the completion cache when it runs
+  finalization. It does not run the service installer. After its Doctor
+  maintenance, it settles the service definition step when the managed definition
+  targets the active installation, or when no managed service remains. A repair
+  that finds a healthy Gateway and skips finalization leaves owed steps unchanged.
+
+A retry that fails keeps the step owed, warns again, and does not fail the
+command. The command that retried it then holds the step in its own run. Gateway
+startup does not retry owed steps. See
+[Status and history](/cli/update/status-and-history#update-status) to inspect them.
+
+An updater records and retries owed steps only when its own version supports
+them. On the first update to a version that does, the previously installed
+updater runs these steps and still drops a failed shell completion refresh
+without a record.
+
 <a id="durable-serving-recovery" />
 
 ### Recovery limits
@@ -1607,6 +1650,89 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
+### Replacing the package directory
+
+The swap publishes the staged package with or without a
+[package-publication journal](/install/updating#package-publication-recovery).
+On macOS and Linux both ways publish with one atomic exchange (`renameat2` with
+`RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP` on macOS), so the
+package path names a complete package at every instant, also when the updater,
+its managed helper, or the machine dies. The tools that make the call are the
+ones the release-directory conversion below uses. The `package-swap` step of the
+update result reads `published by an atomic exchange (<tool>)`.
+
+A POSIX npm update that prepared a journal records a publish intent, gives the
+candidate the name `previous` inside the journal's recovery directory, and
+exchanges that name with the package path. The new package is then installed and
+the old one is under `previous`, which is where every recovery reader expects it
+after a publication.
+
+An updater killed between those two steps leaves the old package serving and the
+candidate waiting under `previous`. The journal still records the publish
+intent, so the next update, and `openclaw update repair`, refuse with `Package
+publication is incomplete` until it is settled. Only the managed update helper,
+when it is still alive, or the journal's printed recovery command settles it:
+`repair` returns the candidate to its own name and aborts the publication, and
+`retire` then removes the recovery directory. That
+state is read only with the recorded intent and the recorded identities of all
+three directories. A reader that finds the layout without that intent, and the
+recovery code of earlier releases, refuses it by its identity check instead of
+taking the candidate for the previous package. An updater killed after the
+exchange leaves the new package installed, as a killed publication always did
+from that point. The exchange tool is a separate short-lived process: when the
+updater is killed while it runs, it can still complete the exchange a moment
+later, and recovery then reads the publication as published.
+
+Without a journal, the same exchange covers pnpm and Bun, where the directory is
+the manager's whole global project, and npm when the journal is not used, for
+example with `--reapply-local-overrides`, for a release replaced in place behind
+its package link, or for a target without delegated post-core execution. The
+staged
+directory first takes the backup name `.openclaw.package-backup-<pid>-<time>`
+beside the directory it replaces. One exchange then puts the new directory in
+place and the old one under the backup name.
+
+An updater killed after the staged directory took the backup name and before the
+exchange leaves the old package serving and the new, unpublished one under that
+backup name. Nothing needs recovery, and that directory must not be moved into
+place. A later update that swaps the package in place removes it with the other
+historical package backups once that update is verified. The exchange tool is a
+separate short-lived process: when the updater is killed while the tool runs,
+the tool can still complete the exchange a moment later, which leaves the new
+package in place and the old one under the backup name.
+
+When the exchange is unavailable (a system without the tool, a filesystem that
+refuses the call, or a stage on another filesystem), the update still installs
+with two moves, and the step reads `published by two moves (atomic exchange
+unavailable: <reason>)`. Between the two moves the package path is missing and
+`openclaw` cannot start.
+
+With a journal, the candidate returns to its own name, the old package moves to
+`previous`, and the candidate moves into place. If the updater dies between
+those moves, the managed update helper, when it is still alive, or the journal's
+printed recovery command, run with the recorded external runtime, finishes the
+publication. `openclaw update repair` cannot run while the package is missing.
+
+Without a journal, the staged directory returns to its stage, the old one moves
+to the backup name, and the staged one moves into place. If the updater dies
+between those moves, the old directory is intact under the backup name. Check
+the `version` in its
+`package.json` first (for pnpm and Bun, in the `openclaw` package inside it):
+the backup that holds the previous version is the one to restore. Rename it back
+to the directory it was taken from, the package path for npm or the global
+project directory for pnpm and Bun, then run the update again. No journal
+records this swap, and `openclaw update repair` cannot run while the package is
+missing.
+
+Windows, FreeBSD, an npm package link to a checkout, and a staged package that
+is itself a link to a checkout keep the two moves and do not attempt the
+exchange. The next update from that checkout restores a package link that a
+killed update left under the backup name.
+
+Rollback after a failed verification still restores with two moves. A restore
+killed between them leaves the package path missing and the previous package
+under the backup name; rename it back to the directory it was taken from.
+
 ### Release directories on OpenClaw-owned prefixes
 
 On macOS and Linux, the prefix that `install-cli.sh` creates
@@ -1626,13 +1752,31 @@ identity still match the record. A release that another updater rewrote in
 place is refused as a rollback target.
 
 The first update with this layout support converts a plain package directory:
-the existing directory moves into `releases/` as the previous release and a
-link takes its place, then the update switches the link to the new release.
-Between those two renames the package path is briefly missing. If the updater
-dies there, `openclaw` cannot start, the old package is intact under
-`releases/`, and a leftover `lib/node_modules/.openclaw.release-link-*` link
-names it. Rename that link onto `lib/node_modules/openclaw` to restore the
-installation, then run the update again.
+the existing directory becomes the previous release in `releases/` and a link
+takes its place, then the update switches the link to the new release. The
+conversion is one atomic exchange of the directory and a prepared link
+(`renameat2` with `RENAME_EXCHANGE` on Linux, `renamex_np` with `RENAME_SWAP`
+on macOS), so the package path names a complete package at every instant, also
+when the updater is killed. Node has no API for that call. The update makes it
+through Node's built-in FFI when the running Node has it (Node 26), and
+otherwise through `/usr/bin/osascript` on macOS or `/usr/bin/perl` on Linux
+x64 and arm64. The `package-swap` step of the update result says which one ran.
+
+An updater killed before the exchange leaves an unused directory in
+`releases/` that holds only a link naming nothing. It is not a release:
+`openclaw update status` does not list it, the next update converts the
+package directory again, and a successful update removes it once it is a day
+old.
+
+When no exchange is available (another platform or architecture without Node
+FFI, a system without that perl such as Alpine, or a filesystem that refuses
+the call), the update still converts the directory, with two renames: the
+directory moves into `releases/`, then a link takes its place. Between those
+two renames the package path is briefly missing. If the updater dies there,
+`openclaw` cannot start, the old package is intact under `releases/`, and a
+leftover `lib/node_modules/.openclaw.release-link-*` link names it. Rename that
+link onto `lib/node_modules/openclaw` to restore the installation, then run
+the update again.
 
 The release layout is an optimisation, and an update never fails because it
 cannot be used. When the new release's `openclaw` launcher is not the link the
@@ -1685,8 +1829,11 @@ prevents automatic rollback; restoring a link alone does not prove runtime safet
 ### Local packaged overrides
 
 Package updates preserve local `dist` edits in a recovery bundle before replacing
-the old package. Capture happens after service drain and the old-tree move, so
-edits made while the new version installs are included. The report names the bundle
+the old package. Capture happens after service drain, so edits made while the new
+version installs are included. A macOS or Linux swap of a package directory
+reads the old package at its path immediately before publication. A swap on
+another platform, or of a staged link, captures after the old-tree move, and a
+release switch reads the previous release in place. The report names the bundle
 under the selected state directory's `update-recovery/` directory. Keep it until
 you have checked the updated installation; removal is manual.
 

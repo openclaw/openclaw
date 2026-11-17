@@ -21,7 +21,7 @@ import * as updateDatabaseRestore from "../infra/update-database-restore.js";
 import * as updateRecoveryBaseline from "../infra/update-recovery-baseline-capture.js";
 import * as windowsPrivateDirectory from "../infra/windows-private-directory.js";
 import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
-import * as nativeResourceAuthority from "../process/spawn-broker/resource-authority.js";
+import * as resourceAuthority from "../process/spawn-broker/resource-authority.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -116,12 +116,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     }
     mocks.restartHealthTestControl.snapshot = undefined;
     vi.resetAllMocks();
-    // Service-platform doubles must not select the native broker's actual socket transport.
-    const createHostAuthority = nativeResourceAuthority.createNativeResourceAuthority;
-    vi.spyOn(nativeResourceAuthority, "createNativeResourceAuthority").mockImplementation(() => {
-      using _ = selectHostPlatform();
-      return createHostAuthority();
-    });
     // Metadata process isolation has its own tests; keep real file and sidecar sizes here.
     vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation(
       (files, { signal }) => stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
@@ -168,6 +162,12 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
         createFileSync(file, { mode: 0o600 }),
       );
     }
+    // Native broker transport follows the host, not the simulated service platform.
+    const createAuthority = resourceAuthority.createNativeResourceAuthority;
+    vi.spyOn(resourceAuthority, "createNativeResourceAuthority").mockImplementation(() => {
+      using _ = selectHostPlatform();
+      return createAuthority();
+    });
     // Service-platform doubles do not change host SQLite helpers or their Node resolution.
     const probeSqliteHeaders = sqliteHeaderProbe.probeSqliteDatabaseHeaders;
     vi.spyOn(sqliteHeaderProbe, "probeSqliteDatabaseHeaders").mockImplementation((...args) => {
