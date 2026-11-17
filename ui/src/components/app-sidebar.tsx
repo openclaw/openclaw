@@ -85,17 +85,6 @@ function AppSidebarContent(
   const owner = sidebarOwners.get(host) ?? new AppSidebarOwner(context, host);
   sidebarOwners.set(host, owner);
   owner.bindContext(context);
-  // A section page shows its own sidebar however it was reached: rail, link or history.
-  createEffect(
-    () => props.activeRouteId,
-    (route, previous) => {
-      const section = route ? sidebarSectionForRoute(route) : undefined;
-      if (section && route !== previous && owner.navigationView !== section) {
-        owner.navigationView = section;
-        owner.invalidate();
-      }
-    },
-  );
   owner.attention = createSessionAttention(
     context,
     owner.attentionQuestions,
@@ -337,8 +326,15 @@ function AppSidebarContent(
       narration()?.();
       narrationState();
       scroll.capture();
+      return props.activeRouteId;
     },
-    () => {
+    (route, previous) => {
+      // A section page shows its own sidebar however it was reached: rail, link or history.
+      const section = route ? sidebarSectionForRoute(route) : undefined;
+      if (section && route !== previous && owner.navigationView !== section) {
+        owner.navigationView = section;
+        owner.invalidate();
+      }
       owner.sessionData.refreshPresentation();
       owner.commitRender();
       if (owner.isConnected) {
