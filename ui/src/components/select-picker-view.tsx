@@ -47,6 +47,7 @@ export function PickerContent<Option extends PickerOption>(props: {
   let sheetScroll: { root: Element; top: number } | undefined;
   let hoverTimer: ReturnType<typeof setTimeout> | undefined;
   let hoverOpened = false;
+  let pointerHighlight = false;
   const [opened, setOpened] = createSignal(false);
   const [searching, setSearching] = createSignal(false);
   const [query, setQuery] = createSignal("");
@@ -147,7 +148,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     items: rows,
     value: () => props.params.value,
   });
-  const active = () => menu.read().highlightedValue;
+  const active = createMemo(() => menu.read().highlightedValue);
   const controls = () =>
     props.params.groupBy
       ? sections()
@@ -207,6 +208,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     if (event.isComposing || props.params.disabled) {
       return;
     }
+    pointerHighlight = false;
     const editing = event.target instanceof HTMLInputElement;
     if (!editing || event.key.startsWith("Arrow")) {
       setKeyboard(true);
@@ -303,18 +305,26 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   createEffect(
     () => [opened(), active(), query(), rows()] as const,
-    () => {
+    ([, highlighted]) => {
       if (!list) {
         return;
       }
-      const node = list.querySelector<HTMLElement>("[data-active]");
-      if (overlay.open && node) {
+      const node =
+        highlighted === null
+          ? null
+          : list.querySelector<HTMLElement>(`[data-value="${CSS.escape(highlighted)}"]`);
+      if (overlay.open && !pointerHighlight && node) {
         revealInScrollRegion(list, node);
       }
       scrollFade();
     },
   );
   onSettled(() => {
+    // Pointer highlights must not reveal a clipped row against manual scrolling.
+    const markPointerHighlight = () => {
+      pointerHighlight = true;
+    };
+    list.addEventListener("pointermove", markPointerHighlight, true);
     overlay.bindTrigger(trigger);
     overlay.setParent(findOverlayParent(trigger));
     if (!untrack(() => props.params.sheet)) {
@@ -333,6 +343,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     const stop = overlay.subscribe((next) => {
       setOpened(next);
       if (next) {
+        pointerHighlight = false;
         untrack(() => props.params.onOpen?.());
         const root = surface.offsetParent;
         if (untrack(() => props.params.sheet) && root) {
@@ -351,6 +362,7 @@ export function PickerContent<Option extends PickerOption>(props: {
       }
     });
     return () => {
+      list.removeEventListener("pointermove", markPointerHighlight, true);
       stop();
       anchor?.dispose();
     };

@@ -48,6 +48,55 @@ async function mountModel(
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it.each([390, 1280])(
+    "preserves a scrolled owner choice under pointer movement at %i pixels",
+    async (width) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(width, 844);
+      const host = mountHost("width:240px;margin:24px");
+      const onChange = vi.fn();
+      const owners = [
+        { value: "all", label: "All owners" },
+        ...Array.from({ length: 18 }, (_, index) => ({
+          value: `owner-${index}`,
+          label: `Teammate ${index + 1}`,
+        })),
+      ];
+      render(
+        renderPicker({
+          label: "Owners",
+          value: "all",
+          options: owners,
+          searchable: "always",
+          onChange,
+        }),
+        host,
+      );
+      const picker = host.querySelector<SelectPicker>("openclaw-select-picker")!;
+      await picker.updateComplete;
+      await page.getByRole("button", { name: "Owners: All owners", exact: true }).click();
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const settle = () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      await userEvent.hover(list, { position: { x: 30, y: 8 } });
+      await settle();
+      list.scrollTop = 180;
+      list.dispatchEvent(new Event("scroll"));
+      await settle();
+      expect(list.scrollTop, "idle after scrolling").toBe(180);
+      await userEvent.hover(list, { position: { x: 32, y: 9 } });
+      await settle();
+      expect(list.scrollTop, "pointer movement after scrolling").toBe(180);
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event("scroll"));
+      await settle();
+      await page.getByRole("option", { name: "Teammate 18", exact: true }).click();
+      expect(onChange).toHaveBeenCalledExactlyOnceWith("owner-17");
+    },
+  );
+
   it.each([
     { width: 1280, direction: "ltr" },
     { width: 390, direction: "ltr" },
