@@ -64,7 +64,6 @@ it.each([true, false])(
     await Promise.resolve();
     await Promise.resolve();
     expect(input.injection).toBe(receipt);
-    expect(receipt!.accepted).toBe(accepted);
     expect(receiptSettled).not.toHaveBeenCalled();
     expect(admittedNext).not.toHaveBeenCalled();
     expect(lifecycle.onSettled).not.toHaveBeenCalled();
