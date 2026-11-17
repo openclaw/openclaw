@@ -1,2 +1,0 @@
-# Status and Doctor show rejected or unavailable catalog discovery; list emits each diagnostic once.
-48
