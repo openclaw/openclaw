@@ -89,7 +89,9 @@ authentication attempts from that client are throttled with `429` and
 Configure trusted proxy attribution correctly before exposing a proxy route.
 
 The normal body limit is **256 KiB**, with a **30-second** body-read timeout.
-Gmail-path mappings receive a larger derived allowance described below. Generic
+A mapping's `maxBodyBytes` raises the limit for its own `match.path` (up to
+32 MiB), and Gmail-path mappings receive a larger derived allowance described
+below. Generic
 hooks parse JSON but do not require the JSON content-type header.
 
 | Endpoint             | Payload and result                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -209,6 +211,7 @@ hook path.
 | `model`                      | agent/model defaults        | Templated model override.                                                                                                                         |
 | `thinking`                   | agent/model defaults        | Templated thinking override.                                                                                                                      |
 | `timeoutSeconds`             | agent timeout               | Positive integer turn timeout.                                                                                                                    |
+| `maxBodyBytes`               | 256 KiB                     | Body limit for this `match.path`; positive integer up to 33554432 (32 MiB).                                                                       |
 | `allowUnsafeExternalContent` | `false`                     | Dangerous: disables agent external-content wrapping for this mapping. Gmail's global unsafe flag can also disable wrapping.                       |
 | `transform.module`           | unset                       | Safe relative JS/TS module under `transformsDir`; absolute, traversal, URL/drive forms, and symlink escapes are rejected.                         |
 | `transform.export`           | `default`, then `transform` | Named function export; an explicitly named export must exist.                                                                                     |
