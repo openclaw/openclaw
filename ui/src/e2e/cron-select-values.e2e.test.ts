@@ -144,6 +144,35 @@ suite.define(() => {
     );
   });
 
+  it("keeps a saved Custom expression editable when it becomes a simple schedule", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const job = gardenJob({
+        id: "garden-custom",
+        schedule: { kind: "cron", expr: "*/15 * * * *", tz: "America/New_York" },
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
+        methodResponses: {
+          ...cronResponses([job], "garden-custom-list"),
+          "cron.update": { ...job, schedule: { ...job.schedule, expr: "30 9 * * 1-5" } },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "cron");
+      await editAutomation(page, job.id);
+      const expression = page.locator("#cron-cron-expr");
+      expect(await expression.inputValue()).toBe("*/15 * * * *");
+      await expression.fill("30 9 * * 1-5");
+      expect(await expression.isVisible()).toBe(true);
+      expect(await expression.evaluate((element) => document.activeElement === element)).toBe(true);
+      await page.locator('[data-test-id="cron-submit"]').click();
+      const request = await gateway.waitForRequest("cron.update");
+      expect(request.params).toMatchObject({
+        id: job.id,
+        patch: { schedule: { kind: "cron", expr: "30 9 * * 1-5", tz: "America/New_York" } },
+      });
+    });
+  });
+
   it("shows the authoritative defaults in the create-form selects", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, {

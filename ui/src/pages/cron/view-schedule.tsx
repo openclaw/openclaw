@@ -115,16 +115,28 @@ export function ScheduleControls(props: CronProps) {
     jobId: string | undefined;
     mode: "custom" | "daily";
   }>();
+  const preferFrequency = (mode: "custom" | "daily" | null) => {
+    const jobId = props.editingJob?.id;
+    setPreference((current) =>
+      mode
+        ? current?.jobId === jobId && current?.mode === mode
+          ? current
+          : { jobId, mode }
+        : undefined,
+    );
+  };
   const frequency = createMemo(() => {
-    const read = formSentenceFrequency(form());
+    const draft = form();
     const current = preference();
-    if (form().scheduleKind !== "cron" || !current || current.jobId !== props.editingJob?.id) {
-      return read;
-    }
-    if (current.mode === "custom") {
+    const preferredMode =
+      draft.scheduleKind === "cron" && current?.jobId === props.editingJob?.id
+        ? current?.mode
+        : undefined;
+    if (preferredMode === "custom") {
       return "custom";
     }
-    return read === "weekly" ? "daily" : read;
+    const read = formSentenceFrequency(draft);
+    return preferredMode === "daily" && read === "weekly" ? "daily" : read;
   });
   const isOnExit = () => form().scheduleKind === "on-exit";
   const isStream = () => form().scheduleKind === "stream";
@@ -166,9 +178,7 @@ export function ScheduleControls(props: CronProps) {
           {...props}
           frequency={frequency()!}
           kinds={kinds()}
-          onFrequencyPreference={(mode) =>
-            setPreference(mode ? { jobId: props.editingJob?.id, mode } : undefined)
-          }
+          onFrequencyPreference={preferFrequency}
         />
       ) : (
         <SettingsSegmented<CronFormState["scheduleKind"]>
@@ -223,6 +233,11 @@ export function ScheduleControls(props: CronProps) {
           <TrayInput
             {...props}
             field="cronExpr"
+            onFormChange={(patch) => {
+              // An inferred Custom mode becomes explicit as soon as the expression is edited.
+              preferFrequency("custom");
+              props.onFormChange(patch);
+            }}
             label={t("cron.form.expression")}
             required
             errorKey="cronExpr"
