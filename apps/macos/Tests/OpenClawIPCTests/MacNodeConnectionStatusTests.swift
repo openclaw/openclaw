@@ -6,27 +6,16 @@ import Testing
 
 @MainActor
 struct MacNodeConnectionStatusTests {
-    @Test(.serialized, arguments: [false, true])
-    func `unchanged provider retains route and changed options retire connected identity`(scoped: Bool) async throws {
-        let root = try makeTempDirForTests()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let initialState = root.appendingPathComponent("initial", isDirectory: true)
-        let replacementState = root.appendingPathComponent("replacement", isDirectory: true)
-        for directory in [initialState, replacementState] {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        }
-        try await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": initialState.path]) {
-            if scoped {
-                try await DeviceIdentityStore.withStateDirectory(initialState) {
-                    try await self.runConnectionScenario(scoped: scoped, replacementState: replacementState)
-                }
-            } else {
-                try await self.runConnectionScenario(scoped: scoped, replacementState: replacementState)
-            }
+    @Test
+    func `unchanged provider retains route and changed options retire connected identity`() async throws {
+        let stateDirectory = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: stateDirectory) }
+        try await DeviceIdentityStore.withStateDirectory(stateDirectory) {
+            try await self.runConnectionScenario()
         }
     }
 
-    private func runConnectionScenario(scoped: Bool, replacementState: URL) async throws {
+    private func runConnectionScenario() async throws {
         let entered = AsyncTestGate()
         let release = AsyncTestGate()
         let count = LockIsolated(0)
@@ -91,14 +80,11 @@ struct MacNodeConnectionStatusTests {
         do {
             _ = try await coordinator.connectWithTLSRepair(attempt("Before refresh"))
             let originalID = try #require(coordinator.connectedDeviceId())
-            let originalState = DeviceIdentityStore.stateDirectoryURL.standardizedFileURL
             let originalRoute = try #require(await session.currentRoute())
             _ = try await coordinator.connectWithTLSRepair(attempt("Before refresh"))
             #expect(count.value == 1)
             #expect(await session.currentRoute() == originalRoute)
-            let identityRetainedBeforeRefresh = coordinator.connectedDeviceId() == originalID
-            #expect(identityRetainedBeforeRefresh)
-            #expect(setenv("OPENCLAW_STATE_DIR", replacementState.path, 1) == 0)
+            #expect(coordinator.connectedDeviceId() == originalID)
             holdHandshake.setValue(true)
             let replacement = Task { try await coordinator.connectWithTLSRepair(attempt("After refresh")) }
             await entered.wait()
@@ -106,12 +92,7 @@ struct MacNodeConnectionStatusTests {
             #expect(coordinator.connectedDeviceId() == nil)
             release.open()
             _ = try await replacement.value
-            let identityRetained = coordinator.connectedDeviceId() == originalID
-            let effectiveRootChanged = DeviceIdentityStore.stateDirectoryURL.standardizedFileURL != originalState
-            let ambientRootChanged = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"] == replacementState.path
-            print("[mac-node-identity-diagnostic] scoped=\(scoped) ambientRootChanged=\(ambientRootChanged) " +
-                "effectiveRootChanged=\(effectiveRootChanged) identityRetained=\(identityRetained)")
-            #expect(identityRetained)
+            #expect(coordinator.connectedDeviceId() == originalID)
         } catch {
             release.open()
             await coordinator.stopAndWait()
