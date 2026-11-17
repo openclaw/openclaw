@@ -157,7 +157,7 @@ export function assertGatewayAuthConfigured(
   }
   if (auth.mode === "token" && isInvalidGatewaySecret(auth.token)) {
     throw new Error(
-      "Gateway token must not be blank or the literal string undefined/null. Run `openclaw doctor --fix --generate-gateway-token` for an inline token, or rotate its external secret source.",
+      "Gateway token must not be blank or the literal string undefined/null. Set gateway.auth.token to a resolved value or fix its external secret source; do not generate a new token, which disconnects other sessions.",
     );
   }
   if (auth.mode === "token" && !auth.token) {
