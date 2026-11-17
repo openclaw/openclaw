@@ -32,6 +32,7 @@ import {
   inspectPackageTarballBytes,
   verifyPluginPublicationArtifact,
 } from "./plugin-publication-artifact.mjs";
+import { downloadReleaseApprovalReceipt } from "./release-approval-receipt.mjs";
 
 export const PREPARED_NPM_MANIFEST = "plugin-npm-prepared.json";
 const SCHEMA = "openclaw.plugin-npm-prepared/v1";
@@ -262,15 +263,6 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
         : { expectedPublicationSelection: params.publicationSelection }),
       verifierSourceSha: workflowSha,
       verifierSourceContent: readFileSync(new URL("./release-ci-summary.mjs", import.meta.url)),
-      isTrustedMainAncestor:
-        params.isTrustedMainAncestor ??
-        ((sha) => {
-          const comparison = client.compareCommits(sha, "main");
-          return (
-            ["ahead", "identical"].includes(comparison.status) &&
-            comparison.merge_base_commit?.sha === sha
-          );
-        }),
     },
     client,
   );
@@ -280,11 +272,9 @@ async function authenticatePreparedNpmArtifactEvidence(params, revalidateOnRetur
     current.manifest.workflowSha;
   if (producerSha !== workflowSha) {
     requireValue(
-      producerSha === sourceSha &&
-        current.workflowRefProof ===
-          (current.manifest.receiptRecovery
-            ? "receipt-backed-recovery-v1"
-            : "candidate-owned-admission-v1") &&
+      authenticated.qualification.kind !== "historical" &&
+        authenticated.qualification.candidateSha === sourceSha &&
+        authenticated.qualification.qualificationSha === producerSha &&
         typeof authenticated.revalidateAuthority === "function",
       "Prepared npm Q != P adoption requires live candidate-owned qualification.",
     );
@@ -671,9 +661,21 @@ export async function consumePreparedNpmPackage(params) {
 }
 
 // Prune only after verifying the original qualified package, registry bytes, and
-// selectors. Final core publication requires every original plugin to be present.
+// selectors. Explicit parent-approved deferrals stay qualified, not published.
 export async function selectUnpublishedPreparedNpmPackages(params) {
   const pending = [];
+  const deferrals = params.corePluginDeferrals ?? [];
+  requireValue(
+    deferrals.every((deferred) =>
+      params.packages.some(
+        (entry) =>
+          entry.packageName === deferred.packageName &&
+          entry.version === deferred.version &&
+          params.sourceSha === deferred.sourceSha,
+      ),
+    ),
+    "Core deferral is outside the original qualified roster.",
+  );
   for (const entry of params.packages) {
     const qualified = await consumePreparedNpmPackage({
       ...params,
@@ -691,10 +693,15 @@ export async function selectUnpublishedPreparedNpmPackages(params) {
       fetchImpl: params.fetchImpl,
     });
     requireValue(
-      alreadyPublished || !params.requirePublished,
+      alreadyPublished ||
+        !params.requirePublished ||
+        deferrals.some((deferred) => deferred.packageName === entry.packageName),
       `${entry.packageName}@${entry.version}: final core publication requires the complete original plugin roster.`,
     );
-    if (!alreadyPublished) {
+    if (
+      !alreadyPublished &&
+      !deferrals.some((deferred) => deferred.packageName === entry.packageName)
+    ) {
       pending.push(entry);
     }
   }
@@ -719,8 +726,11 @@ export async function verifyPublishedNpmRegistry(params) {
   const { distTags } = await verifyNpmRegistryPublication({
     ...params,
     route: "npm-readback",
-    allowMissing: false,
+    allowMissing: params.allowMissing === true,
   });
+  if (distTags === null) {
+    return { alreadyPublished: false, supersededBy: null };
+  }
   const [primaryTag] = params.publishTags;
   const supersededBy = distTags[primaryTag];
   if (classifyNpmDistTagVersion(supersededBy, params.version) === "ahead") {
@@ -783,9 +793,8 @@ async function verifyNpmRegistryPublication(params, tarball) {
       break;
     }
     if (params.allowMissing === true) {
-      requireValue(params.route !== "npm-readback", pendingMessage);
       requireValue(
-        registry.status !== 404 || params.route === "npm-token-bootstrap",
+        registry.status !== 404 || ["npm-token-bootstrap", "npm-readback"].includes(params.route),
         "Prepared OIDC package no longer exists; obtain an explicitly approved bootstrap.",
       );
       return { distTags: null };
@@ -857,10 +866,14 @@ function outputValues(file, values) {
 // Each package can run consume and authorize independently. These are enforced
 // transport ceilings, including retries, not the happy-path fixture counts.
 const PACKAGE_COMMAND_REQUEST_LIMIT = 256;
+// Carrier-backed commands replay immutable reads. A 54-request transport cap
+// keeps the 101-package release below 12,000 requests, including 1,024 headroom:
+// 101 * 2 * 54 + 1,024 = 11,932. Admission uses this same enforced cap.
+const CARRIER_COMMAND_REQUEST_LIMIT = 54;
 const PREVIEW_REQUEST_LIMIT = 1024;
 const PUBLICATION_REQUEST_HEADROOM = 1024;
 
-async function requireFanoutCapacity(packages, params) {
+async function requireFanoutCapacity(packages, params, commandLimit) {
   if (packages === 0) {
     return;
   }
@@ -882,7 +895,7 @@ async function requireFanoutCapacity(packages, params) {
       reset * 1000 > Date.now(),
     "GitHub publication request budget received invalid or stale quota.",
   );
-  const perPackage = 2 * PACKAGE_COMMAND_REQUEST_LIMIT;
+  const perPackage = 2 * commandLimit;
   const required = packages * perPackage + PUBLICATION_REQUEST_HEADROOM;
   const maximum = Math.max(0, Math.floor((remaining - PUBLICATION_REQUEST_HEADROOM) / perPackage));
   console.error(
@@ -908,7 +921,11 @@ export async function main(argv) {
     return runPreparedNpmCommand(argv);
   }
   return withGithubRequestBudget(
-    argv[0] === "load" ? PREVIEW_REQUEST_LIMIT : PACKAGE_COMMAND_REQUEST_LIMIT,
+    argv[0] === "load"
+      ? PREVIEW_REQUEST_LIMIT
+      : process.env.PREPARED_NPM_EVIDENCE_ID
+        ? CARRIER_COMMAND_REQUEST_LIMIT
+        : PACKAGE_COMMAND_REQUEST_LIMIT,
     async (budget) => {
       try {
         return await runPreparedNpmCommand(argv);
@@ -981,6 +998,12 @@ async function runPreparedNpmCommand(argv) {
             client: createReleaseEvidenceClient(common.repository),
             shareAcquisitionReads: true,
           });
+    } else if (command === "authorize" || command === "consume") {
+      // Parent dispatch and direct recovery lack a carrier. Share raw reads only
+      // within this command; the final sweep still refreshes live authority.
+      adoptionParams.immutableReads = createReleaseEvidenceReplay({}, undefined, {
+        shareAcquisitionReads: true,
+      });
     }
     adoption = await authenticatePreparedNpmArtifactEvidence(adoptionParams, false);
     if (options["--evidence-output"]) {
@@ -1061,14 +1084,41 @@ async function runPreparedNpmCommand(argv) {
     });
   } else if (command === "load") {
     const requirePublished = options["--require-published"] === "true";
+    const prunePublished = options["--prune-published"] === "true";
     requireValue(
       !requirePublished ||
         (common.selectionMode === "all-publishable" &&
           adoption.publicationOperation?.publishOpenclawNpm),
       "Final npm roster verification requires the original all-package core operation.",
     );
+    let corePluginDeferrals = [];
+    const parentRunId =
+      process.env.PREPARED_NPM_PARENT_RUN_ID ||
+      (options["--core-deferral-parent"] === "true" ? process.env.GITHUB_RUN_ID : "");
+    // Only beta roster selection can apply deferrals; plain evidence loads cannot.
+    if (
+      parentRunId &&
+      adoption.publicationSelection?.npmDistTag === "beta" &&
+      common.selectionMode === "all-publishable" &&
+      (prunePublished || requirePublished)
+    ) {
+      const { receipt } = await downloadReleaseApprovalReceipt({
+        token: common.token,
+        expected: {
+          repository: common.repository,
+          parentRunId,
+          parentRunAttempt:
+            process.env.PREPARED_NPM_PARENT_RUN_ATTEMPT || process.env.GITHUB_RUN_ATTEMPT,
+          toolingRef: process.env.GITHUB_REF_NAME,
+          toolingFullRef: process.env.GITHUB_REF,
+          toolingSha: process.env.GITHUB_WORKFLOW_SHA ?? process.env.GITHUB_SHA,
+          targetSha: common.sourceSha,
+        },
+      });
+      corePluginDeferrals = receipt.corePluginDeferrals ?? [];
+    }
     const matrix =
-      options["--prune-published"] === "true" || requirePublished
+      prunePublished || requirePublished
         ? await selectUnpublishedPreparedNpmPackages({
             ...common,
             fetchImpl: capacity?.packageFetchImpl ?? common.fetchImpl,
@@ -1077,9 +1127,14 @@ async function runPreparedNpmCommand(argv) {
             cacheDir: options["--cache-dir"],
             outputDir: options["--output-dir"],
             requirePublished,
+            corePluginDeferrals,
           })
         : selectedPackages;
-    await requireFanoutCapacity(matrix.length, common);
+    await requireFanoutCapacity(
+      matrix.length,
+      common,
+      options["--evidence-output"] ? CARRIER_COMMAND_REQUEST_LIMIT : PACKAGE_COMMAND_REQUEST_LIMIT,
+    );
     await adoption.revalidateAuthority?.();
     capacity?.report(selectedPackages.length);
     writeEvidenceOutput?.();
@@ -1091,6 +1146,7 @@ async function runPreparedNpmCommand(argv) {
       selection_count: matrix.length,
       matrix: JSON.stringify(matrix),
       all_matrix: JSON.stringify(selectedPackages),
+      core_deferrals: JSON.stringify(corePluginDeferrals),
     });
   } else if (command === "consume") {
     const entry = JSON.parse(options["--package"]);

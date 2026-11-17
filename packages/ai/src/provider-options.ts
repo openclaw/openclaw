@@ -130,6 +130,20 @@ export const preparedRequestSuffix = {
   },
 };
 
+const UNCACHED_SUFFIX_MESSAGE = Symbol("uncachedSuffixMessage");
+
+/** A side request's own suffix: transports place no prompt-cache checkpoint on or after it. */
+export const uncachedSuffixMessage = {
+  mark<T extends object>(message: T): T {
+    // Enumerable, so transport repair copies keep it.
+    Reflect.set(message, UNCACHED_SUFFIX_MESSAGE, true);
+    return message;
+  },
+  has(message: object): boolean {
+    return Reflect.get(message, UNCACHED_SUFFIX_MESSAGE) === true;
+  },
+};
+
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";

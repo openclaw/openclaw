@@ -392,6 +392,8 @@ export async function resolveEffectiveToolInventory(
         ...params,
         conversationCapabilityProfile: capabilityProfile,
         githubPublicationPreview: true,
+        githubPublicationConfigurationAware:
+          !params.agentRuntime || params.agentRuntime === "openclaw" ? true : undefined,
         authProfileStoreSource,
         agentId,
         workspaceDir,

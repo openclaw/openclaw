@@ -48,10 +48,10 @@ function questions(batch: DecisionBatchV2) {
 
 export function decodeBasetenDecisionResult(
   batch: DecisionBatchV2,
-  payload: Record<string, unknown>,
+  payload: unknown,
 ): ProviderDecisionOutcomeV2 {
   const invalid = { status: "unavailable", reason: "invalid-response" } as const;
-  if (!isRecord(payload.answers) || !isRecord(payload.usage)) {
+  if (!isRecord(payload) || !isRecord(payload.answers) || !isRecord(payload.usage)) {
     return invalid;
   }
   const usage = payload.usage;

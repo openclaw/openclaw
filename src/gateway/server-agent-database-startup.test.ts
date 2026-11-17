@@ -408,7 +408,7 @@ it.for([
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
         inspectionSettled = admission.pendingPreparation;
         waitForHealthyAgent = () =>
-          admission.waitForAgentPreparation(healthyAgentId, { env, signal, forWrite: true });
+          admission.waitForAgentPreparation(healthyAgentId, { env, signal });
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({

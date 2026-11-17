@@ -87,9 +87,12 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Qualification harness/contract defect: repair the frozen candidate closure,
-  freeze a new C/Q, and rebind evidence. Missing contracts require deliberate
-  backports, not a newer-main harness.
+- Qualification harness/contract defect: a tooling-only repair can preserve C
+  and select an explicit reviewed main-ancestor Q through a new admission and
+  successful parent. Missing contracts need a deliberate Q repair or candidate
+  backport, not a moving-main fallback. Follow the
+  [frozen-C recovery procedure](../../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate);
+  never edit the old request or relabel a failed FRV.
 - P-only admission/verifier/publisher, credential, infrastructure, monitor,
   approval, or selector failure: keep C/Q and recover the smallest failed surface.
   Change independent P only when needed; preserve original producer identities.
@@ -276,6 +279,37 @@ and seal prepared publication** job. After publication has been dispatched,
 rerun only failed verification jobs when the publisher succeeded; otherwise
 inspect its children and follow the recovery route above. Never repeat an
 uncertain dispatch or rerun all publication jobs to fix a download failure.
+
+### ClawHub finalization status
+
+Check public state before diagnosing or recovering ClawHub:
+
+```bash
+pnpm release:clawhub-status -- --version <published-version>
+```
+
+Run it from the clean, exact `v<published-version>` tag. Use `--plugins`
+for a retained selected-scope roster. The report separates `published`,
+`absent`, and `failed` packages from pending `staging`, `checks`, and
+`finalization` work.
+
+For stall detection, pass the last observed movement with
+`--last-progress-at <ISO-8601>`; the default threshold is 60 minutes and can
+be changed with `--stall-threshold-minutes`. A threshold crossing signals
+inactivity, not failure or recovery authority.
+
+- Wait while any package is `pending`; do not dispatch new bytes, inspect
+  credentials, or recover it.
+- Recover only `failed` attempts, with explicit recovery authority and the
+  approved credential workflow below.
+- Treat a package as `absent` only when the publication-state endpoint says
+  so. A version-route 404 is not sufficient.
+
+If the parent fails after staging, retain the original parent, child, and public
+attempt IDs. A resumed parent may unblock finalization, but does not adopt or
+prove the original ClawHub publication; verify it separately with this command.
+Escalate sustained lack of movement to the ClawHub owner. Elapsed time alone is
+not failure; see the pending-versus-failed history in PR #168153.
 
 ClawHub publication and recovery run independently from the existing dispatch
 point. A ClawHub failure must not fail or stall core publication, GitHub

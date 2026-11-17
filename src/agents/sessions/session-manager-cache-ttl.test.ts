@@ -298,7 +298,7 @@ it("reconstructs cold forks from pre-compaction projections without crossing a b
       assertCurrent() {},
     });
   const lastToolContent = async () =>
-    (await fork()).messages.findLast((message) => message.role === "toolResult")?.content;
+    (await fork()).context.messages.findLast((message) => message.role === "toolResult")?.content;
 
   // Both the checkpoint and its delta precede compaction and are absent from model messages.
   if (fixture.expected.role !== "toolResult") {

@@ -38,6 +38,7 @@ import {
   type SessionTranscriptTurnExpectedState,
   type TranscriptEntryAnchor,
 } from "./session-accessor.js";
+import { readTranscriptEventMessage } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {
   LatestTranscriptAssistantText,
@@ -52,6 +53,7 @@ import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.j
 import { readActiveTranscriptEntryAnchorAsync } from "./session-transcript-anchor-read.js";
 import { readLatestTranscriptAssistantTextAsync } from "./session-transcript-assistant-read.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
+import { findTranscriptEvent } from "./session-transcript-match.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
@@ -283,6 +285,8 @@ type SessionTranscriptAssistantAppendOptions = {
   beforeMessageWrite?: AssistantBeforeMessageWrite;
   assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
+  /** Prepare display attachments in the writer queue; replays retain their accepted IDs. */
+  prepareDisplayContent?: () => Promise<Array<Record<string, unknown>> | undefined>;
   contextFreeCommand?: true;
   /** Delivered command exchanges are replayable conversation, not delivery bookkeeping. */
   command?: { text: string; idempotencyKey: string };
@@ -489,7 +493,11 @@ async function appendExactAssistantMessageWithSource(
     sessionKey: normalizedKey,
     storePath,
   };
-  if (isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey) {
+  if (
+    isRedundantDeliveryMirror(params.message) &&
+    !explicitIdempotencyKey &&
+    !params.prepareDisplayContent
+  ) {
     // Reconciliation needs the writer queue. Wait before entering it, then
     // read the current projected tail again inside the guarded append.
     await waitForSessionTranscriptProjection(target);
@@ -515,6 +523,7 @@ async function appendExactAssistantMessageWithSource(
     ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode ?? "inline",
     onMessageCommitted: params.onMessageCommitted,
+    publishWhen: params.prepareDisplayContent ? "always" : undefined,
     touchSessionEntry: true,
     messages: [
       ...(params.command
@@ -553,7 +562,9 @@ async function appendExactAssistantMessageWithSource(
           : {}),
         shouldAppend: async (appendTarget) => {
           const messageId =
-            isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey
+            isRedundantDeliveryMirror(params.message) &&
+            !explicitIdempotencyKey &&
+            !params.prepareDisplayContent
               ? await findLatestEquivalentAssistantMessageId(
                   appendTarget,
                   preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
@@ -562,6 +573,25 @@ async function appendExactAssistantMessageWithSource(
           equivalentAssistant = messageId
             ? { messageId, assertCurrent: captureOwnedTranscriptWriteAssertion(appendTarget) }
             : undefined;
+          if (!equivalentAssistant && params.prepareDisplayContent) {
+            const prior = explicitIdempotencyKey
+              ? await findTranscriptEvent(
+                  { ...appendTarget, sessionId: target.sessionId },
+                  { kind: "idempotency", key: explicitIdempotencyKey },
+                )
+              : undefined;
+            // Derived attachment IDs do not replace the caller's text/media replay identity.
+            const displayContent = prior
+              ? asOptionalRecord(readTranscriptEventMessage(prior.event))?.[
+                  ASSISTANT_DISPLAY_CONTENT_FIELD
+                ]
+              : await params.prepareDisplayContent();
+            if (displayContent) {
+              Object.assign(preparedUnkeyedMessage, {
+                [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
+              });
+            }
+          }
           return !equivalentAssistant;
         },
       },

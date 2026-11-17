@@ -452,7 +452,7 @@ describe("pw-session ensurePageState", () => {
     expect(isDownloadStartingNavigationError(new Error("Navigation failed"))).toBe(false);
   });
 
-  it("bounds page-controlled text while tracking network requests", () => {
+  it("bounds page-controlled console and error text", () => {
     const { emit, state } = observedPage();
     const oversized = `${"x".repeat(2047)}😀tail`;
     const argument = { dispose: vi.fn(async () => {}) };
@@ -463,22 +463,12 @@ describe("pw-session ensurePageState", () => {
       args: () => [argument],
     };
     const pageError = Object.assign(new Error(oversized), { name: oversized, stack: oversized });
-    const req = {
-      method: () => "GET",
-      url: () => oversized,
-      resourceType: () => "xhr",
-      failure: () => ({ errorText: oversized }),
-    };
-    emit("request", req);
-    emit("response", { request: () => req, status: () => 500, ok: () => false });
-    emit("requestfailed", req);
     emit("console", consoleMessage);
     expect(argument.dispose).toHaveBeenCalledOnce();
     emit("pageerror", pageError);
 
     const consoleEntry = state.console.at(-1);
     const errorEntry = state.errors.at(-1);
-    const request = [...state.requests.values()].at(-1);
     for (const value of [
       consoleEntry?.type,
       consoleEntry?.text,
@@ -486,14 +476,11 @@ describe("pw-session ensurePageState", () => {
       errorEntry?.message,
       errorEntry?.name,
       errorEntry?.stack,
-      request?.url,
-      request?.failureText,
     ]) {
       expect(value?.length).toBeLessThanOrEqual(2048);
       expect(value).not.toContain("tail");
       expect(value?.charCodeAt((value?.length ?? 0) - 1)).not.toBe(0xd83d);
     }
-    expect(request).toMatchObject({ method: "GET", resourceType: "xhr", status: 500, ok: false });
   });
 
   it("clears frame-scoped role refs on frame detachment", () => {

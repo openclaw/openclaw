@@ -1,5 +1,6 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { stripSummaryFloor } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { applyAgentCompactionSettingsFromConfig } from "../agent-settings.js";
 import { textStream } from "./agent-session-boundary.test-support.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
@@ -73,7 +74,7 @@ describe("configured compaction summary limit", () => {
     );
 
     const result = await session.compact();
-    expect(result.summary.length).toBe(expectedLimit);
+    expect(stripSummaryFloor(result.summary).length).toBe(expectedLimit);
     expect(
       sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
     ).toMatchObject({ summary: result.summary });

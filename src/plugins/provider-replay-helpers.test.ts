@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
-import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectObjectFields as expectFields } from "../test-utils/mock-call-assertions.js";
 import {
@@ -19,7 +18,6 @@ import {
 const sonnet = "claude-sonnet-4-6";
 const legacySonnet = "claude-3-7-sonnet-20250219";
 const strictAnthropicPolicy = {
-  appendOnlyRuntimeContext: false,
   sanitizeMode: "full",
   sanitizeToolCallIds: true,
   toolCallIdMode: "strict",
@@ -81,7 +79,6 @@ describe("provider replay helpers", () => {
 
   it("builds strict anthropic replay policy", () => {
     expectFields(buildStrictAnthropicReplayPolicy({ dropThinkingBlocks: true }), {
-      appendOnlyRuntimeContext: false,
       sanitizeMode: "full",
       preserveSignatures: true,
       repairToolUseResultPairing: true,
@@ -98,39 +95,19 @@ describe("provider replay helpers", () => {
     });
   });
 
-  it.each([
-    ["claude-fable-5-1", true],
-    // Unknown and newer Claude ids take the strict prefix-bound contract.
-    ["claude-mythos-5-1", true],
-    ["claude-zzz-9-9", true],
-    ["claude-opus-5", false],
-  ])("scopes append-only replay to prefix-binding %s", (modelId, expected) => {
-    for (const buildPolicy of [anthropic, nativeAnthropic]) {
-      expect(buildPolicy(modelId).appendOnlyRuntimeContext).toBe(expected);
-      expect(
-        buildPolicy("deployment", { params: { canonicalModelId: modelId } })
-          .appendOnlyRuntimeContext,
-      ).toBe(expected);
-    }
-    for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
-      expect(
-        hybrid({
-          provider: "custom-proxy",
-          modelApi,
-          modelId: "deployment",
-          model: {
-            ...makeProviderModelFixture({
-              id: "deployment",
-              api: modelApi,
-              provider: "custom-proxy",
-              baseUrl: "https://example.invalid",
-            }),
-            params: { canonicalModelId: modelId },
-          },
-        })?.appendOnlyRuntimeContext,
-      ).toBe(expected);
-    }
-  });
+  // Every Claude model keeps the host default (retained carriers); only an explicit opt-out
+  // or an in-history route sets the field.
+  it.each(["claude-fable-5-1", "claude-mythos-5-1", "claude-zzz-9-9", "claude-opus-5"])(
+    "leaves runtime-context retention to the host default for %s",
+    (modelId) => {
+      for (const buildPolicy of [anthropic, nativeAnthropic]) {
+        expect(buildPolicy(modelId)).not.toHaveProperty("appendOnlyRuntimeContext");
+      }
+      expect(buildStrictAnthropicReplayPolicy({ appendOnlyRuntimeContext: false })).toMatchObject({
+        appendOnlyRuntimeContext: false,
+      });
+    },
+  );
 
   it("preserves thinking blocks only for Claude models with native history support", () => {
     for (const modelId of [
@@ -192,10 +169,8 @@ describe("provider replay helpers", () => {
 
   it("builds hybrid anthropic or openai replay policy", () => {
     const sonnet46Policy = hybridPolicy(sonnet);
-    expectFields(sonnet46Policy, {
-      appendOnlyRuntimeContext: false,
-      validateAnthropicTurns: true,
-    });
+    expectFields(sonnet46Policy, { validateAnthropicTurns: true });
+    expect(sonnet46Policy).not.toHaveProperty("appendOnlyRuntimeContext");
     expect(sonnet46Policy).not.toHaveProperty("dropThinkingBlocks");
 
     expectFields(hybridPolicy(legacySonnet), {

@@ -27,6 +27,7 @@ import {
   NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
+  NODE_WORKSPACE_RESULT_VERSION,
 } from "../../../../src/infra/node-runner-inventory.js";
 import {
   coerceNodeInvokeInputPayload,
@@ -426,6 +427,7 @@ type WireWorkerHostOptions = {
   >;
   bundlePrewarm?: boolean;
   workspaceQuiescence?: boolean;
+  publicationIntegration?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
   environmentSession?: boolean;
@@ -513,6 +515,12 @@ export async function createPairedNodeWorkerHost(
     workerHost: {
       enabled: true as const,
       capturedExecPolicy: true as const,
+      ...(options.publicationIntegration
+        ? {
+            workspaceResultVersion: NODE_WORKSPACE_RESULT_VERSION,
+            publicationIntegration: 1 as const,
+          }
+        : {}),
       promptContext: NODE_WORKER_PROMPT_CONTEXT_VERSION,
       ...(environmentSession
         ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }

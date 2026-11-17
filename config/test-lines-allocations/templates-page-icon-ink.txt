@@ -1,2 +1,0 @@
-# Rendered sidebar regression for Templates stroke weight and theme/hover ink parity.
-58

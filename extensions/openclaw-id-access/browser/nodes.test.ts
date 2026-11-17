@@ -73,7 +73,10 @@ it("registers only a signed cap and proof key; builds the secret-bearing command
   expect(params.cap.body.label).toBe("Builder");
   expect(await hasValidSignature(params.cap)).toBe(true);
   const joinLink = made.commands!.installedCommand.split("'")[1]!;
+  expect(made.joinLink).toBe(joinLink);
   const decoded = parseNodeJoinLink(joinLink)!;
+  // The link carries the Discovery origin, so a joining device needs no second input.
+  expect(decoded.discovery_url).toBe("https://discovery.example.test");
   expect(decoded.invite_id).toBe(made.inviteId);
   expect(decoded.claw_id).toBe(link.clawId);
   expect(await deriveInviteProofKey(decoded.secret)).toEqual(base64urlToBytes(params.proofKey));
@@ -82,9 +85,9 @@ it("registers only a signed cap and proof key; builds the secret-bearing command
   );
   expect(JSON.stringify(request.mock.calls)).not.toContain(joinLink);
   request.mockResolvedValue({ discoveryUrl: null, version: "2026.11.5" });
-  expect(
-    (await createNodeInvite(request, link, "Builder", "https://relay.example.test")).commands,
-  ).toBeNull();
+  const bare = await createNodeInvite(request, link, "Builder", "https://relay.example.test");
+  expect(bare.commands).toBeNull();
+  expect(parseNodeJoinLink(bare.joinLink)?.discovery_url).toBeUndefined();
 });
 
 it("signs explicit approve, deny and remove at the freshly read membership sequence", async () => {

@@ -21,7 +21,6 @@ import {
 } from "../models-config.merge.js";
 import { materializeConfiguredProviderCatalogModels } from "../models-config.providers.catalog.js";
 import {
-  filterGeneratedPluginModelCatalogProviders,
   isGeneratedPluginModelCatalog,
   inspectLegacyPluginModelCatalogs,
   loadPersistedPluginModelCatalogsReadOnly,
@@ -54,8 +53,10 @@ import {
   emptyCustomModelsResult,
   mergeProviderSources,
   projectProviderRequestConfig,
+  storeModelHeaders,
   type ProviderRequestConfig,
   type CustomModelsResult,
+  readGeneratedPluginModelCatalogProviders,
   readModelRegistryPluginCatalogs,
   type RegistryProviderSources,
   type ResolvedRequestAuth,
@@ -73,6 +74,7 @@ type ModelRegistryOptions = {
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
+  excludeGeneratedProviderIds?: readonly string[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   sourceSnapshot?: ModelRegistry;
@@ -99,6 +101,7 @@ export class ModelRegistry {
   private modelsJsonPath: string | undefined;
   private modelsJsonContents: string | null | undefined;
   private pluginCatalogs: readonly PersistedPluginModelCatalog[] | undefined;
+  private readonly excludeGeneratedProviderIds: ReadonlySet<string>;
   private pluginCatalogReadError: string | undefined;
   private readonly reloadPluginCatalogs: boolean;
   private staticProviderConfigs: Readonly<Record<string, ModelProviderConfig>> | undefined;
@@ -116,6 +119,7 @@ export class ModelRegistry {
   ) {
     this.authStorage = authStorage;
     this.config = options.config ?? options.sourceSnapshot?.config;
+    this.excludeGeneratedProviderIds = new Set(options.excludeGeneratedProviderIds);
     this.includePluginCatalogs = options.includePluginCatalogs !== false;
     this.reloadPluginCatalogs = this.includePluginCatalogs && options.pluginCatalogs === undefined;
     initializeModelRegistryRuntime(this);
@@ -454,7 +458,7 @@ export class ModelRegistry {
 
     try {
       const content = options.contents ?? readFileSync(modelsJsonPath, "utf-8");
-      const parsed = parseModelCatalogJson(content);
+      const parsed = parseModelCatalogJson(content, options.requireGeneratedCatalog);
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();
       }
@@ -474,7 +478,7 @@ export class ModelRegistry {
 
       const providers =
         options.requireGeneratedCatalog === true
-          ? filterGeneratedPluginModelCatalogProviders({
+          ? readGeneratedPluginModelCatalogProviders({
               catalogPluginId: options.catalogPluginId,
               config: this.config,
               isProviderAvailable: (providerId) =>
@@ -515,6 +519,9 @@ export class ModelRegistry {
       const generated = options.requireGeneratedCatalog === true;
       let sourceProviders: RegistryProviderSources = {};
       for (const [providerName, providerConfig] of Object.entries(providers)) {
+        if (generated && this.excludeGeneratedProviderIds.has(normalizeProviderId(providerName))) {
+          continue;
+        }
         if (!generated && (providerConfig.models ?? []).length > 0) {
           this.storeProviderRequestConfig(providerName, providerConfig);
         }
@@ -588,7 +595,7 @@ export class ModelRegistry {
           continue;
         }
 
-        this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
+        storeModelHeaders(this.modelRequestHeaders, providerName, modelDef.id, modelDef.headers);
         models.push(
           createRegistryRuntimeModel(providerName, providerConfig, modelDef, api, {
             baseUrl,
@@ -637,19 +644,6 @@ export class ModelRegistry {
     if (projected) {
       this.providerRequestConfigs.set(providerName, projected);
     }
-  }
-
-  private storeModelHeaders(
-    providerName: string,
-    modelId: string,
-    headers?: Record<string, string>,
-  ): void {
-    const key = JSON.stringify([providerName, modelId]);
-    if (!headers || Object.keys(headers).length === 0) {
-      this.modelRequestHeaders.delete(key);
-      return;
-    }
-    this.modelRequestHeaders.set(key, headers);
   }
 
   async getApiKeyAndHeaders(model: Model): Promise<ResolvedRequestAuth> {
@@ -804,7 +798,7 @@ export class ModelRegistry {
 
       for (const modelDef of config.models) {
         const api = modelDef.api || config.api;
-        this.storeModelHeaders(providerName, modelDef.id, modelDef.headers);
+        storeModelHeaders(this.modelRequestHeaders, providerName, modelDef.id, modelDef.headers);
 
         this.models.push(createRegistryRuntimeModel(providerName, config, modelDef, api));
       }

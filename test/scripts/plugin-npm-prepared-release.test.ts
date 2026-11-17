@@ -153,8 +153,10 @@ function preparation(
   };
 }
 
-function candidatePreparation() {
-  const qualification = candidatePublicationFixture();
+function candidatePreparation(independentQ = false) {
+  const qualification = candidatePublicationFixture(
+    independentQ ? { qualificationSha: "e".repeat(40) } : {},
+  );
   const qProducer = {
     ...producer,
     workflowSha: qualification.q,
@@ -163,7 +165,7 @@ function candidatePreparation() {
   const artifact = {
     ...qProducer,
     artifactId: 9001,
-    artifactName: preparedNpmArtifactName(qualification.q, qProducer),
+    artifactName: preparedNpmArtifactName(qualification.c, qProducer),
     artifactDigest: `sha256:${"d".repeat(64)}`,
     artifactSizeBytes: 1024,
   };
@@ -185,7 +187,7 @@ function candidatePreparation() {
   };
   const params = {
     repository: qualification.repository,
-    sourceSha: qualification.q,
+    sourceSha: qualification.c,
     workflowSha: qualification.p,
     workflowFullRef: qualification.publisherFullRef,
     artifact: structuredClone(artifact),
@@ -200,22 +202,25 @@ function candidatePreparation() {
   return { qualification, params, qPolicy, policyReads };
 }
 
-it("authenticates Q != P and reads the exact Q policy through the FRV admission owner", async () => {
-  const { qualification, params, qPolicy, policyReads } = candidatePreparation();
-  expect(qualification.q).not.toBe(qualification.p);
-  const admitted = await authenticatePreparedNpmArtifact(params);
-  expect(admitted.artifact).toEqual(params.artifact);
-  expect(admitted.workflowSha).toBe(qualification.q);
-  expect(admitted.publisherPolicySha256).toBe(digest(Buffer.from(qPolicy)));
-  expect(policyReads).toEqual([qualification.q]);
-  if (!admitted.revalidateAuthority) {
-    throw new Error("Missing live candidate authority");
-  }
-  const revalidate = admitted.revalidateAuthority;
-  await revalidate();
-  qualification.admission.authority.permission = "read";
-  expect(() => revalidate()).toThrow();
-});
+it.each([false, true])(
+  "authenticates Q != P with independent Q=%s through the FRV admission owner",
+  async (independentQ) => {
+    const { qualification, params, qPolicy, policyReads } = candidatePreparation(independentQ);
+    expect(qualification.q).not.toBe(qualification.p);
+    const admitted = await authenticatePreparedNpmArtifact(params);
+    expect(admitted.artifact).toEqual(params.artifact);
+    expect(admitted.workflowSha).toBe(qualification.q);
+    expect(admitted.publisherPolicySha256).toBe(digest(Buffer.from(qPolicy)));
+    expect(policyReads).toEqual([qualification.q]);
+    if (!admitted.revalidateAuthority) {
+      throw new Error("Missing live candidate authority");
+    }
+    const revalidate = admitted.revalidateAuthority;
+    await revalidate();
+    qualification.admission.authority.permission = "read";
+    expect(() => revalidate()).toThrow();
+  },
+);
 
 it.each([
   "producer",
@@ -228,7 +233,7 @@ it.each([
   "revoked",
   "missing-parent",
 ])("rejects Q adoption with %s mismatch before reading its publisher policy", async (fault) => {
-  const { qualification, params, policyReads } = candidatePreparation();
+  const { qualification, params, policyReads } = candidatePreparation(true);
   if (fault === "producer") {
     params.artifact.workflowSha = qualification.p;
   }
@@ -324,22 +329,33 @@ async function packedPluginFixture() {
 }
 
 it("loads and consumes the original Q bytes using authenticated Q expectations at P", async () => {
-  const { qualification, params, qPolicy } = candidatePreparation();
+  const { qualification, params, qPolicy } = candidatePreparation(true);
   const { root, entry, source, evidence, tarballName, tarballPath } = await packedPluginFixture();
   sourcePackage(root, plugin("existing", true));
-  const qProducer = { ...producer, workflowHeadBranch: qualification.branch };
+  const qProducer = {
+    ...producer,
+    workflowSha: qualification.q,
+    workflowHeadBranch: qualification.branch,
+  };
   const input = preparation();
-  input.sourceSha = qualification.q;
+  input.sourceSha = qualification.c;
   input.producer = qProducer;
   input.publisherPolicySha256 = digest(Buffer.from(qPolicy));
   input.workflowRun.head_branch = qualification.branch;
+  input.workflowRun.head_sha = qualification.q;
+  for (const artifact of input.artifacts) {
+    artifact.workflow_run.head_sha = qualification.q;
+  }
+  for (const job of input.workflowJobs.jobs) {
+    job.head_sha = qualification.q;
+  }
   const packageName = input.artifacts[0].name;
   const created = createPluginPublicationArtifact({
     artifactDir: evidence,
     artifactName: packageName,
     ...entry,
     route: "npm-oidc",
-    targetSha: qualification.q,
+    targetSha: qualification.c,
     sourcePackageJsonSha256: digest(source.bytes),
     publicationReason: "Stable npm registry preflight selected npm-oidc.",
     publisherPolicy: {
@@ -353,20 +369,30 @@ it("loads and consumes the original Q bytes using authenticated Q expectations a
     "plugin-publication-manifest.json": readFileSync(created.manifestPath),
   });
   input.artifacts[0] = metadata(1, packageName, packageBytes);
+  input.artifacts[0].workflow_run.head_sha = qualification.q;
   const manifest = createPreparedNpmRelease(input);
   const manifestBytes = await archive({ [PREPARED_NPM_MANIFEST]: manifest });
   const manifestArtifact = metadata(
     10,
-    preparedNpmArtifactName(qualification.q, qProducer),
+    preparedNpmArtifactName(qualification.c, qProducer),
     manifestBytes,
   );
-  const qDescriptor = { ...descriptor(manifestArtifact), workflowHeadBranch: qualification.branch };
+  manifestArtifact.workflow_run.head_sha = qualification.q;
+  const qDescriptor = {
+    ...descriptor(manifestArtifact),
+    workflowSha: qualification.q,
+    workflowHeadBranch: qualification.branch,
+  };
   Object.assign(qualification.manifest.publicationArtifacts, { pluginNpm: qDescriptor });
   params.artifact = qDescriptor;
   const authenticated = await authenticatePreparedNpmArtifact(params);
   const fetchImpl = async (url: string) => {
     if (url.endsWith(`/runs/${producer.runId}/attempts/${producer.runAttempt}`)) {
-      return Response.json({ ...workflowRun(true), head_branch: qualification.branch });
+      return Response.json({
+        ...workflowRun(true),
+        head_sha: qualification.q,
+        head_branch: qualification.branch,
+      });
     }
     if (url.includes("/artifacts/10")) {
       return artifactFetch(manifestArtifact, manifestBytes)(url);
@@ -386,6 +412,7 @@ it("loads and consumes the original Q bytes using authenticated Q expectations a
   });
   expect(loaded.producer.workflowSha).toBe(qualification.q);
   expect(loaded.producer.workflowSha).not.toBe(qualification.p);
+  expect(loaded.producer.workflowSha).not.toBe(qualification.c);
   const consumed = await consumePreparedNpmPackage({
     ...context,
     package: loaded.packages[0],
@@ -593,13 +620,15 @@ it("consumes the original qualified package in another run without a source inst
   expect(result.producerRunAttempt).toBe(producer.runAttempt);
   const registry = npmRegistryPackument(entry.packageName, version, readFileSync(tarballPath));
   let verificationAttempt = 0;
-  const verify = (requirePublished: boolean) =>
+  const deferral = { packageName: entry.packageName, version, sourceSha };
+  const verify = (requirePublished: boolean, corePluginDeferrals: (typeof deferral)[] = []) =>
     selectUnpublishedPreparedNpmPackages({
       ...consumeParams,
       outputDir: join(root, `registry-verification-${++verificationAttempt}`),
       sourceRoot: root,
       packages: [consumeParams.package],
       requirePublished,
+      corePluginDeferrals,
       fetchImpl: (url: string) =>
         url.startsWith("https://registry.npmjs.org/")
           ? Promise.resolve(
@@ -614,9 +643,14 @@ it("consumes the original qualified package in another run without a source inst
   delete registry.versions[version];
   expect(await verify(false)).toEqual([consumeParams.package]);
   await expect(verify(true)).rejects.toThrow("complete original plugin roster");
+  expect(await verify(true, [deferral])).toEqual([]);
+  await expect(
+    verify(true, [{ ...deferral, packageName: "@openclaw/unselected" }]),
+  ).rejects.toThrow("outside the original qualified roster");
   registry.versions[version] = published;
   published.dist.integrity = "sha512-conflicting";
   await expect(verify(false)).rejects.toThrow("registry bytes conflict");
+  await expect(verify(true, [deferral])).rejects.toThrow("registry bytes conflict");
 });
 function registryFixture() {
   const bytes = Buffer.from("exact qualified bytes");

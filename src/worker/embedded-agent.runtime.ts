@@ -336,7 +336,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           os: resolveRuntimeOsLabel(),
           arch: os.arch(),
           node: process.version,
-          shell: detectRuntimeShell() ?? path.basename(getShellConfig().shell),
+          shell: detectRuntimeShell() ?? path.basename((await getShellConfig()).shell),
           repoRoot: await resolveSystemPromptRepoRoot({
             workspaceDir: params.cwd,
             cwd: params.cwd,
@@ -354,6 +354,9 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
           settingsManager,
           resourceLoader,
           withSessionWriteSettlement: transcriptRuntime.withSessionWriteSettlement,
+          // The Gateway resolves tools.loopDetection.enabled into the surface policy, and
+          // tool definitions carry their own `repeatable` exemptions over the wire.
+          toolRepeatPolicy: { enabled: toolSurface.policy.toolRepeatGuard !== false },
         });
       } catch (error) {
         throw await disposeTools(toWorkerAgentError(error, "Worker agent setup failed."));

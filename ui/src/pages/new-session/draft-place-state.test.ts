@@ -229,10 +229,11 @@ describe("DraftPlaceState repository selection", () => {
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
     // This test owns draft selection; settle lazy code loading before the interaction deadline.
     await import("../chat/components/chat-model-picker-panel.tsx");
-    const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
-      data: routeData({ requestedModel: "example/first" }),
-      models: models("first", "second", "remembered"),
-    });
+    const { state, context, readPreference, persistModelPreference, request } =
+      createRepositoryFixture({
+        data: routeData({ requestedModel: "example/first" }),
+        models: models("first", "second", "remembered"),
+      });
     onTestFinished(() => state.modelControl.reset());
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
@@ -245,7 +246,7 @@ describe("DraftPlaceState repository selection", () => {
     );
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
-    expect(persistPreference).not.toHaveBeenCalled();
+    expect(persistModelPreference).not.toHaveBeenCalled();
 
     const choice = await vi.waitFor(() => {
       const option = view.querySelector<HTMLButtonElement>(
@@ -268,9 +269,8 @@ describe("DraftPlaceState repository selection", () => {
     state.adoptAgentDefaults();
     await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
-    expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
+    expect(persistModelPreference).toHaveBeenCalledExactlyOnceWith(
       "main",
-      "/workspace",
       expect.objectContaining({ model: "example/second" }),
     );
     context.agents.state.agentsList!.agents.push({ id: "scout", workspace: "/workspace" });

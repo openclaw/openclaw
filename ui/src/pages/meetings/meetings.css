@@ -323,6 +323,12 @@
   white-space: pre-wrap;
 }
 
+.meetings-notes {
+  /* Reading text keeps macOS stem darkening; app chrome stays antialiased via body. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
 .meetings-notes pre {
   overflow-x: auto;
 }

@@ -332,14 +332,14 @@ describe("agent exec command composition", () => {
 
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
-      import { registerHooks } from "node:module";
+      import nodeModule from "node:module";
       import { agentExecCommand } from "./src/commands/agent-exec.ts";
       import { enableConsoleCapture, routeLogsToStderr } from "./src/logging/console.ts";
       import { defaultRuntime } from "./src/runtime.ts";
 
       routeLogsToStderr();
       enableConsoleCapture();
-      registerHooks({
+      nodeModule.registerHooks({
         resolve(specifier, context, nextResolve) {
           if (specifier === "./agent.js" && context.parentURL?.endsWith("/commands/agent-exec.ts")) {
             return {

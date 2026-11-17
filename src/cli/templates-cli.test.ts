@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Command } from "commander";
 import { create as createTar } from "tar";
@@ -257,6 +257,17 @@ describe("templates cli", () => {
     },
   );
 
+  it("strips terminal controls from invalid registry manifest diagnostics", async () => {
+    const registry = await registryFixture("manifest");
+    await add([], registry.name);
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    const message = String(mocks.runtime.error.mock.calls[0]?.[0]);
+    expect(message).toContain("Downloaded Template package manifest is invalid");
+    expect(message).toContain("evil");
+    expect(message).not.toMatch(/[\u202e\u009b]/u);
+    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+  });
+
   it("prints versioned experimental JSON for a development manifest", async () => {
     const manifestPath = await writeManifest();
 
@@ -332,6 +343,7 @@ describe("templates cli", () => {
   it("discloses capability escalations in the human dry-run", async () => {
     const path = await writeManifest({
       ...cliTestHelpers.minimalManifest,
+      agent: { ...cliTestHelpers.minimalManifest.agent, tools: { allow: ["read"] } },
       mcpServers: {
         docs: {
           command: "node",
@@ -340,13 +352,6 @@ describe("templates cli", () => {
         },
       },
     });
-    const root = dirname(path);
-    await mkdir(join(root, "profiles"));
-    await writeFile(
-      join(root, "profiles", "openclaw.yml"),
-      "schemaVersion: 1\nagent:\n  tools:\n    allow: [read]\n",
-      "utf8",
-    );
 
     await add(["--dry-run"], path);
 
@@ -491,13 +496,17 @@ describe("templates cli", () => {
 // Wire fixtures keep the real registry client, trust gate, downloader, extractor,
 // manifest reader, and Add planner; only HTTP responses and the final mutation are controlled.
 async function registryFixture(
-  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency",
+  failure?: "family" | "name" | "digest" | "version" | "trust" | "dependency" | "manifest",
 ) {
   const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
   const manifestPath = join(root, "CLAW.md");
   const manifest = JSON.parse((await readFile(manifestPath, "utf8")).split("---")[1]!);
   if (failure !== "dependency") {
-    manifest.packages = [];
+    manifest.skills = [];
+    manifest.plugins = [];
+  }
+  if (failure === "manifest") {
+    manifest["evil\u202ekey\u009b31m"] = true;
   }
   await writeFile(manifestPath, `---\n${JSON.stringify(manifest)}\n---\n`);
   const archive = join(tempDirs.make("openclaw-registry-archive-"), "package.tgz");

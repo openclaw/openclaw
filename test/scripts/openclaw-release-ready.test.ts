@@ -244,8 +244,6 @@ describe("release readiness contract", () => {
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
-    ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
-    ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
     ["alpha owner", { tag: "v2026.9.2-alpha.1", npm_dist_tag: "alpha" }],
@@ -989,6 +987,29 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   `,
   );
   chmodSync(gh, 0o755);
+  // Keep archive transport hermetic on hosts without unzip, while the real
+  // evidence reader still verifies the ZIP digest, entry list, and manifest.
+  const unzip = writeFixtureFile(
+    fixture.root,
+    "bin/unzip",
+    `#!${process.execPath}
+    import { readFileSync } from 'node:fs';
+    import JSZip from ${JSON.stringify(import.meta.resolve("jszip"))};
+    const args = process.argv.slice(2);
+    if (args.length !== 3 || !(
+      (args[0] === '-Z' && args[1] === '-1') || args[0] === '-p'
+    )) throw new Error('unexpected fixture unzip operation: ' + JSON.stringify(args));
+    const archive = await JSZip.loadAsync(readFileSync(args[0] === '-Z' ? args[2] : args[1]));
+    if (args[0] === '-Z') {
+      process.stdout.write(Object.keys(archive.files).join('\\n') + '\\n');
+    } else {
+      const entry = archive.file(args[2]);
+      if (!entry) throw new Error('fixture archive entry missing: ' + args[2]);
+      process.stdout.write(await entry.async('nodebuffer'));
+    }
+  `,
+  );
+  chmodSync(unzip, 0o755);
   const git = writeFixtureFile(
     fixture.root,
     "bin/git",
@@ -2438,7 +2459,13 @@ describe("prepared Windows handoff", () => {
           prepared_plugins: request.inputs.prepared_plugins,
           publish_openclaw_npm: true,
         },
-        needs: { publish: { result: "success" }, publish_docker: { result: "success" } },
+        needs: {
+          resolve_release_target: {
+            outputs: { prepared_plugins: request.inputs.prepared_plugins },
+          },
+          publish: { result: "success" },
+          publish_docker: { result: "success" },
+        },
       });
       expect(finalizesParent).toBe(false);
       expect(parent.jobs.publish_windows.if).toContain(

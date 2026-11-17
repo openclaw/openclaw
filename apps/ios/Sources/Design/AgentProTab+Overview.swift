@@ -175,14 +175,13 @@ extension AgentProTab {
             ?? "main"
     }
 
+    /// The roster comes from the operator session, so the tab follows its state.
     var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: appModel) == .connected
+        GatewayStatusBuilder.buildChat(appModel: appModel) == .connected
     }
 
     var liveGatewayConnected: Bool {
-        !appModel.isLocalGatewayFixtureEnabled &&
-            self.gatewayConnected &&
-            appModel.isOperatorGatewayConnected
+        !appModel.isLocalGatewayFixtureEnabled && self.gatewayConnected
     }
 
     var emptyAgentsTitle: String {
@@ -216,7 +215,6 @@ extension AgentProTab {
     var rosterTaskID: String {
         [
             self.gatewayConnected ? "connected" : "offline",
-            appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
             appModel.connectedGatewayID ?? "no-gateway",
             self.activeAgentID,
             scenePhase == .active ? "active" : "inactive",

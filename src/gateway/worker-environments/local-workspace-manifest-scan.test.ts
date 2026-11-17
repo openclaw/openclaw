@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
-import { inflateRawSync } from "node:zlib";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -55,10 +55,18 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
         sha256: hash("old"),
       }),
     );
-    const directories = ["edited", "edited/deep", "untouched"];
+    const siblings = Array.from({ length: 64 }, (_, index) => `sibling-${index}`);
+    const directories = ["edited", "edited/deep", "untouched", ...siblings];
     const nodes = [
       ...directories.map((entryPath) => ({ path: entryPath, type: "directory" as const })),
       ...files,
+      ...siblings.map((directory) => ({
+        path: `${directory}/kept.txt`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 3,
+        sha256: hash("old"),
+      })),
       ...["a", "b"].map((name) => ({
         path: `untouched/${name}.txt`,
         type: "file" as const,
@@ -141,6 +149,21 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
     } finally {
       counter.restore();
     }
+    for (const batch of prepareLocalWorkspaceTreePacks(expected)) {
+      const full = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
+      for (const pack of full.packs!) {
+        expect(
+          db
+            .prepare(
+              "SELECT records_json, children_json FROM local_workspace_tree_packs WHERE tree_digest = ?",
+            )
+            .get(localWorkspaceDigestBytes(pack.treeRef)),
+        ).toEqual({
+          records_json: JSON.stringify(pack.records),
+          children_json: JSON.stringify(pack.children),
+        });
+      }
+    }
     const nextRoot = localWorkspaceDigestBytes(result.treeRoot!);
     const { preparations: _preparations, observation: _observation, ...checkpoint } = result;
     let revision = 0;
@@ -153,6 +176,7 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       db.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "config_machine_state"));
       beginLocalWorkspaceSweepInDatabase(db);
       const pendingEpoch = beginLocalWorkspaceSweepInDatabase(db);
+      assert(pendingEpoch !== null);
       expect(readLocalWorkspaceSweepCandidates(db, pendingEpoch).packs).toEqual([]);
       expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, treeRoot))).toEqual(baseline);
       expect(decodeLocalWorkspaceTree(readLocalWorkspaceTree(db, nextRoot))).toEqual(expected);
@@ -168,6 +192,7 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
     assert(accepted.records, "A fresh reader must receive the accepted baseline records");
     expect(decodeLocalWorkspaceTree(accepted.records)).toEqual(expected);
     expect(result.preparations).toHaveLength(1);
+    expect(result.preparations![0]!.byteLength).toBeLessThan(6000);
     const packs = result.preparations!.flatMap(
       (batch) => (deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation).packs!,
     );
@@ -182,6 +207,7 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
       beginLocalWorkspaceSweepInDatabase(db);
     }
     const acceptedEpoch = beginLocalWorkspaceSweepInDatabase(db);
+    assert(acceptedEpoch !== null);
     const garbage = readLocalWorkspaceSweepCandidates(db, acceptedEpoch);
     expect(garbage.packs.length).toBeGreaterThan(0);
     deleteLocalWorkspaceSweepBatchInDatabase(db, acceptedEpoch, garbage);
@@ -315,7 +341,9 @@ it.each([
     if (result.kind !== "replace") {
       throw new Error("Missing prepared repair");
     }
-    const mutation = deserialize(inflateRawSync(result.update.mutation)) as LocalWorkspaceMutation;
+    const mutation = deserialize(
+      zstdDecompressSync(result.update.mutation),
+    ) as LocalWorkspaceMutation;
     expect(mutation).toEqual({
       kind: "update",
       revision: 7,

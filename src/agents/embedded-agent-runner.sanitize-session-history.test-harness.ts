@@ -79,7 +79,6 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
     ...actual,
     // Default to no provider plugin participation; individual tests opt in to
     // hooks so ownership boundaries stay explicit.
-    resolveProviderRuntimePlugin: vi.fn(() => undefined),
     sanitizeProviderReplayHistoryWithPluginAsync: vi.fn(() => undefined),
     validateProviderReplayTurnsWithPlugin: vi.fn(() => undefined),
     ...extra,

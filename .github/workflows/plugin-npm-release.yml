@@ -414,11 +414,13 @@ jobs:
           SOURCE_SHA: ${{ steps.ref.outputs.sha }}
           ALL_PACKAGES: ${{ steps.prepared_plan.outputs.all_matrix || steps.plan.outputs.all_matrix }}
           CANDIDATES: ${{ steps.prepared_plan.outputs.matrix || steps.plan.outputs.matrix }}
+          CORE_DEFERRALS: ${{ steps.prepared_plan.outputs.core_deferrals || '[]' }}
         run: |
-          jq -n --arg sourceSha "$SOURCE_SHA" --argjson all "$ALL_PACKAGES" --argjson candidates "$CANDIDATES" \
+          jq -n --arg sourceSha "$SOURCE_SHA" --argjson all "$ALL_PACKAGES" --argjson candidates "$CANDIDATES" --argjson deferred "$CORE_DEFERRALS" \
             'def identities: map({packageName, packageDir, version});
              {sourceSha: $sourceSha, all: ($all | identities), candidates: ($candidates | identities),
-              skippedPublished: ([$all[] | select(.packageName as $name | $candidates | all(.packageName != $name))] | identities)}' \
+              coreDeferrals: $deferred,
+              skippedPublished: ([$all[] | select(.packageName as $name | ($candidates + $deferred) | all(.packageName != $name))] | identities)}' \
             > "$RUNNER_TEMP/npm-publication-plan.json"
 
       - name: Upload resolved npm publication plan

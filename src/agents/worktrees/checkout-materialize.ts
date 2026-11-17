@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { requireGitCommandOutput, type GitCommandOptions } from "../../infra/git-exec.js";
 import { withWorktreeGitConfig, type WorktreeGitPolicy } from "./checkout-git-config.js";
@@ -51,11 +52,16 @@ export async function cloneManagedWorktreeTemplate(
   options: WorktreeFilesystemOptions,
   checkoutOptions: GitCommandOptions,
 ): Promise<void> {
-  const assertCurrent = () => {
+  const assertCurrent = composeSessionSourceAssertion([options.commitGuard], (assertSource) => {
     options.signal?.throwIfAborted();
-    options.commitGuard();
+    assertSource();
+  });
+  const gitOptions = {
+    signal: options.signal,
+    beforeRun: assertCurrent,
+    stateOwnerPath: options.workerAuthority?.stateOwnerPath,
+    killProcessTree: true,
   };
-  const gitOptions = { signal: options.signal, beforeRun: assertCurrent, killProcessTree: true };
   const markerPath = path.join(params.target.path, ".git");
   const marker = await fs.readFile(markerPath);
   const destinationIndex = await resolveGitMetadataPath(params.target.path, "index", gitOptions);
@@ -169,10 +175,10 @@ export async function prepareClonedWorktreeIndex(
   },
   options: WorktreeFilesystemOptions,
 ): Promise<void> {
-  const assertCurrent = () => {
+  const assertCurrent = composeSessionSourceAssertion([options.commitGuard], (assertSource) => {
     options.signal?.throwIfAborted();
-    options.commitGuard();
-  };
+    assertSource();
+  });
   await timeWorktreePreparationPhase("indexCopy", async () => {
     if (params.apfsCloneCompletedAtMs !== undefined) {
       const { copyApfsCloneIndex } = await import("./checkout-apfs.js");
@@ -209,7 +215,12 @@ export async function prepareClonedWorktreeIndex(
       },
     );
   });
-  const gitOptions = { signal: options.signal, beforeRun: assertCurrent, killProcessTree: true };
+  const gitOptions = {
+    signal: options.signal,
+    beforeRun: assertCurrent,
+    stateOwnerPath: options.workerAuthority?.stateOwnerPath,
+    killProcessTree: true,
+  };
   await timeWorktreePreparationPhase("indexRefresh", () =>
     withWorktreeGitConfig(params.destination, params.sourceOnly === true, gitOptions, (git) =>
       git.require(params.destination, ["update-index", "--refresh"], {

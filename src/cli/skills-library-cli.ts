@@ -16,6 +16,7 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import {
@@ -68,6 +69,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     command: Command,
     action: (opts: GatewayRpcOpts) => Promise<T>,
     format: (result: T) => string,
+    readOnly = false,
   ) =>
     runCommandWithRuntime(defaultRuntime, async () => {
       const commandOptions = command.opts<GatewayRpcOpts>();
@@ -82,7 +84,20 @@ export function registerSkillsLibraryCli(skills: Command): void {
         expectFinal: value("expectFinal"),
         json: value("json"),
       };
-      const result = await action(opts);
+      // Reads stop with the command; nothing they settle to is printed after Ctrl+C.
+      const signal = readOnly ? getAsyncWorkSignal() : undefined;
+      let result: T;
+      try {
+        result = await action(opts);
+      } catch (error) {
+        if (signal?.aborted) {
+          return;
+        }
+        throw error;
+      }
+      if (signal?.aborted) {
+        return;
+      }
       if (opts.json) {
         defaultRuntime.writeJson(result);
       } else {
@@ -135,6 +150,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
           ]
             .map(sanitizeTerminalText)
             .join("\n"),
+        true,
       ),
     );
 
@@ -177,6 +193,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
             ),
             "",
           ].join("\n"),
+        true,
       ),
     );
 

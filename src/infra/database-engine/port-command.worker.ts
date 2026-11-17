@@ -14,7 +14,8 @@ import { createSqliteWalCheckpoint } from "../sqlite-wal-checkpoint.js";
 import { WorkerTaskError } from "../worker-task-pool.js";
 import { resolveDatabaseEngineInput } from "./config.js";
 import { getScopedDatabaseEngineSelection } from "./context.js";
-import { readBackupEngine, readBackupEngineImage, type BackupEngine } from "./physical-store.js";
+import { readBackupEngineImage } from "./physical-store-inspection.js";
+import { readBackupEngine, type BackupEngine } from "./physical-store.js";
 import {
   assertDatabasePortNamespaceOwner,
   databasePortProviders,
@@ -28,7 +29,6 @@ import {
   inspectSqlitePortSchema,
   materializeDatabasePort,
   migrateDatabasePortSource,
-  readPostgresPortCapabilities,
   sqlitePortAllocations,
   type PortDescriptor,
   type PortVerification,
@@ -37,6 +37,7 @@ import {
   refreshPostgresPlannerStatistics,
   type PostgresPlannerStatistics,
 } from "./postgres-planner-statistics.js";
+import { readPostgresPortCapabilities } from "./postgres-port-capabilities.js";
 
 type Common = { sourcePath: string; config: OpenClawConfig };
 type Identity = { storeId: string; namespace: string };

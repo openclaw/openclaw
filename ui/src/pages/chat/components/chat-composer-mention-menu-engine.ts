@@ -6,6 +6,7 @@ import {
   resolveGatewayErrorDetailCode,
 } from "../../../api/gateway-connect-errors.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import {
   findMentionTarget,
   type HumanMentionAccess,
@@ -250,8 +251,8 @@ export function createHumanMentionEngine(owner: MentionEngineOwner) {
         return;
       }
       const currentTextarea = host.getTextarea();
-      currentTextarea?.focus({ preventScroll: true });
-      currentTextarea?.setSelectionRange(caret, caret);
+      focusComposerInput(currentTextarea, { preventScroll: true });
+      selectComposerInput(currentTextarea, caret, caret);
     });
     return true;
   }

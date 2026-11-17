@@ -1,3 +1,0 @@
-# PR #195176: extend the real transcript/persistence seed fixture for lifecycle ordering,
-# truthful outcomes, cancellation, advisory observer failures, and nonreplayed notices.
-81

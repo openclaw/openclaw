@@ -147,7 +147,7 @@ export function createSidebarSessionWindow(
     publish();
   };
   const scheduleMeasurement = createLayoutMeasurement(
-    () => ({ items: inputs() }),
+    () => ({ items: inputs(), rowFloor: rowFloor() }),
     (request) => {
       const scroller = scroll.element();
       if (!request || !scroller) {
@@ -172,12 +172,18 @@ export function createSidebarSessionWindow(
       return () => {
         scroll.captureRowFloor(nextRowFloor);
         // This request still contains estimates for the previous CSS minimum.
-        if (rowFloor() !== nextRowFloor) {
+        if (request.rowFloor !== nextRowFloor) {
           setRowFloor(nextRowFloor);
           return;
         }
         if (layout !== nextLayout) {
-          measured.clear();
+          // Mounted rows remain observed. Dropping their measurements can lose
+          // a resize already delivered, or wait forever for an unchanged size.
+          for (const key of measured.keys()) {
+            if (!mounted.has(key)) {
+              measured.delete(key);
+            }
+          }
         }
         layout = nextLayout;
         viewportHeight = nextHeight;
@@ -202,6 +208,8 @@ export function createSidebarSessionWindow(
       };
     },
     {
+      // Commit archive geometry before its native exit animation can finish.
+      changeTiming: () => (list?.hasAttribute("data-sidebar-archive-exiting") ? "sync" : undefined),
       targets: () => [
         list,
         ...(scroll.element() ? [scroll.element()!] : []),

@@ -9,6 +9,7 @@ const TemplatePackageName = Type.String({
   pattern: "^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$",
 });
 const TemplateArtifactIntegrity = Type.String({ pattern: "^sha256-[A-Za-z0-9+/]{43}=$" });
+const TemplateBundledDigest = Type.String({ pattern: "^sha256:[a-f0-9]{64}$" });
 const TemplateCatalogCoordinateSchema = closedObject({
   packageName: TemplatePackageName,
   version: NonEmptyString,
@@ -61,22 +62,44 @@ const TemplatesCatalogContentsSchema = closedObject({
     }),
   ),
   skills: Type.Array(
-    closedObject({
-      name: NonEmptyString,
-      version: NonEmptyString,
-      excerpt: Type.Optional(Type.String()),
-    }),
+    Type.Union([
+      closedObject({
+        name: NonEmptyString,
+        source: Type.Literal("clawhub"),
+        ref: TemplatePackageName,
+        version: NonEmptyString,
+        excerpt: Type.Optional(Type.String()),
+      }),
+      closedObject({
+        name: NonEmptyString,
+        source: Type.Literal("bundled"),
+        path: NonEmptyString,
+        excerpt: Type.Optional(Type.String()),
+      }),
+    ]),
   ),
   integrations: Type.Array(
-    closedObject({
-      name: NonEmptyString,
-      kind: stringLiteralUnion(["plugin", "mcpServer"]),
-      version: Type.Optional(NonEmptyString),
-    }),
+    Type.Union([
+      closedObject({
+        name: NonEmptyString,
+        kind: Type.Literal("plugin"),
+        source: Type.Literal("clawhub"),
+        ref: TemplatePackageName,
+        version: NonEmptyString,
+      }),
+      closedObject({ name: NonEmptyString, kind: Type.Literal("mcpServer") }),
+      closedObject({
+        name: NonEmptyString,
+        kind: Type.Literal("plugin"),
+        source: Type.Literal("bundled"),
+        path: NonEmptyString,
+      }),
+    ]),
   ),
   automations: Type.Array(
     closedObject({
       name: NonEmptyString,
+      enabled: Type.Boolean(),
       schedule: NonEmptyString,
       timezone: NonEmptyString,
     }),
@@ -90,6 +113,7 @@ export const TemplatesCatalogDetailParamsSchema = closedObject({
 export const TemplatesCatalogDetailSchema = closedObject({
   ...TemplatesCatalogEntrySchema.properties,
   version: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
   agentName: Type.Optional(NonEmptyString),
   agentDescription: Type.Optional(Type.String()),
   workspaceFiles: Type.Integer({ minimum: 0 }),
@@ -98,7 +122,15 @@ export const TemplatesCatalogDetailSchema = closedObject({
   mcpServers: Type.Integer({ minimum: 0 }),
   scheduledJobs: Type.Integer({ minimum: 0 }),
   contents: Type.Optional(TemplatesCatalogContentsSchema),
-  scanStatus: Type.Optional(NonEmptyString),
+  createdAtMs: Type.Optional(Type.Number({ minimum: 0 })),
+  categories: Type.Optional(Type.Array(NonEmptyString)),
+  /** The exact release's ClawHub audit; absent when no report describes this release. */
+  security: Type.Optional(
+    closedObject({
+      verdict: Type.Optional(NonEmptyString),
+      auditUrl: NonEmptyString,
+    }),
+  ),
 });
 export const TemplatesCatalogDetailResultSchema = closedObject({
   detail: TemplatesCatalogDetailSchema,
@@ -181,19 +213,32 @@ export const TemplatePluginGrantsByIdSchema = Type.Record(
   PluginOperatorGrantsSchema,
 );
 
-export const TemplatePluginReviewSchema = closedObject({
+const TemplatePluginReviewProperties = {
   actionId: NonEmptyString,
   pluginId: NonEmptyString,
-  ref: NonEmptyString,
-  version: NonEmptyString,
   ownerAction: stringLiteralUnion(["install", "reuse"]),
-  integrity: TemplateArtifactIntegrity,
   declaredCapabilities: PluginDeclaredSurfaceSchema,
   capabilityGrants: PluginOperatorGrantsSchema,
   capabilityGrantsByPluginId: TemplatePluginGrantsByIdSchema,
   reviewToken: NonEmptyString,
   riskWarning: Type.Optional(NonEmptyString),
-});
+};
+
+export const TemplatePluginReviewSchema = Type.Union([
+  closedObject({
+    ...TemplatePluginReviewProperties,
+    source: Type.Literal("clawhub"),
+    ref: NonEmptyString,
+    version: NonEmptyString,
+    integrity: TemplateArtifactIntegrity,
+  }),
+  closedObject({
+    ...TemplatePluginReviewProperties,
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    digest: TemplateBundledDigest,
+  }),
+]);
 
 export const TemplatePluginAcknowledgementSchema = closedObject({
   actionId: NonEmptyString,
@@ -204,28 +249,52 @@ export const TemplatePluginAcknowledgementSchema = closedObject({
   acknowledgeRiskWarning: Type.Optional(Type.Literal(true)),
 });
 
-export const TemplateSkillReviewSchema = closedObject({
-  actionId: NonEmptyString,
-  ref: NonEmptyString,
-  version: NonEmptyString,
-  integrity: NonEmptyString,
-  riskWarning: NonEmptyString,
-  reviewToken: NonEmptyString,
-});
+export const TemplateSkillReviewSchema = Type.Union([
+  closedObject({
+    actionId: NonEmptyString,
+    source: Type.Literal("clawhub"),
+    ref: NonEmptyString,
+    version: NonEmptyString,
+    integrity: NonEmptyString,
+    riskWarning: NonEmptyString,
+    reviewToken: NonEmptyString,
+  }),
+  closedObject({
+    actionId: NonEmptyString,
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    name: NonEmptyString,
+    digest: TemplateBundledDigest,
+    riskWarning: NonEmptyString,
+    reviewToken: NonEmptyString,
+  }),
+]);
 
-export const TemplateSkillAcknowledgementSchema = closedObject({
-  actionId: NonEmptyString,
-  ref: NonEmptyString,
-  reviewToken: NonEmptyString,
-  acknowledgeRiskWarning: Type.Literal(true),
-});
+export const TemplateSkillAcknowledgementSchema = Type.Union([
+  closedObject({
+    actionId: NonEmptyString,
+    source: Type.Literal("clawhub"),
+    ref: NonEmptyString,
+    reviewToken: NonEmptyString,
+    acknowledgeRiskWarning: Type.Literal(true),
+  }),
+  closedObject({
+    actionId: NonEmptyString,
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    digest: TemplateBundledDigest,
+    reviewToken: NonEmptyString,
+    acknowledgeRiskWarning: Type.Literal(true),
+  }),
+]);
 
 export const TemplatesAddPlanParamsSchema = closedObject({
   source: TemplateCatalogCoordinateSchema,
   agentId: Type.Optional(NonEmptyString),
 });
 
-export const TemplatesAddApplyParamsSchema = closedObject({
+/** Add from a reviewed plan. The setup helper installs through exactly this shape. */
+export const TemplatesAddReviewedApplyParamsSchema = closedObject({
   source: TemplateCatalogCoordinateSchema,
   agentId: Type.Optional(NonEmptyString),
   planIntegrity: Type.Optional(NonEmptyString),
@@ -233,6 +302,21 @@ export const TemplatesAddApplyParamsSchema = closedObject({
   acknowledgeCapabilities: Type.Optional(Type.Array(TemplatePluginAcknowledgementSchema)),
   acknowledgeSkillWarnings: Type.Optional(Type.Array(TemplateSkillAcknowledgementSchema)),
 });
+
+export const TemplatesAddApplyParamsSchema = Type.Union([
+  TemplatesAddReviewedApplyParamsSchema,
+  // Chat-based Add has no reviewed plan: the Gateway creates the agent and the
+  // agent's own conversation continues setup. agentId is the preferred id; the
+  // Gateway answers with the unused id it chose.
+  closedObject({
+    mode: Type.Literal("chat"),
+    source: TemplateCatalogCoordinateSchema,
+    agentId: NonEmptyString,
+    // Retry targets this admitted agent, even if the setup receipt was consumed.
+    resume: Type.Optional(Type.Literal(true)),
+    acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
+  }),
+]);
 
 export const TemplatesUpdatePlanParamsSchema = closedObject({
   agentId: NonEmptyString,
@@ -318,6 +402,7 @@ export const TemplateConfiguredAccessSchema = closedObject({
 });
 
 const TemplateScheduledDeclarationSchema = closedObject({
+  enabled: Type.Boolean(),
   schedule: Type.Union([
     closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
     closedObject({ everyMs: Type.Integer({ minimum: 1 }) }),
@@ -352,12 +437,20 @@ const TemplateOwnershipEffectSchema = closedObject({
   affectedTemplateCount: Type.Integer({ minimum: 0 }),
 });
 
-const TemplateSkillArtifactSchema = closedObject({
-  source: Type.Literal("clawhub"),
-  ref: NonEmptyString,
-  version: NonEmptyString,
-  integrity: TemplateArtifactIntegrity,
-});
+const TemplateSkillArtifactSchema = Type.Union([
+  closedObject({
+    source: Type.Literal("clawhub"),
+    ref: NonEmptyString,
+    version: NonEmptyString,
+    integrity: TemplateArtifactIntegrity,
+  }),
+  closedObject({
+    source: Type.Literal("bundled"),
+    path: NonEmptyString,
+    name: NonEmptyString,
+    digest: TemplateBundledDigest,
+  }),
+]);
 
 const TemplateMcpDeclarationSchema = closedObject({
   transport: stringLiteralUnion(["stdio", "sse", "streamable-http"]),
@@ -416,7 +509,6 @@ export const TemplateManifestDisclosureSchema = closedObject({
     byteLength: Type.Integer({ minimum: 1 }),
   }),
   manifestJson: NonEmptyString,
-  openClawProfileJson: Type.Optional(NonEmptyString),
 });
 
 export const TemplateLifecyclePlanResultSchema = closedObject({
@@ -487,6 +579,7 @@ export type TemplateResourceStatus = Static<typeof TemplateResourceStatusSchema>
 export type TemplateStatusEntry = Static<typeof TemplateStatusEntrySchema>;
 export type TemplatesStatusResult = Static<typeof TemplatesStatusResultSchema>;
 export type TemplatesAddApplyParams = Static<typeof TemplatesAddApplyParamsSchema>;
+export type TemplatesAddReviewedApplyParams = Static<typeof TemplatesAddReviewedApplyParamsSchema>;
 export type TemplatesAddPlanParams = Static<typeof TemplatesAddPlanParamsSchema>;
 export type TemplatesUpdatePlanParams = Static<typeof TemplatesUpdatePlanParamsSchema>;
 export type TemplatesUpdateApplyParams = Static<typeof TemplatesUpdateApplyParamsSchema>;

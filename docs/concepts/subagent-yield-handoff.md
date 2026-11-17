@@ -42,6 +42,14 @@ registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
 
+Background commands belong to the session that started them, not to a run. A
+yield awaits every wake-armed command that is still running in the session,
+including commands that an earlier run started. A command exit becomes an
+ordinary exec wake turn in the child session. Like a tool handoff result, the
+wake continues the task that is paused in that session, whichever run paused it.
+Without a paused task, the wake stays a separate follow-up, and a hidden child
+that did not yield gets only a passive notice.
+
 Before admitting another turn in a yielded requester, the recovery owner transfers
 its ended execution's fence to the current durable child batch. The batch is
 revalidated before the write commits; absent or adopted batches, unrelated run
@@ -212,13 +220,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
-  Visible settlement cohorts use the host-only binding when every captured
-  requester session and lifecycle revision matches the current parent. Private
-  cohorts retain their strict requester identity checks. This lets a guest's own yielded session
-  resume under its existing session-write scope without granting `operator.write`.
-  Stale, mixed-incarnation, or unbound visible history does not gain this scope
-  alternative; its existing authorized recovery path stays unchanged. Copied
-  request fields cannot supply the host-only binding.
+  Settlement cohorts use the host-only binding to the requester chat as it is
+  now, also after a reset or a compaction successor. This lets a guest's own
+  yielded session resume under its existing session-write scope without granting
+  `operator.write`. Copied request fields cannot supply the host-only binding.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
   unrelated inter-session messages do not adopt that row. An ordinary

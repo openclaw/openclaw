@@ -26,7 +26,11 @@ function mockStatus(payload: unknown, code: number | null = 0) {
 }
 
 it("asks Claude CLI for its active account and returns only safe display fields", async () => {
-  const account = { authMethod: "claude.ai", email: "account@example.test" };
+  const account = {
+    authMethod: "claude.ai",
+    email: "account@example.test",
+    subscriptionType: "max",
+  };
   mockStatus({
     loggedIn: true,
     ...account,

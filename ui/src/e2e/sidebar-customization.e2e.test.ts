@@ -549,10 +549,10 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--onboarding");
-      // Ask OpenClaw is a settings-takeover page (#111686): the settings
-      // sidebar owns navigation there, not the app sidebar.
+      // Settings replaces the session panel while retaining the desktop navigation rail.
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
+      await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
+      await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);
