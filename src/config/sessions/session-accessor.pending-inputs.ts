@@ -424,11 +424,13 @@ async function stagePreparedPendingInput(
         };
       }
       assertUnowned();
+      // Exact accepted identity and absence of a live owner were proved above.
+      // Queued input remains owed after this process relinquishes an attempt.
       if (
-        (!options.requestFingerprint && !options.trackCompletion && !reclaimsCancelledSourceTurn) ||
-        (existing.state !== "queued" && !reopensCancelled) ||
-        (existing.lifecycle_generation === lifecycleGeneration &&
+        existing.state !== "queued" &&
+        ((!options.requestFingerprint &&
           !options.trackCompletion &&
+          !reclaimsCancelledSourceTurn) ||
           !reopensCancelled)
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");

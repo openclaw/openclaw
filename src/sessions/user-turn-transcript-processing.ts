@@ -97,9 +97,11 @@ export async function settleUserTurnPendingInput(
 export function createUserTurnProcessingCompletion(
   readPendingInput: () => SessionPendingInputReceipt | undefined,
   sources: readonly UserTurnTranscriptRecorder[] | undefined,
+  onPendingInputRelinquished: (receipt: SessionPendingInputReceipt) => void,
 ) {
   let processingCompletion: Result<AgentRunTerminalOutcome, unknown> | undefined;
   let processingCompletionPromise: Promise<AgentRunTerminalOutcome | undefined> | undefined;
+  let relinquishedPendingInput: SessionPendingInputReceipt | undefined;
   return {
     withPendingInput: <T>(run: () => T): T => {
       const pendingInput = readPendingInput();
@@ -132,6 +134,7 @@ export function createUserTurnProcessingCompletion(
       const pendingInput = readPendingInput();
       if (pendingInput) {
         pendingInput.relinquish();
+        relinquishedPendingInput = pendingInput;
       } else {
         for (const source of sources ?? []) {
           source.relinquishPendingInput?.();
@@ -208,6 +211,7 @@ export function createUserTurnProcessingCompletion(
       return processingCompletionPromise;
     },
     waitForPendingInputSettlement: async () => {
+      const relinquished = relinquishedPendingInput;
       const settled = await Promise.allSettled([
         processingCompletionPromise,
         readPendingInput()?.settled?.(),
@@ -223,6 +227,10 @@ export function createUserTurnProcessingCompletion(
       }
       if (failures.length) {
         throw new AggregateError(failures, "Failed to settle pending input custody");
+      }
+      if (relinquished && relinquishedPendingInput === relinquished) {
+        relinquishedPendingInput = undefined;
+        onPendingInputRelinquished(relinquished);
       }
     },
   };

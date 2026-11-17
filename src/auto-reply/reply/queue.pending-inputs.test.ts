@@ -276,6 +276,116 @@ describe("followup queue durable input consumption", () => {
   const collected = (...texts: string[]) =>
     `[Queued messages while agent was busy]\n\n${texts.map((text, i) => `---\nQueued #${i + 1}\n${text}`).join("\n\n")}`;
 
+  it("rejects a different run ID when reattaching a relinquished native queued input", async () => {
+    const message = {
+      role: "user",
+      content: "Retain the original accepted native run identity.",
+      idempotencyKey: "native-run-identity:user",
+      timestamp: 1,
+    } satisfies PersistedUserTurnMessage;
+    const receipts: pendingInputs.SessionPendingInputReceipt[] = [];
+    try {
+      const original = await pendingInputs.stageSessionPendingInput(scope(), {
+        runId: "native-original",
+        message,
+        assertCurrent() {},
+      });
+      assert(original, "Expected the original native receipt");
+      receipts.push(original);
+      original.relinquish();
+      await original.settled?.();
+      await expect(
+        pendingInputs
+          .stageSessionPendingInput(scope(), {
+            runId: "native-different",
+            message,
+            assertCurrent() {},
+          })
+          .then((receipt) => {
+            if (receipt) {
+              receipts.push(receipt);
+            }
+            return receipt;
+          }),
+      ).rejects.toThrow("Pending input idempotency key conflicts with the accepted input");
+      expect((await pending()).items).toMatchObject([
+        { runId: "native-original", state: "queued", message },
+      ]);
+      expect((await readSessionQueuedInputPage(scope())).rows).toMatchObject([
+        { run_id: "native-original", state: "queued" },
+      ]);
+      expect(await loadMessages()).toEqual([]);
+    } finally {
+      for (const receipt of receipts) {
+        if (receipt.state === "consumed") {
+          receipt.release();
+        } else {
+          receipt.relinquish();
+        }
+        await receipt.settled?.();
+      }
+    }
+  });
+
+  it("admits one native owner when independent callers race to reattach a relinquished queued input", async () => {
+    const runId = "native-reattach-race";
+    const message = {
+      role: "user",
+      content: "Execute the accepted native input exactly once.",
+      idempotencyKey: `${runId}:user`,
+      timestamp: 1,
+    } satisfies PersistedUserTurnMessage;
+    const receipts: pendingInputs.SessionPendingInputReceipt[] = [];
+    try {
+      const original = await pendingInputs.stageSessionPendingInput(scope(), {
+        runId,
+        message,
+        assertCurrent() {},
+      });
+      assert(original, "Expected the original native receipt");
+      receipts.push(original);
+      original.relinquish();
+      await original.settled?.();
+      const attempts = await Promise.allSettled(
+        [scope(), scope()].map((target) =>
+          pendingInputs.stageSessionPendingInput(target, { runId, message, assertCurrent() {} }),
+        ),
+      );
+      const admitted = attempts.flatMap((result) =>
+        result.status === "fulfilled" && result.value ? [result.value] : [],
+      );
+      receipts.push(...admitted);
+      const refused = attempts.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      expect(admitted).toHaveLength(1);
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({
+        message: expect.stringMatching(/already admitted|already has a live owner/u),
+      });
+      const winner = admitted[0];
+      assert(winner, "Expected one native reattachment owner");
+      const execute = vi.fn(async () => appendTranscriptMessage(scope(), { message }));
+      await winner.run(execute);
+      expect(execute).toHaveBeenCalledOnce();
+      winner.release();
+      await winner.settled?.();
+      const messages = await loadMessages();
+      expect(messages).toHaveLength(1);
+      expect(messages).toMatchObject([{ message }]);
+      expect((await pending()).items).toEqual([]);
+    } finally {
+      for (const receipt of receipts) {
+        if (receipt.state === "consumed") {
+          receipt.release();
+        } else {
+          receipt.relinquish();
+        }
+        await receipt.settled?.();
+      }
+    }
+  });
+
   it("relinquishes queued custody during an authority outage and the existing drain runs it once", async ({
     signal,
   }) => {
@@ -308,13 +418,44 @@ describe("followup queue durable input consumption", () => {
       { agentId: "main", sessionKey, sessionId, config, workspaceDir: fixture.sessionsDir() },
     );
     const stage = pendingInputs.stageSessionPendingInput;
-    using staging = vi
-      .spyOn(pendingInputs, "stageSessionPendingInput")
-      .mockImplementationOnce(async (...args) => {
-        const receipt = await stage(...args);
-        unavailable = true;
-        return receipt;
+    using staging = vi.spyOn(pendingInputs, "stageSessionPendingInput");
+    staging.mockImplementationOnce(async (inputScope, options) => {
+      let committedReceipt: pendingInputs.SessionPendingInputReceipt | undefined;
+      const observeSettlement = (receipt: pendingInputs.SessionPendingInputReceipt) => {
+        const waitForSettlement = receipt.settled;
+        assert(waitForSettlement, "Expected the real pending-input receipt settlement");
+        const settlement = vi.spyOn(receipt, "settled");
+        settlement.mockImplementation(async () => {
+          await waitForSettlement();
+          if (
+            !unavailable ||
+            observedOutage ||
+            listLiveSessionPendingInputs(databasePath, resolved.sessionKey, sessionId).some(
+              (input) => input.inputId === receipt.inputId,
+            )
+          ) {
+            return;
+          }
+          observedOutage = true;
+          firstAttempt.resolve();
+        });
+        restoreSettlements.push(() => settlement.mockRestore());
+      };
+      const receipt = await stage(inputScope, {
+        ...options,
+        onCommitted: (committed) => {
+          committedReceipt = committed;
+          observeSettlement(committed);
+          options.onCommitted?.(committed);
+        },
       });
+      assert(receipt, "Expected the staged pending-input receipt");
+      if (receipt !== committedReceipt) {
+        observeSettlement(receipt);
+      }
+      unavailable = true;
+      return receipt;
+    });
     const resolved = await prepareSqliteScope(scope());
     assert(resolved.path, "Expected the durable queue database");
     const databasePath = resolved.path;
@@ -340,44 +481,27 @@ describe("followup queue durable input consumption", () => {
       storePath: fixture.storePath(),
       defaultModel: "gpt-test",
     });
-    const failures: unknown[] = [];
     const firstAttempt = createDeferred();
-    let attempts = 0;
+    let observedOutage = false;
+    const restoreSettlements: Array<() => void> = [];
     enqueue(queued);
     try {
-      scheduleFollowupDrain(sessionKey, async (run) => {
-        attempts += 1;
-        try {
-          await runner(run);
-        } catch (error) {
-          try {
-            expect(error).toBe(outage);
-            expect(attempts).toBe(1);
-            expect(executeAgentTurn).not.toHaveBeenCalled();
-            expect(await pending()).toMatchObject({
-              total: 1,
-              items: [{ state: "queued", message: { content: text } }],
-            });
-            expect(
-              listLiveSessionPendingInputs(databasePath, resolved.sessionKey, sessionId),
-            ).toEqual([]);
-            expect((await readSessionQueuedInputPage(scope())).rows).toMatchObject([
-              { state: "queued", end_cause: null },
-            ]);
-          } catch (failure) {
-            failures.push(failure);
-          } finally {
-            unavailable = false;
-            firstAttempt.resolve();
-          }
-          throw error;
-        }
-      });
+      scheduleFollowupDrain(sessionKey, runner);
       await withinTest(firstAttempt.promise, signal);
-      expect(failures).toEqual([]);
+      expect(executeAgentTurn).not.toHaveBeenCalled();
+      expect(await pending()).toMatchObject({
+        total: 1,
+        items: [{ state: "queued", message: { content: text } }],
+      });
+      expect(listLiveSessionPendingInputs(databasePath, resolved.sessionKey, sessionId)).toEqual(
+        [],
+      );
+      expect((await readSessionQueuedInputPage(scope())).rows).toMatchObject([
+        { state: "queued", end_cause: null },
+      ]);
+      unavailable = false;
       await withinTest(queued.controllerInput!.settlement.promise, signal);
       await queued.controllerInput!.claim?.settlement.promise;
-      expect(attempts).toBe(2);
       expect(executeAgentTurn).toHaveBeenCalledOnce();
       const messages = await loadMessages();
       expect(messages).toMatchObject([
@@ -387,6 +511,9 @@ describe("followup queue durable input consumption", () => {
       expect((await pending()).items).toEqual([]);
     } finally {
       unavailable = false;
+      for (const restore of restoreSettlements) {
+        restore();
+      }
       typing.cleanup();
     }
   });

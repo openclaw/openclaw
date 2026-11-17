@@ -11,4 +11,5 @@
 # Acceptance/outage regressions: failed pre-ACK input, retained follow-up custody,
 # existing drain once, explicit terminal-cause priority, and original Stop signals.
 # Settlement observation stays outside owner joins and verifies post-outage execution once.
-1368
+# Native-owner guards preserve accepted run identity and single execution during reattachment races.
+1476
