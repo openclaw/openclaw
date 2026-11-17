@@ -162,7 +162,13 @@ which support selective deletion after promotion. For coverage and limits, see
 
 When Memory Core owns the memory slot, a fresh Gateway start opens an agent's
 memory manager on its first memory search, flush, or turn that needs it, so an
-idle Gateway does not start index and transcript workers for every agent. Once a
+idle Gateway does not start index and transcript workers for every agent. Set
+`memory.search.coldStart: "eager"` to opt out of this lazy default and open
+every configured agent's index right after startup instead, trading extra
+startup workers and peak memory for immediately fresh indexes; the default
+remains demand-driven. Each agent can override the global default with
+`agents.entries.<id>.memory.search.coldStart`, which takes precedence over the
+global setting in both directions. Once a
 manager has run in the Gateway process, the Memory Core service schedules each
 configured agent's memory manager to open again whenever the service restarts,
 including after plugin replacement and memory or agent configuration changes. This

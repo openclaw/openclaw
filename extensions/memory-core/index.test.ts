@@ -365,6 +365,58 @@ describe("memory-core plugin runtime registration", () => {
     ]);
   });
 
+  it("opens only the eager override agent at boot when cold start is demand-driven", async () => {
+    // Untouched agents with no live demand: a demand-driven selector opens
+    // nothing, so only the per-agent eager override can produce this call.
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          "boot-lazy": {},
+          "boot-eager": { memory: { search: { coldStart: "eager" } } },
+        },
+      },
+      plugins: { slots: { memory: "memory-core" } },
+      memory: { search: { coldStart: "demand" } },
+    };
+    const {
+      services: [service],
+      backgroundTasks,
+      context,
+    } = captureCapability({ config });
+    assert(service, "Expected the memory index service");
+    await service.start(context);
+    await Promise.all(backgroundTasks);
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([
+      [{ cfg: config, agentId: "boot-eager" }],
+    ]);
+  });
+
+  it("keeps a per-agent demand override lazy when cold start is eager globally", async () => {
+    // Untouched agents: the global eager opt-in opens every agent except the
+    // one whose per-agent override keeps it demand-driven.
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          "boot-lazy": { memory: { search: { coldStart: "demand" } } },
+          "boot-eager": {},
+        },
+      },
+      plugins: { slots: { memory: "memory-core" } },
+      memory: { search: { coldStart: "eager" } },
+    };
+    const {
+      services: [service],
+      backgroundTasks,
+      context,
+    } = captureCapability({ config });
+    assert(service, "Expected the memory index service");
+    await service.start(context);
+    await Promise.all(backgroundTasks);
+    expect(getMemorySearchManagerMock.mock.calls).toEqual([
+      [{ cfg: config, agentId: "boot-eager" }],
+    ]);
+  });
+
   it.each(["honcho", "none"])(
     "starts configured indexes only for the selected memory slot: %s",
     async (owner) => {
