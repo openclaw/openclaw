@@ -1,10 +1,8 @@
 import { cloneEnvWithPlatformSemantics } from "../../../config/config-env-vars.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import {
-  isSessionDeliveryGenerationRevokedError,
-  prepareSessionGenerationFacts,
-} from "../../../config/sessions/session-delivery-generation.js";
+import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { acquireTranscriptLease } from "../../../config/sessions/transcript-lease.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { logVerbose } from "../../../globals.js";
@@ -12,6 +10,7 @@ import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import { chatRef } from "../../../sessions/chat-ref.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -168,14 +167,13 @@ export async function prepareSubagentKillSession(
           path: owner.scope?.storePath ?? generationStorePath,
           env: owner.scope?.env ?? env,
         };
-        const lifetime = await prepareSessionGenerationFacts({
-          storePath: database.path,
-          sessionKey,
-          agentId,
-          sessionId: entry?.sessionId ?? null,
-          lifecycleRevision: entry?.lifecycleRevision ?? null,
-          exactTranscript: true,
-        });
+        const lifetime = await acquireTranscriptLease(
+          chatRef({ storePath: database.path, sessionKey, agentId }),
+          {
+            sessionId: entry?.sessionId ?? null,
+            lifecycleRevision: entry?.lifecycleRevision,
+          },
+        );
         // The reader can reject after consumption; custody transfers only when it returns.
         releaseLifetime = lifetime.release;
         owner.assertCurrent();

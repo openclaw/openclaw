@@ -56,6 +56,7 @@ import {
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
+  captureGatewayOperatorContinuation,
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
@@ -587,6 +588,31 @@ describe("scheduled authenticated operator source", () => {
     );
   });
 
+  it("keeps key-linked authority current when an unrelated session is created", () =>
+    withRecovery(async (fixture) => {
+      const { agentId, sessionKey, storePath } = fixture.target;
+      const restored = await restoreGatewayOperatorSource({
+        snapshot: fixture.snapshot,
+        target: { agentId, sessionKey },
+        context: fixture.context,
+        assertCurrent: () => {},
+      });
+      using _ = { [Symbol.dispose]: restored.release };
+      expectCurrent(restored.authority);
+
+      await replaceSessionEntry(
+        { agentId, sessionKey: `agent:${agentId}:unrelated`, storePath },
+        { sessionId: "unrelated-session", updatedAt: 1 },
+      );
+      expectCurrent(restored.authority);
+
+      await replaceSessionEntry(fixture.target, {
+        ...fixture.entry,
+        sessionId: "replacement-session",
+      });
+      expectRevoked(restored.authority);
+    }));
+
   it("keeps restored authority current during unrelated issuance", () =>
     withRecovery(async (fixture, stateDir) => {
       using restored = await restoreFixture(fixture);
@@ -594,6 +620,34 @@ describe("scheduled authenticated operator source", () => {
       await issueDeviceBootstrapToken({ baseDir: stateDir });
       expectCurrent(restored.authority);
     }));
+  it("keeps tokenless continuation device revocation independent of its accepting request", () =>
+    withRecovery(
+      async (fixture) => {
+        const caller = acceptedCaller(fixture);
+        const captured = expectDefined(await caller.capture(), "accepted source");
+        expectDefined(fixture.client.internal, "authenticated client").operatorRunAuthority =
+          captured.authority;
+        const continuation = expectDefined(
+          await captureGatewayOperatorContinuation({
+            client: fixture.client,
+            context: fixture.context,
+          }),
+          "detached continuation",
+        );
+        try {
+          expect(continuation.authority.recoverySnapshot?.device).toBeUndefined();
+          caller.release();
+          captured.release();
+          expect(continuation.authority.assertCurrent).not.toThrow();
+          invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+          expect(continuation.authority.assertCurrent).toThrow();
+        } finally {
+          continuation.release();
+        }
+      },
+      { tokenlessDevice: true },
+    ));
+
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>
     withRecovery(
       async (fixture) => {

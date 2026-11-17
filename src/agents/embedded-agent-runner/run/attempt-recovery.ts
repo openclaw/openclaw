@@ -24,6 +24,7 @@ import { observeReplyDelivery } from "../../reply-completion.js";
 import type { normalizeUsage } from "../../usage.js";
 import { resolveSourceReplyDelivery } from "../delivery-evidence.js";
 import { log } from "../logger.js";
+import { isEmbeddedRunReplaySafe } from "../transcript-conflict.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import type { NormalizedEmbeddedRunAttempt } from "./attempt-normalization.js";
@@ -139,6 +140,7 @@ export async function recoverEmbeddedRunAttempt(input: {
       | "live_model_switch"
       | "timeout_recovery"
       | "transient_retry"
+      | "item_conflict"
       | "replay_unsafe"
       | "overflow_recovery"
       | "overflow_unrecoverable"
@@ -330,6 +332,23 @@ export async function recoverEmbeddedRunAttempt(input: {
     );
     recordRecoveryDecision("accepted", "live_model_switch");
     throw new LiveSessionModelSwitchError(requestedSelection);
+  }
+  if (
+    attemptAssistant?.itemConflictRecovery === "deferred" &&
+    !input.contextRecoveryState.itemConflictRecoveryAttempted &&
+    !terminalInterrupted &&
+    !promptError &&
+    isEmbeddedRunReplaySafe(normalizedAttempt.replayState, attempt) &&
+    (await observeReplyDelivery(params.resolveReplyDelivery, 0, (error) =>
+      log.warn(
+        `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+      ),
+    )) === "missing"
+  ) {
+    // The transport saved the repair; execution and delivery owners must both allow replay.
+    input.contextRecoveryState.itemConflictRecoveryAttempted = true;
+    recordRecoveryDecision("accepted", "item_conflict");
+    return retry();
   }
   const assistantSignal =
     attemptAssistant?.stopReason === "error"

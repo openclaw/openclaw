@@ -81,19 +81,19 @@ it("does not let snapshot-loss permission bypass a foreign Git lock", async () =
   expect(await fs.stat(created.path)).toBeTruthy();
 });
 
-it("continues after snapshot failure when snapshot loss is allowed", async () => {
+it("preserves nested repositories even when snapshot loss is allowed", async () => {
   await createNestedRepository(created.path);
+  const valuable = path.join(created.path, "nested", "valuable.txt");
+  await fs.writeFile(valuable, "uncommitted nested work\n");
 
-  const started = Date.now();
-  const result = await remove(true);
-
-  expect(result).toEqual({
-    removed: true,
-    snapshotError: expect.stringContaining(snapshotFailure),
+  await expect(remove(true)).rejects.toThrow(snapshotFailure);
+  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+  expect(getRegistryWorktree(env, created.id)?.gcRetry).toMatchObject({
+    stage: "nested-repository",
+    attempts: 1,
+    retryAt: null,
   });
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeGreaterThanOrEqual(started);
-  expect(getRegistryWorktree(env, created.id)?.removedAt).toBeLessThanOrEqual(Date.now());
-  await expectGone();
+  expect(await fs.readFile(valuable, "utf8")).toBe("uncommitted nested work\n");
 });
 
 it("allows only one concurrent remover to own the claim", async () => {

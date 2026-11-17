@@ -29,6 +29,7 @@ import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { gatewayPersonPrincipalAuthError } from "./auth.js";
 import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
 import {
+  bindGatewayDeviceRevocation,
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
 } from "./device-revocation.js";
@@ -451,7 +452,8 @@ export async function restoreGatewayOperatorSource(params: {
           onSessionIdentityMutation((mutation) => {
             if (
               mutation.agentId === target.agentId &&
-              (mutation.previous.sessionId === target.sessionId ||
+              ((target.sessionId !== undefined &&
+                mutation.previous.sessionId === target.sessionId) ||
                 mutation.previous.sessionKeys.includes(target.sessionKey))
             ) {
               revoke();
@@ -599,8 +601,19 @@ export async function captureGatewayOperatorContinuation(
     releaseInherited?.();
     throw error;
   });
+  // A tokenless source has no credential in its recovery snapshot, but an
+  // in-process continuation still belongs to its explicitly revocable device.
+  // Carry only that owner's revocation, never the accepting request/turn checks.
+  const deviceRevocation = new AbortController();
+  const stopDeviceRevocation = onGatewayDeviceSourceRevoked(inherited.assertCurrent, () => {
+    deviceRevocation.abort(new Error("Gateway device authorization was revoked"));
+  });
   const authority = createAdmittedRunOperatorAuthority({
     ...restored.authority,
+    signal: AbortSignal.any([
+      deviceRevocation.signal,
+      ...(restored.authority.signal ? [restored.authority.signal] : []),
+    ]),
     // One origin keeps one comparable source identity, as completion batches require.
     source: inherited.source,
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
@@ -608,9 +621,11 @@ export async function captureGatewayOperatorContinuation(
       return restored.authority.modelPolicy;
     },
   });
+  bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
   return {
     authority,
     release: () => {
+      stopDeviceRevocation?.();
       restored.release();
       releaseInherited?.();
     },
