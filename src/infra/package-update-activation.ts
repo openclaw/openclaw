@@ -278,6 +278,23 @@ type PackageActivationSettlement = {
   warning?: string;
 };
 
+async function readPackageActivationSettlement(anchor: string, dryRun?: boolean) {
+  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
+  const journal = openPackageActivationSettlementJournal(anchor);
+  const admission = dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
+  return { linkedCompleted, journal, admission, initial: admission?.record ?? journal.read() };
+}
+
+/** Discover repair custody through the same verified journal and lease inspection as settlement. */
+export async function readPackageActivationRepairLease(installKey: string) {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    return undefined;
+  }
+  const { initial } = await readPackageActivationSettlement(anchor);
+  return inspectPackageActivationLease(initial.descriptor.authority).current;
+}
+
 /** Explicit repair settles untouched preparation or obsolete custody, never pending restoration. */
 export async function settlePendingPackageActivation(
   installKey: string,
@@ -296,11 +313,10 @@ export async function settlePendingPackageActivation(
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
-  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
-  const journal = openPackageActivationSettlementJournal(anchor);
-  const admission =
-    options?.dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
-  const initial = admission?.record ?? journal.read();
+  const { linkedCompleted, journal, admission, initial } = await readPackageActivationSettlement(
+    anchor,
+    options?.dryRun,
+  );
   if (options?.operationId) {
     assertPackageActivationOperation(initial, options.operationId);
   }

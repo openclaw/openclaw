@@ -812,6 +812,12 @@ the retained lease's owner, version, phase, last activity, and recovery guidance
 The repairing CLI must contain this fix; a downloaded update candidate cannot
 repair an older updater's blocked admission.
 
+Explicit repair uses the package journal's verified historical lease store when
+it still exists, so uncertain-handoff recovery and publication settlement share
+one repair claim even when the default per-user store is empty. Recovery checks
+and ordinary update admission remain unchanged. The repairing CLI must contain
+this fix; no lease schema or update protocol change is required.
+
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
 the running build. If the replacement never starts, `openclaw update repair`
