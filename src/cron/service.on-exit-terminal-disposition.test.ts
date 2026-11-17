@@ -21,7 +21,7 @@ it.each<
 >([
   ["permanent failure with route", permanentError, routed, 0, 1],
   ["transient failure with route", "rate limit exceeded", routed, 0, 1],
-  ["same incident during cooldown", permanentError, routed, 0, 1, 2],
+  ["same incident during cooldown", permanentError, routed, 0, 2, 2],
   ["no route", permanentError, { mode: "none" }, 1, 0],
   ["best-effort route", permanentError, { ...routed, bestEffort: true }, 1, 0],
 ])(

@@ -289,6 +289,10 @@ host-attributed agent/session/run/service fields when available. Missing attribu
 is explicitly `unknown`. Derived consumers can name their parent reference.
 Gateway turn preparation attributes its leases to the run ID and the
 `gateway-agent-turn` service, including before embedded execution starts.
+Model catalog work (provider and native catalog lookups, catalog auth refreshes,
+and native login checks) holds a plugin only while a call into it is running, and
+attributes those calls to the agent ID and the `model-catalog-discovery` service,
+even when an agent run started it.
 The `omitted` count reports truncation. These are acquisition facts, not proof
 that a holder is currently executing or exclusively owns shared resources.
 

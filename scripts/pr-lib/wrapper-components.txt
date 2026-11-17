@@ -365,6 +365,7 @@ src/agents/session-slug.ts
 src/agents/core-tool-facts.ts
 src/agents/tool-catalog.ts
 src/agents/tool-description-presets.ts
+src/agents/tool-display-call.ts
 src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
@@ -1192,6 +1193,7 @@ src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
 src/infra/owned-directory-observation.ts
 src/infra/package-json.ts
+src/infra/package-release-slot-path.ts
 src/infra/package-update-activation-custody.ts
 src/infra/package-update-activation-immutable-recovery-schema.ts
 src/infra/package-update-activation-immutable.ts
@@ -1231,6 +1233,7 @@ src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
+src/infra/runtime-process-dependency-manifest.ts
 src/infra/runtime-process-dependency-url.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
@@ -1467,6 +1470,7 @@ src/infra/update-run-admission.types.ts
 src/infra/update-run-admission.ts
 src/infra/update-run-cause.ts
 src/infra/update-run-codec.ts
+src/infra/update-run-owed-step.ts
 src/infra/update-run-gateway-stop.ts
 src/infra/update-run-legacy-expiry.ts
 src/infra/update-run-limits.ts
@@ -1748,6 +1752,9 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-native-resource.client.ts
+src/plugins/plugin-capture-native-resource.ts
+src/plugins/plugin-capture-native-resource.types.ts
 src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
@@ -1783,6 +1790,7 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
+src/plugins/plugin-recovery-source-copy.ts
 src/plugins/plugin-replacement-operation.ts
 src/plugins/plugin-replacement-watchers.ts
 src/plugins/plugin-lifecycle-trace.ts
@@ -1927,6 +1935,7 @@ src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/commands.ts
 src/process/spawn-broker/context.ts
+src/process/spawn-broker/context-state.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-output.ts
 src/process/spawn-broker/file-reads.ts
@@ -2053,6 +2062,7 @@ src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
+src/shared/subagent-completion.ts
 src/shared/tool-block-contract.ts
 src/shared/update-outcome-classification.ts
 src/shared/update-outcome.ts
@@ -2548,6 +2558,7 @@ src/config/sessions/session-transcript-reconcile-pool.ts
 src/config/sessions/session-transcript-reconcile-readiness.ts
 src/config/sessions/session-transcript-reconcile.ts
 src/config/sessions/session-transcript-hydration-caller.ts
+src/config/sessions/session-transcript-hydration-decoder.ts
 src/config/sessions/session-transcript-worker-readers.ts
 src/config/sessions/session-transcript-worker-resources.ts
 src/config/sessions/session-transcript-worker-runtime.ts
@@ -2702,6 +2713,7 @@ src/boards/board-website.ts
 src/boards/github-actions-capability.ts
 src/boards/session-actor-board-memory.ts
 src/chat/sender-identity.ts
+src/chat/transcript-display-position.ts
 src/chat/work-context.ts
 src/config/sessions/ambient-transcript-watermark-projection.ts
 src/config/sessions/cleanup-service-read.policy.ts

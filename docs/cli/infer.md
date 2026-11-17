@@ -240,9 +240,9 @@ late transcript output.
 The same cancellation behavior applies to `infer video describe`: interruption
 stops the pending provider request and suppresses late description output.
 
-For audio transcription and video description on POSIX systems, `--file` follows
-directory symlinks before resolving `..`, matching filesystem path resolution.
-Final-file symlinks remain subject to the existing media-directory checks.
+On POSIX systems, `--file` and `--output` paths follow directory symlinks
+before resolving `..`, matching filesystem path resolution. Final-file symlinks
+remain subject to the existing media-directory checks.
 
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved

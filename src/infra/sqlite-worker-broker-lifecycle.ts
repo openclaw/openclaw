@@ -56,17 +56,10 @@ export function createSqliteWorkerLifecycle({
   ) => Promise<unknown>;
   fail: (slot: Slot, error: unknown) => void;
 }) {
-  async function closeHost({
-    inputAdmission,
-    operations,
-    waiters,
-    beforeSharedStateClose,
-  }: {
-    inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
-    operations: Iterable<Promise<void>>;
-    waiters: Iterable<Iterable<(error?: unknown) => void>>;
-    beforeSharedStateClose?: () => Promise<void>;
-  }): Promise<void> {
+  function sealClients(
+    waiters: Iterable<Iterable<(error?: unknown) => void>>,
+    retainSharedState = false,
+  ): void {
     // Seal clients and pending dispatch before the first await; accepted scopes still settle.
     for (const waiting of waiters) {
       for (const resume of waiting) {
@@ -74,15 +67,22 @@ export function createSqliteWorkerLifecycle({
       }
     }
     for (const client of stores.values()) {
-      // Retained state leases keep their binding until canonical resources finish.
-      if (!beforeSharedStateClose || !client.actor.stateContext) {
+      if (!retainSharedState || !client.actor.stateContext) {
         client.sealed = true;
       }
     }
-    await beforeSharedStateClose?.();
-    for (const client of stores.values()) {
-      client.sealed = true;
-    }
+  }
+
+  async function closeHost({
+    inputAdmission,
+    operations,
+    waiters,
+  }: {
+    inputAdmission: Pick<SqliteWorkerInputAdmission, "joinOpens" | "joinPreparations">;
+    operations: Iterable<Promise<void>>;
+    waiters: Iterable<Iterable<(error?: unknown) => void>>;
+  }): Promise<void> {
+    sealClients(waiters);
     const errors: unknown[] = [];
     try {
       await inputAdmission.joinOpens();
@@ -99,6 +99,7 @@ export function createSqliteWorkerLifecycle({
     if (errors.length) {
       throw new AggregateError(errors, "SQLite worker host cleanup failed");
     }
+    stores.clear();
   }
 
   async function acquireSlot(
@@ -509,6 +510,7 @@ export function createSqliteWorkerLifecycle({
   }
 
   return {
+    sealClients,
     closeHost,
     acquireSlot,
     createSlot,

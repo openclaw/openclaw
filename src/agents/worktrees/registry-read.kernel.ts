@@ -96,9 +96,10 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
       typeof retry.attempts === "number" &&
       Number.isSafeInteger(retry.attempts) &&
       retry.attempts > 0 &&
-      typeof retry.retryAt === "number" &&
-      Number.isSafeInteger(retry.retryAt) &&
-      retry.retryAt >= 0
+      (retry.retryAt === null ||
+        (typeof retry.retryAt === "number" &&
+          Number.isSafeInteger(retry.retryAt) &&
+          retry.retryAt >= 0))
     ) {
       record.gcRetry = {
         stage: retry.stage,

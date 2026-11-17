@@ -66,6 +66,11 @@ import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-trans
 import type { SessionTranscriptReadScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type {
+  SessionPreparedCompactionInput,
+  SessionPreparedCompactionValue,
+  SessionPreparedCompactionWireValue,
+} from "./session-compaction-prepared.types.js";
+import type {
   SessionEntryListWorkerInput,
   SessionEntryListWorkerResult,
   SessionEntryReadWorkerInput,
@@ -186,7 +191,6 @@ export type {
   PreparedSessionTranscriptHydration,
   SessionTranscriptCurrentTurnEntryRead,
   SessionTranscriptCurrentTurnEntryRequest,
-  SessionTranscriptHydrationChunk,
   SessionTranscriptHydrationWorkerResult,
 } from "./session-transcript-hydration.types.js";
 
@@ -306,6 +310,7 @@ export type SessionHistoryWorkerInput =
   | SessionColdMetadataWorkerInput
   | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
+  | SessionPreparedCompactionInput
   | SessionTranscriptMaintenanceWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptRecentActiveEventsWorkerInput
@@ -378,6 +383,7 @@ export type SessionHistoryWorkerPreparedInput =
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "compaction-preparation": SessionPreparedCompactionWireValue;
     "session-retirement-read": {
       kind: "session-retirement-read";
       result: SessionRetirementReadResult;
@@ -557,6 +563,10 @@ type CancellableSessionHistoryReader<
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
   SessionTranscriptHydrationReaders & {
+    readPreparedCompaction: (
+      input: Omit<SessionPreparedCompactionInput, "kind" | "database">,
+      signal?: AbortSignal,
+    ) => Promise<SessionPreparedCompactionValue>;
     readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
     readAgentToolUsageImport: SessionHistoryReader<"agent-tool-usage-import", "scan">;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;
@@ -598,6 +608,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     searchTranscripts: (
       params: SessionTranscriptSearchWorkerInput["params"],
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
+      filterCandidates?: import("./session-transcript-search.types.js").SessionTranscriptSearchFilter,
     ) => Promise<SessionTranscriptSearchResult>;
     assertCurrent: () => void;
     run: (
