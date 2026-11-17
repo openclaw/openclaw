@@ -68,8 +68,19 @@ type Batch = {
   ready: Promise<unknown>;
 };
 const batches = new WeakMap<ReplyOperation, Batch>();
-/** Held sends still in the retained state, so a reset or delete of their target can stop them. */
-const retainedSends = new Set<HeldSend>();
+/**
+ * Retained sends, so a reset or delete of their target can stop them. Weak: a handoff that never
+ * replays (its requester stopped first) does not keep its sends alive.
+ */
+const retainedSends = new Set<WeakRef<HeldSend>>();
+function trackRetainedSend(held: HeldSend): void {
+  for (const ref of retainedSends) {
+    if (ref.deref()?.state.kind !== "retained") {
+      retainedSends.delete(ref);
+    }
+  }
+  retainedSends.add(new WeakRef(held));
+}
 /** Settles a send that a reset or delete stopped while it waited; reports it once. */
 function settleStopped(held: HeldSend): unknown {
   if (held.state.kind !== "stopped") {
@@ -88,13 +99,16 @@ export function stopRetainedSessionSends(
   chat: { agentId: string; sessionKeys: readonly string[] },
   cause: "reset" | "deleted",
 ): void {
-  for (const held of retainedSends) {
-    if (
+  for (const ref of retainedSends) {
+    const held = ref.deref();
+    if (held?.state.kind !== "retained") {
+      retainedSends.delete(ref);
+    } else if (
       normalizeAgentId(held.send.targetAgentId) === normalizeAgentId(chat.agentId) &&
       chat.sessionKeys.includes(held.send.sessionKey)
     ) {
       held.state = { kind: "stopped", cause };
-      retainedSends.delete(held);
+      retainedSends.delete(ref);
     }
   }
 }
@@ -188,7 +202,7 @@ export function createSelfHeldSendRetainer(
         ? "conditional"
         : "after_turn";
     if (!batch) {
-      retainedSends.add(held);
+      trackRetainedSend(held);
       batch = { operations: new Map([[send.runId, held]]), requester, ready: Promise.resolve() };
       batches.set(operation, batch);
       const ownedBatch = batch;
@@ -230,7 +244,6 @@ export function createSelfHeldSendRetainer(
                     outcome.unavailablePluginIds.includes(retainedProof.held[index]!.pluginId),
                 )
               ) {
-                retainedSends.delete(item);
                 const result = {
                   runId: item.send.runId,
                   status: "not_delivered",
@@ -325,7 +338,6 @@ export function createSelfHeldSendRetainer(
                 outcomes.push(stopped);
                 continue;
               }
-              retainedSends.delete(item);
               item.state = { kind: "replaying" };
               const result = await replay(
                 {
@@ -350,7 +362,6 @@ export function createSelfHeldSendRetainer(
               item.state = { kind: "settled", result: result.details };
               outcomes.push(result.details);
             } catch (error) {
-              retainedSends.delete(item);
               const result = {
                 runId: item.send.runId,
                 status: item.state.kind === "replaying" ? "uncertain" : "not_delivered",
@@ -368,13 +379,10 @@ export function createSelfHeldSendRetainer(
         formatResult: (payload) => JSON.stringify(payload),
       }).catch((error: unknown) => {
         batches.delete(operation);
-        for (const item of ownedBatch.operations.values()) {
-          retainedSends.delete(item);
-        }
         throw error;
       });
     } else if (!batch.operations.has(send.runId)) {
-      retainedSends.add(held);
+      trackRetainedSend(held);
       batch.operations.set(send.runId, held);
     }
     try {
