@@ -578,7 +578,7 @@ src/agents/tools/sessions-history-tool.ts	2
 src/agents/tools/sessions-list-tool.ts	2
 src/agents/tools/sessions-operator-authority.ts	1
 src/agents/tools/sessions-resolution.ts	2
-src/agents/tools/sessions-search-tool.ts	12
+src/agents/tools/sessions-search-tool.ts	8
 src/agents/tools/sessions-send-communication-endpoint.ts	2
 src/agents/tools/sessions-send-communication.ts	29
 src/agents/tools/sessions-send-executor.ts	10

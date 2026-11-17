@@ -9,7 +9,6 @@ import {
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { compareSessionTranscriptSearchHits } from "../../config/sessions/session-transcript-search-policy.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
-import { resolveAllAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
 import {
   resolveConfiguredSessionStoreTargets,
   type SessionStoreTarget,
@@ -35,24 +34,20 @@ export async function searchRecallSessionTranscripts(params: {
   client?: GatewayClient | null;
 }): Promise<SessionsSearchResult> {
   const { projection, recall } = params;
-  const config = await withReadySessionRows(
+  const targets = await withReadySessionRows(
     projection,
     () => [],
-    (read) => read.state.cfg,
-  );
-  const configured = resolveConfiguredSessionStoreTargets(config, process.env);
-  const configuredAgents = new Set(configured.map((target) => target.agentId));
-  const targets = [
-    ...configured,
-    ...(await resolveAllAgentSessionStoreTargetsAsync(config)).filter(
-      (target) => !configuredAgents.has(target.agentId),
-    ),
-  ];
-  const selectedPaths = projection.state.scope({}).paths;
-  const selectedTargets = targets.filter((target) =>
-    projection
-      .physicalPaths(target.storePath, target.agentId)
-      .some((path) => selectedPaths.has(path)),
+    (read) => {
+      const scope = projection.state.scope({});
+      const configured = resolveConfiguredSessionStoreTargets(read.state.cfg, process.env);
+      // Shared stores retain each configured logical agent; discovery belongs to topology admission.
+      return [
+        ...configured,
+        ...scope.targets.filter((target) => !scope.ownerAgentIds.has(target.agentId)),
+      ].filter((target) =>
+        read.physicalPaths(target.storePath, target.agentId).some((path) => scope.paths.has(path)),
+      );
+    },
   );
   const filter = (target: SessionStoreTarget, keys: string[]) =>
     withReadySessionRows(
@@ -158,7 +153,7 @@ export async function searchRecallSessionTranscripts(params: {
     );
   const limit = params.limit ?? 10;
   const pages = [];
-  for (const target of selectedTargets) {
+  for (const target of targets) {
     const page = await searchSessionTranscripts(
       { ...target, query: params.query, limit },
       undefined,

@@ -12,6 +12,7 @@ import {
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
 import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
+import * as sessionTargets from "../../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -442,6 +443,7 @@ test("scope search preserves physical shared-store ownership, agent filters, and
     );
     expect(result.payload).toHaveProperty("truncated", true);
     expect(result.payload).not.toHaveProperty("indexing");
+    const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsAsync");
     const recall = await search(context, client, {
       query: "needle",
       limit: 25,
@@ -450,6 +452,7 @@ test("scope search preserves physical shared-store ownership, agent filters, and
     expect(recall.ok, recall.error?.message).toBe(true);
     expect(recall.payload?.results).toEqual(result.payload?.results);
     expect(recall.payload).toHaveProperty("truncated", true);
+    expect(discovery).not.toHaveBeenCalled();
     const key = "agent:work_team:match-0";
     expect(
       await search(context, client, { query: "needle", scope: { search: key } }),
