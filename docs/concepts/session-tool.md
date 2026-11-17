@@ -96,6 +96,14 @@ created it. Agent targets, spawn depth, and child limits follow the same
 `subagents` admission rules. Unlike a visible spawn, the session is not registered
 as a supervised run.
 
+For an admitted, authenticated channel sender whose account and sender ID have no
+linked profile, `sessions_create` ignores a supplied `user` and uses the same
+contained creation path as an omitted `user`. It does not select the supplied
+profile, borrow a session owner’s authority, or link the sender to that person.
+Linked turns still validate explicit participants, including revocation. Missing
+source context, known bot input, and later system or delegated turns do not gain
+this fallback. Other session tools retain their existing selection rules.
+
 The `sessions_create` definition stays in the session's tool catalog across turns.
 The existing `sessions` management tool does not create sessions. The default
 sandbox surface for an admitted non-owner with session-write authority includes
