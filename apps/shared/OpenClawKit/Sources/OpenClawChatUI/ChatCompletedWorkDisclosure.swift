@@ -38,7 +38,9 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
             .font(OpenClawChatTypography.caption)
             .fixedSize(horizontal: false, vertical: true)
             .foregroundStyle(.secondary)
+            #if os(iOS)
             .frame(minHeight: 44)
+            #endif
         }
         #if os(iOS)
         .disclosureGroupStyle(ChatCompletedWorkDisclosureStyle())
