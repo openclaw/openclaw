@@ -394,6 +394,8 @@ describe("startup copy ownership", () => {
       "openclaw.sqlite.pre-1",
       "openclaw.sqlite.pre-2",
       "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.pre-release-blue",
+      "openclaw.sqlite.pre-startup-migration-1.bak",
       "openclaw.sqlite.bak",
       "operator.sqlite.pre-1",
       "worktrees/openclaw.sqlite.pre-1",
@@ -401,13 +403,16 @@ describe("startup copy ownership", () => {
       fs.writeFileSync(path.join(root, name), "kept");
     }
     const reads = vi.spyOn(fs, "readdirSync");
-    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned]))).toEqual([
+    // A custom build ID names a generation as well as a version does.
+    expect(pruneGenerations(root, "3", new Set(["2"]), new Set([owned])).toSorted()).toEqual([
       "openclaw.sqlite.pre-1",
+      "openclaw.sqlite.pre-release-blue",
     ]);
     expect(reads.mock.calls.map(([file]) => file)).toEqual([root]);
     for (const name of [
       "openclaw.sqlite.pre-2",
       "openclaw.sqlite.pre-3",
+      "openclaw.sqlite.pre-startup-migration-1.bak",
       "openclaw.sqlite.bak",
       "operator.sqlite.pre-1",
       "worktrees/openclaw.sqlite.pre-1",

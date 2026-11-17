@@ -301,11 +301,16 @@ function finish(
   stateDir: string,
   workDir: string | undefined,
   ownedFiles: ReadonlySet<string>,
+  // A resumed plan's generation is the state it just replaced; it stays like this build's.
+  resumedGenerations: ReadonlySet<string> = new Set(),
 ): void {
   pruneGenerations(
     stateDir,
     GENERATION,
-    readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
+    new Set([
+      ...readPinnedVersions(path.join(stateDir, "state", "openclaw.sqlite")),
+      ...resumedGenerations,
+    ]),
     ownedFiles,
   );
   if (workDir) {
@@ -370,6 +375,7 @@ export async function upgradeStateDirectory(params: {
     );
   };
   const resumedFiles = new Set<string>();
+  const resumedGenerations = new Set<string>();
   // A durable plan from an interrupted swap is finished before anything else.
   let resumed = false;
   for (const entry of fs.readdirSync(stateDir)) {
@@ -382,6 +388,7 @@ export async function upgradeStateDirectory(params: {
       // Environment selection may already hold the shared database being replaced.
       await params.beforeSwap?.();
       applyPlan(plan);
+      resumedGenerations.add(plan.appVersion);
       for (const op of plan.ops) {
         if (!skip(op.live)) {
           resumedFiles.add(op.live);
@@ -397,7 +404,7 @@ export async function upgradeStateDirectory(params: {
   const outdated = outdatedDatabases(targets);
   if (outdated.length === 0) {
     if (resumed) {
-      finish(stateDir, undefined, resumedFiles);
+      finish(stateDir, undefined, resumedFiles, resumedGenerations);
     }
     return resumed ? { status: "resumed" } : { status: "current" };
   }
