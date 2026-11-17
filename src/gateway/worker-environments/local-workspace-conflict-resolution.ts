@@ -213,6 +213,11 @@ export async function synchronizeResolvedCanonicalPaths(params: {
     if (!stats) {
       const destStats = await fs.lstat(dest).catch(() => undefined);
       if (destStats) {
+        if (destStats.isDirectory()) {
+          throw new Error(
+            `Guest directory at ${resolvedPath} may contain unreviewed descendants; resolve it explicitly`,
+          );
+        }
         params.assertCurrent?.();
         await projectionFs.remove(resolvedPath, {
           recursive: true,
@@ -230,6 +235,11 @@ export async function synchronizeResolvedCanonicalPaths(params: {
       params.assertCurrent?.();
       const destStats = await fs.lstat(dest).catch(() => undefined);
       if (destStats) {
+        if (destStats.isDirectory()) {
+          throw new Error(
+            `Guest directory at ${resolvedPath} may contain unreviewed descendants; resolve it explicitly`,
+          );
+        }
         params.assertCurrent?.();
         await projectionFs.remove(resolvedPath);
         params.assertCurrent?.();
@@ -258,6 +268,11 @@ export async function synchronizeResolvedCanonicalPaths(params: {
       params.assertCurrent?.();
       const destStats = await fs.lstat(dest).catch(() => undefined);
       if (destStats && !destStats.isFile()) {
+        if (destStats.isDirectory()) {
+          throw new Error(
+            `Guest directory at ${resolvedPath} may contain unreviewed descendants; resolve it explicitly`,
+          );
+        }
         params.assertCurrent?.();
         await projectionFs.remove(resolvedPath, {
           recursive: true,

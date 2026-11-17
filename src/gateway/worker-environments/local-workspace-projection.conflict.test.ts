@@ -336,6 +336,47 @@ it("treats a resolved path as a new conflict after the guest edits it again", as
   await expectText(projection, "source.txt", "guest source v3 after resolution\n");
 });
 
+it("settles a legacy checkpoint that predates the conflict fields", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest work\n");
+  await writeText(canonical, "source.txt", "human work\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    const row = store.get();
+    if (row?.checkpoint_json) {
+      const checkpoint = JSON.parse(row.checkpoint_json);
+      delete checkpoint.conflicts;
+      delete checkpoint.acknowledgedPaths;
+      delete checkpoint.acknowledgedGuestVersions;
+      delete checkpoint.resolvedPaths;
+      await store.update(row, { checkpoint_json: JSON.stringify(checkpoint) });
+    }
+  });
+
+  await writeText(canonical, "source.txt", "resolved work\n");
+  await acknowledge("source.txt");
+  await settleProjection();
+  expect((await readProjection())?.pending_ref).toBeNull();
+  await expectText(projection, "source.txt", "resolved work\n");
+});
+
+it("refuses to replace a guest directory that gained unreviewed descendants", async () => {
+  const projection = await prepare();
+  await fs.rm(path.join(projection, "source.txt"));
+  await fs.mkdir(path.join(projection, "source.txt"));
+  await writeText(projection, "source.txt/new-notes.md", "new guest notes\n");
+  await writeText(canonical, "source.txt", "canonical file\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+
+  await acknowledge("source.txt");
+  await expect(settleProjection()).rejects.toThrow(/unreviewed descendants|indeterminate|conflict/);
+
+  // The new guest file is preserved; canonical keeps the operator's bytes.
+  await expectText(projection, "source.txt/new-notes.md", "new guest notes\n");
+  await expectText(canonical, "source.txt", "canonical file\n");
+});
+
 it("allows explicitly accepted Markdown separator lines (Revision 3 Finding 1)", async () => {
   const projection = await prepare();
   // Concurrent edit with markdown separator in canonical

@@ -429,7 +429,10 @@ export function projectionOperations(
               current: snapshot.current,
               assertCurrent,
               workerAuthority,
-              freezeTarget: target === "projection" ? quiescence?.pause : undefined,
+              // Resolved imports write into the guest checkout for either target.
+              // Hold the existing guest pause through acceptance so a background
+              // guest process cannot race the verified bytes.
+              freezeTarget: quiescence?.pause,
               onPhase: quiescence?.markPhase,
               priorConflicts: checkpoint?.conflicts,
               acknowledgedPaths: checkpoint?.acknowledgedPaths
