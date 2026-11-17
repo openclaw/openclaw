@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { PublishablePluginPackage } from "../../scripts/lib/plugin-publication-collector.ts";
+import { formatReleasePublishPreflight } from "../../scripts/lib/release-publish-preflight-interface.mts";
+import * as publicationState from "../../scripts/lib/release-publish-state.mts";
 
+let npmPlugins: PublishablePluginPackage[] = [];
 const version = "2026.11.5-beta.1";
 const [targetSha, toolingSha] = ["a".repeat(40), "b".repeat(40)];
 const workflowRef = "release-publish/bbbbbbbbbbbb-1";
@@ -30,9 +34,9 @@ vi.mock("../../scripts/lib/release-publish-closeout-preflight.mts", () => ({
 }));
 // mock-isolation: package inventory and GitHub run observation read live state.
 vi.mock("../../scripts/lib/release-publish-state.mts", () => ({
-  readReleasePublicationPackages: () => ({ version, corePackages: [], npmPlugins: [] }),
+  readReleasePublicationPackages: () => ({ version, corePackages: [], npmPlugins }),
   // FRV sealed this decision before publication, so it still reports "plan".
-  observeReleaseNpmState: async () => ({ gates: [], bootstrapCandidates: [] }),
+  observeReleaseNpmState: vi.fn(async () => ({ gates: [], bootstrapCandidates: [] })),
   observeReleaseGitHubState: () => ({ gates: [] }),
 }));
 // mock-isolation: publisher discovery verifies live Sigstore provenance.
@@ -40,6 +44,51 @@ vi.mock("../../scripts/openclaw-npm-resume-run.mts", () => ({
   verifyOpenClawNpmResumeRun: resumeRun,
 }));
 const { runReleasePublishPreflight } = await import("../../scripts/release-publish-preflight.mts");
+
+it("hands unverified bootstrap credentials to their owner in the rendered preflight", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const actualState = await vi.importActual<typeof publicationState>(
+    "../../scripts/lib/release-publish-state.mts",
+  );
+  vi.mocked(publicationState.observeReleaseNpmState).mockImplementationOnce(
+    actualState.observeReleaseNpmState,
+  );
+  npmPlugins = [
+    {
+      extensionId: "fixture",
+      packageDir: "extensions/fixture",
+      packageName: "@openclaw/fixture",
+      version,
+      channel: "beta",
+      publishTag: "beta",
+    },
+  ];
+  // A registry 404 reaches the real bootstrap decision and warning formatter.
+  vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+  try {
+    const report = await runReleasePublishPreflight({
+      repo: "openclaw/openclaw",
+      tag: "v" + version,
+      workflowRef,
+      npmDistTag: "beta",
+      publishOpenclawNpm: false,
+      pluginPublishScope: "selected",
+      plugins: "@openclaw/fixture",
+      fullReleaseValidationRunId: "",
+    });
+    expect(report.failed).toBe(false);
+    expect(report.rows.find((row) => row.id === "plugin-npm.token-liveness")).toMatchObject({
+      status: "WARN",
+      message: expect.stringContaining("token liveness is unverified locally"),
+    });
+    const rendered = formatReleasePublishPreflight(report);
+    expect(rendered).toContain("credential owner");
+    expect(rendered).not.toContain("whoami");
+  } finally {
+    npmPlugins = [];
+    vi.unstubAllGlobals();
+  }
+});
 
 describe("release publish preflight core npm resume", () => {
   it.each([true, false])("reads the live registry when published=%s", async (published) => {
