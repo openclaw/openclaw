@@ -3,6 +3,7 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -337,6 +338,28 @@ it("authenticates both manifests before selecting changed transfer payloads", as
   ).rejects.toThrow("digest");
 });
 
+async function refreshTrees(beforeRoot: string, afterRoot: string, temporaryRoot: string) {
+  const trees: string[] = [];
+  for (const root of [beforeRoot, afterRoot]) {
+    await requireGit(root, ["init", "--quiet"]);
+    await requireGit(root, ["add", "."]);
+    if (root === afterRoot) {
+      await requireGit(root, [
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        `160000,${"a".repeat(40)},empty-submodule`,
+      ]);
+    }
+    trees.push(await requireGit(root, ["write-tree"]));
+  }
+  await fs.writeFile(
+    path.join(beforeRoot, ".git/objects/info/alternates"),
+    path.join(afterRoot, ".git/objects") + "\n",
+  );
+  return { root: beforeRoot, beforeTree: trees[0]!, afterTree: trees[1]!, temporaryRoot };
+}
+
 it("prepares byte-exact base refresh contents while retaining saved workspace data", async () => {
   const root = tempDirs.make("workspace-base-refresh-");
   const beforeRoot = path.join(root, "before");
@@ -352,7 +375,6 @@ it("prepares byte-exact base refresh contents while retaining saved workspace da
   await fs.chmod(path.join(afterRoot, "main.txt"), 0o755);
   await fs.writeFile(path.join(afterRoot, "added.txt"), "added");
   await fs.symlink("main.txt", path.join(afterRoot, "alias"));
-  await fs.mkdir(path.join(afterRoot, "empty"));
   await fs.mkdir(path.join(afterRoot, ".artifacts/build-cache-inputs"), { recursive: true });
   await fs.writeFile(path.join(afterRoot, ".artifacts/build-cache-inputs/upstream.json"), "input");
   const savedInput = ".artifacts/build-cache-inputs/saved.json";
@@ -383,15 +405,14 @@ it("prepares byte-exact base refresh contents while retaining saved workspace da
       workspaceFile(".artifacts/build-cache-inputs/upstream.json", "input"),
       workspaceFile("added.txt", "added"),
       { path: "alias", type: "symlink", mode: 0o777, target: "main.txt" },
-      { path: "empty", type: "directory", mode: 0o700 },
+      { path: "empty-submodule", type: "directory", mode: 0o700 },
       { ...workspaceFile("main.txt", "new"), mode: 0o755 },
       workspaceFile("saved.txt", "local only"),
       workspaceFile("unchanged.txt", "guest edit"),
     ],
   });
   const refreshed = await prepareWorkspaceBaseRefresh({
-    beforeRoot,
-    afterRoot,
+    ...(await refreshTrees(beforeRoot, afterRoot, await fs.mkdtemp(path.join(root, "refresh-")))),
     baseCommit,
     baseRaw,
     baseRef,
@@ -432,8 +453,7 @@ it("rejects source integration that replaces a saved-only path", async () => {
   const baseline = encode([workspaceFile("saved.txt", "local only")]);
   await expect(
     prepareWorkspaceBaseRefresh({
-      beforeRoot,
-      afterRoot,
+      ...(await refreshTrees(beforeRoot, afterRoot, tempDirs.make("workspace-refresh-result-"))),
       baseCommit: "b".repeat(40),
       baseRaw: baseline.raw,
       baseRef: baseline.ref,
@@ -444,6 +464,50 @@ it("rejects source integration that replaces a saved-only path", async () => {
     "The selected base conflicts with saved workspace data at saved.txt; move that saved file before retrying prepare_pr.",
   );
 });
+
+it.each(["content", "symlink"])(
+  "matches native checkout semantics for attribute %s changes",
+  async (change) => {
+    const beforeRoot = tempDirs.make("workspace-attributes-before-");
+    const afterRoot = tempDirs.make("workspace-attributes-after-");
+    for (const root of [beforeRoot, afterRoot]) {
+      await fs.writeFile(
+        path.join(root, "text.txt"),
+        change === "symlink" && root === beforeRoot ? "one\r\ntwo\r\n" : "one\ntwo\n",
+      );
+      await fs.writeFile(path.join(root, "kept.txt"), "same");
+      const attributes =
+        "text.txt text eol=" + (change === "content" && root === beforeRoot ? "lf" : "crlf") + "\n";
+      if (change === "symlink" && root === afterRoot) {
+        await fs.symlink(attributes, path.join(root, ".gitattributes"));
+      } else {
+        await fs.writeFile(path.join(root, ".gitattributes"), attributes);
+      }
+    }
+    const baseline = await captureWorkspaceManifestDocument({
+      root: beforeRoot,
+      baseCommit: "a".repeat(40),
+    });
+    const temporaryRoot = tempDirs.make("workspace-attributes-result-");
+    const refreshed = await prepareWorkspaceBaseRefresh({
+      ...(await refreshTrees(beforeRoot, afterRoot, temporaryRoot)),
+      baseCommit: "b".repeat(40),
+      baseRaw: baseline.rawManifest,
+      baseRef: baseline.manifestRef,
+      buildCacheInputs: [],
+      action: "refresh_base",
+    });
+    const compared = await parseWorkspaceManifestPair({
+      baseRaw: baseline.rawManifest,
+      baseRef: baseline.manifestRef,
+      currentRaw: refreshed.rawManifest,
+      currentRef: refreshed.manifestRef,
+    });
+    expect(compared.current.entries).toContainEqual(workspaceFile("text.txt", "one\r\ntwo\r\n"));
+    expect(compared.entries.some((entry) => entry.path === "text.txt")).toBe(change === "content");
+    expect(compared.entries.some((entry) => entry.path === "kept.txt")).toBe(false);
+  },
+);
 
 it("compares pristine workspace contents with the admitted build-cache policy", async () => {
   const canonicalRoot = tempDirs.make("workspace-pristine-canonical-");
