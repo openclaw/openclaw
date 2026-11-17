@@ -67,7 +67,8 @@ const controlUiPerformanceBudgets = {
   // Continuation wakes (#200056): measured 1,314,286 B (+979 B over main 7f234bd9) plus 64 B.
   // Ayaan approved the #198133 tool-call history cost (2026-11-16): measured +10,341 B
   // over its merge base plus 64 B headroom.
-  chatBootJsGzipBytes: 1_324_691,
+  // Approved publication task filtering: +90 B over 054fd978, with no added headroom.
+  chatBootJsGzipBytes: 1_324_779,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
   // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
