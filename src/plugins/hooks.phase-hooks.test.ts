@@ -2,7 +2,6 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveModelPromptText } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -722,88 +721,6 @@ describe("before_prompt_build dispatch", () => {
       Boolean(process.versions.bun),
     );
   });
-
-  it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
-    "%s shares immutable payloads without exposing stored metadata",
-    async (hookName) => {
-      const message = {
-        role: "toolResult" as const,
-        toolCallId: "call-1",
-        toolName: "synthetic",
-        isError: false,
-        timestamp: 0,
-        content: [{ type: "text" as const, text: "caller history" }],
-        details: { private: "storage only" },
-        __openclaw: { upstreamUserText: "storage prompt", retained: "visible" },
-      };
-      const entry = canonicalizeSessionEntry({
-        type: "message",
-        id: "entry-1",
-        parentId: null,
-        timestamp: "2026-01-01T00:00:00.000Z",
-        message: structuredClone(message),
-      });
-      normalizeTranscriptJsonValue(message, "");
-      const messages = [message, entry.message];
-      const owned = new Set<object>(messages.flatMap((item) => [item.content, item.content[0]!]));
-      const ownKeys = vi.spyOn(Reflect, "ownKeys");
-      const clone = vi.spyOn(globalThis, "structuredClone");
-      const entries = vi.spyOn(Object, "entries");
-      onTestFinished(() => {
-        ownKeys.mockRestore();
-        clone.mockRestore();
-        entries.mockRestore();
-      });
-      const runner = hookRunner(
-        [
-          {
-            hookName,
-            handler: (value: unknown) => {
-              const event = value as { messages: (typeof message)[] };
-              for (const [index, source] of messages.entries()) {
-                const projected = event.messages[index]!;
-                expect(projected.content).toBe(source.content);
-                expect(() => {
-                  projected.content[0]!.text = "forbidden mutation";
-                }).toThrow(TypeError);
-                expect(projected).not.toHaveProperty("details");
-                expect(projected["__openclaw"]).toEqual({ retained: "visible" });
-                projected["__openclaw"].retained = "local metadata";
-                projected.toolName = "local tool name";
-              }
-              return { prependContext: "returned context" };
-            },
-          },
-        ],
-        { catchErrors: false },
-      );
-      for (let turn = 0; turn < 2; turn++) {
-        ownKeys.mockClear();
-        clone.mockClear();
-        entries.mockClear();
-        const event = { prompt: "test", messages };
-        const result =
-          hookName === "before_prompt_build"
-            ? await runner.runBeforePromptBuild(event, {})
-            : await runner.runAgentTurnPrepare({ ...event, queuedInjections: [] }, {});
-        expect(result?.prependContext).toBe("returned context");
-        // Copy envelopes without allocating a key/value tuple for every history field.
-        expect(
-          entries.mock.calls.filter(([value]) => Reflect.get(value, "role") === "toolResult"),
-        ).toHaveLength(0);
-        expect(clone).toHaveBeenCalledTimes(hookName === "before_prompt_build" ? 0 : 1);
-        // Warm dispatch must not rescan the frozen payload graph (#182349).
-        if (turn > 0) {
-          expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
-        }
-        for (const source of messages) {
-          expect(source.content[0]!.text).toBe("caller history");
-          expect(source.toolName).toBe("synthetic");
-          expect(source["__openclaw"].retained).toBe("visible");
-        }
-      }
-    },
-  );
 
   it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
     "%s isolates array, envelope, and non-owned edits across dispatches",

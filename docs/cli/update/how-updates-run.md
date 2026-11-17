@@ -1717,13 +1717,31 @@ the old one is under `previous`, which is where every recovery reader expects it
 after a publication.
 
 An updater killed between those two steps leaves the old package serving and the
-candidate waiting under `previous`. The journal still records the publish
-intent, so the next update, and `openclaw update repair`, refuse with `Package
-publication is incomplete` until it is settled. Only the managed update helper,
-when it is still alive, or the journal's printed recovery command settles it:
-`repair` returns the candidate to its own name and aborts the publication, and
-`retire` then removes the recovery directory. That
-state is read only with the recorded intent and the recorded identities of all
+candidate waiting under `previous`, with the publish intent still in the
+journal. The next `openclaw update`, and `openclaw update repair`, settle that
+leftover before anything else. They claim the installation in the recorded
+update lease store, which succeeds only once the killed updater's processes are
+gone, return the candidate to its own name, abort the publication, and remove
+its recovery directory. The old package and its launchers are not touched. The
+update prints what it settled and continues, and its result and run history
+carry a `package-publication-recovery` warning. The journal's printed recovery
+command does the same by hand: `repair` aborts the publication and `retire`
+removes the recovery directory.
+
+A killed update usually also leaves its update run unreconciled. That is a
+separate check: `openclaw update` then stops with `Update <id> has unfinished
+recovery`, and `openclaw update repair` reconciles the run. Repair settles the
+publication in the same pass, so one repair is enough before the next update.
+
+The updater does not settle the leftover when another updater still holds the
+installation, when the lease store is missing or was replaced, when the
+installed package or a launcher no longer matches the journal, or when a
+different OpenClaw build wrote the journal. It then refuses with the reason and
+a next step: wait for the other updater, reinstall, or run the recovery command.
+See
+[Unfinished publication and rollback](/install/updating#unfinished-publication-and-rollback).
+
+That state is read only with the recorded intent and the recorded identities of all
 three directories. A reader that finds the layout without that intent, and the
 recovery code of earlier releases, refuses it by its identity check instead of
 taking the candidate for the previous package. An updater killed after the
@@ -1757,10 +1775,14 @@ unavailable: <reason>)`. Between the two moves the package path is missing and
 `openclaw` cannot start.
 
 With a journal, the candidate returns to its own name, the old package moves to
-`previous`, and the candidate moves into place. If the updater dies between
-those moves, the managed update helper, when it is still alive, or the journal's
+`previous`, and the candidate moves into place. An updater killed before the old
+package moves is settled by the next update as above. If it dies between those
+moves, the package path is missing and `openclaw` cannot start from that
+installation, so neither `openclaw update` nor `openclaw update repair` can run
+there. The managed update helper, when it is still alive, or the journal's
 printed recovery command, run with the recorded external runtime, finishes the
-publication. `openclaw update repair` cannot run while the package is missing.
+publication. An update or repair of the same build that still reaches admission
+for that installation publishes the recorded candidate into the gap.
 
 Without a journal, the staged directory returns to its stage, the old one moves
 to the backup name, and the staged one moves into place. If the updater dies

@@ -517,38 +517,6 @@ full byte-buffer allocation saved by avoiding reassembly. The reported payload
 size identifies the copy size for a single-frame record. This is receiver-owner
 proof, excluding producer serialization, IPC, SQL, and whole-Gateway latency.
 
-## Session-fork snapshots
-
-`node --expose-gc scripts/perf/session-fork-retention-measure.mjs <source-root>
---mode timing --output /path/to/result.json` measures
-ordinary turns through the actual stream-selection, historical fork-capture, and
-request-encoding owners. The source root needs only the five files listed in the
-script; no build or install is needed. Provider transport and unrelated host
-services use synthetic adapters. Current sources do no fork capture; historical
-sources retain their original capture and publication behavior.
-
-The default fixed workload is 27,000 requests across 200 sessions, with 256 KiB
-prepared inputs and 75% HTTP continuation suffixes. That represents one hour of
-traffic at 450 requests/minute, compressed into a fixed-work pass. It is not an
-elapsed-hour Gateway soak. Fixture strings remain reachable equally on both sides.
-`--operations`, `--sessions`, `--payload-bytes`, and `--warmup` select the workload.
-
-Run separate modes for untraced CPU/latency/GC/event-loop timing, collected-object
-allocation sampling, JSON/Blob/timer counts, and forced-GC retention. Retention
-reports heapUsed, external, ArrayBuffers, and RSS separately; the external and
-ArrayBuffer counters overlap and must not be summed as exact retained storage.
-Timing never forces collections. There is no promotion or provider-cache claim.
-
-Use concurrent guarded pairs on the benchmark host, counterbalance launch order,
-and swap the slot's interleaved CPUs. `--warm-ready-file`/`--warm-start-file` and
-`--ready-file`/`--start-file` provide separate warmup and measurement barriers;
-atomically publish a future Unix epoch in milliseconds after both sides are ready. A missed
-start rejects the run. Acceptance is zero fork-specific capture/publication/expiry
-work on ordinary candidate turns, identical parent request counts and encoded
-bytes, reduced allocation/CPU, and removal of the retained snapshot data. Apply
-the campaign's absolute GC/loop materiality, sample-count, and matched-control
-rules; do not use profiled runs as timing gates.
-
 ## Private-array copies
 
 `node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
@@ -693,9 +661,14 @@ absolute-delta rules before treating any percentile as a gate.
 ## Owned directory events
 
 `owned-directory-events-measure.ts` opens real shared directory subscriptions and
-replays fixed native callbacks. Setup checks a missing descendant's event filter;
-the measured pass delivers 65 direct-root events per batch, with a one-millisecond
-yield between batches. It measures observer work, not filesystem or Gateway throughput.
+replays fixed native callbacks through a synthetic in-process host adapter. Setup
+checks a missing descendant's event filter; the measured pass delivers 65 events
+per batch. `--missing` retains that descendant during measurement, exercising
+sibling filtering. `--batch-delay-ms` controls pacing (default 1; 0 yields with
+setImmediate). `--watch-dir` reuses an existing synthetic directory, allowing a
+large surrounding fixture without rebuilding it for each sample. Contents are
+not scanned. This measures observer delivery, not subprocess transport, filesystem,
+or Gateway throughput.
 
 ```sh
 node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
@@ -705,8 +678,8 @@ node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
 ```
 
 Use `--owner /absolute/path/to/owned-directory-observation.baseline.ts` to load a
-baseline saved beside the current owner. Add `--allocations` for a separate paired
-pass including collected objects. Reports include bytes per event, batch latency,
+baseline saved beside the current owner (or a frozen copy with absolute imports).
+Add `--allocations` for a separate paired pass including collected objects. Reports include bytes per event, batch latency,
 CPU, GC counts/tails/maxima, promotion, and event-loop tails with sample counts.
 Compare concurrent pairs under one quiet lock and the production guard, swapping
 interleaved CPU sets for the second pair. Apply the campaign's paired-delta,
