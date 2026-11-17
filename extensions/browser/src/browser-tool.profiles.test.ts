@@ -49,10 +49,16 @@ it("discovers a node without replaying a denied host attach or assuming the node
   });
   const selected = await execute({ action: "profiles", target: "node", node: "desktop" });
   expect(selected.details).toHaveProperty("profiles", [{ name: "chrome", driver: "extension" }]);
-  expect(gateway.callGatewayTool.mock.lastCall?.[2]).toMatchObject({
-    nodeId: "desktop",
-    params: { method: "GET", path: "/profiles", profile: undefined },
-  });
+  expect(gateway.callGatewayTool).toHaveBeenLastCalledWith(
+    "node.invoke",
+    { timeoutMs: expect.any(Number) },
+    expect.objectContaining({
+      nodeId: "desktop",
+      command: "browser.proxy",
+      params: expect.objectContaining({ method: "GET", path: "/profiles", profile: undefined }),
+    }),
+    { scopes: ["operator.admin"] },
+  );
   expect(client.browserProfiles).toHaveBeenCalledTimes(1);
 
   const route = { target: "node", node: "desktop", profile: "chrome" };
@@ -85,10 +91,16 @@ it("discovers a node without replaying a denied host attach or assuming the node
       }),
     ]),
   );
-  expect(gateway.callGatewayTool.mock.lastCall?.[2]).toMatchObject({
-    nodeId: "desktop",
-    params: { path: "/snapshot", profile: "chrome" },
-  });
+  expect(gateway.callGatewayTool).toHaveBeenLastCalledWith(
+    "node.invoke",
+    { timeoutMs: expect.any(Number) },
+    expect.objectContaining({
+      nodeId: "desktop",
+      command: "browser.proxy",
+      params: expect.objectContaining({ path: "/snapshot", profile: "chrome" }),
+    }),
+    { scopes: ["operator.admin"] },
+  );
   expect(client.browserSnapshot).not.toHaveBeenCalled();
 });
 
