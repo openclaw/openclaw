@@ -22,6 +22,7 @@ import {
 } from "../infra/openclaw-root.js";
 import { acquirePackageReleaseLease } from "../infra/package-release-lease.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import {
   getGatewaySuspendAdmissionPhase,
   onGatewaySuspendAdmissionChange,
@@ -70,6 +71,8 @@ export type GatewayInstallationReplacement = {
 type InstallationObserver = {
   root: string | null;
   installationRoot: string | null;
+  /** The update lease key of the installation, captured with it. */
+  updateKey: string | null;
   running: InstallationIdentity;
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
@@ -85,11 +88,13 @@ const installationState = resolveGlobalSingleton<{ observer?: InstallationObserv
 export function registerGatewayInstallationReplacementHandler(
   onReplacement: InstallationObserver["onReplacement"],
 ): () => void {
+  const installationRoot = gatewayInstallRoot
+    ? resolveOpenClawInstallationRootSync(gatewayInstallRoot, process.argv[1])
+    : null;
   const observer: InstallationObserver = {
     root: gatewayInstallRoot,
-    installationRoot: gatewayInstallRoot
-      ? resolveOpenClawInstallationRootSync(gatewayInstallRoot, process.argv[1])
-      : null,
+    installationRoot,
+    updateKey: installationRoot ? resolveUpdateInstallRoot(installationRoot) : null,
     running: { version: VERSION, buildId: resolveRuntimeServiceBuildId() },
     onReplacement,
   };
@@ -201,7 +206,7 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
       }
       if (
         (version !== observer.running.version || buildId !== observer.running.buildId) &&
-        !(await isInstallationHeldByUpdateRun(root))
+        !(observer.updateKey && (await isInstallationHeldByUpdateRun(observer.updateKey)))
       ) {
         recordReplacement(observer, { version, buildId });
       }
@@ -218,20 +223,31 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
  * run races its Doctor and Gateway start. A Gateway the run leaves stale restarts on
  * a later check, after the run releases the lease.
  */
-async function isInstallationHeldByUpdateRun(root: string): Promise<boolean> {
+async function isInstallationHeldByUpdateRun(installRoot: string): Promise<boolean> {
   try {
-    const [{ createManagedHandoffLeaseStore }, { resolveUpdateInstallRoot }] = await Promise.all([
-      import("../infra/update-managed-service-handoff-lease.js"),
-      import("../infra/update-install-root.js"),
+    // Lease reads and process probes are synchronous; they run in the handoff worker.
+    const [{ prepareManagedHandoffParentStore }, { resolveServiceManagerEnv }] = await Promise.all([
+      import("../infra/update-managed-service-handoff-worker.js"),
+      import("../daemon/service-process-env.js"),
     ]);
-    const store = createManagedHandoffLeaseStore();
-    const held = store.read(resolveUpdateInstallRoot(root));
-    return (
-      held.kind === "current" &&
-      [held.lease.helper, held.lease.executor].some((holder) =>
-        store.isProcessIdentityCurrent(holder),
-      )
-    );
+    const store = await prepareManagedHandoffParentStore({
+      installRoot,
+      serviceManagerEnv: resolveServiceManagerEnv(),
+    });
+    try {
+      const held = await store.read(installRoot);
+      if (held.kind !== "current") {
+        return false;
+      }
+      for (const holder of [held.lease.executor, held.lease.helper]) {
+        if (await store.isProcessIdentityCurrent(holder)) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      await store.close();
+    }
   } catch {
     // An unreadable lease cannot hold the installation; keep today's self-restart.
     return false;

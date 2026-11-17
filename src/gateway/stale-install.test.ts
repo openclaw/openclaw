@@ -79,6 +79,7 @@ afterEach(() => {
   dispose = undefined;
   resetGatewayWorkAdmission();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("running installation replacement", () => {
@@ -217,10 +218,8 @@ describe("running installation replacement", () => {
   });
 
   it("leaves a replaced installation to the update run that holds it", async () => {
-    const tempRoot = await import("../infra/tmp-openclaw-dir.js");
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(
-      directories.make("openclaw-update-lease-"),
-    );
+    // The handoff worker resolves the same coordination store from TMPDIR.
+    vi.stubEnv("TMPDIR", directories.make("openclaw-update-lease-"));
     const [{ createManagedHandoffLeaseStore }, { resolveUpdateInstallRoot }] = await Promise.all([
       import("../infra/update-managed-service-handoff-lease.js"),
       import("../infra/update-install-root.js"),
