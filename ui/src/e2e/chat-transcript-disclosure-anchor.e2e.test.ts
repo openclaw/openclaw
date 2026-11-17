@@ -46,6 +46,17 @@ type DisclosureFrame = {
   mountedBodies: number;
   rowHeight: number;
   rowTop: number;
+  rowIndex: string | undefined;
+  rowSize: string | undefined;
+  viewportTop: number;
+  viewportHeight: number;
+  innerTop: number | null;
+  innerHeight: number | null;
+  innerStyleHeight: string | null;
+  columnTop: number | null;
+  columnMarginTop: string | null;
+  blockTop: number | null;
+  blockStyleTop: string | null;
   scrollHeight: number;
   scrollTop: number;
 };
@@ -63,6 +74,12 @@ async function toggleDisclosureWithFrameTrace(
     }
     const frames: DisclosureFrame[] = [];
     const sample = () => {
+      const viewport = thread.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const inner = thread.querySelector<HTMLElement>(".chat-thread-inner--virtual");
+      const innerRect = inner?.getBoundingClientRect();
+      const column = inner?.querySelector<HTMLElement>(".chat-virtual-sizer");
+      const block = row.closest<HTMLElement>(".chat-virtual-block");
       frames.push({
         expanded: button.matches("summary")
           ? button.closest("details")?.hasAttribute("open") === true
@@ -70,8 +87,19 @@ async function toggleDisclosureWithFrameTrace(
             button.getAttribute("aria-pressed") === "true",
         mountedBodies: row.querySelectorAll(".chat-tool-msg-body, .chat-activity-group__body")
           .length,
-        rowHeight: row.getBoundingClientRect().height,
-        rowTop: row.getBoundingClientRect().top - thread.getBoundingClientRect().top,
+        rowHeight: rowRect.height,
+        rowTop: rowRect.top - viewport.top,
+        rowIndex: row.dataset.index,
+        rowSize: row.dataset.rowSize,
+        viewportTop: viewport.top,
+        viewportHeight: thread.clientHeight,
+        innerTop: innerRect?.top ?? null,
+        innerHeight: innerRect?.height ?? null,
+        innerStyleHeight: inner?.style.height ?? null,
+        columnTop: column?.getBoundingClientRect().top ?? null,
+        columnMarginTop: column?.style.marginTop ?? null,
+        blockTop: block?.getBoundingClientRect().top ?? null,
+        blockStyleTop: block?.style.top ?? null,
         scrollHeight: thread.scrollHeight,
         scrollTop: thread.scrollTop,
       });
