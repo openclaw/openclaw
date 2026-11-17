@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
   claimDeliveryPlatformSendAttempt,
@@ -28,7 +29,9 @@ describe("final text replay after a crash mid-send", () => {
     ["unresolved reconciliation", { status: "unresolved", error: "lookup failed" }, 1, 1],
     ["reconciled as sent", { status: "sent", messageId: "platform-1" }, 1, 0],
     ["a second crash, during the resend", undefined, 2, 0],
-  ] as const)("%s", async (_label, reconciliation, startedAttempts, expectedSends) => {
+    ["the resend refused before connecting, then recovered again", undefined, 1, 1],
+  ] as const)("%s", async (label, reconciliation, startedAttempts, expectedSends) => {
+    const refused = label.startsWith("the resend refused");
     if (reconciliation) {
       resolveAdapter.mockReturnValue({
         durableFinal: {
@@ -67,10 +70,19 @@ describe("final text replay after a crash mid-send", () => {
         params.deliveryProducerClaimId,
       );
       await params.onPlatformSendStart?.({});
+      if (refused) {
+        const cause = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+        throw new PlatformMessageNotDispatchedError("connect ECONNREFUSED", { cause });
+      }
       return [{ channel: "demo-channel-a", messageId: "recovered-final" }];
     });
     const log = createRecoveryLog();
     await recoverPendingDeliveries({ deliver, log, cfg: {}, stateDir: tmpDir() });
+    if (refused) {
+      // A proven-unsent failure clears the unconfirmed state; the ceiling must still hold.
+      setQueuedEntryState(tmpDir(), id, { retryCount: 1, lastAttemptAt: 0 });
+      await recoverPendingDeliveries({ deliver, log, cfg: {}, stateDir: tmpDir() });
+    }
     expect(deliver).toHaveBeenCalledTimes(expectedSends);
     expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
     if (startedAttempts === 2) {
