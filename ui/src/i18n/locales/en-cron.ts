@@ -85,7 +85,7 @@ const enCron = {
       autoDisabled: "Auto-disabled",
     },
     actions: {
-      runNow: "Start now",
+      runNow: "Run now",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
       clone: "Clone",

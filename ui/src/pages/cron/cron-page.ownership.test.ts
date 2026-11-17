@@ -36,7 +36,7 @@ it("lets a human owner edit their job but not another person's job", async () =>
   });
   const page = createPage(createContext(gateway), { render: true });
   mounted.push(page);
-  // An automation offers Start now only to someone who may change it.
+  // An automation offers Run now only to someone who may change it.
   const canRun = async (job: CronJob) => {
     page.selectJob(job);
     await page.settle();
