@@ -1,6 +1,8 @@
 import { symlink } from "node:fs/promises";
 import path from "node:path";
+import { registerAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
   createMockPluginRegistry,
   loadUserTurnTranscriptRecorderFactoryForTest,
@@ -150,6 +152,71 @@ it("forks a sender-attributed turn through a database alias using exact submitte
     await run.catch(() => {});
   }
 });
+it("stages an oversized current request through the connection without changing its transcript", async () => {
+  const params = createTestParams();
+  const instruction = "Find the codeword in the complete request.";
+  const opening = '<<<EXTERNAL_UNTRUSTED_CONTENT id="oversized">>>';
+  const closing = '<<<END_EXTERNAL_UNTRUSTED_CONTENT id="oversized">>>';
+  const prompt = [
+    instruction,
+    opening,
+    "x".repeat(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS),
+    "MIDDLE_ONLY_CODEWORD_4217",
+    "y".repeat(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS),
+    closing,
+    "Reply with only the codeword.",
+  ].join("\n");
+  params.prompt = prompt;
+  setCodexTestModelSupportsTools(params, false);
+  await bindProductionHarnessHostCapabilitiesForTest(params);
+  let attachmentPath: string | undefined;
+  const note = "Attachment file: /fixture/managed/current-request.txt";
+  const release = registerAgentWorkspaceAccess(params.workspaceDir, {
+    bridge: {
+      readFile: async () => Buffer.alloc(0),
+      writeFile: async () => {},
+      stat: async () => null,
+    },
+    prepareTurnAttachments: async (turn, assertCurrent) => {
+      assertCurrent();
+      attachmentPath = turn.media?.[0]?.path;
+      return attachmentPath ? note : undefined;
+    },
+  });
+  try {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await Promise.race([
+      harness.waitForMethod("turn/start"),
+      run.then(() => {
+        throw new Error("Attempt settled before dispatch");
+      }),
+    ]);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    const input = turnInput(harness);
+    const inputText = input
+      .filter((item) => item.type === "text")
+      .map((item) => item.text)
+      .join("\n");
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText).toContain(instruction);
+    expect(inputText).toContain(opening);
+    expect(inputText).toContain(closing);
+    expect(inputText).toContain("The complete request is attached as current-request.txt");
+    expect(inputText).toContain(note);
+    expect(attachmentPath).toMatch(/^media:\/\/inbound\//);
+    const saved = await readMediaBuffer(attachmentPath!.slice("media://inbound/".length));
+    expect(saved.buffer.toString("utf8")).toBe(prompt);
+    const user = result.messagesSnapshot.find((message) => message.role === "user");
+    expect(JSON.stringify(user?.content)).toContain("MIDDLE_ONLY_CODEWORD_4217");
+    expect(JSON.stringify(user?.content)).not.toContain(note);
+    expect(params.prompt).toBe(prompt);
+  } finally {
+    release();
+  }
+});
+
 it("delivers prepared document paths alongside native images without changing the canonical prompt", async () => {
   const params = createTestParams();
   const prompt = params.prompt;
