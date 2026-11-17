@@ -1,6 +1,13 @@
 /** Canonical memory-only migration planning and apply policy for embedded surfaces. */
-import { MAX_MEMORY_MIGRATION_ITEMS } from "../../../packages/gateway-protocol/src/index.js";
+import { randomUUID } from "node:crypto";
+import {
+  MAX_MEMORY_MIGRATION_ITEMS,
+  type MigrationsMemoryPlanResult,
+  type MigrationsMemoryApplyResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { OwnerRequest } from "../../cli/local-state-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { bindMemoryMigrationPlanSources } from "../../plugin-sdk/memory-migration-source.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import { withPluginMigrationProviders } from "../../plugins/migration-provider-runtime.js";
@@ -12,7 +19,7 @@ import type {
 } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { runMigrationApply } from "./apply.js";
-import { buildMigrationContext } from "./context.js";
+import { buildMigrationContext, createMigrationLogger } from "./context.js";
 
 const MEMORY_ITEM_KIND = "memory";
 const silentRuntime: RuntimeEnv = {
@@ -27,13 +34,129 @@ export async function withMemoryMigrationProviders<T>(
   config: OpenClawConfig,
   run: (providers: MigrationProviderPlugin[]) => Promise<T>,
   onCleanupError?: (error: unknown) => void | Promise<void>,
+  onForeignOwner?: (request: OwnerRequest) => Promise<T>,
 ): Promise<T> {
   return await withPluginMigrationProviders(
-    { cfg: config, onCleanupError },
+    { cfg: config, onCleanupError, onForeignOwner },
     async (providers) =>
       await run(
         providers.filter((provider) => provider.supportedItemKinds?.includes(MEMORY_ITEM_KIND)),
       ),
+  );
+}
+
+/** A reviewed memory-only offer; apply stays with the selected state owner. */
+export type MemoryMigrationOffer = {
+  providerId: string;
+  label: string;
+  source: string;
+  target?: string;
+  plannedIds: string[];
+  conflicts: number;
+  apply: () => Promise<Pick<MigrationApplyResult, "summary" | "target">>;
+};
+
+/**
+ * Plan memory-only offers with the selected state owner. `discoveryFailed` is set when a
+ * running Gateway could not be asked for plans; discovery is advisory, so callers continue.
+ */
+export async function withMemoryMigrationOffers<T>(
+  params: { config: OpenClawConfig; agentId: string; runtime: RuntimeEnv },
+  run: (offers: MemoryMigrationOffer[], discoveryFailed?: boolean) => Promise<T>,
+  onCleanupError?: (error: unknown) => void | Promise<void>,
+): Promise<T> {
+  return await withMemoryMigrationProviders(
+    params.config,
+    async (providers) => {
+      const logger = createMigrationLogger(params.runtime);
+      const offers: MemoryMigrationOffer[] = [];
+      for (const provider of providers) {
+        try {
+          // Omit the runtime: provider plan/apply writers would print raw JSON
+          // between the wizard prompts; the wizard renders its own notes.
+          const { detection, plan } = await planProviderMemoryImport({
+            provider,
+            config: params.config,
+            agentId: params.agentId,
+            overwrite: false,
+          });
+          const plannedIds = plan.items
+            .filter((item) => item.status === "planned")
+            .map((item) => item.id);
+          if (detection?.found === false || plannedIds.length === 0) {
+            continue;
+          }
+          offers.push({
+            providerId: provider.id,
+            label: provider.label,
+            source: detection?.source ?? plan.source,
+            target: plan.target,
+            plannedIds,
+            conflicts: plan.items.filter((item) => item.status === "conflict").length,
+            apply: () =>
+              applyProviderMemoryImport({
+                provider,
+                config: params.config,
+                agentId: params.agentId,
+                itemIds: plannedIds,
+                overwrite: false,
+                preflightPlan: plan,
+              }),
+          });
+        } catch (error) {
+          // Discovery is advisory; one broken source must not block other offers.
+          logger.debug?.(
+            `Memory migration provider ${provider.id} planning failed: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
+      return await run(offers);
+    },
+    onCleanupError,
+    async (requestOwner) => {
+      let planned: MigrationsMemoryPlanResult;
+      try {
+        planned = await requestOwner<MigrationsMemoryPlanResult>("migrations.memory.plan", {
+          agentId: params.agentId,
+          overwrite: false,
+        });
+      } catch (error) {
+        // Discovery is advisory, as for a failed local scan: an unreachable, older or
+        // unauthorized Gateway yields no offers instead of ending the caller's flow.
+        createMigrationLogger(params.runtime).debug?.(
+          `Memory migration planning through the Gateway failed: ${formatErrorMessage(error)}`,
+        );
+        return await run([], true);
+      }
+      const offers: MemoryMigrationOffer[] = [];
+      for (const provider of planned.providers) {
+        const plannedIds = provider.items
+          .filter((item) => item.status === "planned")
+          .map((item) => item.id);
+        const planFingerprint = provider.planFingerprint;
+        if (!provider.found || !planFingerprint || plannedIds.length === 0) {
+          continue;
+        }
+        offers.push({
+          providerId: provider.providerId,
+          label: provider.label,
+          source: provider.source ?? "",
+          target: provider.target ?? planned.workspace,
+          plannedIds,
+          conflicts: provider.items.filter((item) => item.status === "conflict").length,
+          apply: () =>
+            requestOwner<MigrationsMemoryApplyResult>("migrations.memory.apply", {
+              agentId: params.agentId,
+              providerId: provider.providerId,
+              planFingerprint,
+              itemIds: plannedIds,
+              overwrite: false,
+              idempotencyKey: randomUUID(),
+            }),
+        });
+      }
+      return await run(offers);
+    },
   );
 }
 

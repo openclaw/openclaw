@@ -264,7 +264,7 @@ export async function captureUpdateDatabases(params: {
 /**
  * The activated-release boot is this update's own writer: it records boot and
  * config bookkeeping. When nothing else wrote since Doctor, attribute the boot's
- * writes to the update so a failed boot can still restore the baseline.
+ * writes to the update so the next Doctor accepts them and failures can restore the baseline.
  * Accepted: another writer during the boot window is attributed the same way.
  */
 export async function adoptUpdateBootDatabaseWrites(
@@ -283,7 +283,7 @@ export async function adoptUpdateBootDatabaseWrites(
   const expected = backup.migration?.to ?? backup.sourceGenerations;
   const unchanged = isDeepStrictEqual(await read(), expected);
   const result = await boot();
-  const booted = unchanged && result.status === "error" ? await read() : undefined;
+  const booted = unchanged ? await read() : undefined;
   if (booted) {
     if (backup.migration) {
       backup.migration.to = booted;

@@ -45,8 +45,7 @@ type Send = {
   sessionId: string;
   lifecycleRevision?: string;
   storePath: string;
-  targetTask?: SessionsSendToolOptions["expectedTargetTask"];
-  targetRun: SessionsSendToolOptions["expectedTargetRun"];
+  hadTask: boolean;
   requesterParentOwned: boolean;
 };
 type HeldSend = {
@@ -296,8 +295,7 @@ export function createSelfHeldSendRetainer(
                   expectedTargetSessionId: item.send.sessionId,
                   expectedTargetStorePath: item.send.storePath,
                   expectedTargetLifecycleRevision: item.send.lifecycleRevision ?? null,
-                  expectedTargetTask: item.send.targetTask,
-                  expectedTargetRun: item.send.targetRun,
+                  expectTargetTask: item.send.hadTask,
                   retainedReplay: true,
                 },
                 {
@@ -365,20 +363,10 @@ export function createSelfHeldSendRetainer(
       toolCallId: string;
       readTarget: () => { storePath: string; entry: SessionEntry | undefined };
     }) {
-      const original = getLatestLiveSubagentRunByChildSessionKey(
-        input.sessionKey,
-        undefined,
-        input.targetAgentId,
+      const hadTask = Boolean(
+        getLatestLiveSubagentRunByChildSessionKey(input.sessionKey, undefined, input.targetAgentId),
       );
-      const targetRun = original
-        ? {
-            runId: original.runId,
-            taskRunId: original.taskRunId,
-            generation: original.generation,
-            createdAt: original.createdAt,
-          }
-        : null;
-      return (proof: Refusal, mode: Send["mode"], targetTask?: Send["targetTask"]) => {
+      return (proof: Refusal, mode: Send["mode"]) => {
         const target = input.readTarget();
         if (!target.entry) {
           throw new Error("Retained send requires its refused target incarnation");
@@ -395,8 +383,7 @@ export function createSelfHeldSendRetainer(
                 ? { ...input.args, timeoutSeconds: 0, watch: undefined }
                 : input.args,
             mode,
-            targetRun,
-            targetTask,
+            hadTask,
             sessionId: target.entry.sessionId,
             lifecycleRevision: target.entry.lifecycleRevision,
             storePath: target.storePath,
