@@ -12,16 +12,10 @@ import {
   type SlackReasoningCardLine,
 } from "../../progress-reasoning.js";
 
-// Every row is a compositor line, and the paced send reads the compositor's
-// lines only when it fires. Admission is bounded to what the message being
-// built can take, so at most one message's rows are unsent at any time; the
-// compositor must still never evict them, and the default rolling window
-// (eight lines) is smaller than one message's row budget. The detailed native
-// card therefore disables eviction, with or without reasoning: Slack keeps
-// every row it was sent anyway, and the rollover budget, not the window,
-// sizes a message. The quiet card stores no tool rows, so it disables
-// eviction only once the turn streams reasoning and otherwise keeps the
-// configured window exactly as before.
+// The paced send must deliver admitted rows before they can leave the
+// compositor. Disable its rolling window and let the per-message budget bound
+// admission instead. Quiet cards keep their configured window until reasoning
+// starts, since they store no tool rows.
 const SLACK_REASONING_CARDS_WINDOW_LINES = Number.MAX_SAFE_INTEGER;
 
 type ReasoningPayload = { text?: string; isReasoningSnapshot?: boolean };
@@ -90,13 +84,9 @@ function withSlackReasoningCardsWindow(
 }
 
 /**
- * Per-turn reasoning card state for the native progress card. Streamed
- * reasoning renders as task rows, interleaved with tool rows on the detailed
- * card and below the single summary row on the quiet card, which still shows
- * no tool rows. Cards are ordinary compositor lines, so they share the paced
- * update loop, the start gate and the reconciler with tool rows. A turn that
- * streams no reasoning renders tool rows only on the detailed card, and the
- * quiet card exactly as before.
+ * Projects per-turn reasoning into compositor lines, sharing the paced update
+ * loop, start gate and reconciler with tool rows. Quiet cards retain reasoning
+ * below their summary row without enabling tool rows.
  */
 export function createSlackReasoningCardsRuntime(params: {
   entry: SlackAccountConfig;
@@ -141,12 +131,9 @@ export function createSlackReasoningCardsRuntime(params: {
       .getSnapshot()
       .lines.some((line) => typeof line === "object" && line.id === id);
 
-  // Admits planned cards in order: updates to admitted cards always (they
-  // replace a row in place), new cards only while the message can take them,
-  // and never a later card ahead of a queued earlier one. Rerun after the
-  // chain rolled to release queued cards into the new message's room.
-  // Undefined when the compositor refused a new card: the final reply started
-  // and it takes no more lines, so the chain places the queue itself.
+  // Update admitted cards in place; queue new cards in order until a roll
+  // makes room. Undefined means final delivery has closed compositor admission,
+  // so the stream chain must place the remaining cards itself.
   const render = async (): Promise<boolean | undefined> => {
     let visible = false;
     const plan = planSlackReasoningCards(state);

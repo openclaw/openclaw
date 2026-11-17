@@ -9,9 +9,7 @@ import type { AnyChunk } from "@slack/types";
  * boundary searches (one more unit was rejected), through both methods:
  *
  * - Slack counts the message as it stores it: the plan block serialized as
- *   JSON plus the markdown text, against one ceiling of 13,200. Rows plus one
- *   character of text reached exactly 13,200 with 13, 30 and 44 rows, and with
- *   3,000, 6,000 or 11,000 characters of text the rows took the rest.
+ *   JSON plus the markdown text, against one ceiling of 13,200.
  * - In the plan block each task costs its JSON, 46 plus its id; titles,
  *   `details` and `output` are JSON-escaped: ASCII is one unit (`"`, `\` and
  *   `/` two), every other UTF-16 unit six, so CJK costs six per character and
@@ -68,11 +66,8 @@ export type SlackStreamMessageUpdate = {
 };
 
 export type SlackStreamMessageBudget = {
-  /** Plan block plus text. */
   units: number;
-  /** Plan block. */
   rowUnits: number;
-  /** Text. */
   textUnits: number;
   tasks: number;
 };

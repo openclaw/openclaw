@@ -72,13 +72,9 @@ type SlackStreamRollResult =
     };
 
 /**
- * The turn's native progress stream: what the current stream message holds
- * (task snapshot, narration text) and the chain of messages a long turn
- * rolls through. A message that would pass Slack's size, the row cap or
- * outlive its stream finishes as "continued below" and the turn goes on in a
- * continuation in the same thread with a fresh snapshot; no row id carries
- * over. A continuation is opened the way a human interruption is: the
- * delivery runtime seals the message and keeps its thread for the next start.
+ * Owns the current message's task/narration snapshot and continuation chain.
+ * Rollover reuses interruption sealing: close the message, retain its thread,
+ * and reconcile the continuation against a fresh message snapshot.
  */
 export function createSlackNativeProgressStream(params: {
   delivery: SlackStreamingDeliveryRuntime;
@@ -403,13 +399,9 @@ export function createSlackNativeProgressStream(params: {
   };
 
   /**
-   * One paced send: the compositor against the message as one append (or
-   * the start). It also releases the cards the current message can still
-   * take and, while cards stay queued, rolls to a continuation and goes on
-   * there; rows tool events admitted past the budget roll the same way, so
-   * does a message old enough that Slack would soon close its stream, and a
-   * msg_too_long answer despite the estimate rolls once and retries. Settled means nothing is queued and
-   * every row of the draft is on a message.
+   * Sends the latest draft and queued cards, rolling on size, rows or age.
+   * A msg_too_long rejection gets one rollover retry. Settled means every
+   * draft row has reached a message and no card remains queued.
    */
   const send = async (): Promise<SlackNativeStreamSendResult> => {
     let sent = false;
@@ -719,11 +711,8 @@ export function createSlackNativeProgressStream(params: {
   };
 
   /**
-   * Sends until nothing is queued: each pass sends the compositor and
-   * releases queued cards, rolling as it goes, and ends unsettled only when
-   * a start was not accepted or the compositor refused a release. Cards
-   * still queued after the passes are placed straight from the queue on
-   * budgeted messages, so no closeout ever carries them.
+   * Drains through the compositor first, then places cards it refused directly
+   * on budgeted messages. Closeout must never bypass this admission budget.
    */
   const drain = async (): Promise<void> => {
     if (!params.rollover || !delivery.streamSession) {
