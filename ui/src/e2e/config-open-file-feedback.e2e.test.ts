@@ -55,7 +55,9 @@ async function expectOpenFailure(page: Page, message: string): Promise<void> {
   await expect
     .poll(() => page.evaluate(() => Reflect.get(globalThis, "configOpenFileCopied")))
     .toEqual([configPath]);
-  expect(await page.getByText("Save failed", { exact: true }).count()).toBe(0);
+  expect(await page.getByText("Couldn’t save settings. Try again.", { exact: true }).count()).toBe(
+    0,
+  );
   expect(await page.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
   expect(await page.locator(".settings-save-indicator").count()).toBe(0);
 }

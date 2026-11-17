@@ -1,5 +1,6 @@
+import { withWorkspaceStatePublication } from "../agents/workspace-state-publication.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { runWithOpenClawStateLeasesWorker } from "../state/openclaw-state-lease-worker-operation.js";
+import { withOpenClawStateLeasesWorkerAdmission } from "../state/openclaw-state-lease-worker-owner.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type { TemplateAddStateWorkerOperations } from "./add-state-worker-contract.js";
@@ -20,16 +21,28 @@ export async function executeTemplateMutationStateCommand<
   const assertCurrent = options.assertCurrent;
   await options.prepareEffect?.();
   if (options.leaseSet) {
-    return runWithOpenClawStateLeasesWorker(
+    return withOpenClawStateLeasesWorkerAdmission(
       options.leaseSet.leases,
       context,
-      (scope, leases) => scope.execute({ ...command, input: { ...command.input, leases } }),
+      (admission) =>
+        runOpenClawStateWorkerOperation(
+          context,
+          (scope) =>
+            scope.execute({
+              ...command,
+              input: { ...command.input, leases: admission.identities },
+            }),
+          {
+            assertCurrent: admission.assertCurrent,
+            createAdmission: withWorkspaceStatePublication(context, admission.createAdmission),
+          },
+        ),
       { assertCurrent: () => assertCurrent?.() },
     );
   }
   return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
     assertCurrent,
-    createAdmission: () => ({
+    createAdmission: withWorkspaceStatePublication(context, () => ({
       nativeLocations: [context.admission.databasePath],
       admission: createSqliteWorkerOperationAdmission((request, grant) => {
         if (request.stage !== "transaction" && request.stage !== "commit") {
@@ -39,6 +52,6 @@ export async function executeTemplateMutationStateCommand<
         assertCurrent?.();
         grant();
       }),
-    }),
+    })),
   });
 }

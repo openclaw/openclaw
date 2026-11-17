@@ -22,6 +22,11 @@ struct ChatSystemNoticeRow: View {
             }
             .foregroundStyle(.secondary)
             .tint(.secondary)
+            #if os(iOS)
+            // Inside the iOS List a default DisclosureGroup turns into an outline row that the
+            // label tap does not toggle; keep the inline label + chevron behaviour.
+            .disclosureGroupStyle(ChatInlineDisclosureStyle())
+            #endif
             .padding(.vertical, 4)
         } else {
             VStack(spacing: 8) {
@@ -41,6 +46,34 @@ struct ChatSystemNoticeRow: View {
         }
     }
 }
+
+#if os(iOS)
+/// Inline label + chevron disclosure for transcript rows inside the iOS List.
+struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                configuration.isExpanded.toggle()
+            } label: {
+                HStack {
+                    configuration.label
+                    Spacer(minLength: 8)
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
+            if configuration.isExpanded {
+                configuration.content
+            }
+        }
+    }
+}
+#endif
 
 struct ChatHistoryDividerRow: View {
     let divider: ChatTranscriptRow.HistoryDivider
@@ -290,8 +323,11 @@ private struct ChatBubbleShape: InsettableShape {
 }
 
 @MainActor
-struct ChatMessageBubble: View {
+struct ChatMessageBubble: View, @MainActor Equatable {
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
+    #if os(iOS)
+    @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
@@ -316,6 +352,7 @@ struct ChatMessageBubble: View {
     let contextWindowTokens: Int?
     let userMessageExpanded: Bool
     let onToggleUserMessageExpanded: @MainActor () -> Void
+    let inlineWidgetScope: ChatInlineWidgetScope
     let inlineWidgetResolverReady: Bool
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
@@ -327,7 +364,50 @@ struct ChatMessageBubble: View {
         OpenClawChatMediaKind,
         OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
+    var canUseIOSRenderGate: Bool {
+        guard self.message.role.lowercased() == "assistant" else { return false }
+        return !self.message.content.contains { content in
+            content.isInlineAttachment || (content.type ?? "").lowercased() == "canvas"
+        }
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The iOS gate excludes media/widgets, so resolver closures cannot affect its subtree.
+        // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
+        // The favicon loader is covered by sourceContextRevision, which rotates on context changes.
+        guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
+        return lhs.message == rhs.message &&
+            lhs.liveToolCalls == rhs.liveToolCalls &&
+            lhs.metadata == rhs.metadata &&
+            lhs.sourcePreviews == rhs.sourcePreviews &&
+            lhs.sourceContextRevision == rhs.sourceContextRevision &&
+            lhs.sourceFaviconsEnabled == rhs.sourceFaviconsEnabled &&
+            lhs.markdownVariant.rawValue == rhs.markdownVariant.rawValue &&
+            lhs.userAccent == rhs.userAccent &&
+            lhs.displayOptions.rawValue == rhs.displayOptions.rawValue &&
+            lhs.assistantName == rhs.assistantName &&
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
+            lhs.isClean == rhs.isClean &&
+            lhs.contextWindowTokens == rhs.contextWindowTokens &&
+            lhs.userMessageExpanded == rhs.userMessageExpanded &&
+            lhs.inlineWidgetScope == rhs.inlineWidgetScope &&
+            lhs.inlineWidgetResolverReady == rhs.inlineWidgetResolverReady &&
+            lhs.mediaArtifactResolverReady == rhs.mediaArtifactResolverReady
+    }
+
+    private static func styleValue(_ style: OpenClawChatView.Style) -> UInt8 {
+        switch style {
+        case .standard: 0
+        case .onboarding: 1
+        }
+    }
+
     var body: some View {
+        // View builders reject `_ = …`; `let _` is the only statement form they accept.
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("bubble")
         if self.isUser {
             self.messageBody
                 .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .trailing)
@@ -464,6 +544,9 @@ extension ChatMessageBubble {
                     markdownVariant: self.markdownVariant,
                     includesThinking: self.displayOptions.contains(.reasoning),
                     textColor: textColor)
+                    #if os(iOS)
+                        .chatReaderAnchor(self.readerAnchor)
+                    #endif
             }
 
             if !self.sourcePreviews.isEmpty {
@@ -503,6 +586,8 @@ extension ChatMessageBubble {
                     preview: self.inlineWidgets[idx],
                     resolverReady: self.inlineWidgetResolverReady,
                     resolveResource: self.inlineWidgetResourceResolver)
+                    // A retained row must not lend its browser or callbacks to another chat owner.
+                        .id(self.inlineWidgetScope)
             }
 
             self.footer
@@ -749,13 +834,15 @@ private struct AttachmentRow: View {
                     resolverReady: self.resolverReady,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
+                // A busy Gateway inspector can omit playback metadata. Let its
+                // playback route inspect on demand rather than assume native support.
                 ChatMediaAudioAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     durationSeconds: self.att.durationSeconds,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .audio, self.att.playback) })
+                    load: { try await self.loadMedia($0, .audio, self.att.playback ?? .transcode) })
             case .video:
                 ChatMediaVideoAttachment(
                     artifactId: artifactId,
@@ -764,7 +851,7 @@ private struct AttachmentRow: View {
                     height: self.att.height,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .video, self.att.playback) })
+                    load: { try await self.loadMedia($0, .video, self.att.playback ?? .transcode) })
             }
         } else {
             self.fallbackRow
@@ -1021,11 +1108,44 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     let isClean: Bool
     let cornerRadius: CGFloat
+    let joinsAbove: Bool
+    let joinsBelow: Bool
 
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
 
+    private var bubbleShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: self.joinsAbove ? 0 : self.cornerRadius,
+            bottomLeadingRadius: self.joinsBelow ? 0 : self.cornerRadius,
+            bottomTrailingRadius: self.joinsBelow ? 0 : self.cornerRadius,
+            topTrailingRadius: self.joinsAbove ? 0 : self.cornerRadius,
+            style: .continuous)
+    }
+
     func body(content: Content) -> some View {
+        #if os(iOS)
+        Group {
+            if self.isRunContent || (self.isClean && !self.bubblesInClean) {
+                content
+            } else {
+                content
+                    // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
+                        .padding(.horizontal, self.isClean ? 8 : 0)
+                        .padding(.top, self.isClean && !self.joinsAbove ? 8 : 0)
+                        .padding(.bottom, self.isClean && !self.joinsBelow ? 8 : 0)
+                        .background(self.bubbleShape.fill(OpenClawChatTheme.assistantBubble))
+                        .overlay(
+                            self.bubbleShape
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                                // Joined cells draw only the outside edge, never a seam.
+                                .padding(.top, self.joinsAbove ? -1 : 0)
+                                .padding(.bottom, self.joinsBelow ? -1 : 0)
+                                .clipped())
+            }
+        }
+        .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        #else
         Group {
             if self.isRunContent || (self.isClean && !self.bubblesInClean) {
                 content
@@ -1042,12 +1162,22 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
             }
         }
         .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        #endif
     }
 }
 
 extension View {
-    func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
-        modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
+    func assistantBubbleContainerStyle(
+        isClean: Bool,
+        cornerRadius: CGFloat = 16,
+        joinsAbove: Bool = false,
+        joinsBelow: Bool = false) -> some View
+    {
+        modifier(AssistantBubbleContainerStyle(
+            isClean: isClean,
+            cornerRadius: cornerRadius,
+            joinsAbove: joinsAbove,
+            joinsBelow: joinsBelow))
             .focusable(false)
     }
 }
@@ -1072,11 +1202,22 @@ struct ChatStreamingAssistantText {
         self.includesThinking = includesThinking
         self.segments = AssistantTextParser.segments(from: sourceText, includeThinking: includesThinking)
     }
+
+    /// Item source is already inside a parsed assistant segment; do not interpret
+    /// assistant tags again or discard its inherited reasoning typography.
+    init(markdown: String, kind: AssistantTextSegment.Kind) {
+        self.sourceText = markdown
+        self.includesThinking = kind == .thinking
+        self.segments = [AssistantTextSegment(id: 0, kind: kind, text: markdown)]
+    }
 }
 
 @MainActor
 struct ChatStreamingAssistantBubble: View {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
+    #if os(iOS)
+    @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -1089,6 +1230,8 @@ struct ChatStreamingAssistantBubble: View {
     let isClean: Bool
 
     var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("live")
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(
@@ -1105,6 +1248,9 @@ struct ChatStreamingAssistantBubble: View {
                     textColor: self.isDesktopLayout
                         ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
                         : OpenClawChatTheme.assistantText)
+                    #if os(iOS)
+                        .chatReaderAnchor(self.readerAnchor)
+                    #endif
             }
             .padding(self.isClean ? 4 : 12)
             .assistantBubbleContainerStyle(isClean: self.isClean)
@@ -1164,7 +1310,7 @@ private struct ChatAssistantTextBody: View {
 }
 
 @MainActor
-private struct ChatStreamingAssistantTextBody: View {
+struct ChatStreamingAssistantTextBody: View {
     private let inputSnapshot: Snapshot
     let markdownVariant: ChatMarkdownVariant
     let textColor: Color

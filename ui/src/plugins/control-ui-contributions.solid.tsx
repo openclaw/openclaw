@@ -5,15 +5,16 @@ import {
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
-import { iconData, type IconName } from "../components/icon-data.ts";
+import { isIconName, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
 import { Icon } from "../components/solid/icon.tsx";
+import { formatUiError } from "../lib/format-error.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import { runControlUiPluginAction } from "./control-ui-actions.ts";
+import { runControlUiPluginAction, type ControlUiComposerDraft } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { PluginContribution } from "./control-ui-view.solid.tsx";
@@ -26,6 +27,8 @@ type ContributionsProps = {
   navigationChildren: boolean;
   navigationMenus: SidebarMenus | undefined;
   presented: boolean;
+  /** The pane's draft owner, exposed to composer actions. */
+  composer: ControlUiComposerDraft | undefined;
 };
 export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 
@@ -115,16 +118,14 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   type Navigation = ReturnType<typeof navigation>[number];
   const iconName = (entry: Navigation["entry"], fallback = "plug"): IconName => {
     const icon = entry.value.icon;
-    const name = icon && Object.hasOwn(iconData, icon) ? icon : fallback;
-    // SAFETY: the own-key check admits only names from the fixed icon registry.
-    return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
+    const name = isIconName(icon) ? icon : fallback;
+    return isIconName(name) ? name : "plug";
   };
   // Destinations may carry an emoji appearance instead of an icon name (Workboard boards);
   // show it as the board page does instead of the fallback icon.
   const emojiIcon = (entry: Navigation["entry"]) => {
     const icon = entry.value.icon;
-    const appearance =
-      icon && !Object.hasOwn(iconData, icon) ? normalizeSessionIconValue(icon) : null;
+    const appearance = icon && !isIconName(icon) ? normalizeSessionIconValue(icon) : null;
     return appearance?.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX) ? null : appearance;
   };
   function NavigationLink(link: { item: Navigation; child?: boolean; fallbackIcon?: string }) {
@@ -171,7 +172,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         <span class="nav-item__icon" aria-hidden="true">
           <Show
             when={emojiIcon(link.item.entry)}
-            fallback={<Icon name={iconName(link.item.entry, link.fallbackIcon)} />}
+            fallback={
+              <Icon name={iconName(link.item.entry, link.fallbackIcon)} filled={link.item.active} />
+            }
           >
             {(icon) => <span class="session-glyph__emoji">{icon()}</span>}
           </Show>
@@ -223,7 +226,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                     fallback={(error) => {
                       const message = () => {
                         const failure = error();
-                        return failure instanceof Error ? failure.message : String(failure);
+                        return formatUiError(failure);
                       };
                       return <span role="alert">{message()}</span>;
                     }}
@@ -259,6 +262,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
                         sessionKey: host.sessionKey,
                         agentId: host.agentId,
                         session: currentSession(),
+                        composer: host.composer,
                         signal: current.signal,
                         isCurrent: () => host.isConnected && host.presented,
                       }).catch((error: unknown) => {
@@ -362,6 +366,7 @@ defineSolidBridge<ContributionsProps>("openclaw-plugin-contributions", PluginCon
     navigationChildren: { default: true, type: Boolean },
     navigationMenus: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
+    composer: { default: undefined, attribute: false },
   },
 });
 

@@ -13,13 +13,13 @@ import {
   readWorktreeSourceDependencies,
 } from "./eviction.runtime.js";
 import { readWorktreeCleanupFingerprint } from "./gc-fingerprint.runtime.js";
-import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
+import { splitNullBuffer } from "./git-path-inventory.js";
 import type {
   GitWorktreeOperation,
   GitWorktreeOperationResult,
   GitWorktreeOperations,
 } from "./git-worktree-operations.js";
-import { requireGitBuffer, worktreePathExists } from "./git.js";
+import { commandError, requireGitBuffer, runGitBuffered, worktreePathExists } from "./git.js";
 import {
   hasSafeParentDirectories,
   hasUnsnapshotableProvisionedFiles,
@@ -40,29 +40,26 @@ async function inspectProvisioning(
   if (!(await fs.stat(includePath)).isFile()) {
     throw new Error(".worktreeinclude must resolve to a regular file");
   }
-  const included = splitNullBuffer(
-    await requireGitBuffer(sourceRoot, [
-      "ls-files",
-      "--others",
-      "--ignored",
-      `--exclude-from=${includePath}`,
-      "-z",
-    ]),
-  ).map((entry) => entry.toString("utf8"));
-  const paths: string[] = [];
-  for (const batch of gitPathspecBatches(included)) {
-    const candidates = await requireGitBuffer(sourceRoot, [
-      "--literal-pathspecs",
-      "ls-files",
-      "--others",
-      "--ignored",
-      "--exclude-standard",
-      "-z",
-      "--",
-      ...batch,
-    ]);
-    paths.push(...splitNullBuffer(candidates).map((entry) => entry.toString("utf8")));
+  const included = await requireGitBuffer(sourceRoot, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    `--exclude-from=${includePath}`,
+    "-z",
+  ]);
+  if (included.length === 0) {
+    return { paths: [], estimatedBytes: 0 };
   }
+  // The inventory is untracked; skip index glob matching and use ./ to reject pathspec magic.
+  const result = await runGitBuffered(sourceRoot, ["check-ignore", "--no-index", "--stdin", "-z"], {
+    input: splitNullBuffer(included)
+      .map((entry) => `./${entry.toString("utf8")}\0`)
+      .join(""),
+  });
+  if (result.termination !== "exit" || (result.code !== 0 && result.code !== 1)) {
+    throw commandError("git check-ignore", result);
+  }
+  const paths = splitNullBuffer(result.stdout).map((entry) => entry.toString("utf8").slice(2));
   let estimatedBytes = 0;
   for (const relativePath of estimateBytes ? paths : []) {
     const normalized = normalizeProvisionedRelativePath(relativePath);

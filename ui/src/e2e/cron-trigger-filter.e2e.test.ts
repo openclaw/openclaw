@@ -5,7 +5,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron trigger filter E2E",
@@ -51,6 +51,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       const conditionalRow = page.locator('[data-test-id="cron-row-conditional-job"]');
       await conditionalRow.waitFor();
       await page.locator('[data-test-id="cron-row-plain-job"]').waitFor();
@@ -77,7 +78,7 @@ suite.define(() => {
       expect(await conditionalRow.count()).toBe(1);
 
       await conditionalRow.click();
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       const activity = page.locator('[data-test-id="cron-condition-activity"]');
       await activity.waitFor();
       await expect.poll(() => activity.textContent()).toContain("42");
@@ -85,7 +86,7 @@ suite.define(() => {
       await expect.poll(() => activity.textContent()).toContain("Never");
       await expect
         .poll(() => page.locator(".cron-empty-state").textContent())
-        .toContain("No payload runs yet");
+        .toContain("No run history to show");
     });
   });
 });

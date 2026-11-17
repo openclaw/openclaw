@@ -131,7 +131,7 @@ const enSystems = {
         unavailable: "Unavailable",
         uninitialized: "Not initialized",
         "wrong-key": "Wrong encryption key",
-        error: "Couldn’t check storage",
+        error: "Couldn’t check storage. Try again.",
       },
     },
   },

@@ -81,7 +81,7 @@ it("renders complete catalog content in capability order", () => {
     "Extensions",
     "Skills",
     "Tools",
-    "MCP Server",
+    "MCP server",
   ]);
   expect(container.textContent).not.toMatch(/internal-dispatch|heygen-alias/);
 });

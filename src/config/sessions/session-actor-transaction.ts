@@ -28,7 +28,7 @@ export function withSessionActorTransactionState<T>(
   }
   current = { database: database.db, state, publishTranscript };
   try {
-    const result = withSqliteDatabaseWriteScope(
+    return withSqliteDatabaseWriteScope(
       database.db,
       [
         ...state.entryRows.keys(),
@@ -38,10 +38,6 @@ export function withSessionActorTransactionState<T>(
       ],
       run,
     );
-    if (result instanceof Promise) {
-      throw new Error("Session actor transactions cannot await work");
-    }
-    return result;
   } finally {
     current = undefined;
   }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
@@ -8,7 +8,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let runner: string;
-const engineFiles = ["unit.test.ts", "nested/integration.test.ts"];
+let fixtureRoot: string;
+const engineFiles = ["unit.test.ts", "nested/integration.test.ts", "support.ts", "ignored.spec.ts"];
 
 beforeAll(() => {
   const scripts = path.join(tempDirs.make("database-conformance-"), "scripts");
@@ -17,13 +18,16 @@ beforeAll(() => {
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, content);
   };
+  write("../package.json", JSON.stringify({ type: "module" }));
   mkdirSync(path.join(scripts, "lib"), { recursive: true });
   runner = path.join(scripts, "test-database-conformance.mjs");
+  fixtureRoot = path.dirname(scripts);
+  mkdirSync(path.join(fixtureRoot, "extensions"), { recursive: true });
   copyFileSync("scripts/test-database-conformance.mjs", runner);
-  copyFileSync(
-    "scripts/lib/postgres-conformance-shards.mts",
-    path.join(scripts, "lib/postgres-conformance-shards.mts"),
-  );
+  for (const name of ["postgres-conformance-shards.mts", "changed-path-facts.mjs"]) {
+    copyFileSync(`scripts/lib/${name}`, path.join(scripts, "lib", name));
+  }
+  write("../package.json", JSON.stringify({ type: "module" }));
   write(
     "../config/postgres-conformance-timings.json",
     JSON.stringify({
@@ -82,12 +86,55 @@ describe("PostgreSQL conformance shards", () => {
     ).toEqual([]);
   });
 
+  it("discovers new PostgreSQL suites without registration and forgets deleted suites", () => {
+    const suites = [
+      "src/new-owner/future.postgres.test.ts",
+      "extensions/new-plugin/nested/future.postgres.test.ts",
+      "extensions/workboard/already-covered.postgres.test.ts",
+      "src/infra/database-engine/nested/covered.postgres.test.ts",
+    ];
+    const ordinary = "extensions/new-plugin/ordinary.test.ts";
+    for (const file of [...suites, ordinary]) {
+      mkdirSync(path.dirname(path.join(fixtureRoot, file)), { recursive: true });
+      writeFileSync(path.join(fixtureRoot, file), "");
+    }
+    try {
+      const selected = targets(["--list"]);
+      for (const suite of suites) {
+        expect(
+          selected.filter((target) => suite === target || suite.startsWith(`${target}/`)),
+        ).toHaveLength(1);
+      }
+      expect(selected).not.toContain(ordinary);
+      expect(targets(["--list", "--", "custom.test.ts"])).toEqual(["custom.test.ts"]);
+      rmSync(path.join(fixtureRoot, suites[1]!));
+      expect(targets(["--list"])).not.toContain(suites[1]);
+    } finally {
+      for (const file of [...suites, ordinary]) {
+        rmSync(path.join(fixtureRoot, file), { force: true });
+      }
+    }
+  });
+
   it("partitions the full target inventory without loss or overlap and forwards test options", () => {
     const full = targets([]);
-    expect(full).toContain("src/infra/update-managed-service-handoff-engine.test.ts");
+    expect(full).toEqual(
+      expect.arrayContaining([
+        "src/infra/exec-approvals-native.test.ts",
+        "src/infra/client-credential-update.test.ts",
+        "src/infra/update-managed-service-handoff-engine.test.ts",
+      ]),
+    );
+    expect(full.filter((file) => file.startsWith("src/infra/database-engine/"))).toEqual([
+      "src/infra/database-engine/nested/integration.test.ts",
+      "src/infra/database-engine/unit.test.ts",
+    ]);
     const shards = [1, 2, 3].map((index) => targets(["--shard", `${index}/3`]));
     expect(shards.flat().toSorted()).toEqual(full.toSorted());
     expect(new Set(shards.flat()).size).toBe(full.length);
+    for (const shard of shards) {
+      expect(shard).toEqual(full.filter((target) => shard.includes(target)));
+    }
     const firstShard = shards[0]!;
     const options = ["--maxWorkers=1"];
     expect(targets(["--shard", "1/3", "--", ...options])).toEqual([...firstShard, ...options]);

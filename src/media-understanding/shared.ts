@@ -119,6 +119,7 @@ function resolveProviderOperationClocks() {
 export type ProviderOperationTimeoutMs = number | (() => number);
 
 type GuardedProviderRequestParams = {
+  beforeRequest?: () => void;
   pinDns?: boolean;
   allowPrivateNetwork?: boolean;
   ssrfPolicy?: SsrFPolicy;
@@ -437,6 +438,7 @@ export async function fetchWithTimeoutGuarded(
   timeoutMs: number | undefined,
   fetchFn: typeof fetch,
   options?: {
+    beforeRequest?: () => void;
     ssrfPolicy?: SsrFPolicy;
     lookupFn?: LookupFn;
     pinDns?: boolean;
@@ -456,6 +458,7 @@ export async function fetchWithTimeoutGuarded(
   return await fetchWithSsrFGuard({
     url,
     fetchImpl: fetchFn,
+    beforeRequest: options?.beforeRequest,
     init,
     timeoutMs: resolveGuardedHttpTimeoutMs(timeoutMs),
     policy: options?.ssrfPolicy,
@@ -476,6 +479,7 @@ function resolveGuardedRequestOptions(
     ? { ...params.ssrfPolicy, allowPrivateNetwork: true }
     : params.ssrfPolicy;
   const options = {
+    ...(params.beforeRequest ? { beforeRequest: params.beforeRequest } : {}),
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
     ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
     ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),

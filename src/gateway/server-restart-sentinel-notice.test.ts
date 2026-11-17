@@ -340,6 +340,7 @@ describe("restart sentinel notice recovery", () => {
   );
 
   it("finishes a real durable send under the admitted RPC root after restart admission closes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await useRealDelivery();
     const gate = createRequestGate();
     const sendText = vi.fn(async () => {

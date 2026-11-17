@@ -80,6 +80,8 @@ vi.mock("../../config/io.js", async (original) => ({
 }));
 vi.mock("../../daemon/runtime-paths.js", async (original) => ({
   ...(await original<typeof import("../../daemon/runtime-paths.js")>()),
+  // This fixture models system Node; runtime audit tests own version-manager policy.
+  isVersionManagedNodePath: () => false,
   resolvePreferredNodePath: async () => process.execPath,
   resolveNodeRuntimeInfo: async () => ({
     status: "supported",

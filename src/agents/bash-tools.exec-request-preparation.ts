@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import {
@@ -37,7 +36,10 @@ import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { EXEC_NODE_PATH_PREPEND_WARNING } from "./exec-node-path-prepend.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
-import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
@@ -84,7 +86,7 @@ export function assertDurableExecAvailable(
   }
   if (host !== "gateway" || !allowBackground) {
     throw new Error(
-      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer, a reachable user manager, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
+      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
     );
   }
 }
@@ -162,10 +164,8 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
 /** Capture notification routing and child identity before process lifetime detaches. */
 export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess =
-    typeof defaults?.notifyOnExitEmptySuccess === "boolean"
-      ? defaults.notifyOnExitEmptySuccess
-      : normalizeChatChannelId(defaults?.messageProvider) !== null;
+  // Every exit of a wake-armed command wakes its conversation unless the operator opts out.
+  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess !== false;
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
   );
@@ -192,9 +192,12 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
           agentId: notifyAgentSession.agentId,
         }),
       });
-      return isSubagentEnvelopeSession(notifySessionKey, {
-        entry: read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry,
-      });
+      const entry = read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry;
+      // Visible spawns are interactive; only hidden workers report through the announce chain.
+      return (
+        isSubagentEnvelopeSession(notifySessionKey, { entry }) &&
+        !isVisibleSpawnedSession(notifySessionKey, { entry })
+      );
     })().catch(() => {
       // Identity enrichment must not prevent exec; retry the worker on the next call.
       subagentSession = undefined;
@@ -416,7 +419,6 @@ export function resolvePreparedExecEnvironment(params: {
   execParams: ExecToolArgs;
   host: ExecHost;
   sandbox?: BashSandboxConfig;
-  containerWorkdir?: string | null;
   channelContext?: PluginHookChannelContext;
   subagentExecution?: boolean;
   defaultPathPrepend: string[];
@@ -537,7 +539,7 @@ export function resolvePreparedExecEnvironment(params: {
           defaultPath: DEFAULT_PATH,
           paramsEnv: untrustedRequestedEnv,
           sandboxEnv: params.sandbox.env,
-          containerWorkdir: params.containerWorkdir ?? params.sandbox.containerWorkdir,
+          containerWorkdir: params.sandbox.containerWorkdir,
         })
       : (hostEnvResult?.env ?? inheritedBaseEnv);
 

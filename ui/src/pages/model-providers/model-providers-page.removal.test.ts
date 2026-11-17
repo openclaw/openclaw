@@ -138,7 +138,7 @@ it.each(["agent", "reconnect", "access"] as const)(
     await completion;
     await h.page.updateComplete;
     expect(requestCount(h.request, "models.authLogout")).toBe(1);
-    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Logged out.");
+    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
   },
 );
 
@@ -150,12 +150,13 @@ it.each([true, false])(
     if (withAccount) {
       expect(copy).toContain("other agents");
     } else {
-      expect(copy).not.toContain("Active runs");
+      expect(copy).not.toContain("Active replies");
     }
     expect(copy).toContain("OpenAI");
     expect(copy).toContain("configured aliases");
     expect(copy).not.toContain("Runs using it stop");
-    await waitForSolid(() => expect(h.toast.toasts[0]?.options.message).toContain("Logged out."));
+    await h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
+    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
     expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
       ...(withAccount ? [{ provider: "openai", agentId: "writer" }] : []),
       { provider: "OpenAI", credentialType: "api_key", agentId: "writer" },
@@ -188,7 +189,7 @@ it.each([false, true])(
     } else {
       expect(h.page.querySelector('[data-profile-id="openai:work"]')).toBeNull();
     }
-    expect(h.toast.toasts[0]?.options.message).not.toContain("Logged out.");
+    expect(h.toast.toasts[0]?.options.message).not.toContain("Signed out");
     expect(requestCount(h.request, "models.authLogout")).toBe(2);
   },
 );
@@ -213,7 +214,8 @@ it("names the retained secret reference when saved accounts can be removed", asy
   });
   const copy = await h.confirm();
   expect(copy).toContain("Secret references in OpenAI");
-  await waitForSolid(() => expect(h.toast.toasts[0]?.options.message).toContain("Logged out."));
+  await h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
+  expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
   expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
     { provider: "openai", agentId: "writer" },
   ]);

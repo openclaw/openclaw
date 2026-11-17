@@ -5,6 +5,7 @@ import {
   defaultControlUiFeatureMethods,
   reconnectMockGateway,
   type MockGatewayControls,
+  waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
@@ -77,8 +78,14 @@ async function openPeople(
     const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "People", exact: true });
   await online[touch ? "tap" : "click"]();
+  if (!touch) {
+    // On a desktop People opens Activity; return to the session with the people list open.
+    await waitForControlUiRoute(page, { routeId: "activity" });
+    await page.goBack();
+    await waitForControlUiRoute(page, { routeId: "chat" });
+  }
   return gateway;
 }
 function sessionRow(
@@ -112,7 +119,7 @@ function scenario(recentSessionLabel = recentLabel) {
         lastActivityAt: now - 60_000,
         deviceFamily: "Mac",
         platform: "macOS",
-        timeZone: "Europe/Paris",
+        timeZone: "Pacific/Chatham",
         watchedSessions: [watched, "agent:main:main", "agent:private:hidden"],
       },
     ],
@@ -129,27 +136,6 @@ function scenario(recentSessionLabel = recentLabel) {
       ]),
     },
   };
-}
-
-async function expectInlineLastActivity(card: Locator) {
-  const positions = await card
-    .locator(".person-activity-card__facts dd")
-    .last()
-    .evaluate((value) => {
-      const time = value.querySelector("time");
-      const text = document.createTreeWalker(value, NodeFilter.SHOW_TEXT);
-      let suffix = text.nextNode();
-      while (suffix && suffix.textContent?.trim() !== "ago") {
-        suffix = text.nextNode();
-      }
-      if (!time || !suffix) {
-        throw new Error("Expected last activity duration and suffix");
-      }
-      const range = document.createRange();
-      range.selectNodeContents(suffix);
-      return { time: time.getBoundingClientRect().top, suffix: range.getBoundingClientRect().top };
-    });
-  expect(Math.abs(positions.time - positions.suffix)).toBeLessThan(2);
 }
 
 async function expectMultilineTitle(title: Locator) {
@@ -202,8 +188,7 @@ suite.define(() => {
       // Presence reorders the row; keep focus in the card while its activity changes.
       await link(card, "View activity").focus();
       await expectText(card.locator(".person-activity-card__status"), "Idle");
-      await expectText(card, "Online for");
-      await expectText(card, "Last interaction");
+      await expectText(card.locator(".person-activity-card__status"), "Idle for");
       for (const [personId, activity] of [
         ["alice", "idle"],
         ["bob", "active"],
@@ -252,8 +237,6 @@ suite.define(() => {
         card,
         "Connected with the Gateway token or over a tunnel, not a personal sign-in.",
       );
-      await expectText(card, "Mac · macOS 27.0.0 · App");
-      await expectText(card, "Activity unavailable");
       await expectAttribute(link(card, "View activity"), "href", "/activity/gateway-owner");
       await expectText(onlinePerson(page, "example-person"), "Example person");
       await expectAttribute(
@@ -321,18 +304,21 @@ suite.define(() => {
         await expectCount(row.getByRole("button", { name: "Actions for Alice", exact: true }), 1);
         await person.hover();
         await card.waitFor({ state: "visible" });
-        await expectText(card, "Reported time zone: Europe/Paris");
+        await expectAttribute(
+          card.locator(".person-activity-card__clock"),
+          "title",
+          "Pacific/Chatham",
+        );
         await expect
           .poll(() => card.locator("a").allTextContents())
           .toEqual(
             expect.arrayContaining(
-              ["Release checklist", "Main Session", recentLabel, "View activity"].map((text) =>
+              ["Release checklist", "Main session", recentLabel, "View activity"].map((text) =>
                 expect.stringContaining(text),
               ),
             ),
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
-        await expectInlineLastActivity(card);
         const bounds = await row.boundingBox();
         const cardBounds = await card.boundingBox();
         if (!bounds || !cardBounds) {
@@ -448,7 +434,6 @@ suite.define(() => {
         await recent.focus();
         expect(await computedStyleProperty(recentTitle, "text-indent")).toBe("0px");
         await expectMultilineTitle(recentTitle);
-        await expectInlineLastActivity(card);
         await session.tap();
         await expect.poll(() => page.url()).toContain("/dashboard/");
         await pollCount(card).toBe(0);

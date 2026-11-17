@@ -213,6 +213,48 @@ describe("generate-npm-package-lock", () => {
     },
   );
 
+  it("reads pnpm policy once per generation and refreshes it on the next call", () => {
+    const root = tempDirs.make("openclaw-npm-policy-lifetime-");
+    writeFileSync(path.join(root, "pnpm-workspace.yaml"), "{}\n");
+    writeJson(path.join(root, "pnpm-lock.yaml"), { packages: {} });
+    writeJson(path.join(root, "package.json"), { name: "policy-fixture", version: "1.0.0" });
+    const script = `import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+const lockPath = ${JSON.stringify(path.join(root, "pnpm-lock.yaml"))};
+const read = fs.readFileSync;
+let reads = 0;
+fs.readFileSync = function(file, ...args) {
+  if (String(file) === lockPath) reads++;
+  return read.call(this, file, ...args);
+};
+syncBuiltinESMExports();
+const { generateNpmPackageLock } = await import(${JSON.stringify(new URL("../../scripts/generate-npm-package-lock.mts", import.meta.url).href)});
+const first = JSON.parse(generateNpmPackageLock(${JSON.stringify(root)}));
+const firstReads = reads;
+fs.writeFileSync(lockPath, "invalid: [");
+let error;
+try { generateNpmPackageLock(${JSON.stringify(root)}); } catch (caught) { error = caught.message; }
+console.log(JSON.stringify({ first, firstReads, nextReads: reads - firstReads, error }));`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT: root,
+          npm_config_offline: "true",
+        },
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const observed = JSON.parse(result.stdout);
+    expect(observed.first).toMatchObject({ name: "policy-fixture", lockfileVersion: 3 });
+    expect(observed.firstReads).toBe(1);
+    expect(observed.nextReads).toBe(1);
+    expect(observed.error).toContain("Flow sequence");
+  });
+
   it("accepts strict npm-lock command timeout and buffer overrides", () => {
     expect(
       createNpmLockExecOptions({ command: "npm", args: ["install"] }, "/tmp/package", {
@@ -695,11 +737,14 @@ describe("generate-npm-package-lock", () => {
     });
   });
 
-  it.each(
-    [{ name: "minimatch", version: "10.2.5", required: "10.2.6" }].flatMap((entry) =>
-      ["11.20.0", "12.1.0", "12.2.0"].map((npmVersion) => Object.assign({ npmVersion }, entry)),
+  it.each([
+    ...[{ name: "minimatch", version: "10.2.5", required: "10.2.6" }].flatMap((entry) =>
+      ["11.20.0", "12.1.0", "12.2.0", "12.2.1"].map((npmVersion) =>
+        Object.assign({ npmVersion }, entry),
+      ),
     ),
-  )(
+    { name: "ip-address", version: "10.7.2", required: "10.7.4", npmVersion: "12.2.1" },
+  ])(
     "limits the npm@$npmVersion bundled exception for $name to its approved occurrence",
     ({ name, version, required, npmVersion }) => {
       for (const change of [
@@ -710,9 +755,7 @@ describe("generate-npm-package-lock", () => {
         "unbundled",
       ] as const) {
         const installedNpmVersion =
-          change === "npm version"
-            ? `${npmVersion.slice(0, npmVersion.lastIndexOf(".") + 1)}1`
-            : npmVersion;
+          change === "npm version" ? `${npmVersion}-unreviewed` : npmVersion;
         const bundledVersion = change === "bundle version" ? "0.0.1" : version;
         const npmPath =
           change === "path" ? "node_modules/other/node_modules/npm" : "node_modules/npm";
@@ -756,7 +799,7 @@ describe("generate-npm-package-lock", () => {
     },
   );
 
-  it.each(["11.20.0", "12.1.0", "12.2.0"])(
+  it.each(["11.20.0", "12.1.0", "12.2.0", "12.2.1"])(
     "authenticates npm@%s bundled lock entries against the pnpm-locked archive",
     (npmVersion) => {
       const root = tempDirs.make("openclaw-npm-bundle-");

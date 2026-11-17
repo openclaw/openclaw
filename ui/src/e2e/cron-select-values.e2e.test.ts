@@ -8,7 +8,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -57,6 +57,7 @@ suite.define(() => {
             methodResponses: cronResponses([job], "focus-clearance", enabled),
           });
           await page.goto(`${suite.server.baseUrl}cron`);
+          await collapseNav(page);
           const scroller = page.locator(".content");
           const initialPadding = await scrollPadding(page);
           await page
@@ -80,7 +81,36 @@ suite.define(() => {
             await page.setViewportSize({ width: mode === "edit" ? 320 : 390, height: 707 });
             await expect
               .poll(() => footer.evaluate((element) => element.getBoundingClientRect().height))
-              .toBeGreaterThan(originalHeight);
+              .toBeGreaterThan(originalHeight)
+              .catch(async (error: unknown) => {
+                const facts = await footer
+                  .evaluate(
+                    (element) => {
+                      const rect = element.getBoundingClientRect();
+                      return {
+                        width: rect.width,
+                        height: rect.height,
+                        buttons: [...element.querySelectorAll("button")].map((button) => {
+                          const bounds = button.getBoundingClientRect();
+                          return { width: bounds.width, height: bounds.height, top: bounds.top };
+                        }),
+                        reasonPresent: Boolean(element.querySelector(".cron-submit-reason")),
+                        fontStatus: document.fonts.status,
+                      };
+                    },
+                    undefined,
+                    { timeout: 500 },
+                  )
+                  .catch(() => null);
+                console.info("cron-footer-no-growth", {
+                  mode,
+                  enabled,
+                  narrow,
+                  originalHeight,
+                  facts,
+                });
+                throw error;
+              });
           }
           // Keyboard focus uses the scroll padding published by ResizeObserver.
           // A taller footer alone does not mean that clearance has been applied.
@@ -100,7 +130,8 @@ suite.define(() => {
             .toBe(true);
           await page.locator("#cron-payload-text").fill(gardenMessage);
           if (keyboardName) {
-            for (let field = 0; field < 4; field++) {
+            // Action, scrollable preview, model, reasoning, then name.
+            for (let field = 0; field < 5; field++) {
               await page.keyboard.press("Tab");
             }
             expect(
@@ -213,6 +244,7 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}cron`);
+        await collapseNav(page);
         await page.locator('[data-test-id="cron-row-garden-legacy-delivery"]').click();
         await page.locator("#cron-name").fill("Renamed garden summary");
         const mode = page.locator("#cron-delivery-mode");
@@ -252,6 +284,7 @@ suite.define(() => {
       });
 
       const response = await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       expect(response?.status()).toBe(200);
       await page.locator('[data-test-id="cron-list-tab-activity"]').click();
       const sortMenu = page.locator(".cron-filter-dropdown__details", {
@@ -290,6 +323,16 @@ suite.define(() => {
       await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
+      await expect
+        .poll(() =>
+          page
+            .getByText(
+              "Main adds the task to the agent’s timeline. Isolated starts a reply in a separate session.",
+              { exact: true },
+            )
+            .isVisible(),
+        )
+        .toBe(true);
 
       const target = page.locator("#cron-session-target");
       await target.click();

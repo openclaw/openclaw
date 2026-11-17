@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { collapseNav } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron mocked Gateway E2E",
@@ -206,6 +207,7 @@ suite.define(() => {
       });
 
       const response = await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       expect(response?.status()).toBe(200);
       await jobTitle(page, "Digest every minute").waitFor({ timeout: 10_000 });
       await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
@@ -261,8 +263,9 @@ suite.define(() => {
       );
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
-      await page.getByRole("note").filter({ hasText: "Browsing only" }).waitFor();
+      await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();
       expect(
         await page.locator(`[data-test-id="cron-row-description-${readOnlyJob.id}"]`).textContent(),
       ).toContain(readOnlyJob.description);
@@ -311,7 +314,8 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await collapseNav(page);
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -325,11 +329,11 @@ suite.define(() => {
       await statusFilter.locator('[data-value="option:error"]').click();
       await button(page, "Status Error").waitFor();
       await statusFilter.locator('[data-value="option:ok"]').click();
-      await button(page, "Status OK, Error").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK, Error");
+      await button(page, "Status Completed, Error").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Completed, Error");
       await statusFilter.locator('[data-value="option:skipped"]').click();
-      await button(page, "Status OK +2 (OK, Error, and Skipped)").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK +2");
+      await button(page, "Status Completed +2 (Completed, Error, and Skipped)").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Completed +2");
       await expectRunRequest(gateway, initialRequestCount, (params) =>
         containsAll(params.statuses, statuses),
       );
@@ -378,8 +382,9 @@ suite.define(() => {
       const gateway = await installCronGateway(page);
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
-      await page.getByRole("tab", { name: "Ausführungsverlauf", exact: true }).click();
+      await page.getByRole("tab", { name: "Aktivitätsverlauf", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -394,11 +399,14 @@ suite.define(() => {
       await pressKeys(page, "ArrowDown", "Enter");
       await button(page, "Status Fehler").waitFor();
       await pressKeys(page, "Home", "Enter");
-      await button(page, "Status OK, Fehler").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK, Fehler");
+      await button(page, "Status Abgeschlossen, Fehler").waitFor();
+      expect(await statusTrigger.textContent()).toContain("Abgeschlossen, Fehler");
       await pressKeys(page, "ArrowDown", "ArrowDown", "Enter");
-      await button(page, "Status OK +2 (OK, Fehler und Übersprungen)").waitFor();
-      expect(await statusTrigger.textContent()).toContain("OK +2");
+      await button(
+        page,
+        "Status Abgeschlossen +2 (Abgeschlossen, Fehler und Übersprungen)",
+      ).waitFor();
+      expect(await statusTrigger.textContent()).toContain("Abgeschlossen +2");
 
       await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
       await page.keyboard.press("Enter");
@@ -430,7 +438,8 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await collapseNav(page);
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       await expectRunCount(page, "Initial history", 1);
 
       await gateway.deferNext("cron.runs");
@@ -479,8 +488,11 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await jobTitle(page, selectedJob.name).waitFor({ timeout: 10_000 });
 
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await expectRunCount(page, "Overview history", 1);
       const previousHistoryRequestCount = (await gateway.getRequests("cron.runs")).length;
       await gateway.deferNext("cron.runs");
       await gateway.emitGatewayEvent("cron", {});
@@ -488,6 +500,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("cron.runs")).length)
         .toBeGreaterThan(previousHistoryRequestCount);
 
+      await page.getByRole("tab", { name: "All", exact: true }).click();
       await jobTitle(page, selectedJob.name).click();
       await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await expectRunCount(page, "Selected task history", 1);
@@ -530,6 +543,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
 
       await page.locator('[data-test-id="cron-new-task"]').click();
@@ -570,7 +584,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-tab-all"]').waitFor();
+      await page.locator(".cron-overview-empty").waitFor();
 
       await page.keyboard.press("Tab");
       await expect
@@ -581,8 +595,9 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.id))
         .toBe("control-ui-main");
 
+      await collapseNav(page);
       const tasksTab = page.getByRole("tab", { name: "All", exact: true });
-      const activityTab = page.getByRole("tab", { name: "Run history", exact: true });
+      const activityTab = page.getByRole("tab", { name: "Activity history", exact: true });
       await tasksTab.focus();
       await pressKeys(page, "ArrowRight", "ArrowRight", "ArrowRight");
       await expect
@@ -591,7 +606,7 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
       await expect
-        .poll(() => page.getByRole("tabpanel", { name: "Run history" }).isVisible())
+        .poll(() => page.getByRole("tabpanel", { name: "Activity history" }).isVisible())
         .toBe(true);
     });
   });

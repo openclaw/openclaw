@@ -67,6 +67,7 @@ export type MemoryEmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
   adapters: readonly MemoryEmbeddingProviderAdapter[];
   checkedAtMs: number;
+  /** Compared against `performance.now()` so wall-clock steps cannot extend it. */
   expireAtMs: number;
 };
 
@@ -145,6 +146,9 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
         ([manager, owner]) =>
           owner.retiring ||
           reload.retireRuntime ||
+          // No attempted adapter means unknown dependency, not independence.
+          // Drain lazy managers before service stop inherits their cleanup work.
+          (reload.adapters.size > 0 && owner.adapters.size === 0) ||
           this.getProbeOwners(manager).some((adapter) => reload.adapters.has(adapter)),
       );
       for (const [manager, owner] of selected) {

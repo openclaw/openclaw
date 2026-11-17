@@ -70,6 +70,12 @@ const readerOwners = new AsyncContext<
       databaseAdmissionWaitMs: number;
       transactions: { count: number };
       holdContext?: SqliteOperationHoldContext;
+      // Hydration owners fill scalars; only slow transactions materialize log context.
+      hydrationActiveEvents?: number;
+      hydrationMetadataRows?: number;
+      hydrationMetadataLimit?: number;
+      hydrationExhausted?: number;
+      hydrationDependencyRows?: number;
       diskRead?: { context?: SqliteOperationHoldContext };
     };
   }
@@ -190,6 +196,27 @@ export function captureSqliteReaderOwner(): SqliteReaderOwner | undefined {
 /** Mutable diagnostic counters only; never source or write authority. */
 export function currentSqliteOperationTiming() {
   return readerOwners.getStore()?.timing;
+}
+
+/** Materialize only after the transaction owner's slow-hold threshold. */
+export function readSqliteOperationHoldContext(
+  diagnosticContext: SqliteOperationHoldContext | undefined,
+  hydration: boolean,
+) {
+  const timing = currentSqliteOperationTiming();
+  return {
+    ...diagnosticContext,
+    ...timing?.holdContext,
+    ...(hydration && timing?.hydrationActiveEvents !== undefined
+      ? {
+          activeEvents: timing.hydrationActiveEvents,
+          metadataRows: timing.hydrationMetadataRows,
+          metadataLimit: timing.hydrationMetadataLimit,
+          exhausted: timing.hydrationExhausted,
+          dependencyRows: timing.hydrationDependencyRows,
+        }
+      : {}),
+  };
 }
 
 function currentOwner(

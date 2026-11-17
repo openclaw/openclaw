@@ -1,5 +1,6 @@
 /** Timeout watchdogs for cron runner setup and execution phases. */
 import { raceWithTimeout } from "@openclaw/retry";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import type {
   CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
@@ -56,6 +57,8 @@ export function createCronAgentWatchdog(params: {
 }) {
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
+  // The job budget is process-local, so it is measured on the monotonic clock:
+  // lane waits pause it with `remainingTimeoutMs` and `setTimeout` consumes it.
   let timeoutStartedAt = 0;
   let remainingTimeoutMs = params.jobTimeoutMs;
   let setupTimeoutId: NodeJS.Timeout | undefined;
@@ -74,7 +77,7 @@ export function createCronAgentWatchdog(params: {
     if (timeoutId || waitingForLane || state === "disposed" || state === "timed_out") {
       return;
     }
-    timeoutStartedAt = Date.now();
+    timeoutStartedAt = monotonicNow();
     timeoutId = setTimeout(() => {
       setTimedOut(timeoutErrorMessage(activeExecution));
     }, remainingTimeoutMs);
@@ -151,7 +154,7 @@ export function createCronAgentWatchdog(params: {
       if (timeoutId) {
         clearTimeout(timeoutId);
         timeoutId = undefined;
-        remainingTimeoutMs -= Date.now() - timeoutStartedAt;
+        remainingTimeoutMs -= monotonicNow() - timeoutStartedAt;
       }
       clearSetupTimeout();
       clearPreExecutionTimeout();

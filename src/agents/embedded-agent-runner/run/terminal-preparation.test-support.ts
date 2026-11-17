@@ -89,5 +89,6 @@ export function createTerminalPreparationInput(input: PreparationOverrides): Pre
 
 export async function prepareAttempt(input: PreparationOverrides) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-  return prepareEmbeddedRunTerminal(createTerminalPreparationInput(input));
+  const prepared = createTerminalPreparationInput(input);
+  return prepareEmbeddedRunTerminal(prepared);
 }

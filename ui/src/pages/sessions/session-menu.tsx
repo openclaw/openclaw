@@ -16,6 +16,7 @@ import { sessionPlacementAction } from "../../components/session-placement-actio
 import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import {
   canArchiveSessionRow,
   canDeleteSessionRows,
@@ -103,6 +104,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
       }),
       archiveAllowed: canArchiveSessionRow(row, mainKey),
       deleteAllowed: canDeleteSessionRows([row], mainKey),
+      cloudWorkerStopLabel: cloudWorkerStopAction ? t(cloudWorkerStopAction.copyKey) : "",
       cloudWorkerStopAllowed: Boolean(
         cloudWorkerStopAction &&
         (!cloudWorkerStopAction.blocksActiveRun || row.hasActiveRun !== true) &&
@@ -128,6 +130,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
         archiveAllowed={state().archiveAllowed}
         deleteAllowed={state().deleteAllowed}
         cloudWorkerStopAllowed={state().cloudWorkerStopAllowed}
+        cloudWorkerStopLabel={state().cloudWorkerStopLabel}
         groups={props.groups}
         currentOwner={props.row.owner?.actor ?? null}
         work={visibleWork()}

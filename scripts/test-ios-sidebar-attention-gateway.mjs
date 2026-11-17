@@ -15,9 +15,14 @@ let questions = [];
 let approvals = [];
 let created;
 let workIsActive;
+let recencyProof = false;
+let recencyTimestamp;
+const planningKey = "agent:main:snooze-active";
 
 function reset() {
   created = Date.now();
+  recencyProof = false;
+  recencyTimestamp = undefined;
   workIsActive = true;
   questions = ["Which draft should we review first?", "Should the summary include a timeline?"].map(
     (question, index) => ({
@@ -230,12 +235,52 @@ function reviewSession() {
     status: workIsActive ? "running" : "done",
   };
 }
+function planningSession() {
+  const title = recencyTimestamp ? "Planning recency" : "Planning notes";
+  return {
+    key: planningKey,
+    sessionId: "synthetic-snooze-active",
+    displayName: title,
+    label: title,
+    kind: "direct",
+    updatedAt: recencyTimestamp ?? (recencyProof ? created - 120_000 : created),
+  };
+}
+function publishSessionChange(session) {
+  broadcast("sessions.changed", {
+    sessionKey: session.key,
+    reason: "lifecycle",
+    agentId: "main",
+    session,
+  });
+}
 const server = createServer((req, res) => {
   res.setHeader("content-type", "application/json");
   const path = new URL(req.url, `http://127.0.0.1:${port}`).pathname;
   if (req.method === "POST") {
     if (path === "/reset") {
       reset();
+    } else if (path === "/recency/reset") {
+      reset();
+      recencyProof = true;
+      questions = [];
+      approvals = [];
+      workIsActive = false;
+    } else if (path === "/recency/seed") {
+      recencyTimestamp = Date.now() - 45_000;
+      publishSessionChange(planningSession());
+    } else if (path === "/recency/refresh" && recencyTimestamp) {
+      // Update a different row only after the planning row crosses the minute boundary.
+      const delay = Math.max(0, recencyTimestamp + 61_000 - Date.now());
+      setTimeout(() => {
+        publishSessionChange({
+          ...reviewSession(),
+          displayName: "Refreshed review",
+          label: "Refreshed review",
+        });
+        res.end("{}");
+      }, delay);
+      return;
     } else if (path === "/work/finish") {
       workIsActive = false;
       broadcast("sessions.changed", {
@@ -374,14 +419,7 @@ wss.on("connection", (ws) => {
           hasMore: false,
           defaults: {},
           sessions: [
-            {
-              key: "agent:main:snooze-active",
-              sessionId: "synthetic-snooze-active",
-              displayName: "Planning notes",
-              label: "Planning notes",
-              kind: "direct",
-              updatedAt: created,
-            },
+            planningSession(),
             {
               key: "agent:main:snooze-later",
               sessionId: "synthetic-snooze-later",
@@ -389,11 +427,12 @@ wss.on("connection", (ws) => {
               label: "Follow-up notes",
               kind: "direct",
               updatedAt: created - 1000,
-              snoozedAt: created,
-              snoozedUntil: Date.parse("2099-01-05T17:00:00Z"),
+              snoozedAt: recencyProof ? undefined : created,
+              snoozedUntil: recencyProof ? undefined : Date.parse("2099-01-05T17:00:00Z"),
             },
             {
               key: mainKey,
+              sessionId: "synthetic-main-session",
               displayName: "Home",
               label: "Home",
               kind: "direct",
@@ -417,11 +456,22 @@ wss.on("connection", (ws) => {
       case "chat.history":
         reply({
           sessionKey: params.sessionKey ?? mainKey,
-          sessionId: "synthetic-session",
+          sessionId:
+            params.sessionKey === "agent:main:snooze-active"
+              ? "synthetic-snooze-active"
+              : "synthetic-main-session",
           messages: [
             {
               role: "assistant",
-              content: [{ type: "text", text: "Your research workspace is ready." }],
+              content: [
+                {
+                  type: "text",
+                  text:
+                    params.sessionKey === "agent:main:snooze-active"
+                      ? "Your planning notes are ready."
+                      : "Your research workspace is ready.",
+                },
+              ],
               timestamp: created,
             },
           ],

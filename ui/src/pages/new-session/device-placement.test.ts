@@ -40,12 +40,12 @@ describe("device placement projection", () => {
     [
       "saturated host",
       { workerSlots: { total: 2, available: 0 } },
-      "No worker slots are available. Wait for a slot or pick another device.",
+      "No session slots are available. Wait for a slot or pick another device.",
     ],
     [
       "missing live capacity",
       { workerSlots: undefined },
-      "Worker capacity is unavailable. Restart the device session host and try again.",
+      "Device capacity is unavailable. Restart its session hosting and try again.",
     ],
     [
       "offline durable host",
@@ -60,7 +60,7 @@ describe("device placement projection", () => {
     [
       "update required",
       { issues: [updateIssue] },
-      "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
+      "Update this device: run openclaw update, then reconnect. For a headless device, run openclaw node restart.",
     ],
   ] satisfies [string, Partial<DraftEnvironment>, string | undefined][])(
     "projects %s with one canonical eligibility decision",
@@ -132,12 +132,12 @@ describe("device placement projection", () => {
     [
       "an undeclared command fails closed even when worker slots are free",
       { invocableCommands: ["camera.snap"], requiredNodeCommand: { command, state: "undeclared" } },
-      "Make codex.exec-server.stdio.v1 available on this device, then reconnect, or pick another device.",
+      "Make the required command available on this device, then reconnect, or pick another device.",
     ],
     [
       "a pending-approval command reports awaiting pairing approval",
       { requiredNodeCommand: { command, state: "pending-approval" } },
-      "Ask an administrator to approve the pending codex.exec-server.stdio.v1 request, or pick another device.",
+      "Ask an admin to approve the pending command request, or pick another device.",
     ],
     [
       "missing command state fails closed",

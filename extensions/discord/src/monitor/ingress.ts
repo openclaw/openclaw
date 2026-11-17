@@ -104,6 +104,7 @@ export function createDiscordIngressMonitor(params: {
   botUserId?: string;
   client: Client;
   runtime: Pick<RuntimeEnv, "error" | "log">;
+  abortSignal?: AbortSignal;
   dispatch: DiscordIngressDispatch;
   onDeadLetter?: (event: DiscordMessageEvent, signal: AbortSignal) => Promise<void>;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
@@ -119,6 +120,7 @@ export function createDiscordIngressMonitor(params: {
     DiscordIngressPayload
   >({
     queue,
+    abortSignal: params.abortSignal,
     inspect: inspectDiscordMessage,
     prepareAdmission: async (rawMessage, { receivedAt, signal }) => {
       const prepared = await prepareChannelIngressEvent(rawMessage, {

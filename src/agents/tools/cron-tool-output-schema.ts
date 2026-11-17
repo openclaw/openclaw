@@ -26,6 +26,7 @@ const CompactCronJobSchema = closedObject({
   id: job.id,
   name: job.name,
   agentId: job.agentId,
+  cyberAccessProgram: job.cyberAccessProgram,
   // Protocol-v4 compact replies from older Gateways omit the update timestamp.
   updatedAtMs: Type.Optional(job.updatedAtMs),
   declarationKey: job.declarationKey,
@@ -61,6 +62,7 @@ const CompactCronJobSchema = closedObject({
   lastTriggerEvalAtMs: job.state.properties.lastTriggerEvalAtMs,
   lastMeaningfulResult: job.state.properties.lastMeaningfulResult,
   autoDisabled: job.state.properties.autoDisabled,
+  admissionDeferred: job.state.properties.admissionDeferred,
   lastDelivered: job.lastDelivered,
   lastDeliveryStatus: job.lastDeliveryStatus,
   lastDeliveryError: job.lastDeliveryError,

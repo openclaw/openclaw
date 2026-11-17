@@ -1,5 +1,5 @@
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
-import { listSystemPresence } from "../../infra/system-presence.js";
+import type { PresenceEntry } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { presenceUserKey } from "../../shared/presence-user.js";
 
@@ -49,9 +49,12 @@ export function clearSessionTypingState(): void {
   clearSessionTypingStateValue(sessionTypingState);
 }
 
-export function liveViewerIdentities(sessionKeys: ReadonlySet<string>): Set<string> {
+export function liveViewerIdentities(
+  presence: readonly PresenceEntry[],
+  sessionKeys: ReadonlySet<string>,
+): Set<string> {
   return new Set(
-    listSystemPresence().flatMap((entry) =>
+    presence.flatMap((entry) =>
       entry.user?.id && entry.watchedSessions?.some((sessionKey) => sessionKeys.has(sessionKey))
         ? [presenceUserKey(entry.user)]
         : [],

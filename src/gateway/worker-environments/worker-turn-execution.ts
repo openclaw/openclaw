@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { readAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.async.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -39,7 +40,7 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
-import { prepareWorkerTurnModel } from "./worker-turn-model.js";
+import { prepareWorkerTurnModel, workerTurnRuntimeLeaseOptions } from "./worker-turn-model.js";
 import {
   assertSupportedTurn,
   captureWorkerTurnInputAuthority,
@@ -84,7 +85,7 @@ export async function executeWorkerTurn(
       agentDir: input.agentDir ?? resolveAgentDir(input.config ?? {}, placement.agentId),
       workspaceDir: input.workspaceDir,
     },
-    { pluginGeneration: input.pluginGeneration, abortSignal: input.abortSignal },
+    workerTurnRuntimeLeaseOptions(input),
   );
   return await preparedRuntime.run(async () => {
     const backend = "cloud-worker";
@@ -166,16 +167,10 @@ export async function executeWorkerTurn(
         blocked = true;
       },
     };
-    const workerAdmission = bootstrapReceipt.protocolFeatures.includes(
-      WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
-    );
-    let blockedResult = workerAdmission
-      ? undefined
-      : await runPrepared(() => gateWorkerTurnInput(inputContext));
-    if (blockedResult) {
-      await releaseClaimIfOwned(params.placements, params.turnClaim);
-      return blockedResult;
-    }
+    // Project the wire handshake; the receipt also carries storage-only provenance.
+    const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
+    const workerAdmission = protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
+    let blockedResult: Awaited<ReturnType<typeof gateWorkerTurnInput>>;
     await using contextEngineAdmission = await runPrepared(() =>
       admitEmbeddedContextEngine(
         {
@@ -190,7 +185,7 @@ export async function executeWorkerTurn(
       ),
     );
     assertContextCurrent();
-    const context = await readWorkerTurnInputContext(inputContext, workerAdmission);
+    const context = await readWorkerTurnInputContext(inputContext);
     const { manager, history, userMessageAlreadyPersisted } = context;
     let baseLeafId = context.baseLeafId;
 
@@ -376,10 +371,11 @@ export async function executeWorkerTurn(
                     modelId: modelRef.model,
                     modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
                     runtimeToolAllowlist: turn.toolsAllow,
-                    skillWorkshop: undefined,
                     // Suppresses Workshop; the skill_library adapter replaces this tool by name.
                     skillLibraryAuthoring,
                     computerTransport: null,
+                    // Plugin tools recheck the turn's tool surface, as worker gateway tools do.
+                    assertInvocationCurrent: assertToolSurfaceCurrent,
                   },
                   undefined,
                   undefined,
@@ -490,6 +486,16 @@ export async function executeWorkerTurn(
         isAuthorized,
         signal,
       });
+      assertActive();
+      blockedResult = workerAdmission
+        ? undefined
+        : await runPrepared(() =>
+            gateWorkerTurnInput(inputContext, { ...media, prompt: turn.prompt, history }),
+          );
+      if (blockedResult) {
+        await releaseClaimIfOwned(params.placements, params.turnClaim);
+        return blockedResult;
+      }
       const skillResources = await prepareSkillResourceDelivery(
         turn.skillsSnapshot,
         () => {
@@ -514,7 +520,6 @@ export async function executeWorkerTurn(
           media,
           assertRunCurrent: assertActive,
           isAuthorized,
-          workerAdmission,
           userMessageAlreadyPersisted,
           baseLeafId,
         });
@@ -544,9 +549,8 @@ export async function executeWorkerTurn(
         throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
       }
       const toolAuthority = issueLaunchAuthority();
-      // Project the wire handshake; the receipt also carries storage-only provenance.
-      const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
       githubGrant = await bindWorkerGitHubTurn({
+        operatorAuthority: readAdmittedRunOperatorAuthority(admittedRunContext),
         session: placement,
         fact: readGitHubPublicationFact(placement),
         sessionTarget: transcriptTarget,

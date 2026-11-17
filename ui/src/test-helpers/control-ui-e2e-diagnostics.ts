@@ -27,6 +27,23 @@ export function recordControlUiE2eFailureFacts(
 ): void {
   controlUiE2eFailureFacts.set(page, { ...controlUiE2eFailureFacts.get(page), ...facts });
 }
+
+/** Readers return bounded, redacted facts; late reads must not mutate the failure record. */
+export async function rethrowWithControlUiE2eFailureFacts(
+  page: Page,
+  error: unknown,
+  factsReadKey: string,
+  read: () => Promise<Record<string, ControlUiE2eFailureFact>>,
+): Promise<never> {
+  try {
+    recordControlUiE2eFailureFacts(page, { [factsReadKey]: false });
+    const facts = await withTimeout(read(), 500);
+    recordControlUiE2eFailureFacts(page, { ...facts, [factsReadKey]: true });
+  } catch {
+    // A diagnostic failure or deadline must preserve the original assertion failure.
+  }
+  throw error;
+}
 type ControlUiE2ePageLifecycle = {
   registeredAt: string;
   firstCrashAt: string | null;

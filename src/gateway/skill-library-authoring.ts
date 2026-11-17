@@ -59,7 +59,6 @@ function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn
     !client.internal?.senderAttribution &&
     !client.internal?.pluginRuntimeOwnerId &&
     !client.internal?.approvalRuntime &&
-    !client.internal?.cronRunContinuation &&
     !client.internal?.delegatedToolPolicyHandoffId,
   );
 }

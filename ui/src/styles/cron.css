@@ -47,8 +47,7 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.cron-admin-note svg,
-.cron-row-run svg {
+.cron-admin-note svg {
   width: 12px;
   height: 12px;
 }
@@ -189,6 +188,19 @@
   line-height: 1.45;
 }
 
+.cron-error-details pre,
+.cron-run-entry__error {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.cron-error--clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
 /* ── Jobs table (escape hatch inside the tasks group) ── */
 
 .cron-table {
@@ -295,6 +307,10 @@
   color: var(--danger);
 }
 
+.cron-table__state--warning {
+  color: var(--warn);
+}
+
 .cron-table__state--paused {
   color: var(--muted);
 }
@@ -367,6 +383,10 @@
   display: none;
 }
 
+.cron-table__waiting {
+  white-space: normal;
+}
+
 .cron-table__last {
   display: flex;
   align-items: center;
@@ -419,12 +439,11 @@
   gap: 6px;
 }
 
-.cron-row-run {
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  justify-content: center;
-  flex: 0 0 auto;
+/* With no automation open, the page centers its New automation prompt. */
+.cron-overview-empty {
+  display: grid;
+  place-items: center;
+  min-height: min(60vh, 520px);
 }
 
 .cron-empty-state {
@@ -590,6 +609,11 @@
   tab-size: 2;
 }
 
+.cron-prompt-preview {
+  max-height: 240px;
+  overflow: auto;
+}
+
 .cron-payload-code:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -753,15 +777,6 @@
 
 .cron-job-menu__trigger {
   list-style: none;
-  width: 30px;
-  height: 26px;
-  justify-content: center;
-  padding: 0;
-}
-
-.cron-job-menu__trigger > .oc-menu-item__label {
-  display: flex;
-  justify-content: center;
 }
 
 .cron-job-menu__item {
@@ -1170,10 +1185,7 @@
   }
 
   .cron-table .cron-table__row :is(.cron-row-run, .cron-job-menu__trigger) {
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
-    min-height: 32px;
+    --oc-icon-button-size: 32px;
   }
 
   .cron-table .cron-table__row .settings-toggle {

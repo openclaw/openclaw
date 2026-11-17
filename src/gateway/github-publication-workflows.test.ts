@@ -272,6 +272,37 @@ it.each([
   },
 );
 
+it.each(["first", "existing"] as const)(
+  "does not treat a matching target workflow as inheritance of a branch-owned commit (%s)",
+  async (kind) => {
+    const f = await createRequesters();
+    const workspace = f.local;
+    const file = await writeWorkflow(workspace, "owned.yml", true);
+    const ancestor = await commitAll(workspace, "original workflow");
+    let target = ancestor;
+    await workspace.git("update-ref", "refs/heads/main", target);
+    mockTargetHead(() => target);
+    if (kind === "existing") {
+      await fs.writeFile(workspace.file("artifact.txt"), "first source change\n");
+      expect(await f.publish("first-source")).toMatchObject({ status: "published" });
+    }
+    await fs.writeFile(file, workflow + "# changed on the source branch\n");
+    await commitAll(workspace, "source workflow edit");
+    const tree = await workspace.git("rev-parse", "HEAD^{tree}");
+    target = await workspace.git("commit-tree", tree, "-p", ancestor, "-m", "matching target edit");
+    await workspace.git("update-ref", "refs/heads/main", target);
+    await fs.writeFile(workspace.file("feature.txt"), "ordinary source change\n");
+    const writesBefore = f.externalWrites.length;
+
+    expect(await f.publish("source-owned-workflow")).toMatchObject({
+      status: "failed",
+      code: "github_rejected",
+      nextAction: expect.stringContaining("Publishing GitHub workflow changes"),
+    });
+    expect(f.externalWrites).toHaveLength(writesBefore);
+  },
+);
+
 it.each(["first", "checkpoint", "merge"])(
   "publishes target-main workflows through a restricted scheduled tool (%s)",
   async (kind) => {

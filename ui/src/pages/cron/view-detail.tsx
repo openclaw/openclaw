@@ -3,7 +3,9 @@ import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { FailureDetails } from "./view-attention.tsx";
 import {
   AdminRequired,
   ErrorBanner,
@@ -26,6 +28,10 @@ export function DetailView(
     () => (props.mode === "job" ? (props.editingJob ?? undefined) : undefined),
     { equals: false },
   );
+  const failedJob = () => {
+    const job = selectedJob();
+    return job && isCronJobActiveFailure(job) ? job : undefined;
+  };
   const hasDetailTabs = () => props.mode === "job" && Boolean(selectedJob());
   const showHistory = () => props.mode === "job" && props.detailTab === "history";
   const conditionActivity = () => {
@@ -41,19 +47,34 @@ export function DetailView(
   return (
     <section class="cron-page cron-page--detail" data-panel-mode={props.mode}>
       <SettingsPage wide>
-        <div class="cron-back-row">
-          <button
-            ref={props.focus?.ref("back")}
-            type="button"
-            class="cron-back"
-            data-test-id="cron-back"
-            disabled={props.busy}
-            onClick={() => props.onClosePanel()}
-          >
-            <Icon name="arrowLeft" /> {t("cron.detail.back")}
-          </button>
+        {/* Beside the Automations sidebar its list is the way back. */}
+        <Show when={!props.sidebarListsJobs}>
+          <div class="cron-back-row">
+            <button
+              ref={props.focus?.ref("back")}
+              type="button"
+              class="cron-back"
+              data-test-id="cron-back"
+              disabled={props.busy}
+              onClick={() => props.onClosePanel()}
+            >
+              <Icon name="arrowLeft" /> {t("cron.detail.back")}
+            </button>
+          </div>
+        </Show>
+        <div class="stack">
+          <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
+          <Show when={failedJob()}>
+            {(job) => (
+              // History exposes the full saved-job cause without requiring a retained run.
+              <FailureDetails
+                job={job()}
+                fullCause={showHistory()}
+                onReviewRun={showHistory() ? undefined : () => props.onSelectJob(job())}
+              />
+            )}
+          </Show>
         </div>
-        <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
         <AdminRequired {...props} />
         {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
         <ErrorBanner error={props.error} reads={showHistory() ? undefined : props.reads} />
@@ -131,7 +152,7 @@ function DetailHeader(
                 class="btn btn--sm"
                 data-test-id="cron-run-now"
                 disabled={props.busy || !props.connected}
-                onClick={() => props.onRun(job, "force")}
+                onClick={() => props.onRun(job)}
               >
                 <Icon name="play" /> {t("cron.actions.runNow")}
               </button>

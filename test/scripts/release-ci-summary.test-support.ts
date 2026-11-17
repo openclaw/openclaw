@@ -6,6 +6,7 @@ import {
   composeReleaseAttemptJobs,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../scripts/lib/release-version.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 
 export function rawManifest({
@@ -97,6 +98,8 @@ export function rawManifest({
   };
 }
 
+// Historical producer data remains useful for parsers, artifact I/O, and rejection tests.
+// Qualification/publication acceptance must use candidatePublicationFixture with P admission.
 export function trustedMainPackageFixture({
   manifestVersion = 2,
   parentPath = ".github/workflows/full-release-validation.yml",
@@ -164,6 +167,7 @@ export function trustedMainPackageFixture({
   if (!child) {
     throw new Error("missing release checks child fixture");
   }
+  const steps: { name: string; conclusion: string }[] = [];
   const parentJob = {
     completed_at: "2026-07-10T01:10:00Z",
     conclusion: "success",
@@ -172,7 +176,7 @@ export function trustedMainPackageFixture({
     run_attempt: 1,
     started_at: "2026-07-10T01:00:00Z",
     status: "completed",
-    steps: [],
+    steps,
   };
   const childRun = {
     actor: { login: "github-actions[bot]" },
@@ -208,7 +212,18 @@ export function trustedMainPackageFixture({
       status: base === head ? "identical" : "ahead",
     };
   };
+  const unsupported = () => {
+    throw new Error("Historical fixture does not contain candidate or reused artifacts");
+  };
   const client = {
+    validateChildReuse: unsupported,
+    getRunAttempt: unsupported,
+    getRunAttemptJobs: unsupported,
+    loadExecutionPlan: unsupported,
+    downloadArtifactArchive: unsupported,
+    getRunArtifacts: unsupported,
+    getArtifact: unsupported,
+    loadExecutionPlanEvidence: unsupported,
     verifyQualificationAdmission: () => {
       throw new Error("historical fixture must not request candidate qualification admission");
     },
@@ -266,8 +281,8 @@ export function trustedMainPackageFixture({
   };
 }
 
-export function trustedMainFullFixture() {
-  const fixture = trustedMainPackageFixture({ manifestVersion: 3 });
+function trustedMainFullFixture(targetSha?: string) {
+  const fixture = trustedMainPackageFixture({ manifestVersion: 3, targetSha });
   const children = expectedChildDispatches(fixture.runId, 1, "main", 3).filter(
     (child) => child.manifestKey !== "npmTelegram",
   );
@@ -328,16 +343,24 @@ export function trustedMainFullFixture() {
   return { ...fixture, client, manifest, runs };
 }
 
-export function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta") {
-  const fixture = trustedMainFullFixture();
+export function trustedMainNpmFixture(
+  releaseProfile: "beta" | "stable" = "beta",
+  options: { targetSha?: string; targetVersion?: string } = {},
+) {
+  const fixture = trustedMainFullFixture(options.targetSha);
   const beta = releaseProfile === "beta";
-  const coveragePolicy = beta ? "npm-beta-v1" : "npm-stable-v1";
-  const targetVersion = beta ? "2026.8.28-beta.1" : "2026.8.28";
+  const targetVersion = options.targetVersion ?? (beta ? "2026.8.28-beta.1" : "2026.8.28");
+  const parsedVersion = parseReleaseVersion(targetVersion);
+  const coveragePolicy = beta
+    ? "npm-beta-v1"
+    : parsedVersion && classifyReleaseTrain(parsedVersion) === "stable"
+      ? "npm-stable-v1"
+      : undefined;
   Object.assign(fixture.manifest, { releaseProfile, runReleaseSoak: String(!beta) });
   Object.assign(fixture.manifest.validationInputs, {
-    coveragePolicy,
+    ...(coveragePolicy ? { coveragePolicy } : {}),
     skipPackageTelegramE2e: String(beta),
-    targetContextRef: "release/2026.8.28",
+    targetContextRef: "release/" + targetVersion.split("-")[0],
     targetVersion,
   });
   fixture.manifest.controls.performanceBlocking = !beta;
@@ -433,7 +456,8 @@ export function trustedMainNpmFixture(releaseProfile: "beta" | "stable" = "beta"
   const client = {
     ...fixture.client,
     getJobLog: vi.fn(
-      (jobId: number) => `${originalLog(jobId)}\nCI_RELEASE_SCOPE: npm-${releaseProfile}`,
+      (jobId: number) =>
+        `${originalLog(jobId)}\nCI_RELEASE_SCOPE: ${coveragePolicy ? `npm-${releaseProfile}` : "full"}`,
     ),
     getRunAttemptJobs: vi.fn((runId: string) =>
       jobsForChild(

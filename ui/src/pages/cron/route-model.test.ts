@@ -4,6 +4,10 @@ import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
 import { resolveCronRouteData } from "./route-model.ts";
 
 describe("resolveCronRouteData", () => {
+  it("opens creation for ?new unless an exact job is linked", () => {
+    expect(resolveCronRouteData("?new")).toEqual({ jobId: null, runId: null, create: true });
+    expect(resolveCronRouteData("?new&job=chosen")).toEqual({ jobId: "chosen", runId: null });
+  });
   it("keeps session links owner-qualified and gives exact jobs precedence", () => {
     expect(resolveCronRouteData("?session=agent%3Aops%3Anight+watch&agent=ops")).toEqual({
       jobId: null,

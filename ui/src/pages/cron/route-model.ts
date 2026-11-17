@@ -1,12 +1,17 @@
+import { createCronExecutionId } from "../../../../src/cron/run-id.js";
 import type { CronJob } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
+import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
+import { updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
   runId: string | null;
+  /** `?new` opens the create panel, as the sidebar's New automation does. */
+  create?: true;
   session?: { sessionKey: string; sessionAgentId: string };
 } {
   const params = new URLSearchParams(search);
@@ -16,6 +21,7 @@ export function resolveCronRouteData(search: string): {
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
+    ...(!jobId && params.has("new") ? { create: true as const } : {}),
     ...(!jobId && sessionKey && agentId
       ? { session: { sessionKey, sessionAgentId: agentId } }
       : {}),
@@ -77,4 +83,32 @@ export function createCronRouteSelection() {
     }
   }
   return Object.assign(selection, { bind, resolve, resolveLoadedSession, select });
+}
+
+export function resolveCronDetailTab(
+  job: CronJob | null,
+  runId: string | null | undefined,
+): "history" | "settings" {
+  return job && (runId || isCronJobActiveFailure(job)) ? "history" : "settings";
+}
+
+/** Resolve attention from the saved job; explicit historical run links always win. */
+export function resolveCronDetailSelection(state: CronState, job: CronJob, runId: string | null) {
+  const needsAttention = isCronJobActiveFailure(job);
+  const selectedRunId =
+    runId ??
+    (needsAttention && typeof job.state.lastRunAtMs === "number"
+      ? createCronExecutionId(job.id, job.state.lastRunAtMs)
+      : null);
+  if (needsAttention && !selectedRunId) {
+    updateCronRunsFilter(state, {
+      cronRunsQuery: "",
+      cronRunsStatuses: [],
+      cronRunsDeliveryStatuses: [],
+    });
+  }
+  return {
+    runId: selectedRunId,
+    tab: resolveCronDetailTab(job, selectedRunId),
+  };
 }

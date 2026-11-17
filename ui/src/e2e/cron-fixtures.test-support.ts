@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import type { CronJob, CronJobsListResult } from "../api/types.ts";
 import { cronJobsListResponse } from "../test-helpers/cron.ts";
 
@@ -25,4 +26,9 @@ export function cronList(
   pagination: Partial<Omit<CronJobsListResult, "jobs" | "snapshotRevision">> = {},
 ): CronJobsListResult {
   return cronJobsListResponse(jobs, { snapshotRevision, ...pagination });
+}
+
+/** Beside the open Automations sidebar /cron is an empty state; collapsing it shows the list. */
+export function collapseNav(page: Page) {
+  return page.locator(".sidebar-session-toolbar__collapse:visible").click();
 }

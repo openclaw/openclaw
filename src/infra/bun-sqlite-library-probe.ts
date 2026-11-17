@@ -49,29 +49,17 @@ export function probeBunSqliteLibrary(candidate: string): SqliteLibraryProbe {
     if (result.error) {
       throw result.error;
     }
-    let facts: unknown;
-    try {
-      facts = JSON.parse(result.stdout);
-    } catch {
-      throw new Error("SQLite library probe returned invalid output");
-    }
-    if (
-      typeof facts !== "object" ||
-      facts === null ||
-      Array.isArray(facts) ||
-      !("protocol" in facts) ||
-      facts.protocol !== 1
-    ) {
-      throw new Error("SQLite library probe returned invalid output");
-    }
+    const facts = parseProbeFacts(result.stdout);
+    // A crashed or killed child leaves no facts; report its exit, not its empty output.
     if (result.status !== 0) {
       throw new Error(
-        "error" in facts && typeof facts.error === "string"
+        facts && "error" in facts && typeof facts.error === "string"
           ? facts.error.slice(0, 512)
           : `SQLite library probe failed (${result.signal ?? result.status})`,
       );
     }
     if (
+      !facts ||
       !("version" in facts) ||
       typeof facts.version !== "string" ||
       facts.version.length > 64 ||
@@ -84,4 +72,20 @@ export function probeBunSqliteLibrary(candidate: string): SqliteLibraryProbe {
   } finally {
     script.dispose();
   }
+}
+
+function parseProbeFacts(stdout: string): object | undefined {
+  let facts: unknown;
+  try {
+    facts = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+  return typeof facts === "object" &&
+    facts !== null &&
+    !Array.isArray(facts) &&
+    "protocol" in facts &&
+    facts.protocol === 1
+    ? facts
+    : undefined;
 }

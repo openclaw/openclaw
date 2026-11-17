@@ -62,7 +62,7 @@ it.each(["allowed", "revoked"] as const)(
       } else {
         expect(postMessage).not.toHaveBeenCalled();
         expect(document.querySelector('[role="alert"]')?.textContent).toContain(
-          "Administrator access is required",
+          "You need admin access to change update settings or start an update.",
         );
       }
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toEqual([]);

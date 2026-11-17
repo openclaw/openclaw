@@ -23,6 +23,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { collapseNav } from "./cron-fixtures.test-support.ts";
 
 async function startGateway(owner: OpenClawTestInstance, prepare?: () => Promise<unknown>) {
   try {
@@ -225,10 +226,19 @@ catalogSuite.define(() => {
               }
             }
             // Exercise reads after real publication, not config changes during an in-flight read.
-            // Keep the Gateway's notifications intact and in their original order.
-            if (awaitCatalogPublication && catalogChange) {
+            // Once a notification is held, hold subsequent events too: forwarding a
+            // later sequence (for example skills.changed) would force a gap reconnect.
+            // Responses still flow so publication and in-flight reads can complete.
+            if (
+              awaitCatalogPublication &&
+              (catalogChange || (pendingNotifications.length > 0 && frame.type === "event"))
+            ) {
               traceCatalog(
-                frame.event === "config.changed" ? "config-changed-held" : "metadata-changed-held",
+                frame.event === "config.changed"
+                  ? "config-changed-held"
+                  : frame.event === "chat.metadata.changed"
+                    ? "metadata-changed-held"
+                    : "subsequent-event-held",
               );
               pendingNotifications.push(() => socket.send(message));
               if (
@@ -263,7 +273,7 @@ catalogSuite.define(() => {
         });
         await page.goto(url.toString());
         await waitForControlUiGatewayReady(page);
-        await page.locator('[data-test-id="cron-new-task"]').click();
+        await page.locator(".sidebar-automations__new").click();
         await page.locator("#cron-name").fill("Retain this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this draft");
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
@@ -333,7 +343,7 @@ catalogSuite.define(() => {
         rejectCatalogReplies = true;
         await publish("held");
         await expect.poll(() => rejected.size).toBeGreaterThan(0);
-        const error = page.locator(".cron-error-banner");
+        const error = page.locator(".callout.danger");
         await error.waitFor({ state: "visible" });
         expect(await error.textContent()).toContain("Catalog transport unavailable");
         await waitForModel("published");
@@ -452,6 +462,10 @@ async function withCronJobPage(
     }
     await waitForControlUiGatewayReady(page);
     expect(new URL(page.url()).hash.length).toBe(0);
+    // These cases return to the Automations list; a reload in an earlier case expands the nav.
+    if ((await page.locator(".shell--nav-collapsed").count()) === 0) {
+      await collapseNav(page);
+    }
     await run(evidence);
   } catch (error) {
     await captureControlUiE2eFailureDiagnostics(page, {
@@ -571,6 +585,48 @@ async function openAdvanced(page: Page, name: unknown) {
 }
 
 suite.define(() => {
+  it("long prompt preview: saves exact edits through the real Gateway and reloads them", async () => {
+    await withGatewayCommands(async (cliJson) => {
+      const prompt =
+        "# Fictional garden report\n\n" +
+        "Summarize the fictional herbs, flowers, and seedlings. Compare planned watering with the sample schedule and list observations for the next garden report.\n\n".repeat(
+          40,
+        );
+      const job = await seedPausedAgentJob("Long garden prompt", {
+        kind: "agentTurn",
+        message: prompt,
+      });
+      const jobId = cronJobId(job);
+      await withCronJobPage(cliJson, jobId, async (evidence) => {
+        const { page } = evidence;
+        const row = page.locator('[data-test-id="cron-row-' + jobId + '"] .cron-table__name');
+        await page.locator('[data-test-id="cron-back"]').click();
+        await row.click();
+        const input = page.locator("#cron-payload-text");
+        await input.waitFor();
+        expect(await input.inputValue()).toBe(prompt);
+        const preview = page.getByRole("region", { name: "Prompt preview", exact: true });
+        expect((await preview.boundingBox())?.height).toBe(240);
+        await preview.focus();
+        await page.keyboard.press("End");
+        await expect
+          .poll(() => preview.evaluate((element) => element.scrollTop))
+          .toBeGreaterThan(0);
+        const edited = prompt + "Updated through the real Gateway.";
+        await input.fill(edited);
+        const saved = await submitCronForm(evidence, "cron.update");
+        expect(saved.stored.payload).toMatchObject({ kind: "agentTurn", message: edited });
+        // Back left /cron, and the reload expands the sidebar again.
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        await collapseNav(page);
+        await row.click();
+        await input.waitFor();
+        expect(await input.inputValue()).toBe(edited);
+      });
+    });
+  });
+
   it("timeout override: clearing restores the default after save and reload", async () => {
     await withGatewayCommands(async (cliJson) => {
       const job = await seedCliAutomation(cliJson, "Clear timeout override", {

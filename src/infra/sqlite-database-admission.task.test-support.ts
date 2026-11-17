@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { threadId } from "node:worker_threads";
+import { MessagePort, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createSqliteWorkerBackend,
@@ -14,6 +14,8 @@ export type AdmissionTaskInput = {
   broker?: boolean;
   creationPath?: string;
   measureHostAbsence?: boolean;
+  createPumpGate?: SharedArrayBuffer;
+  writeProof?: boolean;
 };
 export type AdmissionTaskResult = AdmissionOperations["admitted"]["output"];
 
@@ -31,18 +33,49 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
       maxWorkers: 1,
       idleTimeoutMs: 0,
     });
+    const postMessageDescriptor = Object.getOwnPropertyDescriptor(
+      MessagePort.prototype,
+      "postMessage",
+    );
+    assert(postMessageDescriptor);
+    const originalPostMessage: unknown = postMessageDescriptor.value;
+    assert(typeof originalPostMessage === "function");
+    const gate =
+      input.createPumpGate instanceof SharedArrayBuffer
+        ? new Int32Array(input.createPumpGate)
+        : undefined;
+    if (gate) {
+      MessagePort.prototype.postMessage = function (...args) {
+        const message: unknown = args[0];
+        if (
+          isRecord(message) &&
+          message.kind === "sqlite-database-admissions" &&
+          message.create === "admitted" &&
+          Atomics.compareExchange(gate, 0, 0, 1) === 0
+        ) {
+          Atomics.notify(gate, 0);
+          assert.notEqual(Atomics.wait(gate, 1, 0, 10_000), "timed-out");
+        }
+        Reflect.apply(originalPostMessage, this, args);
+      };
+    }
     try {
       return await pool.run(
         {
           path: input.path,
           broker: input.broker === true,
+          writeProof: input.writeProof === true,
           creationPath: typeof input.creationPath === "string" ? input.creationPath : undefined,
           measureHostAbsence: input.measureHostAbsence === true,
         },
         {},
       );
     } finally {
-      await pool.close();
+      try {
+        await pool.close();
+      } finally {
+        Object.defineProperty(MessagePort.prototype, "postMessage", postMessageDescriptor);
+      }
     }
   }
   if (input.broker) {
@@ -57,6 +90,14 @@ serveWorkerTasks<AdmissionTaskResult>(async (input, channel) => {
         },
       });
       assert.ok(store);
+      if (input.writeProof === true) {
+        await store.execute({
+          type: "writeRows",
+          input: {
+            sql: "CREATE TABLE nested_creation_proof(value INTEGER); INSERT INTO nested_creation_proof VALUES (42)",
+          },
+        });
+      }
       return await store.execute({
         type: "admitted",
         input: input.measureHostAbsence === true ? { measureHostAbsence: true } : undefined,

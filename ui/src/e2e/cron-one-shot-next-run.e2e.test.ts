@@ -7,7 +7,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "One-shot runtime schedule",
@@ -45,6 +45,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
+        await collapseNav(page);
         await page.locator('[data-test-id="cron-row-one-shot-proof"] .cron-table__name').click();
         const input = page.locator("#cron-schedule-at");
         await input.waitFor({ state: "visible" });
@@ -57,7 +58,7 @@ suite.define(() => {
         writeFileSync(artifacts + "/schedule.png", frame.png);
         const summaryText = await summary.textContent();
         writeFileSync(artifacts + "/observed.txt", summaryText ?? "");
-        expect(summaryText).toContain("Next run at 10/30/2026, 12:10 PM");
+        expect(summaryText).toContain("Next activity at 10/30/2026, 12:10 PM");
         expect(summaryText).not.toContain("Runs once at");
         await page.locator("#cron-name").fill("Check the fictional build again");
         await page.locator('[data-test-id="cron-submit"]').click();
@@ -72,7 +73,7 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-row-one-shot-proof"] .cron-table__name').click();
         await expect
           .poll(() => summary.textContent())
-          .toContain("Next run at 10/30/2026, 12:10 PM");
+          .toContain("Next activity at 10/30/2026, 12:10 PM");
       },
     );
   });

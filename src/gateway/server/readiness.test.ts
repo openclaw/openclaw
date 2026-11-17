@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
+  createAgentDatabaseDeletionRefusal,
   createAgentDatabaseInspectionRefusal,
   type AgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
@@ -202,6 +203,16 @@ describe("createReadinessChecker", () => {
           agentDatabases: refusals,
         });
       }
+
+      const deletion = createAgentDatabaseDeletionRefusal(refusals[0]!);
+      refusals.push(deletion);
+      expect(readiness()).toEqual({
+        ...failingSnapshot(["agent-database:main"]),
+        agentDatabases: [refusals[0]],
+        agentDeletions: [deletion],
+      });
+      refusals = [deletion];
+      expect(readiness()).toEqual({ ...channelReadiness, agentDeletions: [deletion] });
 
       refusals = [];
       expect(readiness()).toEqual(channelReadiness);

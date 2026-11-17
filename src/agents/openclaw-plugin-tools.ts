@@ -26,8 +26,15 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
-import type { OpenClawPluginToolDelivery } from "../plugins/tool-types.js";
+import {
+  copyPluginToolMeta,
+  getPluginToolMeta,
+  setPluginToolMeta,
+} from "../plugins/tool-metadata.js";
+import type {
+  OpenClawPluginToolAuthQuery,
+  OpenClawPluginToolDelivery,
+} from "../plugins/tool-types.js";
 import { resolvePluginTools, resolvePluginToolsSteps } from "../plugins/tools.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -264,6 +271,44 @@ function createPluginToolDelivery(params: {
   };
 }
 
+/**
+ * A run's personal-library grant also governs the agent's own skills, which plugins author
+ * through their manifest `agentSkillsDir`. A personal-default requester (several profiles, or
+ * not an administrator) never gets those plugins' tools; a workspace-default requester keeps
+ * them, rechecked against the grant's current administrator authority before every call.
+ */
+function applySkillLibraryGrant(
+  tools: AnyAgentTool[],
+  options: ResolveOpenClawPluginToolsOptions | undefined,
+  registry: ReturnType<typeof getActivePluginRegistry> | undefined,
+): AnyAgentTool[] {
+  const grant = options?.skillLibraryAuthoring;
+  if (!grant) {
+    return tools;
+  }
+  const skillAuthors = new Set(
+    (registry?.plugins ?? []).flatMap((plugin) => (plugin.agentSkillsDir ? [plugin.id] : [])),
+  );
+  return tools.flatMap((tool) => {
+    const pluginId = getPluginToolMeta(tool)?.pluginId;
+    if (!pluginId || !skillAuthors.has(pluginId)) {
+      return [tool];
+    }
+    if (grant.defaultTarget === "personal") {
+      return [];
+    }
+    const guarded: AnyAgentTool = {
+      ...tool,
+      execute: (...args) => {
+        grant.assertWorkspaceCurrent?.({ sandboxed: options?.sandboxed });
+        return tool.execute(...args);
+      },
+    };
+    copyPluginToolMeta(tool, guarded);
+    return [guarded];
+  });
+}
+
 type PluginToolOptions = {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;
@@ -332,21 +377,60 @@ function* resolveOpenClawPluginToolSteps(
         includePluginSyntheticAuth: false,
       })
     : undefined;
-  const hasAuthForProvider = authProfileStore
-    ? (providerId: string) =>
-        hasProviderAuthForTool({
+  // A typed query sees only ordered stored profiles of that type, matching what
+  // resolveApiKeyForProvider would select for the same query.
+  const listTypedToolProfileIds = (
+    providerId: string,
+    cfg: OpenClawConfig | undefined,
+    credentialType: NonNullable<OpenClawPluginToolAuthQuery["credentialType"]>,
+  ): string[] =>
+    !authProfileStore ||
+    resolveProviderAuthScope({
+      provider: providerId,
+      config: cfg,
+      workspaceDir: pluginToolInputs.context.workspaceDir,
+    }) === "plugin"
+      ? []
+      : resolveAuthProfileOrder({
+          cfg,
+          store: authProfileStore,
           provider: providerId,
-          cfg: availabilityConfig,
-          workspaceDir: pluginToolInputs.context.workspaceDir,
-          agentDir: params.options?.agentDir,
-          authStore: authProfileStore,
-          runtimeLookup: availabilityRuntimeLookup,
-        })
+          includePendingOAuthRefresh: true,
+        }).filter((profileId) => authProfileStore.profiles[profileId]?.type === credentialType);
+  const hasAuthForProvider = authProfileStore
+    ? (providerId: string, query?: OpenClawPluginToolAuthQuery) =>
+        query?.credentialType
+          ? listTypedToolProfileIds(providerId, availabilityConfig, query.credentialType).length > 0
+          : hasProviderAuthForTool({
+              provider: providerId,
+              cfg: availabilityConfig,
+              workspaceDir: pluginToolInputs.context.workspaceDir,
+              agentDir: params.options?.agentDir,
+              authStore: authProfileStore,
+              runtimeLookup: availabilityRuntimeLookup,
+            })
     : undefined;
   const resolveApiKeyForProvider = authProfileStore
-    ? async (providerId: string): Promise<string | undefined> => {
+    ? async (
+        providerId: string,
+        query?: OpenClawPluginToolAuthQuery,
+      ): Promise<string | undefined> => {
         const cfg = resolveCurrentRuntimeConfig();
         const workspaceDir = pluginToolInputs.context.workspaceDir;
+        if (query?.credentialType) {
+          for (const profileId of listTypedToolProfileIds(providerId, cfg, query.credentialType)) {
+            const resolved = await resolveApiKeyForProfile({
+              cfg,
+              store: authProfileStore,
+              profileId,
+              agentDir: params.options?.agentDir,
+            });
+            if (resolved?.apiKey) {
+              return resolved.apiKey;
+            }
+          }
+          return undefined;
+        }
         // This preparation excludes plugin auth, including agent-profile substitutes.
         if (
           resolveProviderAuthScope({ provider: providerId, config: cfg, workspaceDir }) === "plugin"
@@ -458,9 +542,13 @@ function* resolveOpenClawPluginToolSteps(
         }
       : {}),
   };
-  const pluginTools = captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
-    ? yield* resolvePluginToolsSteps(resolution)
-    : resolvePluginTools(resolution);
+  const pluginTools = applySkillLibraryGrant(
+    captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
+      ? yield* resolvePluginToolsSteps(resolution)
+      : resolvePluginTools(resolution),
+    params.options,
+    runtimeRegistry,
+  );
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);
   }

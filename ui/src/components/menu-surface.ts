@@ -1,4 +1,5 @@
 import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
+import { observeMenuSpacing } from "./menu-spacing.ts";
 
 const connectedSurfaces = new Set<HTMLElement>();
 
@@ -29,12 +30,17 @@ export function promoteToPopoverTopLayer(element: HTMLElement, surfaces: () => I
  * closing removes the element, which auto-hides the popover.
  */
 class MenuSurface extends HTMLElement {
+  private disconnectSpacing?: () => void;
+
   connectedCallback() {
     connectedSurfaces.add(this);
+    this.disconnectSpacing = observeMenuSpacing(this);
     promoteToPopoverTopLayer(this, () => this.children);
   }
 
   disconnectedCallback() {
+    this.disconnectSpacing?.();
+    this.disconnectSpacing = undefined;
     connectedSurfaces.delete(this);
   }
 }

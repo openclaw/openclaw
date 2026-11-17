@@ -7,7 +7,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
+import { collapseNav, cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron saved descriptions E2E",
@@ -45,6 +45,7 @@ suite.define(() => {
           methodResponses: durationResponses([job]),
         });
         await page.goto(`${suite.server.baseUrl}cron`);
+        await collapseNav(page);
         await page.locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`).click();
         const at = page.locator("#cron-schedule-at");
         const submit = page.locator('[data-test-id="cron-submit"]');
@@ -98,6 +99,7 @@ suite.define(() => {
         methodResponses: durationResponses(jobs),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
+      await collapseNav(page);
       await page.locator(`[data-test-id="cron-row-${cases[0].id}"]`).waitFor();
       for (const [index, job] of jobs.entries()) {
         const row = page.locator(`[data-test-id="cron-row-${job.id}"]`);

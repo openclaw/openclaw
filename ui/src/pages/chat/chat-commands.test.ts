@@ -168,7 +168,7 @@ describe("refreshSlashCommands", () => {
   });
 
   it("resolves localized UI command metadata", () => {
-    expect(getSlashCommandDescription(commandByName("clear")!)).toBe("Clear chat history");
+    expect(getSlashCommandDescription(commandByName("clear")!)).toBe("Clear this conversation");
     expect(getSlashCommandCategoryLabel("tools")).toBe("Tools");
   });
 
@@ -261,6 +261,7 @@ describe("conversation reset confirmation", () => {
       expect(host.request).toHaveBeenCalledTimes(sharingRole === "owner" ? 1 : 0);
       if (sharingRole === "owner") {
         expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          userInitiated: true,
           key: sessionKey,
           clearQueued: true,
         });

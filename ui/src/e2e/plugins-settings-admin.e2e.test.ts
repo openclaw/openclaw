@@ -3,10 +3,10 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it } from "vitest";
+import { applyMergePatch } from "../../../src/config/merge-patch.ts";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
@@ -334,66 +334,104 @@ suite.define(() => {
             },
           },
         };
-        const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
-          operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
-          methodResponses: {
-            ...pluginResponses(),
-            "plugins.list": {
-              ...inventory,
-              plugins: [
-                {
-                  ...workboard,
-                  id: manifest.id,
-                  name,
-                  packageName: `@openclaw/${manifest.id}`,
-                  description: `${name} web tools.`,
-                  origin: "bundled",
-                },
-              ],
-            },
-            "plugins.inspect": {
-              ...inspection,
-              catalog: undefined,
-              components: undefined,
-              source: { kind: "npm", packageName: `@openclaw/${manifest.id}` },
-              plugin: { ...inspection.plugin, id: manifest.id, name, origin: "bundled" },
-            },
-            "config.get": {
-              ...configMocks["config.get"],
-              config: credentialConfig,
-              raw: JSON.stringify(credentialConfig),
-            },
-            "config.schema": {
-              ...configMocks["config.schema"],
-              schema: {
-                type: "object",
-                properties: {
-                  plugins: {
-                    type: "object",
-                    properties: {
-                      entries: {
-                        type: "object",
-                        properties: {
-                          [manifest.id]: {
-                            type: "object",
-                            properties: { config: manifest.configSchema },
+        let persistedConfig: Record<string, unknown> = structuredClone(credentialConfig);
+        let currentHash = configMocks["config.get"].hash;
+        const configReads: Record<string, unknown>[] = [];
+        const gateway = await installMockGateway(
+          page,
+          {
+            featureMethods: pluginMethods,
+            operatorScopes: readOnly ? ["operator.read"] : ["operator.read", "operator.admin"],
+            methodResponses: {
+              ...pluginResponses(),
+              "plugins.list": {
+                ...inventory,
+                plugins: [
+                  {
+                    ...workboard,
+                    id: manifest.id,
+                    name,
+                    packageName: `@openclaw/${manifest.id}`,
+                    description: `${name} web tools.`,
+                    origin: "bundled",
+                  },
+                ],
+              },
+              "plugins.inspect": {
+                ...inspection,
+                catalog: undefined,
+                components: undefined,
+                source: { kind: "npm", packageName: `@openclaw/${manifest.id}` },
+                plugin: { ...inspection.plugin, id: manifest.id, name, origin: "bundled" },
+              },
+              "config.get": {
+                ...configMocks["config.get"],
+                config: credentialConfig,
+                raw: JSON.stringify(credentialConfig),
+              },
+              "config.schema": {
+                ...configMocks["config.schema"],
+                schema: {
+                  type: "object",
+                  properties: {
+                    plugins: {
+                      type: "object",
+                      properties: {
+                        entries: {
+                          type: "object",
+                          properties: {
+                            [manifest.id]: {
+                              type: "object",
+                              properties: { config: manifest.configSchema },
+                            },
                           },
                         },
                       },
                     },
                   },
                 },
+                uiHints: Object.fromEntries(
+                  Object.entries(uiHints).map(([key, hint]) => [
+                    `plugins.entries.${manifest.id}.config.${key}`,
+                    hint,
+                  ]),
+                ),
               },
-              uiHints: Object.fromEntries(
-                Object.entries(uiHints).map(([key, hint]) => [
-                  `plugins.entries.${manifest.id}.config.${key}`,
-                  hint,
-                ]),
-              ),
             },
           },
-        });
+          {
+            requestHandlers: {
+              "config.get": () => {
+                const snapshot = structuredClone(persistedConfig);
+                configReads.push(snapshot);
+                return {
+                  ...configMocks["config.get"],
+                  config: snapshot,
+                  raw: JSON.stringify(snapshot),
+                  hash: currentHash,
+                  configRevisionHash: currentHash,
+                };
+              },
+              "config.patch": (params) => {
+                const request = asRecord(params);
+                if (request.baseHash !== currentHash) {
+                  return {
+                    __mockError: { code: "INVALID_REQUEST", message: "Config hash changed" },
+                  };
+                }
+                const patch: unknown = JSON.parse(String(request.raw));
+                if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+                  throw new Error("Expected a config object patch");
+                }
+                persistedConfig = asRecord(
+                  applyMergePatch(persistedConfig, patch, { mergeObjectArraysById: true }),
+                );
+                currentHash += "-saved";
+                return { ok: true, config: structuredClone(persistedConfig), hash: currentHash };
+              },
+            },
+          },
+        );
         await page.goto(`${suite.server.baseUrl}settings/plugins/${manifest.id}#configuration`);
         await page
           .locator(".plugin-editor")
@@ -425,19 +463,21 @@ suite.define(() => {
         await apiKey.pressSequentially("synthetic-credential", { delay: 30 });
         expect(await apiKey.inputValue()).toBe("synthetic-credential");
         expect(await apiKey.getAttribute("type")).toBe("password");
+        await page.getByRole("searchbox", { name: "Search settings", exact: true }).last().focus();
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        await gateway.deferNext("config.patch");
-        await page.getByRole("button", { name: new RegExp(`^Save: .*${label}$`, "u") }).click();
-        const save = await gateway.waitForRequest("config.patch");
-        expect(asRecord(save.params).baseHash).toBe(configMocks["config.get"].hash);
-        expect(JSON.parse(String(asRecord(save.params).raw))).toEqual({
+        const fieldLabel = await apiKey.getAttribute("aria-label");
+        await page.getByRole("button", { name: `Save: ${fieldLabel}`, exact: true }).click();
+        const save = asRecord((await gateway.waitForRequest("config.patch")).params);
+        expect(save.baseHash).toBe(configMocks["config.get"].hash);
+        expect(JSON.parse(String(save.raw))).toEqual({
           plugins: {
             entries: {
               [manifest.id]: { config: { [section]: { apiKey: "synthetic-credential" } } },
             },
           },
         });
-        const savedConfig = {
+        const expectedConfig = {
           ...credentialConfig,
           plugins: {
             ...credentialConfig.plugins,
@@ -453,24 +493,16 @@ suite.define(() => {
             },
           },
         };
-        const hash = "credential-saved";
-        await gateway.setMethodResponse("config.get", {
-          ...configMocks["config.get"],
-          config: savedConfig,
-          raw: JSON.stringify(savedConfig),
-          hash,
-          appliedConfigHash: hash,
-        });
-        await gateway.resolveDeferred("config.patch", { ok: true, hash, config: savedConfig });
-        await page.getByRole("status").getByText("Saved", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Apply changes", exact: true }).waitFor();
+        expect(persistedConfig).toEqual(expectedConfig);
+        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        expect(await gateway.getRequests("config.patch")).toHaveLength(1);
+        const readsBeforeReload = configReads.length;
         await page.reload();
         await gateway.waitForRequest("config.get");
-        await expect
-          .poll(() =>
-            evaluateControlUiContext(page, (app) => app.runtimeConfig.state.configSnapshot?.config),
-          )
-          .toEqual(savedConfig);
+        await expect.poll(() => configReads.length).toBeGreaterThan(readsBeforeReload);
         await expect.poll(() => apiKey.inputValue()).toBe("synthetic-credential");
+        expect(configReads.at(-1)).toEqual(expectedConfig);
         expect(await reference.inputValue()).toBe("");
         expect(await reference.getAttribute("readonly")).not.toBeNull();
         if (captureUiProof) {
@@ -521,7 +553,7 @@ suite.define(() => {
       await page.getByRole("searchbox", { name: "Search settings", exact: true }).last().waitFor();
       expect(await gateway.getRequests("plugins.inspect")).toHaveLength(1);
 
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       await page
         .getByRole("checkbox", { name: "Read conversation context", exact: true })
         .waitFor();
@@ -750,7 +782,7 @@ suite.define(() => {
       await search.fill("Allow prompt changes");
       await page.getByRole("heading", { name: "Permissions", exact: true }).waitFor();
       expect(await page.locator(".plugin-editor__empty").count()).toBe(0);
-      const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
+      const permissionRow = page.locator('[data-setting="hooks.allowPromptModification"]');
       const permission = permissionRow.getByRole("checkbox");
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
@@ -775,7 +807,7 @@ suite.define(() => {
           entries: {
             workboard: {
               enabled: false,
-              hooks: { allowPromptInjection: true },
+              hooks: { allowPromptModification: true },
               config: { refreshMinutes: 15, notifications: false },
             },
           },
@@ -956,7 +988,7 @@ suite.define(() => {
         .click();
       await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
       expect(
-        await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).count(),
+        await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).count(),
       ).toBe(0);
 
       await page.getByRole("alert").filter({ hasText: "Configuration unavailable" }).waitFor();
@@ -964,7 +996,7 @@ suite.define(() => {
       await gateway.setMethodResponse("config.get", configMocks["config.get"]);
       await page.getByRole("button", { name: "Retry", exact: true }).click();
       await page.getByLabel("Workspace label", { exact: true }).waitFor();
-      await page.getByRole("checkbox", { name: "Add context to prompts", exact: true }).waitFor();
+      await page.getByRole("checkbox", { name: "Modify prompts", exact: true }).waitFor();
       expect(await gateway.getRequests("config.get")).toHaveLength(configRequests + 1);
     });
   });

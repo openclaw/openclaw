@@ -1,0 +1,127 @@
+title: Compaction keeps the generated summary ahead of verbatim turns
+
+scenario:
+  id: compaction-summary-priority
+  surface: runtime
+  coverage:
+    primary:
+      - session-memory.compaction
+  objective: Verify an overflow compaction persists the whole generated summary when tool-heavy preserved turns would otherwise exceed the persisted-summary cap.
+  successCriteria:
+    - A seeded transcript with tool-heavy recent turns overflows once and recovers through one safeguard compaction.
+    - The persisted summary keeps the generated body through its final decision and carries no summary-truncation marker.
+    - Preserved tool results are excerpted with an omitted-character note instead of copied verbatim.
+    - The persisted summary stays within the 16,000-character cap and the turn delivers its final answer.
+  gatewayConfigPatch:
+    agents:
+      defaults:
+        compaction:
+          mode: safeguard
+          keepRecentTokens: 64
+  docsRefs:
+    - docs/concepts/compaction.md
+  codeRefs:
+    - src/agents/agent-hooks/compaction-safeguard.ts
+    - src/agents/agent-hooks/compaction-safeguard-budget.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-compaction-summaries.ts
+  execution:
+    kind: flow
+    summary: Overflow a tool-heavy seeded session and verify the persisted compaction keeps the generated summary whole.
+    config:
+      requiredProviderMode: mock-openai
+      priorityMarker: QA-COMPACTION-SUMMARY-PRIORITY
+      bodyEndMarker: QA-SUMMARY-PRIORITY-BODY-END
+      truncatedMarker: "[Compaction summary truncated to fit budget]"
+      omittedNote: more chars omitted at compaction
+      finalMarker: QA-COMPACTION-PRIORITY-FINAL-OK
+      summaryCap: 16000
+
+flow:
+  steps:
+    - name: persists the whole generated summary under tool-heavy preserved turns
+      actions:
+        - assert:
+            expr: "env.providerMode === 'mock-openai' && env.runtimeId === 'openclaw' && Boolean(env.mock)"
+            message: summary priority proof requires the mock-openai OpenClaw runtime
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: sessionId
+          value:
+            expr: "`qa-compaction-priority-${randomUUID()}`"
+        - set: sessionKey
+          value:
+            expr: "`agent:qa:compaction-priority:${randomUUID().slice(0, 8)}`"
+        - set: now
+          value:
+            expr: "Date.now()"
+        - set: historyMessages
+          value:
+            expr: "Array.from({ length: 10 }, (_, index) => [{ role: 'user', text: `${index === 0 ? config.priorityMarker + ' ' : ''}older planning block ${String(index).padStart(2, '0')} ${'u'.repeat(8192)}`, timestamp: now - (90000 - index * 2000) }, { role: 'assistant', text: `older planning reply ${String(index).padStart(2, '0')} ${'r'.repeat(8192)}`, timestamp: now - (89000 - index * 2000) }]).flat()"
+        - set: toolTurns
+          value:
+            expr: "Array.from({ length: 3 }, (_, turn) => { const base = now - (40000 - turn * 10000); const calls = Array.from({ length: 6 }, (_, call) => ({ id: `priority_turn_${turn}_call_${call}`, name: 'read' })); return [{ role: 'user', text: `Inspect the next batch of files for turn ${turn}.`, timestamp: base }, { role: 'assistant', text: '', toolCalls: calls, timestamp: base + 1 }, ...calls.map((call, index) => ({ role: 'toolResult', toolCallId: call.id, toolName: 'read', text: `bulk tool output ${turn}-${index} ${'t'.repeat(3000)}`, timestamp: base + 2 + index })), { role: 'assistant', text: `Batch ${turn} inspected.`, timestamp: base + 9 }]; }).flat()"
+        - call: seedQaSessionTranscript
+          args:
+            - ref: env
+            - sessionId:
+                ref: sessionId
+              sessionKey:
+                ref: sessionKey
+              updatedAt:
+                ref: now
+              label: QA compaction summary priority
+              messages:
+                expr: "[...historyMessages, ...toolTurns, { role: 'user', text: 'Finish the summary priority check.', timestamp: now - 1000 }]"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - call: runAgentPrompt
+          args:
+            - ref: env
+            - sessionKey:
+                ref: sessionKey
+              message:
+                expr: "`Reply with only this exact marker: ${config.finalMarker}`"
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForCondition
+          saveAs: outbound
+          args:
+            - lambda:
+                expr: "state.getSnapshot().messages.findLast((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text === config.finalMarker)"
+            - expr: liveTurnTimeoutMs(env, 30000)
+            - 100
+        - set: scenarioRequests
+          value:
+            expr: "await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)"
+        - assert:
+            expr: "scenarioRequests.some((request) => request.requestKind === 'agent-initial' && request.errorCode === 'context_length_exceeded') && scenarioRequests.some((request) => request.requestKind === 'compaction-summary' && request.outcome === 'success')"
+            message:
+              expr: "`expected one overflow recovered by a compaction summary: ${JSON.stringify(scenarioRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome, code: request.errorCode ?? null })))}`"
+        - call: readSessionTranscriptSummary
+          saveAs: transcript
+          args:
+            - ref: env
+            - ref: sessionKey
+        - set: summary
+          value:
+            expr: "String(transcript.compactionSummaries.at(-1) ?? '')"
+        - assert:
+            expr: "transcript.compactionSummaries.length === 1 && summary.length <= config.summaryCap"
+            message:
+              expr: "`expected one bounded compaction summary: ${JSON.stringify({ count: transcript.compactionSummaries.length, length: summary.length })}`"
+        - assert:
+            expr: "summary.includes(config.bodyEndMarker) && !summary.includes(config.truncatedMarker)"
+            message:
+              expr: "`generated summary body was cut: ${JSON.stringify({ length: summary.length, hasBodyEnd: summary.includes(config.bodyEndMarker), tail: summary.slice(-1200) })}`"
+        - assert:
+            expr: "summary.includes('## Recent turns preserved verbatim') && summary.includes(config.omittedNote) && !summary.includes('t'.repeat(600))"
+            message:
+              expr: "`preserved tool output was not excerpted: ${summary.slice(summary.indexOf('## Recent turns'), summary.indexOf('## Recent turns') + 1500)}`"
+        - assert:
+            expr: "String(transcript.finalText ?? '').trim() === config.finalMarker"
+            message:
+              expr: "`expected the final marker after compaction, got ${JSON.stringify(transcript.finalText)}`"

@@ -10,7 +10,6 @@ import {
   createSystemAgentSession,
   runSystemAgentTurn,
   type SystemAgentSession,
-  type SystemAgentTurnDirective,
   type SystemAgentTurnRunner,
 } from "./agent-turn.js";
 import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
@@ -20,7 +19,14 @@ import {
   type ChatWizardResult,
   type SystemAgentChatReply,
 } from "./chat-wizard-host.js";
-import { approvalQuestion, formatSystemAgentTurnInput } from "./dialogue.js";
+import {
+  applyTurnDirective,
+  agentHandoffReturnHint,
+  approvalQuestion,
+  createCaptureRuntime,
+  formatSystemAgentTurnInput,
+  type CaptureRuntime,
+} from "./dialogue.js";
 import type { SystemAgentGreetingPlanner } from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
@@ -46,6 +52,7 @@ import {
   SYSTEM_AGENT_OPERATOR_NAVIGATION_HANDOFF,
   type SystemAgentCommandDeps,
   type SystemAgentOperation,
+  type SystemAgentOperatorProposal,
   type SystemAgentOperationResult,
 } from "./operations.js";
 import {
@@ -76,7 +83,6 @@ export type SystemAgentChatEngineOptions = {
   requesterAgentId?: string;
 };
 
-type CaptureRuntime = RuntimeEnv & { read: () => string };
 type PersistentApplyGuard = () => void;
 
 function unavailable(reason: string): string {
@@ -86,23 +92,12 @@ function unavailable(reason: string): string {
   ].join("\n");
 }
 
-function createCaptureRuntime(): CaptureRuntime {
-  const lines: string[] = [];
-  return {
-    log: (...args) => lines.push(args.join(" ")),
-    error: (...args) => lines.push(args.join(" ")),
-    exit: (code) => {
-      throw new Error(`OpenClaw operation exited with code ${String(code)}`);
-    },
-    read: () => lines.join("\n").trim(),
-  };
-}
-
 export class SystemAgentChatEngine {
   private readonly history: SystemAgentAssistantTurn[] = [];
   private readonly agentSession: SystemAgentSession;
   private readonly wizard: ChatWizardHost;
   private pending: SystemAgentOperation | null = null;
+  private pendingDescription?: string;
   private proposalResolution: "approved" | "declined" | undefined;
   private verifiedInference: SystemAgentVerifiedInferenceBinding;
   private turnQueue: Promise<unknown> = Promise.resolve();
@@ -128,7 +123,7 @@ export class SystemAgentChatEngine {
     return describeSystemAgentPersistentOperation(this.pending);
   }
 
-  getPendingOperatorProposal(): { operation: SystemAgentOperation; hash: string } | null {
+  getPendingOperatorProposal(): SystemAgentOperatorProposal | null {
     const proposal = resolvePendingOperatorProposal(this.pending, this.agentSession.proposalRef);
     if (!proposal) {
       return null;
@@ -136,9 +131,12 @@ export class SystemAgentChatEngine {
     const operation = this.recordCreateAgentRequester(proposal.operation);
     // Request provenance participates in approval identity, but reading the
     // operator projection must not transfer ownership of a host-seeded plan.
+    const described = this.pendingDescription
+      ? { ...proposal, description: this.pendingDescription }
+      : proposal;
     return operation === proposal.operation
-      ? proposal
-      : { operation, hash: hashSystemAgentOperation(operation) };
+      ? described
+      : { ...described, operation, hash: hashSystemAgentOperation(operation) };
   }
 
   async resolveOperatorApproval(
@@ -165,7 +163,9 @@ export class SystemAgentChatEngine {
       if (reply && terminalStatus && !reply.applied) {
         reply.text = SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES[terminalStatus];
       }
-      if (reply && decision === "allow-once" && !reply.applied) {
+      const reviewingPlugin =
+        this.pending?.kind === "plugin-install" && this.pending.capabilityReview;
+      if (reply && decision === "allow-once" && !reply.applied && !reviewingPlugin) {
         reply.text += ` ${SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT}`;
       }
       if (reply?.text) {
@@ -477,6 +477,12 @@ export class SystemAgentChatEngine {
     }
     const capture = createCaptureRuntime();
     const result = await this.executeOperation(operation, capture, beforePersistentApply);
+    if (operation.kind === "plugin-install" && result?.pluginCapabilityReview) {
+      return await this.runOperation({
+        ...operation,
+        capabilityReview: result.pluginCapabilityReview,
+      });
+    }
     const configWrite =
       operation.kind === "config-set" ||
       operation.kind === "config-unset" ||
@@ -492,6 +498,9 @@ export class SystemAgentChatEngine {
     const baseText = [capture.read() || "Applied. Audit entry written.", verify]
       .filter(Boolean)
       .join("\n\n");
+    if (operation.kind === "template-install") {
+      this.agentSession.templateResult = baseText;
+    }
     if (
       (operation.kind === "setup" || operation.kind === "create-agent") &&
       result?.applied &&
@@ -505,7 +514,7 @@ export class SystemAgentChatEngine {
       return {
         text: [
           baseText,
-          `Your agent is hatching — handing you over now. ${this.agentHandoffReturnHint()}`,
+          `Your agent is hatching — handing you over now. ${agentHandoffReturnHint(this.options.surface)}`,
         ].join("\n\n"),
         action: "open-tui",
         applied: true,
@@ -533,6 +542,7 @@ export class SystemAgentChatEngine {
       this.pending,
       this.proposalResolution,
       uiContext,
+      this.agentSession.templateResult,
     );
     // The runtime already owns recovery; a terminal failure must not start another inference turn.
     const runTurn = () =>
@@ -556,30 +566,18 @@ export class SystemAgentChatEngine {
       this.clearPendingProposals();
     } else if (this.agentSession.proposalRef.current !== undefined) {
       this.pending = null;
+      this.pendingDescription = undefined;
     }
-    return await this.applyAgentTurnReply(loopReply);
-  }
-
-  private async applyAgentTurnReply(loopReply: {
-    text: string;
-    directive?: SystemAgentTurnDirective;
-  }): Promise<SystemAgentChatReply> {
     await this.requireVerifiedInference();
-    const directive = loopReply.directive;
-    if (!directive) {
-      return { text: loopReply.text, action: "none" };
+    const reply = await applyTurnDirective({
+      loopReply,
+      runOperation: (operation) => this.runOperation(operation),
+      applyApproved: (operation) => this.applyApprovedPersistentOperation(operation),
+    });
+    if (loopReply.directive?.kind === "template-operation") {
+      this.agentSession.templateResult = reply.text;
     }
-    const reply =
-      directive.kind === "approved-operation"
-        ? await this.applyApprovedPersistentOperation(directive.operation)
-        : await this.runOperation(directive);
-    return {
-      ...reply,
-      text:
-        directive.kind === "open-tui" && reply.action === "open-tui"
-          ? loopReply.text
-          : [loopReply.text, reply.text].filter(Boolean).join("\n\n"),
-    };
+    return reply;
   }
 
   private async runOperation(operation: SystemAgentOperation): Promise<SystemAgentChatReply> {
@@ -608,7 +606,7 @@ export class SystemAgentChatEngine {
         return { text: setupNotice, action: "none" };
       }
       return {
-        text: `Opening a chat with your agent. ${this.agentHandoffReturnHint()}`,
+        text: `Opening a chat with your agent. ${agentHandoffReturnHint(this.options.surface)}`,
         action: "open-tui",
         handoff: recordedOperation,
       };
@@ -644,20 +642,30 @@ export class SystemAgentChatEngine {
       return await this.startWizard(this.wizard.startMemoryImport());
     }
     if (recordedOperation.kind === "model-setup") {
-      return this.startModelSetup();
+      this.clearPendingProposals();
+      const capture = createCaptureRuntime();
+      await executeSystemAgentOperation(recordedOperation, capture);
+      return { text: capture.read(), action: "none" };
     }
 
     const capture = createCaptureRuntime();
-    if (isPersistentSystemAgentOperation(recordedOperation) && !this.options.yes) {
+    if (
+      isPersistentSystemAgentOperation(recordedOperation) &&
+      (!this.options.yes ||
+        (recordedOperation.kind === "plugin-install" && recordedOperation.capabilityReview))
+    ) {
       this.clearPendingProposals();
       // Validate through the executor before staging; delegated handoff copy must
       // not turn a forbidden operation into an approvable proposal.
-      await executeSystemAgentOperation(recordedOperation, capture, {
+      const proposal = await executeSystemAgentOperation(recordedOperation, capture, {
         approved: false,
         operatorApprovalOnly: this.options.operatorApprovalOnly,
         deps: this.commandDeps(),
       });
       this.pending = recordedOperation;
+      if (recordedOperation.kind === "template-install") {
+        this.pendingDescription = proposal.message;
+      }
       return {
         text: [
           capture.read(),
@@ -718,13 +726,6 @@ export class SystemAgentChatEngine {
     return [result.text, verify].filter(Boolean).join("\n");
   }
 
-  private async startModelSetup(): Promise<SystemAgentChatReply> {
-    this.clearPendingProposals();
-    const capture = createCaptureRuntime();
-    await executeSystemAgentOperation({ kind: "model-setup" }, capture);
-    return { text: capture.read(), action: "none" };
-  }
-
   private commandDeps(): SystemAgentCommandDeps {
     return {
       ...this.options.deps,
@@ -733,15 +734,9 @@ export class SystemAgentChatEngine {
     };
   }
 
-  private agentHandoffReturnHint(): string {
-    // Only the TUI uses /openclaw for navigation; web chat runs rescue in place.
-    return this.options.surface === "gateway"
-      ? "You can return through Settings → Ask OpenClaw."
-      : "Use /openclaw to come back.";
-  }
-
   private clearPendingProposals(): void {
     this.pending = null;
+    this.pendingDescription = undefined;
     this.agentSession.proposalRef.current = undefined;
     this.agentSession.proposalRef.operation = undefined;
   }

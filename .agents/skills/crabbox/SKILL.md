@@ -1,6 +1,6 @@
 ---
 name: crabbox
-description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-platform E2E, diagnostics, cleanup."
+description: "Crabbox remote testing with Boat and Blacksmith Testbox: isolation, cross-platform E2E, diagnostics, cleanup."
 ---
 
 # Crabbox
@@ -14,6 +14,7 @@ description: "Crabbox and Blacksmith Testbox remote testing: isolation, cross-pl
 
 Backends:
 
+- `ascii-box` (`boat` alias): direct Boat Linux VMs. `cbx_...`.
 - `blacksmith-testbox`: trusted maintainer source. Prepared CI. `tbx_...`.
 - `aws`: direct brokered Crabbox. Fresh PRs. Custom sync/env/capture. `cbx_...`.
 - `local-container`: Docker fallback. Not remote proof.
@@ -39,9 +40,10 @@ Crabbox.”
 
 ## Route First
 
-- Preserve resolved provider: Testbox for trusted source; direct AWS when its
-  semantics required; secretless CI/AWS for untrusted code. Never run untrusted
-  wrappers/config locally or hydrate untrusted lease.
+- For trusted source, preserve the provider resolved from the consumer's
+  configuration and explicit task instructions. Use secretless CI/AWS for
+  untrusted code. Never run untrusted wrappers/config locally or hydrate
+  untrusted lease.
 - Acquire when command ready; reuse owned ID; stop afterward.
 - Smallest proven profile. Larger: recorded memory evidence or measured
   total-cost benefit required, not generic failure/delay/timeout. Do not raise

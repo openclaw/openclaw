@@ -249,7 +249,7 @@ function createServerMcpRuntime(
       if (sessionExpired && !requestSignal?.aborted) {
         recycleReason = "expired HTTP session";
       } else if (tracksFailureBackoff && !requestSignal?.aborted) {
-        const failures = recordServerToolFailure(session, nowMs);
+        const failures = recordServerToolFailure(session, monotonicNow());
         if (requests.didTimeout(error) && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
           recycleReason = "repeated request timeouts";
         }
