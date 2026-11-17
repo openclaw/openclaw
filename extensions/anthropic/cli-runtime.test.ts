@@ -708,6 +708,32 @@ describe("Claude native stdio boundary", () => {
     ).toMatchObject({ synthetic: true, privateContext: "second private context" });
   });
 
+  it("restarts a session when its previous turn is still closing", async () => {
+    const liveSession = createLiveSession(async () => {});
+    const context = await createContext("normal", { liveSession, sessionId: SESSION_ID });
+    const iterator = executeClaudeCli(withClaudeCliTestDeadline(context))[Symbol.asyncIterator]();
+    let firstPid: number | undefined;
+    try {
+      for (;;) {
+        const next = await iterator.next();
+        if (next.done) {
+          throw new Error("Expected the first Claude turn to yield its result.");
+        }
+        if (next.value.type === "result") {
+          firstPid = Number(await readFixture(context, "fixture.pid"));
+          break;
+        }
+      }
+
+      expect(context.liveSession?.current()?.isIdle()).toBe(false);
+      const followUp = await runDetail(context, { prompt: "follow-up", useResume: true });
+      expect(followUp).toMatchObject({ turn: 1, user: "follow-up" });
+      expect(followUp.pid).not.toBe(firstPid);
+    } finally {
+      await iterator.return?.();
+    }
+  });
+
   it.each([
     ["mcp-hook", "hookDecision", { continue: true }],
     ["mcp-elicitation", "elicitation", { action: "decline" }],

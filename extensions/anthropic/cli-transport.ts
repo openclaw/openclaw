@@ -18,6 +18,8 @@ export type ClaudeCliTransport = {
   waitForExit(): Promise<void>;
   send(message: Record<string, unknown>): Promise<void>;
   initialize(): Promise<Record<string, unknown>>;
+  /** Returns true if the transport is still accepting requests. */
+  isOpen(): boolean;
 };
 
 /** One Claude Code subprocess and its bidirectional stream-json control channel. */
@@ -334,6 +336,9 @@ export async function createClaudeCliTransport(params: {
         request: { subtype: "initialize", ...params.initialize },
       });
       return await ready;
+    },
+    isOpen() {
+      return !closed && !shutdownStarted;
     },
   };
 }
