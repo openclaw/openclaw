@@ -608,6 +608,7 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     searchTranscripts: (
       params: SessionTranscriptSearchWorkerInput["params"],
       readIndexStatus: (signal: AbortSignal) => Promise<boolean>,
+      filterCandidates?: import("./session-transcript-search.types.js").SessionTranscriptSearchFilter,
     ) => Promise<SessionTranscriptSearchResult>;
     assertCurrent: () => void;
     run: (
