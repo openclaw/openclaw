@@ -10,7 +10,10 @@ import {
   restoreFailedUpdateDatabases,
 } from "./update-command-database-backup.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import { recordMutableUpdateInterruption } from "./update-command-mutable-signals.js";
+import {
+  recordMutableUpdateInterruption,
+  runMutableUpdateRecovery,
+} from "./update-command-mutable-signals.js";
 import type { MutableUpdateExecutionResult } from "./update-command-result.js";
 
 export async function settleMutableUpdateResult(
@@ -63,15 +66,17 @@ export async function settleMutableUpdateResult(
   if (databaseBackup && originalRun && result.status === "error" && doctorSettled) {
     // Execution has not entered finalization or admitted any candidate Gateway.
     // Restore before schema inspection can hand an incompatible ledger to the candidate.
-    await restoreFailedUpdateDatabases({
-      backup: databaseBackup,
-      result,
-      runId: originalRun.runId,
-      env: settlement.env ?? originalRun.env,
-      assertCurrent: settlement.assertCurrent,
-      assertRollbackSafe: packageTransaction?.assertRollbackSafe,
-      progress: params.progress,
-    });
+    await runMutableUpdateRecovery(() =>
+      restoreFailedUpdateDatabases({
+        backup: databaseBackup,
+        result,
+        runId: originalRun.runId,
+        env: settlement.env ?? originalRun.env,
+        assertCurrent: settlement.assertCurrent,
+        assertRollbackSafe: packageTransaction?.assertRollbackSafe,
+        progress: params.progress,
+      }),
+    );
   }
   return result;
 }

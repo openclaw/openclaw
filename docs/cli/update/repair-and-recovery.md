@@ -295,6 +295,19 @@ It creates no new backup or witness store and does not authorize migration,
 rollback, startup, or activation. Updates retain their existing safety gates;
 automatic migration acceptance is a separate integration.
 
+### Interrupted during an update
+
+A signal such as Ctrl-C or `SIGTERM` during `activating`, `restarting`, or
+`verifying` stops the updater’s forward work, including its readiness wait.
+The updater then recovers and reports the interruption before it exits. An
+update that has not finished activating rolls back and restarts the previous
+Gateway when recovery remains authorized; a Gateway that already came up on
+the new version stays running.
+
+Run `openclaw update status`, then `openclaw update repair` for any recovery
+that remains pending. A surviving Doctor process may still own offline
+maintenance; retry after that process exits.
+
 ### Retained updater runtime
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory

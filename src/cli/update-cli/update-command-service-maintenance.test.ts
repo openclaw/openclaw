@@ -695,6 +695,30 @@ it.each(["before stop", "after stop"] as const)(
     }),
 );
 
+it("records the update's own Gateway stop so repair can restore it after the updater dies", () =>
+  withServiceHome(async (home) => {
+    const env = { ...process.env };
+    const run = createUpdateRun({ trigger: "cli" }, { env });
+    mockMaintenanceService(home, {
+      stop: vi.fn<GatewayService["stop"]>(async ({ onMutation }) => {
+        onMutation?.({ mode: "systemctl-stop" });
+      }),
+    });
+    const updateRun = { runId: run.runId, env };
+    const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, process.cwd());
+    await maybeStopManagedServiceBeforeMutableUpdate({
+      updateRun,
+      recordPhase,
+      ...maintenanceDefaults,
+      root: process.cwd(),
+      phase: "prepare",
+    });
+    expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(
+      expect.objectContaining({ step: "service-stop", status: "completed" }),
+    );
+    await closeStateDatabaseForTest();
+  }));
+
 it.each(["respawning", "unloaded", "disabled"] as const)(
   "candidate Doctor preserves native stop/recovery ownership with no Gateway lease: %s",
   (state) =>
