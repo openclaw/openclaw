@@ -82,4 +82,51 @@ struct RootSidebarShellInvalidationTests {
         #expect(counter.detail == initialDetail)
         #expect(counter.sidebar == initialSidebar)
     }
+
+    /// Hosts the reveal control in a destination toolbar, like the chat screen.
+    private struct ToolbarDestination: View {
+        let presentation: RootSidebarPresentation
+        let counter: Counter
+
+        var body: some View {
+            let _ = self.counter.detail += 1
+            NavigationStack {
+                Text(verbatim: "destination")
+                    .toolbar {
+                        OpenClawSidebarToolbarItem(
+                            action: OpenClawSidebarHeaderAction(
+                                systemName: "line.3.horizontal",
+                                accessibilityLabel: .localized("Show Sidebar"),
+                                drawerPresentation: self.presentation,
+                                action: {}),
+                            placement: .topBarLeading)
+                    }
+            }
+        }
+    }
+
+    @Test func `hiding the reveal control does not re-evaluate its destination`() {
+        let counter = Counter()
+        let presentation = RootSidebarPresentation(isPresented: false)
+        let host = UIHostingController(rootView: ToolbarDestination(presentation: presentation, counter: counter))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        host.view.layoutIfNeeded()
+        CATransaction.flush()
+        let initialDetail = counter.detail
+
+        for isPresented in [true, false, true, false] {
+            presentation.isPresented = isPresented
+            host.view.setNeedsLayout()
+            host.view.layoutIfNeeded()
+            CATransaction.flush()
+        }
+
+        #expect(counter.detail == initialDetail)
+    }
 }
