@@ -35,9 +35,18 @@ async function fetchKeySet(issuer: string): Promise<KeySet> {
   );
   const keys = new Map<string, KeyObject>();
   for (const jwk of isRecord(body) && Array.isArray(body.keys) ? body.keys : []) {
-    if (isRecord(jwk) && jwk.kty === "RSA" && typeof jwk.kid === "string") {
+    if (
+      isRecord(jwk) &&
+      jwk.kty === "RSA" &&
+      typeof jwk.kid === "string" &&
+      typeof jwk.n === "string" &&
+      typeof jwk.e === "string"
+    ) {
       try {
-        keys.set(jwk.kid, createPublicKey({ key: jwk as JsonWebKey, format: "jwk" }));
+        keys.set(
+          jwk.kid,
+          createPublicKey({ key: { kty: "RSA", n: jwk.n, e: jwk.e }, format: "jwk" }),
+        );
       } catch {
         // Skip a malformed key; assertions signed by it fail verification.
       }
@@ -104,11 +113,15 @@ export async function verifyCloudflareAccessJwt(
   assertion: string,
   config: CloudflareAccessJwtConfig,
 ): Promise<CloudflareAccessJwtResult> {
-  const segments = assertion.trim().split(".");
-  if (segments.length !== 3) {
+  const [encodedHeader, encodedPayload, encodedSignature, ...extra] = assertion.trim().split(".");
+  if (
+    encodedHeader === undefined ||
+    encodedPayload === undefined ||
+    encodedSignature === undefined ||
+    extra.length > 0
+  ) {
     return INVALID;
   }
-  const [encodedHeader, encodedPayload, encodedSignature] = segments as [string, string, string];
   const header = decodeSegment(encodedHeader);
   const payload = decodeSegment(encodedPayload);
   // Access signs with RS256 only; pinning alg rules out "none" and key-confusion tricks.
