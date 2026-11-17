@@ -116,14 +116,14 @@ function PageAutomations() {
   );
 }
 
-/** Every automation's runs, opened from the sidebar's Activity. */
+/** Every automation's runs, opened from the sidebar's Run history. */
 function ActivityView(props: CronProps) {
   return (
     <section class="cron-page" data-panel-mode="activity">
       <SettingsPage wide>
         <BackRow {...props} />
         <OverviewNotices {...props} />
-        <SettingsSection title={t("cron.list.activity")}>
+        <SettingsSection title={t("cron.list.runHistory")}>
           <div class="cron-activity">
             <RunsSection {...props} />
           </div>

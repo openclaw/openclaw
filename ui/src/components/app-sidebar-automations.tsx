@@ -178,7 +178,7 @@ export function SidebarAutomations(props: {
         <span class="nav-item__icon" aria-hidden="true">
           <Icon name="activity" />
         </span>
-        <span class="nav-item__text">{t("cron.list.activity")}</span>
+        <span class="nav-item__text">{t("cron.list.runHistory")}</span>
       </a>
       <Show when={activeJobs().length > 0}>
         <SidebarListGroup
