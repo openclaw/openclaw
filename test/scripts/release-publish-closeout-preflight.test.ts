@@ -15,7 +15,7 @@ function evaluate({ dir, sha }: { dir: string; sha: string }, expression: string
 import { inspectPublishReleasePage, inspectStableCloseoutPreflight } from ${JSON.stringify(moduleUrl("release-publish-closeout-preflight"))};
 import { createPublishPreflightGh } from ${JSON.stringify(moduleUrl("release-publish-preflight-evidence"))};
 import { observeReleaseGitHubState } from ${JSON.stringify(moduleUrl("release-publish-state"))};
-const input = {repo: 'openclaw/openclaw', tag: 'v2026.9.5', sourceSha: ${JSON.stringify(sha)}, runGh: createPublishPreflightGh()};
+const input = {repo: 'openclaw/openclaw', tag: 'v2026.9.5', sourceSha: ${JSON.stringify(sha)}, toolingSha: ${JSON.stringify(sha)}, runGh: createPublishPreflightGh()};
 const closeoutInput = {...input, attempt: '1', runId: '123'};
 const admit = (changes = {}) => {
   try { return {admitted: true, release: inspectPublishReleasePage({...input, ...changes})}; }

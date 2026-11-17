@@ -748,16 +748,42 @@ write_clawhub_runtime_state() {
     --bootstrap-completed "${plugin_clawhub_bootstrap_completed:-false}" > "${output_path}"
 }
 
+# Rendering and canonical readback share the frozen notice context.
+run_github_release_notes() {
+  local regular_stable_version="" notice_body_file="" release_json
+  local -a render_args=(
+    --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
+    --tag "${RELEASE_TAG}" --repository "${GITHUB_REPOSITORY}"
+    "$@"
+  )
+  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
+    render_args+=(--main-package-version "$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")")
+    if [[ -f "${RUNNER_TEMP}/release-notes.md" ]]; then
+      # Preparation already froze Latest. Reuse it across later workflow steps.
+      notice_body_file="${RUNNER_TEMP}/release-notes.md"
+    elif release_json="$(gh_read release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,body 2>/dev/null)" &&
+      [[ "$(printf '%s' "${release_json}" | jq -r .isDraft)" == false ]]; then
+      # A fresh recovery keeps the public notice even after Latest has advanced.
+      notice_body_file="${RUNNER_TEMP}/existing-public-release-body.md"
+      printf '%s' "${release_json}" | jq -er '.body | strings' > "${notice_body_file}" || return 1
+      assert_initial_release_body "$(cat "${notice_body_file}")" || return 1
+    fi
+    if [[ -n "${notice_body_file}" ]]; then
+      render_args+=(--notice-body "${notice_body_file}")
+    else
+      regular_stable_version="$(gh_read api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)" || return 1
+      render_args+=(--regular-stable-version "${regular_stable_version#v}")
+    fi
+  fi
+  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
+    "${render_args[@]}"
+}
+
 render_github_release_notes() {
   local output_file="$1"
   local verification_file="${2:-}"
   local metadata_file="${3:-}"
-  local regular_stable_version=""
   local -a render_args=(
-    node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts"
-    --root "${GITHUB_WORKSPACE}" --ref "${TARGET_SHA}"
-    --tag "${RELEASE_TAG}"
-    --repository "${GITHUB_REPOSITORY}"
     --output "${output_file}"
   )
 
@@ -770,11 +796,7 @@ render_github_release_notes() {
   if [[ -n "${metadata_file}" ]]; then
     render_args+=(--metadata-output "${metadata_file}")
   fi
-  if [[ "${RELEASE_NPM_DIST_TAG:-}" == "extended-stable" ]]; then
-    regular_stable_version="$(jq -er '.version | strings' "${GITHUB_WORKSPACE}/.release-harness/package.json")"
-    render_args+=(--regular-stable-version "${regular_stable_version}")
-  fi
-  "${render_args[@]}"
+  run_github_release_notes "${render_args[@]}"
 }
 
 verify_release_tag_target() {
@@ -804,14 +826,12 @@ verify_release_tag_target() {
 canonical_release_body_matches() {
   local body_file="$1"
   local -a verify_args=(
-    --root "$GITHUB_WORKSPACE" --ref "$TARGET_SHA"
-    --tag "$RELEASE_TAG" --repository "$GITHUB_REPOSITORY" --verify-body "$body_file"
+    --verify-body "$body_file"
   )
   if [[ "${RELEASE_EVIDENCE_MODE}" != "authorized-beta-focused-v1" && -f "${FULL_RELEASE_VALIDATION_MANIFEST_DIR:-}/full-release-validation-manifest.json" ]] && grep -q '^### Release verification$' "$body_file"; then
     verify_args+=(--validation-manifest "${FULL_RELEASE_VALIDATION_MANIFEST_DIR}/full-release-validation-manifest.json")
   fi
-  node --import "${GITHUB_WORKSPACE}/.release-harness/scripts/tsx.mjs" "${GITHUB_WORKSPACE}/.release-harness/scripts/render-github-release-notes.mts" \
-    "${verify_args[@]}"
+  run_github_release_notes "${verify_args[@]}"
 }
 
 assert_initial_release_body() {

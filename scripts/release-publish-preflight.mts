@@ -553,7 +553,14 @@ export async function runReleasePublishPreflight(
         "github.release-admission",
         "Visible release metadata passed initial publication checks.",
         "Reconcile the exact public release's canonical notes and dependency evidence; leave docs-published bodies with their publication owner.",
-        () => inspectPublishReleasePage({ repo: options.repo, tag: options.tag, sourceSha, runGh }),
+        () =>
+          inspectPublishReleasePage({
+            repo: options.repo,
+            tag: options.tag,
+            sourceSha,
+            toolingSha,
+            runGh,
+          }),
       );
     }
     const github = await check(
