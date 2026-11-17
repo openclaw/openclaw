@@ -232,8 +232,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Optional thinking-effort override for mapping-triggered runs to tune latency versus reasoning depth. Keep low or minimal for high-volume hooks unless deeper reasoning is clearly required.",
   "hooks.mappings[].timeoutSeconds":
     "Maximum runtime allowed for mapping action execution before timeout handling applies. Use tighter limits for high-volume webhook sources to prevent queue pileups.",
-  "hooks.mappings[].maxBodyBytes":
-    "Largest request body, in bytes, accepted on this mapping's match.path; other paths keep the 256 KiB default, and the body is still read only after token auth. Set it for senders whose payloads outgrow the default, such as long meeting transcripts. At most 33554432 (32 MiB); has no effect without match.path.",
   "hooks.mappings[].transform":
     "Transform configuration block defining module/export preprocessing before mapping action handling. Use transforms only from reviewed code paths and keep behavior repeatable for repeatable automation.",
   "hooks.mappings[].transform.module":

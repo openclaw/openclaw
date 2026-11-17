@@ -39,7 +39,7 @@ export type HookMappingResolved = {
   timeoutSeconds?: number;
   transform?: HookMappingTransformResolved;
   forEach?: string;
-  /** Path-scoped request body bound: the mapping's own maxBodyBytes, or the producer contract (gog gmail batches). */
+  /** Path-scoped request body bound derived from the producer contract (e.g. gog gmail batches). */
   maxBodyBytes?: number;
 };
 
@@ -218,7 +218,7 @@ export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] 
     // reader) receives gog's batch payloads, so all of them inherit the
     // producer-derived body bound.
     if (normalized.matchPath === "gmail") {
-      normalized.maxBodyBytes = Math.max(gmailMaxBodyBytes, normalized.maxBodyBytes ?? 0);
+      normalized.maxBodyBytes = gmailMaxBodyBytes;
     }
     return normalized;
   });
@@ -347,7 +347,6 @@ function normalizeHookMapping(
     thinking: mapping.thinking,
     timeoutSeconds: mapping.timeoutSeconds,
     transform,
-    maxBodyBytes: mapping.maxBodyBytes,
   };
 }
 

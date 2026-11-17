@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveConfigForRead } from "../config/io.read-helpers.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { setConfigResolutionFacts } from "../config/resolution-facts.js";
-import { HookMappingSchema } from "../config/zod-schema.hooks.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -17,7 +16,6 @@ import {
   normalizeAgentPayload,
   normalizeWakePayload,
   publishHooksTokenEnvKey,
-  resolveHookPathBodyLimit,
   resolveHooksConfig,
 } from "./hooks.js";
 
@@ -153,32 +151,6 @@ describe("gateway hooks helpers", () => {
     } finally {
       publishHooksTokenEnvKey(null);
     }
-  });
-
-  test("a mapping's maxBodyBytes raises the body bound for its own path only", () => {
-    const resolved = resolveHooksConfigOrThrow(
-      hookConfig({
-        mappings: [
-          { match: { path: "circleback" }, action: "wake", maxBodyBytes: 8 * 1024 * 1024 },
-          { match: { path: "small" }, action: "wake", maxBodyBytes: 1024 },
-          { action: "wake", maxBodyBytes: 4 * 1024 * 1024 },
-        ],
-      }),
-    );
-    expect(resolveHookPathBodyLimit(resolved, "circleback")).toBe(8 * 1024 * 1024);
-    expect(resolveHookPathBodyLimit(resolved, "/circleback/")).toBe(8 * 1024 * 1024);
-    expect(resolveHookPathBodyLimit(resolved, "small")).toBe(256 * 1024);
-    expect(resolveHookPathBodyLimit(resolved, "other")).toBe(256 * 1024);
-  });
-
-  test("hook mapping maxBodyBytes is accepted up to the 32 MiB ceiling", () => {
-    const parse = (maxBodyBytes: unknown) =>
-      HookMappingSchema.safeParse({ match: { path: "circleback" }, maxBodyBytes }).success;
-    expect(parse(8 * 1024 * 1024)).toBe(true);
-    expect(parse(32 * 1024 * 1024)).toBe(true);
-    expect(parse(32 * 1024 * 1024 + 1)).toBe(false);
-    expect(parse(0)).toBe(false);
-    expect(parse(1.5)).toBe(false);
   });
 
   test("resolveHooksConfig rejects root path", () => {

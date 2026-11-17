@@ -13,11 +13,6 @@ function isSafeRelativeModulePath(raw: string): boolean {
   return !value.split(/[\\/]+/g).some((part) => part === "..");
 }
 
-// Upper bound for a mapping's own body allowance: the body is buffered in memory
-// before the mapping runs, so a typo must not become an unbounded allocation.
-// Matches the ceiling of the derived Gmail allowance.
-export const HOOK_MAPPING_MAX_BODY_BYTES_CEILING = 32 * 1024 * 1024;
-
 const SafeRelativeModulePathSchema = z
   .string()
   .refine(isSafeRelativeModulePath, "module must be a safe relative path (no absolute paths)");
@@ -53,7 +48,6 @@ export const HookMappingSchema = z
     model: z.string().optional(),
     thinking: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
-    maxBodyBytes: z.number().int().positive().max(HOOK_MAPPING_MAX_BODY_BYTES_CEILING).optional(),
     transform: z
       .strictObject({
         module: SafeRelativeModulePathSchema,
