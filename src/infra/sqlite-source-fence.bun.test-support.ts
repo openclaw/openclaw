@@ -31,6 +31,8 @@ const databases = ["source", "destination"].map((name) => {
   };
 });
 const [source, destination] = databases;
+assert.ok(source);
+assert.ok(destination);
 const broker = new SqliteWorkerBroker();
 // A late-created Bun worker has a younger hrtime origin than its host.
 await sleep(1200);
