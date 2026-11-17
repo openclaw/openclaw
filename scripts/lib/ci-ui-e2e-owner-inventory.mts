@@ -431,11 +431,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "skills",
   ]),
   pageWatch(
-    "ui/src/e2e/chat-composer-capability-menu.e2e.test.ts",
-    ["chat", "config", "skills"],
-    ["ui/src/components/modal-dialog.tsx"],
-  ),
-  pageWatch(
     "ui/src/e2e/chat-composer-catalog.e2e.test.ts",
     ["chat", "config", "model-providers"],
     ["ui/src/pages/chat/chat-pane.ts"],
@@ -494,7 +489,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/components/chat-detail-panel.ts"],
   ),
-  pageWatch("ui/src/e2e/chat-flow.active-run-follow-ups.e2e.test.ts", ["chat", "config"]),
   pageWatch("ui/src/e2e/chat-flow.composer-shortcuts.e2e.test.ts", ["chat", "config"]),
   pageWatch(
     "ui/src/e2e/chat-flow.dynamic-catalog.e2e.test.ts",
@@ -1089,16 +1083,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/desktop/desktop-panel-solid.tsx",
     ],
   ),
-  pageWatch(
-    "ui/src/e2e/desktop-panel.e2e.test.ts",
-    ["activity", "chat", "terminal"],
-    [
-      "ui/src/components/command-palette.tsx",
-      "ui/src/components/desktop/desktop-client.ts",
-      "ui/src/components/desktop/desktop-panel-solid.tsx",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
   {
     testFile: "ui/src/e2e/desktop-picture-in-picture.e2e.test.ts",
     ownerRoots: [
@@ -1648,11 +1632,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     "ui/src/e2e/session-management.group-return.e2e.test.ts",
     ["chat"],
     sessionMenuOwnerRoots,
-  ),
-  pageWatch(
-    "ui/src/e2e/session-management.groups.e2e.test.ts",
-    ["chat", "sessions"],
-    [...sessionMenuOwnerRoots, "ui/src/lib/cron/types.ts"],
   ),
   pageWatch(
     "ui/src/e2e/session-management.mutation-scope.e2e.test.ts",

@@ -26,12 +26,12 @@ import { copyChildSessionPublication } from "../../channels/message-access/child
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity-inbound.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
-import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import {
   isSessionPersonalBootstrapTurn,
   readSessionInputProfileId,
+  resolveTurnPersonalProfiles,
 } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
@@ -521,9 +521,11 @@ export async function executePreparedReplyRun(
       messageProvider,
       mediaNormalizationOwner: opts?.mediaNormalizationOwner,
       clientCaps: ctx.GatewayClientCaps,
-      bootstrapUserProfileId: personalBootstrapEligible
-        ? sessionPersonalProfileId(preparedSessionState.sessionEntry)
-        : undefined,
+      ...resolveTurnPersonalProfiles(
+        sessionKey,
+        preparedSessionState.sessionEntry,
+        personalBootstrapEligible,
+      ),
       gatewayUiCommandTarget: ctx.GatewayUiCommandTarget,
       toolBindings: ctx.GatewayRunToolBindings,
       chatType: replyRoute.chatType,

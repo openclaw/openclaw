@@ -19,7 +19,10 @@ import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { assertLocalWorkspaceDirectory } from "./local-workspace-checkout.js";
-import type { LocalWorkspaceStore } from "./local-workspace-store.js";
+import {
+  withLocalWorkspaceReconciliation,
+  type LocalWorkspaceStore,
+} from "./local-workspace-store.js";
 import type {
   LocalWorkspaceCapture,
   LocalWorkspaceManifestCheckpoint,
@@ -28,7 +31,7 @@ import type {
 } from "./local-workspace-store.types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { serializeWorkerWorkspaceReconciliationPlan } from "./workspace-manifest.js";
-import type { applyStagedWorkerWorkspace } from "./workspace-reconcile-apply.js";
+import { applyStagedWorkerWorkspace } from "./workspace-reconcile.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   workerWorkspaceResultRef,
@@ -430,7 +433,10 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
   return params.current().projection_path;
 }
 
-export function createLocalWorkspaceCheckpointAcceptance(params: {
+export function applyLocalWorkspaceCheckpoint(params: {
+  selected: Pick<LocalWorkspaceProjection, "worktree_id" | "pending_ref" | "base_commit">;
+  reason: import("../../agents/sandbox/local-workspace-quiescence.js").LocalWorkspacePauseReason;
+  application: Omit<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance">;
   current: () => LocalWorkspaceProjection;
   update: (
     patch: Parameters<LocalWorkspaceStore["update"]>[1],
@@ -447,9 +453,10 @@ export function createLocalWorkspaceCheckpointAcceptance(params: {
   rawManifest: string;
   manifestRef: string;
   beforeCommit: () => void;
-}): Pick<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance"> {
+}): ReturnType<typeof applyStagedWorkerWorkspace> {
+  params.current();
   let conflictPaths: string[] | undefined;
-  return {
+  const acceptance = {
     journal: {
       load: async () => undefined,
       begin: async (journal) => {
@@ -499,11 +506,32 @@ export function createLocalWorkspaceCheckpointAcceptance(params: {
       },
     },
     acceptance: {
-      kind: "reconcile",
-      publish: async (value) => {
+      kind: "checkpoint",
+      publish: async (paths) => {
         params.current();
-        conflictPaths = value.conflictPaths;
+        conflictPaths = paths;
       },
     },
-  };
+  } satisfies Pick<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance">;
+  return withLocalWorkspaceReconciliation(
+    {
+      worktreeId: params.selected.worktree_id,
+      pendingRef: params.selected.pending_ref!,
+      baseCommit: params.selected.base_commit,
+      targetCommit: params.application.current.baseCommit,
+      target: params.target,
+      reason: params.reason,
+    },
+    (markApplied) =>
+      applyStagedWorkerWorkspace({
+        ...params.application,
+        ...acceptance,
+        onPhase: (phase) => {
+          if (phase === "apply") {
+            markApplied();
+          }
+          params.application.onPhase?.(phase);
+        },
+      }),
+  );
 }

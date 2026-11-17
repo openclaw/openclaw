@@ -33,11 +33,12 @@ it.each([
   "native end clamp",
   "pending end with wheel",
   "pending end without input",
+  "pending restoration without input",
 ] as const)(
   "keeps geometry-only changes inert and lets reader input request older history after %s",
   async (movement) => {
-    const pendingEnd =
-      movement === "pending end with wheel" || movement === "pending end without input";
+    const pendingRestoration = movement.startsWith("pending restoration");
+    const pendingMovement = movement.startsWith("pending ");
     transcriptDomState.measuredRowHeight = 120;
     // Startup frames and the scroll idle debounce must share the controlled clock.
     vi.useFakeTimers();
@@ -64,16 +65,16 @@ it.each([
     const state = (pane as unknown as TestChatPane).state;
     state.sessionKey = pane.sessionKey;
     const request = vi.fn(async () => ({
-      messages: Array.from({ length: pendingEnd ? 160 : 2 }, (_, index) =>
+      messages: Array.from({ length: pendingMovement ? 160 : 2 }, (_, index) =>
         nativeHistoryMessage(index + 1),
       ),
       hasMore: false,
-      totalMessages: pendingEnd ? 190 : 4,
+      totalMessages: pendingMovement ? 190 : 4,
     }));
     state.client = createGatewayBrowserClientFixture({ request });
     state.connected = true;
-    state.chatMessages = Array.from({ length: pendingEnd ? 30 : 12 }, (_, index) => {
-      const message = nativeHistoryMessage(index + (pendingEnd ? 161 : 3));
+    state.chatMessages = Array.from({ length: pendingMovement ? 30 : 12 }, (_, index) => {
+      const message = nativeHistoryMessage(index + (pendingMovement ? 161 : 3));
       // A remote image keeps the earlier row measurable for late intrinsic resize.
       return index === 4
         ? {
@@ -88,7 +89,7 @@ it.each([
     state.chatHistoryPagination = {
       hasMore: true,
       olderCursor: "older-2",
-      totalMessages: pendingEnd ? 190 : 4,
+      totalMessages: pendingMovement ? 190 : 4,
     };
     state.chatLoading = false;
     state.chatHasAutoScrolled = true;
@@ -122,7 +123,7 @@ it.each([
       }
     });
     let earlier: HTMLElement | undefined;
-    if (!pendingEnd && movement !== "native end clamp") {
+    if (!pendingMovement && movement !== "native end clamp") {
       // A focused control keeps a previously visited row measurable after
       // Latest deliberately stops mounting speculative history neighbors.
       transcript.scrollToOffset(480);
@@ -177,19 +178,24 @@ it.each([
     expect(state.chatFollowLocked).toBe(false);
     maximum = 1400;
 
-    if (pendingEnd) {
-      expect(transcript.scrollToEnd({ behavior: "smooth" })).toBe(true);
+    if (pendingMovement) {
+      if (pendingRestoration) {
+        transcript.scrollToOffset(0);
+        expect(transcript.isPositionSettled).toBe(false);
+      } else {
+        expect(transcript.scrollToEnd({ behavior: "smooth" })).toBe(true);
+      }
       expect(transcript.isProgrammaticScroll).toBe(true);
       container.scrollTop = 0;
       container.dispatchEvent(new Event("scroll"));
       expect(transcript.isProgrammaticScroll).toBe(true);
       // A wheel at native zero can cancel the journey without another scroll event.
-      if (movement === "pending end with wheel") {
+      if (movement.endsWith("with wheel")) {
         container.dispatchEvent(new WheelEvent("wheel", { deltaY: -2000, bubbles: true }));
       }
       await vi.advanceTimersByTimeAsync(0);
       flush();
-      if (movement === "pending end without input") {
+      if (movement.endsWith("without input")) {
         expect(request).not.toHaveBeenCalled();
         expect(state.chatMessages).toHaveLength(30);
       } else {

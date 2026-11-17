@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type BigIntStats } from "node:fs";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type MaintenanceResource = {

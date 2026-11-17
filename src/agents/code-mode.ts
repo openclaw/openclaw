@@ -29,7 +29,6 @@ import {
   readRunId,
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
-import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
@@ -226,14 +225,28 @@ export function buildCodeModeCatalogPrompt(
   // Only the effective core binding proves shell capability after client overrides.
   const shellTool = bindings.find((entry) => entry.id === "openclaw:core:exec");
   const shellGuidance = shellTool
-    ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
+    ? ` Use the shell tool \`${shellTool.callableName}\` for commands and heavier computation. For multiline commands, join JavaScript strings with \`"\\n"\`, e.g. \`${shellTool.callableName}({command:["pwd","git diff --check"].join("\\n")})\`; never put literal newlines inside ordinary quoted strings.`
+    : "";
+  const editTools = bindings.filter(
+    (entry) => entry.id === "openclaw:core:edit" || entry.id === "openclaw:core:apply_patch",
+  );
+  const editGuidance = editTools.length
+    ? ` Prefer ${editTools.map((entry) => `\`${entry.callableName}\``).join(" or ")} for file changes instead of shell/Python rewriting with nested escaping.`
     : "";
   const askUserTool = bindings.find((entry) => entry.id === "openclaw:core:ask_user");
   const humanActionGuidance = askUserTool
     ? describeRequiredHumanActionTool(askUserTool.callableName)
     : "";
   const prompt = [
-    [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
+    [
+      shellGuidance,
+      editGuidance,
+      apiGuidance,
+      mcpGuidance,
+      swarmGuidance,
+      nodesGuidance,
+      skillsGuidance,
+    ]
       .join("")
       .trim(),
     namespacePrompt,
@@ -273,13 +286,10 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       terminalBatchStatus: result.status,
     });
     runtime?.sourceReplyCell.attach(controlResult, result.status);
-    return recordCodeModeToolOutcome(
-      copyInternalToolResultState(controlResult, {
-        ...controlResult,
-        ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
-      }),
-      result,
-    );
+    return copyInternalToolResultState(controlResult, {
+      ...controlResult,
+      ...(runtimeRefresh.isRequested() ? { terminate: runtimeRefresh.isPending() } : {}),
+    });
   };
   const execTool = markCodeModeControlTool({
     name: CODE_MODE_EXEC_TOOL_NAME,
@@ -319,6 +329,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
     hideFromChannelProgress: true,
+    repeatable: true,
     description:
       'Resume only when the outer exec result has status "waiting", using its top-level runId. A completed exec may return a still-running tool operation inside value; manage that operation through its enabled tool in a new exec. Never pass a nested sessionId or process ID to wait.',
     parameters: CODE_MODE_WAIT_PARAMETERS,

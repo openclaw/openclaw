@@ -53,6 +53,56 @@ backup.
 
 ## Update implementation contract
 
+Gateway update handoff preparation and its parent-side lease reads, identity checks,
+and cleanup run in the existing handoff worker. Slow coordinator filesystem work
+does not block the serving Gateway. Parking and terminal commit still await exact
+lease ownership; signal admission uses the already-owned local lifecycle. The
+installed Gateway must contain this repair. Detached helpers keep their existing
+lease format, synchronous store owner, and recovery behavior.
+
+A newer Doctor recognizes retained update captures whose state directory used
+an older Windows short-path spelling. Scope comparison resolves the recorded
+state directory and configuration parent without changing sealed capture bytes
+or following the final configuration entry. A different selected state directory
+or configuration entry remains rejected.
+
+On Gateway startup, an older supported SQLite schema is upgraded by copy and
+swap: Doctor runs on a private copy, then a durable plan publishes the changed
+files. Chain failure retains the generic rebuild and pins the previous files;
+invalid upgraded config still refuses publication. No live file is replaced or
+removed unless the upgrade copied it. If Doctor creates a template over an
+uncopied workspace file, startup leaves the original alone and reports a warning.
+
+The copy excludes managed worktrees, configured agent workspaces, nested mounts
+and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
+Completed agent deletions whose journal retains files are excluded from startup
+upgrade discovery and copying; their retained files remain unchanged. Pending
+deletions keep their existing deletion-owner behavior.
+Media payloads are excluded; legacy `media/outgoing/records` JSON remains a
+migration input. Legacy session JSON/JSONL, identity, devices, credentials, push,
+exec approvals, audit logs, config, and installed extensions remain available.
+SQLite files above 64 MiB are copied only when their schema needs upgrading or
+they are the shared state database; smaller ancillary stores remain available for
+legacy imports. SQLite and retained WAL/journal content use byte copies, with
+NOCOW directories on btrfs, so the new database does not share extents with its
+preserved original. Committed WAL is recovered in the private copy.
+
+Before copying, startup checks free space against the selected file bytes plus
+an equal-sized scratch margin (at least 256 MiB). Ordinary files are included in
+that budget because a filesystem can decline reflinking. Insufficient space
+reports the exact required, available, and missing bytes. Copies of at least
+256 MiB log their byte count, file count, elapsed time, and throughput.
+
+Replaced files remain as `<file>.pre-<buildId>`, named after the build that replaced
+them, so two builds of one version each keep their own predecessor. Builds without a
+build ID, and earlier releases, wrote `<file>.pre-<version>`. Startup prunes older unpinned
+generations only for files it owns. It leaves retired startup-migration backups,
+SQLite `.bak` files, and media-persistence recovery images in place, reporting
+file counts and bytes within the inspected copy scope. These are operator or
+Doctor retention decisions: deleting large shared clones during startup can
+stall a copy-on-write filesystem. Skipped bulk trees are never walked to count
+or prune their contents.
+
 Offline Doctor prepares no extra inspection image when its existing maintenance
 owner proves custody and the database has no WAL frames or rollback journal.
 These drained SQLite families use immutable reads. Retained WAL, journals, and
@@ -489,12 +539,15 @@ whole-store image for classification. A reader-pinned WAL or rollback journal re
 private recovery and pre-capture engine inspection. Backup digests, PostgreSQL exports, and
 source-change refusal still apply. The candidate backup worker must contain this change.
 
-Candidate Doctor also accepts an empty WAL index appearing or disappearing
-between an older updater's capture and migration admission, provided the database
-identity and committed contents still match and the index contains no write
-evidence. This preserves the installed updater's original fingerprint format.
-Changed committed data or write evidence still refuses migration and automatic
-restoration. The candidate must contain this repair.
+Candidate Doctor separates its initial database admission from the updater's
+rollback baseline. If databases changed after the updater captured them, Doctor
+warns and continues from the current observed state rather than aborting an
+otherwise valid migration. The receipt permanently disables automatic database
+restoration for that update, so a later failure cannot overwrite newer data with
+the stale backup. Existing integrity, schema, and maintenance-ownership checks
+still apply, as do checks for writes after admission. The candidate must contain
+this repair; the installed updater's capture and backup checks are unchanged.
+Empty WAL-index transitions without write evidence remain rollback-eligible.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its

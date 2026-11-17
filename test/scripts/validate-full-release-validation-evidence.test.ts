@@ -101,7 +101,14 @@ describe("authenticated publication eligibility", () => {
             verifierSourceSha: f.workflowSha,
             verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
           },
-          f.client,
+          {
+            ...f.client,
+            getJobLog: async (jobId: number) => f.client.getJobLog(jobId),
+            getParentJobs: async (runId: string) => f.client.getParentJobs(runId),
+            getRunAttemptJobs: async (runId: string) => f.client.getRunAttemptJobs(runId),
+            getRun: async (runId: string) => f.client.getRun(runId),
+            getRunView: async (runId: string) => f.client.getRunView(runId),
+          },
         ),
       ).rejects.toThrow(
         "Release qualification requires authenticated P admission; obtain new admitted qualification or authenticated receipt recovery",

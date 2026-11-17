@@ -304,7 +304,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
 };`,
       );
       const outputDir = join(root, "evidence");
-      const loader = createRequire(join(toolingRoot, "package.json")).resolve("tsx");
+      const loader = pathToFileURL(join(toolingRoot, "scripts/tsx.mjs")).href;
       const invoke = (npmRun: string) =>
         spawnSync(
           process.execPath,

@@ -80,6 +80,7 @@ const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.sli
 const mockRegistryBrowserTests = [
   "src/lib/toast-host.loading.browser.test.ts",
   "src/pages/chat/chat-pane-frame-updates.browser.test.tsx",
+  "src/pages/chat/chat-pane-inline-output.browser.test.tsx",
   "src/pages/chat/components/chat-tool-cards.browser.test.tsx",
   "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
 ].map((file) => resolveUiTypeScriptPath(file, here));
@@ -140,6 +141,7 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-overflow.browser.test.tsx",
   "src/pages/chat/chat-composer-queue.browser.test.tsx",
   "src/pages/chat/chat-queue-images.browser.test.ts",
+  "src/pages/chat/components/chat-activity-summary-width.browser.test.tsx",
   "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
   "src/pages/chat/components/chat-details.browser.test.ts",
   "src/pages/chat/components/chat-message-reactions.browser.test.tsx",

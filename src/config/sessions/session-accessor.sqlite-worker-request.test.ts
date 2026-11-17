@@ -3,7 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import * as boundaryPath from "../../infra/boundary-path.js";
+import * as pathExistence from "../../infra/path-existence.js";
 import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker-request.js";
 
 const createWorker = (script: string) => {
@@ -88,7 +88,7 @@ test.each(["queued", "qualification"])(
     const postMessage = vi.spyOn(worker, "postMessage");
     if (phase === "qualification") {
       const resolve = vi
-        .spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestor")
+        .spyOn(pathExistence, "resolveIdentityPathViaExistingAncestor")
         .mockImplementation(async (pathname) => {
           queued.resolve();
           await releaseAdmission.promise;
