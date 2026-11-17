@@ -29,81 +29,108 @@ describe("ModelRegistry generated catalog description", () => {
     contextWindow: 1_048_576,
     contextTokens: 983_040,
     maxTokens: 65_536,
-    compat: { supportsReasoningEffort: true },
+    compat: { supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "medium", "high"] },
   });
 
-  it("describes listed IDs with hosted rows and never publishes unlisted ones", () => {
-    const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: pluginId,
-          providers: [provider],
-          modelCatalog: {
-            providers: { [provider]: { baseUrl, api: "openai-completions", models: [] } },
-            discovery: { [provider]: "refreshable" },
-          },
-        },
-      ],
-    });
-    const registry = withRemoteModelCatalogSnapshot(
-      {
-        sourceUrl: resolveRemoteCatalogUrl({}),
-        generatedAt: 1,
-        revision: "fixture",
-        recommendations: {},
-        providers: {
-          [provider]: {
-            baseUrl,
-            api: "openai-completions",
-            models: [hostedRow("hosted-listed"), hostedRow("hosted-unlisted")],
-          },
-        },
-        pricing: {},
-        upstreamPricing: {},
-      },
-      () =>
-        ModelRegistry.fromCapturedSources(
-          AuthStorage.inMemory({ [provider]: { type: "api_key", key: "fixture-key" } }),
-          "/unused/models.json",
+  it.each([
+    { efforts: undefined, catalogCompat: true },
+    { efforts: ["medium"], catalogCompat: true },
+    { efforts: [], catalogCompat: true },
+    { efforts: ["medium"], catalogCompat: false },
+  ])(
+    "describes listed IDs while preserving reported efforts $efforts (catalog compat: $catalogCompat)",
+    ({ efforts, catalogCompat }) => {
+      const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
+        plugins: [
           {
-            modelsJsonContents: null,
-            pluginCatalogs: [
-              {
-                pluginId,
-                contents: JSON.stringify({
-                  generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-                  providers: {
-                    [provider]: {
-                      baseUrl,
-                      api: "openai-completions",
-                      models: [discovered("hosted-listed"), discovered("unknown-listed")],
-                    },
-                  },
-                }),
-              },
-            ],
-            pluginMetadataSnapshot,
+            id: pluginId,
+            providers: [provider],
+            modelCatalog: {
+              providers: { [provider]: { baseUrl, api: "openai-completions", models: [] } },
+              discovery: { [provider]: "refreshable" },
+            },
           },
-        ),
-    );
+        ],
+      });
+      const registry = withRemoteModelCatalogSnapshot(
+        {
+          sourceUrl: resolveRemoteCatalogUrl({}),
+          generatedAt: 1,
+          revision: "fixture",
+          recommendations: {},
+          providers: {
+            [provider]: {
+              baseUrl,
+              api: "openai-completions",
+              models: [
+                { ...hostedRow("hosted-listed"), ...(!catalogCompat ? { compat: undefined } : {}) },
+                hostedRow("hosted-unlisted"),
+              ],
+            },
+          },
+          pricing: {},
+          upstreamPricing: {},
+        },
+        () =>
+          ModelRegistry.fromCapturedSources(
+            AuthStorage.inMemory({ [provider]: { type: "api_key", key: "fixture-key" } }),
+            "/unused/models.json",
+            {
+              modelsJsonContents: null,
+              pluginCatalogs: [
+                {
+                  pluginId,
+                  contents: JSON.stringify({
+                    generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+                    providers: {
+                      [provider]: {
+                        baseUrl,
+                        api: "openai-completions",
+                        models: [
+                          {
+                            ...discovered("hosted-listed"),
+                            ...(efforts === undefined
+                              ? {}
+                              : {
+                                  compat: {
+                                    supportedReasoningEfforts: efforts,
+                                    supportsTemperature: false,
+                                  },
+                                }),
+                          },
+                          discovered("unknown-listed"),
+                        ],
+                      },
+                    },
+                  }),
+                },
+              ],
+              pluginMetadataSnapshot,
+            },
+          ),
+      );
 
-    expect(registry.find(provider, "hosted-listed")).toMatchObject({
-      name: "Hosted hosted-listed",
-      input: ["text", "image"],
-      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
-      contextWindow: 1_048_576,
-      contextTokens: 983_040,
-      maxTokens: 65_536,
-      compat: { supportsReasoningEffort: true },
-      baseUrl,
-    });
-    expect(registry.find(provider, "hosted-listed")).not.toHaveProperty("inference.chatEvidence");
-    expect(registry.find(provider, "hosted-unlisted")).toBeUndefined();
-    expect(registry.find(provider, "unknown-listed")).toMatchObject({
-      contextWindow: 128_000,
-      maxTokens: 32_768,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      inference: { chat: true, chatEvidence: "unlikely" },
-    });
-  });
+      expect(registry.find(provider, "hosted-listed")).toMatchObject({
+        name: "Hosted hosted-listed",
+        input: ["text", "image"],
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        contextTokens: 983_040,
+        maxTokens: 65_536,
+        compat: {
+          ...(catalogCompat ? { supportsReasoningEffort: true } : { supportsTemperature: false }),
+          supportedReasoningEfforts: efforts ?? ["low", "medium", "high"],
+        },
+        baseUrl,
+      });
+      expect(registry.find(provider, "hosted-listed")).not.toHaveProperty("inference.chatEvidence");
+      expect(registry.find(provider, "hosted-unlisted")).toBeUndefined();
+      expect(registry.find(provider, "unknown-listed")).toMatchObject({
+        contextWindow: 128_000,
+        maxTokens: 32_768,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        inference: { chat: true, chatEvidence: "unlikely" },
+      });
+    },
+  );
 });
