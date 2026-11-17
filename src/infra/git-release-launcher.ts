@@ -13,6 +13,8 @@ export type GitReleaseTrial = {
   buildId?: string;
   createdAt: number;
   attempts: number;
+  /** Written by the launcher before it restores anything: what the rollback restores. */
+  restoring?: Array<{ suffix: string; files: string[] }>;
 };
 
 // Frozen contract: the release link, the trial record and `dist/index.js` in each
@@ -62,8 +64,16 @@ function restoreState(files, suffix) {
     }
   }
   for (const file of files) {
-    fs.renameSync(file + suffix, file);
+    if (fs.existsSync(file + suffix)) {
+      fs.renameSync(file + suffix, file);
+    }
   }
+}
+
+function writeTrial(record) {
+  const temporary = trialFile + "." + process.pid;
+  fs.writeFileSync(temporary, JSON.stringify(record));
+  fs.renameSync(temporary, trialFile);
 }
 
 // A trial that crashed mid-upgrade leaves its durable plan ("<stateDir>/.upgrade-<generation>-*",
@@ -98,14 +108,23 @@ if (trial && counts) {
   } else if (trial.attempts >= 2) {
     // State first, link last: until the link moves, an interrupted rollback reruns here.
     // The trial's build names what it replaced; an older trial build used its version.
-    for (const generation of [trial.buildId, trial.version].filter(Boolean)) {
-      retirePlans(path.dirname(prefix), generation);
-      const suffix = ".pre-" + generation;
-      const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
-      const config = process.env.OPENCLAW_CONFIG_PATH;
-      if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
-        files.push(config);
+    // The inventory is recorded before any rename, so a retry still knows a family's
+    // already-restored companions and never removes them as the trial's own.
+    if (!trial.restoring) {
+      trial.restoring = [];
+      for (const generation of [trial.buildId, trial.version].filter(Boolean)) {
+        retirePlans(path.dirname(prefix), generation);
+        const suffix = ".pre-" + generation;
+        const files = collectPreserved(path.dirname(prefix), suffix, trial.createdAt, 4, []);
+        const config = process.env.OPENCLAW_CONFIG_PATH;
+        if (config && !files.includes(config) && fs.existsSync(config + suffix) && fs.statSync(config + suffix).ctimeMs >= trial.createdAt) {
+          files.push(config);
+        }
+        trial.restoring.push({ suffix, files });
       }
+      writeTrial(trial);
+    }
+    for (const { suffix, files } of trial.restoring) {
       restoreState(files, suffix);
     }
     const temporary = path.join(path.dirname(slot), ".openclaw.release-link-" + process.pid + "-" + Date.now());
@@ -114,9 +133,7 @@ if (trial && counts) {
     fs.rmSync(trialFile, { force: true });
     console.error("openclaw: release " + trial.target + " failed to start twice; switched back to " + trial.previous);
   } else {
-    const temporary = trialFile + "." + process.pid;
-    fs.writeFileSync(temporary, JSON.stringify({ ...trial, attempts: trial.attempts + 1 }));
-    fs.renameSync(temporary, trialFile);
+    writeTrial({ ...trial, attempts: trial.attempts + 1 });
   }
 }
 process.argv[1] = path.join(slot, "dist", "index.js");

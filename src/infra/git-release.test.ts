@@ -168,6 +168,9 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     await fs.mkdir(db, { recursive: true });
     await fs.writeFile(path.join(db, "blocker"), "");
     await fs.writeFile(`${db}.pre-2.0.0`, "old schema");
+    // The predecessor's WAL holds committed transactions of its own.
+    await fs.writeFile(`${db}-wal.pre-2.0.0`, "old wal");
+    await fs.writeFile(`${db}-wal`, "new wal");
     const slot = gitReleaseSlot(prefix);
     const target = await fs.readlink(slot);
 
@@ -181,7 +184,36 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
 
     expect(resumed.stdout).toContain("old");
     expect(await fs.readFile(db, "utf8")).toBe("old schema");
+    expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
     expect(await fs.readlink(slot)).not.toBe(target);
+  });
+
+  it("keeps a family's restored WAL when a rollback resumes after partial progress", async () => {
+    const { stateDir, prefix } = await setup();
+    const good = await release(prefix, "1.0.0", 'console.log("old");\n');
+    await publishGitRelease({ prefix, releaseRoot: good, trial: true });
+    const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
+    await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+    const db = path.join(stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.dirname(db), { recursive: true });
+    // The previous rollback recorded the family, restored the WAL, then stopped.
+    await fs.writeFile(`${db}-wal`, "old wal");
+    await fs.writeFile(`${db}.pre-2.0.0`, "old schema");
+    await fs.writeFile(db, "new schema");
+    const trialFile = path.join(prefix, "releases", GIT_RELEASE_TRIAL);
+    const trial = JSON.parse(await fs.readFile(trialFile, "utf8"));
+    await fs.writeFile(
+      trialFile,
+      JSON.stringify({
+        ...trial,
+        attempts: 2,
+        restoring: [{ suffix: ".pre-2.0.0", files: [`${db}-wal`, db] }],
+      }),
+    );
+
+    expect(startGateway(prefix).stdout).toContain("old");
+    expect(await fs.readFile(db, "utf8")).toBe("old schema");
+    expect(await fs.readFile(`${db}-wal`, "utf8")).toBe("old wal");
   });
 
   it("stops counting once the trial release reports ready", async () => {
