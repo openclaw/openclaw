@@ -19,10 +19,7 @@ import {
   SQLITE_STAGING_TOKEN_FILES,
   type SqliteStagingToken,
 } from "../infra/sqlite-staging-token.js";
-import {
-  CommandProcessCleanupError,
-  hasCommandProcessCleanupError,
-} from "../process/exec-result.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
@@ -62,7 +59,6 @@ type Instance = {
   releaseSignalExit?: () => void;
   retirement?: Promise<void>;
   handoff?: PluginCaptureRetirement;
-  retirementFailure?: CommandProcessCleanupError;
 };
 const {
   instances,
@@ -609,9 +605,6 @@ export function retainPluginSourceCaptureInstance(
       if (released) {
         return;
       }
-      if (retained.retirementFailure) {
-        throw retained.retirementFailure;
-      }
       if (retained.retirement) {
         return retained.retirement;
       }
@@ -630,6 +623,7 @@ export function retainPluginSourceCaptureInstance(
         return;
       }
       retained.closing = true;
+      let releaseRetirement = true;
       retained.retirement = (async () => {
         if (retained.root && !retained.handoff) {
           try {
@@ -653,14 +647,14 @@ export function retainPluginSourceCaptureInstance(
         released = true;
       })()
         .catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            // The process owner quarantines its deletion claim until exit is known.
-            retained.retirementFailure = new CommandProcessCleanupError({ cause: error });
-          }
+          releaseRetirement = !hasCommandProcessCleanupError(error);
           throw error;
         })
         .finally(() => {
-          retained.retirement = undefined;
+          // An uncertain process keeps this same rejected operation and deletion claim.
+          if (releaseRetirement) {
+            retained.retirement = undefined;
+          }
         });
       return retained.retirement;
     },
@@ -671,6 +665,7 @@ export function retainPluginSourceCaptureInstance(
 export function createPluginNativeCaptureRoot(
   stateDir?: string,
   placement?: PluginSourceCaptureStorage["placement"],
+  retirementOwner: "host" | "native" = "host",
 ) {
   const instance = retainPluginSourceCaptureInstance(stateDir, placement, "native");
   try {
@@ -702,7 +697,11 @@ export function createPluginNativeCaptureRoot(
             await removeTemporaryArtifacts(root.directory, "Plugin native capture");
           }
           disposed = true;
-          await instance.releaseAsync();
+          if (retirementOwner === "native") {
+            instance.release();
+          } else {
+            await instance.releaseAsync();
+          }
         }
       },
     };
@@ -717,6 +716,7 @@ export function createPluginSourceCaptureRoot(
   stateDir: string,
   prefix: string,
   placement?: PluginSourceCaptureStorage["placement"],
+  retirementOwner: "host" | "native" = "host",
 ) {
   const instance = retainPluginSourceCaptureInstance(stateDir, placement);
   try {
@@ -729,7 +729,11 @@ export function createPluginSourceCaptureRoot(
         if (!retainLoadedPluginSourceCapture(directory)) {
           await removeTemporaryArtifacts(directory, "Plugin source worker");
         }
-        await instance.releaseAsync();
+        if (retirementOwner === "native") {
+          instance.release();
+        } else {
+          await instance.releaseAsync();
+        }
       },
     };
   } catch (error) {

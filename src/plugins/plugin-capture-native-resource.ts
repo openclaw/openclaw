@@ -85,6 +85,7 @@ export function createNativeWorkerResource(
         command.storage.stateDir,
         command.prefix,
         command.storage.placement,
+        "native",
       );
       owned.sources.set(command.captureId, source);
       return {
@@ -102,6 +103,7 @@ export function createNativeWorkerResource(
       const root = createPluginNativeCaptureRoot(
         command.storage.stateDir,
         command.storage.placement,
+        "native",
       );
       const rootId = ++owned.nextRoot;
       const retained = { captureId: command.captureId, announced: false, root };
