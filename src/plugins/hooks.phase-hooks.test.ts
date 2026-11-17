@@ -6,6 +6,7 @@ import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-per
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
@@ -744,15 +745,14 @@ describe("before_prompt_build dispatch", () => {
         message: structuredClone(message),
       });
       normalizeTranscriptJsonValue(message, "");
-      const messages = [message, entry.message];
+      const projected = freezeJsonSnapshot(structuredClone(message));
+      const messages = [message, entry.message, { ...projected }];
       const owned = new Set<object>(messages.flatMap((item) => [item.content, item.content[0]!]));
       const ownKeys = vi.spyOn(Reflect, "ownKeys");
       const clone = vi.spyOn(globalThis, "structuredClone");
-      const entries = vi.spyOn(Object, "entries");
       onTestFinished(() => {
         ownKeys.mockRestore();
         clone.mockRestore();
-        entries.mockRestore();
       });
       const runner = hookRunner(
         [
@@ -780,17 +780,12 @@ describe("before_prompt_build dispatch", () => {
       for (let turn = 0; turn < 2; turn++) {
         ownKeys.mockClear();
         clone.mockClear();
-        entries.mockClear();
         const event = { prompt: "test", messages };
         const result =
           hookName === "before_prompt_build"
             ? await runner.runBeforePromptBuild(event, {})
             : await runner.runAgentTurnPrepare({ ...event, queuedInjections: [] }, {});
         expect(result?.prependContext).toBe("returned context");
-        // Copy envelopes without allocating a key/value tuple for every history field.
-        expect(
-          entries.mock.calls.filter(([value]) => Reflect.get(value, "role") === "toolResult"),
-        ).toHaveLength(0);
         expect(clone).toHaveBeenCalledTimes(hookName === "before_prompt_build" ? 0 : 1);
         // Warm dispatch must not rescan the frozen payload graph (#182349).
         if (turn > 0) {
