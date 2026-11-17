@@ -248,6 +248,7 @@ it("updates model selection against a retained and replaced catalog", async () =
 it("prepares account headings only when the model picker opens", async () => {
   let profileReads = 0;
   installModelPickerLayout();
+  const sessions = createSessionsListResult({ model: "primary", modelProvider: "example" });
   const props: Props = {
     activeRunId: null,
     connected: true,
@@ -259,7 +260,8 @@ it("prepares account headings only when the model picker opens", async () => {
     stream: null,
     sessionKey: "main",
     modelCatalog: [{ id: "primary", name: "Primary", provider: "example" }],
-    sessionsResult: createSessionsListResult({ model: "primary", modelProvider: "example" }),
+    selectedSession: sessions.sessions[0],
+    sessionsResult: sessions,
     modelAuthStatusResult: {
       ts: 1,
       providers: [
