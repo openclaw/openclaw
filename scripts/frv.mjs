@@ -589,8 +589,8 @@ async function recheckArtifactProducers(
   }
 }
 
-const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate"]);
-const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker"]);
+const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate", "plugin-npm"]);
+const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "plugin-npm"]);
 
 async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
@@ -659,10 +659,14 @@ function artifactRecoveryJobs(workflow) {
       continue;
     }
     const childKind = job.env?.CHILD_WORKFLOW_KIND;
-    if (typeof childKind !== "string" || !childKind.startsWith("artifact-")) {
+    if (
+      typeof childKind !== "string" ||
+      (!childKind.startsWith("artifact-") && childKind !== "plugin-npm-preflight")
+    ) {
       continue;
     }
-    const stage = childKind.slice("artifact-".length);
+    const stage =
+      childKind === "plugin-npm-preflight" ? "plugin-npm" : childKind.slice("artifact-".length);
     if (!ARTIFACT_PRODUCER_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
       throw new Error("Source workflow artifact producer contract is unsupported");
     }
@@ -724,11 +728,39 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       continue;
     }
     const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
-    const dispatches = [
-      ...log.matchAll(
-        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
-      ),
-    ];
+    const plugin = stage === "plugin-npm";
+    const pluginDispatches = plugin
+      ? [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched plugin-npm-release\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ]
+      : [];
+    const distTags = plugin
+      ? [
+          ...new Set(
+            [
+              ...log.matchAll(
+                /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?\s*NPM_DIST_TAG: (default|extended-stable)\r?(?=\n|$)/gu,
+              ),
+            ].map((match) => match[1]),
+          ),
+        ]
+      : [];
+    const dispatches = plugin
+      ? pluginDispatches.map((match) => [
+          match[0],
+          stage,
+          plan.targetSha,
+          match[1],
+          match[2],
+          match[3],
+        ])
+      : [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ];
     if (
       dispatches.length === 0 &&
       plan.evidenceReuse?.requested === true &&
@@ -736,6 +768,9 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       job.conclusion === "success"
     ) {
       continue;
+    }
+    if (plugin && (distTags.length !== 1 || !log.includes(`TARGET_SHA: ${plan.targetSha}`))) {
+      throw new Error("Original plugin-npm dispatch inputs are unavailable or ambiguous");
     }
     if (
       dispatches.length !== 1 ||
@@ -765,7 +800,10 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       request: {
         stage,
         repository,
-        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        dispatchId: plugin
+          ? `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-plugin-npm-preflight`
+          : `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        ...(plugin ? { sourceSha: plan.targetSha, npmDistTag: distTags[0] } : {}),
         toolingSha: plan.workflowSha,
         workflowRef: plan.workflowRef,
       },
