@@ -108,7 +108,11 @@ handshake, so these windows are rare:
   example after installing or upgrading Codex in between.
 
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
-always win; discovery then keeps reporting the shipped version. Login-status
+always win and are never replaced by the shipped binary. For a local command,
+discovery reports that binary's own `--version` (checked again every five
+minutes; a failed check reuses the last answer), so newer models that ChatGPT
+gates on the client version appear; remote app-servers keep reporting the
+shipped version. Login-status
 checks, node exec-servers, and the Doctor package check always use the shipped
 binary.
 
