@@ -52,20 +52,6 @@ it("does not substitute the prefixed route address for the chat id", () => {
   expect(ctx.OriginatingTo).toBe("channel:123456789012345678");
 });
 
-it("leaves the chat id absent when no delivery context exists", () => {
-  const ctx = buildSessionEventContext({
-    cfg: {},
-    agentId: "main",
-    sessionKey: "agent:main:cron:proof-job",
-    text: "background completion turn",
-    options: { source: "restart" },
-    occurrenceId: "chatid-occurrence-absent",
-    target: { sessionId: "existing", generation: "current" },
-    assertCurrent() {},
-  });
-  expect(ctx.ChatId).toBeUndefined();
-});
-
 it("keeps restart recovery intact for the agent and out of chat display", () => {
   const text =
     "The Gateway restarted while you were working. Resume your work: inspect saved child work before repeating effects. Workspace and publication ownership do not transfer.";
@@ -156,3 +142,36 @@ it.each([undefined, { version: 1 }, { version: 1, snapshot: null }])(
     ).toThrow("Restart recovery operator source");
   },
 );
+
+it("captures the native conversation id from a real-shaped session entry", async () => {
+  const { resolveSessionEventDestinationSettings } = await import("./session-event-target.js");
+  const entry = {
+    permissionMode: undefined,
+    toolOverrides: undefined,
+    delivery: {
+      kind: "external" as const,
+      origin: {
+        provider: "discord",
+        nativeChannelId: "123456789012345678",
+      },
+    },
+  } as never;
+  const settings = resolveSessionEventDestinationSettings(entry);
+  expect(settings?.nativeChannelId).toBe("123456789012345678");
+  const ctx = buildSessionEventContext({
+    cfg: {},
+    agentId: "main",
+    sessionKey: "agent:main:cron:proof-job",
+    text: "background completion turn",
+    options: { source: "restart" },
+    occurrenceId: "chatid-capture-occurrence",
+    deliveryContext: { channel: "discord", to: "channel:123456789012345678" },
+    target: {
+      sessionId: "existing",
+      generation: "current",
+      settings: { nativeChannelId: settings?.nativeChannelId },
+    },
+    assertCurrent() {},
+  });
+  expect(ctx.ChatId).toBe("123456789012345678");
+});
