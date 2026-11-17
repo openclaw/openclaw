@@ -142,7 +142,7 @@ export function createDispatchFixture(
   writeFileSync(npmCallsPath, "");
   writeFileSync(
     publishedVersionsPath,
-    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.9.6"]),
+    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.7.35", "2026.9.6"]),
   );
   const npmPath = join(binDir, "npm");
   writeFileSync(

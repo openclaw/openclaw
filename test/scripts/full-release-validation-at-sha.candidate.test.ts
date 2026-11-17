@@ -19,8 +19,8 @@ import { publicationSelectionFixture } from "./full-release-validation-state.tes
 const P = "repos/openclaw/openclaw/actions/workflows/openclaw-release-prepare.yml/dispatches";
 const Q = "repos/openclaw/openclaw/actions/workflows/full-release-validation.yml/dispatches";
 const frozenBaselines = {
-  upgradeBaseline: "openclaw@2026.7.9",
-  upgradeSurvivorBaselines: ["openclaw@2026.6.34", "openclaw@2026.7.8", "openclaw@2026.7.9"],
+  upgradeBaseline: "openclaw@2026.7.35",
+  upgradeSurvivorBaselines: ["openclaw@2026.7.35", "openclaw@2026.7.8", "openclaw@2026.7.9"],
 };
 const npmVersionsArgs = ["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"];
 
@@ -294,7 +294,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(JSON.parse(envelope.laneInputs.qualification_baselines_json)).toEqual(frozenBaselines);
     expect(admitted.baselinePolicy).toMatchObject({
       candidateVersion: "2026.8.1",
-      oldestSupportedBaseline: "2026.6.34",
+      oldestSupportedBaseline: null,
     });
     expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
     expect(admitted.coverage.profile).toBe("stable");
