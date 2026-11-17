@@ -1,6 +1,7 @@
 import type {
   FastMode,
   GatewaySessionRow,
+  ModelAuthStatusResult,
   ModelCatalogEntry,
   ModelCatalogResult,
   SessionsListResult,
@@ -233,6 +234,30 @@ export function hasChatModelCatalogSelection(
   );
   return catalog.some(
     (entry) => entry.manualSelectionAllowed !== false && catalogModelAvailabilityKey(entry) === key,
+  );
+}
+
+/** Absence must come from a completed auth read, not a built-in model name or a failed read. */
+export function hasNoConnectedChatModel(
+  catalog: readonly ModelCatalogEntry[],
+  auth: ModelAuthStatusResult | null | undefined,
+): boolean {
+  return Boolean(
+    auth &&
+    auth.ts > 0 &&
+    !auth.unavailable &&
+    auth.providers.every(
+      (provider) =>
+        provider.status === "missing" &&
+        provider.profiles.length === 0 &&
+        !provider.apiKey &&
+        !provider.nativeAuth,
+    ) &&
+    !catalog.some(
+      (entry) =>
+        entry.available !== false ||
+        entry.runtimeChoices?.some((route) => route.available !== false),
+    ),
   );
 }
 

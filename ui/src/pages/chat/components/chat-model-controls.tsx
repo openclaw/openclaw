@@ -7,6 +7,7 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../../../lib/chat/model-ref.ts";
 import {
+  hasNoConnectedChatModel,
   prepareChatModelSelectCatalog,
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
@@ -514,6 +515,16 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       triggerRuntime,
     } = selection();
     const catalogState = props.modelCatalogState;
+    const setupRequired =
+      catalogState.hasSnapshot &&
+      catalogState.status === "ready" &&
+      !catalogState.pendingProviders?.length &&
+      !policy?.restricted &&
+      !(
+        props.selectedSession?.placement?.state === "active" &&
+        props.selectedSession.placement.inference === "worker"
+      ) &&
+      hasNoConnectedChatModel(props.modelCatalog, props.modelAuthStatusResult);
     const thinking = resolveChatThinkingSelectState({
       catalog: props.modelCatalog,
       defaults: props.thinkingDefaults,
@@ -611,7 +622,9 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       !catalogState.pendingProviders?.length;
     const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
-      showEffort: !confirmedEmptyCatalog || Boolean(showAccessProgram && hasAccessSelection),
+      showEffort:
+        !setupRequired &&
+        (!confirmedEmptyCatalog || Boolean(showAccessProgram && hasAccessSelection)),
       model: {
         providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
@@ -639,7 +652,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           : selectionScopeLabel
             ? t(selectionScopeLabel)
             : undefined,
-        modelOptions,
+        modelOptions: setupRequired && !sessionModelPinned ? [] : modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,
         selectedAgentRuntime,
@@ -647,7 +660,11 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerModelValue: triggerModelValue || undefined,
-        triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
+        triggerStatusLabel: props.modelSelectionLocked
+          ? undefined
+          : setupRequired
+            ? t("modelSetup.required.action")
+            : catalogTriggerStatus,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:

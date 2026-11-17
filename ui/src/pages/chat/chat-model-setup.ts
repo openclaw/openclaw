@@ -1,11 +1,17 @@
-import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelAuthStatusResult,
+  ModelCatalogResult,
+} from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import {
   chatModelUnavailableMessage,
   hasChatModelCatalogSelection,
+  hasNoConnectedChatModel,
   resolveChatModelOverrideValue,
   resolveChatModelUnavailableReason,
 } from "../../lib/chat/model-select-state.ts";
+import type { ChatModelCatalogState } from "../../lib/model-catalog-store.ts";
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 
 type ChatModelSetupState = {
@@ -14,9 +20,10 @@ type ChatModelSetupState = {
   agentsLoaded: boolean;
   selectedAgentFound: boolean;
   agentModel?: string | null;
-  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
-  catalogRetired?: boolean;
-  catalogInitialized?: boolean;
+  modelCatalogState: ChatModelCatalogState;
+  modelAuthStatusResult?: ModelAuthStatusResult | null;
+  chatModelCatalog?: ModelCatalogResult["models"];
+  activeSession?: GatewaySessionRow;
 };
 
 export function resolveChatModelSetup(
@@ -24,12 +31,12 @@ export function resolveChatModelSetup(
     Pick<
       Parameters<typeof resolveChatModelOverrideValue>[0],
       "chatModelCatalog" | "modelOverrides" | "sessionKey" | "sessionsResult"
-    > & { activeSession?: GatewaySessionRow; catalogError: string | null; onSetup: () => void },
+    > & { onSetup: () => void },
 ) {
-  const policy = state.modelSelectionPolicy;
+  const policy = state.modelCatalogState.modelSelectionPolicy;
   const model = policy?.restricted
     ? resolveChatModelOverrideValue(state) || policy.defaultModel
-    : state.catalogInitialized === false
+    : state.modelCatalogState.initialized === false
       ? undefined
       : (state.activeSession?.model ?? state.agentModel);
   const modelSetupRequired = requiresChatModelSetup(state);
@@ -37,16 +44,17 @@ export function resolveChatModelSetup(
   const agentRuntime = policy?.restricted ? undefined : state.activeSession?.agentRuntime?.id;
   const catalog = state.chatModelCatalog;
   const onSetup = state.onSetup;
-  const retired = state.catalogRetired === true;
+  const retired = state.modelCatalogState.retired === true;
   const inference =
     state.activeSession?.placement?.state === "active"
       ? state.activeSession.placement.inference
       : undefined;
   let modelUnavailableBanner: ChatComposerDisabledBanner | undefined;
   if (retired) {
-    modelUnavailableBanner = state.catalogError
-      ? { kind: "above-composer", text: t("chat.modelControls.modelsUnavailable") }
-      : undefined;
+    modelUnavailableBanner =
+      state.modelCatalogState.status === "error"
+        ? { kind: "above-composer", text: t("chat.modelControls.modelsUnavailable") }
+        : undefined;
   } else if (
     policy?.restricted &&
     policy.defaultModel === null &&
@@ -81,16 +89,23 @@ export function resolveChatModelSetup(
 export function requiresChatModelSetup(state: ChatModelSetupState): boolean {
   if (
     state.catalog ||
-    state.catalogRetired ||
-    state.catalogInitialized === false ||
-    state.modelSelectionPolicy?.restricted ||
+    state.modelCatalogState.retired ||
+    state.modelCatalogState.initialized === false ||
+    state.modelCatalogState.status !== "ready" ||
+    state.modelCatalogState.pendingProviders?.length ||
+    (state.activeSession?.placement?.state === "active" &&
+      state.activeSession.placement.inference === "worker") ||
+    state.modelCatalogState.modelSelectionPolicy?.restricted ||
     !state.connected ||
     !state.agentsLoaded ||
     !state.selectedAgentFound
   ) {
     return false;
   }
-  return !state.agentModel?.trim();
+  return (
+    !state.agentModel?.trim() ||
+    hasNoConnectedChatModel(state.chatModelCatalog ?? [], state.modelAuthStatusResult)
+  );
 }
 
 export function createChatModelSetupBanner(
