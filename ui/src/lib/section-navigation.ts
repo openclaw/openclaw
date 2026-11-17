@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context-types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -38,10 +38,14 @@ export function rememberSectionLocation(
 }
 
 // The section whose sidebar stands open beside the page; its page need not list the items too.
-const [shownSection, setShownSection] = createSignal<ListingSection | null>(null);
+const [sidebar, setSidebar] = createSignal<{
+  section: ListingSection;
+  shown: () => boolean;
+} | null>(null);
 
 export function sectionSidebarShown(section: ListingSection): boolean {
-  return shownSection() === section;
+  const presence = sidebar();
+  return presence?.section === section && presence.shown();
 }
 
 /**
@@ -56,19 +60,9 @@ export function createSectionSidebarPresence(
     mobileNavLayoutMediaQuery(),
     globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false,
   );
-  createEffect(
-    () => !collapsed() && !mobile(),
-    (shown) => {
-      if (shown) {
-        setShownSection(section);
-      } else if (shownSection() === section) {
-        setShownSection(null);
-      }
-    },
-  );
-  onSettled(() => () => {
-    if (shownSection() === section) {
-      setShownSection(null);
-    }
+  const presence = { section, shown: () => !collapsed() && !mobile() };
+  onSettled(() => {
+    setSidebar(presence);
+    return () => setSidebar((current) => (current === presence ? null : current));
   });
 }
