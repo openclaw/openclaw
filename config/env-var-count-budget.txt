@@ -23,4 +23,6 @@
 # Ordinary Git updates now consume the existing, documented source-build declaration flag.
 # OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS (#187962) is the owner-approved launch-only bundled plugin development reload opt-in.
 # Approved Gmail child-only push and hook credential environment sources.
-461
+# OPENCLAW_NODE_TRUSTED_WRITABLE_ANCESTORS declares the operator-selected trusted ancestors.
+# OPENCLAW_INTERNAL_WORKER_TMPDIR directs the confined worker to its private temporary directory.
+463

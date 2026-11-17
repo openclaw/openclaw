@@ -135,6 +135,20 @@ export function nodeWorkerWorkspaceLaunchGenerationKey(
   });
 }
 
+export function nodeWorkerManagedWorkspacePath(
+  root: string,
+  placement: NodeWorkerWorkspaceLaunchReference,
+): string {
+  return path.join(
+    root,
+    placement.gatewayNamespace,
+    "workspaces",
+    hashNodeWorkerWorkspaceComponent(placement.environmentId, 16),
+    hashNodeWorkerWorkspaceComponent(placement.sessionId, 32),
+    String(placement.ownerEpoch),
+  );
+}
+
 export function nodeWorkerWorkspaceSessionKey(
   environmentHash: string,
   sessionHash: string,
@@ -192,16 +206,8 @@ export function resolveNodeManagedWorkspaceIdentity(
   if (!gatewayNamespace || !GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
     return fail();
   }
-  const environmentHash = hashNodeWorkerWorkspaceComponent(request.environmentId, 16);
-  const sessionHash = hashNodeWorkerWorkspaceComponent(request.sessionId, 32);
-  const expected = path.join(
-    root,
-    gatewayNamespace,
-    "workspaces",
-    environmentHash,
-    sessionHash,
-    String(request.ownerEpoch),
-  );
+  const placement = { ...request, gatewayNamespace };
+  const expected = nodeWorkerManagedWorkspacePath(root, placement);
   if (
     !stats.isDirectory() ||
     !isPathInside(root, workspaceDir) ||
@@ -217,12 +223,7 @@ export function resolveNodeManagedWorkspaceIdentity(
     // Workspace commands already use the session root as their retained HOME.
     homeDir: path.dirname(workspaceDir),
     gatewayNamespace,
-    generationKey: nodeWorkerWorkspaceGenerationKey({
-      gatewayNamespace,
-      environmentHash,
-      sessionHash,
-      generation: request.ownerEpoch,
-    }),
+    generationKey: nodeWorkerWorkspaceLaunchGenerationKey(placement),
   };
 }
 
