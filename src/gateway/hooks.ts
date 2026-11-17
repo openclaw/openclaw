@@ -21,7 +21,7 @@ import {
 import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
-import { readJsonBodyWithLimit } from "../infra/http-body.js";
+import { DEFAULT_WEBHOOK_MAX_BODY_BYTES, readJsonBodyWithLimit } from "../infra/http-body.js";
 import {
   normalizeAgentId,
   normalizeAgentIdStrict,
@@ -39,7 +39,10 @@ import { resolveAllowedAgentIds } from "./hooks-policy.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 const DEFAULT_HOOKS_PATH = "/hooks";
-const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
+// Hook bodies are read only after token auth. 1 MiB also matches the Codex
+// runtime's turn text cap (codex-rs MAX_USER_INPUT_TEXT_CHARS); a larger body
+// templated into an agent message would be truncated before the model sees it.
+const DEFAULT_HOOKS_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
 const MAX_HOOK_IDEMPOTENCY_KEY_LENGTH = 256;
 
 export type HooksConfigResolved = {
