@@ -1,8 +1,8 @@
 :root {
   --settings-control-height: 32px;
-  --segmented-surface: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
-  --segmented-selected: var(--bg-elevated);
-  --segmented-border: color-mix(in srgb, var(--border) 50%, transparent);
+  --segmented-surface: var(--control-surface);
+  --segmented-selected: var(--control-selected);
+  --segmented-border: var(--control-edge);
   /* Segments sit 3px (2px pad + 1px border) inside the field-radius track. */
   --segmented-item-radius: calc(var(--field-radius) - 3px);
 }
@@ -286,7 +286,7 @@ select.settings-select:not([multiple]) {
   border: none;
   border-radius: var(--segmented-item-radius);
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   text-align: center;
   white-space: nowrap;
   cursor: var(--cursor-action);
@@ -305,11 +305,11 @@ select.settings-select:not([multiple]) {
 .settings-segmented > .settings-segmented__btn:has(> input:checked) {
   background: var(--segmented-selected);
   color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow: inset 0 0 0 1px var(--control-edge-hover);
 }
 
 :where(.settings-segmented) > .settings-segmented__btn:hover {
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 :where(.settings-segmented) > .settings-segmented__btn:focus-visible,
@@ -342,20 +342,20 @@ select.settings-select:not([multiple]) {
   min-height: calc(var(--settings-control-height) - 6px);
   padding: 0 12px;
   border-radius: var(--segmented-item-radius);
-  color: var(--muted);
+  color: var(--text);
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
   box-shadow: none;
 }
 
 .hub-tabs.oc-segmented > .hub-tab.oc-segmented-item:hover {
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .hub-tabs.oc-segmented > .hub-tab.oc-segmented-item[active] {
   background: var(--segmented-selected);
   color: var(--text-strong);
-  box-shadow: var(--shadow-sm);
+  box-shadow: inset 0 0 0 1px var(--control-edge-hover);
 }
 
 .hub-tabs.oc-segmented > .hub-tab.oc-segmented-item:focus-visible {

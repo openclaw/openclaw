@@ -235,9 +235,9 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
   gap: var(--oc-space-1);
   overflow-x: auto;
   padding: var(--oc-space-1);
-  border: 1px solid var(--oc-border-subtle);
+  border: 1px solid var(--control-edge);
   border-radius: var(--oc-radius-control);
-  background: var(--oc-surface-card);
+  background: var(--control-surface);
 }
 
 .oc-segmented-item {
@@ -275,8 +275,9 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
 .oc-segmented-item[aria-selected="true"],
 .oc-segmented-item[aria-pressed="true"],
 .oc-segmented-item.is-active {
-  background: var(--oc-surface-interactive-hover);
+  background: var(--control-selected);
   color: var(--oc-text-primary);
+  box-shadow: inset 0 0 0 1px var(--control-edge-hover);
 }
 
 .oc-segmented-item:focus-visible {
@@ -585,5 +586,5 @@ html[data-theme-resolved="light"] .oc-action-secondary:hover {
  * item waits for aria-selected/is-active. Keep the shared helper's state
  * contract and apply Carapace's interactive surface at that adapter seam. */
 .settings-segmented__btn.oc-segmented-item.settings-segmented__btn--active {
-  background: var(--oc-surface-interactive);
+  background: var(--segmented-selected);
 }

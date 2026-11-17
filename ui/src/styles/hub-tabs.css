@@ -20,7 +20,7 @@
 .hub-tab {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
-  color: var(--muted);
+  color: var(--text);
   transition: color var(--duration-normal) var(--ease-out);
   padding: var(--space-1) var(--space-2) var(--space-2);
   display: inline-flex;
@@ -53,7 +53,7 @@
 }
 
 .hub-tab:hover {
-  color: var(--text);
+  color: var(--text-strong);
 }
 
 .hub-tab[active] {
