@@ -118,6 +118,19 @@ export function ApplicationShell(props: {
       ? undefined
       : sidebarSectionForRoute(current.activeRoute);
   });
+  // A page with a sidebar opens it at once after a page without one. Its next collapse
+  // change clears this, so the explicit toggle keeps its motion.
+  const navPageShown = createMemo<{ hidden: boolean; collapsed: boolean; instant: boolean }>(
+    (previous) => {
+      const { navPageHidden: hidden, navCollapsed: collapsed } = view();
+      const opened = previous?.hidden === true && !hidden;
+      return {
+        hidden,
+        collapsed,
+        instant: opened || (previous?.collapsed === collapsed && previous.instant),
+      };
+    },
+  );
   // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
   const navBackdropInert = createMemo(() => !view().navDrawerOpen);
   const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
@@ -175,6 +188,7 @@ export function ApplicationShell(props: {
             "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
             "shell--nav-page-hidden": view().navPageHidden,
+            "shell--nav-page-shown": navPageShown().instant,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
             "shell--floating-header": view().floatingHeader,

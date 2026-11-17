@@ -59,4 +59,46 @@ suite.define(() => {
       },
     );
   });
+
+  it("opens a page's sidebar at once after a page without one", async () => {
+    await suite.withPage(
+      { colorScheme: "dark", locale: "en-US", viewport: { width: 1280, height: 800 } },
+      async ({ page }) => {
+        await installMockGateway(page);
+        await page.goto(`${suite.server.baseUrl}dashboards`);
+        const collapsed = page.locator(".shell--nav-collapsed");
+        await collapsed.waitFor({ state: "attached" });
+        // Record each clip-path transition the navigation starts.
+        await page.evaluate(() => {
+          const runs: string[] = [];
+          Object.assign(window, { navRuns: runs });
+          document.addEventListener("transitionrun", (event) => {
+            if ((event.target as Element).matches(".shell-nav")) {
+              runs.push(event.propertyName);
+            }
+          });
+        });
+        const runs = () =>
+          page.evaluate(() => (window as unknown as { navRuns: string[] }).navRuns);
+
+        await page.locator('.sidebar-rail a.nav-item[href="/automations"]').click();
+        await waitForControlUiRoute(page, { routeId: "cron" });
+        await expect.poll(() => collapsed.count()).toBe(0);
+        await page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+        );
+        expect(await runs()).toEqual([]);
+
+        // The explicit toggle keeps its motion.
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Collapse sidebar", exact: true })
+          .click();
+        await expect.poll(runs).toContain("clip-path");
+      },
+    );
+  });
 });

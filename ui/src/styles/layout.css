@@ -910,9 +910,11 @@ div.shell.shell--onboarding {
   transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
-/* A page without a sidebar drops it at once; only the explicit collapse toggle animates. */
+/* A page without a sidebar drops it at once, and the next page with one opens it at once;
+   only the explicit collapse toggle animates. */
 .shell--nav-page-hidden,
-.shell--nav-page-hidden .shell-nav {
+.shell--nav-page-hidden .shell-nav,
+.shell--nav-page-shown .shell-nav {
   transition: none;
 }
 
