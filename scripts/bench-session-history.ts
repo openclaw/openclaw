@@ -257,8 +257,12 @@ async function closeBenchmarkState(stateDir: string): Promise<void> {
 
 async function worker(stateDir: string, profile: Profile, operation: Operation) {
   const scope = scopeFor(stateDir, profile);
+  const phase = (name: string) =>
+    console.error(`[history-benchmark] ${profile}/${operation} ${name}`);
+  phase("config");
   const { captureRuntimeConfigAsyncReader } = await import("../src/config/io.js");
   await captureRuntimeConfigAsyncReader()();
+  phase("imports");
   const importStarted = performance.now();
   const [history, projection, historyQueries] = await Promise.all([
     import("../src/config/sessions/session-accessor.sqlite-history-events.js"),
@@ -308,17 +312,22 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
   };
   try {
     // Runtime config preparation and imports precede this first read; OS caches are not flushed.
+    phase("first-read");
     const firstRead = await measure(read);
+    phase("warmup");
     for (let index = 0; index < 5; index += 1) {
       await read();
     }
+    phase("samples");
     const timings: Sample[] = [];
     for (let index = 0; index < samples; index += 1) {
       timings.push(await measure(read));
     }
     const warmElapsedMs = timings.reduce((total, sample) => total + sample.wallMs, 0);
     const warmCpuMs = timings.reduce((total, sample) => total + sample.cpuMs, 0);
+    phase("trace");
     const traced = await trace(read);
+    phase("explain");
     const database = openOpenClawAgentDatabase({ agentId: "main", env: scope.env });
     const queries = traced.queries.map(({ bindings, ...record }) => {
       const explain = database.db.prepare(`EXPLAIN QUERY PLAN ${record.sql}`);
@@ -329,6 +338,7 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
         timings.map((sample) => sample[metric]),
         percent,
       );
+    phase("report-json");
     process.stdout.write(
       JSON.stringify({
         profile,
@@ -352,7 +362,9 @@ async function worker(stateDir: string, profile: Profile, operation: Operation) 
       }),
     );
   } finally {
+    phase("close");
     await closeBenchmarkState(stateDir);
+    phase("closed");
   }
 }
 
@@ -419,10 +431,20 @@ async function main() {
             "--samples",
             String(samples),
           ],
-          { env: process.env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
+          {
+            env: process.env,
+            encoding: "utf8",
+            maxBuffer: 16 * 1024 * 1024,
+            // Preserve worker progress if an outer timeout kills this synchronous parent.
+            stdio: ["ignore", "pipe", "inherit"],
+          },
         );
         if (child.status !== 0) {
-          throw new Error(child.stderr || child.stdout || String(child.error));
+          throw new Error(
+            child.stdout ||
+              child.error?.message ||
+              `History worker exited: ${child.status}/${child.signal}`,
+          );
         }
         const result: unknown = JSON.parse(child.stdout);
         results.push(result);
