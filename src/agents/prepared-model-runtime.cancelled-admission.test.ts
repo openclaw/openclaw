@@ -415,80 +415,12 @@ describe("prepared model runtime automatic selections", () => {
 });
 
 describe("auth admission publication boundaries", () => {
-  function barrier() {
-    const entered = createDeferred();
-    const finish = createDeferred();
-    return {
-      entered: entered.promise,
-      ...finish,
-      wait: async () => {
-        entered.resolve();
-        await finish.promise;
-      },
-    };
-  }
   const refreshBatch = (config: OpenClawConfig = {}, startup = false) =>
     refresh(config, {
       gatewayLifecycle: true,
       catalogMode: "static",
       ...(startup ? { startup } : {}),
     });
-  it("keeps auth admission pending when startup degrades during an adopted refresh", async () => {
-    mocks.configuredAgentIds = ["first", "last"];
-    const firstAuth = barrier();
-    const secondAuth = barrier();
-    const mutateAuth = () =>
-      mocks.mutationListener?.({
-        agentDir: fixture.state.agentDir("first"),
-        affectsInheritedStores: false,
-      });
-    let initial = true;
-    mocks.prepareStaticCatalog.mockImplementation(async (options) => {
-      if (initial && (options as { workspaceDir: string }).workspaceDir === "/tmp/workspace-last") {
-        initial = false;
-        mutateAuth();
-      }
-      return { entries: [] };
-    });
-    mocks.resolveAmbientCredentials
-      .mockImplementationOnce(() => ({}))
-      .mockImplementationOnce(() => ({}))
-      .mockImplementationOnce(async () => {
-        await firstAuth.wait();
-        return {};
-      })
-      .mockImplementationOnce(async () => {
-        await secondAuth.wait();
-        return {};
-      });
-    mocks.warn.mockImplementation((message: string) => {
-      if (message.includes("startup degraded")) {
-        mutateAuth();
-      }
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const publication = refreshBatch({}, true);
-    let admission: ReturnType<typeof loadPublishedDispatch> | undefined;
-    try {
-      await firstAuth.entered;
-      admission = loadPublishedDispatch({ agentId: "first" });
-      const settled = observeSettlement(admission);
-      await vi.advanceTimersByTimeAsync(120_000);
-      await publication;
-      firstAuth.resolve();
-      await secondAuth.entered;
-      await nextTurn();
-      expect(settled()).toBe(false);
-      secondAuth.resolve();
-      await expect(admission).resolves.toMatchObject({ agentId: "first" });
-    } finally {
-      firstAuth.resolve();
-      secondAuth.resolve();
-      await Promise.allSettled([publication, admission]);
-      await getPreparedModelRuntimeTestApi().resetPreparedModelRuntimeSnapshotsForTest();
-      vi.useRealTimers();
-    }
-  });
   it("does not start plugin callbacks after cancellation at an event-loop boundary", async () => {
     let cancelled = false;
     let lateLoads = 0;

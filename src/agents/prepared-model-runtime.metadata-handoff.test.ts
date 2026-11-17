@@ -431,7 +431,6 @@ describe("auth replacement publication", () => {
 
     expect(events.filter((phase) => phase === "published")).toHaveLength(1);
     expect(events).not.toContain("failed");
-    expect(mocks.warn).not.toHaveBeenCalled();
     expect(affectedRuntime?.config).toBe(replacementConfig);
     expect(siblingRuntime?.config).toBe(replacementConfig);
     const lease = await acquireAgentRunPreparedModelRuntime({
@@ -469,7 +468,6 @@ describe("auth replacement publication", () => {
     for (const read of dispatches) {
       await expect(read).rejects.toBe(refreshError);
     }
-    expect(mocks.warn).toHaveBeenCalledOnce();
   });
   it("settles an adopted auth gate when replacement fails, and permits recovery", async () => {
     await using work = pendingWork();

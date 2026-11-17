@@ -647,6 +647,7 @@ describe("remote catalog publication boundaries", () => {
 });
 
 it("reprepares run admission when config publication supersedes its unfinished build", async () => {
+  mocks.configuredAgentIds = ["default"];
   const config = { messages: { responsePrefix: "before" } };
   const current = { messages: { responsePrefix: "after" } };
   await refresh(config, { gatewayLifecycle: true, catalogMode: "static" });
