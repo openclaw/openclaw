@@ -46,8 +46,9 @@ it("drains seeded transcript owners before fresh-process history measurements", 
   );
 }, 35_000);
 
-it("keeps the source benchmark JSON parseable across all history readers", () => {
-  // Keep the documented source CLI: compiled coverage misses its startup/shutdown boundary.
+it("keeps source Gateway history benchmark JSON parseable", () => {
+  // The source Gateway reader needs runtime config and emits database close logs.
+  // It exercises both CLI boundaries without starting the other two source readers.
   const result = spawnSync(
     resolveTestNodeExecPath(),
     [
@@ -56,6 +57,8 @@ it("keeps the source benchmark JSON parseable across all history readers", () =>
       "scripts/bench-session-history.ts",
       "--profile",
       "small",
+      "--operation",
+      "gateway-tail",
       "--samples",
       "1",
     ],
@@ -73,13 +76,13 @@ it("keeps the source benchmark JSON parseable across all history readers", () =>
   const report: unknown = JSON.parse(result.stdout);
   expect(report).toEqual(
     expect.objectContaining({
-      results: ["recent", "page", "gateway-tail"].map((operation) =>
+      results: [
         expect.objectContaining({
           profile: "small",
-          operation,
+          operation: "gateway-tail",
           result: { returned: 20, total: 80 },
         }),
-      ),
+      ],
     }),
   );
 }, 65_000);
