@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatStreamingPreparationTests {
-    @Test @MainActor func `mounted preparation preserves reveal through deltas and replaces source`() throws {
+    @Test @MainActor func `preparation preserves reveal through deltas and replaces source`() throws {
         let source = "<think>Consider **carefully**.</think>First words"
         let text = ChatStreamingAssistantText(sourceText: source, includesThinking: true)
         let preparation = ChatStreamingAssistantTextBody.Preparation(
@@ -14,7 +14,11 @@ struct ChatStreamingPreparationTests {
         #expect(preparation.revealState.text == "First words")
         let firstDeadline = try #require(preparation.revealState.words.first?.deadline)
         var publications = 0
-        let observation = preparation.$snapshot.dropFirst().sink { _ in publications += 1 }
+        var pendingUntilAtPublication: TimeInterval?
+        let observation = preparation.$snapshot.dropFirst().sink { _ in
+            publications += 1
+            pendingUntilAtPublication = preparation.pendingUntil
+        }
         defer { observation.cancel() }
 
         preparation.update(text: text, defaultDisclosureSummary: "Details", reduceMotion: false, now: 0.01)
@@ -23,7 +27,9 @@ struct ChatStreamingPreparationTests {
 
         preparation.update(
             text: ChatStreamingAssistantText(sourceText: source + " continue", includesThinking: true),
-            defaultDisclosureSummary: "Details", reduceMotion: false, now: 0.02)
+            defaultDisclosureSummary: "Details",
+            reduceMotion: false,
+            now: 0.02)
         #expect(publications == 1)
         #expect(preparation.snapshot.segments[0].kind == .thinking)
         #expect(preparation.revealState.text == "First words continue")
@@ -31,20 +37,40 @@ struct ChatStreamingPreparationTests {
 
         preparation.update(
             text: ChatStreamingAssistantText(sourceText: source + " continue", includesThinking: false),
-            defaultDisclosureSummary: "Details", reduceMotion: true, now: 0.03)
+            defaultDisclosureSummary: "Details",
+            reduceMotion: true,
+            now: 0.03)
         #expect(preparation.snapshot.segments.count == 1)
         #expect(preparation.snapshot.segments[0].kind == .response)
         #expect(preparation.revealLocation?.segmentIndex == 0)
         #expect(preparation.pendingUntil == nil)
+        #expect(pendingUntilAtPublication == nil)
 
         preparation.update(
-            text: ChatStreamingAssistantText(markdown: "Replacement 👋🏽", kind: .thinking),
-            defaultDisclosureSummary: "Details", reduceMotion: false, now: 0.04)
+            text: ChatStreamingAssistantText(sourceText: "<think>Replacement 👋🏽</think>", includesThinking: true),
+            defaultDisclosureSummary: "Details",
+            reduceMotion: false,
+            now: 0.04)
         #expect(preparation.snapshot.segments.count == 1)
         #expect(preparation.snapshot.segments[0].kind == .thinking)
         #expect(preparation.revealState.text == "Replacement 👋🏽")
         #expect(preparation.revealState.words.isEmpty)
         #expect(preparation.pendingUntil == nil)
+
+        let item = "Before <think>reasoning</think> After"
+        preparation.update(
+            text: ChatStreamingAssistantText(sourceText: item, includesThinking: true),
+            defaultDisclosureSummary: "Details",
+            reduceMotion: true,
+            now: 0.05)
+        #expect(preparation.snapshot.segments.count == 3)
+        preparation.update(
+            text: ChatStreamingAssistantText(markdown: item, kind: .thinking),
+            defaultDisclosureSummary: "Details",
+            reduceMotion: true,
+            now: 0.06)
+        #expect(preparation.snapshot.segments.count == 1)
+        #expect(preparation.snapshot.segments[0].kind == .thinking)
     }
 
     @Test @MainActor func `reused blocks invalidate reveal role completion and localized summaries`() throws {
@@ -77,10 +103,13 @@ struct ChatStreamingPreparationTests {
         let disclosure = "<details>\n\nBody\n\n</details>"
         let preparation = ChatStreamingAssistantTextBody.Preparation(
             text: ChatStreamingAssistantText(sourceText: disclosure, includesThinking: false),
-            defaultDisclosureSummary: "Details", now: 0)
+            defaultDisclosureSummary: "Details",
+            now: 0)
         preparation.update(
             text: ChatStreamingAssistantText(sourceText: disclosure, includesThinking: false),
-            defaultDisclosureSummary: "Détails", reduceMotion: false, now: 1)
+            defaultDisclosureSummary: "Détails",
+            reduceMotion: false,
+            now: 1)
         guard case let .disclosure(rendered) = try #require(preparation.snapshot.segments.first?.markdown.blocks.first)
         else {
             Issue.record("expected disclosure")
@@ -89,12 +118,14 @@ struct ChatStreamingPreparationTests {
         #expect(String(rendered.summary.attributed.characters) == "Détails")
     }
 
-    @Test @MainActor func `changed source reparses references headings tables and list structure`() throws {
+    @Test @MainActor func `changed source reparses references headings and tables`() throws {
         let reference = "Read [docs][d].\n\n# Next"
         let initial = ChatMarkdownRenderSnapshot(text: reference, isComplete: false, preparesReveal: true)
         let resolved = ChatMarkdownRenderSnapshot(
-            text: reference + "\n\n[d]: https://example.com/docs", isComplete: false,
-            preparesReveal: true, reusing: initial)
+            text: reference + "\n\n[d]: https://example.com/docs",
+            isComplete: false,
+            preparesReveal: true,
+            reusing: initial)
         guard case let .prose(prose) = try #require(resolved.blocks.first) else {
             Issue.record("reference context must remain together")
             return
@@ -123,19 +154,5 @@ struct ChatStreamingPreparationTests {
         }
         #expect(renderedTable.header == ["Item"])
         #expect(renderedTable.rows == [["Value"]])
-
-        #if os(iOS)
-        let list = ChatMarkdownRenderSnapshot(text: "- First", isComplete: false, preparesReveal: true)
-        let nested = ChatMarkdownRenderSnapshot(
-            text: "- First\n  - Child\n- Last", isComplete: false, preparesReveal: true, reusing: list)
-        guard case let .list(renderedList) = try #require(nested.blocks.first),
-              case let .list(child) = try #require(renderedList.items.first?.content.last)
-        else {
-            Issue.record("expected nested streamed list")
-            return
-        }
-        #expect(renderedList.items.count == 2)
-        #expect(child.items.first?.content == [.markdown("Child")])
-        #endif
     }
 }

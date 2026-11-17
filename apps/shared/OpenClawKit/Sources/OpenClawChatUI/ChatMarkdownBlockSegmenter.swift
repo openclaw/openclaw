@@ -280,8 +280,8 @@ enum ChatMarkdownBlockSegmenter {
                       let list = self.list(
                           child,
                           source: source,
-                          isComplete: isComplete,
                           depth: 1,
+                          isComplete: isComplete,
                           itemCount: &itemCount)
                 else { continue }
                 extractions.append(Extraction(lineRange: lineRange, block: .list(list)))
@@ -842,8 +842,8 @@ enum ChatMarkdownBlockSegmenter {
     private static func list(
         _ markup: any Markup,
         source: SourceBuffer,
-        isComplete: Bool,
         depth: Int,
+        isComplete: Bool,
         itemCount: inout Int) -> ChatMarkdownList?
     {
         guard depth <= self.maxListDepth else { return nil }
@@ -870,13 +870,13 @@ enum ChatMarkdownBlockSegmenter {
                 if let code = child as? Markdown.CodeBlock {
                     content.append(.code(self.codeBlock(
                         code,
-                        isComplete: isComplete || source.hasClosingFence(code, in: item.range))))
+                        isComplete: isComplete || self.fenceIsClosed(code, source: source))))
                 } else if child is Markdown.OrderedList || child is Markdown.UnorderedList {
                     guard let nested = self.list(
                         child,
                         source: source,
-                        isComplete: isComplete,
                         depth: depth + 1,
+                        isComplete: isComplete,
                         itemCount: &itemCount)
                     else { return nil }
                     content.append(.list(nested))
@@ -890,6 +890,17 @@ enum ChatMarkdownBlockSegmenter {
             renderedItems.append(ChatMarkdownListItem(checkbox: item.checkbox, content: content))
         }
         return ChatMarkdownList(kind: kind, items: renderedItems)
+    }
+
+    /// A fenced block nested in a list item is complete once its closing fence
+    /// arrived; indented code has no fence and is always complete.
+    private static func fenceIsClosed(_ code: Markdown.CodeBlock, source: SourceBuffer) -> Bool {
+        guard let range = code.range,
+              let text = source.dedentedText(in: range)
+        else { return true }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let first = lines.first, let opener = FenceOpener.parse(first) else { return true }
+        return lines.count > 1 && opener.isClose(lines[lines.count - 1])
     }
 
     fileprivate struct SourceBuffer {
@@ -959,28 +970,6 @@ enum ChatMarkdownBlockSegmenter {
                   columnOffset <= self.lines[lineIndex].utf8.count
             else { return nil }
             return self.lines[..<lineIndex].reduce(0) { $0 + $1.utf8.count + 1 } + columnOffset
-        }
-
-        func hasClosingFence(_ code: Markdown.CodeBlock, in itemRange: SourceRange?) -> Bool {
-            guard let range = code.range,
-                  let itemRange,
-                  range.upperBound.line <= itemRange.upperBound.line,
-                  let lines = self.lineRange(for: range),
-                  lines.count > 1,
-                  let opening = self.utf8Slice(
-                      self.lines[lines.lowerBound],
-                      from: range.lowerBound.column - 1,
-                      to: self.lines[lines.lowerBound].utf8.count),
-                  let opener = FenceOpener.parse(opening),
-                  opener.isClose(self.lines[lines.upperBound - 1].trimmingCharacters(in: .whitespaces))
-            else { return false }
-
-            // cmark includes a closing fence in the source range, but not the
-            // newline-terminated literal. Verify that it consumed both fence lines:
-            // an over-indented fence-looking content line must not finish the block.
-            // The item range also excludes a fence outside this list container.
-            let contentLines = code.code.utf8.reduce(0) { $0 + ($1 == 0x0A ? 1 : 0) }
-            return lines.count == contentLines + 2
         }
 
         func dedentedText(in range: SourceRange) -> String? {

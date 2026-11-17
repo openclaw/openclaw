@@ -137,6 +137,11 @@ struct ChatAssistantRunGroup: Identifiable {
         }
         return groups
     }
+
+    /// Index of the group that starts the latest turn, or the end when no group starts one.
+    static func latestTurnStart(in groups: [Self]) -> Int {
+        groups.lastIndex { $0.parts.first?.boundaryID != nil } ?? groups.endIndex
+    }
 }
 
 extension ChatTranscriptRow {

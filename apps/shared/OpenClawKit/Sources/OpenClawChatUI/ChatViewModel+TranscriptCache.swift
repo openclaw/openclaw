@@ -35,6 +35,7 @@ extension OpenClawChatViewModel {
         self.retireStreamingSource(for: reconciled.messages)
         self.messages = reconciled.messages
         self.seedInputHistory(from: reconciled.messages)
+        self.flushPendingStreamingAssistantDisplay()
         self.markTimelineChanged()
     }
 
@@ -50,10 +51,6 @@ extension OpenClawChatViewModel {
             guard self.streamingRetiredFinalIDs.insert(message.id).inserted else { continue }
             self.streamingRetiredSource = (message.id, raw, self.displayedStreamingAssistantTextUntracked)
         }
-    }
-
-    var liveAssistantDisplayText: String? {
-        self.liveText(self.displayedStreamingAssistantText)
     }
 
     /// A structural read must not subscribe the whole transcript to every new word.

@@ -143,7 +143,7 @@ final class ChatReaderRunAnchor {
 
     /// Mounted replacement cells can still carry their sizing origin. Only the collection's
     /// current item and committed layout frame may supply reader geometry (s3: a 13,889 pt write).
-    private static func isPositioned(_ marker: UIView, in scroll: UIScrollView) -> Bool {
+    static func isPositioned(_ marker: UIView, in scroll: UIScrollView) -> Bool {
         guard let collection = scroll as? UICollectionView,
               let cell = Self.cell(of: marker, in: scroll),
               let index = collection.indexPath(for: cell),

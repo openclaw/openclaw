@@ -352,6 +352,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     let contextWindowTokens: Int?
     let userMessageExpanded: Bool
     let onToggleUserMessageExpanded: @MainActor () -> Void
+    let inlineWidgetScope: ChatInlineWidgetScope
     let inlineWidgetResolverReady: Bool
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
@@ -391,6 +392,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
             lhs.isClean == rhs.isClean &&
             lhs.contextWindowTokens == rhs.contextWindowTokens &&
             lhs.userMessageExpanded == rhs.userMessageExpanded &&
+            lhs.inlineWidgetScope == rhs.inlineWidgetScope &&
             lhs.inlineWidgetResolverReady == rhs.inlineWidgetResolverReady &&
             lhs.mediaArtifactResolverReady == rhs.mediaArtifactResolverReady
     }
@@ -403,6 +405,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     }
 
     var body: some View {
+        // View builders reject `_ = …`; `let _` is the only statement form they accept.
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("bubble")
         if self.isUser {
             self.messageBody
                 .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .trailing)
@@ -581,6 +586,8 @@ extension ChatMessageBubble {
                     preview: self.inlineWidgets[idx],
                     resolverReady: self.inlineWidgetResolverReady,
                     resolveResource: self.inlineWidgetResourceResolver)
+                    // A retained row must not lend its browser or callbacks to another chat owner.
+                        .id(self.inlineWidgetScope)
             }
 
             self.footer
@@ -1190,15 +1197,15 @@ struct ChatStreamingAssistantText: Equatable {
     let includesThinking: Bool
     let segments: [AssistantTextSegment]
 
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.sourceText == rhs.sourceText && lhs.includesThinking == rhs.includesThinking &&
+            lhs.segments.elementsEqual(rhs.segments) { $0.kind == $1.kind && $0.text == $1.text }
+    }
+
     init(sourceText: String, includesThinking: Bool) {
         self.sourceText = sourceText
         self.includesThinking = includesThinking
         self.segments = AssistantTextParser.segments(from: sourceText, includeThinking: includesThinking)
-    }
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.sourceText == rhs.sourceText && lhs.includesThinking == rhs.includesThinking &&
-            lhs.segments.elementsEqual(rhs.segments) { $0.kind == $1.kind && $0.text == $1.text }
     }
 
     /// Item source is already inside a parsed assistant segment; do not interpret
@@ -1228,6 +1235,8 @@ struct ChatStreamingAssistantBubble: View {
     let isClean: Bool
 
     var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("live")
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(
@@ -1320,7 +1329,7 @@ struct ChatStreamingAssistantTextBody: View {
         self.markdownVariant = markdownVariant
         self.textColor = textColor
         // StateObject's deferred construction prepares the first frame once per
-        // mounted body, including list-item bodies; view value updates stay cheap.
+        // mounted body; view value updates stay cheap.
         let defaultDisclosureSummary = self.defaultDisclosureSummary
         self._preparation = StateObject(wrappedValue: Preparation(
             text: text,
@@ -1441,8 +1450,8 @@ struct ChatStreamingAssistantTextBody: View {
             } ?? ChatStreamingRevealState()
             self.revealLocation = nextLocation
             self.revealState = nextRevealState
-            self.snapshot = nextSnapshot
             self.pendingUntil = reduceMotion ? nil : self.futureDeadline(now: now)
+            self.snapshot = nextSnapshot
         }
 
         func futureDeadline(now: TimeInterval = Date.timeIntervalSinceReferenceDate) -> TimeInterval? {
