@@ -33,7 +33,7 @@ export async function retirePluginCapture(retirement: PluginCaptureRetirement): 
       root.ino.toString() !== identity.directory.ino ||
       (process.getuid && root.uid !== BigInt(process.getuid()))
     ) {
-      throw new Error("Plugin source capture directory changed before retirement");
+      throw new Error("Plugin source capture directory ownership is unknown");
     }
     assertDatabaseFileIdentity(fs.lstatSync(ownerPath, { bigint: true }), identity.token);
     for (const file of SQLITE_STAGING_TOKEN_FILES) {
