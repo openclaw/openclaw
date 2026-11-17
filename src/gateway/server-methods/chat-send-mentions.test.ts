@@ -386,6 +386,28 @@ describe("committed human mentions", () => {
     };
   }
 
+  it("leaves transcript fencing to the commit owner while rechecking invitation permission", async () => {
+    await using fixture = await createInvitationFixture();
+    const entry = loadSessionEntry(fixture.scope);
+    if (!entry) {
+      throw new Error("Expected the fixture session entry");
+    }
+    const target = { ...fixture.scope, entry: { ...entry } };
+    const prepared = fixture.inbox.prepareInvitation(fixture.client, target, [
+      { profileId: fixture.bobId, token: "@Bob" },
+    ]);
+    if (!prepared) {
+      throw new Error("Expected a prepared invitation");
+    }
+    const writerEntry = prepared.invitation.expectedEntry.sessionId;
+    // Caller metadata is descriptive; the store retains the original writer precondition.
+    target.entry.sessionId = "refreshed-caller-description";
+    expect(() => prepared.assertCurrent()).not.toThrow();
+    expect(prepared.invitation.expectedEntry.sessionId).toBe(writerEntry);
+    setUserProfileRole(fixture.bobId, "staff");
+    expect(() => prepared.assertCurrent()).toThrow("Mention invitation is not authorized");
+  });
+
   it("invites a guest at the original human commit and never regrants a removed membership on replay", async () => {
     await using fixture = await createInvitationFixture({ agentTurn: false });
     const record = vi.spyOn(fixture.inbox, "recordCommittedInputAsync");
@@ -567,7 +589,7 @@ describe("committed human mentions", () => {
     });
     try {
       await expect(recorder.persistApproved()).rejects.toThrow(
-        "Mention invitation authority changed before the message was posted",
+        "Mention invitation is not authorized",
       );
     } finally {
       observe.mockRestore();

@@ -233,10 +233,10 @@ async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyPa
         readSession = () => {
           const current = readEntry();
           const facts = sharing.readCurrent(getRuntimeConfig());
-          if (!current?.entry || facts.target?.entry.sessionId !== current.entry.sessionId) {
-            throw new FsSafeError("path-mismatch", "Media access changed");
+          if (!current?.entry || !facts.target) {
+            return undefined;
           }
-          return { ...current, membership: facts.membership };
+          return { ...current, entry: facts.target.entry, membership: facts.membership };
         };
         loaded = readSession();
       }

@@ -190,8 +190,7 @@ it.each([
                   ...(!retainActor
                     ? {
                         cause: expect.objectContaining({
-                          message:
-                            "Mention invitation authority changed before the message was posted",
+                          message: "Mention invitation is not authorized",
                         }),
                       }
                     : {}),

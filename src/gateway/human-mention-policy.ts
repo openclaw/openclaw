@@ -393,10 +393,14 @@ export function createHumanMentionPolicy(params: {
         ? {
             invitation,
             assertCurrent() {
-              if (!isDeepStrictEqual(select(), invitation)) {
-                throw new Error(
-                  "Mention invitation authority changed before the message was posted",
-                );
+              const current = select();
+              // The store owns transcript/view preconditions; this hook checks current authority.
+              if (
+                !current ||
+                current.addedBy !== invitation.addedBy ||
+                !isDeepStrictEqual(current.profiles, invitation.profiles)
+              ) {
+                throw new Error("Mention invitation is not authorized");
               }
             },
           }
@@ -472,7 +476,6 @@ export function createHumanMentionPolicy(params: {
         if (
           client &&
           (!target ||
-            target.entry.sessionId !== input.sessionId ||
             !requester?.ok ||
             requester.value.profile.profileId !== readProfile(input.senderProfileId)?.profileId ||
             !requester.value.canRead({
