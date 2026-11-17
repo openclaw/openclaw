@@ -137,7 +137,9 @@ export function registerDirectoryCli(program: Command) {
     const selectedChannelId = selection.channel;
     const plugin = selection.plugin;
     if (!plugin) {
-      throwExpectedCliError(`Unsupported channel: ${String(selectedChannelId)}`);
+      // On the explicit branch the resolver returns no channel id for an unknown name,
+      // so report the operator's own spelling instead of an empty placeholder.
+      throwExpectedCliError(`Unsupported channel: ${String(explicitChannel ?? selectedChannelId)}`);
     }
     const channelId = selectedChannelId ?? plugin.id;
     const accountId =

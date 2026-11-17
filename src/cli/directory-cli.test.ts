@@ -465,6 +465,21 @@ describe("registerDirectoryCli", () => {
     });
   });
 
+  it.each(["self", "peers list", "groups list"])(
+    "names the operator's own spelling for an unknown --channel on %s",
+    async (args) => {
+      // The resolver returns no channel id when it cannot resolve an explicit name.
+      mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+        cfg: { channels: {} },
+        configChanged: false,
+      });
+      await expect(runDirectory(`${args} --channel slak --json`)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        message: "Unsupported channel: slak",
+      });
+    },
+  );
+
   it("leaves unexpected plugin failures with their original classification", async () => {
     const failure = new Error("unexpected lookup failure");
     installDirectory({ self: vi.fn().mockRejectedValue(failure) });
