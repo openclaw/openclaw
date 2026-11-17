@@ -22,6 +22,31 @@ const dirs = useSessionStoreTempDirs(afterAll, "cli-history-owner-");
 
 afterAll(clearRuntimeConfigSnapshot);
 
+async function prepareHistoryRun(sessionId: string, runId: string) {
+  const root = dirs.make();
+  const target = {
+    agentId: "main",
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
+    storePath: path.join(root, "agents/main/agent/openclaw-agent.sqlite"),
+  };
+  await upsertSessionEntry({
+    ...target,
+    entry: { sessionId, updatedAt: Date.now() },
+  });
+  const context = buildPreparedCliRunContext({
+    sessionTarget: target,
+    workspaceDir: root,
+    runId,
+  });
+  Object.assign(context.params, {
+    config: {},
+    storePath: target.storePath,
+    persistAssistantTranscript: true,
+  });
+  return { target, context };
+}
+
 // Completed held answers are not narration: canonical consumers need both results.
 it.each([
   { transformed: false, finalInterim: false },
@@ -31,17 +56,7 @@ it.each([
   "retains held answers and deduplicates the final interim result in canonical history (%j)",
   async ({ transformed, finalInterim }) => {
     setRuntimeConfigSnapshot({});
-    const root = dirs.make();
-    const target = {
-      agentId: "main",
-      sessionId: "held-answer",
-      sessionKey: "agent:main:held-answer",
-      storePath: path.join(root, "agents/main/agent/openclaw-agent.sqlite"),
-    };
-    await upsertSessionEntry({
-      ...target,
-      entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-    });
+    const { target, context } = await prepareHistoryRun("held-answer", "held-answer-run");
     const parser = createClaudeParser();
     for (const [index, text] of ["PARENT_COMPLETE", "CHILD_COMPLETE"].entries()) {
       parser.push(
@@ -75,16 +90,6 @@ it.each([
       throw new Error("Expected completed CLI output");
     }
     execute.mockResolvedValue(transformed ? transformCliResultText(output, replacements) : output);
-    const context = buildPreparedCliRunContext({
-      sessionTarget: target,
-      workspaceDir: root,
-      runId: "held-answer-run",
-    });
-    Object.assign(context.params, {
-      config: {},
-      storePath: target.storePath,
-      persistAssistantTranscript: true,
-    });
     if (transformed) {
       context.backendResolved.textTransforms = { output: replacements };
     }
@@ -132,17 +137,7 @@ it.each([
   { transformed: false, interrupted: true, yielded: false },
   { transformed: false, interrupted: false, yielded: true },
 ])("settles Claude history safely: %j", async ({ transformed, interrupted, yielded }) => {
-  const root = dirs.make();
-  const target = {
-    agentId: "main",
-    sessionId: "ownership",
-    sessionKey: "agent:main:ownership",
-    storePath: path.join(root, "agents/main/agent/openclaw-agent.sqlite"),
-  };
-  await upsertSessionEntry({
-    ...target,
-    entry: { sessionId: target.sessionId, updatedAt: Date.now() },
-  });
+  const { target, context } = await prepareHistoryRun("ownership", "owner-run");
   const replacements = [{ from: "Done", to: "Finished" }];
   const parsed: CliOutput = {
     text: "Checking now\nChecking inputs\nDone",
@@ -154,17 +149,6 @@ it.each([
   };
   // The process layer applies output replacements before the runner sees the result.
   execute.mockResolvedValue(transformed ? transformCliResultText(parsed, replacements) : parsed);
-  const context = buildPreparedCliRunContext({
-    sessionTarget: target,
-    workspaceDir: root,
-    runId: "owner-run",
-  });
-  Object.assign(context.params, {
-    config: {},
-    storePath: target.storePath,
-    persistAssistantTranscript: true,
-    provider: "claude-cli",
-  });
   if (transformed) {
     context.backendResolved.textTransforms = { output: replacements };
   }
