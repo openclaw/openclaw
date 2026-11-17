@@ -54,6 +54,7 @@ struct PortGuardianDiagnosticsTests {
     @Test func `listener classification keeps failed probes undecided`() {
         func result(
             stdout: String,
+            stderr: String = "",
             exitCode: Int?,
             timedOut: Bool = false,
             success: Bool,
@@ -61,7 +62,7 @@ struct PortGuardianDiagnosticsTests {
         {
             ShellExecutor.ShellResult(
                 stdout: stdout,
-                stderr: "",
+                stderr: stderr,
                 exitCode: exitCode,
                 timedOut: timedOut,
                 success: success,
@@ -87,6 +88,28 @@ struct PortGuardianDiagnosticsTests {
         let broken = result(stdout: "", exitCode: 2, success: false)
         guard case .inconclusive = PortGuardian.classifyListenerInspection(broken) else {
             Issue.record("an unexpected lsof exit must stay undecided")
+            return
+        }
+        // A filesystem warning says nothing about the port, so it must not turn a
+        // genuine "no match" into an undecided probe. The `-b` note is what lsof
+        // prints on a clean run, so it must be ignored too.
+        for note in [
+            "lsof: WARNING: can't stat() nfs file system /Volumes/x\n",
+            "lsof: avoiding readlink(/): -b was specified.\n",
+            "lsof: avoiding stat(/dev): -b was specified.\n",
+        ] {
+            let warned = result(stdout: "", stderr: note, exitCode: 1, success: false)
+            guard case let .listeners(warnedRows) = PortGuardian.classifyListenerInspection(warned),
+                  warnedRows.isEmpty
+            else {
+                Issue.record("\(note.trimmingCharacters(in: .newlines)) is not an inspection failure")
+                return
+            }
+        }
+        // lsof also exits 1 on its own errors, after printing a diagnostic to stderr.
+        let failedInspection = result(stdout: "", stderr: "lsof: proc_listpids failed\n", exitCode: 1, success: false)
+        guard case .inconclusive = PortGuardian.classifyListenerInspection(failedInspection) else {
+            Issue.record("exit 1 with an lsof diagnostic is an error, not an empty port")
             return
         }
         let unparsable = result(stdout: "garbage", exitCode: 0, success: true)
@@ -157,7 +180,7 @@ struct PortGuardianDiagnosticsTests {
             await PortGuardian.shared.inspect(port: Int(bound.port))
         }
         guard case .free = inspection else {
-            Issue.record("a port without a listener must be reported free")
+            Issue.record("an unlistened port must be reported free")
             return
         }
     }

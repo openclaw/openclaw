@@ -284,8 +284,16 @@ extension OnboardingView {
         let port = GatewayEnvironment.gatewayPort()
         let inspection = await PortGuardian.shared.inspect(port: port)
         guard case let .owned(desc) = inspection else {
-            // Keep the last probe when the port is unreadable; do not report it as idle.
-            if case .free = inspection { self.localGatewayProbe = nil }
+            switch inspection {
+            case .free:
+                self.localGatewayProbe = nil
+            case .unknown:
+                // Startup will not install on an unreadable port, so the page must not
+                // keep promising an automatic install or a stale listener.
+                self.localGatewayProbe = .init(unreadablePort: port)
+            case .owned:
+                break
+            }
             return
         }
         let managedServicePID = if AppProfile.current.isActive {

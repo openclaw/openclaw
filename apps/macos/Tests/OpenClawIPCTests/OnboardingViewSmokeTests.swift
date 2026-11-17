@@ -226,6 +226,9 @@ struct OnboardingViewSmokeTests {
             "Port 55636 already in use (node pid 1402). Choose a different Gateway port for profile p2380.")
         #expect(managed.subtitle == "Existing gateway detected (node pid 2380). Will attach.")
         #expect(inactiveUnexpected.subtitle == "Port 18789 already in use (python pid 3301). Will attach.")
+        // Startup refuses to install on an unreadable port, so onboarding must not promise one.
+        #expect(OnboardingView.LocalGatewayProbe(unreadablePort: 18789).subtitle ==
+            "Could not check whether port 18789 is free. Startup waits until it can.")
     }
 
     @Test func `onboarding window resizes vertically and gives the page the extra height`() {

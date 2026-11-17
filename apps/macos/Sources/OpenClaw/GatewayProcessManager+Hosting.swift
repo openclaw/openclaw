@@ -1,6 +1,29 @@
 import Foundation
 
 extension GatewayProcessManager {
+    func gatewayReadinessContext(
+        purpose: GatewayReadinessPurpose,
+        port: Int,
+        generation: UInt64,
+        readinessPID: Int32? = nil,
+        launchAgentInstalled: Bool = false,
+        inspectionFailure: String? = nil,
+        migrationDrain: Bool = false) -> GatewayReadinessContext
+    {
+        GatewayReadinessContext(
+            purpose: purpose,
+            port: port,
+            generation: generation,
+            readinessPID: readinessPID,
+            readinessRevision: self.launchAgentReadinessRevision,
+            readinessCandidate: self.launchAgentReadinessCandidate,
+            readinessFailure: self.launchAgentReadinessFailure,
+            endpointPIDBeforeProbe: self.lastObservedGatewayPID,
+            launchAgentInstalled: launchAgentInstalled,
+            inspectionFailure: inspectionFailure,
+            migrationDrain: migrationDrain)
+    }
+
     func canonicalUpdateResult(
         for receipt: PostAppUpdateReceipt?,
         generation: UInt64) -> CLIInstaller.CanonicalUpdateResult?
@@ -340,9 +363,18 @@ extension GatewayProcessManager {
             switch inspection {
             case .free:
                 break
-            case .owned, .unknown:
-                // An unreadable port may still be held; attach before starting a child.
+            case .owned:
+                // A readable owner may still be a Gateway we can attach to.
                 _ = await self.attachExistingGatewayIfAvailable(port: port, startGeneration: startGeneration)
+                return
+            case .unknown:
+                // An unreadable port may still be held; attach before starting a child.
+                // A re-inspection that confirms the port is free settles the uncertainty,
+                // so only an inconclusive attachment stops this start.
+                guard await self.attachExistingGatewayIfAvailable(
+                    port: port,
+                    startGeneration: startGeneration)
+                else { break }
                 return
             }
             let environment = try self.appHostedEnvironment(runtime: runtime)

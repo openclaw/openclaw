@@ -156,13 +156,14 @@ final class GatewayProcessManager {
     private var launchAgentEnableNextInvocationID: UInt64 = 0
     var launchAgentDisableTask: Task<Void, Never>?
     private var launchAgentDisableGeneration: UInt64?
-    private var launchAgentReadinessFailure: LaunchAgentReadinessFailure?
-    private var launchAgentReadinessCandidate: LaunchAgentReadinessCandidate?
-    private var launchAgentReadinessRevision: UInt64 = 0
+    // Read by gatewayReadinessContext, which lives in GatewayProcessManager+Hosting.swift.
+    var launchAgentReadinessFailure: LaunchAgentReadinessFailure?
+    var launchAgentReadinessCandidate: LaunchAgentReadinessCandidate?
+    var launchAgentReadinessRevision: UInt64 = 0
     private var launchAgentInstallGeneration: UInt64?
     private var launchAgentFreshInstallGeneration: UInt64?
     private var profilePortConflict: String?
-    private var lastObservedGatewayPID: Int32?
+    var lastObservedGatewayPID: Int32?
     /// Async readiness audits may outlive stop/restart. Only the current generation may publish
     /// their failure state or retain a PID for a later repair.
     var gatewayStartGeneration: UInt64 = 0 {
@@ -843,6 +844,14 @@ final class GatewayProcessManager {
             context: context,
             deadlinePolicy: .fixed(timeout: hasListener ? 6.5 : 2),
             clock: self.readinessClock)
+        if case .unknown = inspection, case .failed(.attachProbe) = terminal {
+            guard self.isCurrentGatewayReadiness(context) else { return true }
+            // A responsive Gateway rejects attachment for reasons a retry cannot fix
+            // (token mismatch, protocol mismatch) and names them. Publish that reason
+            // instead of flattening it into the inconclusive-port message.
+            let published = await self.publishGatewayReadinessTerminal(terminal, context: context)
+            return published || !self.isCurrentGatewayStart(startGeneration)
+        }
         if case .unknown = inspection, case .failed = terminal {
             guard self.isCurrentGatewayReadiness(context) else { return true }
             // Neither attach nor a fresh child start is safe until the port is readable.
@@ -963,29 +972,6 @@ final class GatewayProcessManager {
 }
 
 extension GatewayProcessManager {
-    func gatewayReadinessContext(
-        purpose: GatewayReadinessPurpose,
-        port: Int,
-        generation: UInt64,
-        readinessPID: Int32? = nil,
-        launchAgentInstalled: Bool = false,
-        inspectionFailure: String? = nil,
-        migrationDrain: Bool = false) -> GatewayReadinessContext
-    {
-        GatewayReadinessContext(
-            purpose: purpose,
-            port: port,
-            generation: generation,
-            readinessPID: readinessPID,
-            readinessRevision: self.launchAgentReadinessRevision,
-            readinessCandidate: self.launchAgentReadinessCandidate,
-            readinessFailure: self.launchAgentReadinessFailure,
-            endpointPIDBeforeProbe: self.lastObservedGatewayPID,
-            launchAgentInstalled: launchAgentInstalled,
-            inspectionFailure: inspectionFailure,
-            migrationDrain: migrationDrain)
-    }
-
     private func prepareLaunchdGatewayStart(startGeneration: UInt64) async -> GatewayReadinessContext? {
         guard self.isCurrentGatewayStart(startGeneration) else { return nil }
         self.existingGatewayDetails = nil
@@ -1279,6 +1265,25 @@ extension GatewayProcessManager {
         }
     }
 
+    /// Details and refresh reason used when a readiness audit reports the Gateway as ready.
+    private func readyPresentation(
+        context: GatewayReadinessContext,
+        instance: PortGuardian.Descriptor?,
+        snapshot: HealthSnapshot?) -> (details: String?, refreshReason: String)
+    {
+        switch context.purpose {
+        case .attach:
+            (
+                self.describe(
+                    details: instance.map { self.describe(instance: $0) },
+                    port: context.port,
+                    snap: snapshot),
+                "attach existing")
+        case .launchd, .child, .audit:
+            (instance.map { "pid \($0.pid)" }, "gateway readiness recovered")
+        }
+    }
+
     func publishGatewayReadinessTerminal(
         _ terminal: GatewayReadinessTerminal,
         context: GatewayReadinessContext) async -> Bool
@@ -1294,19 +1299,10 @@ extension GatewayProcessManager {
             let replaced = installed ||
                 Self.gatewayPIDChanged(from: context.endpointPIDBeforeProbe, to: instance?.pid) ||
                 Self.gatewayPIDChanged(from: startingPID, to: instance?.pid)
-            let details: String?
-            let refreshReason: String
-            switch context.purpose {
-            case .attach:
-                details = self.describe(
-                    details: instance.map { self.describe(instance: $0) },
-                    port: context.port,
-                    snap: snapshot)
-                refreshReason = "attach existing"
-            case .launchd, .child, .audit:
-                details = instance.map { "pid \($0.pid)" }
-                refreshReason = "gateway readiness recovered"
-            }
+            let (details, refreshReason) = self.readyPresentation(
+                context: context,
+                instance: instance,
+                snapshot: snapshot)
             self.setLaunchAgentReadinessState(candidate: nil, failure: nil)
             self.clearLastFailure()
             // Only installation evidence replaces a remembered owner. A readiness path

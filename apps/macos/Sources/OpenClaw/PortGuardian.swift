@@ -513,8 +513,18 @@ actor PortGuardian {
             // Rows that failed to parse are a format surprise, not an empty port.
             return listeners.isEmpty && !result.stdout.isEmpty ? .inconclusive : .listeners(listeners)
         }
-        // lsof exits 1 with no output when nothing matches the filter.
-        return result.exitCode == 1 ? .listeners([]) : .inconclusive
+        // lsof exits 1 when nothing matches the filter, but also exits 1 on its own
+        // errors (for example proc_listpids failing) after printing a diagnostic.
+        // `-b` makes lsof note skipped readlinks on that stream even for a clean run,
+        // so only diagnostics that are not that note count as a failed probe.
+        let ignorable = ["lsof: WARNING:", "lsof: avoiding readlink(", "lsof: avoiding stat("]
+        let hasErrorDiagnostic = result.stderr
+            .split(separator: "\n")
+            .contains { line in
+                let text = line.trimmingCharacters(in: .whitespaces)
+                return text.hasPrefix("lsof:") && !ignorable.contains { text.hasPrefix($0) }
+            }
+        return result.exitCode == 1 && !hasErrorDiagnostic ? .listeners([]) : .inconclusive
     }
 
     private static func readFullCommand(pid: Int32) -> String? {
