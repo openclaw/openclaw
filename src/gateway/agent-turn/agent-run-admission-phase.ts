@@ -566,11 +566,10 @@ export async function prepareAgentRunDispatch(
             },
           }
         : undefined;
-    // Accepted work retains this caller; the shared owner derives continuation from child lineage.
+    // Accepted work retains this caller's continuation for the turn's whole lifetime.
     capturedOperator = await retainGatewayOperatorRun({
       ...params,
       systemTurn,
-      spawnedBy: params.sessionEntry?.spawnedBy,
       entry: activeRunAbort.entry,
       abortSession: params.resolvedSessionKey
         ? {

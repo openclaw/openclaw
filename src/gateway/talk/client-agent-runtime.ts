@@ -121,10 +121,7 @@ export function createTalkClientAgentRuntime(params: {
         const config = runParams.config ?? params.config;
         params.assertCurrent?.();
         assertSourceCurrent();
-        const retained = await params.runAuthority?.retainRun(
-          runParams.runId,
-          runParams.spawnedBy ?? undefined,
-        );
+        const retained = await params.runAuthority?.retainRun(runParams.runId);
         try {
           runParams.abortSignal?.throwIfAborted();
           const execution = await loadTalkAgentExecution();
