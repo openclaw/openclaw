@@ -574,7 +574,9 @@ export function createAgentDatabaseExecution(
               return;
             }
             const cleanupSignal = getGatewayShutdownCleanupSignal();
-            const canRetain = () => generation && !nativeClosing && !cleanupSignal.aborted;
+            // An absent read has no admitted file to keep warm and must release creation.
+            const canRetain = () =>
+              generation && fileIdentity && !nativeClosing && !cleanupSignal.aborted;
             try {
               for (const idle of executionState.idle) {
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {
