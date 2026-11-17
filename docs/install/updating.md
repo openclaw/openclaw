@@ -584,6 +584,12 @@ one repair claim even when the default per-user store is empty. Recovery checks
 and ordinary update admission remain unchanged. The repairing CLI must contain
 this fix; no lease schema or update protocol change is required.
 
+If an explicit update timeout expires during preparation, the original updater
+records a failed outcome after its child work settles, while it still owns
+bookkeeping. Expiration during activation, unresolved child work, or lost
+ownership retains recovery custody instead. A timeout does not authorize a new
+process to take over an unresolved update.
+
 A successful foreground update hands completion to the replacement Gateway.
 Automatic history reconciliation preserves that handoff while startup verifies
 the running build. If the replacement never starts, `openclaw update repair`

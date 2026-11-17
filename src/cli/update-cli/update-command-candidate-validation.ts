@@ -263,6 +263,7 @@ export function createUpdateDatabaseFamilyAdmission(
     | "packageInstallTarget"
     | "opts"
     | "shouldRestart"
+    | "executionGuards"
   >,
 ) {
   type Context = { config: OpenClawConfig; env: NodeJS.ProcessEnv };
@@ -303,6 +304,7 @@ export function createUpdateDatabaseFamilyAdmission(
       for (const { env } of pending) {
         const result = await runUpdateCandidateAdmission({
           candidateRoot,
+          assertCurrent: execution.executionGuards.assertCurrent,
           nodeRunner: execution.packageUpdateNodeRunner,
           timeoutMs: execution.updateStepTimeoutMs,
           env,
@@ -333,6 +335,7 @@ export function createUpdateDatabaseFamilyAdmission(
             supervisor: { version: VERSION, host: os.hostname(), pid: process.pid },
           },
         });
+        execution.executionGuards.assertCurrent();
         if (
           result.verdict?.verdict !== "admit" ||
           !result.verdict.facts.checks.some(

@@ -124,7 +124,6 @@ export async function runAdmittedUpdate(
             run.executorFence = await executor.enter(executorRoot, {
               preflight: true,
               serviceRoot,
-              activationTimeoutMs: Math.max(1, deadline.remainingMs()),
             });
           }
           const execute = () => {
