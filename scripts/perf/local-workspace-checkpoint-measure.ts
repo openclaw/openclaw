@@ -204,6 +204,7 @@ const { values } = parseArgs({
     "native-turns": { type: "boolean", default: false },
     "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
+    "checkpoint-changed-files": { type: "string", default: "1" },
     "tools-per-turn": { type: "string", default: "10" },
     "mutation-segments": { type: "boolean", default: false },
     "reconcile-traffic": { type: "boolean", default: false },
@@ -471,6 +472,12 @@ assert(Number.isSafeInteger(reconcileRandomBytes) && reconcileRandomBytes >= 0);
 assert(!reconcileRandomBytes || reconcile);
 assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
 assert(!reconcile || reconcileChangedFiles < Number(values.files));
+const checkpointChangedFiles = values["checkpoint-changed-files"].split(",").map(Number);
+assert(
+  checkpointChangedFiles.every(
+    (count) => Number.isSafeInteger(count) && count > 0 && count < Number(values.files),
+  ),
+);
 const nativeTurns = values["native-turns"];
 assert(!nativeTurns || (turnLoop && values["sandbox-backend"] === "podman"));
 assert(!values["settlement-socket"] || nativeTurns);
@@ -908,6 +915,7 @@ const custodyDurationsMs: number[] = [];
 const containerCommands: string[] = [];
 const finalizations: Array<{
   changed: boolean;
+  changedFiles?: number;
   durationMs: number;
   commandDurationMs: number;
   processCpuMs: number;
@@ -1853,30 +1861,40 @@ measurement: try {
         const commandAllocated = getHeapStatistics().total_allocated_bytes;
         const beforePauses = containerCommands.filter((command) => command === "pause").length;
         const spec = await backend.buildExecSpec({ command: "synthetic", env: {}, usePty: false });
-        const editedFile = Math.floor((files * (tool % 10 === 4 ? 1 : 2)) / 3);
-        const relative = `file-${editedFile}.txt`;
-        const content =
-          values["all-mutating"] || tool % 10 === 4 || tool % 10 === 9
-            ? `synthetic edit ${++edit}\n`
-            : undefined;
-        if (content) {
+        const changed = values["all-mutating"] || tool % 10 === 4 || tool % 10 === 9;
+        const changedFiles = changed
+          ? checkpointChangedFiles[edit % checkpointChangedFiles.length]!
+          : 0;
+        const seed = `${processInstance} synthetic edit ${++edit}`;
+        const content = (index: number) =>
+          createHash("shake256", { outputLength: Math.max(64, fileBytes) })
+            .update(`${seed} file-${index}`)
+            .digest();
+        if (changed) {
           assert(!fakePaused, "Guest command cannot write while frozen");
           if (nativeTurns) {
             execFileSync("podman", [
               "exec",
               turnRuntime,
-              "sh",
-              "-c",
-              'printf "%s" "$1" > "$2"',
-              "sh",
-              content,
-              `/workspace/${relative}`,
+              "node",
+              "-e",
+              `
+              const fs = require("node:fs"), crypto = require("node:crypto");
+              const [seed, count, bytes] = process.argv.slice(1);
+              for (let i = 1; i <= Number(count); i++) fs.writeFileSync("/workspace/file-" + i + ".txt",
+                crypto.createHash("shake256", { outputLength: Number(bytes) }).update(seed + " file-" + i).digest());
+            `,
+              seed,
+              String(changedFiles),
+              String(Math.max(64, fileBytes)),
             ]);
           } else {
-            fs.writeFileSync(path.join(workspace!, relative), content);
+            for (let i = 1; i <= changedFiles; i++) {
+              fs.writeFileSync(path.join(workspace!, `file-${i}.txt`), content(i));
+            }
           }
         } else if (nativeTurns) {
-          execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/${relative}`]);
+          execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"]);
         }
         const began = performance.now();
         const beforePauseSamples = pauseDurationsMs.length;
@@ -1890,7 +1908,8 @@ measurement: try {
         const usedCpu = process.cpuUsage(commandCpu);
         const paused = pauseDurationsMs.slice(beforePauseSamples);
         finalizations.push({
-          changed: Boolean(content),
+          changed,
+          changedFiles,
           durationMs: finalizationEnded - began,
           commandDurationMs: finalizationEnded - commandBegan,
           processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
@@ -1900,14 +1919,13 @@ measurement: try {
           maxPauseDurationMs: Math.max(0, ...paused),
         });
         assert(!fakePaused, "Finalization must resume the guest");
-        if (content) {
-          assert.equal(fs.readFileSync(path.join(canonical, relative), "utf8"), content);
+        for (let i = 1; i <= changedFiles; i++) {
+          const expected = content(i);
+          assert.deepEqual(fs.readFileSync(path.join(canonical, `file-${i}.txt`)), expected);
           if (nativeTurns) {
-            assert.equal(
-              execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/${relative}`], {
-                encoding: "utf8",
-              }),
-              content,
+            assert.deepEqual(
+              execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/file-${i}.txt`]),
+              expected,
               "The next guest read must see the completed command's saved bytes",
             );
           }
@@ -3182,6 +3200,7 @@ measurement: try {
           ...(reconcile ? { reconcileTarget, reconcileChangedFiles, reconcileRandomBytes } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
+          checkpointChangedFiles,
           snapshotCaptures: checkpointPhases.filter(
             (phase) => phase.name === "nativeWorktreeFilesystem:copy",
           ).length,

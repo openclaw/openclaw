@@ -121,6 +121,17 @@ pause invocation through successful unpause return and conservatively include
 engine CLI overhead. Command latency includes guest execution and finalization;
 the subsequent correctness read is excluded.
 
+Use `--checkpoint-changed-files 10,100,1000,5000` to rotate changed-set sizes in
+command-checkpoint traces. Each changed file contains `--file-bytes` bytes
+(at least 64 bytes) of deterministic incompressible data, seeded uniquely for
+each process. Unique contents keep prior runs' Git objects from hiding object
+write cost. Every changed file is checked after finalization. Use at least two
+measured turns per process to cover all four sizes, excluding warmup; retain the
+raw `changedFiles`, `pausedDurationMs`, and `maxPauseDurationMs` samples. Compare
+changed-command pause percentiles separately from unchanged commands' zero pauses.
+The synthetic engine seam also supports this trace, but does not measure native
+container or btrfs pause latency.
+
 The native driver acquires the existing reconciliation lease after warmup and
 after the measured burst, then awaits outstanding native removal operations
 observed by its phase instrumentation. This settles cleanup after canonical
