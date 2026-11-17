@@ -11,6 +11,20 @@ export type SessionWatchdogWaitKind =
   | "runtime_owned"
   | "retry"
   | "backend";
+export type OwnedWait = {
+  kind: SessionWatchdogWaitKind;
+  deadlineAtMs?: number;
+  rateLimitStopMessage?: string;
+  /** A runtime-owned wait whose release hands a finished turn back to its run. */
+  releaseStartsSemanticWindow?: boolean;
+  isCurrent: () => boolean;
+};
+export type OwnedExecution = {
+  deadlineAtMs?: number;
+  getDeadlineAtMs?: () => number | undefined;
+  recoverDeadline?: () => Promise<boolean>;
+};
+
 export type SessionWatchdogPhase = "active" | "finishing" | "terminal" | "settled";
 export type SessionWatchdogSnapshot = Readonly<{
   current: boolean;

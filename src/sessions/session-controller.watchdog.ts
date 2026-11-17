@@ -10,28 +10,18 @@ import {
   SESSION_WATCHDOG_CLEANUP_MS,
   SESSION_WATCHDOG_QUIET_TOOL_MS,
   SESSION_WATCHDOG_WARNING_MS,
+  type OwnedExecution,
+  type OwnedWait,
   type SessionWatchdogDecision,
   type SessionWatchdogPhase,
   type SessionWatchdogSnapshot,
-  type SessionWatchdogWaitKind,
 } from "./session-controller.watchdog-state.js";
 
 type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
-type OwnedWait = {
-  kind: SessionWatchdogWaitKind;
-  deadlineAtMs?: number;
-  rateLimitStopMessage?: string;
-  isCurrent: () => boolean;
-};
-type OwnedExecution = {
-  deadlineAtMs?: number;
-  getDeadlineAtMs?: () => number | undefined;
-  recoverDeadline?: () => Promise<boolean>;
-};
 const executionDeadline = (execution: OwnedExecution) =>
   execution.getDeadlineAtMs ? execution.getDeadlineAtMs() : execution.deadlineAtMs;
 export type SessionWatchdogWait = {
-  close(): void;
+  close: () => void;
   updateDeadline(deadlineAtMs: number): void;
 };
 export type SessionControllerWatchdogAttempt = {
@@ -128,8 +118,16 @@ export function createSessionControllerWatchdog(params: {
   const stagnationCurrent = (at: number) =>
     stagnation &&
     !(semanticSequence > stagnation.semanticSequence && at - stagnation.observedAtMs >= 60_000);
+  // While an opted-in runtime-owned wait is live, the native runtime owns liveness, so
+  // that interval is never semantically stale. Its release (a native turn that just
+  // completed) starts the semantic horizon; it must not make the masked interval
+  // retroactively expire and stop a run that is finalizing. Other waits keep their
+  // retroactive horizon and publish progress themselves when they end.
+  let runtimeOwnedThroughAt: number | undefined;
   const progressOrigin = (at: number) =>
-    stagnationCurrent(at) ? stagnation!.startedAtMs : semanticAt;
+    stagnationCurrent(at)
+      ? stagnation!.startedAtMs
+      : Math.max(semanticAt, runtimeOwnedThroughAt ?? semanticAt);
   let retryAllowanceAt: number | undefined;
   let requestRecoveryAt: number | undefined;
   let cleanupAt: number | undefined;
@@ -223,18 +221,24 @@ export function createSessionControllerWatchdog(params: {
   };
   const snapshot = (at = now()): SessionWatchdogSnapshot => {
     const isCurrent = current();
-    const liveWaits = [...waits]
-      .filter((wait) => live(wait.isCurrent))
-      .map((wait) => ({
-        kind: wait.kind,
-        // Mechanical traffic/retry rearming never moves the logical semantic horizon.
-        deadlineAtMs:
-          wait.kind === "backend"
-            ? Math.min(wait.deadlineAtMs!, semanticDeadline(at))
-            : wait.kind === "retry"
-              ? Math.min(wait.deadlineAtMs!, retryAllowanceAt!)
-              : wait.deadlineAtMs,
-      }));
+    const currentWaits = [...waits].filter((wait) => live(wait.isCurrent));
+    if (
+      isCurrent &&
+      !recovery &&
+      currentWaits.some((wait) => wait.kind === "runtime_owned" && wait.releaseStartsSemanticWindow)
+    ) {
+      runtimeOwnedThroughAt = Math.max(runtimeOwnedThroughAt ?? at, at);
+    }
+    const liveWaits = currentWaits.map((wait) => ({
+      kind: wait.kind,
+      // Mechanical traffic/retry rearming never moves the logical semantic horizon.
+      deadlineAtMs:
+        wait.kind === "backend"
+          ? Math.min(wait.deadlineAtMs!, semanticDeadline(at))
+          : wait.kind === "retry"
+            ? Math.min(wait.deadlineAtMs!, retryAllowanceAt!)
+            : wait.deadlineAtMs,
+    }));
     const pendingAssessment = assessment.pendingWait();
     if (pendingAssessment) {
       liveWaits.push(pendingAssessment);
