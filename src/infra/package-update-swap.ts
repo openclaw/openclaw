@@ -689,7 +689,7 @@ export async function swapStagedPackageInstall(
       : [
           hadPackage && !retained
             ? rootLink
-              ? await rootLink.retire()
+              ? ((await rootLink.retire())?.message ?? null)
               : await discardPackageUpdateBackup(backupRoot, "old package", targetLayout.globalRoot)
             : null,
           !retained ? await discardPackageLauncherBackup(launchers, targetLayout.globalRoot) : null,

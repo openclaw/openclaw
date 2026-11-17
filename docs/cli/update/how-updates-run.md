@@ -1563,6 +1563,13 @@ reclaim these stages. If an interrupted update leaves one behind, confirm that
 no updater is still using it before removing that exact directory. This separation
 does not make simultaneous package swaps safe.
 
+After the new package is verified, failure to remove an unchanged obsolete npm
+package link records a `package-backup-retention` warning rather than failing
+the update. The warning names the link and any launcher backups or database
+snapshots retained with it. Inspect these paths before removing them; remove
+only the link itself, never recursively delete the checkout it names. Changed
+or unreadable backup links still fail closed.
+
 A matching installed version skips core replacement but still converges plugins. Core updates also
 refresh core-command completion; full plugin-command completion rebuilds remain explicit
 `openclaw completion --write-state` runs.

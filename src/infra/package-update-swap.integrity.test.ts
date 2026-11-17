@@ -388,10 +388,10 @@ describe("retained npm package integrity", () => {
         await replaceLink();
       }
     });
-    expect(await transaction.complete({ activationVerified: true }, () => {})).toMatchObject({
-      name: "package-backup-retention",
-      exitCode: 1,
-    });
+    const retention = await transaction.complete({ activationVerified: true }, () => {});
+    expect(retention).toMatchObject({ name: "package-backup-retention", exitCode: 1 });
+    // The refused unlink names a foreign entry, so it is not pending cleanup.
+    expect(retention?.advisory).toBeUndefined();
     expect(replaced).toBe(true);
     const retained = await fs.lstat(transaction.backupRoot);
     expect(retained.isDirectory()).toBe(true);
