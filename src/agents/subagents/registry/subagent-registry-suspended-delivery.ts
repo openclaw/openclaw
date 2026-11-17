@@ -92,8 +92,6 @@ export async function discardSuspendedPendingFinalDelivery(params: {
   resumedRuns.delete(resumeKey);
   params.clearPendingLifecycleError(runId);
   params.clearPendingLifecycleTimeout(runId);
-  // Retiring the obligation is the final failure: the requester sees it, not only the log.
-  await recordRequiredCompletionFailure(entry, "expired");
   params.warn("subagent suspended delivery discarded", {
     reason: "expired",
     runId: entry.runId,
@@ -122,4 +120,13 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       prepareCurrent: prepareHookCurrent,
     });
   }
+  // Retiring the obligation is the final failure: the requester sees it, not only the log.
+  // The discard is already committed, so the notice is best-effort and cannot undo it.
+  await recordRequiredCompletionFailure(entry, "expired").catch((error: unknown) => {
+    params.warn("subagent expiry notice could not be recorded", {
+      runId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }

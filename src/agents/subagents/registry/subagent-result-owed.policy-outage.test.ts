@@ -27,7 +27,7 @@ import {
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 
-// The local lifecycle controller is the sole registry owner, as in the completion database suites.
+// mock-isolation: the local lifecycle controller is the sole registry owner; the real one starts a global sweeper.
 vi.mock("./subagent-registry.js", () => ({ resumeSubagentRun: vi.fn() }));
 
 const db = useCompletionDatabase("openclaw-result-policy-outage-");
