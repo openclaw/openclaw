@@ -1,6 +1,12 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveCliNetworkProxyPolicy } from "../command-path-policy.js";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
 import { registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
@@ -198,6 +204,86 @@ describe("setup routing", () => {
     expect(systemAgent).not.toHaveBeenCalled();
   }
   beforeEach(() => configSnapshot({}, false));
+
+  it.skipIf(process.platform === "win32")(
+    "exposes the verified desktop CLI without reading config or running setup",
+    async () => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-desktop-path-"));
+      try {
+        const launcher = path.join(home, ".openclaw/bin/openclaw");
+        await fs.mkdir(path.dirname(launcher), { recursive: true });
+        const marker = {
+          purpose: "gateway",
+          runtime: { bun: process.execPath },
+          entry: process.argv[1],
+        };
+        await fs.writeFile(
+          launcher,
+          `#!/bin/sh\n# OpenClaw-Tauri runtime v1 ${JSON.stringify(marker)}\nprintf 'desktop:%s:%s\\n' "$OPENCLAW_PROFILE" "$*"\n`,
+          { mode: 0o755 },
+        );
+        await fs.writeFile(
+          path.join(home, ".bashrc"),
+          "# operator settings\nexport PATH=/usr/bin:/bin\n",
+          { mode: 0o600 },
+        );
+        const env = {
+          HOME: home,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_PROFILE: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+          OPENCLAW_CONFIG_PATH: undefined,
+          SHELL: "/bin/bash",
+          PATH: "/usr/bin:/bin",
+        };
+        expect(
+          resolveCliNetworkProxyPolicy(["node", "openclaw", "setup", "--terminal-path", launcher]),
+        ).toBe("bypass");
+        expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "setup"])).toBe("default");
+        expect(
+          resolveCliNetworkProxyPolicy([
+            "node",
+            "openclaw",
+            "setup",
+            "--",
+            "--terminal-path",
+            launcher,
+          ]),
+        ).toBe("default");
+        await withEnvAsync(env, async () => {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await runSetup(["--terminal-path", launcher]);
+            expectNoCalls(config, setup, wizard, systemAgent, runtime.error, runtime.exit);
+          }
+        });
+        const output = execFileSync("/bin/bash", ["-ic", "openclaw qr 'literal argument'"], {
+          env: { HOME: home, PATH: "/usr/bin:/bin", OPENCLAW_PROFILE: "operator" },
+          encoding: "utf8",
+        });
+        expect(output.trim()).toBe("desktop:operator:qr literal argument");
+        expect((await fs.stat(path.join(home, ".bashrc"))).mode & 0o777).toBe(0o600);
+        expect(
+          (await fs.readFile(path.join(home, ".bashrc"), "utf8")).match(/if ! command/g),
+        ).toHaveLength(1);
+        expect((await fs.readdir(home)).toSorted()).toEqual([".bashrc", ".openclaw", ".profile"]);
+        expect(await fs.readdir(path.join(home, ".openclaw"))).toEqual(["bin"]);
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["--baseline", "--mode remote", "--message status", "--json"])(
+    "rejects terminal-only setup combined with %s before reading config",
+    async (other) => {
+      await runSetup(["--terminal-path", "/missing/openclaw", ...other.split(" ")]);
+      expectNoCalls(config, setup, wizard, systemAgent);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--terminal-path cannot be combined"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it.each([
     ["pending inference", { agents: { defaults: { model: "acme/verified" } } }, true, true],

@@ -1,7 +1,12 @@
-# PR #200425: +498 net test lines against CI base f8038cd6fcf2d7b6df7deef5e1bfb8b5939960c5.
-# Shared fixtures and parameterized cases removed 93 lines before this allocation.
+# PR #200425: +784 net test lines against CI base f8038cd6fcf2d7b6df7deef5e1bfb8b5939960c5.
+# Shared fixtures and parameterized cases removed 93 lines before the original allocation.
 # Retain distinct actual-shell startup/PATH discovery and precedence, profile and
 # exit propagation, launcher/startup ownership, permissions, atomic races, and
 # refusal/failure proofs; installer and wrapper boundaries remain independently covered.
-# Allocate only the 98 lines above the unchanged 400-line allowance; no extra headroom.
-98
+# Desktop expansion adds 286 lines: real setup registration/config bypass and fresh
+# shell discovery (86), qualified-launcher/preserved-selection/refusal cases (41),
+# and disposable Windows registry/cmd proof (159). Windows cases cover raw String/
+# ExpandString preservation, case-insensitive dedup/selection, refused or concurrent
+# writes, and unusable PATHEXT; no live user PATH or environment broadcast is tested.
+# Allocate exactly 384 above the unchanged 400-line allowance; no extra headroom.
+384
