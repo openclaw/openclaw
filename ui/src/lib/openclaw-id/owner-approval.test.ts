@@ -645,62 +645,50 @@ describe("owner approval across transport failures", () => {
     return original;
   };
 
-  it("finishes an admitted approval whose sealed handoff was lost to a dropped connection", async () => {
-    const f = await setup();
+  // The first sealed send fails as the connection drops; the claw has already applied the change.
+  const dropFirstSealed = (f: Awaited<ReturnType<typeof setup>>, onContext = () => {}) => {
     admitOnSubmit(f);
     const admitted = f.request.getMockImplementation()!;
     let dropped = false;
     f.request.mockImplementation(async (...args) => {
       if (
-        !dropped &&
         args[1].operation === "send" &&
-        JSON.parse(args[1].body as string).payload.step === "sealed"
+        JSON.parse(args[1].body as string).payload.step === "sealed" &&
+        !dropped
       ) {
         dropped = true;
         f.mockClient.connected = false;
         throw new Error("gateway closed (1006): ");
       }
-      return admitted(...args);
-    });
-    await owner.decide(f.id, true);
-    expect(owner.read().requests[0]).toMatchObject({ uncertain: true });
-    f.mockClient.connected = true;
-    f.poke();
-    await vi.waitFor(() => expect(f.read().handoff).toBeDefined());
-    expect(f.operations.filter((op) => op === "submit")).toHaveLength(1);
-    expect(owner.read().requests).toEqual([]);
-  });
-
-  it("finishes the handoff through the client it was moved to after a reconnect", async () => {
-    const f = await setup();
-    admitOnSubmit(f);
-    const admitted = f.request.getMockImplementation()!;
-    f.request.mockImplementation(async (...args) => {
-      if (
-        args[1].operation === "send" &&
-        JSON.parse(args[1].body as string).payload.step === "sealed"
-      ) {
-        f.mockClient.connected = false;
-        throw new Error("gateway closed (1006): ");
+      if (dropped && args[1].operation === "context") {
+        onContext();
       }
       return admitted(...args);
     });
-    await owner.decide(f.id, true);
-    const replacement = {
-      connected: true,
-      request: vi.fn((...args: Parameters<typeof admitted>) => admitted(...args)),
-    };
-    owner.suspend();
-    owner.resume(replacement as unknown as GatewayBrowserClient);
-    f.poke();
-    await vi.waitFor(() => expect(f.read().handoff).toBeDefined());
-    expect(
-      replacement.request.mock.calls.some(
-        ([, p]) => p.operation === "send" && JSON.parse(p.body as string).payload.step === "sealed",
-      ),
-    ).toBe(true);
-    expect(f.operations.filter((op) => op === "submit")).toHaveLength(1);
-  });
+    return admitted;
+  };
+
+  it.each([false, true])(
+    "finishes an admitted approval whose sealed handoff was lost to a dropped connection (moved client: %s)",
+    async (moved) => {
+      const f = await setup();
+      const admitted = dropFirstSealed(f);
+      await owner.decide(f.id, true);
+      expect(owner.read().requests[0]).toMatchObject({ uncertain: true });
+      const next = { connected: true, request: vi.fn(admitted) };
+      if (moved) {
+        owner.suspend();
+        owner.resume(next as unknown as GatewayBrowserClient);
+      } else {
+        f.mockClient.connected = true;
+      }
+      f.poke();
+      await vi.waitFor(() => expect(f.read().handoff).toBeDefined());
+      expect(f.operations.filter((op) => op === "submit")).toHaveLength(1);
+      expect(owner.read().requests).toEqual([]);
+      expect(next.request.mock.calls.some(([, p]) => p.operation === "send")).toBe(moved);
+    },
+  );
 
   it("holds mail and decisions while a reconnected client is being admitted", async () => {
     const f = await setup();
@@ -722,29 +710,11 @@ describe("owner approval across transport failures", () => {
 
   it("withholds a recovered handoff when the attempt expires during the admission check", async () => {
     const f = await setup();
-    admitOnSubmit(f);
-    const admitted = f.request.getMockImplementation()!;
-    let failed = false;
-    f.request.mockImplementation(async (...args) => {
-      const sealed =
-        args[1].operation === "send" &&
-        JSON.parse(args[1].body as string).payload.step === "sealed";
-      if (sealed && !failed) {
-        failed = true;
-        throw new Error("gateway closed (1006): ");
-      }
-      if (failed && args[1].operation === "context") {
-        vi.spyOn(Date, "now").mockReturnValue(Date.now() + 301_000);
-      }
-      return admitted(...args);
-    });
+    dropFirstSealed(f, () => vi.spyOn(Date, "now").mockReturnValue(Date.now() + 301_000));
     await owner.decide(f.id, true);
     f.poke();
-    await vi.waitFor(() =>
-      expect(
-        f.request.mock.calls.filter(([, p]) => p.operation === "context").length,
-      ).toBeGreaterThan(2),
-    );
+    const contexts = () => f.request.mock.calls.filter(([, p]) => p.operation === "context").length;
+    await vi.waitFor(() => expect(contexts()).toBeGreaterThan(2));
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 100);
     });

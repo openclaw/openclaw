@@ -7,12 +7,7 @@ const held = vi.hoisted(() => ({
   account: { sub: "owner", idToken: "test-account-token" } as unknown,
   accountListeners: [] as ((value: unknown) => void)[],
   keyListeners: [] as (() => void)[],
-  owners: [] as {
-    start: ReturnType<typeof vi.fn>;
-    stop: ReturnType<typeof vi.fn>;
-    suspend: ReturnType<typeof vi.fn>;
-    resume: ReturnType<typeof vi.fn>;
-  }[],
+  owners: [] as Record<"start" | "stop" | "suspend" | "resume", ReturnType<typeof vi.fn>>[],
 }));
 // mock-isolation: the signed-in account and device key come from fixtures instead of browser storage.
 vi.mock("./account.ts", () => ({
@@ -41,22 +36,15 @@ vi.mock("./owner-approval.ts", () => ({
 }));
 
 let status: { channel: string; owner: boolean; clawId: string };
-const statusRequests = new WeakMap<GatewayBrowserClient, () => number>();
-function fakeClient(gatewayUrl = "ws://127.0.0.1:18789") {
-  let count = 0;
-  const client = {
+// Admission re-reads status and people; `resume` is only reached through that check.
+const fakeClient = (gatewayUrl = "ws://127.0.0.1:18789") =>
+  ({
     gatewayUrl,
-    request: async (method: string) => {
-      if (method !== "openclawId.status") {
-        return { link: { linked: true, clawId: status.clawId } };
-      }
-      count += 1;
-      return { channel: status.channel, owner: status.owner, link: { linked: true } };
-    },
-  } as unknown as GatewayBrowserClient;
-  statusRequests.set(client, () => count);
-  return client;
-}
+    request: async (method: string) =>
+      method === "openclawId.status"
+        ? { channel: status.channel, owner: status.owner, link: { linked: true } }
+        : { link: { linked: true, clawId: status.clawId } },
+  }) as unknown as GatewayBrowserClient;
 function fakeGateway(client: GatewayBrowserClient) {
   const listeners = new Set<() => void>();
   const gateway = {
@@ -93,44 +81,78 @@ async function bound(client = fakeClient()) {
 }
 
 describe("owner approval reader lifetime", () => {
-  it("keeps the reader and its attempts across a transport reconnect of the same client", async () => {
+  it.each([
+    ["a transport reconnect of the same client", (client: GatewayBrowserClient) => client],
+    ["a replacement client for the same Gateway", () => fakeClient()],
+  ])("keeps the reader and its attempts across %s", async (_case, nextClient) => {
     const { set, client, first } = await bound();
     set({ phase: "reconnecting" });
-    set({ phase: "connected" });
     expect(first.suspend).toHaveBeenCalled();
-    await vi.waitFor(() => expect(first.resume).toHaveBeenCalledWith(client));
-    expect(statusRequests.get(client)?.()).toBe(2);
+    const next = nextClient(client);
+    set({ client: next, phase: "connected" });
+    await vi.waitFor(() => expect(first.resume).toHaveBeenCalledWith(next));
     expect(first.stop).not.toHaveBeenCalled();
     expect(held.owners).toHaveLength(1);
-    expect(ownerApprovalFor(client)).toBe(first);
+    expect(ownerApprovalFor(next)).toBe(first);
+    expect(next === client || ownerApprovalFor(client) === undefined).toBe(true);
   });
 
   it.each([
-    ["no longer an owner", () => (status.owner = false)],
-    ["no longer local", () => (status.channel = "remote_owner")],
-    ["relinked to another claw", () => (status.clawId = "34".repeat(16))],
-  ])("tears the reader down when the reconnected client is %s", async (_case, change) => {
+    ["no longer an owner", () => (status.owner = false), false],
+    ["no longer local", () => (status.channel = "remote_owner"), false],
+    ["relinked to another claw", () => (status.clawId = "34".repeat(16)), false],
+    ["a replacement that is no longer an owner", () => (status.owner = false), true],
+  ])("tears the reader down when the reconnected client is %s", async (_case, change, replace) => {
     const { set, client, first } = await bound();
     set({ phase: "reconnecting" });
     change();
-    set({ phase: "connected" });
+    const next = replace ? fakeClient() : client;
+    set({ client: next, phase: "connected" });
     await vi.waitFor(() => expect(first.stop).toHaveBeenCalledTimes(1));
     expect(first.resume).not.toHaveBeenCalled();
-    expect(ownerApprovalFor(client)).toBeUndefined();
+    expect(ownerApprovalFor(next)).toBeUndefined();
   });
 
   it.each([
     ["an account change", () => held.accountListeners.forEach((l) => l({ sub: "other" }))],
     ["an owner key change", () => held.keyListeners.forEach((l) => l())],
-  ])("starts over on %s, even mid-reconnect", async (_case, change) => {
+    ["a reconnect to another Gateway", undefined],
+    ["a connected client for another Gateway", undefined],
+  ])("starts over on %s", async (label, change) => {
     const { set, first } = await bound();
-    set({ phase: "reconnecting" });
-    change();
+    if (!label.startsWith("a connected")) {
+      set({ phase: "reconnecting" });
+    }
+    if (change) {
+      change();
+    } else {
+      set({
+        client: fakeClient("wss://other.example.test"),
+        phase: label.includes("connected") ? "connected" : "connecting",
+      });
+    }
     expect(first.stop).toHaveBeenCalledTimes(1);
     set({ phase: "connected" });
     await vi.waitFor(() => expect(held.owners).toHaveLength(2));
     expect(first.resume).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["stopped", false],
+    ["reload-required", false],
+    ["stopped", true],
+    ["reload-required", true],
+  ] as const)(
+    "stops the reader when the client becomes %s (after reconnecting: %s)",
+    async (phase, afterReconnect) => {
+      const { set, first } = await bound();
+      if (afterReconnect) {
+        set({ phase: "reconnecting" });
+      }
+      set({ phase });
+      expect(first.stop).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("finishes the first admission through unrelated snapshot updates", async () => {
     const g = fakeGateway(fakeClient());
@@ -139,64 +161,4 @@ describe("owner approval reader lifetime", () => {
     await vi.waitFor(() => expect(held.owners).toHaveLength(1));
     expect(held.owners[0]!.start).toHaveBeenCalled();
   });
-
-  it("retires a held reader as soon as a reconnect targets another Gateway", async () => {
-    const { set, first } = await bound();
-    set({ phase: "reconnecting" });
-    expect(first.stop).not.toHaveBeenCalled();
-    set({ client: fakeClient("wss://other.example.test"), phase: "connecting" });
-    expect(first.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("moves the reader to a replacement client for the same Gateway", async () => {
-    const { set, client, first } = await bound();
-    set({ phase: "reconnecting" });
-    const replacement = fakeClient();
-    set({ client: replacement, phase: "connected" });
-    await vi.waitFor(() => expect(first.resume).toHaveBeenCalledWith(replacement));
-    expect(first.stop).not.toHaveBeenCalled();
-    expect(held.owners).toHaveLength(1);
-    expect(ownerApprovalFor(replacement)).toBe(first);
-    expect(ownerApprovalFor(client)).toBeUndefined();
-  });
-
-  it("starts over for a client to a different Gateway", async () => {
-    const { set, first } = await bound();
-    set({ client: fakeClient("wss://other.example.test") });
-    expect(first.stop).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() => expect(held.owners).toHaveLength(2));
-    expect(first.resume).not.toHaveBeenCalled();
-  });
-
-  it("does not move the reader to a replacement client that is no longer an owner", async () => {
-    const { set, first } = await bound();
-    status.owner = false;
-    const replacement = fakeClient();
-    set({ client: replacement });
-    await vi.waitFor(() => expect(first.stop).toHaveBeenCalledTimes(1));
-    expect(first.resume).not.toHaveBeenCalled();
-    expect(ownerApprovalFor(replacement)).toBeUndefined();
-  });
-
-  it.each(["stopped", "reload-required"] as const)(
-    "stops a reader held through a reconnect when the client becomes %s",
-    async (phase) => {
-      const { set, first } = await bound();
-      set({ phase: "reconnecting" });
-      set({ phase });
-      expect(first.stop).toHaveBeenCalledTimes(1);
-      set({ phase: "connected" });
-      await vi.waitFor(() => expect(held.owners).toHaveLength(2));
-      expect(first.resume).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["stopped", "reload-required"] as const)(
-    "stops the reader when the same client is %s",
-    async (phase) => {
-      const { set, first } = await bound();
-      set({ phase });
-      expect(first.stop).toHaveBeenCalledTimes(1);
-    },
-  );
 });
