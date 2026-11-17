@@ -6,6 +6,7 @@ import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-ava
 import type { MessageGroup, ToolCard } from "../../../lib/chat/chat-types.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
@@ -80,7 +81,17 @@ export function projectChatTranscript(
   const actionProps = merge(props, actions);
   const recordedStopNames = indexRecordedSubagentStopNames(props.messages);
   const recordedStopNamesKey = JSON.stringify([...recordedStopNames]);
-  const subagentActions = merge(actionProps, { recordedStopNames });
+  const subagentActions = merge(actionProps, {
+    recordedStopNames,
+    onOpenSession: actions.onOpenSessionLink
+      ? (sessionKey: string) => {
+          const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+          if (agentId) {
+            actions.onOpenSessionLink?.({ sessionKey, agentId });
+          }
+        }
+      : undefined,
+  });
   const asyncQuestionGeneration = state.asyncQuestionGeneration;
   const realtimeConversation = projectRealtimeTalkConversation(props);
   const { asyncQuestions, selectedSession: activeSession } = props;
