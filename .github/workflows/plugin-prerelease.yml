@@ -312,6 +312,7 @@ jobs:
             "extension-test-plan": "./scripts/lib/extension-test-plan.mts",
             "bundled-plugin-source-utils": "./scripts/lib/bundled-plugin-source-utils.mts",
             "ci-node-test-plan": "./scripts/lib/ci-node-test-plan.mts",
+            "vitest-build-prerequisites": "./scripts/lib/vitest-build-prerequisites.mts",
           };
           const targetPlanPath = (name) => {
             const mtsPath = targetPlanPaths[name];
@@ -349,6 +350,10 @@ jobs:
 
           try {
             const planner = await import(targetPlanPath("extension-test-plan"));
+            const buildPrerequisitesPath = targetPlanPath("vitest-build-prerequisites");
+            const buildPrerequisites = existsSync(buildPrerequisitesPath)
+              ? await import(buildPrerequisitesPath)
+              : undefined;
             const extensionVitestArgs = JSON.parse(
               process.env.EXTENSION_TEST_EXCLUDE_PATTERNS_JSON || "[]",
             ).map((file) => `--exclude=${file}`);
@@ -475,6 +480,9 @@ jobs:
                   extensions_csv: [...new Set(includePatterns.map((file) => file.split("/")[1]))].join(","),
                   includePatterns,
                   vitest_config: group.config,
+                  pretest_build_mode: buildPrerequisites?.resolveVitestPretestBuildMode?.([
+                    { configs: [group.config], includePatterns },
+                  ]),
                   exclusion_configs: [{ config: group.config, includePatterns }],
                   vitest_max_workers: 1,
                   runner: "blacksmith-8vcpu-ubuntu-2404",
@@ -750,6 +758,14 @@ jobs:
         uses: ./.github/actions/setup-test-bun
 
       - *checkout_exclusion_tooling
+
+      - name: Build extension test runtime
+        if: matrix.pretest_build_mode != null
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
+          VITEST: "1"
+        run: pnpm build qaRuntime
 
       - name: Run extension shard
         env:
