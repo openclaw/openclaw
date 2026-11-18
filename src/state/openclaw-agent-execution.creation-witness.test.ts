@@ -17,6 +17,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import type { SqliteWorkerAdmissionRequest } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   prepareOpenClawAgentDatabaseRegistrySnapshotRead,
   readOpenClawAgentDatabaseRegistryToken,
@@ -40,7 +41,6 @@ import {
   captureOpenClawAgentDatabaseExecutionAsync,
   prepareOpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "./openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
@@ -89,6 +89,15 @@ it.each(["cancelled", "revoked"] as const)(
     let preparing: Promise<void> | undefined;
     try {
       await withinTest(entered.promise, signal);
+      const turns = resolveGlobalSingleton<{ pending: Map<string, Promise<void>> }>(
+        Symbol.for("openclaw.sqliteDatabaseAdmissionTurns"),
+        () => {
+          throw new Error("Expected the real cold database admission queue");
+        },
+      );
+      const key = `path:${options.path}`;
+      const heldTurn = turns.pending.get(key);
+      assert(heldTurn);
       preparing = prepareOpenClawAgentDatabaseExecution(
         options,
         () => {
@@ -99,9 +108,8 @@ it.each(["cancelled", "revoked"] as const)(
         controller.signal,
       );
       const result = preparing.catch((error: unknown) => error);
-      await vi.waitFor(() =>
-        expect(SQLITE_SESSION_WRITER_QUEUES.get(options.path)?.pending.length).toBeGreaterThan(0),
-      );
+      // Cold native admission precedes the store writer queue in this forked suite.
+      await vi.waitFor(() => expect(turns.pending.get(key)).not.toBe(heldTurn));
       if (outcome === "cancelled") {
         controller.abort(refusal);
         expect(await withinTest(result, signal)).toBe(refusal);
