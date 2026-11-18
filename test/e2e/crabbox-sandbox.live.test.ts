@@ -196,6 +196,7 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
         console.log(`Crabbox live: concurrent creators share ${first.runtimeId}`);
 
         const execution = await runExecProcess({
+          scopeKey: "test-scope",
           command: "cat marker.txt && uname -s",
           workdir: workspaceDir,
           env: {},
@@ -259,6 +260,7 @@ describe.skipIf(!LIVE)("Crabbox registered sandbox backend (live)", () => {
         console.log(`Crabbox live: adopted ${first.runtimeId}; recreated ${recreated.runtimeId}`);
 
         const admitted = await runExecProcess({
+          scopeKey: "test-scope",
           command: "true",
           workdir: workspaceDir,
           env: {},

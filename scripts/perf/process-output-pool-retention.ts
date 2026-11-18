@@ -4,9 +4,8 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
 import {
-  addSession,
   appendOutput,
-  createProcessSession,
+  registerProcessSession,
   deleteSession,
   getSession,
   markExited,
@@ -39,8 +38,9 @@ const churn = "x".repeat(Buffer.poolSize / 2 - 8);
 // Native pool backing can include extra bytes beyond the configured pool size.
 const slabBytes = Buffer.from("marker").buffer.byteLength;
 const sessions = Array.from({ length: sessionCount }, (_, index) => {
-  const session = createProcessSession({
+  const session = registerProcessSession({
     id: `pool-retention-${index}`,
+    scopeKey: "agent:main:pool-retention",
     command: "synthetic sparse output",
     cleanupMs: 60_000,
     startedAt: Date.now(),
@@ -55,7 +55,6 @@ const sessions = Array.from({ length: sessionCount }, (_, index) => {
     backgrounded: true,
     cursorKeyMode: "normal",
   });
-  addSession(session);
   return session;
 });
 async function collect() {

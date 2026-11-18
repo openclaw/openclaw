@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { adoptReleasedProcess } from "./released-processes.js";
 
@@ -34,7 +35,7 @@ it.runIf(process.platform !== "win32")(
     );
     const pid = survivor.pid!;
     groups.push(pid);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await delay(300);
     const adopted = adoptReleasedProcess("group-grace", { pid, pgid: pid }, () => {});
 
     expect(await adopted!.stop({ group: true })).toEqual({ status: "stopped" });
@@ -55,7 +56,7 @@ it.runIf(process.platform !== "win32")(
     });
     const pid = survivor.pid!;
     groups.push(pid);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await delay(300);
     const adopted = adoptReleasedProcess("group-denied", { pid, pgid: pid }, () => {});
     const realKill = process.kill.bind(process);
     vi.spyOn(process, "kill").mockImplementation((target, signal) => {
@@ -81,7 +82,7 @@ it.runIf(process.platform !== "win32")(
     });
     const pid = survivor.pid!;
     groups.push(pid);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await delay(300);
     const onExit = vi.fn();
     const adopted = adoptReleasedProcess("group-kill-denied", { pid, pgid: pid }, onExit);
     const realKill = process.kill.bind(process);
@@ -98,7 +99,7 @@ it.runIf(process.platform !== "win32")(
 
     expect(await adopted!.stop({ group: true })).toMatchObject({ status: "uncertain" });
     // Custody holds while the group runs: the reaper does not settle it, and a retry stops it.
-    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    await delay(6_000);
     expect(onExit).not.toHaveBeenCalled();
     vi.restoreAllMocks();
     expect(await adopted!.stop({ group: true })).toEqual({ status: "stopped" });

@@ -150,6 +150,7 @@ process.stdout.write('durable-command-output\\n');
   let requestMs = 0;
   request = withExecRequestTurn({ identity, abortSignal: controller.signal }, async () => {
     execution = await runExecProcess({
+      scopeKey: "test-scope",
       command: `exec ${quote(process.execPath)} ${quote(childFile)}`,
       workdir: root,
       env: { PATH: process.env.PATH ?? "", HOME: home },

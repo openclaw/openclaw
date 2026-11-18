@@ -85,6 +85,7 @@ try {
     for (const arm of sample % 2 ? arms.toReversed() : arms) {
       let exitObservedAt = 0;
       const run = await runExecProcess({
+        scopeKey: "test-scope",
         command: "synthetic quiet command",
         workdir: workspace,
         env: {},
