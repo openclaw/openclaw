@@ -680,7 +680,9 @@ export function MessageGroup(props: {
     >
       <Show
         when={
-          normalizeRoleForGrouping(props.group.role) !== "tool" || options().showToolCalls !== false
+          Boolean(props.group.compaction) ||
+          normalizeRoleForGrouping(props.group.role) !== "tool" ||
+          options().showToolCalls !== false
         }
       >
         <Show

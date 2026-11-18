@@ -34,6 +34,7 @@ import {
   collectActivityGroup,
   type ActivityGroupData,
 } from "./chat-activity-projection.ts";
+import { ChatCompactionActivity } from "./chat-compaction-activity.tsx";
 import {
   ActivityOperation,
   PreparedActivityRow,
@@ -111,8 +112,9 @@ function prepareActivityGroup(
   const ownLaunches = ownSessionLaunchCalls(cards);
   const summaryByCard = new Map(preparedByCard);
   // Older/raw-only pages still have canonical call and result facts, but no prepared labels.
-  const summaryActivity = visibleActivity.length
-    ? visibleActivity
+  const hasPreparedTools = visibleActivity.some((item) => !data.compactions.has(item));
+  const rawSummaryActivity = hasPreparedTools
+    ? []
     : cardGroups.map(({ card }) => {
         const call = unwrapToolCallForDisplay(card);
         const outcome = resolveToolCardOutcome(card, opts.runActive);
@@ -140,6 +142,7 @@ function prepareActivityGroup(
         summaryByCard.set(card, item);
         return item;
       });
+  const summaryActivity = [...visibleActivity, ...rawSummaryActivity];
   const activeGroup = source
     ? source.activeGroup
     : Boolean(
@@ -149,9 +152,27 @@ function prepareActivityGroup(
         (!opts.activityRunId ||
           entries.some(({ message }) => transcriptRunId(message) === opts.activityRunId)),
       );
-  const rawHeadlineActivity = activeGroup && visibleActivity.length === 0 ? summaryActivity : [];
+  const rawHeadlineActivity = activeGroup ? rawSummaryActivity : [];
+  const headlineActivity = [...currentActivity, ...rawHeadlineActivity];
+  if (currentActivity.length && rawHeadlineActivity.length) {
+    // Keep the selector's newest-failure precedence tied to transcript order.
+    const orderBySource = new Map<string, number>();
+    groups.forEach((group, index) => {
+      orderBySource.set(group.key, index);
+      group.messages.forEach(({ key }) => orderBySource.set(key, index));
+    });
+    const rawOrder = new Map(
+      cardGroups.map(({ card }) => [
+        summaryByCard.get(card),
+        orderBySource.get(toolContexts.get(card)!.messageKey),
+      ]),
+    );
+    const rank = (item: (typeof currentActivity)[number]) =>
+      (data.compactions.has(item) ? orderBySource.get(item.itemId) : rawOrder.get(item)) ?? -1;
+    headlineActivity.sort((left, right) => rank(left) - rank(right));
+  }
   const headline = selectActivityHeadline(
-    currentActivity.length ? currentActivity : rawHeadlineActivity,
+    headlineActivity,
     summaryByCard,
     opts.subagents?.subagentSessions,
     opts.subagents?.recordedStopNames,
@@ -262,20 +283,24 @@ function prepareActivityGroup(
     stepCall && resolveToolCallInput(stepCall.name, asNullableRecord(stepCall.args));
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const soleStep =
-    !activeGroup &&
-    !headline &&
-    !reviewOutcome &&
-    approvalReviews.length === 0 &&
-    cardGroups.length === 1 &&
-    step !== undefined &&
-    (visibleActivity.length === 0 ||
-      ((step.children.length > 0 || stepInput?.kind !== "edit" || Boolean(stepInput.path)) &&
-        visibleCalls.size === 1 &&
-        (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
-        visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId)));
+    (visibleActivity.length === 1 &&
+      data.compactions.has(visibleActivity[0]!) &&
+      entries.length === 0) ||
+    (!activeGroup &&
+      !headline &&
+      !reviewOutcome &&
+      approvalReviews.length === 0 &&
+      cardGroups.length === 1 &&
+      step !== undefined &&
+      (visibleActivity.length === 0 ||
+        ((step.children.length > 0 || stepInput?.kind !== "edit" || Boolean(stepInput.path)) &&
+          visibleCalls.size === 1 &&
+          (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
+          visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId))));
 
   return {
     data,
+    compactions: data.compactions,
     actionOrder: data.actionOrder,
     firstGroup,
     toolContexts,
@@ -505,7 +530,17 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
                       fallback={
                         <Show when={entry().activity}>
                           {(activity) => (
-                            <PreparedActivityRow activity={activity()} options={props.options} />
+                            <Show
+                              when={props.state.data.compactions.get(activity())}
+                              fallback={
+                                <PreparedActivityRow
+                                  activity={activity()}
+                                  options={props.options}
+                                />
+                              }
+                            >
+                              {(compaction) => <ChatCompactionActivity item={compaction()} />}
+                            </Show>
                           )}
                         </Show>
                       }

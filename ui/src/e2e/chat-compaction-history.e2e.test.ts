@@ -188,7 +188,16 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          // Wait for the authoritative tail, not merely the request that fetched it.
+          // Wait for the authoritative tail, then inspect savings through the activity row.
+          await thread.getByText("Compacted context", { exact: true }).waitFor();
+          const collapsedFrame = await takeControlUiScreenshotFrame(page, thread, [goal, queue], {
+            animations: "disabled",
+          });
+          await writeFile(
+            join(suite.artifactDir, "compaction-history-collapsed.png"),
+            collapsedFrame.png,
+          );
+          await thread.locator(".chat-compaction-activity summary").click();
           await thread.getByText("saved 60k tokens (75%)", { exact: true }).waitFor();
           const frame = await takeControlUiScreenshotFrame(page, thread, [goal, queue], {
             animations: "disabled",

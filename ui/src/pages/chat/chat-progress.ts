@@ -97,12 +97,12 @@ export function buildGuardianNoticeItem(
   };
 }
 
-export function buildCompactionDividerItem(
+export function buildCompactionActivityItem(
   marker: Record<string, unknown>,
   timestamp: number,
   index: number,
   phase: "active" | "complete" = "complete",
-): Extract<ChatItem, { kind: "divider" }> {
+): Extract<ChatItem, { kind: "compaction" }> {
   const tokensBefore = marker.tokensBefore;
   const tokensAfter = marker.tokensAfter;
   const metric =
@@ -118,17 +118,32 @@ export function buildCompactionDividerItem(
         })
       : null;
   return {
-    kind: "divider",
+    kind: "compaction",
     key:
       typeof marker.id === "string"
-        ? `divider:compaction:${marker.id}`
-        : `divider:compaction:${timestamp}:${index}`,
-    label: t(
-      phase === "active" ? "chat.composer.compactingContext" : "chat.composer.contextCompacted",
-    ),
-    compaction: phase,
+        ? `compaction:${marker.id}`
+        : `compaction:${timestamp}:${index}`,
+    label: t(phase === "active" ? "chat.compaction.running" : "chat.compaction.completed"),
+    phase,
     ...(metric === null ? {} : { metric }),
     timestamp,
+  };
+}
+
+export function buildLiveCompactionActivity(
+  status: CompactionStatus,
+): Extract<ChatItem, { kind: "compaction" }> {
+  return {
+    ...buildCompactionActivityItem(
+      {},
+      status.startedAt ?? status.completedAt ?? Date.now(),
+      0,
+      status.phase === "complete" ? "complete" : "active",
+    ),
+    key: `compaction:live:${status.runId}:${status.itemId ?? "manual"}`,
+    ...(status.completedAt != null && status.startedAt != null
+      ? { durationMs: status.completedAt - status.startedAt }
+      : {}),
   };
 }
 

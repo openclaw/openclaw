@@ -22,7 +22,8 @@ import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { hasAutomationActivity } from "./chat-automation-projection-loader.ts";
 import {
-  buildCompactionDividerItem,
+  buildCompactionActivityItem,
+  buildLiveCompactionActivity,
   buildGuardianNoticeItem,
   buildResetDividerItem,
   clearWorkingProgress,
@@ -79,6 +80,7 @@ import {
   optionalBoundaryIdentity,
   optionalRunIdentity,
   resolveRunInsertionBounds,
+  createCompactionRunLookup,
 } from "./chat-thread-run-identity.ts";
 import {
   createRecordedToolKeyLookup,
@@ -180,9 +182,9 @@ export function buildChatItems(
   const historyItems = buildMessageItems(history);
   const canvasTurns = collectCanvasTurns(historyItems, normalizedHistory, matchesSearch);
   const compaction = props.compactionStatus;
-  const compactionKey = compaction
-    ? `divider:compaction:live:${compaction.runId}:${compaction.itemId ?? "manual"}`
-    : undefined;
+  const liveCompaction = compaction ? buildLiveCompactionActivity(compaction) : undefined;
+  const compactionKey = liveCompaction?.key;
+  const compactionRunIdentity = createCompactionRunLookup(history, props.runId);
   let hasPersistedCompaction = false;
   let latestResetAt: number | undefined;
   const projectSubmittedModel = createSubmittedModelNoticeProjector();
@@ -240,7 +242,7 @@ export function buildChatItems(
     }
     if (marker?.kind === "compaction" || isContextCompactionMessage(msg)) {
       const matchesLive = compaction != null && matchesCompactionOperation(msg, compaction);
-      const divider = buildCompactionDividerItem(
+      const activity = buildCompactionActivityItem(
         marker ?? {},
         rawMessageTimestamp(msg) ?? Date.now(),
         i,
@@ -249,8 +251,12 @@ export function buildChatItems(
         facts?.indexedDividers.push(msg);
       }
       items.push({
-        ...divider,
-        compactionId: divider.key,
+        ...activity,
+        compactionId: activity.key,
+        ...compactionRunIdentity(marker?.runId),
+        ...(matchesLive && liveCompaction?.durationMs != null
+          ? { durationMs: liveCompaction.durationMs }
+          : {}),
         ...(matchesLive && compactionKey ? { key: compactionKey } : {}),
       });
       hasPersistedCompaction ||= matchesLive;
@@ -451,19 +457,8 @@ export function buildChatItems(
     });
   }
   const projections: ChatProjection[] = [];
-  if (compaction && compactionKey && !hasPersistedCompaction) {
-    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
-    projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
-    });
+  if (liveCompaction && !hasPersistedCompaction) {
+    projections.push({ item: { ...liveCompaction, ...compactionRunIdentity(compaction?.runId) } });
   }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));

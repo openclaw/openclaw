@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
-  buildCompactionDividerItem,
+  buildCompactionActivityItem,
   clearWorkingProgress,
   resetWorkingProgress,
   resolveWorkingProgress,
@@ -37,7 +37,9 @@ describe("compaction savings", () => {
     [1_000, 1_100, undefined],
     [Number.POSITIVE_INFINITY, 10, undefined],
   ])("reports the reduction from %s to %s tokens", (tokensBefore, tokensAfter, metric) => {
-    expect(buildCompactionDividerItem({ tokensBefore, tokensAfter }, 1_000, 0).metric).toBe(metric);
+    expect(buildCompactionActivityItem({ tokensBefore, tokensAfter }, 1_000, 0).metric).toBe(
+      metric,
+    );
   });
 });
 

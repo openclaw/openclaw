@@ -5,9 +5,9 @@ import { cdp } from "vitest/browser";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../components/tooltip.ts";
-import { buildCompactionDividerItem } from "../chat-progress.ts";
+import { buildCompactionActivityItem } from "../chat-progress.ts";
+import { ChatCompactionActivity } from "./chat-compaction-activity.tsx";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
-import { ChatDivider } from "./chat-divider.tsx";
 import baseStyles from "../../../styles/base.css?inline";
 import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
 import chatComposerStyles from "../../../styles/chat/composer.css?inline";
@@ -21,7 +21,7 @@ function mountCompaction(container: HTMLElement) {
     () => {
       const [phase, updatePhase] = createSignal<"active" | "complete">("active");
       setPhase = updatePhase;
-      return <ChatDivider item={buildCompactionDividerItem({}, 1_000, 0, phase())} />;
+      return <ChatCompactionActivity item={buildCompactionActivityItem({}, 1_000, 0, phase())} />;
     },
     { container },
   );
@@ -105,7 +105,7 @@ describe("inline compaction motion", () => {
     for (const phase of ["active", "complete"] as const) {
       setPhase(phase);
       const indicator = container.querySelector<HTMLElement>(".chat-compaction")!;
-      const label = container.querySelector<HTMLElement>(".chat-divider__title")!;
+      const label = container.querySelector<HTMLElement>(".chat-tool-row__title")!;
       const check = container.querySelector<SVGElement>(".chat-compaction__glyph svg")!;
       expect(label.textContent?.trim()).not.toBe("");
       expect(getComputedStyle(label).webkitTextFillColor).not.toBe("rgba(0, 0, 0, 0)");
@@ -126,11 +126,12 @@ describe("inline compaction motion", () => {
     }
   });
 
-  it("stacks compaction savings in a narrow pane without splitting either line", () => {
+  it("keeps the expanded compaction savings readable in a narrow pane", () => {
+    container.style.width = "260px";
     mountSolid(
       () => (
-        <ChatDivider
-          item={buildCompactionDividerItem(
+        <ChatCompactionActivity
+          item={buildCompactionActivityItem(
             { tokensBefore: 101_000, tokensAfter: 52_100 },
             1_000,
             0,
@@ -139,26 +140,17 @@ describe("inline compaction motion", () => {
       ),
       { container },
     );
-    const textRects = (selector: string) => {
-      const range = document.createRange();
-      range.selectNodeContents(container.querySelector(selector)!);
-      return [...range.getClientRects()];
-    };
-    const title = () => textRects(".chat-divider__title");
-    const metric = () => textRects(".chat-divider__metric");
-    const separator = () => textRects(".chat-divider__separator");
-
-    container.style.width = "260px";
-    expect(title()).toHaveLength(1);
-    expect(metric()).toHaveLength(1);
-    expect(metric()[0]!.top).toBeGreaterThanOrEqual(title()[0]!.bottom);
-    expect(separator()).toHaveLength(0);
-
-    container.style.width = "560px";
-    expect(title()).toHaveLength(1);
-    expect(metric()).toHaveLength(1);
-    expect(metric()[0]!.top).toBeCloseTo(title()[0]!.top);
-    expect(separator()).toHaveLength(1);
+    const row = container.querySelector<HTMLDetailsElement>(".chat-compaction-activity")!;
+    row.open = true;
+    const title = row.querySelector(".chat-tool-row__title")!.getBoundingClientRect();
+    const metric = row.querySelector(".chat-tool-kv > div")!;
+    const range = document.createRange();
+    range.selectNodeContents(metric);
+    const rects = [...range.getClientRects()];
+    expect(metric.textContent).toBe("saved 48.9k tokens (48.4%)");
+    expect(rects).toHaveLength(1);
+    expect(rects[0]!.top).toBeGreaterThanOrEqual(title.bottom);
+    expect(rects[0]!.right).toBeLessThanOrEqual(container.getBoundingClientRect().right);
   });
 
   it.each(["active", "cleared"] as const)("preserves the %s fallback pill", async (phase) => {

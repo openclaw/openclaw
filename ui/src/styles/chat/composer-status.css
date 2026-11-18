@@ -17,53 +17,26 @@
 }
 
 .chat-compaction {
-  container: chat-compaction / inline-size;
-  margin: var(--space-5) 8px;
+  position: relative;
+  display: inline-block;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
 }
 
-.chat-compaction .chat-divider__label {
-  gap: 10px;
-  font-weight: 400;
-  font-size: 13px;
-  letter-spacing: 0;
-  text-transform: none;
-}
-
-@container chat-compaction (max-width: 400px) {
-  .chat-compaction .chat-divider__label:has(> .chat-divider__metric) {
-    display: grid;
-    grid-template-columns: auto minmax(0, max-content);
-    grid-template-areas:
-      "glyph title"
-      "glyph metric";
-    min-width: 0;
-    row-gap: 0;
-    overflow-wrap: anywhere;
-  }
-
-  .chat-compaction__glyph {
-    grid-area: glyph;
-  }
-
-  .chat-compaction .chat-divider__title {
-    grid-area: title;
-  }
-
-  .chat-compaction .chat-divider__metric {
-    grid-area: metric;
-  }
-
-  .chat-compaction .chat-divider__separator {
-    display: none;
-  }
+.chat-compaction-activity[open] > summary .chat-tool-row__chevron {
+  opacity: 1;
+  transform: rotate(90deg);
 }
 
 .chat-compaction__glyph {
-  position: relative;
-  flex: 0 0 28px;
+  position: absolute;
+  inset: 0;
   width: 28px;
   height: 28px;
-  color: var(--accent);
+  transform: scale(0.571429);
+  transform-origin: top left;
 }
 
 .chat-compaction__line {

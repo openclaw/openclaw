@@ -6,6 +6,7 @@ import { createInterval } from "../../../lib/reactive/timers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
+import { ChatCompactionGlyph } from "./chat-compaction-activity.tsx";
 import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 
 export type ChatActivityHeadlineProps = {
@@ -123,14 +124,23 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
             aria-label={name()}
             aria-hidden={name() ? undefined : "true"}
           >
-            <Show when={name()} fallback={<Icon name="listTree" />}>
-              {(tool) => (
-                <ChatToolIcon
-                  style={{ display: "contents" }}
-                  name={shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())}
-                  tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
-                />
-              )}
+            <Show
+              when={shown()?.compaction}
+              fallback={
+                <Show when={name()} fallback={<Icon name="listTree" />}>
+                  {(tool) => (
+                    <ChatToolIcon
+                      style={{ display: "contents" }}
+                      name={
+                        shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())
+                      }
+                      tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
+                    />
+                  )}
+                </Show>
+              }
+            >
+              {(phase) => <ChatCompactionGlyph phase={phase()} />}
             </Show>
           </span>
         }
