@@ -18,6 +18,7 @@ import {
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
 } from "../../scripts/code-mode-model-matrix.js";
+import { compareCodeModeMatrixResults } from "../../scripts/lib/code-mode-matrix-comparison.js";
 import { createGatewayMatrixWorkload } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import {
   BUILD_STAMP_FILE,
@@ -336,3 +337,44 @@ it.each([
     );
   },
 );
+
+it("compares only complete, unique cells with the same workload identity", () => {
+  const baseline = {
+    id: "fixture-code-inventory-1",
+    model: "openai/fixture",
+    mode: "code",
+    task: "inventory-join",
+    repetition: 1,
+    passed: true,
+    gitSha: "baseline",
+    elapsedMs: 10,
+    workload: createGatewayMatrixWorkload("inventory-join", 1, "off", 10, "node"),
+  };
+  const candidate = { ...baseline, gitSha: "candidate", elapsedMs: 8 };
+  expect(compareCodeModeMatrixResults([baseline], [candidate])).toMatchObject({
+    total: 1,
+    cells: [{ baselineSha: "baseline", candidateSha: "candidate", bothPassed: true }],
+  });
+  expect(() => compareCodeModeMatrixResults([baseline, baseline], [candidate])).toThrow(
+    "Duplicate comparison cell",
+  );
+  expect(() => compareCodeModeMatrixResults([baseline], [candidate, candidate])).toThrow(
+    "Duplicate comparison cell",
+  );
+  expect(() => compareCodeModeMatrixResults([baseline], [])).toThrow("same model/mode/task");
+  expect(() =>
+    compareCodeModeMatrixResults([baseline], [{ ...candidate, workload: undefined }]),
+  ).toThrow("fixed workload fingerprints");
+  for (const workload of [
+    { ...candidate.workload, promptSha256: "different-prompt" },
+    { ...candidate.workload, fixtureSha256: "different-fixture" },
+    {
+      ...candidate.workload,
+      settings: { ...candidate.workload.settings, timeoutSeconds: 11 },
+    },
+  ]) {
+    expect(() => compareCodeModeMatrixResults([baseline], [{ ...candidate, workload }])).toThrow(
+      "workload changed",
+    );
+  }
+});

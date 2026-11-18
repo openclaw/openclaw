@@ -240,11 +240,6 @@ function expectLabelCleanup() {
   );
 }
 
-const existingTarget = {
-  profileName: "chrome-live",
-  profile: { name: "chrome-live", driver: "existing-session" },
-  targetId: "7",
-};
 const requireRecord = createRequireRecord("object", "expected-label");
 
 function deepSnapshot() {
