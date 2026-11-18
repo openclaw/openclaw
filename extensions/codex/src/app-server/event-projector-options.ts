@@ -5,12 +5,14 @@ import type { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexNativePlan } from "./plan-compaction-state.js";
 import type { CodexThreadItem, JsonValue } from "./protocol.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
+import type { CodexRuntimeUpdateFacts } from "./usage-limit-error.js";
 
 export type CodexAsyncDeliverySettlement = "settled" | "retry";
 
 export type CodexAppServerEventProjectorOptions = {
   agentHookContext?: Parameters<typeof runAgentHarnessBeforeCompactionHook>[0]["ctx"];
-  serverVersion?: string;
+  /** The running Codex and its update owner, for model-version failures. */
+  codexRuntime?: CodexRuntimeUpdateFacts;
   initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
   asyncUserMessageAllowed?: boolean;

@@ -312,6 +312,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         return await createHarnessUpdateSession(
           {
             agentId: createParams.agentId,
+            sourceSessionKey: previousSessionKey,
             session: selectedChatSessionRow(state),
             create: sessions.createResult,
             open: (key) => this.onPaneSessionChange?.(this.paneId, key),

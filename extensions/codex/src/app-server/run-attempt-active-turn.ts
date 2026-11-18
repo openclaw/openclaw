@@ -50,6 +50,7 @@ import {
   createCodexAppServerUserMessagePersistenceNotifier,
   mirrorPromptAtTurnStartBestEffort,
 } from "./transcript-mirror.js";
+import { readCodexRuntimeUpdateFacts } from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { buildCodexUserInput } from "./user-input.js";
 import { buildResolvedCodexUserPromptMessage } from "./user-prompt-message.js";
@@ -170,7 +171,7 @@ export function activateCodexAttemptTurn(
     activeTurnId,
     {
       agentHookContext: hookContext,
-      serverVersion: resourceState.client.getServerVersion(),
+      codexRuntime: readCodexRuntimeUpdateFacts(resourceState.client),
       onResponseObserved,
       hasDeliveredFinalSourceReply: () => toolBridge.telemetry.finalSourceReplyDelivered === true,
       initialContextTokens: connection.mutable.startupContextTokens,

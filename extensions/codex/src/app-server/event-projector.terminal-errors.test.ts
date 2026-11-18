@@ -27,6 +27,7 @@ import {
   expectUsageFields,
 } from "./event-projector.test-harness.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
+import { resolveCodexPromptError } from "./usage-limit-error.js";
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector terminal errors", () => {
@@ -221,7 +222,9 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     ]) {
       for (const completed of [false, true]) {
         const params = { ...(await createParams()), modelId: "gpt-6.2-sol" };
-        const projector = await createProjector(params, { serverVersion: testCase.version });
+        const projector = await createProjector(params, {
+          codexRuntime: { serverVersion: testCase.version },
+        });
         await fail(
           projector,
           { message: testCase.message, codexErrorInfo: testCase.codexErrorInfo },
@@ -240,6 +243,39 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         }
         expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
       }
+    }
+  });
+
+  it("points the update at the Codex install the turn ran", () => {
+    const source = {
+      message: "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.",
+      codexErrorInfo: "modelNotFound" as const,
+    };
+    // Configured commands and remote app-servers win over PATH Codex after a restart.
+    for (const [facts, instruction] of [
+      [
+        { source: "config", command: "/opt/codex/bin/codex" },
+        "Update the Codex at /opt/codex/bin/codex (set by plugins.entries.codex.config.appServer.command), then restart the Gateway.",
+      ],
+      [
+        { source: "env", command: "/opt/codex/bin/codex" },
+        "Update the Codex at /opt/codex/bin/codex (set by OPENCLAW_CODEX_APP_SERVER_BIN), then restart the Gateway.",
+      ],
+      [
+        { source: "remote" },
+        "Update the Codex app-server this Gateway connects to, then restart it.",
+      ],
+    ] as const) {
+      expect(
+        resolveCodexPromptError(source, {
+          model: "gpt-6.2-sol",
+          serverVersion: "0.164.0",
+          ...facts,
+        }),
+      ).toMatchObject({
+        message: `gpt-6.2-sol needs a newer Codex than 0.164.0. ${instruction} Or choose another model.`,
+        code: "harness_update_required",
+      });
     }
   });
 

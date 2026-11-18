@@ -46,7 +46,7 @@ import {
   buildCodexRingZeroThreadConfigPatch,
   readCodexInheritedMcpServerNames,
 } from "./thread-requests.js";
-import { resolveCodexPromptError } from "./usage-limit-error.js";
+import { readCodexRuntimeUpdateFacts, resolveCodexPromptError } from "./usage-limit-error.js";
 
 const loadInferenceRouting = createLazyRuntimeModule(() => import("./inference-routing.js"));
 
@@ -419,7 +419,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         const notification = result.error
           ? readCodexErrorNotification(result.error)?.error
           : undefined;
-        const runtime = { model: thread.model, serverVersion: client.getServerVersion() };
+        const runtime = { model: thread.model, ...readCodexRuntimeUpdateFacts(client) };
         const priorFailure = notification
           ? resolveCodexPromptError(notification, runtime)
           : undefined;

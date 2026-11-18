@@ -21,6 +21,40 @@ import {
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
+import { getSharedCodexAppServerClientState } from "./shared-client-lifecycle.js";
+
+/** The running Codex and who owns updating it, captured from the client that ran the turn. */
+export type CodexRuntimeUpdateFacts = {
+  serverVersion?: string;
+  source?: "global" | "config" | "env" | "remote";
+  command?: string;
+};
+
+export function readCodexRuntimeUpdateFacts(client: CodexAppServerClient): CodexRuntimeUpdateFacts {
+  const start = getSharedCodexAppServerClientState().startMetadata.get(client)?.startOptions;
+  const serverVersion = client.getServerVersion();
+  if (start && start.transport !== "stdio") {
+    return { serverVersion, source: "remote" };
+  }
+  // Configured commands win over PATH Codex, so updating global Codex would not help.
+  if (start?.commandSource === "config" || start?.commandSource === "env") {
+    return { serverVersion, source: start.commandSource, command: start.command };
+  }
+  return { serverVersion, source: "global" };
+}
+
+function formatCodexUpdateInstruction(facts: CodexRuntimeUpdateFacts): string {
+  switch (facts.source) {
+    case "remote":
+      return "Update the Codex app-server this Gateway connects to, then restart it.";
+    case "config":
+      return `Update the Codex at ${facts.command} (set by plugins.entries.codex.config.appServer.command), then restart the Gateway.`;
+    case "env":
+      return `Update the Codex at ${facts.command} (set by OPENCLAW_CODEX_APP_SERVER_BIN), then restart the Gateway.`;
+    default:
+      return 'Update your global Codex with "npm i -g @openai/codex", then restart the Gateway.';
+  }
+}
 
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 
@@ -51,7 +85,7 @@ export class CodexUsageLimitPromptError extends Error {
 
 export function resolveCodexPromptError(
   source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
-  runtime: { model: string; serverVersion?: string },
+  runtime: { model: string } & CodexRuntimeUpdateFacts,
 ): string | Error | undefined {
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
@@ -99,7 +133,7 @@ export function resolveCodexPromptError(
     });
     return Object.assign(
       new AgentHarnessRuntimeUpdateRequiredError(
-        `${runtime.model} needs a newer Codex${version}. Update your global Codex with "npm i -g @openai/codex", then restart the Gateway. Or choose another model.`,
+        `${runtime.model} needs a newer Codex${version}. ${formatCodexUpdateInstruction(runtime)} Or choose another model.`,
       ),
       { nativeMessage: source.message, ...(status === undefined ? {} : { status }) },
     );
@@ -228,7 +262,7 @@ export async function resolveCodexTurnStartError(params: {
   // Normalize them before the generic runner loses the native error envelope.
   const promptError = resolveCodexPromptError(source, {
     model: params.model,
-    serverVersion: params.client.getServerVersion(),
+    ...readCodexRuntimeUpdateFacts(params.client),
   });
   return promptError instanceof Error ? { message: promptError.message, promptError } : undefined;
 }

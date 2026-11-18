@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,6 +23,8 @@ type SessionOperation = {
 
 export type HarnessUpdateSessionTarget = {
   agentId: string;
+  /** The failed conversation; an incognito source keeps the recovery session incognito. */
+  sourceSessionKey: string;
   session: GatewaySessionRow | undefined;
   create: ApplicationContext["sessions"]["createResult"];
   open: (key: string) => boolean | void;
@@ -42,6 +45,7 @@ export async function createHarnessUpdateSession(
   const result = await target.create(
     {
       agentId: target.agentId,
+      ...(isIncognitoSessionKey(target.sourceSessionKey) ? { incognito: true } : {}),
       ...(model ? { model, agentRuntime: "openclaw" as const } : {}),
       message: t("chat.recovery.harnessUpdatePrompt", { summary }),
     },

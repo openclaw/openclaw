@@ -515,7 +515,7 @@ export abstract class CodexTurnProjection {
           codexErrorInfo: params.codexErrorInfo,
           rateLimits: params.rateLimits,
         },
-        { model: this.params.modelId, serverVersion: this.options.serverVersion },
+        { model: this.params.modelId, ...this.options.codexRuntime },
       ) ?? params.fallbackMessage;
     this.requestPolicyDenialMessage =
       this.promptError instanceof AgentHarnessModelRequestPolicyError ? params.message : undefined;

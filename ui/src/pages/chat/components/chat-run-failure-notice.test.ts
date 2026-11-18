@@ -243,6 +243,7 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
         createHarnessUpdateSession(
           {
             agentId: "cx",
+            sourceSessionKey: "agent:cx:failed",
             session: {
               key: "agent:cx:failed",
               kind: "direct",
@@ -289,4 +290,25 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
     },
     { signal: expect.any(AbortSignal) },
   );
+});
+
+it("keeps an update session incognito when the failed conversation was incognito", async () => {
+  const create = vi.fn<ApplicationContext["sessions"]["createResult"]>().mockResolvedValue({
+    key: "agent:cx:dashboard:incognito-update",
+    initialRun: { status: "started", runId: "update-run" },
+  });
+  await createHarnessUpdateSession(
+    {
+      agentId: "cx",
+      sourceSessionKey: "agent:cx:dashboard:incognito-failed",
+      session: undefined,
+      create,
+      open: vi.fn(),
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+    },
+    "gpt-6.2-sol needs a newer Codex.",
+  );
+  // An ordinary session would persist the private conversation's error and follow-up.
+  expect(create.mock.calls[0]?.[0]).toMatchObject({ agentId: "cx", incognito: true });
 });
