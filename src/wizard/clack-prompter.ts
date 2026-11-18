@@ -142,7 +142,7 @@ async function runPromptWithNavigation<T>(
   }
 }
 
-export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
+function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
   const tokens = normalizeLowercaseStringOrEmpty(search)
     .split(/\s+/)
     .filter((token) => token.length > 0);

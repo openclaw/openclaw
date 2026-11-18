@@ -45,6 +45,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
         options?.reset === true || hasFlag(argv, "--reset") ? "defer" : "skip",
       loadPlugins: "never",
       ensureCliPath: false,
+      networkProxy: ({ argv }) => (hasCliOption(argv, "--terminal-path") ? "bypass" : "default"),
     },
   },
   {
@@ -149,6 +150,11 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { loadPlugins: "never" },
   })),
+  {
+    commandPath: ["agents", "render-blobster"],
+    exact: true,
+    policy: { configGuard: "skip", loadPlugins: "never", networkProxy: "bypass" },
+  },
   {
     commandPath: ["configure"],
     policy: { configGuard: "skip", stateStoreGuard: "run", loadPlugins: "never" },

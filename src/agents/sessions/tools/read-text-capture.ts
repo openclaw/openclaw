@@ -1,3 +1,20 @@
+import { createWindowsTextFileDecoder } from "../../../infra/windows-encoding.js";
+
+/** Keep UTF-8 bytes until the line scanner selects the requested range. */
+export function decodeReadTextBuffer(params: {
+  buffer: Buffer;
+  platform?: NodeJS.Platform;
+}): string | Buffer {
+  const decoder = createWindowsTextFileDecoder({ ...params, prefix: params.buffer });
+  if (decoder.encoding !== "utf-8") {
+    return decoder.decode(params.buffer);
+  }
+  const buffer = params.buffer;
+  return !decoder.ignoreBOM && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf
+    ? buffer.subarray(3)
+    : buffer;
+}
+
 export type ReadTextCapture = {
   content: string;
   totalLines?: number;
@@ -53,8 +70,8 @@ export function createReadTextCapture(params: {
       }
       const newline = text.indexOf("\n", start);
       const end = newline === -1 ? text.length : newline;
-      const segment = text.slice(start, end);
       if (selected()) {
+        const segment = text.slice(start, end);
         selectedHasText ||= segment.length > 0;
         if (line === startLine) {
           const before = params.cursor - 1 - lineLength;
@@ -74,7 +91,7 @@ export function createReadTextCapture(params: {
           append("\n");
         }
       }
-      lineLength += segment.length;
+      lineLength += end - start;
       if (newline !== -1) {
         line += 1;
         lineLength = 0;
@@ -83,7 +100,36 @@ export function createReadTextCapture(params: {
     }
   };
   return {
-    write(text: string) {
+    write(input: string | Buffer) {
+      let text = input;
+      if (typeof text !== "string") {
+        // Byte inputs are complete UTF-8 files; streaming callers supply decoded chunks.
+        const buffer =
+          text[0] === 0xef && text[1] === 0xbb && text[2] === 0xbf ? text.subarray(3) : text;
+        if (params.limit !== undefined) {
+          let totalLines = 0;
+          let start = buffer.length;
+          let end = buffer.length;
+          for (let position = 0; position < buffer.length;) {
+            if (totalLines === startLine) {
+              start = position;
+            }
+            if (totalLines === startLine + params.limit) {
+              end = position;
+            }
+            const newline = buffer.indexOf(10, position);
+            totalLines++;
+            position = newline === -1 ? buffer.length : newline + 1;
+          }
+          line = startLine;
+          scan(buffer.toString("utf8", start, end).replaceAll("\r\n", "\n"));
+          line = totalLines;
+          lineLength = 0;
+          return true;
+        }
+        // Unbounded selections need complete text totals; one native decode is cheaper.
+        text = buffer.toString("utf8");
+      }
       let normalized = pendingCr + text;
       pendingCr = normalized.endsWith("\r") ? "\r" : "";
       if (pendingCr) {

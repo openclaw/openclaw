@@ -3,7 +3,6 @@ import { createMemo, For, Show } from "solid-js";
 import {
   agentTabIconShape,
   type TabIconPreference,
-  type AgentTabIconShape,
 } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
@@ -47,7 +46,7 @@ function FallbackArtwork(props: { fallbackUrl: string }) {
 
 function TabIconAvatar(props: {
   imageUrl: string | null;
-  shape?: AgentTabIconShape;
+  shape?: "circle";
   fallbackUrl: string;
   fallbackOnly?: boolean;
 }) {
@@ -75,12 +74,6 @@ function TabIconAvatar(props: {
     </Show>
   );
 }
-
-const SHAPE_CHOICES = [
-  ["square", "agent"],
-  ["rounded", "agent:rounded"],
-  ["circle", "agent:circle"],
-] as const;
 
 function LobsterPreview(props: { palette: LobsterPetPalette }) {
   const look = createMemo(() => canonicalLobsterLook(props.palette));
@@ -128,15 +121,13 @@ export function TabIconRow(props: TabIconViewProps) {
   const selected = createMemo(() =>
     lobsters().find((palette) => props.tabIcon === `lobster:${palette.id}`),
   );
-  const agentLabel = (shape: AgentTabIconShape) =>
-    `${t("configView.appearance.tabIcon.agent")} · ${t(`configView.appearance.tabIcon.${shape}`)}`;
   const selectionName = () => {
     const palette = selected();
     const shape = selectedShape();
     return palette
       ? lobsterPaletteName(palette.id)
       : shape
-        ? agentLabel(shape)
+        ? t("configView.appearance.tabIcon.agent")
         : t("configView.appearance.tabIcon.default");
   };
   const description = () => {
@@ -170,21 +161,17 @@ export function TabIconRow(props: TabIconViewProps) {
             >
               <TabIconAvatar imageUrl={null} fallbackUrl={defaultSource()} />
             </TabIconPick>
-            <For each={SHAPE_CHOICES}>
-              {([choice, preference]) => (
-                <TabIconPick
-                  label={agentLabel(choice)}
-                  pressed={selectedShape() === choice}
-                  onSelect={() => props.setTabIconMode(preference)}
-                >
-                  <TabIconAvatar
-                    imageUrl={props.tabIconAgentAvatar ?? null}
-                    shape={choice}
-                    fallbackUrl={defaultSource()}
-                  />
-                </TabIconPick>
-              )}
-            </For>
+            <TabIconPick
+              label={t("configView.appearance.tabIcon.agent")}
+              pressed={selectedShape() !== null}
+              onSelect={() => props.setTabIconMode("agent")}
+            >
+              <TabIconAvatar
+                imageUrl={props.tabIconAgentAvatar ?? null}
+                shape="circle"
+                fallbackUrl={defaultSource()}
+              />
+            </TabIconPick>
             <For each={lobsters()} keyed={(entry) => entry.id}>
               {(palette) => (
                 <TabIconPick

@@ -20,7 +20,6 @@ const record: DurableProcessRecord = {
   id: "opaque-process-id",
   agentId: "main",
   sessionKey: "agent:main:test",
-  sessionId: "owning-session-id",
   unitName: "openclaw-proc-0123456789abcdef.service",
   command: "exec",
   cwd: "/workspace",

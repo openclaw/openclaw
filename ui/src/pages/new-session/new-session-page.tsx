@@ -59,10 +59,10 @@ import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 import { createNewSessionTitle } from "./draft-title.ts";
 import { DraftWelcome } from "./draft-welcome.tsx";
 import {
+  DraftWelcomeHint,
   NEW_SESSION_DOCKED_LAYOUT_QUERY,
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
-  NewSessionWelcomeHint,
 } from "./incognito-control-view.tsx";
 import { restoredInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
@@ -71,6 +71,7 @@ import {
   type NewSessionPageProps,
   type PageHost,
 } from "./new-session-page-owner.ts";
+import { PickerSkeleton } from "./picker.tsx";
 import { createSubmissionAction } from "./submission-action.ts";
 import { AgentSelect, NewSessionPlaceControls } from "./target-controls-view.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
@@ -241,14 +242,7 @@ function DraftBlock(props: {
             />
           </Show>
         }
-        placeSelect={
-          <NewSessionPlaceControls
-            params={placeOptions()}
-            ref={(read) => {
-              placeElements = read;
-            }}
-          />
-        }
+        placeSelect={null}
       />
       <Show when={place().worktree && !isWorktreeNameValid(place().worktreeName)}>
         <DraftError message={t("newSession.worktreeNameInvalid")} />
@@ -280,6 +274,18 @@ function DraftBlock(props: {
         />
       </Show>
       <NewSessionComposer
+        contextControls={
+          <div class="new-session-page__triggers">
+            <Loading fallback={<PickerSkeleton tray checkout={place().checkoutVisible} />}>
+              <NewSessionPlaceControls
+                params={placeOptions()}
+                ref={(read) => {
+                  placeElements = read;
+                }}
+              />
+            </Loading>
+          </div>
+        }
         surroundings={surroundings}
         options={Object.assign(props.options(), {
           permissionControl,
@@ -449,7 +455,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
     return () => stops.forEach((stop) => stop());
   });
   const dockedLayout = createMediaQuerySource(NEW_SESSION_DOCKED_LAYOUT_QUERY);
-  const [incognitoNoteOpen, setIncognitoNoteOpen] = createSignal(false);
+  const [noteOpen, setNoteOpen] = createSignal(false);
   const visibilityControl = {
     get visibility() {
       return page().submission.visibility;
@@ -464,7 +470,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
     setVisibility: (visibility: Parameters<DraftSubmissionFlow["setVisibility"]>[0]) => {
       owner.submission.setVisibility(visibility);
       // Say what Incognito means when it is turned on; restored drafts stay quiet.
-      setIncognitoNoteOpen(owner.submission.visibility === "incognito" && dockedLayout.read());
+      setNoteOpen(owner.submission.visibility === "incognito" && dockedLayout.read());
     },
   };
   const completed = () => page().submission.completedSubmission;
@@ -516,13 +522,7 @@ function renderPageContent(host: PageHost, shell: NewSessionPageProps) {
           </Show>
         ));
         const welcomeHint = children(() => (
-          <Show when={!catalog.isTarget(page().data)} fallback={page().welcomeHint()}>
-            <NewSessionWelcomeHint
-              hint={page().welcomeHint()}
-              noteOpen={incognitoNoteOpen()}
-              onNoteOpenChange={setIncognitoNoteOpen}
-            />
-          </Show>
+          <DraftWelcomeHint page={page()} open={noteOpen()} setOpen={setNoteOpen} />
         ));
         onSettled(() => {
           renderedPages.add(host);

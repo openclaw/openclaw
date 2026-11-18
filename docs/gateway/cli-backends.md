@@ -396,6 +396,17 @@ For local plugin-managed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
 native session retains the context for resume. Imported visible history and
 cross-provider fallback preludes do not copy private hook attachments.
+Claude Code saves a single hook value above 10,000 characters to a file and
+shows the model only a preview, which message-only turns cannot open. OpenClaw
+splits longer private context, such as a long subagent result in a completion
+turn, across 128 prompt hooks of at most 10,000 UTF-16 code units each. Claude
+renders these as separate reminders, so each segment is a labeled, complete
+JSON string. The labels describe how to concatenate decoded segments without
+separators, preserving the original instruction/data boundaries. Cuts preserve
+JSON escapes and surrogate pairs. This bounded allowance covers a
+160,000-code-unit result even when runtime-context and transport JSON escaping
+expand it sevenfold, with room for framing. Larger context can still spill to
+Claude Code's file fallback.
 
 Local plugin-managed Claude turns also receive the renderer-owned Runtime facts
 through this private hook context on every turn. Session identity stays out of the
@@ -656,6 +667,7 @@ A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest. An oversized summary is truncated and labeled `(truncated)`.
 - Same-provider `claude-cli` to `claude-cli` fallbacks rely on Claude's own `--resume` and skip the prelude.
 - The seed reuses the existing Claude session-file path validation, so arbitrary paths cannot be read.
+- A turn that called a tool and then exceeded the stream output limit (`CLI JSONL output exceeded …`) does not fall back. Another model would run the user message again and repeat the completed tool calls, so the run fails with that error instead.
 
 ## Images
 
@@ -680,18 +692,18 @@ Images come from the current turn's attachments and explicit image references, i
 JSON examples inside double-quoted banner text are not treated as response or error records.
 For JSONL, banner scanning starts fresh on each line.
 
-Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Pure tool-result records
-hand payloads to consumers without retaining them, so those payloads do not count
-toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
-records and cumulative snapshots still count. Forwarded subagent assistant
+Claude streaming limits count what the parser keeps: text, thinking, and
+tool-input payloads, assistant content blocks, block headers, and tool ids. Frames
+whose content the parser discards (tool-result payloads, message and request
+metadata, block and message stops, thinking signatures and progress ticks) pay a
+fixed allowance each, so the 8 MiB output limit also bounds how many frames a turn
+can stream. Mixed user records still count in full. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
 allowance for their parent progress id. Child attribution alone does not earn
 that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Discarded stream control frames (thinking signatures and progress
-ticks, block and message stops, message deltas) are charged a fixed allowance,
-and progress ticks and stops also skip the frame count like partial-message
-envelopes. Single-line limits and bounded frame counts remain active.
+output limit. The 20,000-frame limit counts only frames that leave more than
+1 KiB of their raw line uncharged, such as large tool results. Single-line limits
+remain active.
 
 Input modes:
 
@@ -936,8 +948,9 @@ that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for clean
 triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
-exceeds its deadline, OpenClaw refuses replacement, including from a later run.
-Check the cleanup error and the backend's remaining processes before retrying.
+exceeds its deadline, the run waiting for it fails with the cleanup error. The
+next run starts a new process; check `openclaw logs` and the backend's remaining
+processes if the error repeats.
 Command output and process exit alone do not confirm that descendants stopped.
 
 For `claude-cli`, the installed Claude Code process reads and refreshes its own native

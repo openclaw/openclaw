@@ -7,6 +7,7 @@ import {
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { MessageInjectionWithdrawnError } from "../auto-reply/reply/message-injection-authority.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { diagnosticLogger } from "../logging/diagnostic-runtime.js";
 import type { AgentHarnessAttemptParams } from "../plugin-sdk/agent-harness-runtime.js";
 import {
@@ -209,12 +210,44 @@ function revocableAuthority(message: string) {
   const controller = new AbortController();
   return {
     error,
+    signal: controller.signal,
     revoke: () => controller.abort(error),
     assertCurrent: () => controller.signal.throwIfAborted(),
   };
 }
 
 describe("submitSessionControllerSteer", () => {
+  it.each([
+    [1, new GatewayOperatorAccessUnavailableError()],
+    [1, new Error("internal SDK assertion failure")],
+    [2, new Error("internal SDK assertion failure")],
+  ] as const)(
+    "retains unaccepted input after assertion %s refuses without revocation (%s)",
+    async (at, error) => {
+      let checks = 0;
+      let refusing = false;
+      const assertCurrent = () => {
+        if (refusing && ++checks >= at) {
+          throw error;
+        }
+      };
+      const { input, injected, operation } = startTurn({
+        adapter: { authority: { assertCurrent } },
+      });
+      refusing = true;
+      await expect(steer(input)).rejects.toBe(error);
+      expect(input.retirementRequested).toBeUndefined();
+      expect(input.abortSignal.aborted).toBe(false);
+      expect(operation.abortSignal.aborted).toBe(false);
+      expect(injected).toEqual([]);
+      refusing = false;
+      expect(assertCurrent).not.toThrow();
+      operation.complete();
+      const claim = expectDefined(tryClaimSessionControllerTask(input), "retained fallback input");
+      releaseSessionControllerClaim(claim);
+    },
+  );
+
   it.each([
     [undefined, "required"],
     [undefined, "optional"],

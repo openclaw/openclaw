@@ -164,7 +164,6 @@ const runtimeConsumers = [
     // Compiled catalog workers load the fixture's public SDK through built host artifacts.
     "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.oauth-peers.integration.test.ts",
   ].map((file) => ({
     file,
@@ -291,7 +290,6 @@ const runtimeConsumers = [
   ...[
     "src/infra/database-engine/cli-oneshot.postgres.test.ts",
     "src/infra/database-engine/interactive-setup.integration.test.ts",
-    "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     "src/plugin-state/plugin-state-store.runtime.test.ts",
   ].map((file) => ({
@@ -304,7 +302,6 @@ const runtimeConsumers = [
     "src/commands/doctor-agent-database-order.process.test.ts",
     "src/commands/doctor-config-flow.legacy-composition.test.ts",
     "src/commands/doctor-config-preflight.test.ts",
-    "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
     "src/commands/doctor-historical-imports.process.test.ts",
   ].map((file) => ({
@@ -384,6 +381,7 @@ const runtimeConsumers = [
     "src/gateway/github-publication-draft.test.ts",
     "src/gateway/github-publication-requester-aliases.test.ts",
     "src/gateway/github-publication-requester.test.ts",
+    "src/gateway/github-publication-requester.members.test.ts",
   ].map((file) => ({
     file,
     configs: [

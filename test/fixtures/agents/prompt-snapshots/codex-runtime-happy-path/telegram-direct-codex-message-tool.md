@@ -71,6 +71,7 @@
     "features.shell_tool": true,
     "features.standalone_web_search": false,
     "features.tool_suggest": false,
+    "include_collaboration_mode_instructions": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -122,6 +123,7 @@
     "features.shell_tool": true,
     "features.standalone_web_search": false,
     "features.tool_suggest": false,
+    "include_collaboration_mode_instructions": false,
     "project_doc_max_bytes": 131072,
     "suppress_unstable_features_warning": true,
     "tools.update_plan.enabled": false,
@@ -194,7 +196,7 @@
 
 ## Reconstructed Model-Bound Prompt Layers
 
-This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, native collaboration-mode instructions, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
+This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.
 
 ### Layer Metadata
 
@@ -208,7 +210,7 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
   "limitations": [
     "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
     "Additional context shows this turn's supplied values; native truncation, deduplication and retained history are not simulated.",
-    "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API."
+    "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API. Ordinary managed sessions suppress the native Default collaboration block; their collaboration policy is included in OpenClaw developer instructions above."
   ],
   "openClawRuntime": {
     "additionalContextFrom": "extensions/codex app-server turn/start additionalContext",
@@ -245,28 +247,28 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 86800,
-    "roughTokens": 21700
+    "chars": 102799,
+    "roughTokens": 25700
   },
   "openClawBaseInstructions": {
-    "chars": 8398,
-    "roughTokens": 2100
+    "chars": 9356,
+    "roughTokens": 2339
   },
   "openClawDeveloperInstructions": {
-    "chars": 3431,
-    "roughTokens": 858
+    "chars": 3683,
+    "roughTokens": 921
   },
   "openClawParentLocalInstructions": {
     "chars": 507,
     "roughTokens": 127
   },
   "totalTextOnly": {
-    "chars": 14505,
-    "roughTokens": 3627
+    "chars": 15715,
+    "roughTokens": 3929
   },
   "totalWithDynamicToolsJson": {
-    "chars": 101307,
-    "roughTokens": 25327
+    "chars": 118516,
+    "roughTokens": 29629
   },
   "userInputText": {
     "chars": 879,
@@ -325,8 +327,11 @@ For user-requested login or pairing in a group, deliver short-lived codes and ve
 ## OpenClaw Control
 Do not invent commands.
 Config read: `gateway` (`config.get|config.schema.lookup`) only when those actions are exposed by its schema. Config writes need the `openclaw` tool.
+
+Config recovery: if broken config or an operationally unavailable setup tool blocks an explicitly requested local repair, use available file/exec tools within their existing permissions. Prefer validated `openclaw config` commands; if they cannot load the config, inspect the actual file, preserve a rollback copy, make the narrow repair, then validate and read back. Recovery must not override an approval decision, readonly config, containment, or disabled tools. Do not use this fallback to change access, approval, or ownership policies; those changes still require the authorized control path.
 `/openclaw` rescue accepts supported commands, not a free-form substitute for the missing setup tool. Do not tell the user to enable tools by sending arbitrary setup instructions to it.
-For the Gateway hosting this session: In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile. On an explicit owner request or operator-scheduled maintenance, perform the work with `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Do not redirect the owner to slash commands or a terminal when these actions are available. Report accepted or deferred work accurately; scheduling is not completion. Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator. Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for installation changes or service control. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization.
+For the Gateway hosting this session: In a connected chat, the owner can send `/update` with commands.restart enabled (the default), regardless of the agent's tool profile. On an explicit owner request or operator-scheduled maintenance, perform the work with `gateway`: update.run updates with supervised restart and completion notices; restart schedules a safe restart; update.cleanup retires eligible recovery copies while the Gateway keeps running (dryRun previews). Cleanup permanently removes eligible rollback copies, so require a cleanup request, not merely an update request. Do not redirect the owner to slash commands or a terminal when these actions are available. Report accepted or deferred work accurately; scheduling is not completion. Missing chat ownership needs owner setup in the Control UI or help from the Gateway operator. Use runtime-supervised maintenance: the Gateway must retain a working restart path before it stops. For this Gateway, use maintenance tools, not exec or detached jobs, for updates, installation replacement, or service stop/restart. If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec.
+For explicitly authorized non-disruptive component builds (such as `pnpm build:iroh`), dependency work, or repairs with no dedicated maintenance action, use exec under normal permissions and approvals. Do not refuse solely because the work is on the Gateway host or no maintenance action exists.
 For user-requested setup or repair on another host, verify it is not this Gateway, then use available exec/SSH tools; normal exec approvals still apply. The local `openclaw` helper does not target remote Gateways. Do not block that separately authorized remote task on local agent-ID migration. For updates there, use `openclaw update --yes`.
 
 ## Documentation
@@ -419,12 +424,16 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 
 ### Conversation Behavior
 You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation. If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Do not use silence to abandon an outstanding request or hide a failure.
+
+<collaboration_mode>
+Prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. Ask the user directly when required input prevents progress; silence is not an answer or approval.
+</collaboration_mode>
 </thread_policy>
 ````
 
 ### Developer: Codex Collaboration Mode Instructions
 
-This turn asks Codex app-server to resolve its built-in Default collaboration-mode instructions at runtime.
+No per-turn collaboration text is supplied. Ordinary managed sessions suppress native Default-mode rendering and carry collaboration policy in the OpenClaw developer instructions above.
 
 ### Developer: OpenClaw Additional Context (openclaw_active_computer)
 
@@ -518,7 +527,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
+    "description": "Send/manage channel messages. Supports actions: react, send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -531,6 +540,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "asDocument": {
           "description": "Alias for forceDocument.",
+          "type": "boolean"
+        },
+        "asVideoNote": {
+          "description": "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
           "type": "boolean"
         },
         "asVoice": {
@@ -572,6 +585,34 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "contentType": {
           "type": "string"
         },
+        "delivery": {
+          "description": "Delivery prefs; pin when supported.",
+          "properties": {
+            "pin": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "notify": {
+                      "type": "boolean"
+                    },
+                    "required": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["enabled"],
+                  "type": "object"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        },
         "dryRun": {
           "type": "boolean"
         },
@@ -584,7 +625,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "emoji": {
-          "description": "One Unicode emoji for the current WebChat prompt; explicit external channels validate their own emoji.",
+          "description": "Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:\"emoji-list\" directly as emoji. Use action:\"emoji-list\" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.",
           "type": "string"
         },
         "filename": {
@@ -610,6 +651,39 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         "groupId": {
           "type": "string"
         },
+        "location": {
+          "description": "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
+          "properties": {
+            "accuracy": {
+              "description": "Pin uncertainty radius in meters.",
+              "maximum": 1500,
+              "minimum": 0,
+              "type": "number"
+            },
+            "address": {
+              "description": "Venue address; requires name.",
+              "minLength": 1,
+              "type": "string"
+            },
+            "latitude": {
+              "maximum": 90,
+              "minimum": -90,
+              "type": "number"
+            },
+            "longitude": {
+              "maximum": 180,
+              "minimum": -180,
+              "type": "number"
+            },
+            "name": {
+              "description": "Venue name; requires address.",
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": ["latitude", "longitude"],
+          "type": "object"
+        },
         "media": {
           "description": "Media URL/path. data: use buffer.",
           "type": "string"
@@ -628,6 +702,298 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "mimeType": {
           "type": "string"
+        },
+        "pollAnonymous": {
+          "description": "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
+          "type": "boolean"
+        },
+        "pollDurationSeconds": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "pollPublic": {
+          "description": "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
+          "type": "boolean"
+        },
+        "presentation": {
+          "description": "Rich text/chart/table/button/select/context; unsupported degrades to text.",
+          "properties": {
+            "blocks": {
+              "items": {
+                "properties": {
+                  "buttons": {
+                    "items": {
+                      "properties": {
+                        "action": {
+                          "anyOf": [
+                            {
+                              "properties": {
+                                "command": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "const": "command",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "command"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "callback",
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "value"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "url",
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "web-app",
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "widgetId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "web-app",
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "widgetId": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "widgetId"],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "disabled": {
+                          "type": "boolean"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "reusable": {
+                          "type": "boolean"
+                        },
+                        "style": {
+                          "enum": ["primary", "secondary", "success", "danger"],
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string"
+                        },
+                        "web_app": {
+                          "properties": {
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["url"],
+                          "type": "object"
+                        },
+                        "webApp": {
+                          "properties": {
+                            "url": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["url"],
+                          "type": "object"
+                        }
+                      },
+                      "required": ["label"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "caption": {
+                    "type": "string"
+                  },
+                  "categories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "chartType": {
+                    "enum": ["pie", "bar", "area", "line"],
+                    "type": "string"
+                  },
+                  "headers": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "options": {
+                    "items": {
+                      "properties": {
+                        "action": {
+                          "anyOf": [
+                            {
+                              "properties": {
+                                "command": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "const": "command",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "command"],
+                              "type": "object"
+                            },
+                            {
+                              "properties": {
+                                "type": {
+                                  "const": "callback",
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "value"],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["label"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "placeholder": {
+                    "type": "string"
+                  },
+                  "rowHeaderColumnIndex": {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "rows": {
+                    "items": {
+                      "items": {
+                        "type": ["string", "number"]
+                      },
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "segments": {
+                    "items": {
+                      "properties": {
+                        "label": {
+                          "type": "string"
+                        },
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["label", "value"],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "series": {
+                    "items": {
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "values": {
+                          "items": {
+                            "type": "number"
+                          },
+                          "minItems": 1,
+                          "type": "array"
+                        }
+                      },
+                      "required": ["name", "values"],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": ["text", "context", "divider", "buttons", "select", "chart", "table"],
+                    "type": "string"
+                  },
+                  "xLabel": {
+                    "type": "string"
+                  },
+                  "yLabel": {
+                    "type": "string"
+                  }
+                },
+                "required": ["type"],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "title": {
+              "type": "string"
+            },
+            "tone": {
+              "enum": ["info", "success", "warning", "danger", "neutral"],
+              "type": "string"
+            }
+          },
+          "required": ["blocks"],
+          "type": "object"
         },
         "quoteText": {
           "description": "Telegram reply quote text.",

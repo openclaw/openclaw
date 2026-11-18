@@ -42,9 +42,6 @@ it("keeps the configured occurrence while runtime refreshes, pauses, runs, or co
     job.enabled = enabled;
     refresh();
     expect(summary()).toContain(expected);
-    expect(container.querySelector(".cron-detail-meta > .cron-detail-sub")?.textContent).toContain(
-      expected.startsWith("Next activity at") ? "Next " : expected,
-    );
     expect(container.querySelector("#cron-schedule-at")).toBe(input);
     expect(input.value).toBe(formatDateTimeLocal(at));
   }

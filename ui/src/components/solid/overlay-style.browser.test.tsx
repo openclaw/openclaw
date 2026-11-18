@@ -80,10 +80,11 @@ function positionTrigger(style: Partial<CSSStyleDeclaration>) {
 }
 
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
-  const box = expectWithinViewport(menu);
+  // The menu's scrollport clips rows: a menu inside the viewport can still cut one off.
+  const top = expectWithinViewport(menu).top + menu.clientTop;
   const itemBox = element.getBoundingClientRect();
-  expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
-  expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
+  expect(itemBox.top, element.textContent ?? "").toBeGreaterThanOrEqual(top);
+  expect(itemBox.bottom, element.textContent ?? "").toBeLessThanOrEqual(top + menu.clientHeight);
 }
 
 describe("native overlay presentation", () => {
@@ -264,6 +265,26 @@ describe("native overlay presentation", () => {
       expectItemVisible(item("Action 1"), surface());
     },
   );
+
+  it("flips a short row menu at the window edge with every action whole", async () => {
+    await page.viewport(800, 600);
+    mountMenu({
+      placement: "bottom-end",
+      items: [
+        { id: "edit", label: "Edit" },
+        { id: "delete", label: "Delete", variant: "danger" },
+      ],
+    });
+    // Like the last Secrets row: less room below the trigger than the menu needs.
+    positionTrigger({ right: "16px", bottom: "40px" });
+    await openMenu();
+    const rows = [...surface().querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => expectItemVisible(row, surface()));
+    expect(surface().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      trigger().getBoundingClientRect().top,
+    );
+  });
 
   it("uses high-contrast borders and focus in forced colors", async () => {
     await emulateOverlayMedia({ forcedColors: "active" });

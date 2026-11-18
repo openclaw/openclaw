@@ -52,7 +52,10 @@ import {
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
-import { acceptSessionTurnFreshAuthority } from "./session-turn-fresh-authority.js";
+import {
+  acceptSessionTurnFreshAuthority,
+  prepareSessionTurnMention,
+} from "./session-turn-fresh-authority.js";
 import {
   completeSessionTurnPublication,
   publishCommittedSessionTurn,
@@ -234,11 +237,13 @@ export async function appendSessionTurnInWorker(
     }
     const operation = {
       database,
+      workspaceEvidence: ownerSource?.workspaceEvidence,
+      readCustody: ownerSource?.readCustody,
       retainedExecution: execution,
       agentId: scope.agentId,
       assertCurrent,
       candidateKind: "session-turn",
-      onTransactionFacts(facts) {
+      onTransactionFacts(this: void, facts) {
         if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
           return true;
         }
@@ -441,18 +446,9 @@ export async function appendSessionTurnInWorker(
           if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
             message = sanitizeTranscriptMessageForStorage(message);
           }
-          if (
-            !facts?.pending &&
-            !facts?.existing &&
-            message !== undefined &&
-            hooks?.prepareMentionInvitation
-          ) {
-            const preparedMention = hooks.prepareMentionInvitation(message);
-            if (preparedMention) {
-              append.mentionInvitation = structuredClone(preparedMention.invitation);
-              mentionCommitGuards[index] = preparedMention.assertCurrent;
-              append.freshGuard = true;
-            }
+          const mentionGuard = prepareSessionTurnMention(append, hooks, facts, message);
+          if (mentionGuard) {
+            mentionCommitGuards[index] = mentionGuard;
           }
           plan.options.messages[index] = {
             ...append,
@@ -510,6 +506,12 @@ export async function appendSessionTurnInWorker(
           }
         };
         const authority: SessionActorAuthority = {
+          workspaceEvidence: (inputActor.storageAuthority?.workspaceEvidence ?? []).concat(
+            ownerSource?.workspaceEvidence ?? [],
+          ),
+          readCustody: (inputActor.storageAuthority?.readCustody ?? []).concat(
+            ownerSource?.readCustody ?? [],
+          ),
           assertCurrent: () => checkAuthority(assertCurrent),
           authorize(stage, state, publication) {
             checkAuthority(() => {
@@ -540,24 +542,22 @@ export async function appendSessionTurnInWorker(
               database,
               undefined,
               assertCurrent,
-              (preparedExecution, source) =>
-                preparedExecution
-                  .runExisting(source, (worker) =>
-                    worker.execute({ type: "session.turn.prepare", input: plan }),
-                  )
-                  .then((prepared) => {
-                    if (!prepared) {
-                      throw new Error("Input preparation lost its database");
-                    }
-                    return prepared;
-                  }),
-              undefined,
-              undefined,
-              undefined,
-              undefined,
-              (publication) => {
-                operation.onTransactionFacts(publication);
+              async (preparedExecution, source) => {
+                source.workspaceEvidence = authority.workspaceEvidence;
+                source.readCustody = authority.readCustody;
+                const prepared = await preparedExecution.runExisting(source, (worker) =>
+                  worker.execute({ type: "session.turn.prepare", input: plan }),
+                );
+                if (!prepared) {
+                  throw new Error("Input preparation lost its database");
+                }
+                return prepared;
               },
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              operation.onTransactionFacts,
             );
           },
           async () => {

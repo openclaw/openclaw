@@ -261,7 +261,6 @@ function SystemsInventory(props: { controller: Systems }) {
           type="button"
           class="systems-filter__refresh"
           aria-label={t("systems.refresh")}
-          title={t("systems.refresh")}
           disabled={inventoryRead.pending() || !controller().connected()}
           onClick={() => void controller().refresh("manual")}
         >
@@ -306,7 +305,9 @@ function SystemsInventory(props: { controller: Systems }) {
             );
           }}
         </For>
-        {!inventoryRead.pending() && rows().length === 0 ? (
+        {controller().state.inventory !== null &&
+        !inventoryRead.pending() &&
+        rows().length === 0 ? (
           <p class="systems-sidebar__empty">
             {t(
               query() || controller().state.statusFilter !== "all"

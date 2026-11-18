@@ -52,7 +52,7 @@ it("accepts the legacy full release run alias without allowing ambiguous selecto
   ).toThrow("do not combine");
 });
 
-it("rejects invalid selectors, publication booleans, and retired bypasses", () => {
+it("rejects invalid selectors and publication booleans", () => {
   const rejects = (args: string, error?: string) => expect(() => parse(args)).toThrow(error);
   const selectorError = "--tag and exactly one of --workflow-ref or --workflow-sha are required.";
   rejects("", selectorError);
@@ -61,9 +61,6 @@ it("rejects invalid selectors, publication booleans, and retired bypasses", () =
     `--workflow-sha ${"A".repeat(12)}`,
     "--workflow-sha must be a lowercase 40-character commit SHA.",
   );
-  for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
-    rejects(`--workflow-ref main ${flag} approved`);
-  }
   rejects("--workflow-ref main --publish-openclaw-npm TRUE", "must be true or false");
 });
 

@@ -375,7 +375,7 @@ describe("host-owned current admission annotation", () => {
         } finally {
           host?.close();
           for (const source of sources) {
-            source.finishPendingInput?.("interrupted");
+            source.finishPendingInput?.("interrupted", "failed");
           }
         }
       },

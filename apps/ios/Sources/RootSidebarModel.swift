@@ -146,7 +146,18 @@ extension NodeAppModel {
                         agentID: sourceAgentID,
                         offset: offset)
                     let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
-                    return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+                    let response: Result<OpenClawChatSessionsListResponse, Error>
+                    do {
+                        response = try await .success(GatewayPayloadDecoding.decode(
+                            OpenClawChatSessionsListResponse.self, from: data))
+                    } catch {
+                        response = .failure(error)
+                    }
+                    // Decoding suspends this owner; a retired page or error cannot publish a partial roster.
+                    guard await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID) == route else {
+                        throw CancellationError()
+                    }
+                    return try response.get()
                 }
                 guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID),
                       self.chatDeliveryAgentId == sourceAgentID
@@ -658,7 +669,7 @@ final class RootSidebarModel {
         return snapshot?.jobs
     }
 
-    private func request<T: Decodable>(
+    private func request<T: Decodable & Sendable>(
         _ type: T.Type,
         appModel: NodeAppModel,
         method: String,
@@ -669,7 +680,7 @@ final class RootSidebarModel {
                 method: method,
                 paramsJSON: paramsJSON,
                 timeoutSeconds: 12)
-            return try JSONDecoder().decode(type, from: data)
+            return try await GatewayPayloadDecoding.decode(type, from: data)
         } catch {
             return nil
         }

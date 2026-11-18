@@ -500,6 +500,20 @@ export function renderSidebarSessionSortMenuForMenus(
               {t("sessionsView.personalGroupNew")}
             </button>
             <a
+              ref={(element) => controls.set("all-sessions", element)}
+              class="sidebar-session-filter-footer"
+              href={pathForRoute("sessions", host.basePath)}
+              onClick={(event: MouseEvent) =>
+                handleNavigationClick(event, () => {
+                  menus.closePositionedMenu("sessionSort");
+                  host.onNavigate?.("sessions");
+                })
+              }
+            >
+              <span aria-hidden="true">{<Icon name="messageCircle" />}</span>
+              {t("chat.sidebar.viewAllSessions")}
+            </a>
+            <a
               ref={(element) => controls.set("sources", element)}
               id="sidebar-sessions-sources"
               class="sidebar-session-filter-footer"

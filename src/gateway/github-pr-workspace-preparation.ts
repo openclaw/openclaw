@@ -229,7 +229,6 @@ export async function performSessionGitHubPreparation(
     const baseCommit =
       params.action === "prepare_pr" ? params.expectedHeadCommit : params.baseCommit;
     const assertEntry = (entry: SessionEntry) => {
-      assertCurrent();
       if (
         entry.sessionId !== owner.sessionId ||
         (entry.lifecycleRevision ?? null) !== owner.lifecycleRevision ||
@@ -451,7 +450,6 @@ export async function performSessionGitHubPreparation(
     using sourceResources = new DisposableStack();
     let reserved: Awaited<ReturnType<typeof prepareGitHubPublicationSession>> | undefined;
     const assertReserved = () => {
-      assertCurrent();
       const entry = (reserved ?? initial).readCurrent().entry;
       if (
         !entry ||
@@ -546,6 +544,7 @@ export async function performSessionGitHubPreparation(
       await patchSessionEntryCore(
         scope,
         (entry) => {
+          assertCurrent();
           const worktree = assertEntry(entry);
           if (!isDeepStrictEqual(worktree.githubPullRequest, binding)) {
             throw new Error("The accepted PR source changed before preparation completed.");

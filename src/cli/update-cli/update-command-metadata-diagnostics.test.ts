@@ -431,6 +431,7 @@ it.each([
           "version",
           "engines.node",
           "openclaw.schemaVersions",
+          "dist.unpackedSize",
           "--json",
           "--global",
         ],

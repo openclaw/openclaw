@@ -2,6 +2,7 @@ import type {
   ProgressContinuationCapability,
   ProgressContinuationReceipt,
 } from "../../channels/progress-continuation.js";
+import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
@@ -129,6 +130,16 @@ export type ReplyDispatcherOptions = {
     queuedCounts: Readonly<Record<ReplyDispatchKind, number>>;
     humanDelayBudgetMs: number;
   }) => ReplyFollowupAdmissionBarrierTimeoutPolicy | undefined;
+};
+
+export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
+  typingCallbacks?: TypingCallbacks;
+  onReplyStart?: () => Promise<void> | void;
+  onIdle?: () => Promise<void> | void;
+  onSettled?: () => unknown;
+  onFreshSettledDelivery?: () => unknown;
+  /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
+  onCleanup?: () => void;
 };
 
 export type ReplyDispatcher = {

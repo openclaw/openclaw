@@ -26,7 +26,9 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
-  appendOnlyRuntimeContext: false,
+  // Earlier runtime-context carriers stay in history on every route, so each request extends
+  // the previous one byte for byte. An owning provider plugin may opt out explicitly.
+  appendOnlyRuntimeContext: true,
   inHistorySystemUpdates: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
@@ -157,12 +159,7 @@ export function resolveTranscriptPolicy(params: {
   const replayPolicy = buildReplayPolicy
     ? (buildReplayPolicy(context) ?? undefined)
     : buildUnownedProviderTransportReplayFallback(context);
-  const modelApi = params.modelApi;
-  const policy = {
-    ...DEFAULT_TRANSCRIPT_POLICY,
-    // Exact-entry caches need earlier temporal carriers to remain in the request prefix.
-    appendOnlyRuntimeContext: modelApi === "openai-completions" || modelApi === "ollama",
-  };
+  const policy = { ...DEFAULT_TRANSCRIPT_POLICY };
   for (const [key, value] of Object.entries(replayPolicy ?? {})) {
     if (value != null) {
       Object.assign(policy, {
@@ -174,11 +171,5 @@ export function resolveTranscriptPolicy(params: {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
     policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;
   }
-  // Anthropic caches tools, then system, then messages: any system change re-writes the whole
-  // conversation. Every Anthropic Messages route (custom base URLs, proxies and OAuth included)
-  // therefore pins the session prompt; routes without in-history system messages receive the
-  // delta as a user-role note.
-  policy.pinnedSystemPrompt =
-    policy.inHistorySystemUpdates === true || modelApi === "anthropic-messages";
   return policy;
 }
