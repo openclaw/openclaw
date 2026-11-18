@@ -19,6 +19,7 @@ import {
   completionSourcesShareAuthority,
   runWithCompletionBaseline,
   runWithLiveCompletionAuthority,
+  selectCompletionAuthorityBatch,
 } from "./subagent-completion-authority.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
@@ -43,6 +44,7 @@ import {
   latestSubagentRun,
   compareSubagentRunGeneration,
 } from "./subagent-run-generation.js";
+import { SubagentRunIndex } from "./subagent-run-index.js";
 import {
   isSubagentRunPayloadEvicted,
   recordSubagentRunPayloadEviction,
@@ -159,47 +161,6 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
 }
 
 const emptyRunBucket: readonly SubagentRunRecord[] = Object.freeze([]);
-
-class SubagentRunIndex extends Map<string, SubagentRunRecord[]> {
-  constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
-    super();
-  }
-
-  update(previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
-    const previousKey = previous && this.keyFor(previous);
-    const key = entry && this.keyFor(entry);
-    if (previousKey && previousKey !== key) {
-      const bucket = this.get(previousKey);
-      const position = bucket && previous ? bucket.indexOf(previous) : -1;
-      if (bucket && position >= 0) {
-        bucket.splice(position, 1);
-        if (bucket.length === 0) {
-          this.delete(previousKey);
-        }
-      }
-    }
-    if (!key || !entry) {
-      return;
-    }
-    const bucket = this.get(key);
-    if (bucket?.length === 1 && bucket[0] === previous) {
-      bucket[0] = entry;
-    } else if (bucket) {
-      // Replacement moves to the end, preserving the collector's last-published lookup.
-      const position = previous ? bucket.indexOf(previous) : -1;
-      if (position >= 0) {
-        bucket.splice(position, 1);
-      }
-      bucket.push(entry);
-    } else {
-      this.set(key, [entry]);
-    }
-  }
-
-  getLatest(key: string): SubagentRunRecord | undefined {
-    return this.get(key)?.at(-1);
-  }
-}
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
 // must stay O(1) regardless of retained collector records. The map subclass
@@ -419,6 +380,18 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return (
       entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       entry.execution.outcome?.status === "error"
+    );
+  }
+
+  selectCompletionAuthorityBatch(
+    observed: readonly SubagentRunRecord[],
+    anchor: SubagentRunRecord,
+  ): SubagentRunRecord[] {
+    return selectCompletionAuthorityBatch(
+      observed.map((entry) => this.currentValue(entry)),
+      this.currentValue(anchor),
+      this.completionAuthorities,
+      this.retiredCompletionEntries,
     );
   }
 

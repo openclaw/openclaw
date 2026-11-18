@@ -318,14 +318,18 @@ export function scheduleRequesterSettleWake(
       return false;
     }
   };
-  const admittedBatch = (
-    entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
-      ? [runId]
-      : (admittedWake?.batchRunIds ?? [runId])
-  ).flatMap((id) => {
-    const member = params.runs.get(id);
-    return member ? [member] : [];
-  });
+  const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
+  // Failure settlement owns offered results, not a message wait's future completion.
+  const offeredBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
+    (id) => {
+      const member = params.runs.get(id);
+      return member?.requesterSettleWake &&
+        member.requesterSettleWake.rearmGeneration === admittedWake?.rearmGeneration
+        ? [member]
+        : [];
+    },
+  );
+  const admittedBatch = subagentRuns.selectCompletionAuthorityBatch(offeredBatch, entry);
   let settleObserved = pendingSettlement?.scope === scope ? pendingSettlement.settle : undefined;
   let publishDispatch = pendingTransition?.scope === scope ? pendingTransition.commit : undefined;
   const completeBatch = async (
