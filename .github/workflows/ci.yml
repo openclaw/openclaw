@@ -2680,6 +2680,7 @@ jobs:
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
             resolve("ui/src/e2e/chat-scroll-tool-rows.e2e.test.ts"),
             resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-session-switch-scroll.e2e.test.ts"),
           ].filter((file) => existsSync(file) && isSelected(file)));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
           const hasRuntimeSuite = existsSync(runtimeSuite) && isSelected(runtimeSuite);
