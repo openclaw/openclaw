@@ -371,7 +371,10 @@ model ID is advertised, without refreshing or extending the metadata snapshot.
 Upstream reasoning metadata preserves omitted controls as unspecified and an
 empty options or effort list as no effort control. A native `null` effort maps
 to `none`; provider-native effort names retain their casing. These facts remain
-separate from whether a model performs reasoning internally.
+separate from whether a model performs reasoning internally. When describing
+a generated account listing with bundled or hosted catalog metadata, OpenClaw
+retains its explicit `compat.supportedReasoningEfforts`, including an empty
+list. General model metadata must not widen that account-specific control.
 
 Official plugins use the private, pure
 `openclaw/plugin-sdk/model-catalog-pricing` runtime subpath. It exposes

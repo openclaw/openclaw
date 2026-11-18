@@ -29,10 +29,10 @@ describe("ModelRegistry generated catalog description", () => {
     contextWindow: 1_048_576,
     contextTokens: 983_040,
     maxTokens: 65_536,
-    compat: { supportsReasoningEffort: true },
+    compat: { supportsReasoningEffort: true, supportedReasoningEfforts: ["low", "medium", "high"] },
   });
 
-  it("describes listed IDs with hosted rows and never publishes unlisted ones", () => {
+  it.each([undefined, ["medium"], []])("preserves discovered efforts: %j", (efforts) => {
     const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -76,7 +76,15 @@ describe("ModelRegistry generated catalog description", () => {
                     [provider]: {
                       baseUrl,
                       api: "openai-completions",
-                      models: [discovered("hosted-listed"), discovered("unknown-listed")],
+                      models: [
+                        {
+                          ...discovered("hosted-listed"),
+                          ...(efforts === undefined
+                            ? {}
+                            : { compat: { supportedReasoningEfforts: efforts } }),
+                        },
+                        discovered("unknown-listed"),
+                      ],
                     },
                   },
                 }),
@@ -94,7 +102,10 @@ describe("ModelRegistry generated catalog description", () => {
       contextWindow: 1_048_576,
       contextTokens: 983_040,
       maxTokens: 65_536,
-      compat: { supportsReasoningEffort: true },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: efforts ?? ["low", "medium", "high"],
+      },
       baseUrl,
     });
     expect(registry.find(provider, "hosted-listed")).not.toHaveProperty("inference.chatEvidence");

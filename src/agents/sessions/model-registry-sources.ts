@@ -169,11 +169,18 @@ export function projectProviderRequestConfig(config: {
  * row, the catalog owns the metadata field by field. Generated rows carry no marker separating a
  * provider-reported value from a discovery default (128k context, a $0 cost placeholder), so this
  * applies the rule live discovery already applies to a plugin's own static rows: the catalog value
- * wins and a discovered value fills only what the catalog omits. The row keeps its ID, route and a
- * declared non-chat kind.
+ * wins and a discovered value fills only what the catalog omits. The row keeps its ID, route,
+ * declared non-chat kind, and explicit account-specific reasoning effort list.
  */
 export function readGeneratedPluginModelCatalogProviders<
-  T extends { models?: readonly { id: string; cost?: unknown; inference?: { chat?: boolean } }[] },
+  T extends {
+    models?: readonly {
+      id: string;
+      cost?: unknown;
+      inference?: { chat?: boolean };
+      compat?: ProviderModelCatalog["compat"];
+    }[];
+  },
 >(params: Parameters<typeof filterGeneratedPluginModelCatalogProviders<T>>[0]): Record<string, T> {
   const providers = filterGeneratedPluginModelCatalogProviders(params);
   const plugin = params.pluginMetadataSnapshot?.manifestRegistry?.plugins.find(
@@ -210,6 +217,15 @@ export function readGeneratedPluginModelCatalogProviders<
         return {
           ...discovered,
           ...metadata,
+          // A general catalog ladder cannot widen the selected account's explicit controls.
+          ...(model.compat?.supportedReasoningEfforts !== undefined
+            ? {
+                compat: {
+                  ...(metadata.compat ?? model.compat),
+                  supportedReasoningEfforts: model.compat.supportedReasoningEfforts,
+                },
+              }
+            : {}),
           ...(row.cost ? {} : { cost: model.cost }),
           ...(inference ? { inference } : {}),
         };
