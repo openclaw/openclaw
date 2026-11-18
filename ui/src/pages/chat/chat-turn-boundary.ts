@@ -71,6 +71,13 @@ export function isInterSessionMessage(message: unknown): boolean {
   return provenance?.kind === "inter_session";
 }
 
+export function readInterSessionSummary(message: unknown): string | undefined {
+  const provenance = asRecord(asRecord(message)?.provenance);
+  return provenance?.kind === "inter_session" && typeof provenance.sourceSummary === "string"
+    ? provenance.sourceSummary
+    : undefined;
+}
+
 export function isSessionActivityGroup(group: MessageGroup): boolean {
   return (
     group.role === "assistant" &&

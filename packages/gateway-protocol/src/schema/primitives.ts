@@ -56,6 +56,7 @@ export const InputProvenanceSchema = closedObject({
   sourceTool: Type.Optional(Type.String()),
   sourceRole: Type.Optional(Type.Literal("subagent")),
   sourcePromptPrefix: Type.Optional(Type.String()),
+  sourceSummary: Type.Optional(Type.String()),
   jobId: Type.Optional(Type.String()),
   runId: Type.Optional(Type.String()),
 });

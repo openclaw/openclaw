@@ -285,6 +285,13 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
+Pass an optional `summary` for a one-line sender-written preview (up to 280
+characters, no line breaks). Control UI shows the linked source above the native
+message bubble and expands the summary inline to the original `message`. Without
+a summary, it shows the original message directly. Adjacent messages keep their
+own summaries, original content, order, and actions. Passive `mode: "notify"` keeps
+summary metadata with its ephemeral queued event; it does not create a chat bubble.
+
 Waiting and delayed inter-session replies recover the accepted run's full answer
 instead of returning its 4,096-character lifecycle preview. If the full answer is
 unavailable under the requester's current access, inline results include

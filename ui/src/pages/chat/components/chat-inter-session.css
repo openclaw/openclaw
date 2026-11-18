@@ -1,0 +1,52 @@
+/* Geometry, tint and bubble edges remain owned by the native forwarded bubble. */
+.chat-group.assistant.chat-group--inter-session {
+  flex-direction: row-reverse;
+  padding-inline-start: calc(var(--chat-group-inset) + var(--chat-avatar-gutter));
+  padding-inline-end: var(--chat-group-inset);
+}
+
+.chat-group--inter-session > .chat-group-messages {
+  align-items: flex-end;
+}
+
+.chat-group--inter-session > .chat-avatar,
+.chat-group--inter-session > .chat-avatar-slot {
+  margin-top: 22px;
+}
+
+.chat-inter-session-message {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.chat-group--inter-session .chat-session-activity__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.chat-group--inter-session .chat-session-activity__summary > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-group--inter-session .chat-session-activity__chevron {
+  transform: none;
+}
+
+.chat-group--inter-session .chat-session-activity[open] .chat-session-activity__chevron {
+  transform: rotate(180deg);
+}
+
+.chat-group--inter-session .chat-session-activity__body {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.chat-group--inter-session .chat-reply-attribution {
+  max-width: 100%;
+}

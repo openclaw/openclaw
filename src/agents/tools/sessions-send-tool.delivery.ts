@@ -99,6 +99,7 @@ export async function notifySessionsSendSession(params: {
         {
           sessionKey: params.sessionKey,
           contextKey: `session-notify:${params.runId}`,
+          inputProvenance: params.inputProvenance,
         },
         params.targetAgentId,
       ),

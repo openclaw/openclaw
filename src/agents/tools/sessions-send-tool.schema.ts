@@ -8,6 +8,15 @@ export const SessionsSendToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
+  summary: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 280,
+      pattern: "^[^\\r\\n\\u2028\\u2029]+$",
+      description:
+        "Optional one-line sender summary for the receiving chat; the full message remains expandable.",
+    }),
+  ),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   watch: Type.Optional(Type.Boolean()),
   mode: Type.Optional(

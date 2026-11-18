@@ -1,3 +1,4 @@
+import { validateAgentParams, formatValidationErrors } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
@@ -21,7 +22,11 @@ import {
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
-import { drainSystemEvents, peekSystemEvents } from "../../infra/system-events.js";
+import {
+  drainSystemEvents,
+  peekSystemEvents,
+  peekSystemEventEntries,
+} from "../../infra/system-events.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -252,6 +257,40 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
+  it("delivers a sender summary separately from the original peer message", async () => {
+    const callGateway = mockAgentGateway(async (request) => {
+      expect(
+        validateAgentParams(request.params),
+        formatValidationErrors(validateAgentParams.errors),
+      ).toBe(true);
+      expect(request.params.inputProvenance).toMatchObject({
+        kind: "inter_session",
+        sourceSessionKey: requesterSessionKey,
+        sourceTool: "sessions_send",
+        sourceSummary: "Verification is ready.",
+      });
+      expect(request.params.message).toContain("Full original receipt, not a replacement.");
+      expect(request.params.message).not.toContain("Verification is ready.");
+      return { runId };
+    });
+    const result = await execute(createTool({ callGateway }), "summary-peer", {
+      message: "Full original receipt, not a replacement.",
+      summary: "Verification is ready.",
+    });
+    expect(result.details, JSON.stringify(result.details)).toMatchObject({ status: "accepted" });
+  });
+
+  it.each(["two\nlines", "x".repeat(281), "   ", 42])(
+    "rejects invalid summaries before sending: %j",
+    async (summary) => {
+      const callGateway = vi.fn();
+      await expect(
+        execute(createTool({ callGateway }), "invalid-summary", { summary }),
+      ).rejects.toThrow();
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
   it("applies peer preferences to new notifications without revoking accepted events", async () => {
     const callGateway = vi.fn();
     callGateway.mockResolvedValue({ key: targetSessionKey, agentId: "main" });
@@ -259,6 +298,7 @@ describe("sessions_send dispatch admission", () => {
     const first = await tool.execute("notify-peer", {
       sessionKey: targetSessionKey,
       message: "accepted notice",
+      summary: "An optional passive preview.",
       mode: "notify",
     });
     expect(first.details).toMatchObject({
@@ -272,6 +312,9 @@ describe("sessions_send dispatch admission", () => {
       communication: { receive: "never" },
     });
     expect(peekSystemEvents(targetSessionKey)).toHaveLength(1);
+    expect(peekSystemEventEntries(targetSessionKey)[0]?.inputProvenance).toMatchObject({
+      sourceSummary: "An optional passive preview.",
+    });
     const second = await tool.execute("notify-denied", {
       sessionKey: targetSessionKey,
       message: "unaccepted notice",

@@ -7,7 +7,11 @@ import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
-import { isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import {
+  isSessionActivityGroup,
+  isInterSessionMessage,
+  readInterSessionSummary,
+} from "../chat-turn-boundary.ts";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
 
 registerChatComposerEnglish();
@@ -86,6 +90,14 @@ export function latestTranscriptAnnouncement(
         continue;
       }
       for (const group of chatItemGroups(part).toReversed()) {
+        if (isSessionActivityGroup(group) && isInterSessionMessage(group.messages[0]?.message)) {
+          const source = group.messages.at(-1);
+          const text =
+            readInterSessionSummary(source?.message) ?? extractTextCached(source?.message);
+          if (source && text) {
+            return announcement(source.key, text);
+          }
+        }
         if (isSessionActivityGroup(group)) {
           const count = group.messages.length;
           const source = group.senderSession?.label ?? group.senderSession?.sessionKey;
