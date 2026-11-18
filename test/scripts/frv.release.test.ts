@@ -702,7 +702,7 @@ else process.stdout.write(JSON.stringify(value));
 
 describe("publication status real CLI", () => {
   it.each([false, true])(
-    "prints a verification verdict without changing JSON (json=%s)",
+    "keeps verified qualification separate from publication inputs without changing JSON (json=%s)",
     async (json) => {
       const result = await runPublicationCli(publicationFixture(), [
         "verify",
@@ -715,8 +715,12 @@ describe("publication status real CLI", () => {
         expect(JSON.parse(result.stdout)).toEqual({ valid: true });
       } else {
         expect(result.stdout).toContain("VERIFIED: Full Release Validation run 77");
+        expect(result.stdout).toContain(`Qualification tooling (Q): ${SHA}`);
+        expect(result.stdout.split("\n").find((line) => line.startsWith("Candidate inputs:"))).toBe(
+          `Candidate inputs: --target-sha ${TARGET_SHA} --full-release-validation-run-id 77 --release-profile beta --skip-dispatch`,
+        );
         expect(result.stdout).toContain(
-          `--target-sha ${TARGET_SHA} --full-release-validation-run-id 77 --workflow-sha ${SHA} --release-profile beta --skip-dispatch`,
+          "Supply independently pinned publication tooling (P) via --workflow-sha <P> or --publish-workflow-ref <tag>",
         );
       }
     },
