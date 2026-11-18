@@ -633,7 +633,14 @@ export async function mutateRequesterCompletionBatch(
     params.operation.outcome.disposition !== "intentional_non_delivery"
   ) {
     for (const entry of params.entries) {
-      await recordRequiredCompletionNotice(entry, "failed");
+      // A permanent parent-only wake failure is reported by its bound requester
+      // settlement owner, never by re-resolving a possibly replaced conversation.
+      if (
+        entry.completionTarget !== "parent" ||
+        params.operation.outcome.disposition !== "permanent_failure"
+      ) {
+        await recordRequiredCompletionNotice(entry, "failed");
+      }
     }
   }
   return publication;

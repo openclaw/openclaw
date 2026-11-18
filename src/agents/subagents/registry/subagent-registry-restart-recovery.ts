@@ -32,7 +32,7 @@ import type {
 import type { SubagentRunRecord, SubagentSessionEffects } from "./subagent-registry.types.js";
 import {
   hasRequesterCompletionCohort,
-  hasSameRequesterWakeCohort,
+  hasSameRequesterWakePartition,
   isRequesterCompletionCohortCurrent,
   isRequesterSettleWakeForRun,
   sameRequesterSettleRunIdentity,
@@ -80,10 +80,12 @@ function findRequesterSettleWakeRecoveryBatch(
       continue;
     }
     const pauseNotice = child.pauseReason === "sessions_yield" && wake.pauseNotice;
-    const batchRunIds = pauseNotice ? [child.runId] : (wake.batchRunIds ?? []);
+    const batchRunIds = pauseNotice
+      ? [child.runId]
+      : (wake.partitionRunIds ?? wake.batchRunIds ?? []);
     const batch = batchRunIds.flatMap((id) => {
       const member = children.get(id);
-      return hasSameRequesterWakeCohort(member, wake) ? [member] : [];
+      return hasSameRequesterWakePartition(member, wake) ? [member] : [];
     });
     if (
       batch.length > 0 &&

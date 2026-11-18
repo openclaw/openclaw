@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -13,8 +12,13 @@ import {
   matchesSubagentChildSessionOwner,
   resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
+import {
+  hasSameCompletionAuthority,
+  isCancellationNotice,
+  type CompletionAuthority,
+  type CompletionCustody,
+} from "./subagent-completion-batch-authority.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
   publishSubagentRunChanges,
   subscribeSubagentRunChanges,
@@ -200,17 +204,6 @@ function completeRetirementPublication(scope: SubagentRetirementScope): void {
   publication.resolve();
 }
 
-type CompletionAuthority = NonNullable<
-  Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
->;
-type CompletionCustody = {
-  authority: CompletionAuthority;
-  entry: SubagentRunRecord;
-  /** The requester run whose accepted receipt this child's completion satisfies. */
-  requesterRunInstance?: OperationalRunInstanceRef;
-  stop: () => void;
-};
-
 class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
@@ -314,12 +307,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const entry = this.currentValue(observed);
     this.assertCompletionEntryCurrent(entry);
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    // Cancellation notices belong to the admitted cancellation caller, not its revoked target.
-    // Keep that caller's existing dispatch restrictions; never turn a successful result into a notice.
-    if (
-      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-      entry.execution.outcome?.status === "error"
-    ) {
+    // Without retained custody, only a cancellation notice may use the admitted caller.
+    if (!custody && isCancellationNotice(entry)) {
       return run();
     }
     if (
@@ -332,45 +321,59 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return custody ? custody.authority.run(run) : run();
   }
 
+  private hasSameCompletionAuthority(entry: SubagentRunRecord, anchor: SubagentRunRecord) {
+    return hasSameCompletionAuthority(
+      entry,
+      anchor,
+      this.completionAuthorities.get(getSubagentRunRuntimeKey(entry)),
+      this.completionAuthorities.get(getSubagentRunRuntimeKey(anchor)),
+    );
+  }
+
+  selectCompletionAuthorityBatch(
+    observed: readonly SubagentRunRecord[],
+    anchor: SubagentRunRecord,
+  ): SubagentRunRecord[] {
+    const current = this.currentValue(anchor);
+    return observed
+      .map((entry) => this.currentValue(entry))
+      .filter((entry) => this.hasSameCompletionAuthority(entry, current));
+  }
+
   runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
     const batch = observed.map((entry) => this.currentValue(entry));
     batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
-    const resultEntry = batch.find(
-      (entry) =>
-        !(
-          entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-          entry.execution.outcome?.status === "error"
-        ),
-    );
-    // Only a cancellation-only batch can use the independently admitted cancellation caller.
+    const resultEntry = batch.find((entry) => !isCancellationNotice(entry));
     if (!resultEntry) {
-      return run();
+      const first = batch[0];
+      if (
+        !first ||
+        !batch.every(
+          (entry) =>
+            this.hasCompletionAuthority(entry) && this.hasSameCompletionAuthority(entry, first),
+        )
+      ) {
+        // Without a shared retained source, cancellation notices use their admitted caller.
+        return run();
+      }
+      for (const entry of batch) {
+        this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority.assertCurrent();
+      }
+      return this.runWithCompletionAuthority(first, run);
     }
-    const first = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry))?.authority
-      .operatorAuthority;
     // Mixed waves must still prove the cancelled member's original source is live and identical.
     // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
     for (const entry of batch) {
-      const source = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority
-        .operatorAuthority;
+      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
       if (
         (entry.completionAuthorityRequired ||
           this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry))) &&
-        !source
+        !custody?.authority.operatorAuthority
       ) {
         throw new Error("Subagent completion authority is no longer active");
       }
-      source?.assertCurrent();
-      if (
-        (source?.source !== first?.source &&
-          !(
-            entry.operatorRecoverySource &&
-            resultEntry.operatorRecoverySource &&
-            isDeepStrictEqual(entry.operatorRecoverySource, resultEntry.operatorRecoverySource) &&
-            isDeepStrictEqual(source?.recoverySnapshot, first?.recoverySnapshot)
-          )) ||
-        !isDeepStrictEqual(source?.scopes, first?.scopes)
-      ) {
+      custody?.authority.assertCurrent();
+      if (!this.hasSameCompletionAuthority(entry, resultEntry)) {
         throw new Error("Subagent completion batch has incompatible operator authority");
       }
     }

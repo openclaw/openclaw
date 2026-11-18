@@ -52,6 +52,7 @@ import {
   buildRequesterSettleWakeIdentity,
   captureRequesterSettleRunIdentity,
   hasSameRequesterWakeCohort,
+  hasSameRequesterWakePartition,
 } from "./subagent-requester-settle-identity.js";
 import {
   currentSubagentRunOrObserved,
@@ -114,7 +115,7 @@ async function prepareParentDeliveryFailureReport(
   const { runId } = buildRequesterSettleWakeIdentity({
     requesterSessionKey: sessionKey,
     requesterAgentId: agentId,
-    batchRunIds: wake.batchRunIds ?? entries.map((entry) => entry.runId),
+    batchRunIds: wake.partitionRunIds ?? wake.batchRunIds ?? entries.map((entry) => entry.runId),
     rearmGeneration: wake.rearmGeneration,
   });
   return {
@@ -278,6 +279,7 @@ export async function cancelRequesterSettleWake(
           current.execution.status !== "terminal" ||
           current.pauseReason === "sessions_yield" ||
           current.requesterSettleWake?.rearmGeneration !== wake.rearmGeneration ||
+          !isDeepStrictEqual(current.requesterSettleWake?.partitionRunIds, wake.partitionRunIds) ||
           !isDeepStrictEqual(current.requesterSettleWake?.batchRunIds, wake.batchRunIds)
         ) {
           throw new SubagentRegistryMutationRejectedError(
@@ -298,7 +300,12 @@ export async function cancelRequesterSettleWake(
             context.options.getRuntimeConfig(),
             published,
           );
-          if (requesterAgentId && wake.requesterYieldBatch && wake.rearmGeneration !== undefined) {
+          if (
+            requesterAgentId &&
+            !wake.partitionRunIds &&
+            wake.requesterYieldBatch &&
+            wake.rearmGeneration !== undefined
+          ) {
             revokeRequesterFinalAttachment({
               requesterAgentId,
               requesterSessionKey: published.requesterSessionKey,
@@ -479,13 +486,16 @@ export function scheduleRequesterSettleWake(
   let admittedBatch = (
     entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
       ? [runId]
-      : (admittedWake?.batchRunIds ?? [runId])
+      : (admittedWake?.partitionRunIds ?? admittedWake?.batchRunIds ?? [runId])
   ).flatMap((id) => {
     const member = params.runs.get(id);
-    return member && (!admittedWake || hasSameRequesterWakeCohort(member, admittedWake))
+    return member && (!admittedWake || hasSameRequesterWakePartition(member, admittedWake))
       ? [member]
       : [];
   });
+  if (!admittedWake?.partitionRunIds && (admittedWake?.attemptCount ?? 0) === 0) {
+    admittedBatch = subagentRuns.selectCompletionAuthorityBatch(admittedBatch, entry);
+  }
   context.scheduledRequesterSettleWakeRuns.add(runtimeKey);
   runWithoutOwnedSessionTranscriptWrites(() => {
     void context

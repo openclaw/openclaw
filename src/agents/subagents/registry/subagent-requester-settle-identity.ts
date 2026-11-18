@@ -55,13 +55,13 @@ export function isRequesterSettleWakeForRun(params: {
   const pauseNotice = entry.pauseReason === "sessions_yield" && wake.pauseNotice;
   // Dispatch selects the surviving members of its frozen generation. Retired
   // rows no longer contribute to the admitted wake's identity.
-  const batch = (pauseNotice ? [entry.runId] : (wake.batchRunIds ?? []))
+  const batch = (pauseNotice ? [entry.runId] : (wake.partitionRunIds ?? wake.batchRunIds ?? []))
     .map((id) => params.runsById.get(id))
     .filter((member): member is SubagentRunRecord =>
       pauseNotice
         ? member?.requesterSettleWake !== undefined &&
           member.requesterSettleWake.rearmGeneration === wake.rearmGeneration
-        : hasSameRequesterWakeCohort(member, wake),
+        : hasSameRequesterWakePartition(member, wake),
     );
   const batchRunIds = batch.map((member) => member.runId);
   if (
@@ -141,6 +141,7 @@ export function captureRequesterSettleWakeProgress(entry: SubagentRunRecord) {
       nextAttemptAt: wake.nextAttemptAt,
       lastError: wake.lastError,
       batchRunIds: wake.batchRunIds?.toSorted(),
+      partitionRunIds: wake.partitionRunIds,
       rearmGeneration: wake.rearmGeneration,
       requesterYieldBatch: wake.requesterYieldBatch === true,
       afterRequesterYield: wake.afterRequesterYield === true,
@@ -210,6 +211,7 @@ const requesterRetirementCustody = (current: SubagentRunRecord) => ({
     suppressTaskDelivery: current.killReconciliation.suppressTaskDelivery === true,
   },
   batchRunIds: current.requesterSettleWake?.batchRunIds?.toSorted(),
+  partitionRunIds: current.requesterSettleWake?.partitionRunIds,
   rearmGeneration: current.requesterSettleWake?.rearmGeneration,
   requesterYieldBatch: current.requesterSettleWake?.requesterYieldBatch === true,
   yieldedFinalDeliverable: current.requesterSettleWake?.yieldedFinalDeliverable === true,
@@ -276,7 +278,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
       wake.rearmGeneration !== params.rearmGeneration ||
       (!params.pause &&
         observed.requesterSettleWake &&
-        !hasSameRequesterWakeCohort(entry, observed.requesterSettleWake)) ||
+        !hasSameRequesterWakePartition(entry, observed.requesterSettleWake)) ||
       (params.pause
         ? entry.pauseReason !== "sessions_yield" || !wake.pauseNotice
         : entry.pauseReason === "sessions_yield") ||
@@ -323,5 +325,16 @@ export function hasSameRequesterWakeCohort(
   return (
     current.rearmGeneration === wake.rearmGeneration &&
     Boolean(current.requesterYieldBatch) === Boolean(wake.requesterYieldBatch)
+  );
+}
+
+/** An admitted result partition has its own identity inside the retained cohort. */
+export function hasSameRequesterWakePartition(
+  entry: SubagentRunRecord | null | undefined,
+  wake: RequesterSettleWakeState,
+): entry is SubagentRunRecord {
+  return (
+    hasSameRequesterWakeCohort(entry, wake) &&
+    isDeepStrictEqual(entry.requesterSettleWake?.partitionRunIds, wake.partitionRunIds)
   );
 }

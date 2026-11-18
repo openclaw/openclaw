@@ -42,7 +42,7 @@ import {
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
-  hasSameRequesterWakeCohort,
+  hasSameRequesterWakePartition,
   sameRequesterSettleRunIdentity,
 } from "../registry/subagent-requester-settle-identity.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
@@ -295,6 +295,7 @@ function prepareRequesterBatch(
   const ids = new Set(entries.map(({ subagent }) => subagent.runId));
   const first = entries[0]?.subagent;
   const cohort = first?.requesterSettleWake?.batchRunIds?.toSorted().join("\0");
+  const partition = first?.requesterSettleWake?.partitionRunIds;
   const checkedOmittedIds = new Set<string>();
   return entries.map(({ subagent: expected }) => {
     const changedOwner = () =>
@@ -307,19 +308,35 @@ function prepareRequesterBatch(
       subagent.requesterAgentId !== first?.requesterAgentId ||
       subagent.requesterSettleWake.rearmGeneration !==
         first?.requesterSettleWake?.rearmGeneration ||
-      subagent.requesterSettleWake.batchRunIds?.toSorted().join("\0") !== cohort
+      subagent.requesterSettleWake.batchRunIds?.toSorted().join("\0") !== cohort ||
+      !isDeepStrictEqual(subagent.requesterSettleWake.partitionRunIds, partition)
     ) {
       throw changedOwner();
     }
-    // Outcome settlement owns the whole frozen wave; quiet wake decisions may select
-    // current members without settling the remaining siblings' delivery outcomes.
+    if (params.kind === "requesterWake" && params.operation.kind === "transition") {
+      const offered = params.operation.state.partitionRunIds;
+      if (
+        partition
+          ? !isDeepStrictEqual(offered, partition)
+          : offered &&
+            (subagent.requesterSettleWake.attemptCount !== 0 ||
+              offered.length !== ids.size ||
+              new Set(offered).size !== ids.size ||
+              !offered.every(
+                (id) => ids.has(id) && subagent.requesterSettleWake?.batchRunIds?.includes(id),
+              ))
+      ) {
+        throw changedOwner();
+      }
+    }
+    // Outcome settlement owns the entire admitted partition, not pending siblings.
     for (const id of params.kind === "requesterBatch" &&
     !(subagent.pauseReason === "sessions_yield" && subagent.requesterSettleWake.pauseNotice)
-      ? (subagent.requesterSettleWake?.batchRunIds ?? [])
+      ? (partition ?? subagent.requesterSettleWake.batchRunIds ?? [])
       : []) {
       if (!ids.has(id) && !checkedOmittedIds.has(id)) {
         const member = readSubagentRun(database, id);
-        if (hasSameRequesterWakeCohort(member, subagent.requesterSettleWake)) {
+        if (hasSameRequesterWakePartition(member, subagent.requesterSettleWake)) {
           throw changedOwner();
         }
         // Planning performs no writes, so this check holds for the remaining same-wave rows.

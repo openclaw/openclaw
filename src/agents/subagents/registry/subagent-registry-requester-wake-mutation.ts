@@ -10,7 +10,7 @@ import type {
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import { getPendingWakeCommit } from "./subagent-registry-requester-wake-commit.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { hasSameRequesterWakeCohort } from "./subagent-requester-settle-identity.js";
+import { hasSameRequesterWakePartition } from "./subagent-requester-settle-identity.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export const isCurrentRequesterSettleWakeBatch = (
@@ -31,7 +31,7 @@ export const isCurrentRequesterSettleWakeBatch = (
           current?.requesterSettleWake !== undefined &&
           current.requesterSettleWake.rearmGeneration === rearmGeneration &&
           (!entry.requesterSettleWake ||
-            hasSameRequesterWakeCohort(current, entry.requesterSettleWake)) &&
+            hasSameRequesterWakePartition(current, entry.requesterSettleWake)) &&
           (current.requesterSettleWake.yieldedFinalDeliverable === true) ===
             (entry.requesterSettleWake?.yieldedFinalDeliverable === true)
         );

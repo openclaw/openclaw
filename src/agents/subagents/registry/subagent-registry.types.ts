@@ -131,6 +131,8 @@ export type RequesterSettleWakeState = {
   nextAttemptAt?: number;
   /** Frozen wave membership after delivery admission or requester-yield re-admission. */
   batchRunIds?: string[];
+  /** Exact offered results of an early wake; the remaining cohort keeps its own outbox. */
+  partitionRunIds?: string[];
   /** Batch frozen while its spawning requester turn was yielding. */
   requesterYieldBatch?: true;
   /** Present only when an idle requester needs a new turn after yielding. */

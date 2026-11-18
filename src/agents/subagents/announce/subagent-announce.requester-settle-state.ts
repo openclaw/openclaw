@@ -1,11 +1,20 @@
+import { GatewayProtocolRequestError } from "../../../../packages/gateway-client/src/protocol-request.js";
 import { logWarn } from "../../../logger.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { isSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import type {
   RequesterSettleWakeState,
   SubagentRunRecord,
 } from "../registry/subagent-registry.types.js";
 import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+
+export function isRequesterSettleSetupRefusal(error: unknown): boolean {
+  return (
+    isSandboxProvisioningError(error) ||
+    (error instanceof GatewayProtocolRequestError && error.gatewayCode === "UNAVAILABLE")
+  );
+}
 
 /** Delivered findings stay consumed unless restart reconciliation still owns them. */
 export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
@@ -82,6 +91,7 @@ export function createRequesterSettleBatchClaim(
 
 export function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
   return {
+    ...(state.partitionRunIds ? { partitionRunIds: state.partitionRunIds } : {}),
     ...(state.pauseNotice ? { pauseNotice: state.pauseNotice } : {}),
     ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true as const } : {}),
     ...(state.afterRequesterYield === true ? { afterRequesterYield: true as const } : {}),
@@ -187,6 +197,7 @@ export function readSharedBatchState(
     ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
+    ...(source?.partitionRunIds ? { partitionRunIds: source.partitionRunIds } : {}),
     ...(states.some((state) => state.requesterYieldBatch === true)
       ? { requesterYieldBatch: true }
       : {}),
