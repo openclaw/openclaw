@@ -4,7 +4,6 @@ import type { CronProps } from "./view-types.ts";
 export function CronSuggestionLists(
   props: Pick<
     CronProps,
-    | "agentSuggestions"
     | "thinkingSuggestions"
     | "timezoneSuggestions"
     | "deliveryToSuggestions"
@@ -14,7 +13,6 @@ export function CronSuggestionLists(
 ) {
   const lists = createMemo(() =>
     Object.entries({
-      "cron-agent-suggestions": props.agentSuggestions,
       "cron-thinking-suggestions": props.thinkingSuggestions,
       "cron-tz-suggestions": props.timezoneSuggestions,
       "cron-delivery-to-suggestions": props.deliveryToSuggestions,

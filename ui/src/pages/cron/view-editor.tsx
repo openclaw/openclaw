@@ -1,12 +1,16 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, For, Show } from "solid-js";
+import type { AgentSelectOption } from "../../components/agent-select-types.ts";
+import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
 import { EnabledSwitch } from "./view-controls.tsx";
 import { Advanced } from "./view-delivery.tsx";
@@ -16,7 +20,7 @@ import {
   errorIdForField,
   inputIdForField,
   CronSelect,
-  CronInput,
+  FieldRow,
   TrayInput,
 } from "./view-fields.tsx";
 import {
@@ -138,16 +142,7 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
             )}
           </Show>
           <fieldset class="cron-editor-section" disabled={formDisabled()}>
-            <CronInput
-              {...props}
-              field="agentId"
-              label={t("cron.form.agentId")}
-              help={t("cron.form.agentHelp")}
-              quietHelp
-              list="cron-agent-suggestions"
-              disabled={props.form.clearAgent}
-              placeholder={t("cron.form.agentPlaceholder")}
-            />
+            <AgentRow {...props} disabled={formDisabled()} />
             <CronSelect
               {...props}
               field="sessionTarget"
@@ -208,6 +203,70 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
         <EditorActions {...props} onCancel={() => props.onCancelEdit()} />
       ) : undefined}
     </>
+  );
+}
+
+/**
+ * Which agent runs the automation. An empty id (or a cleared one) leaves the choice to the
+ * Gateway, which falls back to its default agent; a stored id missing from the roster is kept
+ * until another agent is picked.
+ */
+function AgentRow(props: CronProps & { disabled: boolean }) {
+  // Typing elsewhere in the form replaces it; only the agent fields rebuild the options.
+  const stored = createMemo(() => (props.form.clearAgent ? "" : props.form.agentId.trim()));
+  const choice = createMemo(() => {
+    const list = props.agentsList;
+    const agents = listSelectableAgents(list?.agents ?? []);
+    const byId = new Map(agents.map((agent) => [normalizeAgentId(agent.id), agent]));
+    const value = stored() ? normalizeAgentId(stored()) : "";
+    const defaultAgent = list ? byId.get(normalizeAgentId(list.defaultId)) : undefined;
+    const unlisted = Boolean(list && value && !byId.has(value));
+    // System agents are not offered, but a job they own still names them.
+    const system = list?.agents.find((agent) => normalizeAgentId(agent.id) === value);
+    const options: AgentSelectOption[] = [
+      {
+        value: "",
+        label: defaultAgent
+          ? t("cron.form.defaultAgentNamed", { name: normalizeAgentLabel(defaultAgent) })
+          : t("cron.form.defaultAgent"),
+        agent: defaultAgent,
+      },
+      ...[...byId].map(([id, agent]) => ({ value: id, label: normalizeAgentLabel(agent), agent })),
+      ...(unlisted
+        ? [
+            system
+              ? { value, label: normalizeAgentLabel(system), agent: system }
+              : {
+                  value,
+                  label: stored(),
+                  agent: { id: value },
+                  badge: t("cron.form.agentNotFound"),
+                },
+          ]
+        : []),
+    ];
+    // With one agent there is nothing to pick, unless the stored id needs attention. Most
+    // Gateways have one agent, so the row waits for the roster rather than flash away.
+    return { options, value, visible: Boolean(list) && (agents.length !== 1 || unlisted) };
+  });
+  return (
+    <Show when={choice().visible}>
+      <FieldRow
+        label={t("cron.form.agentId")}
+        controlId=""
+        control={
+          <openclaw-agent-select
+            prop:options={choice().options}
+            prop:value={choice().value}
+            prop:accessibleLabel={t("cron.form.agentId")}
+            prop:disabled={props.disabled}
+            prop:onSelect={(agentId: string) =>
+              props.onFormChange({ agentId, clearAgent: agentId === "" })
+            }
+          />
+        }
+      />
+    </Show>
   );
 }
 
