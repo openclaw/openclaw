@@ -250,9 +250,9 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
   );
 
   it.each([
-    ["captured default", undefined, "alpha", "alpha"],
+    ["session owner before captured default", undefined, "alpha", "session-owner"],
     ["explicit job owner", "gamma", "alpha", "gamma"],
-    ["captured absence", undefined, undefined, undefined],
+    ["session owner without default", undefined, undefined, "session-owner"],
   ])(
     "routes a failure alert using %s instead of the live default",
     async (_name, jobAgentId, defaultAgentId, recipient) => {
