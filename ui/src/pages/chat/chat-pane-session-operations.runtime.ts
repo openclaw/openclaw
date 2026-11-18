@@ -1,8 +1,6 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
@@ -25,7 +23,8 @@ export type HarnessUpdateSessionTarget = {
   agentId: string;
   /** The failed conversation; an incognito source keeps the recovery session incognito. */
   sourceSessionKey: string;
-  session: GatewaySessionRow | undefined;
+  /** The failed conversation's effective model, as `provider/model`. */
+  model: string | undefined;
   create: ApplicationContext["sessions"]["createResult"];
   open: (key: string) => boolean | void;
   signal: AbortSignal;
@@ -39,14 +38,11 @@ export async function createHarnessUpdateSession(
   if (target.signal.aborted || !target.isCurrent()) {
     return false;
   }
-  const model = target.session?.model
-    ? buildQualifiedChatModelValue(target.session.model, target.session.modelProvider)
-    : undefined;
   const result = await target.create(
     {
       agentId: target.agentId,
       ...(isIncognitoSessionKey(target.sourceSessionKey) ? { incognito: true } : {}),
-      ...(model ? { model, agentRuntime: "openclaw" as const } : {}),
+      ...(target.model ? { model: target.model, agentRuntime: "openclaw" as const } : {}),
       message: t("chat.recovery.harnessUpdatePrompt", { summary }),
     },
     { signal: target.signal },

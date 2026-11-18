@@ -244,12 +244,7 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
           {
             agentId: "cx",
             sourceSessionKey: "agent:cx:failed",
-            session: {
-              key: "agent:cx:failed",
-              kind: "direct",
-              model: "gpt-6.2-sol",
-              modelProvider: "openai",
-            },
+            model: "openai/gpt-6.2-sol",
             create,
             open,
             signal: new AbortController().signal,
@@ -301,7 +296,7 @@ it("keeps an update session incognito when the failed conversation was incognito
     {
       agentId: "cx",
       sourceSessionKey: "agent:cx:dashboard:incognito-failed",
-      session: undefined,
+      model: "openai/gpt-6.2-sol",
       create,
       open: vi.fn(),
       signal: new AbortController().signal,
@@ -309,6 +304,12 @@ it("keeps an update session incognito when the failed conversation was incognito
     },
     "gpt-6.2-sol needs a newer Codex.",
   );
-  // An ordinary session would persist the private conversation's error and follow-up.
-  expect(create.mock.calls[0]?.[0]).toMatchObject({ agentId: "cx", incognito: true });
+  // An ordinary session would persist the private conversation's error and follow-up; without
+  // the model and OpenClaw runtime it could rerun on the outdated Codex harness.
+  expect(create.mock.calls[0]?.[0]).toMatchObject({
+    agentId: "cx",
+    incognito: true,
+    model: "openai/gpt-6.2-sol",
+    agentRuntime: "openclaw",
+  });
 });

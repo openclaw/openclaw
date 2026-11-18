@@ -4,6 +4,7 @@ import { isArchiveHeld, undoHeldArchive } from "../../components/session-archive
 import { t } from "../../i18n/index.ts";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
+import { resolveChatModelSelectValues } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -309,11 +310,23 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
           }
           return false;
         }
+        // The composer's model, not the roster row: incognito chats are not in the roster.
+        const selection = resolveChatModelSelectValues({
+          activeSession: selectedChatSessionRow(state),
+          agentDefaultModel: state
+            .readChatAgentsList()
+            ?.agents.find((row) => row.id === createParams.agentId)?.model?.primary,
+          modelOverrides: state.sessions.state.modelOverrides,
+          sessionKey: previousSessionKey,
+          sessionsResult: state.sessionsResult ?? null,
+          chatModelCatalog: state.chatModelCatalog,
+          modelSelectionPolicy: state.chatModelSelectionPolicy,
+        });
         return await createHarnessUpdateSession(
           {
             agentId: createParams.agentId,
             sourceSessionKey: previousSessionKey,
-            session: selectedChatSessionRow(state),
+            model: selection.currentOverride || selection.defaultModel || undefined,
             create: sessions.createResult,
             open: (key) => this.onPaneSessionChange?.(this.paneId, key),
             signal,
