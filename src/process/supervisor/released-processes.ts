@@ -113,26 +113,39 @@ function processGroupOf(pid: number): number | undefined {
   }
 }
 
-/** Members that outlive the survivor keep the rest of the shared grace, then are forced. */
-async function forceGroupAfterGrace(pgid: number, graceEnds: number): Promise<void> {
-  const groupAlive = () => {
-    try {
-      process.kill(-pgid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  while (groupAlive() && Date.now() < graceEnds) {
+/** Only ESRCH proves the group empty; EPERM means a member we cannot signal still runs. */
+function groupGone(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return false;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ESRCH";
+  }
+}
+
+/**
+ * Members that outlive the survivor keep the rest of the shared grace, then are forced.
+ * Stopped only once the group is observed empty.
+ */
+async function forceGroupAfterGrace(pgid: number, graceEnds: number): Promise<StopOutcome> {
+  while (!groupGone(pgid) && Date.now() < graceEnds) {
     await sleep(100);
   }
-  if (groupAlive()) {
-    try {
-      process.kill(-pgid, "SIGKILL");
-    } catch {
-      // The group emptied.
-    }
+  if (groupGone(pgid)) {
+    return { status: "stopped" };
   }
+  try {
+    process.kill(-pgid, "SIGKILL");
+  } catch {
+    // Confirmed below either way.
+  }
+  const deadline = Date.now() + KILL_CONFIRM_TIMEOUT_MS;
+  while (!groupGone(pgid) && Date.now() < deadline) {
+    await sleep(100);
+  }
+  return groupGone(pgid)
+    ? { status: "stopped" }
+    : { status: "uncertain", reason: `process group ${pgid} did not exit after SIGKILL` };
 }
 
 /**
@@ -177,10 +190,7 @@ async function terminate(
     return { status: "stopped" };
   }
   if ("result" in term && (await waitForExit(entry, GRACEFUL_CANCEL_TIMEOUT_MS))) {
-    if (pgid) {
-      await forceGroupAfterGrace(pgid, graceEnds);
-    }
-    return { status: "stopped" };
+    return pgid ? await forceGroupAfterGrace(pgid, graceEnds) : { status: "stopped" };
   }
   const kill = await signal("SIGKILL");
   if (
