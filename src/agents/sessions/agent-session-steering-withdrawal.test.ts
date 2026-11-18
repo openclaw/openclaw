@@ -135,7 +135,11 @@ it.each(
       expect(session.getSteeringMessages()).toEqual([]);
       expect(session.agent.hasQueuedMessages()).toBe(false);
       expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-      expect(result).toMatchObject({ status: "rejected" });
+      expect(result).toMatchObject(
+        surface === "registry"
+          ? { status: "rejected", outcome: { runtimeReason: "session_ended" } }
+          : { status: "rejected", runtimeReason: "session_ended" },
+      );
     } finally {
       if (!terminated) {
         held.release();

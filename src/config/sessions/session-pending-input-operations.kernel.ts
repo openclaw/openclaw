@@ -13,7 +13,6 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import {
   ensureSessionInputCompletionsSchema,
   ensureSessionPendingInputsSchema,
-  hasSessionPendingInputsSchema,
   SESSION_INPUT_COMPLETIONS_TABLE,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -45,7 +44,6 @@ import type {
 import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
 import {
   isFinalInputCompletion,
-  markSessionPendingInputCancelledByUser,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 
@@ -157,7 +155,12 @@ export function mutatePendingInput(
         }
         // Native SDK completion uses only "complete"; stage and finish execute in workers.
         if (input.kind === "stage") {
-          if (row?.input_id !== input.expected.existing?.input_id) {
+          // Compare-and-set: a restage may rebind run_id, so a concurrent reopen must lose.
+          if (
+            row?.input_id !== input.expected.existing?.input_id ||
+            row?.run_id !== input.expected.existing?.run_id ||
+            row?.state !== input.expected.existing?.state
+          ) {
             throw new SessionPendingInputCustodyError(
               "Pending input changed before staging committed",
             );
@@ -175,9 +178,7 @@ export function mutatePendingInput(
         }
         withoutSqliteDatabaseWriteScope(current.db, () => admit("transaction", grant));
         if (input.kind === "stage") {
-          if (!hasSessionPendingInputsSchema(current.db)) {
-            ensureSessionPendingInputsSchema(current.db);
-          }
+          ensureSessionPendingInputsSchema(current.db);
           if (input.trackCompletion && !tableExists(current.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
             ensureSessionInputCompletionsSchema(current.db);
           }
@@ -186,7 +187,14 @@ export function mutatePendingInput(
               current.db,
               getSessionKysely(current.db)
                 .updateTable("session_pending_inputs")
-                .set({ state: "queued", lifecycle_generation: input.lifecycleGeneration })
+                // Same-run restages keep run_id; a reclaimed channel source turn rebinds it.
+                .set({
+                  state: "queued",
+                  run_id: input.runId,
+                  lifecycle_generation: input.lifecycleGeneration,
+                  end_cause: null,
+                  origin_source_json: row.origin_source_json ?? input.originSourceJson ?? null,
+                })
                 .where("input_id", "=", row.input_id)
                 .returningAll(),
             );
@@ -206,6 +214,7 @@ export function mutatePendingInput(
                   lifecycle_generation: input.lifecycleGeneration,
                   state: "queued",
                   accepted_at: Date.now(),
+                  origin_source_json: input.originSourceJson ?? null,
                 })
                 .returningAll(),
             );
@@ -215,7 +224,7 @@ export function mutatePendingInput(
               "Pending input staging omitted its postimage",
             );
           }
-          if (actor) {
+          if (actor && receipt.stagedInput.consumed_event_id === null) {
             actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
             actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
           }
@@ -225,11 +234,11 @@ export function mutatePendingInput(
           }
           receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
         } else if (row) {
+          ensureSessionPendingInputsSchema(current.db);
           const changes = {
             state: input.disposition,
-            ...(input.cancelledByUser
-              ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
-              : {}),
+            end_cause: input.endCause,
+            origin_source_json: null,
           };
           const result = executeSqliteQuerySync(
             current.db,

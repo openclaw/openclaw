@@ -28,7 +28,7 @@ import { convertResponsesMessages } from "./openai-responses-replay-internal.js"
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 
 const model = fixtures.createReplayModel();
-const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
+const replayIdentity = { sessionId: "session-a" };
 const COMPACTION_WINDOW_MAX_BYTES = 16 * 1024 * 1024;
 const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const inputMessage = (text: string) => ({
@@ -135,6 +135,47 @@ describe("Responses retained-user compaction replay", () => {
           responsesContinuationPrefixFingerprint(build());
           messages.push(freezeJsonSnapshot(fixtures.userMessage("new suffix")));
           const appended = build();
+          const previousInput = build().slice(0, -1);
+          const continuation = {
+            lastRequest: { input: previousInput },
+            lastResponseId: "resp_compacted",
+            lastResponseItems: [],
+          };
+          const continued = resolveResponsesContinuationRequest(continuation, { input: appended });
+          expect(continued.continuationStatus).toBe("continued");
+          expect(continued.request).toEqual({
+            previous_response_id: "resp_compacted",
+            input: [appended.at(-1)],
+          });
+          // Equal rebuilt windows and mutable hook copies retain the same decision.
+          expect(
+            resolveResponsesContinuationRequest(continuation, { input: structuredClone(appended) })
+              .continuationStatus,
+          ).toBe("continued");
+          const edited = structuredClone(appended);
+          const checkpoint = edited.find((entry) => entry.type === "compaction");
+          assert(checkpoint);
+          checkpoint.encrypted_content = "edited-checkpoint";
+          expect(
+            resolveResponsesContinuationRequest(continuation, { input: edited }).continuationStatus,
+          ).toBe("history_changed");
+          const opaque = [...appended];
+          const firstOpaque = opaque[0];
+          assert(firstOpaque);
+          opaque[0] = Object.assign({}, firstOpaque, {
+            toJSON: () => ({ type: "message", role: "user", content: "hook edit" }),
+          });
+          expect(
+            resolveResponsesContinuationRequest(continuation, { input: opaque }).continuationStatus,
+          ).toBe("history_changed");
+          const sparse: typeof previousInput = [];
+          sparse.length = previousInput.length;
+          expect(
+            resolveResponsesContinuationRequest(
+              { ...continuation, lastRequest: { input: sparse } },
+              { input: appended },
+            ).continuationStatus,
+          ).toBe("history_changed");
           const expected = responsesContinuationPrefixFingerprint(structuredClone(appended));
           const stringify = vi.spyOn(JSON, "stringify");
           try {

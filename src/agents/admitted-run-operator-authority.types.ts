@@ -5,8 +5,12 @@ import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Original OCID device and listing; profile attribution never replaces this source. */
+  openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
+  /** Diagnostic only; never participates in authority checks. */
+  recoverySnapshotUnavailableReason?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRecoveryUnavailableReason;
   /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
   channelRecoverySource?: Readonly<{
     reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
@@ -27,6 +31,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   readCurrentRoleFacts?: (this: void) => Readonly<{
     assignedRole: string | null;
     githubLogin?: string | null;
+    /** Non-named source policy, checked by the original authority before each read. */
+    policy?: GatewayOperatorRoleDefinition;
   }>;
   /** Prepared role permissions; source-policy changes revoke the owning authority. */
   rolePolicy?: Readonly<{

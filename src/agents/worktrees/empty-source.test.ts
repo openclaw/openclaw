@@ -7,6 +7,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
+import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as commandExec from "../../process/exec.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { withWorktreeAllocationLease as withAllocation } from "./allocation.js";
@@ -95,7 +96,13 @@ describe("empty managed workspaces", () => {
   });
 
   it("isolates files, history, remotes, and config while retaining snapshot recovery", async () => {
+    const logs = createWarnLogCapture("empty-workspace-age");
     const first = await create("first");
+    try {
+      expect(await logs.findText("base is older than 7 days")).toBeUndefined();
+    } finally {
+      logs.cleanup();
+    }
     await fs.writeFile(path.join(first.path, "notes.md"), "Committed task content\n");
     await requireGit(first.path, ["add", "notes.md"]);
     await requireGit(first.path, ["commit", "-m", "Task progress"], { env: identity });

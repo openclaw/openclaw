@@ -72,6 +72,7 @@ import {
   listOwnedEntries,
   listNodeWorkerWorkspaceSessions,
   removeIfEmpty,
+  retainNodeWorkerWorkspaceOperation,
 } from "./node-worker-workspace-retention.js";
 import { runNodeWorkerWorkspaceSeed } from "./node-worker-workspace-seeds.js";
 
@@ -92,6 +93,7 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly retainQueue = new KeyedAsyncQueue();
   private readonly acceptedSnapshots = new Map<string, NodeWorkerWorkspaceRetainSnapshot>();
   private readonly activeWorkspaceOperations = new Map<string, number>();
+  private readonly publicationQueue = new KeyedAsyncQueue();
   private readonly latestTransferredManifest = new Map<string, string>();
   // Per-generation capture hash memo; lets upload captures skip re-hashing unchanged trees.
   private readonly workspaceHashMemos = new Map<string, Map<string, string>>();
@@ -221,24 +223,11 @@ export class NodeWorkerWorkspaceRuntime {
   }
 
   private beginWorkspaceOperation(gatewayNamespace: string, generationKey: string): () => void {
-    this.activeWorkspaceOperations.set(
+    return retainNodeWorkerWorkspaceOperation(
+      this.activeWorkspaceOperations,
+      this.activeRetainProtections.get(gatewayNamespace),
       generationKey,
-      (this.activeWorkspaceOperations.get(generationKey) ?? 0) + 1,
     );
-    this.activeRetainProtections.get(gatewayNamespace)?.add(generationKey);
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      const count = this.activeWorkspaceOperations.get(generationKey) ?? 0;
-      if (count <= 1) {
-        this.activeWorkspaceOperations.delete(generationKey);
-      } else {
-        this.activeWorkspaceOperations.set(generationKey, count - 1);
-      }
-    };
   }
 
   private currentLocalProtection(
@@ -527,7 +516,7 @@ export class NodeWorkerWorkspaceRuntime {
     }
     const finishOperation = this.beginWorkspaceOperation(input.gatewayNamespace, generationKey);
     try {
-      const result = await serializeNodeWorkerWorkspace(sessionRootCandidate, async () => {
+      const admitted = await serializeNodeWorkerWorkspace(sessionRootCandidate, async () => {
         signal?.throwIfAborted();
         const prepared = deviceFolder
           ? undefined
@@ -542,13 +531,16 @@ export class NodeWorkerWorkspaceRuntime {
         // Drain proves prior queued work settled, including an interrupted prepared
         // mutation whose durable row is now retiring; it does not reopen that workspace.
         if (input.argv[0] === NODE_WORKSPACE_DRAIN_COMMAND) {
-          return projectWorkspaceOperationResult(
-            deviceFolder
-              ? deviceFolder
-              : (prepared?.workspace_dir ??
-                  path.join(sessionRootCandidate, String(input.generation))),
-            "drained\n",
-          );
+          const drained = this.publicationQueue.enqueue(sessionRootCandidate, async () => {});
+          const workspaceDir =
+            deviceFolder ??
+            prepared?.workspace_dir ??
+            path.join(sessionRootCandidate, String(input.generation));
+          return async () => {
+            await drained;
+            signal?.throwIfAborted();
+            return projectWorkspaceOperationResult(workspaceDir, "drained\n");
+          };
         }
         let sessionRoot: string;
         let workspacePath: string;
@@ -612,31 +604,44 @@ export class NodeWorkerWorkspaceRuntime {
           if (!gateway?.url) {
             throw new Error("INVALID_REQUEST: workspace transfer gateway is unavailable");
           }
-          const stdout = await runNodeWorkerWorkspaceTransfer({
-            seedsRoot: this.seedsRoot,
-            gatewayNamespace: input.gatewayNamespace,
-            gatewayUrl: gateway.url,
-            gatewayTlsFingerprint: gateway.tlsFingerprint,
-            gatewayCloudflareAccess: gateway.cloudflareAccess,
-            environmentId: input.environmentId,
-            workspaceDir: workspacePath,
-            manifestHome: homeDir,
-            ...(prepared && this.prepared.store
-              ? { prepared: { row: prepared, store: this.prepared.store } }
-              : {}),
-            transfer: input.transfer,
-            hashMemo: takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey),
-            signal,
-          });
-          // A snapshot sent before this transfer knows only the old base. Keep the latest
-          // result across command gaps; supersede it on transfer or drop it with its generation.
-          if (
-            !(input.transfer.direction === "download" && input.transfer.attachments) &&
-            !(input.transfer.direction === "upload" && input.transfer.publicationBaseCommit)
-          ) {
-            this.latestTransferredManifest.set(generationKey, stdout);
+          const selectedTransfer = input.transfer;
+          const runTransfer = async () => {
+            assertProcessCurrent();
+            const stdout = await runNodeWorkerWorkspaceTransfer({
+              seedsRoot: this.seedsRoot,
+              gatewayNamespace: input.gatewayNamespace,
+              gatewayUrl: gateway.url,
+              gatewayTlsFingerprint: gateway.tlsFingerprint,
+              gatewayCloudflareAccess: gateway.cloudflareAccess,
+              environmentId: input.environmentId,
+              workspaceDir: workspacePath,
+              manifestHome: homeDir,
+              ...(prepared && this.prepared.store
+                ? { prepared: { row: prepared, store: this.prepared.store } }
+                : {}),
+              transfer: selectedTransfer,
+              assertCurrent: assertProcessCurrent,
+              hashMemo: takeWorkspaceHashMemo(this.workspaceHashMemos, generationKey),
+              signal,
+            });
+            // A snapshot sent before this transfer knows only the old base. Keep the latest
+            // result across command gaps; supersede it on transfer or drop it with its generation.
+            if (
+              selectedTransfer.direction !== "publication" &&
+              !(selectedTransfer.direction === "download" && selectedTransfer.attachments) &&
+              !(selectedTransfer.direction === "upload" && selectedTransfer.publicationBaseCommit)
+            ) {
+              this.latestTransferredManifest.set(generationKey, stdout);
+            }
+            return projectWorkspaceOperationResult(workspacePath, `${stdout}\n`);
+          };
+          if (selectedTransfer.direction !== "publication") {
+            return await runTransfer();
           }
-          return projectWorkspaceOperationResult(workspacePath, `${stdout}\n`);
+          // Register before releasing editing serialization so a queued drain joins
+          // the entire transfer, including its finally cleanup, without serializing edits.
+          const operation = this.publicationQueue.enqueue(sessionRootCandidate, runTransfer);
+          return () => operation;
         }
         if (isWorkspaceInspectionCommand(input.argv)) {
           const stat = fs.lstatSync(workspacePath, { throwIfNoEntry: false });
@@ -714,13 +719,10 @@ export class NodeWorkerWorkspaceRuntime {
         });
         return input.process ? output : projectNodeWorkerWorkspaceExecResult(workspaceDir, output);
       });
-      return this.credentialScrubber
-        ? {
-            ...result,
-            stdout: this.credentialScrubber.scrub(result.stdout),
-            stderr: this.credentialScrubber.scrub(result.stderr),
-          }
-        : result;
+      const result = typeof admitted === "function" ? await admitted() : admitted;
+      result.stdout = this.credentialScrubber?.scrub(result.stdout) ?? result.stdout;
+      result.stderr = this.credentialScrubber?.scrub(result.stderr) ?? result.stderr;
+      return result;
     } finally {
       finishOperation();
     }

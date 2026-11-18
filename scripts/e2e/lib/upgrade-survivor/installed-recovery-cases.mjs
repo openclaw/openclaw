@@ -9,6 +9,9 @@ export const retirementCuts = [
   "helper-sync",
 ];
 
+// Explicit cells that run a fixture-managed Gateway service; no retirement cut fan-out.
+export const serviceRecoveryCuts = ["older-runtime", "live-gateway"];
+
 export const installedRecoveryLaneNames = retirementCuts.map(
   (cut) => `package-installed-recovery-${cut}`,
 );

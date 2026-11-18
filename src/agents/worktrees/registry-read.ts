@@ -5,7 +5,7 @@ import {
 import type { RegisteredStateReadCommand } from "../../state/openclaw-state-read-operation-registry.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
-import { registryAuthorityChanged } from "./errors.js";
+import { registryAuthorityChanged, WorktreeRecordNotFoundError } from "./errors.js";
 import type { WorktreeRegistryListOptions } from "./registry-read.kernel.js";
 import {
   captureWorktreeRegistryAuthority,
@@ -260,7 +260,7 @@ export function requireActiveWorktreeRecord(
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
   if (!record || record.removedAt !== undefined) {
-    throw new Error(`unknown active worktree: ${id}`);
+    throw new WorktreeRecordNotFoundError(`unknown active worktree: ${id}`);
   }
   return record;
 }

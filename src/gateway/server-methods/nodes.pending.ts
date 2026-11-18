@@ -19,6 +19,7 @@ import {
   replacePendingNodeActionsForGeneration,
   type PendingNodeAction,
 } from "../node-runtime-state.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../openclaw-id/tunnel-principal.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import { respondPairingChanged } from "./nodes.shared.js";
 import { respondUnavailableOnThrow } from "./response.js";
@@ -50,6 +51,12 @@ function resolveAllowedPendingNodeActions(params: {
     commands: declaredCommands,
   });
   const allowed = pending.filter((entry) => {
+    if (
+      entry.openclawIdPrincipal &&
+      !isOpenClawIdTunnelPrincipalCurrent(entry.openclawIdPrincipal)
+    ) {
+      return false;
+    }
     const result = isNodeCommandAllowed({
       command: entry.command,
       declaredCommands,
@@ -78,7 +85,7 @@ export function toPendingParamsJSON(params: unknown): string | undefined {
 
 async function withPendingNodeActions(
   options: GatewayRequestHandlerOptions,
-  operation: (nodeId: string, pairingGeneration: string) => () => unknown,
+  operation: (nodeId: string, pairingGeneration: string) => unknown,
 ): Promise<void> {
   const { respond, client, context } = options;
   const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
@@ -93,17 +100,18 @@ async function withPendingNodeActions(
       respondPairingChanged(respond);
       return;
     }
+    if (!(await isNodePairingGenerationCurrent(generation))) {
+      respondPairingChanged(respond);
+      return;
+    }
     const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
     if (!session || session.connId !== client?.connId) {
       respondPairingChanged(respond);
       return;
     }
-    const readResult = operation(trimmedNodeId, generation.key);
-    if (!(await isNodePairingGenerationCurrent(generation))) {
-      respondPairingChanged(respond);
-      return;
-    }
-    respond(true, readResult(), undefined);
+    // Read and filter only after pairing validation yields: requester membership
+    // must still authorize the action when it is handed to the target node.
+    respond(true, operation(trimmedNodeId, generation.key), undefined);
   });
 }
 
@@ -120,7 +128,7 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
         client,
         cfg: context.getRuntimeConfig(),
       });
-      return () => ({
+      return {
         nodeId,
         actions: pending.map((entry) => ({
           id: entry.id,
@@ -128,7 +136,7 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
           paramsJSON: entry.paramsJSON ?? null,
           enqueuedAtMs: entry.enqueuedAtMs,
         })),
-      });
+      };
     });
   },
   "node.pending.ack": async (options) => {
@@ -144,7 +152,7 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
         ids: ackIds,
         ttlMs: nodeInvokePolicy.pendingActionTtlMs,
       });
-      return () => ({ nodeId, ackedIds: ackIds, remainingCount: remaining.length });
+      return { nodeId, ackedIds: ackIds, remainingCount: remaining.length };
     });
   },
 };

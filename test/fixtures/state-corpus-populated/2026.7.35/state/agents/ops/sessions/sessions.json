@@ -1,0 +1,14 @@
+{
+  "agent:ops:corpus-alpha": {
+    "sessionId": "00000000-0000-4000-8000-000000000003",
+    "updatedAt": 1794580856422,
+    "label": "Corpus ops alpha",
+    "sessionFile": "/home/fixture/.openclaw/agents/ops/sessions/00000000-0000-4000-8000-000000000003.jsonl"
+  },
+  "agent:ops:corpus-beta": {
+    "sessionId": "00000000-0000-4000-8000-000000000004",
+    "updatedAt": 1794580856423,
+    "label": "Corpus ops beta",
+    "sessionFile": "/home/fixture/.openclaw/agents/ops/sessions/00000000-0000-4000-8000-000000000004.jsonl"
+  }
+}

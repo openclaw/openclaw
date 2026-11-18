@@ -75,6 +75,28 @@ it("keeps the published recovery predicate bound to its current command owner", 
   expect(legacy.isPackageManagerUpdateMode()).toBe("current predicate");
 });
 
+it("preserves the extended-stable immutable updater denial after activation", async () => {
+  const release = previousReleaseInventory.releases.find((entry) => entry.version === "2026.9.37")!;
+  const published = release.chunks.find((entry) =>
+    entry.exports.some(
+      (binding) => binding.origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess",
+    ),
+  )!;
+  const f = fixtureFiles(createTempDir("update-compat-immutable-denial-"));
+  f.json("package.json", { type: "module" });
+  f.write(
+    "dist/current.mjs",
+    "export function isCurrentManagedServiceUpdateHandoffProcess() { return true; }\n",
+  );
+  writeUpdateCompatibilityChunks({
+    distDir: f.file("dist"),
+    sourceDir: f.root,
+    inventory: { schemaVersion: 1, releases: [{ ...release, chunks: [published] }] },
+  });
+  const legacy = await f.load(`dist/${published.path}`);
+  expect(await legacy.isCurrentManagedServiceUpdateHandoffProcess({})).toBe(false);
+});
+
 it.each([
   'import { safePath as helper } from "@openclaw/fs-safe/path"; export { helper };',
   'import helper from "external-package"; export { helper };',
@@ -155,32 +177,35 @@ it.each([
   ).toThrow("Cannot trace surface-abcdefgh.mjs export external to its release source");
 });
 
-it("bridges Rolldown module labels without confusing an unrelated same-named export", async () => {
-  const f = candidateFixture();
-  for (const file of fs.readdirSync(f.file("dist"))) {
-    if (file.startsWith("candidate-")) {
-      const source = fs.readFileSync(f.file("dist/" + file), "utf8");
-      f.write("dist/" + file, source.replaceAll("//#region ", "// "));
+it.each(["// ", "//!"])(
+  "bridges %s module labels without confusing an unrelated same-named export",
+  async (label) => {
+    const f = candidateFixture();
+    for (const file of fs.readdirSync(f.file("dist"))) {
+      if (file.startsWith("candidate-")) {
+        const source = fs.readFileSync(f.file("dist/" + file), "utf8");
+        f.write("dist/" + file, source.replaceAll("//#region ", label));
+      }
     }
-  }
-  const origin = chunk.exports[0]!.origin;
-  f.write(
-    "dist/optional-worker.mjs",
-    "// src/infra/unrelated.ts\nconst example = " +
-      String.fromCharCode(96) +
-      "\n// " +
-      origin.module +
-      "\n" +
-      String.fromCharCode(96) +
-      ";\nfunction " +
-      origin.symbol +
-      '() { return "wrong owner"; }\nexport { ' +
-      origin.symbol +
-      " };\n",
-  );
-  f.emit();
-  await expectLegacy(f);
-});
+    const origin = chunk.exports[0]!.origin;
+    f.write(
+      "dist/optional-worker.mjs",
+      "// src/infra/unrelated.ts\nconst example = " +
+        String.fromCharCode(96) +
+        "\n// " +
+        origin.module +
+        "\n" +
+        String.fromCharCode(96) +
+        ";\nfunction " +
+        origin.symbol +
+        '() { return "wrong owner"; }\nexport { ' +
+        origin.symbol +
+        " };\n",
+    );
+    f.emit();
+    await expectLegacy(f);
+  },
+);
 
 it("records updater imports and export origins from Rolldown module labels", () => {
   const f = fixtureFiles(createTempDir("update-compat-module-labels-"));

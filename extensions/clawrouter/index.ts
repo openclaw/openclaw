@@ -570,12 +570,12 @@ export default defineSingleProviderPluginEntry({
     return {
       label: "ClawRouter",
       docsPath: "/providers/clawrouter",
-      // Upstream account credits do not describe the shared router credential.
+      // The session's empty upstream grant cannot recover by retrying the shared router key.
       classifyFailoverReason: ({ provider, status, errorMessage }) =>
         provider?.trim().toLowerCase() === PROVIDER_ID &&
         status === 400 &&
         /\bcredit balance is too low\b/i.test(errorMessage)
-          ? "server_error"
+          ? "route_unavailable"
           : undefined,
       manifestAuth: {
         hint: "Credential-scoped access to approved models and budgets",

@@ -60,10 +60,12 @@ import {
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
-import { composeSessionSourceAssertion } from "./session-source-authority.js";
-import { maintenanceLane, projectionLane } from "./session-transcript-worker-resources.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "./session-source-authority.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
@@ -196,6 +198,10 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
     ];
   });
   const commit = async (assertSourceCurrent?: () => void) => {
+    const source = await prepareSessionSourceEffect(
+      composeSessionSourceAssertion([params.assertCommitAllowed, assertSourceCurrent]),
+    );
+    await using _ = { [Symbol.asyncDispose]: async () => source.release?.() };
     const config = params.skipMaintenance === false ? resolveMaintenanceConfig() : undefined;
     const preservation =
       config && config.mode !== "warn"
@@ -222,9 +228,14 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
           },
           {
             ...memory.authority,
+            workspaceEvidence: [
+              ...(memory.authority.workspaceEvidence ?? []),
+              ...(source.workspaceEvidence ?? []),
+            ],
+            readCustody: [...(memory.authority.readCustody ?? []), ...(source.readCustody ?? [])],
             assertCurrent() {
               memory.authority.assertCurrent();
-              assertSourceCurrent?.();
+              source.assertCurrent();
               preservation?.capture();
             },
           },
@@ -390,13 +401,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                 }
                 return result.replacement;
               },
-              // Label owners can expand a keyed selection beyond the foreground read budget.
-              params.sessionKeys &&
-                params.sessionKeys.length + (params.includeSessionWindowOwner ? 1 : 0) <=
-                  MAX_SESSION_ROW_FACTS_KEYS &&
-                params.includeLabelOwners === undefined
-                ? projectionLane
-                : maintenanceLane,
+              sessionStoreLane,
             )
           : await readNative();
       const { entries, expectedRows, labelOwnerKeys } = snapshot;

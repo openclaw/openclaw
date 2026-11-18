@@ -25,6 +25,7 @@ import {
   getScopedPluginCache,
   runOutsidePluginCache,
   withPluginCache,
+  type PluginCache,
 } from "./plugin-cache.js";
 import {
   resolvePluginControlPlaneFingerprint,
@@ -60,6 +61,11 @@ type CurrentPluginMetadataSnapshotOptions = {
   /** Only immutable runtime generations may trust identity across policy drift. */
   trustConfigIdentity?: boolean;
   workspaceDir?: string;
+};
+
+type PluginMetadataSnapshotScopeOptions = CurrentPluginMetadataSnapshotOptions & {
+  /** Borrow inventory without adopting its producer's module and cleanup ownership. */
+  cache?: PluginCache;
 };
 
 export type CurrentPluginMetadataSnapshotParams = {
@@ -293,7 +299,7 @@ function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): b
 export function withPluginMetadataSnapshotScope<T>(
   snapshot: PluginMetadataSnapshot,
   run: () => T,
-  options: CurrentPluginMetadataSnapshotOptions = {},
+  options: PluginMetadataSnapshotScopeOptions = {},
 ): T {
   return runWithPluginExecutionFrame(createPluginMetadataSnapshotFrame(snapshot, options), run);
 }
@@ -301,10 +307,10 @@ export function withPluginMetadataSnapshotScope<T>(
 /** Compose metadata and its cache before the runtime owner enters the async scope. */
 export function createPluginMetadataSnapshotFrame(
   snapshot: PluginMetadataSnapshot,
-  options: CurrentPluginMetadataSnapshotOptions = {},
+  options: PluginMetadataSnapshotScopeOptions = {},
 ): PluginExecutionFrame {
   const current = getPluginExecutionFrame();
-  const cache = getPluginMetadataSnapshotCache(snapshot);
+  const cache = options.cache ?? getPluginMetadataSnapshotCache(snapshot);
   // Complete runtime inventories already own policy; projections still need scope matching.
   const immutableRuntimeGeneration =
     options.trustConfigIdentity === true ||

@@ -10,6 +10,10 @@ import {
   withTranscriptWriteSequence,
 } from "../../../src/config/sessions/session-accessor.ts";
 import type { GatewayServer } from "../../../src/gateway/server-public.ts";
+import {
+  connectGatewayClient,
+  disconnectGatewayClient,
+} from "../../../src/gateway/test-helpers.e2e.ts";
 import { linkUserChannelIdentity } from "../../../src/state/user-channel-identities.ts";
 import {
   setDisplayName,
@@ -41,7 +45,8 @@ suite.define(() => {
       label: "slack-inline-identity",
       env: {
         ...deviceGatewayEnv,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+        // This is a display proof, not source-plugin compilation inside the history RPC.
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
         OPENCLAW_GATEWAY_PASSWORD: undefined,
         OPENCLAW_GATEWAY_TOKEN: undefined,
       },
@@ -127,6 +132,19 @@ suite.define(() => {
           expectDefined(proxy.resolvedUrls?.local[0], "Slack proof proxy URL"),
         );
         gatewayUrl.protocol = "ws:";
+        // Warm the real history projection before the browser assertion deadline.
+        const historyClient = await connectGatewayClient({
+          url: gatewayUrl.href,
+          origin: new URL(suite.server.baseUrl).origin,
+          clientName: "openclaw-control-ui",
+          mode: "ui",
+          scopes: ["operator.read"],
+        });
+        try {
+          await historyClient.request("chat.history", { sessionKey, limit: 1 });
+        } finally {
+          await disconnectGatewayClient(historyClient);
+        }
         await suite.withPage(
           { viewport: { width: 1440, height: 1000 }, locale: "en-US" },
           async ({ page }) => {

@@ -37,9 +37,11 @@ import {
   createControlUiMockGatewayInitScript,
   resolvePlaywrightChromiumExecutablePath,
   defaultControlUiFeatureMethods,
-  prepareControlUiMockGatewayScenario,
-  type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  prepareNativePluginMockGatewayScenario,
+  type NativeControlUiMockGatewayScenario,
+} from "../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiSessionRow } from "../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "./control-ui-parity/fixtures.ts";
 import { startControlUiBenchGatewayServer } from "./lib/control-ui-bench-gateway-server.ts";
@@ -112,7 +114,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,cron-transcript,worktree-create,templates-search,roster-create-template,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
+    "--bundle-dir BASE [--compare-bundle-dir HEAD] --routes sessions,cron,usage --mode coverage|timing|all --pairs 10 --profiles local,remote [--screenshots] [--output DIR]. Default routes include every Settings section, Sessions, Cron, Agents, Usage, Plugins, Workboard and sharing. Select --routes systems,portals,desktop-document for the optional Desktop probes; they use a scripted RFB endpoint and loaded synthetic portal. portal-embedded navigates Chat and opens its Portal panel through native controls, including iframe readiness and the rail CSS cascade. Optional --interactions agents-files,cron-history,worktree-create,templates-search,roster-create-template,model-search-and-compose probes follow cold readiness; new-session-typing-immediate types before artifact work with no hover or think time; preload-idle observes native New Session/roster prefetch without prior intent; --routes roster exercises the persisted sidebar roster on New Session. Security uses --routes advanced with one settings-security-immediate or settings-security-idle interaction. Coverage and timing run in separate fresh contexts; comparison timings include a base/base control. Apps packet aliases: apps-catalog,apps-open-immediate,apps-open-idle. First App opens use real catalog navigation, actual launch/view receipts and the native sandbox; no prior Chat visit or manual preload.",
     "Native Settings root: --routes settings-native-root uses the iOS phone embed at 390x844; do not combine with --interactions.",
     `Browser/Reader cells: ${DOCK_SCENARIO_IDS.join(",")}. Each owns its cold/native first-open phases; do not combine with --interactions.`,
     "Activity media: --routes activity --activity-media empty|gallery; --interactions activity-lightbox opens the viewer after the fixed warmup, activity-lightbox-immediate opens it before artifact analysis, and activity-idle records the warmup without a click.",
@@ -204,7 +206,6 @@ const creationInteractions: Record<string, ProbeRoute[]> = {
 const knownInteractions = [
   "agents-files",
   "cron-history",
-  "cron-transcript",
   "new-session-typing-immediate",
   "preload-idle",
   "activity-lightbox",
@@ -380,11 +381,11 @@ function censusTarget(id: CensusRoute): RouteTarget {
 
 function censusFixture(
   id: CensusRoute,
-  base: ControlUiMockGatewayScenario,
-): ControlUiMockGatewayScenario {
+  base: NativeControlUiMockGatewayScenario,
+): NativeControlUiMockGatewayScenario {
   const methods = new Set(base.featureMethods ?? []);
   const methodResponses = { ...base.methodResponses };
-  const changes: Partial<ControlUiMockGatewayScenario> = {};
+  const changes: Partial<NativeControlUiMockGatewayScenario> = {};
   const add = (name: string, response: unknown) => {
     methods.add(name);
     methodResponses[name] = response;
@@ -673,11 +674,7 @@ function censusReady({ id, sessionKey }: { id: CensusRoute; sessionKey: string }
     return (
       text('[data-provider-id="codex"]', "MEMORY.md") &&
       !present(".memory-import__loading") &&
-      [
-        ...document.querySelectorAll<HTMLButtonElement>(
-          '[data-test-id="memory-import-page"] button',
-        ),
-      ].some((node) => node.textContent?.trim() === "Refresh" && !node.disabled)
+      present('[data-test-id="memory-import-page"] button[aria-label="Refresh"]:not(:disabled)')
     );
   }
   if (id === "debug") {
@@ -765,11 +762,10 @@ function routeTarget(id: ProbeRoute, sessionKey: string): RouteTarget {
     notifications: "openclaw-config-page .settings-section .settings-row__control .settings-status",
     secrets:
       "openclaw-secrets-page .secrets-store__table tbody tr, openclaw-secrets-page .secrets-store__empty, openclaw-secrets-page .settings-section .settings-empty",
-    approvals:
-      "openclaw-approvals-page .approval-history-table[aria-busy=false] .data-table-empty-state",
+    approvals: "openclaw-approvals-page .settings-empty",
     search: 'openclaw-search-page select[aria-label="Search provider"]:not(:disabled)',
     labs: "openclaw-labs-page .settings-section input[role=switch]:not(:disabled)",
-    about: "openclaw-about-page .about-hero__links a",
+    about: "openclaw-about-page nav a.about-link",
     memory: ".memory-page__panel :is(a.memory-page__link,button:not(:disabled))",
     devices:
       "openclaw-devices-page .device-entry, openclaw-devices-page .settings-section .settings-empty",
@@ -843,7 +839,7 @@ function fixtureFor(
   build: { buildId: string; version: string },
   id: ProbeRoute,
   baseUrl: string,
-): ControlUiMockGatewayScenario {
+): NativeControlUiMockGatewayScenario {
   if (isDockScenario(id)) {
     return dockFixture(build, id);
   }
@@ -941,7 +937,6 @@ function fixtureFor(
           : []),
         ...(id === "search" ? ["webSearch.status"] : []),
         ...(id === "model-setup" ? ["openclaw.setup.detect"] : []),
-        ...(id === "cron" && interactionIds.length ? ["cron.history"] : []),
         ...(creationFixture
           ? ["templates.catalog.search", "templates.drafts.create", "chat.send"]
           : []),
@@ -1157,20 +1152,6 @@ function fixtureFor(
               hasMore: false,
               nextOffset: null,
             },
-            "cron.history": {
-              messages: [
-                {
-                  role: "user",
-                  content: "Inspect this synthetic automation.",
-                  timestamp: 1_800_000_000_000,
-                },
-                {
-                  role: "assistant",
-                  content: "Synthetic route transcript ready.",
-                  timestamp: 1_800_000_000_120,
-                },
-              ],
-            },
           }
         : {}),
       ...workboard.methodResponses,
@@ -1343,7 +1324,7 @@ async function summarizeCoverage(
   coverage: CoverageEntry[],
   requests: AssetRequest[],
   root: string,
-  assets: Awaited<ReturnType<typeof prepareControlUiMockGatewayScenario>>["assets"],
+  assets: Awaited<ReturnType<typeof prepareNativePluginMockGatewayScenario>>["assets"],
 ) {
   const scripts = await Promise.all(
     requests.map(async (request) => {
@@ -1703,7 +1684,7 @@ try {
             try {
               console.info(`[route-leaks] ${prefix}: preparing synthetic fixture`);
               const routeFixture = fixtureFor(variant.build, route, server.baseUrl);
-              const prepared = await prepareControlUiMockGatewayScenario(
+              const prepared = await prepareNativePluginMockGatewayScenario(
                 route === "apps"
                   ? appsPilotFixture(routeFixture, appsSandbox!.descriptor)
                   : routeFixture,
@@ -1928,15 +1909,12 @@ try {
                   const approvalsSettled =
                     routeId !== "approvals" ||
                     (document
-                      .querySelector(
-                        ".approval-history-table[aria-busy=false] .data-table-empty-state",
-                      )
-                      ?.textContent?.trim() ===
-                      "No resolved approvals in the rolling 30-day window." &&
-                      document
-                        .querySelector(".standing-grants-table .data-table-empty-state")
-                        ?.textContent?.trim() ===
-                        "No standing grants. Answer an automation approval with Always allow to mint one.");
+                      .getElementById("approval-history-title")
+                      ?.closest(".settings-section")
+                      ?.querySelector(".settings-empty")
+                      ?.textContent?.trim() === "No resolved approvals in the last 30 days." &&
+                      document.querySelector(".standing-grants-empty")?.textContent?.trim() ===
+                        "No standing grants yet. Choose Always allow on an automation approval to create one.");
                   // SAFETY: Every measured page receives this fixture before navigation.
                   const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
                   const enabled = (candidateSelector: string) =>
@@ -2102,34 +2080,29 @@ try {
               const observedAfterReady = Array.from(requests.values(), (request) =>
                 Object.assign({}, request),
               );
-              const activityCutoff = after.NavigationStart! + readyMs / 1_000;
-              const requestsAtReady =
-                route === "activity" && activityMedia
-                  ? observedAfterReady
-                      .filter((request) => request.timestampSeconds! <= activityCutoff)
-                      .map((request) => {
-                        const item = Object.assign({}, request);
-                        if ((item.finishedTimestampSeconds ?? Infinity) > activityCutoff) {
-                          delete item.finishedTimestampSeconds;
-                          delete item.wireBytes;
-                        }
-                        if ((item.failedTimestampSeconds ?? Infinity) > activityCutoff) {
-                          delete item.failedTimestampSeconds;
-                          delete item.failed;
-                        }
-                        return item;
-                      })
-                  : observedRequestsAtReady;
-              if (route === "activity" && activityMedia) {
-                result.observedRequestsAtReady = observedRequestsAtReady;
-                result.observedRequestsAfterReady = observedAfterReady;
-                result.phaseClockEvidence = {
-                  navigationStart: after.NavigationStart,
-                  coldMetricTimestamp: after.Timestamp,
-                  sameDocumentCutoffMs: readyMs,
-                  rawCutoffSeconds: activityCutoff,
-                };
-              }
+              const coldCutoff = after.NavigationStart! + readyMs / 1_000;
+              const requestsAtReady = observedAfterReady
+                .filter((request) => request.timestampSeconds! <= coldCutoff)
+                .map((request) => {
+                  const item = Object.assign({}, request);
+                  if ((item.finishedTimestampSeconds ?? Infinity) > coldCutoff) {
+                    delete item.finishedTimestampSeconds;
+                    delete item.wireBytes;
+                  }
+                  if ((item.failedTimestampSeconds ?? Infinity) > coldCutoff) {
+                    delete item.failedTimestampSeconds;
+                    delete item.failed;
+                  }
+                  return item;
+                });
+              result.observedRequestsAtReady = observedRequestsAtReady;
+              result.observedRequestsAfterReady = observedAfterReady;
+              result.phaseClockEvidence = {
+                navigationStart: after.NavigationStart,
+                coldMetricTimestamp: after.Timestamp,
+                sameDocumentCutoffMs: readyMs,
+                rawCutoffSeconds: coldCutoff,
+              };
               result.jsRequestsColdCapture = requestsAtReady.filter((request) =>
                 /\.m?js$/u.test(new URL(request.url).pathname),
               );
@@ -2473,26 +2446,24 @@ try {
                 }),
                 readyMs,
               );
-              if (route === "activity" && activityMedia) {
-                result.rpcObservedAtMs = data.observedAtMs;
-                const clock = qualifyRouteNetworkClock(
-                  requestsAtReady,
-                  after.NavigationStart!,
-                  data.resources.filter((resource) => resource.responseEnd > 0),
-                );
-                result.clockQualification = clock;
-                if (!clock.passed) {
-                  result.routeClockFailure = true;
-                  result.networkAndCoverageTotalsWithheld = true;
-                  throw new Error("Activity cold clock did not qualify; raw evidence retained");
-                }
-                result.networkAtReady = routeNetworkPhase(
-                  requestsAtReady,
-                  after.NavigationStart!,
-                  0,
-                  readyMs,
-                );
+              result.rpcObservedAtMs = data.observedAtMs;
+              const clock = qualifyRouteNetworkClock(
+                requestsAtReady,
+                after.NavigationStart!,
+                data.resources.filter((resource) => resource.responseEnd > 0),
+              );
+              result.clockQualification = clock;
+              if (!clock.passed) {
+                result.routeClockFailure = true;
+                result.networkAndCoverageTotalsWithheld = true;
+                throw new Error("Route cold clock did not qualify; raw evidence retained");
               }
+              result.networkAtReady = routeNetworkPhase(
+                requestsAtReady,
+                after.NavigationStart!,
+                0,
+                readyMs,
+              );
               // Keep the first open ahead of artifact analysis and screenshots.
               let activityImmediateCell: InteractionResult | undefined;
               if (activityImmediate) {
@@ -2831,32 +2802,18 @@ try {
                 }
                 const cell: InteractionResult = { id };
                 try {
-                  // Transcript probing starts with the Activity list already available.
-                  if (
-                    id === "cron-transcript" &&
-                    !(await page.locator(".cron-activity .cron-run-entry").isVisible())
-                  ) {
-                    await page.locator('[data-test-id="cron-list-tab-activity"]').click();
-                    await page
-                      .locator('.cron-activity .cron-runs[aria-busy="false"] .cron-run-entry')
-                      .waitFor();
-                  }
                   const trigger =
                     id === "agents-files"
                       ? "#agents-tab-files"
                       : id === "cron-history"
                         ? '[data-test-id="cron-list-tab-activity"]'
-                        : id === "activity-lightbox"
-                          ? activityMediaTrigger
-                          : ".cron-activity .cron-run-entry button";
+                        : activityMediaTrigger;
                   const ready =
                     id === "agents-files"
                       ? "#agent-panel .agent-file-tabs [role=tab]"
                       : id === "cron-history"
                         ? '.cron-activity .cron-runs[aria-busy="false"] .cron-run-entry'
-                        : id === "activity-lightbox"
-                          ? activityLightboxImage
-                          : "[data-cron-run-transcript] .chat-text";
+                        : activityLightboxImage;
                   const creationBefore =
                     id in creationInteractions
                       ? await page.evaluate(
@@ -2948,12 +2905,6 @@ try {
                   } else {
                     await page.locator(trigger).first().click();
                     await page.locator(ready).first().waitFor({ state: "visible" });
-                  }
-                  if (id === "cron-transcript") {
-                    await page
-                      .locator(ready)
-                      .filter({ hasText: "Synthetic route transcript ready." })
-                      .waitFor();
                   }
                   if (id === "activity-lightbox") {
                     await waitForActivityLightbox(page);
@@ -3183,7 +3134,7 @@ try {
               );
             }
             if (result.routeClockFailure) {
-              throw new Error("Activity clock qualification failed; remaining contexts aborted");
+              throw new Error("Route clock qualification failed; remaining contexts aborted");
             }
             if (result.dockClockFailure) {
               throw new Error("Dock clock qualification failed; stopped after saving the failure");

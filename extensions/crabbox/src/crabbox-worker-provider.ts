@@ -34,6 +34,7 @@ import {
   supportsCrabboxProjectPreparation,
 } from "./crabbox-worker-profile.js";
 import {
+  createCrabboxPreparedProjectRefresh,
   prepareCrabboxProjectFiles,
   prepareCrabboxWorkerRuntime,
 } from "./crabbox-worker-project.js";
@@ -697,6 +698,10 @@ export function createCrabboxWorkerProvider(
     resolvePreparationTarget: resolveCrabboxPreparationTarget,
     runSetupCommand: createCrabboxSetupCommandRunner({
       resolveBinary: async (...args) => (await resolveBinary(...args)).binary,
+    }),
+    refreshPreparedProject: createCrabboxPreparedProjectRefresh({
+      signal: providerAbort.signal,
+      resolveLeaseContext,
     }),
     notePreparedDemand: async (lease, preparation) =>
       await warmImages.notePreparedDemand(lease.leaseId, preparation),

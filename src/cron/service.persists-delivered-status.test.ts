@@ -383,7 +383,10 @@ describe("CronService persists delivered status", () => {
         completionStatus: "failed",
         delivered: verified,
         deliveryStatus,
-        ...(!verified ? { failureNotificationDelivery: undefined } : { deliveryError: undefined }),
+        // The first failure requests its alert; the run event carries that open notice.
+        ...(!verified
+          ? { failureNotificationDelivery: expect.objectContaining({ status: "unknown" }) }
+          : { deliveryError: undefined }),
       });
     },
   );

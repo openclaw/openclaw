@@ -18,7 +18,7 @@ const en = {
       empty: "No memories matched “{query}”.",
       error: "Memory search failed: {message}",
       retry: "Retry",
-      gatewayUpdateRequired: "Update the gateway to search memories from the Control UI.",
+      gatewayUpdateRequired: "Update the gateway to search memories here.",
       hybridSearch: "hybrid search",
       keywordSearch: "keyword search",
       lineRange: "lines {start}–{end}",
@@ -35,6 +35,7 @@ const en = {
         waking: "Waking memory…",
         hibernating: "Memory is hibernating",
         needsAttention: "Memory needs attention",
+        unavailable: "Memory is unavailable",
         noSearchRuntime: "Host memory search is unavailable",
         noSearchRuntimeDescription:
           "{engine} does not provide a host memory search runtime. Other memory integrations may run independently.",

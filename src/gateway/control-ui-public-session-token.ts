@@ -6,7 +6,7 @@ import {
   loadDeviceIdentityIfPresentAsync,
   loadOrCreateProcessDeviceIdentityAsync,
 } from "../infra/device-identity-async.js";
-import { resolveDeviceIdentityStore } from "../infra/device-identity-store.js";
+import { resolveDeviceIdentityStore } from "../infra/device-identity-store-options.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { deriveCanonicalEd25519PrivateKeyRaw } from "../infra/ed25519-signature.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";

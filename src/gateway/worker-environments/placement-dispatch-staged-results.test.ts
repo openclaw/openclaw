@@ -24,6 +24,7 @@ import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
 import { stagePendingWorkerWorkspaceResult } from "./workspace-recovery.test-support.js";
+import * as workspaceResults from "./workspace-result-staging.js";
 import {
   applyStagedWorkerWorkspaceResult,
   cleanupWorkerWorkspaceResultRef,
@@ -111,6 +112,54 @@ describe("worker placement result recovery", () => {
     );
     return { active, claim };
   }
+
+  it("retires an oversized unapplied result while preserving its staged ref", async () => {
+    const workspacePath = path.join(root, "rejected-staged-result");
+    const harness = await createHarness(database, placementStore, { workspacePath });
+    const { active, claim } = await seedWorkerTurn(harness);
+    harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
+    const staged = await stagePendingWorkerWorkspaceResult({
+      store: placementStore,
+      claim,
+      workspacePath,
+      base: "base\n",
+      current: "worker\n",
+    });
+    await placementStore.handoffWorkspaceResultRecovery(claim);
+    const refusal = Object.assign(
+      new Error("Workspace result changes 65000 files (limit 50000)."),
+      {
+        code: "WORKSPACE_RESULT_LIMIT",
+      },
+    );
+    const admission = vi
+      .spyOn(workspaceResults, "applyStagedWorkerWorkspaceResult")
+      .mockRejectedValueOnce(refusal);
+    await harness.service.reconcile();
+    admission.mockRestore();
+    expect(harness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: expect.stringContaining("65000 files"),
+      }),
+    );
+    expect(placementStore.get(active.sessionId)).toMatchObject({
+      state: "failed",
+      turnClaim: null,
+      recoveryError: expect.stringContaining("65000 files"),
+    });
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+    await harness.service.reconcile();
+    await expect(fs.readFile(path.join(workspacePath, "result.txt"), "utf8")).resolves.toBe(
+      "base\n",
+    );
+    expect(
+      await workspaceResults.hasWorkerWorkspaceResultRef({
+        root: workspacePath,
+        stagedResultRef: staged.stagedResultRef,
+      }),
+    ).toBe(true);
+    expect(harness.reportWorkspaceResultRecoveryFailure).toHaveBeenCalledOnce();
+  });
 
   it("applies a staged pending result without a tunnel and reclaims the worker", async () => {
     const workspacePath = path.join(root, "same-worker-staged-result");

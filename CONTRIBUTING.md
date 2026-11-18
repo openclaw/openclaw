@@ -82,7 +82,7 @@ must declare their own development dependencies rather than rely on hoisting.
 
 ## Before You PR
 
-- Use **Node 24.22.1+ LTS** or **Node 26.12.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Use **Node 24.22.1+ LTS** or **Node 26.12.1+** for source checkouts. Compatible Node 24.16.0+ on 24.x and 26.1.0+ also work with safe SQLite, but warn about missing security patches. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md).
 - Local tests and `pnpm dev` use the pinned OpenClaw Bun fork. See [local development tools](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork) for supported platforms, automatic staging, runtime/tool overrides, and fallbacks, and [CI runtime selection](https://docs.openclaw.ai/ci/pipeline#test-runtime-selection) for CI policy.
 - Test locally with your OpenClaw instance
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
@@ -114,19 +114,29 @@ must declare their own development dependencies rather than rely on hoisting.
 - Check that CI checks pass
 - Keep PRs focused (one thing per PR; do not mix unrelated concerns)
 - Describe what & why
-- **Include screenshots** — one showing the problem/before, one showing the fix/after (for UI or visual changes)
+- **Make visual changes easy to review** — follow the [PR visual-proof standard](.agents/skills/openclaw-pr-maintainer/references/media.md#pr-visual-proof) for visible clean and annotated before/after comparisons of the affected web or native UI.
 - Use American English spelling and grammar in code, comments, docs, and UI strings
 
 ## Security-sensitive changes
 
 Changes to authentication, credentials, secret handling, sandboxing, or execution
 permissions receive a security-review notice with the affected files and review
-guidance. A PR author with a GitHub user account and repository `maintain` or
-`admin` access needs no additional security approval. Other authors need a
-command comment from a user with either role:
+guidance. For sensitive product changes, a PR author with a GitHub user account and
+repository `maintain` or `admin` access needs no additional security approval.
+Other authors need a command comment from a user with either role. Dependency
+changes generally require a repository admin or an active member of
+`@openclaw/openclaw-secops`, either as the PR author or as the command approver:
 
 - `/allow-security-sensitive-change` for sensitive product changes.
-- `/allow-dependencies-change` for dependency changes that require approval.
+- `/allow-dependencies-change` from a repository admin or SecOps member for dependency changes that require approval.
+
+Maintain authors also qualify when all dependency-sensitive edits are release-version
+alignment in existing manifests: top-level `version` in the root, the `ai`,
+`gateway-client`, and `gateway-protocol` packages, and `extensions/*/package.json`;
+bundled plugins may also update existing `devDependencies.openclaw` and
+`peerDependencies.openclaw` release floors. This exemption does not let Maintain
+commenters approve another author's dependencies. See the
+[exact release-alignment scope](https://docs.openclaw.ai/ci/pipeline#security-review-checks).
 
 Wait for the guard notice to show the current PR commit, then post the applicable
 command on its own line in a new PR comment. Use only command lines in that
@@ -140,7 +150,7 @@ these command requirements.
 PR updates, approval comment events, and CI completion run security review
 automatically. Approval comments update the review result without rerunning the
 test suite. Missing approval fails the check. Automation using a GitHub user
-account follows the same role checks; GitHub App bot identities do not qualify.
+account follows the same guard-specific authority checks; GitHub App bot identities do not qualify.
 Open PRs targeting the same branch must have distinct head commits. GitHub shares
 commit statuses across PRs, so duplicate heads block security approval. Close the
 duplicate PR or push a distinct commit; security review evaluates automatically.

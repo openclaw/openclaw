@@ -190,8 +190,18 @@ export function createGatewayRetainedStoreMatcher(
 ) {
   const readOptions = discoveryReadOptions(discovery);
   const env = readOptions.env ?? process.env;
-  const readConfiguredTargets = () =>
-    resolveConfiguredAgentDatabaseTargets(cfg, { env, ...readOptions });
+  const readConfiguredTargets: Parameters<typeof createRetainedAgentDatabaseMatcher>[1] = (
+    excludeTarget,
+  ) =>
+    resolveConfiguredAgentDatabaseTargets(cfg, {
+      env,
+      ...readOptions,
+      excludeTarget: (target) =>
+        excludeTarget(
+          resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path,
+          target.agentId,
+        ),
+    });
   const prepared = discovery
     ? undefined
     : getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath(env));

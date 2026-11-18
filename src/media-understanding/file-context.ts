@@ -98,6 +98,7 @@ export async function extractFileContext(params: {
         attachmentIndex: attachment.index,
         maxBytes: limits.maxBytes,
         timeoutMs: limits.timeoutMs,
+        signal: params.signal,
       });
     } catch (err) {
       if (shouldLogVerbose()) {

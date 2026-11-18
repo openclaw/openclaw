@@ -36,8 +36,12 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
   listeners they register
 - optional `ctx.requester`, the host-derived requester that initiated the current
   message run. It can include `channel`, `accountId`, `senderId`,
-  `senderIsOwner`, and provider-native `roleIds`. Missing fields are unproven,
-  not false assurances; deny the action if policy requires those fields.
+  `senderIsOwner`, provider-native `roleIds`, and `deviceId`, the paired device
+  of the Gateway connection that sent the turn after the Gateway verified its
+  signature (never a request parameter or client name). `deviceId` is dropped
+  once another device or a device-less source steers input into the run. Missing
+  fields are unproven, not false assurances; deny the action if policy requires
+  those fields.
 - optional `ctx.trigger`, the run origin when its producer supplies one, such as
   `"user"`, `"cron"`, or `"memory"`. Memory flushes retain the originating turn's
   requester. This field is metadata, not authorization: it never grants owner
@@ -108,6 +112,38 @@ api.on(
   { matcher: ["exec"], priority: 50 },
 );
 ```
+
+### Device-aware policy
+
+`ctx.requester.deviceId` lets a policy tell two paired devices apart even when
+they run the same app. This file lets one device run tools and blocks every
+other source, including device-less clients and steered runs:
+
+```typescript
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+// Paired device ids from `openclaw devices list`.
+const ALLOWED_DEVICES = new Set(["<paired-device-id>"]);
+
+export default definePluginEntry({
+  id: "device-allowlist",
+  name: "Device allowlist",
+  description: "Let only approved paired devices run tools.",
+  register(api) {
+    api.on("before_tool_call", (event, ctx) => {
+      // Absent means unproven: a device-less client, a system run, or a run that
+      // another device has steered.
+      const deviceId = ctx.requester?.deviceId;
+      if (deviceId && ALLOWED_DEVICES.has(deviceId)) {
+        return;
+      }
+      return { block: true, blockReason: `This device may not run ${event.toolName}.` };
+    });
+  },
+});
+```
+
+Load it the same way as the sender-aware file below.
 
 ### Sender-aware policy in one file
 

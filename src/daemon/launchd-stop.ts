@@ -12,7 +12,7 @@ import {
 } from "../infra/restart-intent.js";
 import { cleanStaleGatewayProcesses } from "../infra/restart-stale-pids.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -80,7 +80,8 @@ function verifyLaunchAgentStopProbe(
   return probe.runtime.pid;
 }
 
-async function waitForLaunchAgentUnloaded(
+/** Waits until launchd unloads the job and every PID it ran has exited. */
+export async function waitForLaunchAgentUnloaded(
   serviceTarget: string,
   initialPids: readonly number[],
   assertCurrent?: () => void,

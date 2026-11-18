@@ -14,10 +14,11 @@ import type {
   ScopeUpgradeBinding,
 } from "@openclaw/gateway-client/scope-upgrade";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { CONTROL_UI_OPERATOR_SCOPES } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { formatConnectionErrorSummary } from "../lib/connection-error.ts";
 import { clearDeviceAuthToken, storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { listSessionPlacementRecoveryStorageKeys } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -36,7 +37,6 @@ import {
   deriveLegacyV4RecoveryScope,
   selectBrowserGatewayConnectAuth,
   CONTROL_UI_OPERATOR_ROLE,
-  CONTROL_UI_OPERATOR_SCOPES,
   type ConnectPlan,
   type GatewayBrowserClientOptions,
   type GatewayEventListener,
@@ -142,7 +142,7 @@ export class GatewayBrowserClient {
               ? error
               : new GatewayRequestError({
                   code: "UNAVAILABLE",
-                  message: formatUiError(error),
+                  message: formatConnectionErrorSummary(error),
                   retryable: error instanceof NativeGatewayAuthUnavailableError,
                 });
           return {
@@ -172,7 +172,7 @@ export class GatewayBrowserClient {
         this.recovery = { ...this.recovery, generation: context.generation + 1, resolved: false };
         this.clearInboundActivity();
         this.scopeUpgradeBinding = null;
-        const error = this.pairingFailure ?? context.connectFailure?.error ?? this.nativeAuthError;
+        const error = decision.pendingError;
         this.pendingPairing = null;
         if (decision.notify) {
           const info = {
@@ -231,6 +231,7 @@ export class GatewayBrowserClient {
       },
       onGap: (info) => this.opts.onGap?.(info),
       onActivity: () => {
+        this.clearInboundSilenceProbe();
         this.lastInboundActivityAtMs = Date.now();
         this.firstUnansweredRequestAtMs = null;
       },
@@ -243,10 +244,7 @@ export class GatewayBrowserClient {
       onCallbackError: (label, error) => console.error(`[gateway] ${label} handler error:`, error),
       handshake: { mode: "require-challenge", timeoutMs: DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS },
       reconnect: { initialMs: 800, multiplier: 1.7, maxMs: 15_000 },
-      nowMs: () =>
-        typeof performance !== "undefined" && typeof performance.now === "function"
-          ? performance.now()
-          : Date.now(),
+      nowMs: () => performance.now(),
     });
   }
 
@@ -510,7 +508,8 @@ export class GatewayBrowserClient {
     );
   }
 
-  private checkInboundSilence(): void {
+  /** Probes a silent socket, or on wake an admitted one at once; any inbound frame keeps it. */
+  checkInboundSilence(wake?: boolean): void {
     const lastActivityAtMs = this.lastInboundActivityAtMs;
     if (!this.connected || lastActivityAtMs === null || this.maxInboundSilenceMs === null) {
       return;
@@ -523,14 +522,21 @@ export class GatewayBrowserClient {
     const now = Date.now();
     const probe = this.inboundSilenceProbe;
     if (probe && lastActivityAtMs === probe.activityAtMs) {
-      if (now >= probe.deadlineMs) {
-        this.clearInboundActivity();
-        this.forceReconnect("inbound silence probe timeout");
+      // Repeated wakes keep a running probe's deadline. A page suspended mid-probe
+      // wakes with an expired one and gets a fresh deadline.
+      if (now < probe.deadlineMs) {
+        return;
       }
-      return;
+      if (!wake) {
+        this.clearInboundActivity();
+        // resolveBrowserGatewayClose replaces a socket closed with this reason at once.
+        this.forceReconnect("inbound silence probe timeout");
+        return;
+      }
     }
     this.clearInboundSilenceProbe();
     if (
+      !wake &&
       now - lastActivityAtMs < this.maxInboundSilenceMs &&
       (this.firstUnansweredRequestAtMs === null ||
         now - this.firstUnansweredRequestAtMs < UNANSWERED_REQUEST_SILENCE_MS)
@@ -544,14 +550,15 @@ export class GatewayBrowserClient {
       abort,
     };
     // Health is scope-independent; avoid active integration probes. Any inbound
-    // frame, including an error response, proves liveness at the next check.
+    // frame, including an error response, proves liveness.
     void this.client
       .request(
         "health",
         { probe: false },
         { timeoutMs: INBOUND_SILENCE_PROBE_TIMEOUT_MS, signal: abort.signal },
       )
-      .catch(() => undefined);
+      // The timeout is the probe deadline; the once-a-second check would add up to a second.
+      .catch(() => this.checkInboundSilence());
   }
 
   private clearInboundSilenceProbe(): void {

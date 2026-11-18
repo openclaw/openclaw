@@ -3,10 +3,12 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { preparePluginDoctorContractModules } from "./doctor-contract-preparation.js";
 import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registry.js";
 import { createDoctorGenerationFixture } from "./doctor-generation.test-support.js";
 import { loadPluginManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -54,13 +56,22 @@ it("binds replaced Codex declarations and callbacks to their own package generat
   }
   await using previousCache = createPluginCache();
   const previousInventory = withPluginCache(previousCache, () => install("2026.9.6", before));
-  const previous = withPluginCache(previousCache, () =>
-    listPluginDoctorStateMigrationEntries({ inventory: previousInventory }),
+  const previous = await withPluginGenerationSourceCustody(() =>
+    withPluginCache(previousCache, async () => {
+      await preparePluginDoctorContractModules({ inventory: previousInventory });
+      return listPluginDoctorStateMigrationEntries({ inventory: previousInventory });
+    }),
   );
   await using nextCache = createPluginCache();
   const nextInventory = withPluginCache(nextCache, () => install("2026.9.7", after));
-  const next = withPluginCache(nextCache, () =>
-    listPluginDoctorStateMigrationEntries({ inventory: nextInventory }),
+  const next = await withPluginGenerationSourceCustody(() =>
+    withPluginCache(nextCache, async () => {
+      await preparePluginDoctorContractModules({ inventory: nextInventory });
+      return listPluginDoctorStateMigrationEntries({ inventory: nextInventory });
+    }),
+  );
+  expect([...nextCache.setupModules.values()][0]!.sourceDigest).not.toBe(
+    [...previousCache.setupModules.values()][0]!.sourceDigest,
   );
   expect(next.map(({ migration }) => migration.id)).toEqual(after.map((action) => action.id));
   for (const [entries, version] of [

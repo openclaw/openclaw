@@ -661,6 +661,8 @@ instance automatically. A plugin's narrower restart policy or
 describes expected application; it is not a receipt from a running Gateway.
 See [Config hot reload](/gateway/configuration/hot-reload).
 
+When a running Gateway commits the write and it moves a configured model consumer to another billing route (metered API key, subscription/OAuth or token profile, or a CLI runtime's own credentials), the CLI prints the Gateway's warning on stderr. Each warning names the consumer path, the model, and the old and new route. The `config.set`, `config.patch`, and `config.apply` Gateway methods return the same lines as `billingRouteWarnings` on success and write them to the Gateway log. Offline writes (no running Gateway) do not compare billing routes.
+
 Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
 
 Model references are normalized before a mutation is saved. Core agent model references do not require plugin discovery; provider catalog model IDs reuse compatible prepared plugin metadata or load their manifest normalization policies on demand.
@@ -669,6 +671,9 @@ Unrelated edits leave provider catalogs unchanged. Catalog writes and changes to
 ## Write safety
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
+
+Normal writes refuse malformed UTF-8 in the root config or an included source
+before staging backups, preserving the original source and recovery bytes.
 
 If staging a config save fails, the existing root or include backup ring is left
 untouched. OpenClaw prepares backup contents without blocking unrelated Gateway
@@ -704,6 +709,23 @@ openclaw config validate
 ```
 
 Direct editor writes are still allowed, but the running Gateway treats them as untrusted until they validate. Startup validates config without rewriting legacy keys. Invalid direct edits stop startup; hot reload skips invalid edits without rewriting `openclaw.json`. Run `openclaw doctor --fix` for legacy-key repair, prefixed/clobbered config, or last-known-good recovery. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config).
+
+### Agent-assisted recovery
+
+The agent's `openclaw` tool accepts exact config commands in its `message`, including
+`config set <path> <value>`, `config unset <path>`, `config get <path>`,
+`config schema <path>`, and `config validate`. These commands use the existing config
+executor and approval checks without requiring a working setup-helper model.
+Natural-language setup requests still require working inference. A permission-policy
+change still requires its exact human approval; a helper outage does not grant it.
+
+If broken config or an unavailable setup tool prevents an explicitly requested local
+repair, an agent may use its available file or exec tools under their existing
+permissions. Prefer validated CLI edits. If the CLI cannot load the config, inspect
+the actual file, preserve a rollback copy, make the narrow repair, then validate and
+read back. This is not a way to override an approval decision, readonly config,
+containment, or disabled tools, or to change access, approval, or ownership policies.
+Gateway updates, restarts, and service control still use supervised maintenance.
 
 Ordinary recovery can restore an eligible, valid current backup verbatim. Backups that need legacy transformations must be recovered through Doctor. Plugin schema changes or `minHostVersion` skew stay loud instead of rolling back unrelated user settings such as models, providers, auth profiles, channels, gateway exposure, tools, memory, browser, or cron config.
 

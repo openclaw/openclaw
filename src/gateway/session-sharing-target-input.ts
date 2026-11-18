@@ -226,7 +226,11 @@ export function resolveTalkSessionTargetInput(
   | { kind: "request"; sessionKey?: string }
   | ({ kind: "relay" } & NonNullable<ReturnType<typeof resolveUnifiedTalkSessionTarget>>)
   | undefined {
-  if (method === "talk.session.steer") {
+  if (
+    method === "talk.session.steer" ||
+    method === "talk.session.appendAudio" ||
+    method === "talk.session.close"
+  ) {
     const sessionId = readSessionSharingStringParam(params, "sessionId");
     const retained = sessionId ? resolveUnifiedTalkSessionTarget(sessionId, connId) : undefined;
     return retained ? { kind: "relay", ...retained } : undefined;

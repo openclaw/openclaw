@@ -2,6 +2,7 @@ import { probeGatewayReachability } from "../api/gateway-browser-socket.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import { refreshControlUiServiceWorker } from "./sw-refresh.ts";
 
 /** Revalidates suspended tabs and lost transports through the application owner. */
 export function startGatewayPageActivation(
@@ -12,7 +13,7 @@ export function startGatewayPageActivation(
     > & {
       readonly client: Pick<
         GatewayBrowserClient,
-        "needsWakeReconnect" | "needsReachabilityReconnect" | "gatewayUrl"
+        "needsWakeReconnect" | "needsReachabilityReconnect" | "checkInboundSilence" | "gatewayUrl"
       > | null;
     };
     connect: () => void;
@@ -24,6 +25,7 @@ export function startGatewayPageActivation(
   let disposed = false;
   let queued = false;
   let forceRecovery = false;
+  let refreshWorker = false;
   let wasHidden = documentTarget.visibilityState === "hidden";
   let probeTimer: ReturnType<typeof setTimeout> | undefined;
   let probe: AbortController | null = null;
@@ -108,11 +110,12 @@ export function startGatewayPageActivation(
     syncProbe(Math.max(0, probeDelay() - (Date.now() - checkedAtMs)));
   };
 
-  const schedule = (force: boolean) => {
+  const schedule = (force: boolean, refreshesWorker = true) => {
     if (documentTarget.visibilityState === "hidden") {
       return;
     }
     forceRecovery ||= force;
+    refreshWorker ||= refreshesWorker;
     if (queued) {
       return;
     }
@@ -121,6 +124,8 @@ export function startGatewayPageActivation(
       queued = false;
       const forceQueuedRecovery = forceRecovery;
       forceRecovery = false;
+      const refreshQueuedWorker = refreshWorker;
+      refreshWorker = false;
       if (disposed || documentTarget.visibilityState === "hidden") {
         return;
       }
@@ -128,17 +133,23 @@ export function startGatewayPageActivation(
       failedProbes = Math.min(failedProbes, 1);
       clearTimeout(probeTimer);
       probeTimer = undefined;
-      if (client && recoveryAllowed() && (forceQueuedRecovery || client.needsWakeReconnect)) {
-        // Replacing the client retires Safari's ghost socket synchronously. A
-        // socket close would depend on the suspended transport firing `close`.
-        gateway.connect();
+      if (client && recoveryAllowed()) {
+        if (forceQueuedRecovery || client.needsWakeReconnect) {
+          // Replacing the client retires Safari's ghost socket synchronously. A
+          // socket close would depend on the suspended transport firing `close`.
+          gateway.connect();
+        } else {
+          // A socket that died while the app was away still looks open until it fails to answer.
+          client.checkInboundSilence(true);
+        }
       }
       syncProbe(0);
-      void import("./sw-refresh.runtime.ts")
-        .then(({ refreshControlUiServiceWorker }) => refreshControlUiServiceWorker())
-        .catch((error: unknown) => {
-          console.warn("OpenClaw service worker refresh failed after page activation.", error);
-        });
+      if (!refreshQueuedWorker) {
+        return;
+      }
+      void refreshControlUiServiceWorker().catch((error: unknown) => {
+        console.warn("OpenClaw service worker refresh failed after page activation.", error);
+      });
     });
   };
   const onVisibilityChange = () => {
@@ -158,11 +169,15 @@ export function startGatewayPageActivation(
     }
   };
   const onOnline = () => schedule(false);
+  // Returning from another app leaves the window "visible", so focus is the
+  // only return signal. Skip the service-worker update fetch on app switches.
+  const onFocus = () => schedule(false, false);
 
   const stops = [
     listen(documentTarget, "visibilitychange", onVisibilityChange),
     listen(windowTarget, "pageshow", onPageShow),
     listen(windowTarget, "online", onOnline),
+    listen(windowTarget, "focus", onFocus),
     gateway.subscribe(() => syncProbe()),
   ];
   syncProbe();

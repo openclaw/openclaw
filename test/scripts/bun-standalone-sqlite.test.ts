@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stageStandaloneSqlite } from "../../scripts/lib/bun-standalone-sqlite.mjs";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const { run } = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock("node:child_process", () => ({ spawnSync: run }));
@@ -11,9 +12,7 @@ vi.mock("node:child_process", () => ({ spawnSync: run }));
 const temporary: string[] = [];
 beforeEach(() => run.mockReset());
 afterEach(() => {
-  for (const directory of temporary.splice(0)) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+  cleanupTempDirs(temporary);
 });
 
 function fixture() {

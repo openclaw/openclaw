@@ -47,6 +47,7 @@ import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { withSqliteSnapshotReuse } from "./sqlite-snapshot-reuse.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
@@ -57,7 +58,7 @@ import {
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
-import { resolveUpdateInstallRoot } from "./update-install-root.js";
+import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 import {
   commitReadyUpdatePluginCohort,
   settleDelegatedUpdatePluginCohort,
@@ -155,10 +156,12 @@ async function finalizeMigratedUpdate(): Promise<void> {
     return;
   }
   if (process.argv[2] === "--post-core") {
-    return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
+    const postCoreInput = readUpdatePostCoreInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedPostCore(postCoreInput));
   }
   if (process.argv[2] === "--doctor") {
-    return await runDelegatedDoctor(readUpdateDoctorInput(JSON.parse(text)));
+    const doctorInput = readUpdateDoctorInput(JSON.parse(text));
+    return await withSqliteSnapshotReuse(() => runDelegatedDoctor(doctorInput));
   }
   // SAFETY: Only the typed parent continuation serializes this private input.
   const input = JSON.parse(text) as MigratedUpdateFinalizationInput;
@@ -292,7 +295,7 @@ async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<
     process.env[POST_CORE_UPDATE_ENV] !== "1" ||
     process.env[UPDATE_RUN_ID_ENV] !== input.runId ||
     !executingRoot ||
-    resolveUpdateInstallRoot(executingRoot) !== resolveUpdateInstallRoot(input.root)
+    !updateInstallRootsMatch(executingRoot, input.root)
   ) {
     throw new Error("Post-core update does not match its delegated run and installed runtime.");
   }

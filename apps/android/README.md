@@ -13,6 +13,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Choose **Text size** in **Settings → Appearance**: 90%, 100% (default), 110%, 125%, or 140%. This device-local choice survives restarting the app and does not sync to your profile. It combines with Android system font scaling, including nonlinear scaling, without changing spacing or typefaces.
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
+- During Talk, use the separate microphone button to mute or unmute your input without ending the call, canceling submitted work, or stopping reply audio. The muted state is visible and announced to accessibility services. Realtime mute sends silence while keeping the recording session open, so Android's microphone indicator may remain visible. Native Talk finishes already-recognized words before pausing recognition. Mute is retained across Talk restarts within the app process until you unmute; standalone push-to-talk remains available after ending Talk.
 - Talk setup and startup failures stay visible in a dismissible Chat dialog. If the message reports a missing provider or invalid credentials, configure the Talk provider on the Gateway before trying again.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
 - Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. **Request all** asks for the available runtime permissions without enabling the camera or location features; Android handles consent through its system prompts. Notification access stays separate under **Special access**. Continue without granting access, or enable phone capabilities individually or later in Settings. Blocked individual setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
@@ -289,14 +290,16 @@ build timestamp shared by every debug variant in that invocation. Release
 tasks still require explicit `openclawBuildCommit` and
 `openclawBuildTimestamp` properties so signed artifacts remain reproducible.
 
-Android release archives use the pinned version in `apps/android/version.json`.
+Android Play releases calculate their version from the root `package.json` and
+live store state. Local builds derive their default version from the root
+package version; a saved release plan selects an exact store build identity.
 Run **Android Store Release** from `main` with the default `release` operation, or run
 `pnpm android:release:upload` from a clean local `main` matching `origin/main`.
 The pipeline selects unused phone and Wear build numbers from Google Play and
 generates OpenAI release notes from changes since each form factor's public
 release. It saves the plan and notes as release artifacts and uploads the selected
-clean source commit. Tracked version defaults and notes stay unchanged; the flow
-creates no preparation commits or follow-up PRs.
+clean source commit without updating tracked version metadata; the flow creates
+no preparation commits or follow-up PRs.
 
 For daily Google Play Internal testing builds, the same workflow runs at
 **7:00 AM Pacific** using the `America/Los_Angeles` time zone, including daylight
@@ -316,9 +319,6 @@ For local preparation or inspection:
 
 ```bash
 pnpm android:version
-pnpm android:version:check
-pnpm android:version:pin -- --from-gateway
-pnpm android:version:sync
 ```
 
 Release-owner signing sync:
@@ -392,7 +392,7 @@ Start a fresh app process between scenes.
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
 
-Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. The **Android APK Artifact Publish** workflow at `.github/workflows/android-release.yml` is the only automated GitHub Release upload path. When the tagged Android pin matches the stable release train, `OpenClaw Release Publish` qualifies Android independently and dispatches it after core npm succeeds. A mismatched pin records an explicit skip. Android does not hold npm or GitHub release finalization, so verified APK assets may attach after the release is public.
+Current Android releases are independent of Gateway releases. Without a legacy Android version manifest, Gateway publication skips Android. The **Android APK Artifact Publish** workflow at `.github/workflows/android-release.yml` remains available for APK builds and legacy release recovery, with its existing exact-source qualification, protected approval, signing, and verification requirements. APK builds use runtime defaults from the root package version when no legacy manifest exists.
 
 The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
 
@@ -641,7 +641,7 @@ records it in the qualification proof.
 The **Android Release E2E** workflow runs this command directly, during eligible
 full manual CI at the workflow's exact source SHA, and before a manual Android
 Store Release accesses signing credentials. Scheduled and manual internal
-distributions retain their existing path. Gateway APK publication in
+distributions retain their existing path. Legacy Gateway APK publication in
 `android-release.yml` remains separate.
 
 The phone completes setup-code onboarding against a pinned published stable

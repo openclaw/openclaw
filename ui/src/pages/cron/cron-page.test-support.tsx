@@ -1,6 +1,6 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -26,7 +26,7 @@ export type CronTestPage = HTMLElement & {
   deliveryDirectory: CronPageState["deliveryDirectory"];
   patchForm: CronPageState["actions"]["onFormChange"];
   closePanel: CronPageState["actions"]["onClosePanel"];
-  submitForm: (runNow?: boolean) => void;
+  submitForm: () => void;
   selectJob: CronPageState["actions"]["onSelectJob"];
   removeJob: CronPageState["actions"]["onRemove"];
   settle: () => Promise<void>;
@@ -164,6 +164,7 @@ export function createContext(
       },
     },
     navigate: vi.fn(),
+    replace: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
 }
@@ -212,8 +213,7 @@ export function createPage(
   Object.defineProperty(page, "deliveryDirectory", { get: () => state.deliveryDirectory });
   page.patchForm = state.actions.onFormChange;
   page.closePanel = state.actions.onClosePanel;
-  page.submitForm = (runNow = false) =>
-    runNow ? state.actions.onSubmitRunNow() : state.actions.onSubmit();
+  page.submitForm = state.actions.onSubmit;
   page.selectJob = state.actions.onSelectJob;
   page.removeJob = state.actions.onRemove;
   page.refreshView = () => state.publish();
@@ -232,6 +232,28 @@ export function createPage(
   };
   flush();
   return page;
+}
+
+/** The page's copy of an automation once its list read has landed. */
+export async function heldJob(page: CronTestPage, id: string): Promise<CronJob> {
+  await waitForSolid(() => expect(page.cron.cronJobs.some((job) => job.id === id)).toBe(true));
+  return page.cron.cronJobs.find((job) => job.id === id)!;
+}
+
+/** Opens a held automation, as choosing it in the Automations sidebar does. */
+export async function openJob(page: CronTestPage, id: string): Promise<void> {
+  page.selectJob(await heldJob(page, id));
+  await page.settle();
+}
+
+/** Opens a held automation and its settings, as Edit on the automation's prompt does. */
+export async function editJob(page: CronTestPage, id: string): Promise<void> {
+  await openJob(page, id);
+  await waitForSolid(() =>
+    expect(page.querySelector('[data-test-id="cron-edit"]')).toBeInstanceOf(HTMLButtonElement),
+  );
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
+  await page.settle();
 }
 
 export function cronListResponse(jobs: CronJob[]): CronJobsListResult {

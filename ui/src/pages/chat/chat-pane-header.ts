@@ -226,7 +226,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         catalog,
         currentLayout,
         Boolean(panelControls),
-        ...panelDefinitions.flatMap(({ slot, label, available }) => [slot, label, available]),
+        ...panelDefinitions.flatMap(({ slot, label, icon, available }) => [
+          slot,
+          label,
+          icon,
+          available,
+        ]),
         i18n.getLocale(),
       ],
       () => {
@@ -315,7 +320,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             addPanelAction(slot, {
               id: `session-${slot}`,
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
-              icon: subagents ? "bot" : "terminal",
+              icon: subagents ? "bot" : "listTree",
               active: subagents ? subagentsVisible : processesVisible,
               onActivate: () => this.requestBackgroundPanel(slot, "toggle"),
             });

@@ -3,7 +3,6 @@ import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderAndroidVersionProperties } from "../../scripts/lib/android-version.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { commit, git, write } from "./mobile-release-git.test-support.js";
 
@@ -64,6 +63,7 @@ function fixture(
   const uploadAudit = path.join(directory, "upload.json");
   const firebaseAudit = path.join(directory, "firebase.jsonl");
   const firebasePreload = path.join(directory, "firebase-fixture.mjs");
+  const rendezvous = path.join(directory, "rendezvous");
   let firebaseKey = "";
   git(directory, "init", "--bare", "--initial-branch=main", remote);
   git(directory, "clone", remote, root);
@@ -109,6 +109,9 @@ const stageOnly = process.argv.includes("--stage-only");
 const sourceRoot = process.env.OPENCLAW_IOS_RELEASE_SOURCE_ROOT || process.cwd();
 const plan = JSON.parse(fs.readFileSync(process.env.OPENCLAW_IOS_RELEASE_PLAN, "utf8"));
 const buildNumber = process.argv[process.argv.indexOf("--build-number") + 1];
+if (!stageOnly) {
+  execFileSync(process.execPath, ["--import", "./scripts/tsx.mjs", "scripts/mobile-release-notes.ts", "generate", "--platform", "ios", "--plan", process.env.OPENCLAW_IOS_RELEASE_PLAN, "--output", process.env.OPENCLAW_MOBILE_RELEASE_NOTES], { stdio: "inherit" });
+}
 const notes = renderMobileReleaseNotes({ rootDir: sourceRoot, platform: "ios", version: plan.appStoreVersion, build: buildNumber, audience: "ios" });
 fs.appendFileSync(process.env.FIXTURE_UPLOAD_AUDIT, JSON.stringify({ sha, stageOnly, notes, buildNumber, destination: process.argv.includes("--destination") ? process.argv[process.argv.indexOf("--destination") + 1] : "app-store", stampedSha: process.env.GIT_COMMIT, status: git("status", "--porcelain", "--untracked-files=all"), remoteMain: git("ls-remote", "origin", "refs/heads/main").split(/\\s+/)[0], metadata: fs.readFileSync("apps/ios/CHANGELOG.md", "utf8") }) + "\\n");
 if (!stageOnly) {
@@ -132,6 +135,60 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
 `,
   });
   if (platform === "android") {
+    fs.mkdirSync(rendezvous);
+    fs.renameSync(
+      path.join(root, "scripts/mobile-release-notes.ts"),
+      path.join(root, "scripts/fixture-notes.ts"),
+    );
+    write(
+      root,
+      "scripts/mobile-release-notes.ts",
+      String.raw`
+import fs from "node:fs";
+import path from "node:path";
+import { waitFor } from "./fixture-rendezvous.mjs";
+if (process.argv.includes("generate")) {
+  const directory = process.env.FIXTURE_RELEASE_RENDEZVOUS;
+  fs.writeFileSync(path.join(directory, "notes-pid"), String(process.pid));
+  process.once("exit", () => {
+    if (process.env.FIXTURE_RELEASE_FAILURE) {
+      fs.mkdirSync("apps/android/build/release-artifacts", { recursive: true });
+      fs.writeFileSync("apps/android/build/release-artifacts/notes-joined.apk", "Generator finished before artifact collection.");
+    }
+    fs.writeFileSync(path.join(directory, "notes-exited"), "finished");
+  });
+  await waitFor("build-ready", "Build did not start while notes were pending.");
+  if (process.env.FIXTURE_RELEASE_FAILURE === "notes") {
+    throw new Error("Synthetic notes generation refused.");
+  }
+}
+await import("./fixture-notes.ts");
+`,
+    );
+    write(
+      root,
+      "scripts/fixture-rendezvous.mjs",
+      String.raw`
+import fs from "node:fs";
+import path from "node:path";
+export const waitFor = (file, failure) => new Promise((resolve, reject) => {
+  const directory = process.env.FIXTURE_RELEASE_RENDEZVOUS;
+  const deadline = AbortSignal.timeout(3000);
+  const watcher = fs.watch(directory, (_, changed) => { if (changed === file) finish(); });
+  const aborted = () => finish(new Error(failure));
+  function finish(error) {
+    watcher.close();
+    deadline.removeEventListener("abort", aborted);
+    error ? reject(error) : resolve();
+  }
+  deadline.addEventListener("abort", aborted, { once: true });
+  if (fs.existsSync(path.join(directory, file))) finish();
+});
+if (process.argv[2] === "build") {
+  await waitFor("notes-pid", "Notes did not start while the build was pending.");
+}
+`,
+    );
     const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
     firebaseKey = JSON.stringify({
       type: "service_account",
@@ -143,8 +200,8 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       firebasePreload,
       String.raw`
 import fs from "node:fs";
-import { registerHooks } from "node:module";
-registerHooks({ resolve(specifier, context, nextResolve) {
+import nodeModule from "node:module";
+nodeModule.registerHooks({ resolve(specifier, context, nextResolve) {
   return specifier === "undici" ? { url: import.meta.url, shortCircuit: true } : nextResolve(specifier, context);
 } });
 export class Agent { async close() {} }
@@ -179,7 +236,6 @@ export const fetch = async (url, options = {}) => {
 `,
     );
     copyFiles(root, [
-      "scripts/android-sync-versioning.ts",
       "scripts/android-version.ts",
       "scripts/lib/android-version.ts",
       "scripts/lib/mobile-changelog.ts",
@@ -191,11 +247,6 @@ export const fetch = async (url, options = {}) => {
       "scripts/android-release-upload.sh",
     ]);
     writeFiles(root, {
-      "apps/android/version.json": '{"version":"2026.8.2","versionCode":2026080201}\n',
-      "apps/android/Config/Version.properties": renderAndroidVersionProperties({
-        canonicalVersion: "2026.8.2",
-        versionCode: 2026080201,
-      }),
       "apps/android/CHANGELOG.md":
         "## Unreleased\n\nFuture manual notes.\n\n## 2026.8.2\n\nPrevious APK notes.\n",
       "apps/android/fastlane/metadata/android/en-US/release_notes.txt": "Previous APK notes.\n",
@@ -226,7 +277,10 @@ def validate_android_release_preflight!(metadata); end
 def capture_android_screenshots!; end
 def screenshots; $lanes.fetch(:screenshots).call; end
 def build_release_artifacts!(artifact: "all")
+  raise "Overlap failed" unless system("node", "scripts/fixture-rendezvous.mjs", "build")
   raise "Archive failed" unless system("node", "--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--artifact", artifact, "--dry-run")
+  File.write(File.join(ENV.fetch("FIXTURE_RELEASE_RENDEZVOUS"), "build-ready"), "ready")
+  raise "Synthetic archive failure" if ENV["FIXTURE_RELEASE_FAILURE"] == "build"
   FileUtils.mkdir_p("apps/android/build/release-artifacts")
   %w(play wear).each do |audience|
     file = "apps/android/build/release-artifacts/openclaw-2026.9.20-#{audience}-release.aab"
@@ -258,6 +312,7 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
     ...process.env,
     FIXTURE_UPLOAD_AUDIT: uploadAudit,
     FIXTURE_FIREBASE_AUDIT: firebaseAudit,
+    FIXTURE_RELEASE_RENDEZVOUS: rendezvous,
     FIREBASE_APP_DISTRIBUTION_JSON_KEY_DATA: firebaseKey,
     FIREBASE_APP_ID: "1:123:android:abc123",
     FIREBASE_TESTER_GROUPS: "android-daily",
@@ -298,6 +353,7 @@ $lanes.fetch(:release_upload).call(destination: ARGV.fetch(0).delete_prefix("des
     invoke,
     uploadAudit,
     firebaseAudit,
+    rendezvous,
     audit: () => readLines(uploadAudit),
     ref: (name: string) => git(remote, "rev-parse", name),
   };
@@ -336,15 +392,11 @@ describe("mobile release CLI", () => {
     { destination: "play-store", event: "schedule" },
     { destination: "internal", event: "schedule" },
   ])(
-    "builds Android $destination on $event from the saved plan without changing Git or pinned metadata",
+    "builds Android $destination on $event from the saved plan without changing Git or manual release notes",
     ({ destination, event }) => {
       const f = fixture("android");
-      const pinned = [
-        "apps/android/version.json",
-        "apps/android/Config/Version.properties",
-        "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
-      ];
-      const original = pinned.map((file) => read(f.root, file));
+      const manualNotes = ["apps/android/fastlane/metadata/android/en-US/release_notes.txt"];
+      const original = manualNotes.map((file) => read(f.root, file));
       const ci = workflowEnv(f.base);
       if (destination === "internal") {
         const rejected = f.invoke("run", ["--destination", destination], {
@@ -393,6 +445,7 @@ describe("mobile release CLI", () => {
         "Release artifact: wear aab",
         "Release artifact: play aab",
       ]);
+      expect(read(f.rendezvous, "notes-exited")).toBe("finished");
       expect(f.audit()[0]).toMatchObject({
         version: "2026.9.20",
         versionCode: 2026090250,
@@ -406,7 +459,7 @@ describe("mobile release CLI", () => {
         f.ref("refs/openclaw/mobile-releases/android/v2/2026.9.2/0/1/2026090250-2026090251"),
       ).toBe(f.base);
       expect(f.ref("main")).toBe(f.base);
-      expect(pinned.map((file) => read(f.root, file))).toEqual(original);
+      expect(manualNotes.map((file) => read(f.root, file))).toEqual(original);
       const rebuilt = spawnSync(
         process.execPath,
         ["--import", "tsx", "apps/android/scripts/build-release-artifacts.ts", "--dry-run"],
@@ -424,6 +477,34 @@ describe("mobile release CLI", () => {
       expect(rebuilt.stdout).toContain("Android versionCode: 2026090250");
       expect(rebuilt.stdout).toContain("Release artifact: third-party apk");
       expect(git(f.root, "status", "--porcelain")).toBe("");
+    },
+  );
+
+  it.each(["notes", "build"])(
+    "joins Android notes and retains the failed attempt without uploading after a %s failure",
+    (failure) => {
+      const f = fixture("android");
+      const result = f.invoke("run", ["--destination", "internal"], {
+        ...workflowEnv(f.base),
+        FIXTURE_RELEASE_FAILURE: failure,
+      });
+      expectResult(
+        result,
+        1,
+        failure === "notes" ? "release-note generation failed" : "Synthetic archive failure",
+      );
+      expect([f.uploadAudit, f.firebaseAudit].map((file) => fs.existsSync(file))).toEqual([
+        false,
+        false,
+      ]);
+      expect(git(f.remote, "for-each-ref", "--format=%(refname)", "refs/openclaw")).toBe("");
+      expect(exists(f.recovery, "source")).toBe(true);
+      expect(read(f.recovery, "artifacts/notes-joined.apk")).toBe(
+        "Generator finished before artifact collection.",
+      );
+      expect(read(f.rendezvous, "notes-exited")).toBe("finished");
+      expect(() => process.kill(Number(read(f.rendezvous, "notes-pid")), 0)).toThrow(/ESRCH/);
+      expect(f.ref("main")).toBe(f.base);
     },
   );
 
@@ -646,20 +727,13 @@ describe("mobile release CLI", () => {
     },
   );
 
-  it.each(["ios", "android"])(
-    "retains full %s release ancestry when notes are needed",
-    (platform) => {
-      const f = fixture(platform, undefined, true);
-      const latestMain = advanceMain(f);
-      expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
-      const result = f.invoke("run", [], workflowEnv(f.base));
-      expectResult(result, 0);
-      expect(git(f.root, "log", "--format=%s")).toBe("Update application source\nInitial source");
-      expect(f.audit()).toHaveLength(1);
-      expect(f.ref("main")).toBe(latestMain);
-      expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
-    },
-  );
+  it.each(["ios", "android"])("avoids loading %s ancestry for first release notes", (platform) => {
+    const f = fixture(platform, undefined, true);
+    const result = f.invoke("run", [], workflowEnv(f.base));
+    expectResult(result, 0);
+    expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
+    expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
+  });
 
   it("rejects dirty, non-main, and missing-key releases before creating a worktree or calling Fastlane", () => {
     const f = fixture();

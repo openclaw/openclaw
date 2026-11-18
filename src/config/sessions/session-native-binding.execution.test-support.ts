@@ -91,21 +91,20 @@ export function expectNoSql(queries: readonly string[], pattern: RegExp) {
 
 // Capture the originals before spying; keep both paths and their lazy identity getters intact.
 export function spyAgentExecutions(module: ExecutionModule, decorate: Decorate) {
-  const wrap =
-    <Args extends unknown[]>(capture: (...args: Args) => OpenClawAgentDatabaseExecution) =>
-    (...args: Args): OpenClawAgentDatabaseExecution => {
-      const owner = capture(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(source, (worker) => operation(decorate(worker)), options),
-      };
-    };
-  const capture = wrap(module.captureOpenClawAgentDatabaseExecution);
-  const prepare = wrap(module.captureOpenClawAgentDatabasePreparationExecution);
-  vi.spyOn(module, "captureOpenClawAgentDatabaseExecution").mockImplementation(capture);
-  vi.spyOn(module, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(prepare);
+  const wrap = <Execution extends OpenClawAgentDatabaseExecution>(owner: Execution): Execution => ({
+    ...owner,
+    get fileIdentity() {
+      return owner.fileIdentity;
+    },
+    runExisting: (source, operation, options) =>
+      owner.runExisting(source, (worker) => operation(decorate(worker)), options),
+  });
+  const capture = module.captureOpenClawAgentDatabaseExecution;
+  const captureAsync = module.captureOpenClawAgentDatabaseExecutionAsync;
+  vi.spyOn(module, "captureOpenClawAgentDatabaseExecution").mockImplementation((...args) =>
+    wrap(capture(...args)),
+  );
+  vi.spyOn(module, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+    async (...args) => wrap(await captureAsync(...args)),
+  );
 }

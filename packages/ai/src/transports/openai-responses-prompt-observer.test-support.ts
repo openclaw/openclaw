@@ -22,7 +22,7 @@ export const createReplayModel = () =>
   createModel({ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", contextWindow: 1_000_000 });
 export function createReplayState(
   model: Model,
-  identity: { sessionId: string; authProfileId: string },
+  identity: { sessionId: string },
   state: Pick<ProviderReplayState, "type" | "data"> & Partial<ProviderReplayState>,
 ): ProviderReplayState {
   const { source: _source, ...metadata } = replayMetadata(model, identity);
@@ -99,7 +99,7 @@ export function completedSdkResponse(responseId: string, extra: Record<string, u
   };
 }
 
-type ReplayIdentity = { authProfileId: string; sessionId: string };
+type ReplayIdentity = { sessionId: string };
 export const createCompactionContext = (
   model: Model,
   identity: ReplayIdentity,

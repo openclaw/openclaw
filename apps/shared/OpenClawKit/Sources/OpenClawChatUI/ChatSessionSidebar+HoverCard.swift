@@ -302,7 +302,6 @@ private struct ChatSessionHoverCard: View {
                     if let created = self.session.createdAt {
                         Text(verbatim: ChatSessionHoverCardProjection.age(created, now: Date()))
                             .foregroundStyle(.secondary)
-                            .help(ChatSessionHoverCardProjection.age(created, now: Date(), suffix: true))
                     }
                 }
                 if channel == nil { self.attribution(attribution) }
@@ -311,7 +310,7 @@ private struct ChatSessionHoverCard: View {
                     id: \.offset)
                 { _, item in
                     Label(item.text, systemImage: item.symbol).foregroundStyle(.secondary)
-                        .help(item.detail ?? item.text)
+                        .help(item.detail ?? "")
                         .accessibilityLabel(item.label ?? item.text)
                 }
                 if let head = ChatSessionHoverCardProjection.headsUp(card, session: self.session) {

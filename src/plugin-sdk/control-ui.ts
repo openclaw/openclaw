@@ -19,6 +19,16 @@ export type { AgentsWorkspaceGetResult } from "@openclaw/gateway-protocol";
 export type { MemorySearchResponse } from "../../packages/memory-host-sdk/src/host/types.js";
 export type ControlUiDisposer = () => void;
 
+/** Tab-local recovery data bound to this authenticated Gateway account and plugin. */
+export type ControlUiRecoveryStorageV1 = {
+  readonly version: 1;
+  /** Throws after account, connection, activation, or view retirement. */
+  assertCurrent: () => void;
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+  removeItem: (key: string) => void;
+};
+
 export type ControlUiConnection = {
   connected: boolean;
   canRead: boolean;
@@ -103,6 +113,12 @@ export type ControlUiSurfaceProps = {
     stream: string | null;
     loading: boolean;
   };
+  /** Only the feedback action/receipt beside a terminal run failure, not its details or recovery. */
+  "run-failure-feedback": BoardGetParams & {
+    /** The exact displayed failure, including when adjacent failures are grouped. */
+    runId: string;
+    repeatCount: number;
+  };
   "tool-result": BoardGetParams & {
     toolName: string;
     toolCallId: string;
@@ -180,6 +196,8 @@ type ControlUiInlineView = {
 export type ControlUiPanel = {
   id: string;
   label: string;
+  /** Fixed host icon-registry name; unknown/omitted names fall back to plug. Manifest SVG artwork takes precedence. */
+  icon?: string;
   mount: ControlUiView<BoardGetParams>;
 };
 
@@ -197,6 +215,8 @@ export type ControlUiAction = {
       session?: ControlUiSession;
       host: ControlUiHost;
       signal: AbortSignal;
+      /** Composer placement only: the invoking pane's live draft; retires with `signal`. */
+      composer?: { readonly draft: string; setDraft: (text: string) => void };
     },
   ) => void | Promise<void>;
 };
@@ -236,6 +256,8 @@ export type ControlUiHost = {
   readonly locale: string;
   redact: (text: string) => string;
   readonly connection: ControlUiConnection;
+  /** Absent or null until the authenticated recovery owner is available. Storage errors throw. */
+  readonly recoveryStorage?: ControlUiRecoveryStorageV1 | null;
   readonly components: ControlUiComponents;
   /**
    * Native modules share the operator's authenticated Gateway authority.

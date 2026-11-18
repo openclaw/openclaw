@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { writeSidebarSectionDragData } from "../lib/sessions/drag.ts";
 
 // Only the header's trailing icon actions (new session, menus, filters) keep pure
@@ -22,13 +22,11 @@ export function renderSidebarSessionSectionHeader(params: {
     title?: string;
     onToggle: () => void;
   };
-  draggable?: boolean;
-  disabledReason?: string;
+  draggable: boolean;
   onStartDrag: (sectionId: string) => void;
   onFinishDrag: () => void;
   onContextMenu?: JSX.EventHandler<HTMLDivElement, MouseEvent>;
 }) {
-  const draggable = createMemo(() => params.draggable !== false && !params.disabledReason);
   let header!: HTMLElement;
   onSettled(() => {
     const sectionId = params.sectionId;
@@ -47,10 +45,9 @@ export function renderSidebarSessionSectionHeader(params: {
       }}
       class={[
         "sidebar-recent-sessions__head",
-        draggable() && "sidebar-recent-sessions__head--draggable",
+        params.draggable && "sidebar-recent-sessions__head--draggable",
       ]}
-      draggable={draggable() ? "true" : "false"}
-      title={params.disabledReason}
+      draggable={params.draggable ? "true" : "false"}
       onMouseDown={(event) => {
         const currentHeader = event.currentTarget;
         currentHeader.toggleAttribute(
@@ -62,7 +59,7 @@ export function renderSidebarSessionSectionHeader(params: {
         event.currentTarget.removeAttribute("data-section-drag-blocked");
       }}
       onDragStart={(event) => {
-        if (!draggable()) {
+        if (!params.draggable) {
           event.preventDefault();
           return;
         }

@@ -71,6 +71,7 @@ import type {
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
   WidgetPresenter,
@@ -219,6 +220,11 @@ export type OpenClawPluginApi = {
   runtime: PluginRuntime;
   logger: PluginLogger;
   /**
+   * Plugin-owned metric families for diagnostics exporters (diagnostics-prometheus serves them).
+   * Requires plugins.entries.<id>.allowMetrics. Samples are dropped while no exporter listens.
+   */
+  metrics?: import("./plugin-metrics.js").PluginMetricsApi;
+  /**
    * Grouped facade over the existing flat session-related plugin API.
    * Flat methods remain supported for compatibility.
    */
@@ -318,7 +324,8 @@ export type OpenClawPluginApi = {
   registerService: {
     (service: OpenClawPluginService): void;
     (service: OpenClawPluginServiceV2): void;
-    (service: OpenClawPluginService | OpenClawPluginServiceV2): void;
+    (service: OpenClawPluginServiceV3): void;
+    (service: OpenClawPluginService | OpenClawPluginServiceV2 | OpenClawPluginServiceV3): void;
   };
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
   registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;

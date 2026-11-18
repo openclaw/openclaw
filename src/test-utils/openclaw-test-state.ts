@@ -1,6 +1,5 @@
 // Creates isolated OpenClaw state directories for integration-style tests.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
@@ -10,7 +9,7 @@ import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../gateway/test-helpers.env.js
 import { acquireStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { captureEnv, withEnv } from "./env.js";
+import { captureEnv, resolveTestTempRoot, withEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type ConfigRuntimeResettable = typeof configRuntime & {
@@ -281,7 +280,7 @@ export async function createOpenClawTestState(
   const prefix = options.prefix ?? `${DEFAULT_PREFIX}${label}-`;
   const layout = options.layout ?? "home";
   const config = scenarioConfig(options);
-  let root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  let root = await fs.mkdtemp(path.join(resolveTestTempRoot(), prefix));
   const removeRoot = () =>
     fs.rm(root, {
       recursive: true,

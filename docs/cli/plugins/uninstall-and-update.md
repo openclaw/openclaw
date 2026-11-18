@@ -99,6 +99,12 @@ before retrying; data migrations require `openclaw doctor --fix`. Disabled plugi
 keep their pending inputs without running state migrations; unrelated pending
 migrations remain preserved.
 
+When a repair moves a setting, updates retain authored environment references
+such as `${LISTENER_HOST}`, including settings in a single owned `$include` file.
+The replacement plugin's Doctor contract handles both the resolved value and the
+authored reference before the config is saved. Values already saved as literals
+stay literals; the updater cannot recover a reference that an earlier update lost.
+
 Recovery keeps the published package generation when config rollback is not
 confirmed. The command reports the failure without claiming runtime activation.
 
@@ -120,7 +126,11 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
-    When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins. Stored dist-tags such as `@beta` retain their selected release line.
+    When you pass a plugin id, OpenClaw starts from its recorded install source. For a multi-entry package, a child id resolves to its package owner and updates every sibling together. If the new package version removes or renames children, OpenClaw removes the retired children's entries, allow/deny policy, exact child load paths, channel config, and memory/context slot selections while preserving retained/new children and unrelated plugins.
+
+    On the stable update channel, trusted official plugins with saved prerelease channel tags (`@alpha`, `@beta`, `@next`, `@rc`, `@canary`, `@nightly`, or `@dev`) follow core's stable release. Updates prefer the version matching core, or `latest` when that version is unavailable, and warn before saving `latest` after success. The saved `@latest` selector keeps this core preference and version floor on every subsequent stable update. A compatible replacement must be stable and at least core's release cohort; otherwise the installed plugin and selector stay in place with a warning. This applies to named updates, `--all`, and managed core-update convergence. Older records do not distinguish automatically saved channel tags from user-selected tags, so both follow this policy. Use an exact version or an explicit selector in the current command to retain a deliberate selection.
+
+    Third-party plugins, custom dist-tags, and an explicit beta update channel keep their selected release line. This channel-tag recovery does not change exact-version or range selectors; the separate managed release-pin recovery below still applies.
 
     The narrow exception is a trusted official package completing a catalog-declared plugin id replacement. That update starts from the catalog package selector so the renamed manifest can replace the legacy id.
 
@@ -149,6 +159,8 @@ A plugin selected through `plugins.load.paths` is operator-managed. Named update
   </Accordion>
   <Accordion title="Version checks and integrity drift">
     Before a live npm update, OpenClaw checks the installed package version against the npm registry metadata. If the installed version and recorded artifact identity already match the resolved target, it avoids downloading or reinstalling. A requested selector change or managed release-pin recovery can still update the plugin index without rewriting `openclaw.json`.
+
+    ClawHub updates also retain an unchanged installation when the verified artifact digest, package, version, and archive kind match the install record. ClawHub compatibility and release-trust checks still run, and the installed package must pass the normal package validation and host-link audit. The archive is still downloaded and verified; damaged installs or changed artifacts use the normal replacement path. File-list-only releases without an attested archive digest are reinstalled.
 
     When a stored integrity hash exists and the fetched artifact hash changes, OpenClaw treats that as npm artifact drift. The interactive `openclaw plugins update` command prints the expected and actual hashes and asks for confirmation before proceeding. Non-interactive update helpers refuse the update unless the caller supplies an explicit continuation policy.
 
@@ -279,6 +291,10 @@ host-attributed agent/session/run/service fields when available. Missing attribu
 is explicitly `unknown`. Derived consumers can name their parent reference.
 Gateway turn preparation attributes its leases to the run ID and the
 `gateway-agent-turn` service, including before embedded execution starts.
+Model catalog work (provider and native catalog lookups, catalog auth refreshes,
+and native login checks) holds a plugin only while a call into it is running, and
+attributes those calls to the agent ID and the `model-catalog-discovery` service,
+even when an agent run started it.
 The `omitted` count reports truncation. These are acquisition facts, not proof
 that a holder is currently executing or exclusively owns shared resources.
 

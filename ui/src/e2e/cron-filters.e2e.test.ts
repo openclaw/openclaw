@@ -8,10 +8,13 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  createControlUiE2eContextOptions,
-  createControlUiE2eSuite,
-} from "./control-ui-e2e-suite.test-support.ts";
+  cronSidebarFeatureMethods,
+  openAutomation,
+  openAutomationActivity,
+  openRunHistoryByAddress,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron mocked Gateway E2E",
@@ -34,6 +37,7 @@ function installCronGateway(
   options: Omit<GatewayScenario, "methodResponses"> = {},
 ) {
   return installMockGateway(page, {
+    featureMethods: cronSidebarFeatureMethods,
     ...options,
     methodResponses: {
       "cron.list": cronListResponse([]),
@@ -93,25 +97,6 @@ const requireRecord = createRequireRecord("record", "expected-object-value");
 
 const requestParams = (request: MockGatewayRequest) => requireRecord(request.params);
 
-async function waitForCronListRequest(
-  gateway: MockGatewayControls,
-  predicate: (params: Record<string, unknown>) => boolean,
-): Promise<MockGatewayRequest> {
-  const deadline = Date.now() + 10_000;
-  let requests: MockGatewayRequest[] = [];
-  while (Date.now() < deadline) {
-    requests = await gateway.getRequests("cron.list");
-    const match = requests.find((request) => predicate(requestParams(request)));
-    if (match) {
-      return match;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error(`No matching cron.list request found: ${JSON.stringify(requests)}`);
-}
-
 function button(page: Page, name: string) {
   return page.getByRole("button", { name, exact: true });
 }
@@ -130,16 +115,6 @@ function containsAll(value: unknown, expected: string[]) {
   return Array.isArray(value) && expected.every((entry) => value.includes(entry));
 }
 
-const defaultListParams = {
-  enabled: "all",
-  includeDisabled: true,
-  lastRunStatus: "all",
-  limit: 50,
-  offset: 0,
-  scheduleKind: "all",
-  sortBy: "nextRunAtMs",
-  sortDir: "asc",
-};
 const statuses = ["ok", "error", "skipped"];
 const deliveryStatuses = ["delivered", "not-delivered", "unknown"];
 
@@ -157,10 +132,6 @@ async function expectRunRequest(
     .toBe(true);
 }
 
-function jobTitle(page: Page, name: string) {
-  return page.locator(".cron-table__name-text", { hasText: new RegExp(`^${name}$`, "u") });
-}
-
 async function dismissDropdownToNextTrigger(page: Page, trigger: Locator, nextTrigger: Locator) {
   await page.keyboard.press("Escape");
   expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
@@ -172,68 +143,6 @@ async function dismissDropdownToNextTrigger(page: Page, trigger: Locator, nextTr
 }
 
 suite.define(() => {
-  it("sends cron job table filters through the Gateway and renders the filtered page", async () => {
-    const everyOk = cronJob(
-      "digest-every-ok",
-      "Digest every minute",
-      { kind: "every", everyMs: 60_000 },
-      { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
-    );
-    const cronUnknown = cronJob("nightly-cron-unknown", "Nightly cron pending", {
-      kind: "cron",
-      expr: "0 1 * * *",
-      tz: "UTC",
-    });
-
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installCronGateway(page, {
-        "cron.list": cronListResponseFixture([
-          {
-            match: { scheduleKind: "cron", lastRunStatus: "unknown" },
-            response: cronListResponse([cronUnknown]),
-          },
-          {
-            match: {},
-            response: cronListResponse([everyOk, cronUnknown], 2),
-          },
-        ]),
-        "cron.status": {
-          enabled: true,
-          jobs: 2,
-          nextWakeAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
-          storePath: "/tmp/openclaw-e2e/cron/jobs.json",
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}cron`);
-      expect(response?.status()).toBe(200);
-      await jobTitle(page, "Digest every minute").waitFor({ timeout: 10_000 });
-      await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
-
-      const initialRequest = await waitForCronListRequest(
-        gateway,
-        (params) => params.limit === 50 && params.scheduleKind === "all",
-      );
-      expect(requestParams(initialRequest)).toMatchObject(defaultListParams);
-
-      await page.locator(".cron-filter-popover__trigger").click();
-      await page.locator('[data-test-id="cron-jobs-schedule-filter"]').selectOption("cron");
-      await page.locator('[data-test-id="cron-jobs-last-status-filter"]').selectOption("unknown");
-
-      const filteredRequest = await waitForCronListRequest(
-        gateway,
-        (params) => params.scheduleKind === "cron" && params.lastRunStatus === "unknown",
-      );
-      expect(requestParams(filteredRequest)).toMatchObject({
-        ...defaultListParams,
-        lastRunStatus: "unknown",
-        scheduleKind: "cron",
-      });
-      await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
-      await expect.poll(async () => jobTitle(page, "Digest every minute").count()).toBe(0);
-    });
-  });
-
   it("keeps read-only operators on Cron browse and history surfaces", async () => {
     const readOnlyJob = {
       ...cronJob(
@@ -249,6 +158,7 @@ suite.define(() => {
         page,
         {
           "cron.list": cronListResponseFixture(cronListResponse([readOnlyJob])),
+          "cron.get": readOnlyJob,
           "cron.runs": cronRunsResponse([
             {
               ...run(1, readOnlyJob.id, "Read-only history remains available"),
@@ -261,21 +171,12 @@ suite.define(() => {
       );
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
-      await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();
-      expect(
-        await page.locator(`[data-test-id="cron-row-description-${readOnlyJob.id}"]`).textContent(),
-      ).toContain(readOnlyJob.description);
-
+      await page.locator(".cron-overview-empty").waitFor();
       await expectCount(page, '[data-test-id="cron-new-task"]', 0);
-      await expectCount(page, `[data-test-id="cron-row-run-${readOnlyJob.id}"]`, 0);
-      await expectCount(page, `[data-test-id="cron-row-toggle-${readOnlyJob.id}"]`, 0);
-      await expectCount(page, ".cron-job-menu", 0);
-      await expectCount(page, "[data-suggestion]", 0);
-      expect(await page.locator(".cron-filter-popover__trigger").count()).toBe(1);
 
-      await jobTitle(page, readOnlyJob.name).click();
-      await page.locator("fieldset.cron-editor:disabled").waitFor();
+      await openAutomation(page, readOnlyJob.id);
+      await page.getByRole("note").filter({ hasText: "owner with automation access" }).waitFor();
+      await expectCount(page, ".cron-job-menu", 0);
       expect(
         await page.locator('[data-test-id="cron-detail-description"]').textContent(),
       ).toContain(readOnlyJob.description);
@@ -283,11 +184,10 @@ suite.define(() => {
       await expectCount(page, '[data-test-id="cron-submit"]', 0);
       await expectCount(page, ".cron-editor-actions", 0);
 
-      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await page.getByText("Read-only history remains available", { exact: true }).waitFor();
-      expect(
-        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
-      ).toContain(readOnlyJob.description);
+      await page.locator('[data-test-id="cron-edit"]').click();
+      await page.locator("fieldset.cron-editor:disabled").waitFor();
+      await expectCount(page, '[data-test-id="cron-submit"]', 0);
 
       const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);
       expect(
@@ -310,8 +210,7 @@ suite.define(() => {
         ]),
       });
 
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await openRunHistoryByAddress(page, suite.server.baseUrl);
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -377,9 +276,8 @@ suite.define(() => {
     await suite.withPage({ ...contextOptions, locale: "de-DE" }, async ({ page }) => {
       const gateway = await installCronGateway(page);
 
-      await page.goto(`${suite.server.baseUrl}cron`);
+      await openRunHistoryByAddress(page, suite.server.baseUrl);
       await expect.poll(() => page.evaluate(() => document.documentElement.lang)).toBe("de");
-      await page.getByRole("tab", { name: "Aktivitätsverlauf", exact: true }).click();
 
       const statusFilter = page.locator('[data-filter="status"]');
       const deliveryFilter = page.locator('[data-filter="delivery"]');
@@ -432,8 +330,7 @@ suite.define(() => {
         "cron.runs": cronRunsResponse([run(1, "initial-job", "Initial history")]),
       });
 
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
+      await openRunHistoryByAddress(page, suite.server.baseUrl);
       await expectRunCount(page, "Initial history", 1);
 
       await gateway.deferNext("cron.runs");
@@ -466,6 +363,7 @@ suite.define(() => {
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installCronGateway(page, {
         "cron.list": cronListResponseFixture(cronListResponse([selectedJob])),
+        "cron.get": selectedJob,
         "cron.runs": {
           cases: [
             {
@@ -482,8 +380,8 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await jobTitle(page, selectedJob.name).waitFor({ timeout: 10_000 });
-
+      await openAutomationActivity(page);
+      await expectRunCount(page, "Overview history", 1);
       const previousHistoryRequestCount = (await gateway.getRequests("cron.runs")).length;
       await gateway.deferNext("cron.runs");
       await gateway.emitGatewayEvent("cron", {});
@@ -491,8 +389,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("cron.runs")).length)
         .toBeGreaterThan(previousHistoryRequestCount);
 
-      await jobTitle(page, selectedJob.name).click();
-      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+      await openAutomation(page, selectedJob.id);
       await expectRunCount(page, "Selected task history", 1);
 
       await gateway.resolveDeferred(
@@ -503,6 +400,7 @@ suite.define(() => {
       await expectRunCount(page, "Selected task history", 1);
       await expectRunCount(page, "Late overview history", 0);
 
+      await page.locator('[data-test-id="cron-runs-filters-toggle"]').click();
       const statusTrigger = page.locator('[data-filter="status"] .cron-filter-dropdown__trigger');
       const deliveryTrigger = page.locator(
         '[data-filter="delivery"] .cron-filter-dropdown__trigger',
@@ -529,12 +427,11 @@ suite.define(() => {
         "cron.add": { id: "created-no-timeout" },
         "cron.update": { id: existingJob.id },
         "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
+        "cron.get": existingJob,
         "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
-
       await page.locator('[data-test-id="cron-new-task"]').click();
       await page.locator("#cron-name").fill("Created no-timeout task");
       await page.locator("#cron-payload-text").fill("Continue until the new task finishes");
@@ -548,8 +445,8 @@ suite.define(() => {
         payload: agentPayload("Continue until the new task finishes"),
       });
 
-      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
-      await jobTitle(page, existingJob.name).click();
+      await openAutomation(page, existingJob.id);
+      await page.locator('[data-test-id="cron-edit"]').click();
       await page.locator("details.cron-advanced > summary").click();
       expect(await page.locator("#cron-timeout-seconds").inputValue()).toBe("0");
       await page.locator("#cron-payload-text").fill("Continue until the edited task finishes");
@@ -566,14 +463,14 @@ suite.define(() => {
     });
   });
 
-  it("supports skip navigation and keyboard tab activation", async () => {
+  it("supports skip navigation", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       await installCronGateway(page, {
         "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
       });
 
       await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-tab-all"]').waitFor();
+      await page.locator(".cron-overview-empty").waitFor();
 
       await page.keyboard.press("Tab");
       await expect
@@ -583,19 +480,17 @@ suite.define(() => {
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
         .toBe("control-ui-main");
+    });
+  });
 
-      const tasksTab = page.getByRole("tab", { name: "All", exact: true });
-      const activityTab = page.getByRole("tab", { name: "Activity history", exact: true });
-      await tasksTab.focus();
-      await pressKeys(page, "ArrowRight", "ArrowRight", "ArrowRight");
-      await expect
-        .poll(() => activityTab.evaluate((element) => element === document.activeElement))
-        .toBe(true);
-      await page.keyboard.press("Enter");
-      await expect.poll(() => activityTab.getAttribute("aria-selected")).toBe("true");
-      await expect
-        .poll(() => page.getByRole("tabpanel", { name: "Activity history" }).isVisible())
-        .toBe(true);
+  it("shows only the rail beside Automations without an automation", async () => {
+    await suite.withPage(contextOptions, async ({ page }) => {
+      await installCronGateway(page, {});
+
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await page.locator(".cron-overview-empty").getByText("No automations yet").waitFor();
+      await page.locator(".shell--nav-page-hidden").waitFor({ state: "attached" });
+      expect(await page.locator(".sidebar-automations").isVisible()).toBe(false);
     });
   });
 });

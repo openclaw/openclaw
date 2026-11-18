@@ -3,6 +3,7 @@ import { text as readText } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 import {
   catalogTransportModels,
@@ -432,3 +433,94 @@ it("models.authRefresh revokes old executable rows before discovery and config.p
     expectDispatch(fixture.requests, 2, "account-b-only", "account-b-key", "reloaded-transport");
   });
 }, 180_000);
+
+it(
+  "existing default threads follow config changes while explicit selections stay pinned",
+  { timeout: 180_000 },
+  async ({ signal }) => {
+    await withDispatchLifecycle(signal, async (fixture) => {
+      fixture.advertised.set("account-a-key", ["account-a-only", "account-a-new"]);
+      await fixture.list(true);
+      const changeDefault = async (model: string) => {
+        const config = await fixture.client.request<{ hash: string }>("config.get", {});
+        await fixture.client.request("config.patch", {
+          baseHash: config.hash,
+          raw: JSON.stringify({
+            agents: {
+              defaults: { model: { primary: `opencode/${model}` }, modelSelectionScope: "session" },
+            },
+          }),
+        });
+      };
+      await changeDefault("account-a-only");
+      const inherited = await fixture.client.request<{
+        key: string;
+        entry: { sessionId: string; modelOverrideSource: string };
+      }>("sessions.create", {
+        agentId: "main",
+        key: "agent:main:default-refresh",
+      });
+      expect(inherited.entry.modelOverrideSource).toBe("default");
+      // Reconstruct a persisted default snapshot written by an older Gateway.
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: inherited.key },
+        {
+          sessionId: inherited.entry.sessionId,
+          updatedAt: Date.now(),
+          providerOverride: "opencode",
+          modelOverride: "account-a-only",
+          modelOverrideSource: "default",
+        },
+      );
+      await changeDefault("account-a-new");
+      const pinned = await fixture.client.request<{ key: string }>("sessions.create", {
+        agentId: "main",
+        key: "agent:main:pinned-refresh",
+        model: "opencode/account-a-only",
+      });
+      const list = (sessionKey: string) =>
+        fixture.client.request<ModelsListResult>("models.list", {
+          agentId: "main",
+          sessionKey,
+          view: "configured",
+        });
+      const refreshed = await waitForCatalogPublication({
+        signal,
+        read: () => list(inherited.key),
+        ready: (result) => result.models.some((model) => model.id === "account-a-new"),
+      });
+      expect(refreshed.models[0]).toMatchObject({
+        id: "account-a-new",
+        available: true,
+        agentRuntime: { id: "openclaw" },
+      });
+      expect((await list(pinned.key)).models).toContainEqual(
+        expect.objectContaining({ id: "account-a-only", available: true }),
+      );
+      const rpc = catalogSessionRpc(fixture.client);
+      const send = async (key: string, name: string, model: string) => {
+        const index = fixture.requests.length;
+        const started = await rpc.send(key, "Reply with the lifecycle dispatch marker.", name);
+        expect(started.status).toBe("started");
+        expect(await rpc.wait(started.runId)).toMatchObject({ status: "ok" });
+        expectDispatch(fixture.requests, index, model);
+        expectAssistantReply((await rpc.history(key)).messages, "LIFECYCLE_DISPATCH_REPLY");
+      };
+      await send(inherited.key, "default-after-refresh", "account-a-new");
+      await send(pinned.key, "pin-after-refresh", "account-a-only");
+      await fixture.client.request("sessions.patch", {
+        key: inherited.key,
+        model: "opencode/account-a-only",
+      });
+      await send(inherited.key, "explicit-after-refresh", "account-a-only");
+      await fixture.client.request("sessions.patch", { key: inherited.key, model: null });
+      await send(inherited.key, "reset-after-refresh", "account-a-new");
+      const history = await fixture.client.request<{ sessionId: string; messages: unknown[] }>(
+        "chat.history",
+        { sessionKey: inherited.key },
+      );
+      expect(history.sessionId).toBe(inherited.entry.sessionId);
+      expect(history.messages.length).toBeGreaterThanOrEqual(6);
+    });
+  },
+);

@@ -22,15 +22,15 @@ export class DuplicateAgentDirError extends Error {
   }
 }
 
-function canonicalizeAgentDir(agentDir: string): string {
-  let resolved = path.resolve(agentDir);
+function resolveAgentDirIdentity(agentDir: string): string {
+  const resolved = path.resolve(agentDir);
   try {
     const prefix = resolvePathPrefixSync(resolved);
-    resolved = path.join(prefix.existingPath, ...prefix.unresolvedSegments);
+    return path.join(prefix.existingPath, ...prefix.unresolvedSegments);
   } catch {
     // Unreadable paths keep their configured spelling for best-effort comparison.
+    return resolved;
   }
-  return isPathCaseInsensitive(resolved) ? normalizeLowercaseStringOrEmpty(resolved) : resolved;
 }
 
 function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {
@@ -65,11 +65,22 @@ export function findDuplicateAgentDirs(
   if (agentIds.length < 2) {
     return [];
   }
+  const dirs = agentIds.map((agentId) => {
+    const agentDir = resolveEffectiveAgentDir(cfg, agentId, deps);
+    const resolved = resolveAgentDirIdentity(agentDir);
+    return { agentId, agentDir, resolved, folded: normalizeLowercaseStringOrEmpty(resolved) };
+  });
+  // Folding can only merge paths that are equal ignoring case, so the sync
+  // filesystem case probe runs only for those candidates, not for every agent.
+  const foldedCounts = new Map<string, number>();
+  for (const { folded } of dirs) {
+    foldedCounts.set(folded, (foldedCounts.get(folded) ?? 0) + 1);
+  }
   const byDir = new Map<string, { agentDir: string; agentIds: string[] }>();
 
-  for (const agentId of agentIds) {
-    const agentDir = resolveEffectiveAgentDir(cfg, agentId, deps);
-    const key = canonicalizeAgentDir(agentDir);
+  for (const { agentId, agentDir, resolved, folded } of dirs) {
+    const key =
+      (foldedCounts.get(folded) ?? 0) > 1 && isPathCaseInsensitive(resolved) ? folded : resolved;
     const entry = byDir.get(key);
     if (entry) {
       entry.agentIds.push(agentId);

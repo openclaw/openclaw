@@ -9,11 +9,11 @@ import {
 } from "../cli/update-cli/update-command-executor.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
-import { hasErrnoCode } from "./errno.js";
 import { resolveExecutablePath } from "./executable-path.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { readPackageVersion } from "./package-json.js";
+import { resolvePackageReleaseSlotForRootSync } from "./package-release-slot-path.js";
 import {
   archivePackageActivationCustody,
   settlePackageActivationCustody,
@@ -33,13 +33,21 @@ import {
 import { assertPackageActivationSelectedLaunchers } from "./package-update-activation-launcher.js";
 import { LEGACY_PACKAGE_RECOVERY_HELPER } from "./package-update-activation-paths.js";
 import {
+  explainLostPublicationLease,
+  inspectResumablePackagePublication,
+  noteResumedPackagePublication,
   preparePackageActivationJournal,
+  previewResumedPackagePublication,
+  refusePackagePublicationResume,
   PackageActivationArchiveError,
   resolvePackageActivationRecoveryCommand as recoveryCommand,
   type PackageActivationPreparation,
 } from "./package-update-activation-prepare.js";
 import {
+  inspectPackageActivationLease,
   inspectRemountedPackagePublication,
+  isForeignLeaseDirectory,
+  isUnpublishedPreparation,
   verifyPackagePublicationSettlement,
 } from "./package-update-activation-settlement.js";
 import {
@@ -51,7 +59,6 @@ import { createPublicationOwner } from "./package-update-publication-owner.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
-  captureManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
@@ -60,48 +67,6 @@ import type { UpdateRecoveryFence } from "./update-run-recovery.js";
 
 export type { PackageActivationStatus } from "./package-update-activation-status.js";
 const log = createSubsystemLogger("update/package-recovery");
-
-function isForeignLeaseDirectory(databasePath: string): boolean {
-  const uid = process.getuid?.();
-  if (uid === undefined) {
-    return false;
-  }
-  const directory = fs.lstatSync(path.dirname(databasePath), { throwIfNoEntry: false });
-  return directory?.isDirectory() === true && directory.uid !== uid;
-}
-
-function isUnpublishedPreparation(record: PackageActivationRecord, installedIdentity: string) {
-  return (
-    record.phase === "prepared" &&
-    record.intent === null &&
-    record.publications.length === 0 &&
-    installedIdentity === record.descriptor.previous.identity
-  );
-}
-
-function inspectPackageActivationLease({
-  databasePath,
-  databaseIdentity,
-  parentIdentity,
-}: PackageActivationRecord["descriptor"]["authority"]) {
-  let current: ReturnType<typeof captureManagedUpdateLeaseDatabaseIdentity> | undefined;
-  // Historical receipts do not grant access to another user's replacement directory.
-  if (isForeignLeaseDirectory(databasePath)) {
-    return { current, changed: true, foreignDirectory: true };
-  }
-  try {
-    current = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
-  } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT") || fs.lstatSync(databasePath, { throwIfNoEntry: false })) {
-      throw error;
-    }
-  }
-  return {
-    current,
-    changed: !isDeepStrictEqual(current, { databasePath, databaseIdentity, parentIdentity }),
-    foreignDirectory: false,
-  };
-}
 
 /** Reconcile completed receipts; unfinished operations still require a live fence. */
 function readPackageActivationContinuation(installKey: string, dryRun?: boolean) {
@@ -129,7 +94,10 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   const record = journal.readForAdmission(installKey, dryRun);
   if (
     isPackageActivationComplete(anchor, record) ||
-    (dryRun && journal.isInstallationReplaced(record))
+    // A dry run previews the resumption a real update performs before admission.
+    (dryRun &&
+      (inspectResumablePackagePublication(journal, record) ||
+        journal.isInstallationReplaced(record)))
   ) {
     return undefined;
   }
@@ -151,7 +119,11 @@ function readPackageActivationContinuation(installKey: string, dryRun?: boolean)
   ) {
     return undefined;
   }
-  assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  try {
+    assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
+  } catch (error) {
+    throw explainLostPublicationLease(error);
+  }
   if (record.phase === "superseded") {
     throw new Error("Package recovery settlement is incomplete; run openclaw update repair.");
   }
@@ -197,6 +169,14 @@ export async function preparePackageActivation(
     params.installTarget.directNodeModulesRoot ||
     !(await fsp.lstat(params.stageRoot)).isDirectory()
   ) {
+    return undefined;
+  }
+  if (resolvePackageReleaseSlotForRootSync(params.liveRoot)) {
+    // The journal publishes at the installation key, which is the package link; a
+    // release that the link selects is replaced in place by the ordinary swap.
+    options.onUnavailable?.(
+      "Standalone package publication repair is unavailable for a release replaced in place behind its package link; the package backup and rollback path is used.",
+    );
     return undefined;
   }
   const nodeRunner = resolveExecutablePath(options.runtime.path, { useCache: false });
@@ -267,7 +247,26 @@ type PackageActivationSettlement = {
   retained: string | undefined;
   detail: string | undefined;
   warning?: string;
+  /** What resuming the killed publication does before settlement closes it. */
+  resumed?: string;
 };
+
+async function readPackageActivationSettlement(anchor: string, dryRun?: boolean) {
+  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
+  const journal = openPackageActivationSettlementJournal(anchor);
+  const admission = dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
+  return { linkedCompleted, journal, admission, initial: admission?.record ?? journal.read() };
+}
+
+/** Discover repair custody through the same verified journal and lease inspection as settlement. */
+export async function readPackageActivationRepairLease(installKey: string) {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (!fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
+    return undefined;
+  }
+  const { initial } = await readPackageActivationSettlement(anchor);
+  return inspectPackageActivationLease(initial.descriptor.authority).current;
+}
 
 /** Explicit repair settles untouched preparation or obsolete custody, never pending restoration. */
 export async function settlePendingPackageActivation(
@@ -281,21 +280,58 @@ export async function settlePendingPackageActivation(
     /** Asserts an exclusive installation claim the caller already holds. */
     owner?: () => void;
   },
-) {
+): Promise<PackageActivationSettlement | undefined> {
   const anchor = resolvePackageActivationAnchor(installKey);
   if (!expectedCompleted && !fs.existsSync(resolvePackageActivationJournalPath(anchor))) {
     assertNoPendingPackageActivation(installKey);
     return undefined;
   }
-  const linkedCompleted = fs.lstatSync(resolvePackageActivationJournalPath(anchor)).nlink > 1;
-  const journal = openPackageActivationSettlementJournal(anchor);
-  const admission =
-    options?.dryRun || linkedCompleted ? undefined : await journal.readForRecovery();
-  const initial = admission?.record ?? journal.read();
+  const { linkedCompleted, journal, admission, initial } = await readPackageActivationSettlement(
+    anchor,
+    options?.dryRun,
+  );
   if (options?.operationId) {
     assertPackageActivationOperation(initial, options.operationId);
   }
   const complete = isPackageActivationComplete(anchor, initial);
+  // A killed publication is first brought to rest by its own recovery. The claim
+  // it takes in the recorded lease store, which proves the original updater gone,
+  // then also closes the aborted or published operation. A caller's own claim is
+  // not known to be in that store, so it never resumes.
+  const resumable =
+    complete || expectedCompleted || options?.operationId || options?.owner
+      ? undefined
+      : inspectResumablePackagePublication(journal, initial);
+  if (resumable) {
+    if (options?.dryRun) {
+      return previewResumedPackagePublication(initial, resumable);
+    }
+    return withUpdateCommandExecutor(
+      randomUUID(),
+      async (executor) => {
+        const claim = (await executor.enter(installKey)).assertCurrent;
+        const assertCurrent = retainMutationAuthority(claim);
+        assertManagedUpdateLeaseDatabaseIdentity(initial.descriptor.authority);
+        admission?.admit(assertCurrent);
+        journal.assertCurrent(initial);
+        const { phase } = await createPublicationOwner(anchor, journal, assertCurrent, initial)
+          .publish(true)
+          .catch((cause: unknown) => {
+            throw refusePackagePublicationResume(initial, cause);
+          });
+        const note = (settled: PackageActivationSettlement) =>
+          noteResumedPackagePublication(settled, phase === "aborted" ? "abort" : "publish");
+        const settled = await settlePendingPackageActivation(
+          installKey,
+          (receipt) => onSettled?.(note(receipt)),
+          undefined,
+          { ...options, owner: claim },
+        );
+        return settled && note(settled);
+      },
+      { existingAuthority: initial.descriptor.authority },
+    );
+  }
   const replacedInstallation = !complete && journal.isInstallationReplaced(initial);
   const identities = journal.inspectRemount(initial);
   if (expectedCompleted && (!complete || !isDeepStrictEqual(initial, expectedCompleted))) {

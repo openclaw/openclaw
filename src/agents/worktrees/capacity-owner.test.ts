@@ -1,6 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { withWorktreeAllocationLease } from "./allocation.js";
 import { createWorktreeCapacityOwner } from "./capacity-owner.js";
 import { evictManagedWorktree } from "./eviction.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
@@ -127,9 +126,9 @@ it("evicts merged, cumulative squash, then oldest protected manual work, retaini
     limitsSatisfied: false,
     protectionReasons: { "live-refused": 1 },
   });
-  await expect(
-    withWorktreeAllocationLease({ env }, (guard) => owner(1).admit(guard)),
-  ).rejects.toThrow(/cap 1.*owner-live.*worktreeMaxCount/);
+  await expect(owner(1).withAllocation({ env }, (guard) => owner(1).admit(guard))).rejects.toThrow(
+    /cap 1.*owner-live.*worktreeMaxCount/,
+  );
 });
 
 it("does no Git classification below the cap and stops after freeing the requested slot", async () => {

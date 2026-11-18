@@ -66,3 +66,23 @@ export function createPluginBackgroundRunner(
     );
   };
 }
+
+/** Internal wake signal: subscribing never reopens an instance's call admission. */
+export function createResumeSignal() {
+  const listeners = new Set<() => void>();
+  return Object.assign(
+    (wake: () => void) => {
+      listeners.add(wake);
+      return () => {
+        listeners.delete(wake);
+      };
+    },
+    {
+      notify: () => {
+        for (const wake of listeners) {
+          wake();
+        }
+      },
+    },
+  );
+}

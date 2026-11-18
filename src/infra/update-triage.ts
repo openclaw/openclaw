@@ -71,13 +71,15 @@ export async function prepareUpdateFailureTriage(params: {
   mode: "interactive" | "json" | "non-interactive";
   runtime: RuntimeEnv;
   invocationCwd?: string;
+  /** Invoking operator snapshot, captured before entering the managed service environment. */
+  operatorEnv?: NodeJS.ProcessEnv;
 }): Promise<(invocation: UpdateTriageInvocation) => Promise<UpdateTriageResult>> {
   const { mode, runtime } = params;
   if (mode !== "interactive") {
     return (invocation) => runUpdateFailureTriage({ ...invocation, mode, runtime });
   }
   const invocationCwd = params.invocationCwd ?? tryProcessCwd();
-  const operatorEnv = resolveServiceRefreshEnv(process.env, invocationCwd);
+  const operatorEnv = resolveServiceRefreshEnv(params.operatorEnv ?? process.env, invocationCwd);
   const operatorHome = resolveOsHomeDir(operatorEnv);
   const { triageCommand } = await import("../commands/triage.js");
   const prepared: PreparedTriage = {

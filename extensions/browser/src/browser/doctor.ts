@@ -180,7 +180,7 @@ export function buildBrowserDoctorReport(params: {
         ? "CDP WebSocket is reachable"
         : status.running
           ? "CDP WebSocket is not reachable"
-          : "Browser is launchable but not running",
+          : "Browser is not currently running",
       ...(status.cdpReady || !status.running
         ? {}
         : { fixHint: "Check Chrome launch logs, stale locks, proxy env, and port conflicts." }),
