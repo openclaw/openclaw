@@ -11,6 +11,12 @@
  *
  * Run two baseline controls, then five interleaved A/B pairs. Allocation profiling
  * is a separate pass (--allocation), never mixed with unprofiled timing samples.
+ * Reports existing worker-message counters before/after the action, including
+ * unmeasured messages; known payload bytes are not complete wire-byte totals.
+ * --traffic separately measures V8-serializable main-boundary envelopes (shared
+ * memory and message ports counted as handles); exclude it from timing/allocation.
+ * cgroupCpuMs includes subprocesses; use an isolated cgroup v2 mount rooted at the
+ * benchmark's cgroup. Other cgroup layouts report null.
  * The unchanged tree has 62k files/1.1 GB. Its upstream adds 512 MiB of unique
  * historical objects then replaces them with small current files. This local Git
  * server declines filtering, so the real fetch downloads history while the final
@@ -54,6 +60,7 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "17742" },
     "history-mib": { type: "string", default: "512" },
     allocation: { type: "boolean", default: false },
+    traffic: { type: "boolean", default: false },
     "native-image": { type: "string" },
     "native-engine": { type: "string", default: "docker" },
   },
@@ -68,6 +75,7 @@ const files = Number(values.files);
 const fileBytes = Number(values["file-bytes"]);
 const historyMiB = Number(values["history-mib"]);
 assert(["docker", "podman"].includes(values["native-engine"]!));
+assert(!(values.allocation && values.traffic), "Profile allocation and traffic separately");
 for (const value of [files, fileBytes, historyMiB]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
@@ -114,9 +122,12 @@ import path from "node:path";
 import os from "node:os";
 import { execFile } from "node:child_process";
 import { Session } from "node:inspector/promises";
+import { DefaultSerializer, getHeapStatistics } from "node:v8";
+import { MessagePort } from "node:worker_threads";
 import { it, expect, onTestFinished, vi } from "vitest";
 import * as engine from "../agents/sandbox/docker.js";
 import * as projectionOperation from "./worker-environments/local-workspace-projection-operation.js";
+import * as workerMessages from "../infra/worker-message-metrics.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 
 installGitHubPublicationTestHarness({ creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true });
@@ -217,9 +228,58 @@ it("measures immutable object acquisition beside a live guest", async () => {
     return result;
   });
   const allocation = process.env.OPENCLAW_PUBLICATION_PAUSE_ALLOCATION === "1";
+  const traffic = process.env.OPENCLAW_PUBLICATION_PAUSE_TRAFFIC === "1";
+  class TrafficSerializer extends DefaultSerializer {
+    private nextSharedId = 0;
+    _getSharedArrayBufferId() { return this.nextSharedId++; }
+    _writeHostObject(value: object) {
+      if (value instanceof MessagePort) { this.writeUint32(0xffffffff); return; }
+      super._writeHostObject(value);
+    }
+  }
+  const envelopes = {
+    to_worker: { messages: 0, serializedBytes: 0, unsupported: 0 },
+    from_worker: { messages: 0, serializedBytes: 0, unsupported: 0 },
+  };
+  let measuring = false;
+  const measureEnvelope = (message: unknown, direction: keyof typeof envelopes) => {
+    if (measuring) {
+      const counter = envelopes[direction];
+      counter.messages++;
+      try {
+        const serializer = new TrafficSerializer();
+        serializer.writeHeader();
+        serializer.writeValue(message);
+        counter.serializedBytes += serializer.releaseBuffer().byteLength;
+      }
+      catch { counter.unsupported++; }
+    }
+  };
+  // Observe native task/control ports before transfer, including Worker.postMessage's port.
+  const postPort = MessagePort.prototype.postMessage;
+  using port = traffic ? vi.spyOn(MessagePort.prototype, "postMessage") : undefined;
+  port?.mockImplementation(function (message, transfers) {
+    measureEnvelope(message, "to_worker");
+    postPort.call(this, message, transfers);
+  });
+  const observe = workerMessages.observeWorkerMessage;
+  using observer = traffic ? vi.spyOn(workerMessages, "observeWorkerMessage") : undefined;
+  observer?.mockImplementation((message, direction, ...rest) => {
+    if (direction === "from_worker") measureEnvelope(message, direction);
+    observe(message, direction, ...rest);
+  });
   const guestCpu = async () => nativeImage && nativeEngine === "docker"
     ? Number((await docker(["exec", nativeName, "cat", "/sys/fs/cgroup/cpu.stat"])).stdout.match(/^usage_usec (\d+)$/m)?.[1])
     : null;
+  const cgroupRootOwnsProcess = process.platform === "linux" &&
+    (await fs.readFile("/sys/fs/cgroup/cgroup.procs", "utf8").catch(() => ""))
+      .split("\n").includes(String(process.pid));
+  const cgroupCpu = async () => {
+    const usage = cgroupRootOwnsProcess
+      ? (await fs.readFile("/sys/fs/cgroup/cpu.stat", "utf8").catch(() => "")).match(/^usage_usec (\d+)$/m)?.[1]
+      : undefined;
+    return usage === undefined ? null : Number(usage);
+  };
   const objectBytesBefore = await bytesUnder(objects);
   const guestCpuBefore = await guestCpu();
   const heartbeatStart = nativeImage ? (await fs.readFile(path.join(f.projection, ".git/pause-proof-heartbeat.jsonl"), "utf8")).trim().split("\n").length : 0;
@@ -233,12 +293,16 @@ it("measures immutable object acquisition beside a live guest", async () => {
   }
   const filesystem = await fs.statfs(f.projection);
   const agentDatabaseBytes = (await fs.stat(path.join(process.env.OPENCLAW_STATE_DIR!, "agents/main/agent/openclaw-agent.sqlite"))).size;
+  const cgroupCpuBefore = await cgroupCpu();
+  const workerMessagesBefore = workerMessages.getWorkerMessageMetrics();
+  const allocatedBefore = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
   const cpu = process.cpuUsage();
   const threadCpu = process.threadCpuUsage();
   const heapBefore = process.memoryUsage();
   const started = performance.now();
   const beforeLoad = os.loadavg();
   console.log("publication-pause: measured owner starts");
+  measuring = true;
   let outcome: unknown;
   let failure: string | undefined;
   try {
@@ -247,6 +311,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     failure = String(error);
   }
   const ownerMs = performance.now() - started;
+  measuring = false;
   mark("finished");
   const phaseMs: Record<string, { running: number; paused: number }> = {};
   for (let index = 0; index + 1 < phases.length; index++) {
@@ -257,6 +322,9 @@ it("measures immutable object acquisition beside a live guest", async () => {
   const processCpu = process.cpuUsage(cpu);
   const mainCpu = process.threadCpuUsage(threadCpu);
   const heapAfter = process.memoryUsage();
+  const allocatedAfter = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  const workerMessagesAfter = workerMessages.getWorkerMessageMetrics();
+  const cgroupCpuAfter = await cgroupCpu();
   let sampledAllocationBytes: number | null = null;
   if (allocation) {
     const { profile } = await inspector.post("HeapProfiler.stopSampling");
@@ -286,13 +354,24 @@ it("measures immutable object acquisition beside a live guest", async () => {
     node: process.version, bun: process.versions.bun ?? null, executable: process.execPath, platform: process.platform, cpus: os.cpus().length, memory: os.totalmem(), beforeLoad, afterLoad: os.loadavg(),
     ownerMs, processCpuMs: (processCpu.user + processCpu.system) / 1000, mainCpuMs: (mainCpu.user + mainCpu.system) / 1000,
     guestCpuMs: guestCpuBefore !== null && guestCpuAfter !== null ? (guestCpuAfter - guestCpuBefore) / 1000 : null,
+    cgroupCpuMs: cgroupCpuBefore !== null && cgroupCpuAfter !== null ? (cgroupCpuAfter - cgroupCpuBefore) / 1000 : null,
     heapBefore, heapAfter, sampledAllocationBytes, fetched, pauseMs, phaseMs,
+    mainAllocatedBytes: typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
+      ? allocatedAfter - allocatedBefore : null,
+    workerMessagesBefore, workerMessagesAfter,
+    serializedEnvelopes: traffic ? envelopes : undefined,
     objectBytesBefore, objectBytesAfter, objectByteGrowth: objectBytesAfter - objectBytesBefore,
     totalPauseMs: pauseMs.reduce((sum, value) => sum + value, 0), maxPauseMs: Math.max(0, ...pauseMs),
     pausedAtReturn: runtime.isPaused(), outcome, failure, verified: false,
   };
   await fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
   expect(failure).toBeUndefined();
+  if (traffic) {
+    for (const counter of Object.values(envelopes)) {
+      expect(counter.messages).toBeGreaterThan(0);
+      expect(counter.unsupported).toBe(0);
+    }
+  }
   expect(outcome).toMatchObject({ status: "prepared", headCommit: head });
   expect(runtime.isPaused()).toBe(false);
   expect(await f.git("write-tree")).toBe(await upstream("rev-parse", head + "^{tree}"));
@@ -461,6 +540,7 @@ try {
         OPENCLAW_PUBLICATION_PAUSE_FIXTURE: path.resolve(values.fixture),
         OPENCLAW_PUBLICATION_PAUSE_OUTPUT: output,
         OPENCLAW_PUBLICATION_PAUSE_ALLOCATION: values.allocation ? "1" : "0",
+        OPENCLAW_PUBLICATION_PAUSE_TRAFFIC: values.traffic ? "1" : "0",
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_IMAGE: values["native-image"],
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_ENGINE: values["native-engine"],
         OPENCLAW_PUBLICATION_PAUSE_NATIVE_NAME: "openclaw-pause-proof-" + process.pid,

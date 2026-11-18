@@ -404,6 +404,31 @@ describe("native plugin session actions", () => {
     await element.updateComplete;
   });
 
+  it("binds composer actions to the invoking pane's live draft until the pane retires", async () => {
+    const { element, run } = await mountActions({ placement: "composer" });
+    let draft = "fix the bug";
+    const setDraft = vi.fn((text: string) => {
+      draft = text;
+    });
+    element.composer = { draft: "stale render", getDraft: () => draft, onDraftChange: setDraft };
+    element.querySelector<HTMLButtonElement>("button")?.click();
+    const composer = run.mock.calls[0]?.[0].composer;
+    if (!composer) {
+      throw new Error("Expected the composer action to receive its pane draft");
+    }
+    draft = "fix the login bug";
+    expect(composer.draft).toBe("fix the login bug");
+    composer.setDraft(composer.draft.toUpperCase());
+    expect(draft).toBe("FIX THE LOGIN BUG");
+
+    element.sessionKey = "agent:main:other";
+    expect(() => composer.draft).toThrow("view has ended");
+    expect(() => composer.setDraft("stale")).toThrow("view has ended");
+    expect(setDraft).toHaveBeenCalledOnce();
+    expect(draft).toBe("FIX THE LOGIN BUG");
+    await element.updateComplete;
+  });
+
   it("retires a hidden header action across a same-turn hide/show and admits a fresh action", async () => {
     const { element, run, navigate, setSessionKey } = await mountActions({ placement: "header" });
     const destination = { sessionKey: "agent:writer:resumed", agentId: "writer" };

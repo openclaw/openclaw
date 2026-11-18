@@ -1728,10 +1728,61 @@ carry a `package-publication-recovery` warning. The journal's printed recovery
 command does the same by hand: `repair` aborts the publication and `retire`
 removes the recovery directory.
 
-A killed update usually also leaves its update run unreconciled. That is a
-separate check: `openclaw update` then stops with `Update <id> has unfinished
-recovery`, and `openclaw update repair` reconciles the run. Repair settles the
-publication in the same pass, so one repair is enough before the next update.
+A killed update usually also leaves the plugin recovery it reserved, which is a
+separate check from the publication. `openclaw update repair` settles it and
+then finishes what the killed update left: it runs Doctor and plugin convergence
+for the installed version and restarts a Gateway the update had stopped.
+
+The next `openclaw update` settles that recovery itself, after the publication,
+only when repair would have nothing left to finish and nothing needs an
+operator:
+
+- the installation is a package install, and the killed update was a
+  command-line `openclaw update`, not one the Gateway started, whose recorded
+  process is no longer running;
+- the update lease store still holds that process's lease, so claiming the
+  installation shows its child processes are gone too;
+- it did not stop the Gateway without starting it again;
+- either the version from before that update is still installed, so its plugin
+  and configuration changes are rolled back, or the Gateway was verified on the
+  version it installed, so they are kept.
+
+The update prints what it settled, continues, and records an
+`interrupted-update-recovery` warning in its run history.
+
+Otherwise the update stops with `Update <id> has unfinished recovery`. When
+repair can settle the recovery, the message adds the reason and the command:
+
+- **The killed update replaced the installed version and was not confirmed
+  finished.** Run `openclaw update repair`, which also runs Doctor for that
+  version. An update that found it already current would not.
+- **The killed update had begun rolling its plugin changes back** on the version
+  it installed. Run `openclaw update repair`, which finishes that rollback and
+  then the installed version.
+- **The killed update stopped the Gateway and never started it again.** Run
+  `openclaw update repair`, which settles the recovery, then restarts and
+  verifies the Gateway.
+- **The Gateway started the update**, or a managed helper adopted it. Wait if
+  the Gateway is still finishing it; otherwise run `openclaw update repair`.
+- **An update is still recorded as running** and its process is not known to
+  have exited, or another updater holds the installation. Wait for it; run
+  `openclaw update repair` if it has stopped.
+- **The update lease store no longer holds the killed update's lease.** A
+  restart cleared temporary files, the store was replaced, or another command
+  already claimed the installation. That includes an earlier `openclaw update`
+  that claimed it and then refused for one of the reasons above, so a second
+  attempt reports this reason. Run `openclaw update repair`.
+- **The recovery could not be settled.** The message includes the cause. Run
+  `openclaw update repair`.
+- **The installation is a source checkout.** Its version does not show whether
+  the killed update had already switched the sources. Run
+  `openclaw update repair`.
+- **The recovery belongs to another installation.** Run `openclaw update repair`
+  from that installation.
+- **A dry run** changes nothing. Run `openclaw update`.
+
+Recovery that `openclaw update repair` cannot settle either keeps the plain
+refusal without a command.
 
 The updater does not settle the leftover when another updater still holds the
 installation, when the lease store is missing or was replaced, when the
@@ -1799,6 +1850,22 @@ Windows, FreeBSD, an npm package link to a checkout, and a staged package that
 is itself a link to a checkout keep the two moves and do not attempt the
 exchange. The next update from that checkout restores a package link that a
 killed update left under the backup name.
+
+After the new package is verified, the updater removes that backup link without
+following it. If the filesystem refuses the removal and the link is unchanged,
+the update keeps the new package and exits 0. It records a
+`package-backup-retention` warning that names the link and any launcher backups
+or database snapshots left beside it, because cleanup stops at the link.
+Historical package backups from earlier updates also wait for a later update.
+The link still names your checkout, which the updater does not modify. After
+checking the installation, remove the link itself and not what it names: use
+`rm <link>` without a trailing slash, or `rmdir <link>` on Windows, and never a
+recursive delete. The other named paths are ordinary directories. A later update
+that swaps the package in place also removes the link with the other historical
+package backups once that update is verified, unless the filesystem refuses
+again. A backup link that was replaced or cannot be read still fails the update,
+because the updater can no longer show that the entry is the link it moved
+aside.
 
 Rollback after a failed verification still restores with two moves. A restore
 killed between them leaves the package path missing and the previous package

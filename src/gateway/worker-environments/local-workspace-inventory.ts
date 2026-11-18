@@ -8,7 +8,10 @@ import type {
   LocalWorkspaceManifestRecord,
   LocalWorkspaceManifestNode,
 } from "./local-workspace-manifest-tree.js";
+import type { LocalWorkspaceStore } from "./local-workspace-store.js";
 import type {
+  LocalWorkspaceManifestAction,
+  LocalWorkspacePreparedUpdate,
   LocalWorkspaceManifestValue,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
@@ -19,6 +22,43 @@ import {
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+
+export function createLocalWorkspaceManifestReader(params: {
+  store: LocalWorkspaceStore;
+  current: () => LocalWorkspaceProjection;
+  canonicalRoot: string;
+  accept: (update: LocalWorkspacePreparedUpdate) => Promise<void>;
+}) {
+  const repair = async () => {
+    const replacement = await params.store.manifest(params.current(), {
+      kind: "repair",
+      canonicalRoot: params.canonicalRoot,
+    });
+    if (replacement.kind !== "replace") {
+      throw new Error("Local workspace baseline repair is missing");
+    }
+    await params.accept(replacement.update);
+  };
+  return {
+    repair,
+    read: async (action: LocalWorkspaceManifestAction) => {
+      try {
+        return await params.store.manifest(params.current(), action);
+      } catch (error) {
+        if (
+          !(error instanceof Error) ||
+          !error.message.includes("Local workspace baseline nodes are missing")
+        ) {
+          throw error;
+        }
+        // Repair older missing packs only from a verified baseline or checkpoint;
+        // divergent files must never replace the merge base.
+        await repair();
+        return await params.store.manifest(params.current(), action);
+      }
+    },
+  };
+}
 
 function decodeLocalWorkspaceGitPaths(listed: Buffer): string[] {
   if (!isUtf8(listed)) {

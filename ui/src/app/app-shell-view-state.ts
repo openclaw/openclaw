@@ -1,4 +1,4 @@
-import { isSettingsTakeover, pageTitleForRoute } from "../app-navigation.ts";
+import { isSettingsTakeover, pageTitleForRoute, sidebarViewForPage } from "../app-navigation.ts";
 import {
   isSessionRouteId,
   pluginTabForLocation,
@@ -10,12 +10,14 @@ import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
 import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { sectionListsItems } from "../lib/section-navigation.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { pluginPageLabel } from "../pages/plugin/route.tsx";
 import { isTemplatesAvailable } from "../pages/templates/availability.ts";
+import { navigationSectionForPage, pluginPageKeyForRoute } from "../plugins/navigation-sections.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";
@@ -132,6 +134,12 @@ export function readShellView(host: ShellViewHost) {
           context.basePath,
         )
       : null;
+  // Plugin pages on native routes (Workboard) carry their plugin key like plugin tabs do.
+  const activePluginKey = pluginPageKeyForRoute(
+    activeRoute,
+    activePluginRef ? pluginTabKey(activePluginRef) : undefined,
+    gatewaySnapshot.hello?.controlUiTabs ?? [],
+  );
   const workboardLayout =
     activeRoute === "workboard" ||
     (activePluginRef !== null &&
@@ -195,9 +203,22 @@ export function readShellView(host: ShellViewHost) {
   // Drawer navigation always opens expanded; the tab's desktop collapse state
   // stays in memory for when the viewport returns to the desktop layout.
   // Settings needs expanded navigation, so the collapse state pauses there too.
+  // A page without a sidebar shows only the rail; the saved collapse preference is untouched.
+  // Automations without any automation shows only the rail beside its empty state.
+  const pageSidebar = sidebarViewForPage(
+    activeRoute,
+    activePluginKey,
+    Boolean(navigationSectionForPage(context.plugins.registrations("navigation"), activePluginKey)),
+  );
+  const navPageHidden =
+    !nativeEmbed &&
+    !onboarding &&
+    !settingsTakeover &&
+    (pageSidebar === undefined ||
+      (pageSidebar === "automations" && !sectionListsItems("automations")));
   const navCollapsed = () =>
     !nativeEmbed &&
-    navigationSnapshot.navCollapsed &&
+    (navigationSnapshot.navCollapsed || navPageHidden) &&
     !host.desktopNavigationExpanded &&
     !navDrawerOpen() &&
     !settingsTakeover;
@@ -258,7 +279,7 @@ export function readShellView(host: ShellViewHost) {
     basePath: context.basePath,
     activeRouteId: activeRoute,
     router: runtime.router,
-    activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
+    activePluginTabId: activePluginKey ?? "",
     enabledRouteIds:
       isTemplatesAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
@@ -277,6 +298,9 @@ export function readShellView(host: ShellViewHost) {
     },
     get navigationCollapsed() {
       return navCollapsed();
+    },
+    get navigationCollapsedByChoice() {
+      return navigationSnapshot.navCollapsed && !host.desktopNavigationExpanded;
     },
     sidebarAgentsMode: uiSettings.sidebarAgentsMode ?? "chip",
     sidebarLiveActivity: uiSettings.sidebarLiveActivity !== false,
@@ -301,8 +325,14 @@ export function readShellView(host: ShellViewHost) {
   };
   const embedNavigation =
     nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");
+  // Nothing expands on a page without a sidebar, so it offers no expand control.
   const collapsedControls = () =>
-    !nativeEmbed && navCollapsed() && !onboarding && !settingsTakeover && !mobileNavLayout;
+    !nativeEmbed &&
+    navCollapsed() &&
+    !navPageHidden &&
+    !onboarding &&
+    !settingsTakeover &&
+    !mobileNavLayout;
   const shellConnectionStatus = !nativeEmbed && !initialConnection ? connectionStatus : null;
   const gatewayStatus: GatewayStatusProps = {
     kind: shellConnectionStatus ?? (!nativeEmbed && gatewayConnected ? "connected" : null),
@@ -415,6 +445,7 @@ export function readShellView(host: ShellViewHost) {
     get navCollapsed() {
       return navCollapsed();
     },
+    navPageHidden,
     railAvailable,
     railWidth,
     expandedNavWidth,

@@ -14,16 +14,19 @@ import {
 import {
   pendingLocalWorkspaceDirection as pendingDirection,
   prepareLocalWorkspaceCheckpoint,
+  prehashLocalWorkspaceCheckpoint,
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
   applyLocalWorkspaceCheckpoint,
   type LocalWorkspaceSyncOptions,
+  type LocalWorkspaceCheckpointUpdate,
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import {
   admitLocalWorkspaceSourcePaths,
+  createLocalWorkspaceManifestReader,
   captureLocalWorkspaceArchiveBaseline,
   parseLocalWorkspaceSourcePaths,
   prepareLocalWorkspaceBuildInputs,
@@ -37,7 +40,7 @@ import {
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type {
   LocalWorkspaceCapture,
-  LocalWorkspaceManifestAction,
+  LocalWorkspacePreparedEntry,
   LocalWorkspaceManifestCheckpoint,
 } from "./local-workspace-store.types.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -77,6 +80,8 @@ export function projectionOperations(
   },
   reason: LocalWorkspacePauseReason = "reconcile",
 ) {
+  let checkpointPreparation: LocalWorkspacePreparedEntry[] | undefined;
+  let checkpointObjects: Array<[string, string]> | undefined;
   const signal = store.signal;
   let row = initialRow;
   const selectCurrent = (assertCurrent: (() => void) | undefined) => {
@@ -94,11 +99,8 @@ export function projectionOperations(
   // Subprocess input admission requires an undefined result.
   const assertCurrent = () => void current();
   const workerAuthority = bindLocalWorkspaceAuthority(owner, store.workerAuthority, selectCurrent);
-  const update = async (
-    patch: Parameters<typeof store.update>[1],
-    manifest?: Parameters<typeof store.update>[3],
-  ) => {
-    row = await store.update(current(), patch, owner.workerAuthority, manifest);
+  const update: LocalWorkspaceCheckpointUpdate = async (patch, manifest, publicationPack) => {
+    row = await store.update(current(), patch, owner.workerAuthority, manifest, publicationPack);
   };
   const rejection = createLocalWorkspaceCheckpointRejection({
     current,
@@ -108,32 +110,14 @@ export function projectionOperations(
       row = await store.reject(selected, value, owner.workerAuthority);
     },
   });
-  const repairBaseline = async () => {
-    const repair = await store.manifest(current(), {
-      kind: "repair",
-      canonicalRoot: owner.worktree.path,
-    });
-    if (repair.kind !== "replace") {
-      throw new Error("Local workspace baseline repair is missing");
-    }
-    row = await store.accept(repair.update, owner.workerAuthority);
-  };
-  const readManifest = async (action: LocalWorkspaceManifestAction) => {
-    try {
-      return await store.manifest(current(), action);
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !error.message.includes("Local workspace baseline nodes are missing")
-      ) {
-        throw error;
-      }
-      // Repair older missing packs only from a verified baseline or checkpoint;
-      // divergent files must never replace the merge base.
-      await repairBaseline();
-      return await store.manifest(current(), action);
-    }
-  };
+  const { read: readManifest, repair: repairBaseline } = createLocalWorkspaceManifestReader({
+    store,
+    current,
+    canonicalRoot: owner.worktree.path,
+    accept: async (prepared) => {
+      row = await store.accept(prepared, owner.workerAuthority);
+    },
+  });
   const baselineDocument = async () => {
     const document = await readManifest({ kind: "materialize" });
     current();
@@ -224,12 +208,19 @@ export function projectionOperations(
       target,
       canonicalRoot: owner.worktree.path,
       capture: source,
+      preparedEntries: target === "canonical" && !source ? checkpointPreparation : undefined,
     });
     current();
     if (snapshot.kind !== "scan") {
       throw new Error("Local workspace checkpoint scan is missing");
     }
-    const { observation, ...checkpoint } = snapshot;
+    const {
+      observation,
+      preparedEntries: _preparedEntries,
+      existingObjects,
+      ...checkpoint
+    } = snapshot;
+    checkpointObjects = existingObjects;
     if (observation) {
       // Admit host paths and unchanged-file identities without materializing the tree here.
       row = await store.accept(observation, owner.workerAuthority);
@@ -364,6 +355,7 @@ export function projectionOperations(
           {
             root: owner.worktree.path,
             stagingRoot: source?.root ?? sourcePath(target),
+            existingObjects: checkpointObjects,
             stagedResultRef: selected.pending_ref,
             baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
             currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
@@ -542,6 +534,10 @@ export function projectionOperations(
     current,
     workerAuthority,
     canonicalPaths,
+    prehash: async () => {
+      current();
+      checkpointPreparation = await prehashLocalWorkspaceCheckpoint(store, owner.worktree.path);
+    },
     capture,
     buildCacheInputs,
     baselineDocument,

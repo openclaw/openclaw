@@ -5405,6 +5405,7 @@ jobs:
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true' }}
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           openclawkit_test_args=(
             --package-path apps/shared/OpenClawKit
             --scratch-path "${OPENCLAWKIT_SCRATCH:?OpenClawKit scratch was not prepared}"
@@ -5415,7 +5416,7 @@ jobs:
           else
             openclawkit_test_args+=(--no-parallel)
           fi
-          swift test "${openclawkit_test_args[@]}"
+          run_apple_command_logged "$RUNNER_TEMP/openclaw-native-test-logs/openclawkit.log" swift test "${openclawkit_test_args[@]}"
 
       - name: Clean OpenClawKit build scratch
         if: always() && env.OPENCLAWKIT_SCRATCH != ''
@@ -5541,10 +5542,10 @@ jobs:
           finish_checks
 
       - name: Upload macOS native test logs
-        if: ${{ always() && matrix.phase == 'tests' }}
+        if: ${{ always() && (matrix.phase == 'tests' || matrix.phase == 'packages') }}
         uses: *upload_artifact_v7
         with:
-          name: macos-native-test-logs
+          name: ${{ matrix.phase == 'packages' && 'macos-package-test-logs' || 'macos-native-test-logs' }}
           path: ${{ runner.temp }}/openclaw-native-test-logs/*.log
           if-no-files-found: ignore
           retention-days: 7
@@ -6970,6 +6971,8 @@ jobs:
     with:
       candidate_artifact_id: ${{ needs.build-artifacts.outputs.published_driver_artifact_id }}
       candidate_sha256: ${{ needs.build-artifacts.outputs.published_driver_sha256 }}
+      target_context_ref: ${{ inputs.target_context_ref || github.base_ref || github.ref_name }}
+      qualification_baselines_json: ${{ inputs.qualification_baselines_json }}
 
   docker-seed-e2e:
     permissions:
