@@ -2962,6 +2962,16 @@ describe("ci workflow guards", () => {
         `#!${testNodeExecPath}`,
         'import { appendFileSync } from "node:fs"; appendFileSync(process.env.RESTART_COMMANDS, JSON.stringify(process.argv.slice(2)) + "\\n");',
       ]);
+      writeExecutable(path.join(bin, "xcrun"), [
+        "#!/bin/bash",
+        'printf \'%s\\n\' "$*" >> "$SIM_COMMANDS"',
+        'case "$*" in',
+        '  "simctl list devices available --json")',
+        '    printf \'%s\\n\' \'{"devices":{"iOS":[{"isAvailable":true,"name":"iPad fixture","udid":"fixture-ipad","state":"Booted"}]}}\' ;;',
+        '  "simctl bootstatus fixture-ipad -b") exit 0 ;;',
+        "  *) exit 1 ;;",
+        "esac",
+      ]);
       const job = readCiWorkflow().jobs["ios-build"];
       for (const name of [
         "Run focused iOS voice cleanup simulator tests",
@@ -2974,6 +2984,8 @@ describe("ci workflow guards", () => {
           writeFileSync(commandFile, "");
           const restartFile = path.join(root, "restart-commands.jsonl");
           writeFileSync(restartFile, "");
+          const simulatorFile = path.join(root, "simulator-commands.txt");
+          writeFileSync(simulatorFile, "");
           const result = runWorkflowShellScript(step.run, {
             cwd: root,
             env: {
@@ -2981,6 +2993,7 @@ describe("ci workflow guards", () => {
               PATH: `${bin}${path.delimiter}${process.env.PATH}`,
               COMMANDS: commandFile,
               RESTART_COMMANDS: restartFile,
+              SIM_COMMANDS: simulatorFile,
               IOS_CI_PHASE: "tests",
               IOS_MAIN_TIER: String(tier === "main"),
               IOS_FROZEN_TARGET: "false",
@@ -2989,6 +3002,7 @@ describe("ci workflow guards", () => {
             },
           });
           expect(result.status, result.stderr).toBe(0);
+          expect(readFileSync(simulatorFile, "utf8")).not.toContain("shutdown");
           const restarts = readFileSync(restartFile, "utf8")
             .trim()
             .split("\n")
@@ -3010,13 +3024,32 @@ describe("ci workflow guards", () => {
         const full = expectDefined(commands[1], "full-tier commands");
         const selectors = (args: string[]) =>
           args.filter((arg) => arg.startsWith("-only-testing:"));
-        expect(main).toHaveLength(1);
+        expect(main).toHaveLength(name.includes("lifecycle") ? 2 : 1);
         const mainUnits = selectors(expectDefined(main[0], "main-tier unit command"));
         expect(mainUnits).toEqual(selectors(expectDefined(full[0], "full-tier unit command")));
         expect(mainUnits.length).toBeGreaterThan(0);
         if (name.includes("lifecycle")) {
-          expect(full).toHaveLength(2);
-          expect(full[1]).toContain(
+          for (const calls of [main, full]) {
+            expect(calls[0]).toContain("platform=iOS Simulator,id=fixture-phone");
+            expect(calls[0]).toEqual(
+              expect.arrayContaining([
+                "-only-testing:OpenClawTests/IOSConversationAdapterTests",
+                "-only-testing:OpenClawTests/IOSConversationControllerTests",
+              ]),
+            );
+            expect(calls[1]).toContain("platform=iOS Simulator,id=fixture-ipad");
+          }
+          const ipad = expectDefined(main[1], "main-tier iPad command");
+          expect(ipad).toContain("platform=iOS Simulator,id=fixture-ipad");
+          expect(selectors(ipad)).toEqual([
+            "-only-testing:OpenClawTests/IOSConversationAdapterTests",
+            "-only-testing:OpenClawTests/IOSConversationControllerTests",
+          ]);
+          expect(selectors(expectDefined(full[1], "full-tier iPad command"))).toEqual(
+            selectors(ipad),
+          );
+          expect(full).toHaveLength(3);
+          expect(full[2]).toContain(
             "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
           );
         } else {

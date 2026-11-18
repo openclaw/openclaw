@@ -302,8 +302,36 @@ describe("CI check failure collection", () => {
     ["security-fast", "Detect committed private keys", "scanner_config"],
   ])("runs %s / %s after sibling failures with its prerequisite", (job, name, prerequisite) => {
     const condition = ciStep(job, name).if;
-    expect(condition).toContain("!cancelled()");
-    expect(condition).toContain(`steps.${prerequisite}.outcome == 'success'`);
+    const admitted = {
+      ...failedContext,
+      matrix: { shard: 1, run_desktop: true, run_tests: true },
+      preflightOutputs: {
+        strict_native_i18n: "true",
+        reuse_control_ui_i18n_setup: "true",
+        run_ui_webkit: "true",
+        run_docs_content: "true",
+        frozen_target: "true",
+      },
+      steps: {
+        ...Object.fromEntries(
+          ["node_setup", "ui_chromium", "ui_bun", "scanner_config", prerequisite].map((id) => [
+            id,
+            { outputs: {}, outcome: "success" as const },
+          ]),
+        ),
+        workflow_scope: { outputs: { changed: "true" }, outcome: "success" as const },
+      },
+    };
+    expectAdmission(condition, admitted, [
+      {
+        ...admitted,
+        steps: { ...admitted.steps, [prerequisite]: { outputs: {}, outcome: "failure" } },
+      },
+      {
+        ...admitted,
+        steps: { ...admitted.steps, [prerequisite]: { outputs: {}, outcome: "skipped" } },
+      },
+    ]);
     expect(ciWorkflow.jobs[job]!.steps.some((item: WorkflowStep) => item.id === prerequisite)).toBe(
       true,
     );
@@ -735,21 +763,31 @@ ${check.run}
     ).toBe(row.expected);
   });
 
-  it("iOS runs the Access proof and Watch UI tests after lifecycle tests fail", () => {
+  it("iOS runs iPad, Access proof and Watch UI tests after lifecycle tests fail", () => {
     const root = fixture();
     const result = run(
       root,
-      `xcodebuild() { printf '%s\\n' "$*" >> "$TRACE"; return 7; }
+      `xcrun() {
+  case "$*" in
+    "simctl list devices available --json")
+      printf '%s\\n' '{"devices":{"iOS":[{"isAvailable":true,"name":"iPad fixture","udid":"fixture-ipad","state":"Booted"}]}}' ;;
+    "simctl bootstatus fixture-ipad -b") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+xcodebuild() { printf '%s\\n' "$*" >> "$TRACE"; return 7; }
 python3() { printf '%s\\n' "$*" >> "$TRACE"; }
 ${ciStep("ios-build", "Run focused iOS lifecycle simulator tests").run!}`,
       { IOS_CI_PHASE: "tests", IOS_MAIN_TIER: "false", IOS_SIMULATOR_ID: "fixture-simulator" },
     );
     expect(result.status, result.stderr).not.toBe(0);
     const commands = readFileSync(path.join(root, "trace"), "utf8").trim().split("\n");
-    expect(commands).toHaveLength(3);
+    expect(commands).toHaveLength(4);
     expect(commands[0]).toContain("OpenClawLifecycleTests.xcresult");
-    expect(commands[1]).toBe("scripts/ios-access-restart-proof.py fixture-simulator");
-    expect(commands[2]).toContain("OpenClawWatchDeliveryUITests.xcresult");
+    expect(commands[1]).toContain("OpenClawIPadConversationTests.xcresult");
+    expect(commands[1]).toContain("platform=iOS Simulator,id=fixture-ipad");
+    expect(commands[2]).toBe("scripts/ios-access-restart-proof.py fixture-simulator");
+    expect(commands[3]).toContain("OpenClawWatchDeliveryUITests.xcresult");
   });
 
   it.each([

@@ -140,8 +140,7 @@ extension ChatTranscriptRow {
     private var isWorkOutput: Bool {
         guard let message = self.workMessage else { return false }
         return !message.isForwardedTurnBoundary &&
-            (message.isNestedToolActivity ||
-                ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased()))
+            ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased())
     }
 }
 
@@ -201,7 +200,7 @@ extension OpenClawChatMessage {
 
     fileprivate var isCollapsibleWork: Bool {
         !self.hasWorkReplyContent && !self.isForwardedTurnBoundary && !self.isRealtimeVoiceTranscript &&
-            (self.isNestedToolActivity || ["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
+            (["tool", "toolresult", "tool_result"].contains(self.role.lowercased()) ||
                 (self.role.lowercased() == "assistant" && self.content.contains(where: \.isWorkContent)))
     }
 

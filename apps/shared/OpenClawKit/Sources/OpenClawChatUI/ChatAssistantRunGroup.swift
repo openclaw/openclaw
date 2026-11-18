@@ -149,7 +149,6 @@ extension ChatTranscriptRow {
         switch self {
         case let .message(message):
             guard !self.startsTurn,
-                  message.isNestedToolActivity ||
                   ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased())
             else { return nil }
             return message.workRunID

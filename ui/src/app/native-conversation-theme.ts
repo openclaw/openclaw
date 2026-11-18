@@ -10,8 +10,8 @@ export function readNativeConversationTheme(): CatalogTheme | undefined {
   if (host?.platform !== "ios" || host.formFactor !== "pad" || host.surface !== "conversation") {
     return undefined;
   }
-  // SAFETY: optional document-start host metadata is validated by the normal palette reader.
   const embed = asOptionalRecord(
+    // SAFETY: optional document-start host metadata is validated by the normal palette reader.
     (window as Window & { __OPENCLAW_NATIVE_EMBED__?: unknown })["__OPENCLAW_NATIVE_EMBED__"],
   );
   const appearance = asOptionalRecord(embed?.appearance);

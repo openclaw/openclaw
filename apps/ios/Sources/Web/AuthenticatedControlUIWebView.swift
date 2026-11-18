@@ -1049,6 +1049,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             }
             return
         }
+        coordinator.conversation?.onDismantle?()
         coordinator.retireAccess(in: webView)
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: NativeConversationContract.handlerName, contentWorld: .page)

@@ -574,6 +574,9 @@ struct ChatToolActivityList: View {
                         .foregroundStyle(.secondary)
                 }
                 .tint(.secondary)
+                #if os(iOS)
+                .disclosureGroupStyle(ChatInlineDisclosureStyle())
+                #endif
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -2,7 +2,7 @@ import Foundation
 import OpenClawKit
 
 extension OpenClawChatMessage {
-    /// Normalize embedded tool results and expand user result carriers from CLI history.
+    /// Normalize supported embedded results and expand user result carriers from CLI history.
     /// Expand those rows before they reach turn ownership or presentation.
     var ingestedMessages: [OpenClawChatMessage] {
         if self.role.lowercased() == "assistant" || self.isNestedToolActivity,

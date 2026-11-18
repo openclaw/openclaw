@@ -580,6 +580,109 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
     }
 
+    func testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority() throws {
+        self.executionTimeAllowance = 60
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-step-labels-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["Local readiness checked."].waitForExistence(timeout: 8))
+        let transcript = try self.chatTranscript(in: app)
+        let details = app.buttons["Tool details"].firstMatch
+        for _ in 0..<8 where !details.isHittable {
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "Tool details").count, 1)
+        XCTAssertTrue(details.isHittable)
+        let quiet = app.buttons["chat-tool-activity-fixture-nested-success"]
+        XCTAssertFalse(quiet.exists, "An explicit empty canonical descriptor must start under Tool details")
+        self.attachScreenshot(named: "nested-custom-quiet-collapsed")
+        details.tap()
+        self.attachScreenshot(named: "nested-custom-diagnostic-after-original-row-tap")
+        let afterRowTap = XCTAttachment(string: app.debugDescription)
+        afterRowTap.name = "nested-custom-diagnostic-after-original-row-tap-hierarchy"
+        afterRowTap.lifetime = .keepAlways
+        self.add(afterRowTap)
+        let originalQuietWait = quiet.waitForExistence(timeout: 5)
+        if !originalQuietWait {
+            let parentCount = app.buttons.matching(identifier: "Tool details").count
+            var observation = "originalQuietWait=false; parentCount=\(parentCount)"
+            var action = "skipped"
+            if parentCount == 1 {
+                let imageCount = details.images.count
+                let collapsedCount = details.images.matching(identifier: "collapsed").count
+                observation += "; images=\(imageCount); collapsed=\(collapsedCount)"
+                if imageCount == 1, collapsedCount == 1 {
+                    let chevrons = details.buttons
+                    let chevronCount = chevrons.count
+                    observation += "; nestedButtons=\(chevronCount)"
+                    if chevronCount == 1 {
+                        let chevron = chevrons.firstMatch
+                        let collapsed = chevron.images.matching(identifier: "collapsed").count == 1
+                        let hittable = chevron.isHittable
+                        observation += "; nestedChevronCollapsed=\(collapsed); nestedChevronHittable=\(hittable)"
+                        if collapsed, hittable {
+                            chevron.tap()
+                            action = "performed; quietAfterChevron=\(quiet.waitForExistence(timeout: 1))"
+                        }
+                    }
+                }
+            }
+            self.attachScreenshot(named: "nested-custom-diagnostic-chevron-contrast")
+            let contrast = XCTAttachment(string: observation + "; diagnosticChevronTap=" + action +
+                "; quietPresentAtCapture=\(quiet.exists)\n" + app.debugDescription)
+            contrast.name = "nested-custom-diagnostic-chevron-contrast-hierarchy"
+            contrast.lifetime = .keepAlways
+            self.add(contrast)
+        }
+        // A diagnostic chevron success cannot satisfy the original row-tap assertion.
+        XCTAssertTrue(originalQuietWait)
+        guard originalQuietWait else { return }
+        for (callID, title, status, text) in [
+            ("fixture-nested-success", "Knowledge Status", "Finished", "Sanitized nested success output"),
+            ("fixture-nested-failed", "Read", "Failed", "Recorded nested output"),
+        ] {
+            let rows = app.buttons.matching(identifier: "chat-tool-activity-" + callID)
+            let row = rows.firstMatch
+            for _ in 0..<4 where !row.isHittable {
+                transcript.swipeDown()
+            }
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            XCTAssertEqual(rows.count, 1, "A custom carrier must not duplicate its result row")
+            XCTAssertTrue(row.isHittable)
+            XCTAssertEqual(row.label, title)
+            XCTAssertTrue((row.value as? String)?.hasPrefix(status) == true)
+            self.assertElementHasRenderedContent(row, named: callID + " collapsed control")
+            let output = app.staticTexts[text]
+            XCTAssertFalse(output.exists, "The result must start collapsed, not merely be present in metadata")
+            row.tap()
+            XCTAssertTrue(output.waitForExistence(timeout: 5))
+            XCTAssertEqual(output.label, text)
+            self.assertElementHasRenderedContent(output, named: callID + " expanded output")
+            self.attachScreenshot(named: "nested-custom-" + callID + "-expanded")
+            row.tap()
+            XCTAssertTrue(output.waitForNonExistence(timeout: 5))
+        }
+        for _ in 0..<4 where !details.isHittable {
+            transcript.swipeUp()
+        }
+        XCTAssertTrue(details.isHittable)
+        details.tap()
+        XCTAssertTrue(quiet.waitForNonExistence(timeout: 5), "Quiet output must return under its disclosure")
+        let pending = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND value == %@", "Knowledge Status", "Working")).firstMatch
+        for _ in 0..<4 where !pending.isHittable {
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(pending.waitForExistence(timeout: 5))
+        XCTAssertTrue(pending.isHittable)
+        XCTAssertNotEqual(pending.elementType, .button)
+        XCTAssertFalse(app.buttons["chat-tool-activity-fixture-nested-pending"].exists)
+        self.assertElementHasRenderedContent(pending, named: "canonical nested start without result")
+        self.attachScreenshot(named: "nested-custom-quiet-recollapsed-and-pending")
+    }
+
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,

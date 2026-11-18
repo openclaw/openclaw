@@ -508,7 +508,18 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public internal(set) var transcriptRunID: String?
     public var isTruncated = false
     public internal(set) var role: String
-    var customType: String?
+    #if os(iOS)
+    private var decodedNestedToolActivity = false
+    #endif
+
+    var isNestedToolActivity: Bool {
+        #if os(iOS)
+        self.role == "custom" && self.decodedNestedToolActivity
+        #else
+        false
+        #endif
+    }
+
     public let phase: String?
     public internal(set) var turnBoundary: Bool?
     public let steerTargetRunID: String?
@@ -537,11 +548,6 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public internal(set) var isError: Bool?
     public internal(set) var provenance: OpenClawChatInputProvenance?
     public internal(set) var historyMarker: OpenClawChatHistoryMarker?
-
-    /// Code Mode audit rows contain real tool activity, not a separate assistant reply.
-    var isNestedToolActivity: Bool {
-        self.role.lowercased() == "custom" && self.customType == "openclaw.nested-tool.v1"
-    }
 
     var isToolResult: Bool {
         ["toolresult", "tool_result"].contains(self.role.lowercased())
@@ -578,7 +584,9 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case role
+        #if os(iOS)
         case customType
+        #endif
         case model
         case senderLabel
         case senderSession
@@ -662,7 +670,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.role = try container.decode(String.self, forKey: .role)
-        self.customType = try container.decodeIfPresent(String.self, forKey: .customType)
+        #if os(iOS)
+        self.decodedNestedToolActivity = self.role == "custom" &&
+            (try? container.decode(String.self, forKey: .customType)) == "openclaw.nested-tool.v1"
+        #endif
         self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
         let decodedOpenClaw = try container.decodeIfPresent(OpenClawMetadata.self, forKey: .openClaw)
         self.idempotencyKey = try decodedOpenClaw?.idempotencyKey ??
@@ -794,7 +805,11 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.role, forKey: .role)
-        try container.encodeIfPresent(self.customType, forKey: .customType)
+        #if os(iOS)
+        if self.isNestedToolActivity {
+            try container.encode("openclaw.nested-tool.v1", forKey: .customType)
+        }
+        #endif
         try container.encodeIfPresent(self.model, forKey: .model)
         try container.encodeIfPresent(self.senderLabel, forKey: .senderLabel)
         try container.encodeIfPresent(self.senderSession, forKey: .senderSession)

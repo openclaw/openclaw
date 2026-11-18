@@ -191,8 +191,13 @@ final class IOSConversationController {
             viewModel.setWebConversationMode(.probing)
             let bridge = IOSConversationBridge(url: url, gatewayURL: baseURL)
             bridge.isCurrent = { [weak self] in self?.current == true && self?.retiring == false }
-            bridge.onFailure = { [weak self] in self?.failed = true
-                self?.useNative()
+            bridge.onFailure = { [weak self, weak bridge] in
+                guard let self, self.bridge === bridge else { return }
+                self.failed = true
+                self.useNative()
+            }
+            bridge.onDismantle = { [weak self, weak bridge] in
+                self?.documentDismantled(bridge)
             }
             bridge.onReady = { [weak self, weak bridge] in
                 guard let self, self.current, self.bridge === bridge else { return }
@@ -200,16 +205,18 @@ final class IOSConversationController {
                 self.present(visible: self.visible, active: self.active)
                 self.reconcile()
             }
-            bridge.onState = { [weak self] state in
-                guard let self, self.nativeTarget.map({ self.sameConversation($0, state.context) }) != false
+            bridge.onState = { [weak self, weak bridge] state in
+                guard let self, self.bridge === bridge,
+                      self.nativeTarget.map({ self.sameConversation($0, state.context) }) != false
                 else { return }
                 self.nativeTarget = nil
                 self.routes.report(state.context)
                 self.reconcileWebRoute()
             }
             bridge.onFacts = { [weak self] facts in self?.owner.sessionFacts = facts.sessions }
-            bridge.onRoute = { [weak self] context in
-                guard let self, self.nativeTarget.map({ self.sameConversation($0, context) }) != false
+            bridge.onRoute = { [weak self, weak bridge] context in
+                guard let self, self.bridge === bridge,
+                      self.nativeTarget.map({ self.sameConversation($0, context) }) != false
                 else { return }
                 self.nativeTarget = nil
                 self.routes.report(context)
@@ -313,6 +320,13 @@ final class IOSConversationController {
         self.nativeRequested = false
         self.failed = false
         self.reconcile()
+    }
+
+    private func documentDismantled(_ bridge: IOSConversationBridge?) {
+        guard self.bridge === bridge else { return }
+        // A tab remount is a new executable document. Re-admit the current
+        // selection rather than loading this bridge's original entry URL.
+        self.useNative()
     }
 
     private func useNative() {

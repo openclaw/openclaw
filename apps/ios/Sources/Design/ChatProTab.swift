@@ -450,13 +450,13 @@ struct ChatProTab: View {
 
     private var chatActionsMenu: some View {
         Button {
-            if let conversation = self.appModel.chatPresentation.conversation,
-               let bridge = conversation.bridge, bridge.ready,
-               let context = self.viewModel?.webConversationContext
-            {
-                Task { _ = await bridge.request(.openSessionActions(context)) }
-            } else {
-                self.showsChatActions.toggle()
+            Task {
+                await Self.openChatActions(
+                    bridge: self.appModel.chatPresentation.conversation?.bridge,
+                    context: self.viewModel?.webConversationContext)
+                {
+                    self.showsChatActions = true
+                }
             }
         } label: {
             Label {
@@ -479,6 +479,19 @@ struct ChatProTab: View {
                     self.performPendingChatAction()
                 }
                 .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    static func openChatActions(
+        bridge: IOSConversationBridge?,
+        context: NativeConversationContext?,
+        showNative: () -> Void) async
+    {
+        guard let bridge, bridge.ready, let context,
+              await bridge.request(.openSessionActions(context))
+        else {
+            showNative()
+            return
         }
     }
 

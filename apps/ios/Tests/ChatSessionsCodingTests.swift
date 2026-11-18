@@ -1,7 +1,8 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import Testing
+@testable import OpenClaw
+@testable import OpenClawChatUI
 
 struct ChatSessionsCodingTests {
     private struct ExecutorProbe: Decodable, Sendable {
@@ -99,5 +100,194 @@ struct ChatSessionsCodingTests {
         #expect(entry.lastReadAt == 1_720_000_000_000)
         #expect(entry.markedUnreadAt == 1_720_000_002_500)
         #expect(entry.lastActivityAt == 1_720_000_005_000)
+    }
+
+    @Test @MainActor func `ios nested custom results preserve envelope and cached output`() throws {
+        for (result, output, failed) in [
+            (["content": [["type": "text", "text": "Nested success output"]]], "Nested success output", false),
+            (["content": "Nested failure output", "isError": true], "Nested failure output", true),
+            (["text": "Explicit output", "content": "Ignored output"], "Explicit output", false),
+            (["content": [
+                ["type": "text", "text": "Alpha"],
+                ["type": "image", "width": "invalid"],
+                ["type": "text", "text": "Beta"],
+            ]], "Alpha\nBeta", false),
+            (["content": ["malformed": true]], nil, false),
+        ] as [([String: Any], String?, Bool)] {
+            var envelope = Self.nestedEnvelope
+            var blocks = try #require(envelope["content"] as? [[String: Any]])
+            blocks[1].merge(result, uniquingKeysWith: { _, new in new })
+            envelope["content"] = blocks
+            let decoded = try GatewayPayloadDecoding.decode(Self.nestedRaw(envelope), as: OpenClawChatMessage.self)
+            let messages = decoded.ingestedMessages
+            let message = try #require(messages.first)
+            #expect(messages.count == 1 && message.id == decoded.id && message.role == "custom")
+            #expect(message.transcriptMessageID == "nested-row" && message.workRunID == "nested-run")
+            let items = ChatToolActivity.items(message: message)
+            let item = try #require(items.first)
+            #expect(items.count == 1 && item.id == "nested-call" && item.name == "knowledge_status")
+            #expect(item.arguments?.dictionaryValue?.isEmpty == true)
+            #expect(item.details?.dictionaryValue?["marker"]?.stringValue == "paired")
+            #expect(item.resultText == output && item.isError == failed && item.isVisible && !item.isPending)
+            let cached = try JSONEncoder().encode(message)
+            let fields = try #require(JSONSerialization.jsonObject(with: cached) as? [String: Any])
+            #expect(fields["customType"] as? String == "openclaw.nested-tool.v1" && fields["id"] == nil)
+            let restored = try JSONDecoder().decode(OpenClawChatMessage.self, from: cached)
+            #expect(restored.isNestedToolActivity && restored.role == "custom")
+            #expect(restored.transcriptMessageID == "nested-row" && restored.workRunID == "nested-run")
+            #expect(ChatToolActivity.items(message: restored) == items)
+        }
+    }
+
+    @Test @MainActor func `ios nested recognition is exact and ignores unrelated custom metadata`() async throws {
+        for discriminator in [nil, "unknown", "Openclaw.nested-tool.v1", "openclaw.nested-tool.v1 ", 7] as [Any?] {
+            var envelope = Self.nestedEnvelope
+            envelope["customType"] = discriminator
+            let messages = try await OpenClawChatViewModel.decodeMessages([Self.nestedRaw(envelope)])
+            let message = try #require(messages.first)
+            #expect(messages.count == 1 && message.role == "custom" && !message.isNestedToolActivity)
+            #expect(ChatToolActivity.items(message: message).isEmpty)
+            #expect(message.content.last?.text == nil)
+            let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? [String: Any]
+            #expect(encoded?["customType"] == nil)
+        }
+        for role in ["assistant", "system", "Custom", " custom"] {
+            var envelope = Self.nestedEnvelope
+            envelope["role"] = role
+            let message = try #require(await OpenClawChatViewModel.decodeMessages([Self.nestedRaw(envelope)]).first)
+            #expect(!message.isNestedToolActivity && message.role == role)
+            #expect(ChatToolActivity.items(message: message).isEmpty == (role != "assistant"))
+        }
+    }
+
+    @Test @MainActor func `ios nested activity keeps canonical visibility and outcome authority`() async throws {
+        let decoded = try #require(await OpenClawChatViewModel.decodeMessages([Self.nestedRaw(Self.nestedEnvelope)])
+            .first)
+        for activity in [
+            [],
+            [Self.nestedActivity(callID: "other")],
+            [Self.nestedActivity(hidden: true)],
+            [Self.nestedActivity(suppressed: true)],
+        ] {
+            var message = decoded
+            message.activity = activity
+            let item = try #require(ChatToolActivity.items(message: message).first)
+            #expect(!item.isVisible && item.activityPrepared && item.resultText == "Nested success output")
+        }
+        for (status, expected) in [
+            ("skipped", ChatToolActivityItem.State.skipped),
+            ("blocked", .blocked),
+            (nil, .unavailable),
+        ] as [(String?, ChatToolActivityItem.State)] {
+            var envelope = Self.nestedEnvelope
+            var blocks = try #require(envelope["content"] as? [[String: Any]])
+            blocks[1]["isError"] = true
+            envelope["content"] = blocks
+            var message = try #require(await OpenClawChatViewModel.decodeMessages([Self.nestedRaw(envelope)]).first)
+            message.activity = [Self.nestedActivity(status: status)]
+            let item = try #require(ChatToolActivity.items(message: message).first)
+            #expect(item.displayState == expected && !item.isError && !item.isPending)
+            #expect(item.isVisible && item.resultText == "Nested success output")
+        }
+        var callOnly = decoded
+        callOnly.content = Array(callOnly.content.prefix(1))
+        let live = OpenClawChatPendingToolCall(
+            toolCallId: "nested-call", name: "knowledge_status", args: nil, startedAt: 1, isError: nil)
+        #expect(ChatToolActivity.items(message: callOnly).first?.displayState == .unavailable)
+        let pending = try #require(ChatToolActivity.items(message: callOnly, liveTools: [live]).first)
+        #expect(pending.isPending && pending.resultText == nil && pending.isVisible)
+        let recorded = try #require(ChatToolActivity.items(message: decoded, liveTools: [live]).first)
+        #expect(recorded.displayState == .finished && !recorded.isPending)
+        #expect(recorded.resultText == "Nested success output")
+    }
+
+    @Test @MainActor func `ios nested live row adopts history without changing presentation identity`() async throws {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
+        defer { model.detachTransport() }
+        var liveEnvelope = Self.nestedEnvelope
+        liveEnvelope["__openclaw"] = ["id": "nested-row", "runId": "earlier-run"]
+        liveEnvelope["content"] = try Array(#require(liveEnvelope["content"] as? [[String: Any]]).prefix(1))
+        let live = try GatewayPayloadDecoding.decode(Self.nestedRaw(liveEnvelope), as: OpenClawChatMessage.self)
+        model.handleTransportEvent(.sessionMessage(.init(
+            sessionKey: "main", message: live, messageId: "nested-row", messageSeq: 1)))
+        let before = try #require(model.messages.first)
+        #expect(before.workRunID == "earlier-run")
+        let payload = try JSONDecoder().decode(
+            OpenClawChatHistoryPayload.self,
+            from: JSONSerialization.data(withJSONObject: [
+                "messages": [Self.nestedEnvelope], "sessionKey": "main",
+                "activity": [["messageId": "nested-row", "items": JSONSerialization.jsonObject(with:
+                    JSONEncoder().encode([Self.nestedActivity(status: "blocked")]))]],
+            ]))
+        let canonical = await OpenClawChatViewModel.decodeMessages(payload.messages ?? [], activity: payload.activity)
+        let request = model.beginHistoryRequest()
+        #expect(model.applyHistoryPayload(
+            payload,
+            for: request,
+            preservingOptimisticLocalMessages: false,
+            decodedMessages: canonical))
+        let after = try #require(model.messages.first)
+        #expect(model.messages.count == 1 && after.id == before.id && after.presentationID == before.presentationID)
+        #expect(after.role == "custom" && after.workRunID == "nested-run" && after.isNestedToolActivity)
+        #expect(ChatToolActivity.items(message: after).first?.resultText == "Nested success output")
+        #expect(ChatToolActivity.items(message: after).first?.displayState == .blocked)
+    }
+
+    static var nestedEnvelope: [String: Any] {
+        [
+            "role": "custom",
+            "customType": "openclaw.nested-tool.v1",
+            "display": true,
+            "excludeFromContext": true,
+            "__openclaw": ["id": "nested-row", "runId": "nested-run"],
+            "timestamp": 1,
+            "content": [
+                [
+                    "type": "toolCall",
+                    "id": "nested-call",
+                    "name": "knowledge_status",
+                    "arguments": [:],
+                    "parentToolCallId": "outer",
+                    "runId": "nested-run",
+                ],
+                [
+                    "type": "toolResult",
+                    "role": "toolResult",
+                    "toolCallId": "nested-call",
+                    "toolName": "knowledge_status",
+                    "parentToolCallId": "outer",
+                    "runId": "nested-run",
+                    "afterEntryId": "paragraph",
+                    "isError": false,
+                    "details": ["marker": "paired"],
+                    "content": [["type": "text", "text": "Nested success output"]],
+                ],
+            ],
+        ]
+    }
+
+    static func nestedRaw(_ fields: [String: Any]) throws -> AnyCodable {
+        try JSONDecoder().decode(AnyCodable.self, from: JSONSerialization.data(withJSONObject: fields))
+    }
+
+    static func nestedActivity(
+        callID: String = "nested-call",
+        status: String? = "completed",
+        phase: String = "end",
+        hidden: Bool = false,
+        suppressed: Bool = false) -> OpenClawAgentActivityItem
+    {
+        OpenClawAgentActivityItem(
+            itemId: "tool:\(callID)",
+            toolCallId: callID,
+            kind: "tool",
+            phase: phase,
+            title: "Knowledge status",
+            name: "knowledge_status",
+            status: status,
+            hideFromChannelProgress: hidden,
+            suppressChannelProgress: suppressed)
     }
 }

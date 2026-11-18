@@ -20,6 +20,7 @@ final class IOSConversationBridge: NSObject, WKScriptMessageHandlerWithReply {
     @ObservationIgnored var onRoute: ((NativeConversationContext) -> Void)?
     @ObservationIgnored var onDashboard: ((NativeConversationDashboardRoute) -> Bool)?
     @ObservationIgnored var onFailure: (() -> Void)?
+    @ObservationIgnored var onDismantle: (() -> Void)?
     @ObservationIgnored var isCurrent: () -> Bool = { false }
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var deadline: Task<Void, Never>?
@@ -209,6 +210,9 @@ final class IOSConversationBridge: NSObject, WKScriptMessageHandlerWithReply {
     }
 
     func request(_ action: NativeConversationCommand.Action) async -> Bool {
+        if case .openSessionActions = action, !self.capabilities.contains("session-actions-v1") {
+            return false
+        }
         guard let documentID, self.isCurrent(), let webView else { return false }
         let command = NativeConversationCommand(documentId: documentID, requestId: UUID().uuidString, action: action)
         guard let script = try? command.javaScript() else { return false }

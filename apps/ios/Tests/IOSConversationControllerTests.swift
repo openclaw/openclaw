@@ -1,13 +1,160 @@
 import Foundation
 import OpenClawKit
+import SwiftUI
 import Testing
 import UIKit
+import WebKit
 @testable import OpenClaw
 @testable import OpenClawChatUI
 
 @MainActor
 @Suite(.enabled { await MainActor.run { UIDevice.current.userInterfaceIdiom == .pad } }, .timeLimit(.minutes(1)))
 struct IOSConversationControllerTests {
+    @Test func `tab remount opens the selected web thread instead of the original document`() async throws {
+        let server = try SettingsHubHTTPFixture(body: """
+        <html><body><script>
+        const documentId = crypto.randomUUID();
+        window.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__ = { documentId };
+        const path = new URL(location.href).searchParams.get('path');
+        history.replaceState(null, '', path);
+        let revision = 0;
+        const post = body => window.webkit.messageHandlers.openclawConversation.postMessage({
+          contract: 1, documentId, ...body
+        });
+        window.selectFixtureSession = sessionKey => post({
+          type: 'state', revision: ++revision, context: {agentId: 'main', sessionKey},
+          title: sessionKey, run: {active: false}, connection: 'connected'
+        });
+        window.addEventListener('openclaw:native-conversation-command', async ({detail}) => {
+          await post({type: 'command-result', requestId: detail.requestId, ok: true});
+          if (detail.type === 'navigate') await window.selectFixtureSession(detail.payload.sessionKey);
+        });
+        post({type: 'ready', surface: 'conversation', capabilities: []}).then(() =>
+          window.selectFixtureSession(path.endsWith('/selected') ? 'agent:main:selected' : 'agent:main:origin'));
+        </script></body></html>
+        """)
+        let root = try await server.start()
+        defer { server.stop() }
+        try await ControllerFixture
+            .run(sessionKey: "agent:main:origin", url: root.deletingLastPathComponent()) { fixture in
+                let selected = NativeConversationContext(agentId: "main", sessionKey: "agent:main:selected")
+                fixture.appModel.apply(.connected(GatewaySessionInfo()), to: .operator, route: nil)
+                fixture.controller.reconcile()
+                try await TestWait.observed("initial conversation bridge") { fixture.controller.bridge != nil }
+                let original = try #require(fixture.controller.bridge)
+                var events: [String] = []
+                @MainActor func observeLifecycle(
+                    _ bridge: IOSConversationBridge, label: String) -> @MainActor () -> Void
+                {
+                    let failure = bridge.onFailure
+                    let dismantle = bridge.onDismantle
+                    bridge.onFailure = {
+                        if events.count < 8 { events.append(label + ".failure") }
+                        failure?()
+                    }
+                    bridge.onDismantle = {
+                        if events.count < 8 { events.append(label + ".dismantle") }
+                        dismantle?()
+                    }
+                    return {
+                        bridge.onFailure = failure
+                        bridge.onDismantle = dismantle
+                    }
+                }
+                let restoreOriginal = observeLifecycle(original, label: "original")
+                defer { restoreOriginal() }
+                let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                    .first { $0.activationState == .foregroundActive })
+                let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
+                let window = UIWindow(windowScene: scene)
+                let chat = AnyView(IOSConversationView(controller: fixture.controller).environment(fixture.appModel))
+                let host = UIHostingController(rootView: chat)
+                window.rootViewController = host
+                window.makeKeyAndVisible()
+                defer {
+                    window.isHidden = true
+                    window.rootViewController = nil
+                    previousKeyWindow?.makeKeyAndVisible()
+                }
+                var stage = "A handshake"
+                var replyOK = "not-returned"
+                var replyError = ""
+                // One bounded synthetic snapshot also survives thrown requirements/cancellation,
+                // before window teardown can dismantle the document being diagnosed.
+                defer {
+                    fixture.recordRemountDiagnostic(
+                        original: original, stage: stage, replyOK: replyOK, replyError: replyError, events: events)
+                }
+                try await TestWait.observed("A admitted by the real WebKit handshake") {
+                    original.ready && fixture.controller.owner.state?.context.sessionKey == "agent:main:origin"
+                }
+                let originalDocument = try #require(original.documentID)
+                let webView = try #require(original.webView)
+                stage = "B bridge reply"
+                let reply = try #require(try await webView.callAsyncJavaScript(
+                    "return await window.selectFixtureSession(sessionKey);",
+                    arguments: ["sessionKey": selected.sessionKey],
+                    in: nil,
+                    contentWorld: .page) as? [String: Any])
+                replyOK = String(describing: reply["ok"] as? Bool)
+                replyError = String((reply["error"] as? String ?? "").prefix(256))
+                try #require(reply["ok"] as? Bool == true, "B bridge rejected state: \(replyError)")
+                stage = "B bridge state"
+                try await TestWait.observed("original bridge accepted B state") { original.state?.context == selected }
+                stage = "B owner state"
+                try await TestWait.observed("controller owner admitted B state") {
+                    fixture.controller.owner.state?.context == selected
+                }
+                stage = "B native model selection"
+                try await TestWait
+                    .observed("native model selected B") { fixture.model.sessionKey == selected.sessionKey }
+                stage = "B combined admission"
+                try await TestWait.observed("web B selected and admitted") {
+                    fixture.controller.owner.state?.context == selected && fixture.model.sessionKey == selected
+                        .sessionKey
+                }
+                stage = "Overview replacement"
+                host.rootView = AnyView(Text("Overview"))
+                try await TestWait.observed("replacement after leaving Chat") {
+                    fixture.controller.bridge != nil && fixture.controller.bridge !== original
+                }
+                let replacement = try #require(fixture.controller.bridge)
+                let restoreReplacement = observeLifecycle(replacement, label: "replacement")
+                defer { restoreReplacement() }
+                let entry = try #require(URLComponents(url: replacement.url, resolvingAgainstBaseURL: false))
+                #expect(entry.queryItems == [.init(name: "path", value: "/chat/main/~key/selected")])
+                #expect(fixture.controller.documentURL == replacement.url)
+                #expect(original.webView == nil)
+                #expect(fixture.controller.owner.state == nil)
+                stage = "Chat readmission"
+                host.rootView = chat
+                try await TestWait.observed("new document and B admitted after returning to Chat") {
+                    replacement.ready && replacement.documentID != originalDocument &&
+                        fixture.controller.owner.state?.context == selected
+                }
+                let replacementWebView = try #require(replacement.webView)
+                stage = "stale A rejection"
+                let staleAccepted = try await replacementWebView.callAsyncJavaScript(
+                    """
+                    const reply = await window.webkit.messageHandlers.openclawConversation.postMessage({
+                      contract:1, documentId:oldDocument, type:'state', revision:99,
+                      context:{agentId:'main',sessionKey:'agent:main:origin'},
+                      title:'Old A', run:{active:false}, connection:'connected'
+                    });
+                    return reply.ok;
+                    """,
+                    arguments: ["oldDocument": originalDocument],
+                    in: nil,
+                    contentWorld: .page)
+                #expect(staleAccepted as? Bool == false)
+                #expect(fixture.controller.bridge === replacement)
+                #expect(fixture.controller.owner.state?.context == selected)
+                #expect(fixture.model.sessionKey == selected.sessionKey)
+                fixture.expectNativeAdmission(selected, allowed: false)
+                stage = "complete"
+            }
+    }
+
     @Test(arguments: ["", "/configured"])
     func `learned mount reaches the retained offline owner before web admission`(urlPath: String) async throws {
         try await ControllerFixture.run(urlPath: urlPath) { fixture in
@@ -229,7 +376,10 @@ private struct ControllerFixture {
     let store: OpenClawChatSQLiteTranscriptCache
 
     static func run(
-        sessionKey: String = "main", urlPath: String = "/control", _ body: (Self) async throws -> Void) async throws
+        sessionKey: String = "main",
+        urlPath: String = "/control",
+        url: URL? = nil,
+        _ body: (Self) async throws -> Void) async throws
     {
         let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
@@ -247,7 +397,7 @@ private struct ControllerFixture {
         appModel.gatewayDefaultAgentId = "main"
         appModel.focusChatSession(sessionKey)
         appModel.activeGatewayConnectConfig = try GatewayConnectConfig(
-            url: #require(URL(string: "wss://gateway.invalid" + urlPath)),
+            url: #require(url ?? URL(string: "wss://gateway.invalid" + urlPath)),
             stableID: gatewayID,
             tls: nil,
             token: nil,
@@ -295,6 +445,41 @@ private struct ControllerFixture {
         // This also makes retirement immediate, deterministically rotating claimOwner.
         bridge.onReady?()
         return bridge
+    }
+
+    func recordRemountDiagnostic(
+        original: IOSConversationBridge, stage: String, replyOK: String, replyError: String, events: [String])
+    {
+        func bridgeSnapshot(_ bridge: IOSConversationBridge?) -> [String: String] {
+            guard let bridge else { return ["identity": "nil"] }
+            return [
+                "identity": String(describing: ObjectIdentifier(bridge)),
+                "document": bridge.documentID ?? "nil",
+                "ready": String(bridge.ready), "closing": String(bridge.isClosing),
+                "revision": bridge.state.map { String($0.revision) } ?? "nil",
+                "agent": bridge.state?.context.agentId ?? "nil",
+                "session": bridge.state?.context.sessionKey ?? "nil",
+                "entryURL": bridge.url.absoluteString,
+                "currentURL": bridge.webView?.url?.absoluteString ?? "nil",
+            ].mapValues { String($0.prefix(256)) }
+        }
+        let snapshot: [String: Any] = [
+            "stage": stage, "BReplyOK": replyOK, "BReplyError": replyError, "events": events,
+            "original": bridgeSnapshot(original), "current": bridgeSnapshot(self.controller.bridge),
+            "ownerMode": String(describing: self.controller.owner.mode),
+            "ownerAgent": self.controller.owner.state?.context.agentId ?? "nil",
+            "ownerSession": self.controller.owner.state?.context.sessionKey ?? "nil",
+            "ownerRevision": self.controller.owner.state.map { String($0.revision) } ?? "nil",
+            "modelSession": self.model.sessionKey, "pendingInput": self.model.hasPendingNativeConversationInput,
+            "sending": self.model.isSending, "pendingRuns": self.model.pendingRunCount,
+            "blockingRun": self.model.hasBlockingRunActivity, "nativeRequested": self.controller.nativeRequested,
+            "entryURL": self.controller.documentURL?.absoluteString ?? "nil",
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: snapshot, options: [.sortedKeys]),
+           let text = String(data: data, encoding: .utf8)
+        {
+            print("Controller remount diagnostic: \(text.prefix(8192))")
+        }
     }
 
     func waitForNativeAdmission(

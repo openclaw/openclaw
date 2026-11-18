@@ -604,10 +604,39 @@ private actor LocalFixtureChatStore {
         } else {
             self.messages
         }
+        var historyWireMessages = try JSONDecoder().decode(
+            [AnyCodable].self, from: JSONEncoder().encode(historyMessages))
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
+            // Keep the existing step transcript/latest reply intact. These earlier raw carriers
+            // cross the real history JSON decoder; the public message initializer cannot mark them.
+            let nested = try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
+            [
+              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
+               "__openclaw":{"id":"fixture-nested-pending-row","runId":"fixture-nested-run"},"timestamp":1,
+               "content":[{"type":"toolCall","id":"fixture-nested-pending","name":"knowledge_status",
+                 "arguments":{},"runId":"fixture-nested-run","parentToolCallId":"fixture-parent"}]},
+              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
+               "__openclaw":{"id":"fixture-nested-failed-row","runId":"fixture-nested-run"},"timestamp":2,
+               "content":[{"type":"toolCall","id":"fixture-nested-failed","name":"read",
+                 "arguments":{"path":"synthetic.txt"},"parentToolCallId":"fixture-parent"},
+                 {"type":"toolResult","role":"toolResult","toolCallId":"fixture-nested-failed","toolName":"read",
+                  "isError":true,"content":[{"type":"text","text":"Recorded nested output"}]}]},
+              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
+               "__openclaw":{"id":"fixture-nested-success-row","runId":"fixture-nested-run"},"timestamp":3,
+               "content":[{"type":"toolCall","id":"fixture-nested-success","name":"knowledge_status",
+                 "arguments":{},"runId":"fixture-nested-run","parentToolCallId":"fixture-parent"},
+                 {"type":"toolResult","role":"toolResult","toolCallId":"fixture-nested-success",
+                  "toolName":"knowledge_status","runId":"fixture-nested-run","parentToolCallId":"fixture-parent",
+                  "afterEntryId":"fixture-nested-failed-row","isError":false,
+                  "content":[{"type":"text","text":"Sanitized nested success output"}]}]}
+            ]
+            """#.utf8))
+            historyWireMessages.insert(contentsOf: nested, at: 0)
+        }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
-            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages)),
+            messages: historyWireMessages,
             thinkingLevel: self.thinkingLevel,
             // The progress card is read only for a session whose owner the history names.
             sessionInfo: OpenClawChatSessionInfo(
@@ -632,6 +661,11 @@ private actor LocalFixtureChatStore {
                    "title":"Exec — outcome unknown","name":"exec"},
                   {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
                    "title":"Exec","name":"exec","status":"completed"}
+                ]},
+                {"messageId":"fixture-nested-success-row","items":[]},
+                {"messageId":"fixture-nested-pending-row","items":[
+                  {"itemId":"tool:fixture-nested-pending","toolCallId":"fixture-nested-pending","kind":"tool",
+                   "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}
                 ]}]
                 """.utf8)) : nil)
     }

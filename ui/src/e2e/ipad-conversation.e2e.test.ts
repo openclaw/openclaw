@@ -205,16 +205,19 @@ async function checkConversation({ page }: { page: Page }) {
     const [prose, line, label, signal, previous, input] = await presented(targets, () =>
       Promise.all(targets.map(layoutBox)),
     );
-    // Compare actual rendered content bounds, not the viewport or a CSS inset.
-    expect(Math.abs(line!.x - prose!.x)).toBeLessThanOrEqual(3);
-    expect(Math.abs(signal!.x - prose!.x)).toBeLessThanOrEqual(3);
-    expect(Math.abs(line!.x - previous!.x)).toBeLessThanOrEqual(3);
-    if (waiting) {
-      expect(label!.x).toBeGreaterThanOrEqual(right(signal));
-      expect(label!.x - right(signal)).toBeLessThanOrEqual(12);
+    if (!prose || !line || !label || !signal || !previous || !input) {
+      throw new Error("Expected rendered bounds for every iPad conversation status target");
     }
-    expect(line!.y).toBeGreaterThanOrEqual(previous!.y + previous!.height - 1);
-    expect(line!.y + line!.height).toBeLessThanOrEqual(input!.y);
+    // Compare actual rendered content bounds, not the viewport or a CSS inset.
+    expect(Math.abs(line.x - prose.x)).toBeLessThanOrEqual(3);
+    expect(Math.abs(signal.x - prose.x)).toBeLessThanOrEqual(3);
+    expect(Math.abs(line.x - previous.x)).toBeLessThanOrEqual(3);
+    if (waiting) {
+      expect(label.x).toBeGreaterThanOrEqual(right(signal));
+      expect(label.x - right(signal)).toBeLessThanOrEqual(12);
+    }
+    expect(line.y).toBeGreaterThanOrEqual(previous.y + previous.height - 1);
+    expect(line.y + line.height).toBeLessThanOrEqual(input.y);
     const flow = await working.evaluate((element) => {
       const thread = element.closest(".chat-thread");
       let viewportPinned = false;

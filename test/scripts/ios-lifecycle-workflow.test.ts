@@ -94,6 +94,8 @@ if (tool === "installer") {
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[0], "simslim"));
 } else if (tool === "uname") {
   console.log("arm64");
+} else if (tool === "prepare") {
+  process.exit(Number(process.env.IPAD_PREPARE_EXIT ?? 0));
 } else if (tool === "xcrun") {
   if (args[1] === "list" && args[2] === "pairs") {
     console.log(JSON.stringify({ pairs: mode === "unpaired" ? {} : {
@@ -101,16 +103,23 @@ if (tool === "installer") {
       selected: { watch: { udid: "watch-fixture" }, phone: { udid: "companion-fixture" } }
     } }));
   } else if (args[1] === "list") {
+    if (Number(process.env.IPAD_SELECTOR_EXIT ?? 0)) process.exit(Number(process.env.IPAD_SELECTOR_EXIT));
     console.log(JSON.stringify({ devices: { watch: [
       { name: mode.startsWith("voice") ? "iPhone fixture" : "Apple Watch fixture", isAvailable: true,
         udid: mode.includes("slim") ? "11111111-2222-3333-4444-555555555555" : "watch-fixture" }
-    ] } }));
+    ], ios: [{ name: "iPad fixture", isAvailable: true, udid: "66666666-7777-8888-9999-AAAAAAAAAAAA",
+      state: process.env.IPAD_FIXTURE_STATE ?? "Booted" }] } }));
+  } else if (args[2] === "66666666-7777-8888-9999-AAAAAAAAAAAA") {
+    if (args[1] === "bootstatus") process.exit(Number(process.env.IPAD_BOOT_EXIT ?? 0));
+    if (args[1] === "shutdown") process.exit(Number(process.env.IPAD_SHUTDOWN_EXIT ?? 0));
   } else if (args[1] === "bootstatus" && mode.endsWith("boot-failed")) {
     console.error("Intentional simulator boot failure");
     process.exit(23);
   } else if (args[1] === "install" && !existsSync(args[3])) {
     process.exit(24);
   }
+} else if (tool === "xcodebuild" && process.env.IPAD_FIXTURE_STATE && args.includes("platform=iOS Simulator,id=66666666-7777-8888-9999-AAAAAAAAAAAA")) {
+  process.exit(Number(process.env.IPAD_TEST_EXIT ?? 0));
 } else if (args.includes("build-for-testing") && mode === "voice-build-failed-" + args[args.indexOf("-scheme") + 1]) {
   process.exit(26);
 } else if (args.includes("-showBuildSettings")) {
@@ -130,7 +139,16 @@ if (tool === "installer") {
 `,
   );
   // Exercise the restart helper itself below; this fixture checks workflow ordering.
-  for (const tool of ["xcrun", "xcodebuild", "pnpm", "uname", "sysctl", "installer", "simslim"]) {
+  for (const tool of [
+    "xcrun",
+    "xcodebuild",
+    "pnpm",
+    "uname",
+    "sysctl",
+    "installer",
+    "simslim",
+    "prepare",
+  ]) {
     const executable = path.join(bin, tool);
     writeFileSync(executable, `#!/bin/sh\nexec '${process.execPath}' '${runner}' '${tool}' "$@"\n`);
     chmodSync(executable, 0o755);
@@ -166,6 +184,11 @@ exec '${pythonExecutable}' "$@"
     );
   }
   const environmentFile = path.join(root, "github-env");
+  if (env.IPAD_FIXTURE_STATE) {
+    const scripts = path.join(root, "scripts");
+    mkdirSync(scripts, { recursive: true });
+    copyFileSync(path.join(bin, "prepare"), path.join(scripts, "ios-simulator-prepare.sh"));
+  }
   const summaryFile = path.join(root, "summary.md");
   writeFileSync(environmentFile, "");
   writeFileSync(summaryFile, "");
@@ -291,7 +314,7 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       expect(result.stdout).toContain("[apple-command] Exit 25");
     }
     const tests = commands.filter(isTestCommand);
-    expect(tests).toHaveLength(phase === "smoke" ? 1 : 2);
+    expect(tests).toHaveLength(phase === "smoke" ? 2 : 3);
     expect(tests[0]?.args).toContain("platform=iOS Simulator,id=watch-fixture");
     expectArgs(tests[0]?.args, [
       "-collect-test-diagnostics",
@@ -314,6 +337,15 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(tests[0]?.args).toEqual(expect.arrayContaining(lifecycleSelectors));
     expect(selectedTests(tests[0]!.args).join("\n")).not.toMatch(/\/(?:ESPSetup|Security2)/u);
     expect(commands.filter((command) => command.tool === "python3")).toHaveLength(1);
+    expectArgs(tests[1]?.args, [
+      "platform=iOS Simulator,id=66666666-7777-8888-9999-AAAAAAAAAAAA",
+      resultBundle("OpenClawIPadConversationTests"),
+      ...selectors("OpenClawTests", [
+        "IOSConversationAdapterTests",
+        "IOSConversationControllerTests",
+      ]),
+    ]);
+    expect(argsFor(commands, "xcrun").some((args) => args.includes("shutdown"))).toBe(false);
     if (phase === "smoke") {
       expect(commands.at(-1)).toEqual({
         tool: "python3",
@@ -328,14 +360,63 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
       "-only-testing:OpenClawLogicTests/WatchVoiceTurnTrackerTests",
       "-only-testing:OpenClawTests/NodeAppModelInvokeTests",
     ]);
-    expect(selectedTests(tests[1]!.args)).toEqual([
+    expect(selectedTests(tests[2]!.args)).toEqual([
       "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings",
       "-only-testing:OpenClawUITests/BootstrapSetupFailureUITests",
     ]);
     const restart = commands.findIndex((command) => command.tool === "python3");
-    expect(restart).toBeGreaterThan(commands.indexOf(tests[0]!));
-    expect(restart).toBeLessThan(commands.indexOf(tests[1]!));
+    expect(restart).toBeGreaterThan(commands.indexOf(tests[1]!));
+    expect(restart).toBeLessThan(commands.indexOf(tests[2]!));
   });
+});
+
+it.skipIf(process.platform === "win32").each([
+  { name: "owned success", state: "Shutdown", cleanup: true },
+  { name: "prebooted success", state: "Booted", cleanup: false },
+  { name: "selector failure", state: "Shutdown", selector: 39, cleanup: false, failure: 1 },
+  { name: "boot failure", state: "Shutdown", boot: 41, cleanup: true, failure: 41 },
+  { name: "preparation failure", state: "Shutdown", prepare: 42, cleanup: true, failure: 42 },
+  {
+    name: "test failure survives cleanup failure",
+    state: "Shutdown",
+    test: 43,
+    shutdown: 44,
+    cleanup: true,
+    failure: 43,
+  },
+  { name: "cleanup failure is best effort", state: "Shutdown", shutdown: 44, cleanup: true },
+  { name: "prebooted test failure", state: "Booted", test: 43, cleanup: false, failure: 43 },
+])("preserves iPad ownership and original status on $name", (scenario) => {
+  const { result, commands } = runSimulatorStep("voice", [iosStep], {
+    IOS_SIMULATOR_ID: "watch-fixture",
+    IPAD_FIXTURE_STATE: scenario.state,
+    IPAD_SELECTOR_EXIT: String(scenario.selector ?? 0),
+    IPAD_BOOT_EXIT: String(scenario.boot ?? 0),
+    IPAD_PREPARE_EXIT: String(scenario.prepare ?? 0),
+    IPAD_TEST_EXIT: String(scenario.test ?? 0),
+    IPAD_SHUTDOWN_EXIT: String(scenario.shutdown ?? 0),
+  });
+  expect(result.status, result.stderr).toBe(scenario.failure ? 1 : 0);
+  if (scenario.failure) {
+    expect(result.stdout).toContain("failed (exit " + scenario.failure + ")");
+  }
+  const device = "66666666-7777-8888-9999-AAAAAAAAAAAA";
+  const shutdown = argsFor(commands, "xcrun").filter((args) => args[1] === "shutdown");
+  expect(shutdown).toEqual(scenario.cleanup ? [["simctl", "shutdown", device]] : []);
+  expect(argsFor(commands, "prepare")).toEqual(
+    scenario.selector || scenario.boot ? [] : [[device]],
+  );
+  const ipadTests = commands
+    .filter(isTestCommand)
+    .filter((command) => command.args.includes("platform=iOS Simulator,id=" + device));
+  expect(ipadTests).toHaveLength(scenario.selector || scenario.boot || scenario.prepare ? 0 : 1);
+  if (ipadTests.length) {
+    expect(selectedTests(ipadTests[0]!.args)).toEqual(
+      selectors("OpenClawTests", ["IOSConversationAdapterTests", "IOSConversationControllerTests"]),
+    );
+  }
+  // run_check must continue the independent restart proof even after iPad setup/test failure.
+  expect(commands.at(-1)?.args).toEqual(["scripts/ios-access-restart-proof.py", "watch-fixture"]);
 });
 
 it.skipIf(process.platform === "win32")(
@@ -361,7 +442,7 @@ it.skipIf(process.platform === "win32")(
     }
     expect(commands.every((command) => command.settings === undefined)).toBe(true);
     const tests = commands.filter(isTestCommand);
-    expect(tests).toHaveLength(3);
+    expect(tests).toHaveLength(4);
     for (const test of tests) {
       expect(test.args).toContain("test-without-building");
       expect(test.args).not.toContain("test");
@@ -485,16 +566,18 @@ it.skipIf(process.platform === "win32").each([
       : "generic/platform=iOS Simulator",
   );
   const tests = commands.filter(isTestCommand);
-  expect(tests).toHaveLength(groups.length);
-  for (const test of tests) {
+  expect(tests).toHaveLength(groups.length + Number(groups.includes("lifecycle")));
+  for (const [index, test] of tests.entries()) {
     expect(test.args).toContain("test-without-building");
     expect(test.args).not.toContain("test");
     expect(test.args).toContain(
-      groups[0] === "voice"
-        ? "-only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests"
-        : "-only-testing:OpenClawTests/ChatTypingFocusTests",
+      index === 1
+        ? "-only-testing:OpenClawTests/IOSConversationAdapterTests"
+        : groups[0] === "voice"
+          ? "-only-testing:OpenClawTests/TalkRealtimeVoiceSessionCleanupTests"
+          : "-only-testing:OpenClawTests/ChatTypingFocusTests",
     );
-    if (owner.endsWith("/ChatComposerTextViewIOSTests.swift")) {
+    if (index === 0 && owner.endsWith("/ChatComposerTextViewIOSTests.swift")) {
       expect(test.args).toContain("-only-testing:OpenClawTests/ChatComposerTextViewIOSTests");
     }
   }

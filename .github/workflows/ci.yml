@@ -6086,6 +6086,8 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/IOSConversationAdapterTests
+            -only-testing:OpenClawTests/IOSConversationControllerTests
             -only-testing:OpenClawTests/SettingsHubTests
             -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
@@ -6134,6 +6136,43 @@ jobs:
             -collect-test-diagnostics never \
             "${test_args[@]}" \
             "$test_action"
+          run_ipad_conversation_tests() {
+            local ipad_simulator ipad_simulator_id ipad_simulator_state
+            ipad_simulator="$(
+              xcrun simctl list devices available --json | node --input-type=module -e '
+                const chunks = [];
+                for await (const chunk of process.stdin) chunks.push(chunk);
+                const devices = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+                const ipad = Object.values(devices).flat().find(
+                  (device) => device.isAvailable && device.name.startsWith("iPad"),
+                );
+                if (!ipad) throw new Error("No available iPad simulator for conversation tests");
+                process.stdout.write(`${ipad.udid} ${ipad.state}`);
+              '
+            )"
+            read -r ipad_simulator_id ipad_simulator_state <<< "$ipad_simulator"
+            if [[ "$ipad_simulator_state" != "Booted" ]]; then
+              # Capture the ID before function locals leave run_check's strict subshell.
+              trap "ipad_test_status=\$?; xcrun simctl shutdown '$ipad_simulator_id' || true; exit \"\$ipad_test_status\"" EXIT
+            fi
+            xcrun simctl bootstatus "$ipad_simulator_id" -b
+            if [[ -x ./scripts/ios-simulator-prepare.sh ]]; then
+              OPENCLAW_CI_SIMSLIM_BINARY="$RUNNER_TEMP/openclaw-simslim/simslim" \
+                ./scripts/ios-simulator-prepare.sh "$ipad_simulator_id"
+            fi
+            run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawIPadConversationTests.log xcodebuild \
+              "${project_args[@]}" \
+              -scheme OpenClaw \
+              -configuration Debug \
+              -destination "platform=iOS Simulator,id=$ipad_simulator_id" \
+              -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawIPadConversationTests.xcresult \
+              -parallel-testing-enabled NO \
+              -collect-test-diagnostics never \
+              -only-testing:OpenClawTests/IOSConversationAdapterTests \
+              -only-testing:OpenClawTests/IOSConversationControllerTests \
+              "$test_action"
+          }
+          run_check "iPad conversation tests" run_ipad_conversation_tests
           run_check "iOS Access restart proof" python3 scripts/ios-access-restart-proof.py "${IOS_SIMULATOR_ID:?}"
           if [[ "$IOS_CI_PHASE" == "tests" && "$IOS_MAIN_TIER" != "true" ]]; then
             run_check "iOS Watch delivery UI tests" run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
