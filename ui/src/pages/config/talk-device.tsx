@@ -196,18 +196,13 @@ export function VoiceWakeEditor(props: {
         fallback={
           <VoiceWakeSection
             control={
-              <>
-                <textarea
-                  class="settings-input"
-                  aria-label={t("configPage.deviceTalk.triggerWords")}
-                  aria-busy="true"
-                  rows={4}
-                  disabled
-                />
-                <span class="muted" role="status">
-                  {t("common.loading")}
-                </span>
-              </>
+              <textarea
+                class="settings-input"
+                aria-label={t("configPage.deviceTalk.triggerWords")}
+                aria-busy="true"
+                rows={4}
+                disabled
+              />
             }
           />
         }
