@@ -370,7 +370,11 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
           },
         ]),
       );
-      await runJob(announce, {}, { sessionTarget: "current", sessionKey: sourceSessionKey });
+      await runJob(
+        announce,
+        {},
+        { sessionTarget: "isolated", includeRecentChat: true, sessionKey: sourceSessionKey },
+      );
       dispatch({
         sourceSessionKey,
         sourceDeliveryOutcome: messageToolOutcome(

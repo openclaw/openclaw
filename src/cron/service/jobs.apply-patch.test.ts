@@ -16,7 +16,7 @@ function makeJob(overrides: Partial<CronJob> = {}): CronJob {
 
 function makeMainJob(delivery?: CronJob["delivery"]) {
   return makeJob({
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     payload: { kind: "systemEvent", text: "tick" },
     delivery,
   });
@@ -150,11 +150,11 @@ describe("applyJobPatch delivery merge", () => {
   it("clears inherited announce delivery when retargeting to main with bestEffort", () => {
     const job = makeJob();
     applyJobPatch(job, {
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       payload: { kind: "systemEvent", text: "tick" },
       delivery: { bestEffort: false },
     });
-    expect(job).toMatchObject({ sessionTarget: "main", delivery: undefined });
+    expect(job).toMatchObject({ sessionTarget: "session:main", delivery: undefined });
   });
 
   it("preserves inherited main-session webhook mode in a partial delivery update", () => {

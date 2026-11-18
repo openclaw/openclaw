@@ -1,12 +1,13 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Loading, Show } from "solid-js";
 import type { AgentSelectOption } from "../../components/agent-select-types.ts";
-import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
+import "../../components/agent-select-registration.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
+import { Picker } from "../../components/solid/select-picker.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -20,6 +21,7 @@ import {
   errorIdForField,
   inputIdForField,
   CronSelect,
+  ToggleRow,
   FieldRow,
   TrayInput,
 } from "./view-fields.tsx";
@@ -38,12 +40,84 @@ type EditorProps = CronProps & {
   mode: CronPanelMode;
 };
 
+function PlacementConversation(
+  props: CronProps & {
+    field: "executionConversation" | "recentChatConversation";
+    disabled: boolean;
+  },
+) {
+  const [search, setSearch] = createSignal("");
+  const recentChat = () => props.field === "recentChatConversation";
+  const agentId = () => props.form.agentId.trim() || props.agentsList?.defaultId;
+  const selected = () => (recentChat() ? props.form.sessionKey : props.form.sessionTarget.slice(8));
+  const label = () =>
+    t(recentChat() ? "cron.form.recentChatConversation" : "cron.form.conversation");
+  const result = createMemo(async () => {
+    const agent = agentId();
+    const query = search().trim();
+    if (!props.connected || !agent || !props.listConversations) return undefined;
+    return await props.listConversations(agent, query);
+  });
+  const options = createMemo(() => {
+    const rows = (result()?.sessions ?? []).map((row) => ({
+      value: row.key,
+      label: row.displayName || row.label || row.key,
+    }));
+    const primary =
+      props.agentsList?.scope === "global"
+        ? "global"
+        : agentId() && `agent:${agentId()}:${props.agentsList?.mainKey ?? "main"}`;
+    if (primary) {
+      const index = rows.findIndex((row) => row.value === primary);
+      if (index >= 0) rows.splice(index, 1);
+      rows.unshift({ value: primary, label: t("cron.form.mainConversation") });
+    }
+    const key = selected();
+    if (key && !rows.some((row) => row.value === key)) rows.unshift({ value: key, label: key });
+    return [{ value: "", label: t("cron.form.chooseConversation"), disabled: true }, ...rows];
+  });
+  const id = () => inputIdForField(props.field);
+  return (
+    <FieldRow
+      label={label()}
+      controlId={id()}
+      required
+      stacked
+      control={
+        <>
+          <input
+            class="settings-input"
+            type="search"
+            value={search()}
+            aria-label={t("cron.form.searchConversations")}
+            placeholder={t("cron.form.searchConversations")}
+            disabled={props.disabled}
+            onChange={(event) => setSearch(event.currentTarget.value)}
+          />
+          <Loading fallback={<span role="status">{t("common.loading")}</span>}>
+            <Picker
+              id={id()}
+              label={label()}
+              value={selected()}
+              options={options()}
+              disabled={props.disabled}
+              onChange={(key) =>
+                props.onFormChange(
+                  recentChat() ? { sessionKey: key } : { sessionTarget: `session:${key}` },
+                )
+              }
+            />
+          </Loading>
+        </>
+      }
+    />
+  );
+}
+
 function payloadFacts(props: CronProps) {
   const payloadLocked = () => props.form.payloadLocked;
   const isAgentTurn = () => !payloadLocked() && props.form.payloadKind === "agentTurn";
-  const supportsAnnounce = () =>
-    props.form.payloadKind === "agentTurn" ||
-    (props.form.sessionTarget !== "main" && payloadLocked());
+  const supportsAnnounce = () => props.form.payloadKind === "agentTurn" || payloadLocked();
   const selectedDeliveryMode = () =>
     props.form.deliveryMode === "announce" && !supportsAnnounce()
       ? "none"
@@ -111,8 +185,7 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
   const { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode } =
     payloadFacts(props);
   const { blockingFields, blockedByValidation } = createSubmitState(props);
-  const sessionTarget = () => props.form.sessionTarget;
-  const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
+  const continues = () => props.form.sessionTarget !== "isolated";
   const formDisabled = () => props.busy || !props.canManage;
   const editableJob = () =>
     props.mode === "job" && props.phoneLayout && props.canManage ? props.editingJob : undefined;
@@ -147,16 +220,34 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
               {...props}
               field="sessionTarget"
               label={t("cron.form.runsIn")}
-              help={t("cron.form.sessionHelp")}
-              quietHelp
+              value={continues() ? "session:" : "isolated"}
+              onFormChange={(patch) => props.onFormChange({ ...patch, includeRecentChat: false })}
               options={[
-                { value: "main", label: t("cron.form.mainSession") },
                 { value: "isolated", label: t("cron.form.isolatedSession") },
-                ...(knownSessionTarget()
-                  ? []
-                  : [{ value: sessionTarget(), label: sessionTarget() }]),
+                { value: "session:", label: t("cron.form.continueConversation") },
               ]}
             />
+            <Show when={continues()}>
+              <PlacementConversation
+                {...props}
+                field="executionConversation"
+                disabled={formDisabled()}
+              />
+            </Show>
+            <Show when={!continues() && isAgentTurn()}>
+              <ToggleRow
+                {...props}
+                field="includeRecentChat"
+                label={t("cron.form.includeRecentChat")}
+              />
+              <Show when={props.form.includeRecentChat}>
+                <PlacementConversation
+                  {...props}
+                  field="recentChatConversation"
+                  disabled={formDisabled()}
+                />
+              </Show>
+            </Show>
           </fieldset>
         </div>
         <fieldset class="cron-editor-section cron-editor-extra" disabled={formDisabled()}>

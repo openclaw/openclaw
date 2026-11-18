@@ -250,6 +250,7 @@ export function createJob(
       ? { cyberAccessProgram: input.cyberAccessProgram }
       : {}),
     sessionTarget: input.sessionTarget,
+    ...(input.includeRecentChat === true ? { includeRecentChat: true } : {}),
     wakeMode: input.wakeMode,
     payload:
       input.payload.kind === "script"
@@ -366,6 +367,9 @@ export function applyJobPatch(
   }
   if (patch.sessionTarget) {
     job.sessionTarget = patch.sessionTarget;
+    if (patch.sessionTarget !== "isolated") {
+      delete job.includeRecentChat;
+    }
   }
   if ("activeHours" in patch) {
     if (patch.activeHours == null) {
@@ -390,6 +394,13 @@ export function applyJobPatch(
   }
   if (patch.wakeMode) {
     job.wakeMode = patch.wakeMode;
+  }
+  if (patch.includeRecentChat !== undefined) {
+    if (patch.includeRecentChat) {
+      job.includeRecentChat = true;
+    } else {
+      delete job.includeRecentChat;
+    }
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
@@ -418,11 +429,7 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
-  if (
-    job.sessionTarget === "main" &&
-    job.payload.kind !== "agentTurn" &&
-    job.delivery?.mode !== "webhook"
-  ) {
+  if (job.payload.kind === "systemEvent" && job.delivery?.mode !== "webhook") {
     assertFailureDestinationSupport(job);
     // Retargeting may discard inherited announce routes, but must not silently
     // accept a newly authored delivery request before cleanup.

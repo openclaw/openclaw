@@ -135,7 +135,7 @@ describe("cron service timer seam coverage", () => {
     expect(runSessionEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "heartbeat seam tick",
-        job: expect.objectContaining({ id: "main-heartbeat-job", sessionTarget: "main" }),
+        job: expect.objectContaining({ id: "main-heartbeat-job", sessionTarget: "session:main" }),
       }),
     );
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -308,7 +308,7 @@ describe("cron service timer seam coverage", () => {
 
     await expect(
       executeJobCore(state, {
-        ...createDueScriptJob({ now, sessionTarget: "main" }),
+        ...createDueScriptJob({ now, sessionTarget: "session:main" }),
         agentId: undefined,
       }),
     ).resolves.toMatchObject({
@@ -376,7 +376,8 @@ describe("cron service timer seam coverage", () => {
 
     await writeJobs({
       ...createDueIsolatedAgentJob({ now }),
-      sessionTarget: "current",
+      sessionTarget: "isolated",
+      includeRecentChat: true,
       sessionKey: "agent:finn:telegram:direct:42",
     });
 

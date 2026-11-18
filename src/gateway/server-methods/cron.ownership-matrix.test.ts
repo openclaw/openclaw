@@ -510,7 +510,7 @@ describe("cron ownership access matrix", () => {
       enabled: true,
       declarationKey: "daily-check",
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "replacement" },
     };
@@ -648,7 +648,10 @@ describe("cron ownership access matrix", () => {
       "scoped",
       {
         id: dormant.id,
-        patch: { sessionTarget: "main", payload: { kind: "systemEvent", text: "Check status" } },
+        patch: {
+          sessionTarget: "session:main",
+          payload: { kind: "systemEvent", text: "Check status" },
+        },
       },
       dormant.context,
     );

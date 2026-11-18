@@ -146,8 +146,7 @@ export async function replayInferenceRuntimes(
     return undefined;
   }
   const target = resolveCronSessionTargetSessionKey(job.sessionTarget);
-  const currentRow =
-    job.sessionTarget === "current" && job.sessionKey ? readRow(job.sessionKey) : undefined;
+  const currentRow = job.includeRecentChat && job.sessionKey ? readRow(job.sessionKey) : undefined;
   const entry = target
     ? readRow(target)
     : currentRow
@@ -522,7 +521,7 @@ async function main() {
     const rows: ReplayRow[] = [];
     const fixtures = new Map<string, ScheduledContextFixture>();
     for (const job of jobs) {
-      if (job.sessionTarget === "main") {
+      if (job.payload.kind === "systemEvent") {
         continue;
       }
       const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));

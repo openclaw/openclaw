@@ -82,7 +82,7 @@ it("advances an already executed daily slot during recovery (#17852)", () => {
     enabled: true,
     schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
     payload: { kind: "systemEvent", text: "daily task" },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     createdAtMs: threeAM - dayMs,
     updatedAtMs: threeAM - dayMs,

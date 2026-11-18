@@ -10,12 +10,14 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
+import { resolveCanonicalMainSessionKey } from "../../../config/sessions/main-session-key.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { classifyCronAgentTurnShellPrompt } from "../../../cron/agent-turn-command-prompt.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
-import { resolveCronCurrentSessionTarget } from "../../../cron/session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
@@ -54,6 +56,7 @@ type CronStoreIssueKey =
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
   | "legacyDeliveryMode"
+  | "legacySessionTarget"
   | "migratedScheduledToolPolicy"
   | "reconciledOwnerAccount"
   | "invalidSchedule"
@@ -102,6 +105,7 @@ type NormalizeCronStoreJobsResult = {
   legacyTriggerScriptJobs: string[];
   unsupportedLegacyTriggerScriptJobs: string[];
   unsupportedDeliveryModeJobs: string[];
+  pausedSessionTargetJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
   legacyGatewayExecJobs: string[];
@@ -158,6 +162,7 @@ export function canRepairCronDeliveryForDoctor(delivery: unknown): boolean {
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
   options: {
+    cfg?: OpenClawConfig;
     migrateCodexModelRefs?: boolean;
     shouldMigrateCodexRuntimePolicyTarget?: (target: CronCodexRuntimePolicyTarget) => boolean;
   } = {},
@@ -168,6 +173,7 @@ export function normalizeStoredCronJobs(
   const legacyTriggerScriptJobs: string[] = [];
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
   const unsupportedDeliveryModeJobs: string[] = [];
+  const pausedSessionTargetJobs: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
   const legacyScheduledToolPolicyJobs: string[] = [];
   const invalidScheduledToolPolicyJobs: string[] = [];
@@ -461,30 +467,56 @@ export function normalizeStoredCronJobs(
       payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script";
     const rawSessionTarget = normalizeOptionalString(raw.sessionTarget) ?? "";
     const loweredSessionTarget = normalizeLowercaseStringOrEmpty(rawSessionTarget);
-    if (
-      loweredSessionTarget === "main" ||
-      loweredSessionTarget === "isolated" ||
-      loweredSessionTarget === "current"
-    ) {
-      const sessionTarget = resolveCronCurrentSessionTarget({
-        sessionTarget: loweredSessionTarget,
-        sessionKey: normalizeOptionalString(raw.sessionKey),
-      });
-      setField(raw, "sessionTarget", sessionTarget);
-    } else if (loweredSessionTarget.startsWith("session:")) {
-      const customSessionId = rawSessionTarget.slice(8).trim();
-      if (customSessionId) {
-        setField(raw, "sessionTarget", `session:${customSessionId}`);
+    const wasMain =
+      loweredSessionTarget === "main" || (!rawSessionTarget && payloadKind === "systemEvent");
+    const pause = (reason: string) => {
+      setField(raw, "enabled", false);
+      raw.state = { ...asNullableRecord(raw.state), lastError: reason };
+      pausedSessionTargetJobs.push(
+        `Paused automation ${jobName ?? String(raw.id ?? "(unnamed)")}: ${reason}`,
+      );
+    };
+    if (wasMain) {
+      const { cfg } = options;
+      const agentId =
+        normalizeOptionalString(raw.agentId) ?? tryResolveAmbientOwnerAgentId(cfg ?? {});
+      const sessionKey =
+        agentId &&
+        resolveCanonicalMainSessionKey({
+          agentId,
+          mainKey: cfg?.session?.mainKey,
+          sessionScope: cfg?.session?.scope,
+        });
+      if (sessionKey && agentId) {
+        setField(raw, "agentId", agentId);
+        setField(raw, "sessionTarget", `session:${sessionKey}`);
+      } else {
+        setField(raw, "sessionTarget", "session:main");
+        pause(
+          "The agent for its former main conversation could not be determined. Choose a conversation before re-enabling.",
+        );
       }
-    } else {
-      setField(raw, "sessionTarget", isRunnablePayload ? "isolated" : "main");
+      trackChange("legacySessionTarget");
+    } else if (loweredSessionTarget === "current") {
+      setField(raw, "sessionTarget", "isolated");
+      const sessionKey = normalizeOptionalString(raw.sessionKey);
+      if (sessionKey && !sessionKey.includes("\0") && payloadKind === "agentTurn") {
+        setField(raw, "includeRecentChat", true);
+      } else {
+        pause(
+          "The former current-conversation target has no usable creating conversation for an agent turn. Review where it should run before re-enabling.",
+        );
+      }
+      trackChange("legacySessionTarget");
+    } else if (loweredSessionTarget.startsWith("session:")) {
+      const key = rawSessionTarget.slice(8).trim();
+      if (key) {
+        setField(raw, "sessionTarget", `session:${key}`);
+      }
+    } else if (loweredSessionTarget === "isolated" || !rawSessionTarget) {
+      setField(raw, "sessionTarget", "isolated");
     }
-
-    const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
-    const isIsolatedTarget =
-      sessionTarget === "isolated" ||
-      sessionTarget === "current" ||
-      sessionTarget.startsWith("session:");
+    const isIsolatedTarget = typeof raw.sessionTarget === "string" && !wasMain;
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery,
       payload: payloadRecord,
@@ -492,6 +524,9 @@ export function normalizeStoredCronJobs(
 
     if (!delivery && isIsolatedTarget && isRunnablePayload) {
       raw.delivery = normalizedLegacy.delivery ?? { mode: "announce" };
+      mutated = true;
+    } else if (!delivery && wasMain && isRunnablePayload && !normalizedLegacy.delivery) {
+      raw.delivery = { mode: "none" };
       mutated = true;
     } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
       raw.delivery = normalizedLegacy.delivery;
@@ -544,6 +579,7 @@ export function normalizeStoredCronJobs(
     legacyTriggerScriptJobs,
     unsupportedLegacyTriggerScriptJobs,
     unsupportedDeliveryModeJobs,
+    pausedSessionTargetJobs,
     legacyScheduledToolPolicyJobs,
     invalidScheduledToolPolicyJobs,
     legacyGatewayExecJobs,

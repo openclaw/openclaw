@@ -110,7 +110,7 @@ describe("createLazyGatewayCronState", () => {
       createdAtMs: 1,
       updatedAtMs: 1,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
       state: {},

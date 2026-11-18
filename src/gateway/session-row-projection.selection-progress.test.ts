@@ -194,7 +194,7 @@ describe("automation bindings", () => {
           { sessionId: `${agentId}-global`, updatedAt: 1 },
         );
       }
-      const binding = cronTestJob({ id: "binding", sessionTarget: "main" });
+      const binding = cronTestJob({ id: "binding", sessionTarget: "session:main" });
       const jobs = [binding];
       registerSessionAutomationSource({
         getJobs: () => jobs,

@@ -176,12 +176,15 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
-  const normalized = normalizeStoredCronJobs(rawJobs);
+  const normalized = normalizeStoredCronJobs(rawJobs, { cfg: params.cfg });
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     recordFinding({
       message: line.replace(/^- /u, ""),
       requirement: "legacy-cron-store-shape",
     });
+  }
+  for (const message of normalized.pausedSessionTargetJobs) {
+    recordFinding({ message, requirement: "legacy-cron-session-target" });
   }
   for (const job of normalized.unsupportedDeliveryModeJobs) {
     recordFinding({
@@ -378,7 +381,7 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
 
-  const normalized = normalizeStoredCronJobs(rawJobs);
+  const normalized = normalizeStoredCronJobs(rawJobs, { cfg: params.cfg });
   if (normalized.unsupportedDeliveryModeJobs.length > 0) {
     note(
       `Unsupported cron delivery modes were left unchanged: ${normalized.unsupportedDeliveryModeJobs.join(", ")}. Review their intended delivery and set mode to "none", "announce", or "webhook".`,

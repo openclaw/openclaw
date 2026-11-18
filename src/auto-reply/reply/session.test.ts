@@ -2478,7 +2478,7 @@ describe("drainFormattedSystemEvents", () => {
 
   it("leaves tagged cron events queued during heartbeat runs instead of re-rendering them (#44922)", async () => {
     try {
-      // A `sessionTarget: "main"` cron systemEvent is enqueued tagged `cron:<jobId>`
+      // A `sessionTarget: "session:main"` cron systemEvent is enqueued tagged `cron:<jobId>`
       // and is surfaced by the heartbeat's dedicated reminder prompt. The generic
       // render must not also emit it as a raw `System:` line during that heartbeat
       // run, or the model sees the same text twice.

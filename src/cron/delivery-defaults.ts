@@ -165,7 +165,6 @@ export function shouldDefaultCronDeliveryToAnnounce(params: {
   }
   return (
     params.sessionTarget === "isolated" ||
-    params.sessionTarget === "current" ||
     (typeof params.sessionTarget === "string" && params.sessionTarget.startsWith("session:"))
   );
 }

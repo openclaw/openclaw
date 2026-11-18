@@ -253,7 +253,7 @@ describe("buildScheduledExecutionContext principals", () => {
 
   it("runs main-session jobs in the main session, like session:<key>", () => {
     const context = ready(
-      job({ sessionTarget: "main" }),
+      job({ sessionTarget: "session:main" }),
       facts({ runSessionKey: MAIN_KEY, agentSandboxMode: "non-main" }),
     );
     expect(context.placement).toBe("in-session");

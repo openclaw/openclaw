@@ -23,7 +23,7 @@ it("disables persisted main jobs with empty systemEvent text after skipping them
         name: "empty event",
         enabled: true,
         schedule: { kind: "at", at: new Date(atMs).toISOString() },
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         wakeMode: "now",
         payload: { kind: "systemEvent", text: "   " },
       });

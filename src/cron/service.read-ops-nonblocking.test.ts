@@ -131,7 +131,7 @@ function systemEventJob(id: string, schedule: CronJob["schedule"]) {
     name: id,
     enabled: true,
     schedule,
-    sessionTarget: "main" as const,
+    sessionTarget: "session:main" as const,
     wakeMode: "next-heartbeat" as const,
     payload: { kind: "systemEvent" as const, text: id },
   };
@@ -556,7 +556,7 @@ describe("CronService read operations", () => {
         recurringJob("long-running-job", now),
         {
           ...recurringJob("later-job", now + 10_000),
-          sessionTarget: "main",
+          sessionTarget: "session:main",
           payload: { kind: "systemEvent", text: "later work" },
         },
       ],

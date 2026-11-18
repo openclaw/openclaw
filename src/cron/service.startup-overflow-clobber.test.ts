@@ -31,7 +31,7 @@ describe("CronService startup catch-up repair scoping", () => {
     return makeCronJob({
       id,
       schedule,
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       payload: { kind: "systemEvent", text: `tick-${id}` },
       state: { nextRunAtMs },
     });

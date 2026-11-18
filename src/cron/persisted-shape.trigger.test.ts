@@ -7,7 +7,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
     schedule: { kind: "every", everyMs: 30_000 },
     trigger: { script: "json({ fire: true })" },
     payload: { kind: "systemEvent", text: "changed" },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     ...overrides,
   };
 }

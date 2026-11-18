@@ -30,7 +30,7 @@ export async function prepareCronInferenceDiagnosticSession(params: {
   cfg: OpenClawConfig;
   agentId: string;
   signal?: AbortSignal;
-  job: Pick<CronStoredJob, "id" | "sessionTarget" | "sessionKey">;
+  job: Pick<CronStoredJob, "id" | "sessionTarget" | "sessionKey" | "includeRecentChat">;
 }) {
   const { cfg, agentId, job, signal } = params;
   signal?.throwIfAborted();
@@ -59,7 +59,7 @@ export async function prepareCronInferenceDiagnosticSession(params: {
     agentId,
     sessionKey,
     sourceSessionKey:
-      job.sessionTarget === "current" && job.sessionKey
+      job.includeRecentChat === true && job.sessionKey
         ? resolveCronAgentSessionKey({ cfg, agentId, sessionKey: job.sessionKey })
         : undefined,
     forceNew: isDetachedCronSessionTarget(job.sessionTarget),

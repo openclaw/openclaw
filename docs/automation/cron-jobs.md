@@ -20,7 +20,7 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
     ```bash
     openclaw automations create "2027-02-01T16:00:00Z" \
       --name "Reminder" \
-      --session main \
+      --session "session:agent:main:main" \
       --system-event "Reminder: check the automations docs draft" \
       --wake now \
       --delete-after-run
@@ -86,7 +86,7 @@ This page is an index. Each section below moved to a child page, and every ancho
 - <a id="script-payloads"></a>[Script payloads](/automation/cron-jobs/payloads#script-payloads)
 - <a id="execution-styles"></a>[Execution styles](/automation/cron-jobs/payloads#execution-styles)
 - <a id="codex-apps-in-scheduled-automations"></a>[Codex apps in scheduled automations](/automation/cron-jobs/payloads#codex-apps-in-scheduled-automations)
-- <a id="main-session-vs-current-vs-isolated-vs-custom"></a>[Main session vs current vs isolated vs custom](/automation/cron-jobs/payloads#main-session-vs-current-vs-isolated-vs-custom)
+- <a id="main-session-vs-current-vs-isolated-vs-custom"></a>[New session each time vs continue a conversation](/automation/cron-jobs/payloads#main-session-vs-current-vs-isolated-vs-custom)
 - <a id="what-fresh-session-means-for-isolated-jobs"></a>[What 'fresh session' means for isolated jobs](/automation/cron-jobs/payloads#what-fresh-session-means-for-isolated-jobs)
 - <a id="unattended-run-contract"></a>[Unattended run contract](/automation/cron-jobs/payloads#unattended-run-contract)
 - <a id="subagent-and-discord-delivery"></a>[Subagent and Discord delivery](/automation/cron-jobs/payloads#subagent-and-discord-delivery)

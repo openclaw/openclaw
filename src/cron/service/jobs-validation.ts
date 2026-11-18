@@ -91,50 +91,26 @@ function assertCronScriptSyntax(script: string, subject: "script payload" | "tri
 
 /** Validates that session target and payload kind form a supported cron job shape. */
 export function assertSupportedJobSpec(
-  job: Pick<CronJob, "sessionTarget"> & { payload: Pick<CronJob["payload"], "kind"> },
+  job: Pick<CronJob, "sessionTarget" | "includeRecentChat" | "sessionKey"> & {
+    payload: Pick<CronJob["payload"], "kind">;
+  },
 ) {
-  if (typeof job.sessionTarget !== "string") {
-    throw new Error(
-      'cron job is missing sessionTarget; expected "main", "isolated", "current", or "session:<id>"',
-    );
-  }
-  const isConversationTarget =
-    job.sessionTarget === "current" || job.sessionTarget.startsWith("session:");
-  if (job.sessionTarget.startsWith("session:")) {
+  const continuing =
+    typeof job.sessionTarget === "string" && job.sessionTarget.startsWith("session:");
+  if (continuing) {
     assertSafeCronSessionTargetId(job.sessionTarget.slice(8));
+  } else if (job.sessionTarget !== "isolated") {
+    throw new Error('Expected cron sessionTarget "isolated" or "session:<key>"');
+  }
+  if (job.payload.kind === "systemEvent" && !continuing) {
+    throw new Error("A system event requires an explicit conversation: session:<key>");
   }
   if (
-    job.sessionTarget === "main" &&
-    job.payload.kind !== "systemEvent" &&
-    job.payload.kind !== "agentTurn" &&
-    job.payload.kind !== "script"
+    job.includeRecentChat &&
+    (continuing || job.payload.kind !== "agentTurn" || !job.sessionKey?.trim())
   ) {
     throw new Error(
-      'cron sessionTarget "main" requires payload.kind="systemEvent", "agentTurn", or "script"',
-    );
-  }
-  if (
-    job.payload.kind === "script" &&
-    job.sessionTarget !== "main" &&
-    job.sessionTarget !== "isolated"
-  ) {
-    throw new Error(
-      `cron sessionTarget "${job.sessionTarget}" cannot run script payloads: scripts run headless and support only "main" or "isolated"; to run a turn in an existing conversation use payload {kind:"agentTurn",message} with sessionTarget "session:<key>"`,
-    );
-  }
-  if (isConversationTarget && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
-    throw new Error(
-      `cron sessionTarget "${job.sessionTarget}" cannot run ${job.payload.kind}: systemEvent only runs in the main session; for sessionTarget "${job.sessionTarget}" use payload {kind:"agentTurn",message}`,
-    );
-  }
-  if (
-    job.sessionTarget === "isolated" &&
-    job.payload.kind !== "agentTurn" &&
-    job.payload.kind !== "command" &&
-    job.payload.kind !== "script"
-  ) {
-    throw new Error(
-      'cron sessionTarget "isolated" requires payload.kind="agentTurn", "command", or "script"',
+      "Include recent chat requires a new-session agent turn and a creating conversation",
     );
   }
 }
@@ -312,12 +288,8 @@ export function assertDeliverySupport(
     // Webhook delivery is standalone and does not need an isolated chat target.
     return;
   }
-  const isIsolatedLike =
-    job.sessionTarget === "isolated" ||
-    job.sessionTarget === "current" ||
-    job.sessionTarget.startsWith("session:");
-  if (!isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('cron channel delivery config is only supported for sessionTarget="isolated"');
+  if (job.payload.kind === "systemEvent") {
+    throw new Error("System event payloads do not support announce delivery");
   }
 }
 
@@ -377,11 +349,7 @@ export function assertFailureDestinationSupport(
   ) {
     return;
   }
-  if (
-    job.sessionTarget === "main" &&
-    job.payload.kind !== "agentTurn" &&
-    job.delivery?.mode !== "webhook"
-  ) {
+  if (job.payload.kind === "systemEvent" && job.delivery?.mode !== "webhook") {
     throw new Error(
       'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
     );

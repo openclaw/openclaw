@@ -20,7 +20,7 @@ const WEBHOOK = "https://example.invalid/cron";
 const input = (overrides: Partial<CronJobCreate> = {}) =>
   cronTestInput({
     name: "job",
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "tick" },
     ...overrides,
@@ -435,7 +435,7 @@ it.each(["systemEvent", "agentTurn"] as const)(
     applyJobPatch(current, { name: "renamed" }, { defaultAgentId: "main" });
     expect(current).toMatchObject({
       agentId: "custom-agent",
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       name: "renamed",
     });
   },

@@ -10,7 +10,7 @@ function streamCandidate(schedule: Record<string, unknown>) {
     id: "job-1",
     schedule: { kind: "stream", command: ["watch-source"], ...schedule },
     payload: { kind: "systemEvent", text: "batch" },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
   };
 }
 

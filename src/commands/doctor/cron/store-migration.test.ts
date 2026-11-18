@@ -57,6 +57,7 @@ const agentPayload = (fields: Record<string, unknown> = {}) => ({
 });
 const codexJob = (overrides: Record<string, unknown> = {}) =>
   makeLegacyJob({
+    sessionTarget: "isolated",
     schedule: { ...every },
     payload: agentPayload({ model: "codex/gpt-5.6-sol" }),
     ...overrides,
@@ -384,6 +385,49 @@ it("normalizes isolated legacy jobs without mutating runtime code paths", () => 
   expect("isolation" in expectDefined(job, "job test invariant")).toBe(false);
 });
 
+it("converts saved current jobs without changing their linked conversation", () => {
+  const sessionKey = "agent:main:dashboard:garden";
+  const sourceConversation = { sessionKey, sessionId: "source", lifecycleRevision: "revision" };
+  const { job, result } = normalizeLegacy({
+    sessionTarget: "current",
+    sessionKey,
+    sourceConversation,
+    payload: agentPayload(),
+  });
+  expect(job).toMatchObject({
+    sessionTarget: "isolated",
+    includeRecentChat: true,
+    sessionKey,
+    sourceConversation,
+    enabled: true,
+  });
+  expect(result.pausedSessionTargetJobs).toEqual([]);
+  expect(normalizeStoredCronJobs(result.jobs).mutated).toBe(false);
+});
+
+it("pins the original agent's configured main conversation without adding announce delivery", () => {
+  const { job, result } = normalizeOneJob(
+    makeLegacyJob({ agentId: "gardener", payload: agentPayload() }),
+    { cfg: { session: { mainKey: "desk" } } },
+  );
+  expect(job).toMatchObject({
+    sessionTarget: "session:agent:gardener:desk",
+    delivery: { mode: "none" },
+    enabled: true,
+  });
+  expect(result.pausedSessionTargetJobs).toEqual([]);
+});
+
+it("pauses and preserves a current job when its creating conversation is missing", () => {
+  const { job, result } = normalizeLegacy({ sessionTarget: "current", payload: agentPayload() });
+  expect(job).toMatchObject({ sessionTarget: "isolated", enabled: false, payload: agentPayload() });
+  expect(job).not.toHaveProperty("includeRecentChat");
+  expect(result.pausedSessionTargetJobs).toEqual([
+    expect.stringContaining("no usable creating conversation"),
+  ]);
+  expect(result.removedJobs).toEqual([]);
+});
+
 const at = "2026-04-01T10:00:00.000Z";
 it.each([
   { at: "2026-04-01T12:00:00+02:00" },
@@ -421,7 +465,7 @@ it("migrates legacy string schedules and command-only payloads (#18445)", () => 
   expect(result.mutated).toBe(true);
   expect(job).toMatchObject({
     schedule: { kind: "cron", expr: "0 */2 * * *" },
-    sessionTarget: "main",
+    sessionTarget: "session:agent:main:main",
     wakeMode: "now",
   });
   expect(job?.payload).toEqual({ kind: "systemEvent", text: "bash /tmp/imessage-refresh.sh" });
@@ -470,7 +514,7 @@ it.each([
   ["current", undefined, "isolated", undefined],
   ["current", " \t ", "isolated", undefined],
   ["current", 42, "isolated", undefined],
-  [" CURRENT ", sourceSessionKey, "current", sourceSessionKey],
+  [" CURRENT ", sourceSessionKey, "isolated", sourceSessionKey],
   [" ISOLATED ", sourceSessionKey, "isolated", sourceSessionKey],
   [" SESSION: ProjectAlpha ", sourceSessionKey, "session:ProjectAlpha", sourceSessionKey],
   [undefined, sourceSessionKey, "isolated", sourceSessionKey],
@@ -493,6 +537,17 @@ it.each([
       ...structuredClone(job),
       sessionTarget: target,
       sessionKey: binding,
+      ...(sessionTarget?.trim().toLowerCase() === "current" && binding
+        ? { includeRecentChat: true }
+        : {}),
+      ...(sessionTarget === "current" && !binding
+        ? {
+            state: {
+              consecutiveErrors: 2,
+              lastError: expect.stringContaining("no usable creating conversation"),
+            },
+          }
+        : {}),
     };
 
     const result = normalizeStoredCronJobs([job]);

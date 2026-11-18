@@ -164,7 +164,12 @@ export async function resolveDeliveryTarget(
     CronDeliveryPlan,
     "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
   > &
-    Partial<Pick<CronStoredJob, "sessionKey" | "sessionTarget" | "sourceConversation">>,
+    Partial<
+      Pick<
+        CronStoredJob,
+        "sessionKey" | "sessionTarget" | "includeRecentChat" | "sourceConversation"
+      >
+    >,
   options?: {
     dryRun?: boolean;
     inheritSessionThread?: boolean;
@@ -224,7 +229,7 @@ export async function resolveDeliveryTarget(
     })());
   const { rawSessionKey, threadSessionKey, usedSharedMainFallback } = sessionContext;
   const hasConversationCompletion =
-    jobPayload.sessionTarget === "current" || jobPayload.sourceConversation !== undefined;
+    jobPayload.includeRecentChat === true || jobPayload.sourceConversation !== undefined;
   // A missing creating conversation cannot inherit another conversation's shared route.
   const main =
     hasConversationCompletion && usedSharedMainFallback ? undefined : sessionContext.main;

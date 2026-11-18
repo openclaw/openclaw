@@ -60,7 +60,7 @@ function isPendingLegacyHeartbeatRetry(job: DoctorCronJob): job is CronJob & {
 } {
   return (
     job.schedule.kind === "at" &&
-    job.sessionTarget === "main" &&
+    job.sessionTarget.startsWith("session:") &&
     job.payload.kind === "systemEvent" &&
     (job.state.lastRunStatus ?? job.state.lastStatus) === "skipped" &&
     job.state.lastError === "disabled" &&

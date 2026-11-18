@@ -15,10 +15,6 @@ export function resolveCronBindParent(
   if (job.pluginCommand) {
     return { refusal: "cron bind does not apply to plugin command automations." };
   }
-  // `main` jobs run inside the agent's main session and record no creating conversation.
-  if (job.sessionTarget === "main") {
-    return { refusal: "cron bind does not apply to main-session automations." };
-  }
   // The principal kind never depends on agentId; it only labels an exact parent's agent,
   // which bind does not read.
   const principal = resolveScheduledPrincipal(job, { trigger: "cron", agentId: job.agentId ?? "" });

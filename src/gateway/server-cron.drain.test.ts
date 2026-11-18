@@ -112,7 +112,7 @@ async function startGatewayCron(
     enabled: true,
     schedule: { kind: "stream", command: ["source"] },
     payload: { kind: "systemEvent", text: "event" },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
   });
   return fixture;
@@ -205,7 +205,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       name: "stopped before reservation",
       enabled: true,
       schedule: { kind: "at", at: new Date(original.clock.clock.now() + 1_000).toISOString() },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "must remain due" },
     });

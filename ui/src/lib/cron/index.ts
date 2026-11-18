@@ -265,6 +265,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? { deleteAfterRun: form.deleteAfterRun }
         : {}),
       sessionTarget: form.sessionTarget,
+      includeRecentChat: form.sessionTarget === "isolated" && form.includeRecentChat,
       wakeMode: form.wakeMode,
       trigger,
       activeHours: form.activeHoursEnabled

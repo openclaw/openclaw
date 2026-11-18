@@ -70,7 +70,7 @@ async function service(overrides: Partial<CronServiceDeps> = {}, now = Date.now(
 const jobInput = (overrides: Partial<CronJobCreate> = {}) =>
   cronTestInput({
     agentId: "main",
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "now",
     delivery: { mode: "none" },
     ...overrides,

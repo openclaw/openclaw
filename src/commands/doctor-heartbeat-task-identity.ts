@@ -53,11 +53,11 @@ export function heartbeatTaskDeclarationKey(
 export function isHeartbeatTaskCronJob(job: DoctorCronJob): job is CronJob & {
   declarationKey: string;
   payload: Extract<CronJob["payload"], { kind: "systemEvent" }>;
-  sessionTarget: "main";
+  sessionTarget: `session:${string}`;
 } {
   return (
     isHeartbeatTaskDeclarationKey(job.declarationKey) &&
     job.payload.kind === "systemEvent" &&
-    job.sessionTarget === "main"
+    job.sessionTarget.startsWith("session:")
   );
 }

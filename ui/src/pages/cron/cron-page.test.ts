@@ -309,7 +309,7 @@ it("clears a failed job link when opening another link", async () => {
 it("drops pending automation scratch when admin access is removed", async () => {
   const job = createCronViewJob("migrated-job", {
     payload: { kind: "agentTurn", message: "Review the checklist" },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
   });
   const scratch = createDeferred<object>();
   const request = cronRpc({

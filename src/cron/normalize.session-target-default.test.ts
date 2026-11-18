@@ -13,7 +13,8 @@ describe("normalizeCronJobCreate sessionTarget defaults", () => {
       { sessionContext: { sessionKey: "agent:main:discord:channel:ops" } },
     );
     expect(normalized).toMatchObject({
-      sessionTarget: "current",
+      sessionTarget: "isolated",
+      includeRecentChat: true,
       sessionKey: "agent:main:discord:channel:ops",
       delivery: { mode: "announce" },
     });

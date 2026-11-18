@@ -27,7 +27,7 @@ describe("cron main job session delivery", () => {
           createdAtMs: now - 10_000,
           updatedAtMs: now - 10_000,
           schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "main",
+          sessionTarget: "session:main",
           wakeMode: "now",
           payload: { kind: "systemEvent", text: "Check in" },
           state: { nextRunAtMs: now - 1 },
@@ -51,7 +51,7 @@ describe("cron main job session delivery", () => {
       await terminal;
       expect(runSessionEvent).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          job: expect.objectContaining({ id: "main-delivery", sessionTarget: "main" }),
+          job: expect.objectContaining({ id: "main-delivery", sessionTarget: "session:main" }),
           text: "Check in",
         }),
       );

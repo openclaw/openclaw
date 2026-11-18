@@ -342,8 +342,8 @@ describe("cron.runs session visibility", () => {
       explicitOwner: true,
       sqlOwner: null,
     },
-    { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: null },
-    { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: "main" },
+    { sessionTarget: "session:main", agentId: "ops", explicitOwner: false, sqlOwner: null },
+    { sessionTarget: "session:main", agentId: "ops", explicitOwner: false, sqlOwner: "main" },
   ] as const)(
     "uses canonical sharing for $sessionTarget without a fleet default (explicit=$explicitOwner, SQL owner=$sqlOwner)",
     ({ sessionTarget, agentId, explicitOwner, sqlOwner }) =>
@@ -360,7 +360,7 @@ describe("cron.runs session visibility", () => {
           delete job.agentId;
           delete job.owner;
           job.sessionTarget = sessionTarget;
-          if (sessionTarget === "main") {
+          if (sessionTarget === "session:main") {
             job.payload = { kind: "systemEvent", text: "visibility fixture" };
           }
           await saveCronStore(storePath, store);
@@ -371,7 +371,7 @@ describe("cron.runs session visibility", () => {
               ).run(sqlOwner, cronStoreKey(storePath), jobId);
             }
           });
-          const targetKey = sessionTarget === "main" ? "main" : "custom-target";
+          const targetKey = sessionTarget === "session:main" ? "main" : "custom-target";
           await createOwnedSession(agentId, targetKey, owner);
           const loaded = await cron.readJob(jobId);
           expect(loaded).toMatchObject({

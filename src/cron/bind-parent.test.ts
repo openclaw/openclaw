@@ -19,7 +19,10 @@ describe("resolveCronBindParent", () => {
   it.each([
     ["account policy naming the parent", { scheduledToolPolicy: account }],
     ["owner key without a policy", { owner: { sessionKey: PARENT } }],
-    ["current target", { sessionTarget: "current", scheduledToolPolicy: account }],
+    [
+      "current target",
+      { sessionTarget: "isolated", includeRecentChat: true, scheduledToolPolicy: account },
+    ],
     ["default-agent job without agentId", { agentId: undefined, scheduledToolPolicy: account }],
   ])("binds a key-only job: %s", (_name, fields) => {
     expect(resolveCronBindParent({ ...base, ...fields } as CronStoredJob)).toEqual({
@@ -39,7 +42,11 @@ describe("resolveCronBindParent", () => {
       /session key alone/,
     ],
     ["no parent key", {}, /session key alone/],
-    ["main target", { sessionTarget: "main", scheduledToolPolicy: account }, /main-session/],
+    [
+      "main target",
+      { sessionTarget: "session:main", scheduledToolPolicy: account },
+      /main-session/,
+    ],
   ])("refuses %s", (_name, fields, message) => {
     const result = resolveCronBindParent({ ...base, ...fields } as CronStoredJob);
     expect(result).toEqual({ refusal: expect.stringMatching(message) });

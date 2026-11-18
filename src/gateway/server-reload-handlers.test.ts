@@ -1740,7 +1740,7 @@ describe("gateway hot reload model state", () => {
           name: "preserve the real watched child",
           enabled: true,
           schedule: { kind: "on-exit", command },
-          sessionTarget: "main",
+          sessionTarget: "session:main",
           wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "watched child finished" },
         });

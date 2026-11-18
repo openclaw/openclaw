@@ -177,7 +177,8 @@ function addJob(
     job: {
       name,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "current",
+      sessionTarget: "isolated",
+      includeRecentChat: true,
       payload: { kind: "agentTurn", message: "Check status" },
       delivery: { mode: "none" },
       ...overrides,
@@ -310,7 +311,8 @@ it.each(["operator.cron", "operator.write"])(
     const job = {
       name: "Signed requester job",
       schedule: { kind: "every" as const, everyMs: 60_000 },
-      sessionTarget: "current" as const,
+      sessionTarget: "isolated" as const,
+      includeRecentChat: true,
       sessionKey: SESSION,
       wakeMode: "next-heartbeat" as const,
       payload: { ...timedPayload, kind: "agentTurn" as const, toolsAllow: [] },
@@ -488,7 +490,8 @@ it.each([
               name: "Live creator",
               ...ownedJob,
               sessionKey: SESSION,
-              sessionTarget: "current",
+              sessionTarget: "isolated",
+              includeRecentChat: true,
               payload: {
                 kind: "agentTurn",
                 timeoutSeconds: 0,

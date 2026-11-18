@@ -518,7 +518,7 @@ describe("gateway server cron", () => {
 
     for (const bindingPatch of [
       { agentId: "ops" },
-      { sessionTarget: "main" },
+      { sessionTarget: "session:main" },
       { payload: { kind: "systemEvent", text: "new work" } },
     ]) {
       const retargeted = await cronState.request("cron.update", {
@@ -529,7 +529,7 @@ describe("gateway server cron", () => {
       expect(retargeted.payload).toMatchObject({
         name: "retained explicit owner",
         agentId: "ops",
-        sessionTarget: "main",
+        sessionTarget: "session:main",
       });
       expect(await cronState.request("cron.get", { id: jobId })).toEqual(retargeted);
     }

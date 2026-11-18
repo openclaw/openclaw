@@ -16,7 +16,7 @@ import { CronAddResultSchema, CronJobSchema } from "./schema/cron.js";
 const minimalAddParams = {
   name: "daily-summary",
   schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "main",
+  sessionTarget: "session:main",
   wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "tick" },
 } as const;
@@ -151,7 +151,7 @@ describe("cron protocol validators", () => {
     [{ scheduledToolPolicy }, false],
     [{ failureAlert }, false],
     [{ failureAlert: null }, false],
-    [{ sessionTarget: "current", payload: agentPayload }, true],
+    [{ sessionTarget: "isolated", includeRecentChat: true, payload: agentPayload }, true],
     [{ sessionTarget: "session:project-alpha", payload: agentPayload }, true],
     [
       {

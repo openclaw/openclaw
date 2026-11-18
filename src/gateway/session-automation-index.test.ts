@@ -42,8 +42,8 @@ afterEach(() => {
 });
 
 test("unchanged bindings publish nothing, including shared bindings and in-place edits", () => {
-  const first = job({ id: "a", sessionTarget: "main" });
-  const second = job({ id: "b", sessionTarget: "main" });
+  const first = job({ id: "a", sessionTarget: "session:main" });
+  const second = job({ id: "b", sessionTarget: "session:main" });
   const jobs = [first, second];
   registerJobs(jobs);
   expect(sessionHasAutomation("agent:main:main", cfg)).toBe(true);
@@ -70,7 +70,7 @@ test("publishes additions, removals, retargets, and mutable routing config delta
     invalidateSessionAutomationIndex();
     expectChanges(...keys);
   };
-  const binding = job({ id: "a", sessionTarget: "main" });
+  const binding = job({ id: "a", sessionTarget: "session:main" });
   source.jobs = [binding];
   publish("agent:main:first");
   config.session!.mainKey = "second";
@@ -102,7 +102,7 @@ test("publishes additions, removals, retargets, and mutable routing config delta
 });
 
 test("reads adopt replacement config and default agents without replacing jobs", () => {
-  const source = registerJobs([job({ id: "a", sessionTarget: "main" })]);
+  const source = registerJobs([job({ id: "a", sessionTarget: "session:main" })]);
   expect(sessionHasAutomation("agent:main:main", cfg)).toBe(true);
   source.defaultAgentId = "work";
   expect(sessionHasAutomation("agent:work:main", cfg)).toBe(true);

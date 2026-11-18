@@ -2,6 +2,7 @@ import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
+import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { CronStoredJob } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import type { CronServiceState } from "./state.js";
@@ -96,21 +97,25 @@ export async function executeScriptCronJob(
     };
   }
 
+  const continuationKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const notify = result.notify?.trim() ? result.notify : undefined;
-  if ((job.sessionTarget === "main" && notify) || result.wake) {
+  if ((continuationKey && notify) || result.wake) {
     const agentId = resolveCronJobEffectiveAgentId(
       job,
       state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
     );
-    const deliveryContext =
-      job.sessionTarget === "main"
-        ? await resolveMainSessionCronDeliveryContext(state, job)
-        : undefined;
+    const deliveryContext = continuationKey
+      ? await resolveMainSessionCronDeliveryContext(state, job)
+      : undefined;
     await options?.assertRunCurrent?.();
     abortSignal?.throwIfAborted();
     options?.deliveryAttemptFence?.assertCurrent();
-    const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };
-    if (job.sessionTarget === "main" && notify && !result.wake) {
+    const eventOptions = {
+      agentId,
+      sessionKey: continuationKey,
+      ...(deliveryContext ? { deliveryContext } : {}),
+    };
+    if (continuationKey && notify && !result.wake) {
       state.deps.enqueueSystemEvent(notify, {
         ...eventOptions,
         contextKey: `cron:${job.id}:script`,

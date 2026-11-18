@@ -22,7 +22,7 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
     createdAtMs: 0,
     updatedAtMs: 0,
     schedule: { kind: "cron", expr: "0 9 * * *" },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
     ...overrides,

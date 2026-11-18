@@ -84,7 +84,7 @@ function createJob(name = family.name) {
     description: family.ownerPluginTag,
     enabled: false,
     schedule: { kind: "cron" as const, expr: "0 2 * * *" },
-    sessionTarget: "main" as const,
+    sessionTarget: "session:main" as const,
     wakeMode: "now" as const,
     payload: { kind: "systemEvent" as const, text: "maintenance" },
   };

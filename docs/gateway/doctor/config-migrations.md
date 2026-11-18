@@ -660,6 +660,10 @@ quarantine files, including linked files, and reports their deferred archival.
 The live Doctor phase imports those sources and archives them after package
 installation. This also protects updates started by supported older releases.
 
+## Automation execution targets
+
+Run `openclaw doctor --fix` after a direct upgrade. Doctor backs up cron state before converting saved jobs. It converts `current` to **New session each time** with **Include recent chat** and keeps the creating conversation link, workspace, sandbox, and delivery settings. It converts `main` to **Continue a conversation**, targeting the original agent’s main conversation. If Doctor cannot recover the creating conversation or resolve the original owner, it retains and pauses the job with a reason. Review the target before re-enabling it. Existing isolated and explicitly targeted jobs keep their targets.
+
 ## Legacy cron delivery settings
 
 A stored delivery object must name its mode: `none`, `announce`, or `webhook`.

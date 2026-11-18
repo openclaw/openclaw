@@ -74,7 +74,7 @@ export function classifyScheduledJob(
   const runsCommand = job.payload.kind === "command";
   // Only a trigger script or a detached/custom-session run executes under the minted context;
   // a main-target job runs in the agent's own session, though a missing parent still pauses it.
-  const usesContext = Boolean(job.trigger) || (!runsCommand && job.sessionTarget !== "main");
+  const usesContext = Boolean(job.trigger) || (!runsCommand && job.payload.kind !== "systemEvent");
   if (result.status === "pause") {
     if (!runsCommand) {
       report.pauses.push({

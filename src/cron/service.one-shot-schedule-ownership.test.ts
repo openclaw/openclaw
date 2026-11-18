@@ -593,7 +593,7 @@ it("recovers an overdue interrupted replacement without deleting it", async () =
     createdAtMs: now - 60_000,
     updatedAtMs: now - 10_000,
     schedule: at(replacementAt),
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "run the replacement once" },
     state: { nextRunAtMs: replacementAt, runningAtMs: interruptedAt },

@@ -37,7 +37,7 @@ it("persists and edits ordinary automation policy through the public Cron bounda
         agentId: "helper",
         enabled: false,
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         wakeMode: "now",
         ...structuredClone(policy),
       });
@@ -53,7 +53,7 @@ it("persists and edits ordinary automation policy through the public Cron bounda
       };
       expect(await reload()).toMatchObject({
         agentId: "helper",
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         ...policy,
       });
       await cron.update(job.id, { name: "Renamed check" });

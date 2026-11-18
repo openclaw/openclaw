@@ -42,7 +42,8 @@ function currentJob(id: string, agentId = id) {
   return makeCronJob({
     id,
     agentId,
-    sessionTarget: "current",
+    sessionTarget: "isolated",
+    includeRecentChat: true,
     sessionKey: `agent:${agentId}:dashboard:current-origin`,
     delivery: { mode: "announce" },
   });
@@ -363,8 +364,14 @@ it("shares alias reads across a preview batch and refreshes routes on the next r
 const unavailableRoute = { channel: "unavailable-plugin", to: "recipient" };
 const commandPayload: CronStoredJob["payload"] = { kind: "command", argv: ["echo", "report"] };
 it.each<[Parameters<typeof withCurrentOrigin>[0], CronDeliveryPreview]>([
-  [{ surface: "dashboard", channelCount: 2, sessionTarget: "current" }, conversationPreview()],
-  [{ surface: "webchat", sessionTarget: "current" }, conversationPreview()],
+  [
+    { surface: "dashboard", channelCount: 2, sessionTarget: "isolated", includeRecentChat: true },
+    conversationPreview(),
+  ],
+  [
+    { surface: "webchat", sessionTarget: "isolated", includeRecentChat: true },
+    conversationPreview(),
+  ],
   [
     { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" },
     conversationPreview("creating conversation"),
@@ -376,7 +383,10 @@ it.each<[Parameters<typeof withCurrentOrigin>[0], CronDeliveryPreview]>([
   ],
   [{ channelCount: 0, delivery: { mode: "announce", accountId: "work" } }, blockedPreview()],
   [{ channelCount: 2, delivery: { mode: "announce", threadId: 0 } }, blockedPreview()],
-  [{ sessionTarget: "current", source: unavailableRoute }, blockedPreview()],
+  [
+    { sessionTarget: "isolated", includeRecentChat: true, source: unavailableRoute },
+    blockedPreview(),
+  ],
   [{ sessionTarget: "isolated", source: unavailableRoute }, blockedPreview()],
   [{ channelCount: 0, payload: commandPayload }, blockedPreview()],
   [{ channelCount: 1, payload: commandPayload }, blockedPreview()],

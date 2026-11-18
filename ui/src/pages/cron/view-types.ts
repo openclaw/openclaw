@@ -3,6 +3,7 @@ import type { buildCronViewProps } from "./view-props.ts";
 
 type CronViewProps = ReturnType<typeof buildCronViewProps>;
 type OptionalViewProp =
+  | "listConversations"
   | "ownerOptions"
   | "reads"
   | "eventSource"

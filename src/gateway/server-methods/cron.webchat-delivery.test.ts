@@ -213,7 +213,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           name: "basketball-reminder",
           enabled: false,
           schedule: { kind: "at", at },
-          sessionTarget: "main",
+          sessionTarget: "session:main",
           payload: { kind: "systemEvent", text: "Reminder: play basketball!" },
           deleteAfterRun: true,
         }),
@@ -273,7 +273,8 @@ describe("WebChat automation creation through the tool and Gateway", () => {
       const jobs = await cron.list({ includeDisabled: true });
       expect(jobs).toEqual([
         expect.objectContaining({
-          sessionTarget: "current",
+          sessionTarget: "isolated",
+          includeRecentChat: true,
           sessionKey,
           enabled: false,
           delivery: delivery ?? { mode: "announce" },

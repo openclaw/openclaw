@@ -682,7 +682,10 @@ export function printCronList(
       next: [job.enabled ? formatRelative(state.nextRunAtMs, now) : "-", theme.muted],
       last: [formatRelative(state.lastRunAtMs, now), theme.muted],
       status: [status.label, status.color],
-      target: [job.sessionTarget, job.sessionTarget === "main" ? theme.accent : theme.accentBright],
+      target: [
+        job.sessionTarget,
+        job.sessionTarget !== "isolated" ? theme.accent : theme.accentBright,
+      ],
       delivery: [
         deliveryPreview ? `${deliveryPreview.label} (${deliveryPreview.detail})` : "-",
         deliveryPreview ? theme.info : theme.muted,

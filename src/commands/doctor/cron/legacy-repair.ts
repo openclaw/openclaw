@@ -253,10 +253,12 @@ export async function applyLegacyCronStoreRepair(params: {
     params.normalized && quarantineRecovery.recoveredJobs.length === 0
       ? params.normalized
       : normalizeStoredCronJobs(state.rawJobs, {
+          cfg: params.cfg,
           migrateCodexModelRefs: params.migrateCodexModelRefs,
           shouldMigrateCodexRuntimePolicyTarget: (target) =>
             !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
         });
+  warnings.push(...normalized.pausedSessionTargetJobs);
   warnings.push(
     ...normalized.unsupportedLegacyTriggerScriptJobs.map(
       (job) =>

@@ -9,7 +9,7 @@ export function preparesCronSessionEvents(job: CronStoredJob): boolean {
   return (
     !isPluginCommandCronJob(job) &&
     (job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent") &&
-    (job.sessionTarget === "main" || job.sessionTarget.startsWith("session:"))
+    job.sessionTarget.startsWith("session:")
   );
 }
 
@@ -23,8 +23,7 @@ export function runsCronMainSessionRoute(
 ): boolean {
   return (
     !isPluginCommandCronJob(scheduledJob) &&
-    (effectiveJob.sessionTarget === "main" ||
-      (effectiveJob.sessionTarget.startsWith("session:") &&
-        effectiveJob.payload.kind === "agentTurn"))
+    effectiveJob.sessionTarget.startsWith("session:") &&
+    (effectiveJob.payload.kind === "agentTurn" || effectiveJob.payload.kind === "systemEvent")
   );
 }

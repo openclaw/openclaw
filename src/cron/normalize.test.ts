@@ -21,7 +21,11 @@ const AGENT_JOB = {
   wakeMode: "now",
   payload: AGENT_TURN,
 };
-const MAIN_JOB = { sessionTarget: "main", wakeMode: "next-heartbeat", payload: SYSTEM_EVENT };
+const MAIN_JOB = {
+  sessionTarget: "session:main",
+  wakeMode: "next-heartbeat",
+  payload: SYSTEM_EVENT,
+};
 const GROUP_SESSION = "agent:main:telegram:group:-100123";
 const DIRECT_SESSION = "agent:main:telegram:direct:42";
 const CUSTOM_SESSION = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
@@ -250,13 +254,27 @@ it.each<[UnknownRecord, UnknownRecord]>([
 });
 
 it.each<[string, string | undefined, string, string | undefined]>([
-  [" Current ", ` ${DIRECT_SESSION} `, "current", DIRECT_SESSION],
   [CUSTOM_SESSION, undefined, CUSTOM_SESSION, undefined],
 ])("resolves session target %s", (input, context, target, sessionKey) => {
   const normalized = createAgent({ sessionTarget: input }, context);
   expect(normalized.sessionTarget).toBe(target);
   expect(normalized.sessionKey).toBe(sessionKey);
   expect(normalized.delivery).toEqual({ mode: "announce" });
+});
+
+it.each(["main", "current"])("rejects retired target %s at the write boundary", (sessionTarget) => {
+  expect(() => createAgent({ sessionTarget })).toThrow(/Expected cron sessionTarget/);
+  expect(() => normalizePatch({ sessionTarget })).toThrow(/Expected cron sessionTarget/);
+});
+
+it("binds recent chat to the creator without continuing its transcript", () => {
+  expect(
+    createAgent({ sessionTarget: "isolated", includeRecentChat: true }, DIRECT_SESSION),
+  ).toMatchObject({
+    sessionTarget: "isolated",
+    includeRecentChat: true,
+    sessionKey: DIRECT_SESSION,
+  });
 });
 
 it("preserves custom session separators but rejects null bytes", () => {

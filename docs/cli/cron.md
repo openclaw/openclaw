@@ -529,8 +529,6 @@ This searches job metadata, not message or script payloads; use `automations run
 
 The human-readable Agent ID column shows the effective owner. JSON list rows preserve the declared `agentId` and include `effectiveAgentId`, which is `null` when ownership is unresolved.
 
-Existing main-session jobs can still be renamed, disabled, or rescheduled after their agent stops being the system default. Creating a main-session job or explicitly setting its agent, session target, or payload kind revalidates the current main-session rules.
-
 An unresolved owner does not stop the scheduler: that job is skipped with an explanation in `state.lastError`, while other jobs continue. Run `openclaw doctor --fix` to repair unresolved multi-agent legacy ownership, set `agents.defaults.systemAgent.agentId`, or use `openclaw cron edit <job-id> --agent <id>` to repair the job. Sole-agent rosters and legacy default markers honored by the runtime already resolve an owner and need no owner migration. The explanation stays on the job. No agent run-history entry is created, because no agent run starts.
 
 `--json` always requests JSON output. Commands whose product is already a machine-readable result emit JSON results by default: `add`/`create`, `status`, `enable`, `disable`, `rm`/`remove`/`delete`, `run`, `edit`, `get`, and `runs`. They accept `--json` as the explicit machine-output spelling. `openclaw automations get <job-id>` returns the stored job JSON directly. Use `automations show <job-id>` when you want the human-readable view with delivery-route preview.
@@ -571,12 +569,12 @@ markers, and empty checklist stubs skip the run. `--unset` removes scratch;
 missing scratch still runs. Use `automations disable <job-id>` to stop the job
 regardless of scratch content.
 
-Agent and session retargeting:
+Agent and session retargeting (use `--no-include-recent-chat` to turn off recent context):
 
 ```bash
 openclaw automations edit <job-id> --agent ops
 openclaw automations edit <job-id> --clear-agent
-openclaw automations edit <job-id> --session current
+openclaw automations edit <job-id> --session isolated --include-recent-chat --session-key <creating-conversation-key>
 openclaw automations edit <job-id> --session "session:daily-brief"
 ```
 

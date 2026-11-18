@@ -35,7 +35,7 @@ it("settles a migrated task through ordinary session execution without a heartbe
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000 },
       payload: { kind: "systemEvent", text: "Check urgent inbox items" },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
     };
     const added = await cron.add(input);
@@ -53,7 +53,7 @@ it("settles a migrated task through ordinary session execution without a heartbe
     expect(cron.getJob(job.id)?.state.lastStatus).not.toBe("ok");
     expect(context.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        job: expect.objectContaining({ id: job.id, sessionTarget: "main" }),
+        job: expect.objectContaining({ id: job.id, sessionTarget: "session:main" }),
         text: "Check urgent inbox items",
       }),
     );

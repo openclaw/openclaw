@@ -420,7 +420,7 @@ export function registerLegacyHeartbeatDriverTests() {
               id: "published-monitor",
               agentId: "main",
               declarationKey: "heartbeat:main",
-              sessionTarget: "main",
+              sessionTarget: "session:main",
               schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 37 },
               payload: { kind: "systemEvent", text: "Legacy monitor" },
             });

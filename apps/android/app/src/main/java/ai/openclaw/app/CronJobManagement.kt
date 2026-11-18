@@ -413,11 +413,9 @@ internal fun buildCronUpdateParams(
   val description = edit.description.trim()
   val sessionTarget = edit.sessionTarget.trim()
   require(
-    sessionTarget == "main" ||
-      sessionTarget == "isolated" ||
-      sessionTarget == "current" ||
+    sessionTarget == "isolated" ||
       (sessionTarget.startsWith("session:") && sessionTarget.removePrefix("session:").isNotBlank()),
-  ) { "Session target must be main, isolated, current, or session:<id>." }
+  ) { "Session target must be isolated or session:<key>." }
   val wakeMode = edit.wakeMode.trim()
   require(wakeMode == "now" || wakeMode == "next-heartbeat") {
     "Wake mode must be now or next-heartbeat."

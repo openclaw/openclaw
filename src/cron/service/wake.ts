@@ -188,9 +188,8 @@ export async function wake(
     if (
       !target?.agentId ||
       !target.sessionKey ||
-      (candidate.payload.kind !== "agentTurn" &&
-        !(candidate.sessionTarget === "main" && candidate.payload.kind === "systemEvent")) ||
-      !(candidate.sessionTarget === "main" || candidate.sessionTarget.startsWith("session:")) ||
+      (candidate.payload.kind !== "agentTurn" && candidate.payload.kind !== "systemEvent") ||
+      !candidate.sessionTarget.startsWith("session:") ||
       runAtMs === undefined
     ) {
       continue;

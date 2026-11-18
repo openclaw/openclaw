@@ -59,7 +59,8 @@ export function registerCronSessionCompletionEventTests({
         const job: CronStoredJob = {
           id: "job-webchat",
           name: "Current WebChat completion",
-          sessionTarget,
+          sessionTarget: "isolated",
+          includeRecentChat: sessionTarget === "current",
           sessionKey,
           ...(sessionTarget === "isolated"
             ? {

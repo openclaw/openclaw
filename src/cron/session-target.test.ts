@@ -1,7 +1,6 @@
 // Session target tests cover target resolution for cron-created sessions.
 import { describe, expect, it } from "vitest";
 import {
-  resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "./session-target.js";
@@ -17,19 +16,6 @@ describe("cron session target helpers", () => {
     expect(() => resolveCronSessionTargetSessionKey("session:bad\0id")).toThrow(
       "invalid cron sessionTarget session id",
     );
-  });
-
-  it("preserves current targets when a creator session key exists", () => {
-    expect(
-      resolveCronCurrentSessionTarget({
-        sessionTarget: "current",
-        sessionKey: " agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a== ",
-      }),
-    ).toBe("current");
-  });
-
-  it("falls back current targets to isolated without a creator session key", () => {
-    expect(resolveCronCurrentSessionTarget({ sessionTarget: "current" })).toBe("isolated");
   });
 
   it("prefers sessionTarget over creator sessionKey for delivery", () => {

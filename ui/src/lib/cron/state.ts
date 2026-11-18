@@ -43,6 +43,7 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   triggerScript: "",
   triggerOnce: false,
   sessionTarget: "isolated",
+  includeRecentChat: false,
   wakeMode: "now",
   payloadKind: "agentTurn",
   payloadLocked: false,

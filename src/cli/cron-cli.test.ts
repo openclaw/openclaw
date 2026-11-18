@@ -506,7 +506,7 @@ it("creates a one-shot webhook system event with an explicit keep policy", async
   );
   expect(params).toMatchObject({
     name: "Reminder",
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     deleteAfterRun: false,
     schedule: { kind: "at", at: "2026-05-25T00:30:00.000Z" },
     payload: { kind: "systemEvent", text: "hi" },
@@ -526,7 +526,7 @@ it("creates exact system events with a tool allowlist", async () => {
   expect(
     await namedAdd("--system-event", "tick", "--exact", "--tools", "read,write"),
   ).toMatchObject({
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     schedule: { kind: "cron", staggerMs: 0 },
     payload: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "write"] },
   });

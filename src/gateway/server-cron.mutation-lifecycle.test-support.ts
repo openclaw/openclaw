@@ -97,7 +97,7 @@ export function registerGatewayCronMutationAuthorityTests(harness: CronMutationH
           {
             owner,
             schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "main",
+            sessionTarget: "session:main",
             wakeMode: "now",
           },
         );

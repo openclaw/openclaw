@@ -318,7 +318,7 @@ async function createFixture(jobIds: [string, ...string[]] = ["job-1"], applyEnv
     enabled: false,
     createdAtMs: 1,
     updatedAtMs: 1,
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     payload: { kind: "systemEvent", text: "test" },
   });
   runOpenClawStateWriteTransaction(({ db }) => {

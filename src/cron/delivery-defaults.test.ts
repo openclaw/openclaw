@@ -60,7 +60,7 @@ describe("cron default delivery destination", () => {
       });
     expect(resolveFor("isolated")).toMatchObject({ mode: "announce", channel: "telegram" });
     expect(resolveFor("main")).toEqual(
-      resolveCronDeliveryPlan(makeCronJob({ sessionTarget: "main", delivery: undefined })),
+      resolveCronDeliveryPlan(makeCronJob({ sessionTarget: "session:main", delivery: undefined })),
     );
   });
 

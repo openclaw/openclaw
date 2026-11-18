@@ -62,7 +62,7 @@ function cronJob(
     createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
     updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
     schedule,
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: `${name} fired` },
     state,

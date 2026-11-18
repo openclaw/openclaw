@@ -27,9 +27,7 @@ import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Session target accepted by cron jobs. */
 const CronSessionTargetSchema = Type.Union([
-  Type.Literal("main"),
   Type.Literal("isolated"),
-  Type.Literal("current"),
   Type.String({ pattern: "^session:.+" }),
 ]);
 /** Legacy wake input; scheduled runs execute their ordinary payload. */
@@ -540,6 +538,7 @@ export const CronJobSchema = closedObject({
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
+  includeRecentChat: Type.Optional(Type.Boolean()),
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
@@ -629,6 +628,7 @@ export const CronAddParamsSchema = closedObject({
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
+  includeRecentChat: Type.Optional(Type.Boolean()),
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
@@ -676,6 +676,7 @@ const CronJobPatchSchema = closedObject({
   cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),
+  includeRecentChat: Type.Optional(Type.Boolean()),
   wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),
   delivery: Type.Optional(CronDeliveryPatchSchema),

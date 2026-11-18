@@ -44,7 +44,7 @@ function expectUninterrupted(
 async function addSource(state: ReturnType<typeof watchSource>["state"], name: string) {
   const added = await addSystemEventJob(state, name, "event", {
     schedule: { kind: "stream", command: ["source"] },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
   });
   return "job" in added ? added.job : added;
 }
@@ -100,7 +100,7 @@ describe("buildGatewayCronService stream lifecycle", () => {
     const adding = addSystemEventJob(state, "original name", "event", {
       id: "observed-source",
       schedule: { kind: "stream", command: ["source"] },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
     });
     let updating: ReturnType<typeof state.cron.update> | undefined;
     try {

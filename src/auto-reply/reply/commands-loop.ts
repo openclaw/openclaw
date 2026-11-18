@@ -47,7 +47,7 @@ function buildLoopWorkOrder(prompt: string, sessionKey: string, everyMs?: number
   }
   const message = lines.join("\n");
   const pacing = selfPaced ? 'pacing:{min:"1m",max:"1h"},' : "";
-  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs ?? LOOP_DEFAULT_INTERVAL_MS}},${pacing}sessionTarget:"current",payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
+  return `Create a recurring loop with the ${AUTOMATIONS_TOOL_NAME} tool, then confirm in one short line (name + cadence + '/loop stop' hint). ${LOOP_FINAL_REPLY_ONLY} action:"add", job:{name:${JSON.stringify(jobName)},schedule:{kind:"every",everyMs:${everyMs ?? LOOP_DEFAULT_INTERVAL_MS}},${pacing}sessionTarget:"isolated", includeRecentChat:true,payload:{kind:"agentTurn",message:${JSON.stringify(message)}}}.`;
 }
 
 function buildLoopStatusWorkOrder(sessionKey: string): string {

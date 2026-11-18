@@ -437,9 +437,8 @@ describe("cron method validation", () => {
               : await invokeCronAdd(
                   agentTurnCronParams({
                     agentId: "cleaner",
-                    ...(operation === "add-current"
-                      ? { sessionTarget: "current", sessionKey: "agent:cleaner:main" }
-                      : {}),
+                    includeRecentChat: true,
+                    sessionKey: "agent:cleaner:main",
                   }),
                 );
         expect(respond).toHaveBeenCalledWith(
@@ -789,7 +788,7 @@ describe("cron method validation", () => {
     {
       name: "current target resolved from a reserved caller session",
       params: {
-        sessionTarget: "current",
+        includeRecentChat: true,
         sessionKey: "agent:main:harness:codex:supervision:native-thread",
       },
     },
@@ -887,7 +886,7 @@ describe("cron method validation", () => {
     const { context, respond } = await invokeCronAdd({
       name: "main reminder",
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       sessionKey: "agent:main:harness:codex:supervision:native-thread",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "remind me" },
@@ -1225,7 +1224,7 @@ describe("cron method validation", () => {
         name: "scoped job",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         wakeMode: "next-heartbeat",
         agentId: "main",
         payload: { kind: "systemEvent", text: "before replacement" },

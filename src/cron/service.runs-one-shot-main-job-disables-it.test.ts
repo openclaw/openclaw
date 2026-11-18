@@ -22,7 +22,7 @@ const mainJob = (overrides: Partial<CronJobCreate> = {}) =>
   cronTestInput({
     name: "one-shot",
     schedule: { kind: "at", at: new Date(atMs).toISOString() },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "hello" },
     ...overrides,

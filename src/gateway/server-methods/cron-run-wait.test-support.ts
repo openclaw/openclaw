@@ -51,7 +51,7 @@ export function registerCronRunWaitTests({
   });
 
   it.each([
-    { name: "main", job: { sessionTarget: "main" }, waits: false },
+    { name: "main", job: { sessionTarget: "session:main" }, waits: false },
     {
       name: "aliased own session",
       job: { sessionTarget: "session:agent:ops:main" },
@@ -61,7 +61,8 @@ export function registerCronRunWaitTests({
     {
       name: "current-session announce into the caller",
       job: {
-        sessionTarget: "current",
+        sessionTarget: "isolated",
+        includeRecentChat: true,
         sessionKey: "agent:ops:main",
         delivery: { mode: "announce" },
       },
@@ -89,7 +90,12 @@ export function registerCronRunWaitTests({
     {
       // Quiet current jobs run detached and never commit into the conversation.
       name: "quiet current-session",
-      job: { sessionTarget: "current", sessionKey: "agent:ops:main", delivery: { mode: "none" } },
+      job: {
+        sessionTarget: "isolated",
+        includeRecentChat: true,
+        sessionKey: "agent:ops:main",
+        delivery: { mode: "none" },
+      },
       waits: true,
     },
     {

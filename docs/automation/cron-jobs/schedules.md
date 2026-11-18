@@ -211,7 +211,8 @@ For a simple log condition, use the existing match mode instead of writing a tri
       "mode": "match",
       "match": "ERROR"
     },
-    "sessionTarget": "current",
+    "sessionTarget": "isolated",
+    "includeRecentChat": true,
     "payload": { "kind": "agentTurn", "message": "Report the matching application errors." }
   }
 }

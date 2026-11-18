@@ -31,7 +31,7 @@ const oneShot: CronJob["schedule"] = { kind: "at", at: new Date(60_000).toISOStr
 const restrictedHours = { start: "09:00", end: "17:00", timezone: "UTC" };
 const receiverJob = (overrides: Partial<CronJob>) =>
   makeCronJob({
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     state: { nextRunAtMs: 60_000 },
     ...overrides,
   });

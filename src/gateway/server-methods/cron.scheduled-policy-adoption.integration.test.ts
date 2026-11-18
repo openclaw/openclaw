@@ -606,7 +606,7 @@ it.each([
     };
     const exercise = async (callUpdate: (patch: CronJobPatch) => Promise<void>) => {
       await callUpdate({
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         payload: { kind: "systemEvent", text: "Check status" },
       });
       const store = await loadCronStore(storePath);
@@ -615,7 +615,7 @@ it.each([
         "dormant job",
       );
       expect(dormant).toMatchObject({
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         payload: { kind: "systemEvent", toolsAllow: ["message"] },
         scheduledToolPolicy: accountPolicy,
       });

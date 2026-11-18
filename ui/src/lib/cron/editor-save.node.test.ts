@@ -302,7 +302,7 @@ it.each<
   async (_name, expr, original, exact, amount, expected, originalExpr, unchanged) => {
     const stored = storedJob({
       schedule: { kind: "cron", expr: originalExpr ?? expr, tz: "UTC", staggerMs: original },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "Synthetic paused task" },
     });
@@ -359,7 +359,7 @@ it.each(["create", "edit"] as const)(
       service,
       storedJob({
         schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic paused task" },
       }),
@@ -393,7 +393,7 @@ it.each(["create", "edit"] as const)(
         scheduleKind: "cron",
         cronExpr: "0 7 * * *",
         cronTz: "UTC",
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         payloadKind: "systemEvent",
         payloadText: "Synthetic paused task",
       };

@@ -36,11 +36,8 @@ export function resolveCronRunSessionKeys(params: {
 }) {
   const { job, agentId, cfg } = params;
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${job.id}`).trim();
-  // A `current` job keeps its own run key; conversation resources come from admission.
-  const currentBoundSourceKey =
-    job.sessionTarget === "current" ? job.sessionKey?.trim() : undefined;
-  const usesDetachedRunSession =
-    isDetachedCronSessionTarget(job.sessionTarget) || Boolean(currentBoundSourceKey);
+  const recentChatSourceKey = job.includeRecentChat ? job.sessionKey?.trim() : undefined;
+  const usesDetachedRunSession = isDetachedCronSessionTarget(job.sessionTarget);
   const baseSessionKeyIsCron =
     baseSessionKey.startsWith("cron:") || isCronSessionKey(baseSessionKey);
   const agentSessionKey = resolveCronAgentSessionKey({
@@ -50,13 +47,13 @@ export function resolveCronRunSessionKeys(params: {
     cfg,
   });
   const resolvedBaseSessionKey = resolveCronAgentSessionKey({
-    sessionKey: currentBoundSourceKey ?? baseSessionKey,
+    sessionKey: recentChatSourceKey ?? baseSessionKey,
     agentId,
     mainKey: cfg.session?.mainKey,
     cfg,
   });
   const sourceSessionKey =
-    currentBoundSourceKey && resolvedBaseSessionKey !== agentSessionKey
+    recentChatSourceKey && resolvedBaseSessionKey !== agentSessionKey
       ? resolvedBaseSessionKey
       : undefined;
   return { baseSessionKey, usesDetachedRunSession, agentSessionKey, sourceSessionKey };

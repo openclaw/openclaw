@@ -1039,7 +1039,8 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       );
       h.runCliAgentMock.mockResolvedValue(cliReply(claudeModel));
       const job = makeAuthJob({
-        sessionTarget: "current",
+        sessionTarget: "isolated",
+        includeRecentChat: true,
         sessionKey: parentKey,
         inferenceBinding: binding,
       });

@@ -19,12 +19,7 @@ import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 const CRON_CHANNEL_LAST = "last";
 
 function isCronFormSessionTarget(value: string): value is CronFormState["sessionTarget"] {
-  return (
-    value === "main" ||
-    value === "isolated" ||
-    value === "current" ||
-    (value.startsWith("session:") && value.length > "session:".length)
-  );
+  return value === "isolated" || (value.startsWith("session:") && value.length > "session:".length);
 }
 
 export function normalizeCronFormState(
@@ -32,16 +27,20 @@ export function normalizeCronFormState(
   changed: Partial<CronFormState> = {},
 ): CronFormState {
   let normalized = form;
-  if (!form.payloadLocked && form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
+  if (
+    !form.payloadLocked &&
+    form.payloadKind === "systemEvent" &&
+    form.sessionTarget === "isolated"
+  ) {
     normalized =
       changed.sessionTarget !== undefined
         ? { ...normalized, payloadKind: "agentTurn" }
-        : { ...normalized, sessionTarget: "main" };
+        : { ...normalized, sessionTarget: "session:", includeRecentChat: false };
   }
   if (
     normalized.deliveryMode !== "announce" ||
     normalized.payloadKind === "agentTurn" ||
-    (normalized.sessionTarget !== "main" && normalized.payloadLocked)
+    normalized.payloadLocked
   ) {
     return normalized;
   }
@@ -63,6 +62,12 @@ function parsesAsCron(expr: string, timezone?: string): boolean {
 
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
+  if (form.sessionTarget === "session:") {
+    errors.executionConversation = "cron.errors.conversationRequired";
+  }
+  if (form.sessionTarget === "isolated" && form.includeRecentChat && !form.sessionKey.trim()) {
+    errors.recentChatConversation = "cron.errors.conversationRequired";
+  }
   if (!form.name.trim()) {
     errors.name = "cron.errors.nameRequired";
   }
@@ -227,6 +232,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     triggerScript: job.trigger?.script ?? "",
     triggerOnce: job.trigger?.once === true,
     sessionTarget: job.sessionTarget,
+    includeRecentChat: job.includeRecentChat === true,
     wakeMode: job.wakeMode,
     payloadKind: payload.kind,
     payloadLocked,

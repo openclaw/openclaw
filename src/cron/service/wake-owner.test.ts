@@ -23,7 +23,7 @@ function createState(overrides: Partial<CronServiceDeps>) {
 const mainJob = () =>
   makeCronJob({
     payload: { kind: "systemEvent", text: "  check pending work  " },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
   });
 
 it.each(["occurrence revalidation", "session custody"] as const)(

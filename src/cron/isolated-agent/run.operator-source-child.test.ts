@@ -186,7 +186,8 @@ it.each([
                 job: {
                   name: "Check the deploy",
                   schedule: { kind: "every", everyMs: 180_000 },
-                  sessionTarget: "current",
+                  sessionTarget: "isolated",
+                  includeRecentChat: true,
                   payload: { kind: "agentTurn", message: "Check the deploy" },
                   delivery: { mode: "none" },
                 },

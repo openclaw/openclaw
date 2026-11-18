@@ -101,6 +101,14 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   return {
     ...page.actions,
     gateway: page.context().gateway,
+    listConversations: (agentId: string, search: string) =>
+      page.context().sessions.list({
+        agentId,
+        search,
+        rowMode: "compact",
+        includeGlobal: true,
+        limit: 50,
+      }),
     getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
     listError: page.cron().cronJobsError,

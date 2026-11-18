@@ -191,9 +191,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         systemSent: true,
       },
     });
-    const currentBoundJob = normalizeCronJobCreate(sessionJob({ sessionTarget: "current" }), {
-      sessionContext: { sessionKey: boundSessionKey },
-    }) as CronJob;
+    const currentBoundJob = normalizeCronJobCreate(
+      sessionJob({ sessionTarget: "isolated", includeRecentChat: true }),
+      {
+        sessionContext: { sessionKey: boundSessionKey },
+      },
+    ) as CronJob;
     const executionSessionKey = `agent:main:cron:${currentBoundJob.id}`;
     embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
       const { agentId = "main", sessionId, sessionKey = "" } = input;
@@ -235,9 +238,12 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     const storePath = await f.writeSessionStoreEntries(home, { [parentKey]: parentRow });
     const cfg = f.makeCfg(home, storePath);
     const job: CronStoredJob = {
-      ...(normalizeCronJobCreate(sessionJob({ sessionTarget: "current" }), {
-        sessionContext: { sessionKey: parentKey },
-      }) as CronJob),
+      ...(normalizeCronJobCreate(
+        sessionJob({ sessionTarget: "isolated", includeRecentChat: true }),
+        {
+          sessionContext: { sessionKey: parentKey },
+        },
+      ) as CronJob),
       sourceConversation: {
         sessionKey: parentKey,
         sessionId: "creator-session",

@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { resolveCronSessionTargetSessionKey } from "../../cron/session-target.js";
@@ -155,10 +154,7 @@ export async function prepareHumanCronTargetAccess(
   }
   const cfg = getConfig();
   const agentId = resolveCronJobEffectiveAgentId(next, defaultAgentId);
-  const sessionKey =
-    next.sessionTarget === "main"
-      ? resolveAgentMainSessionKey({ cfg, agentId })
-      : (resolveCronSessionTargetSessionKey(next.sessionTarget) ?? next.sessionKey);
+  const sessionKey = resolveCronSessionTargetSessionKey(next.sessionTarget) ?? next.sessionKey;
   const profiles = await prepareSessionSharingProfiles(client);
   const facts = sessionKey
     ? await prepareSessionMutationFacts({ cfg, agentId, sessionKey, allowMissing: true })

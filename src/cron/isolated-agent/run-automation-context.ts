@@ -20,9 +20,9 @@ async function resolveCronAutomationMessage(params: {
   assertCurrent: () => void;
 }): Promise<string> {
   const { job, sourceSessionKey, sourceEntry } = params;
-  // Current jobs stay detached; a bounded tail supplies context without transcript continuation.
+  // New sessions stay detached; a bounded tail supplies context without transcript continuation.
   const conversation =
-    job.sessionTarget === "current" &&
+    job.includeRecentChat === true &&
     job.payload.kind === "agentTurn" &&
     sourceSessionKey &&
     sourceEntry

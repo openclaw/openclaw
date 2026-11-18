@@ -96,6 +96,7 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
     legacyPayloadProvider: "still uses payload `provider` as a delivery alias",
     legacyTopLevelPayloadFields: "still uses top-level payload fields",
     legacyTopLevelDeliveryFields: "still uses top-level delivery fields",
+    legacySessionTarget: "uses a retired execution target and needs conversion",
     legacyDeliveryMode: "still uses delivery mode `deliver`",
     migratedScheduledToolPolicy:
       "can recover scheduled account authority from persisted owner identity",

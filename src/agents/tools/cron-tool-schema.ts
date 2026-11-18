@@ -447,7 +447,14 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
-            description: "main | isolated | current (agentTurn default) | session:<id>",
+            description:
+              "isolated (new session each run) | session:<key> (continue a conversation)",
+          }),
+        ),
+        includeRecentChat: Type.Optional(
+          Type.Boolean({
+            description:
+              "For isolated agent turns, include recent chat from the creating conversation",
           }),
         ),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),

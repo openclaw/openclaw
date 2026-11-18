@@ -21,7 +21,7 @@ describe("cron trigger SQLite codec", () => {
       updatedAtMs: 2,
       schedule: { kind: "every", everyMs: 30_000 },
       trigger: { script: "json({ fire: false })", once: false },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "changed" },
       state: {

@@ -25,7 +25,7 @@ Run links from automation messages and notifications open the exact recorded run
     openclaw automations add \
       --name "Calendar check" \
       --at "20m" \
-      --session main \
+      --session "session:agent:main:main" \
       --system-event "Check the calendar for upcoming events." \
       --wake now
     ```
@@ -88,7 +88,7 @@ An authenticated channel sender explicitly listed in `commands.ownerAllowFrom`, 
 
 When `tools.gatewayPolicy.automations.scope` is `"caller"`, model turns keep ordinary caller scope even for administrators and configured channel owners. `allowCommandJobs: false` additionally blocks model changes to and runs of command jobs. Direct human administration remains available. See [Gateway tool policy](/gateway/config-tools/tool-policy#automation-scope-and-command-jobs).
 
-Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
+Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns with recent chat from the creating conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
 
 The Gateway grants this authority from the authenticated turn's admission facts. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel owner membership is rechecked against the current global owner list when the capability is used and immediately before a mutation commits. Channel allowlists, wildcard entries, display names, account IDs, and session routes do not establish ownership. Other channel turns and Control UI turns without `operator.admin` receive no management grant. If access is denied or a grant expires, retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the **Automations** page.
 

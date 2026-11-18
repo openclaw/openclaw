@@ -35,7 +35,7 @@ test.each([
 );
 
 test("shares binding facts across interleaved session-routing contexts", () => {
-  const definition = { id: "shared", sessionTarget: "main" as const };
+  const definition = { id: "shared", sessionTarget: "session:main" as const };
   const contexts = [
     { cfg: {}, defaultAgentId: "ops" },
     { cfg: {}, defaultAgentId: "research" },

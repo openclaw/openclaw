@@ -23,7 +23,7 @@ export function registerGatewayCronSystemJobTests({
         name: "Migrated proactive work",
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "Review outstanding work" },
         delivery: { mode: "none" },

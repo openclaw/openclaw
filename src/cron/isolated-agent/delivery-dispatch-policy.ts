@@ -78,7 +78,7 @@ export function resolveDirectCronDeliveryGeneration(
     | "cfgWithAgentDefaults"
   >,
 ) {
-  return (params.job.sessionTarget === "isolated" || params.job.sessionTarget === "current") &&
+  return params.job.sessionTarget === "isolated" &&
     params.sourceSessionKey &&
     params.sourceSessionGeneration &&
     !hasExplicitCronDeliveryTarget(params.deliveryPlan)

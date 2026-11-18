@@ -16,7 +16,7 @@ function checkMaintenance(
   const job = cronTestJob({
     id: "maintenance",
     schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     payload: { kind: "systemEvent", text: "tick" },
     ...overrides,
   });

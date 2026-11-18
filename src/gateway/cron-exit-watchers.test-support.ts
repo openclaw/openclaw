@@ -70,7 +70,7 @@ export function onExitJob(id: string, command = "true", enabled = true, cwd?: st
     createdAtMs: 1,
     updatedAtMs: 1,
     schedule: { kind: "on-exit", command, ...(cwd ? { cwd } : {}) },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "done" },
     delivery: { mode: "none" },

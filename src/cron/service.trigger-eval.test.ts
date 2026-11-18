@@ -39,7 +39,7 @@ function mainWatcher(name: string, overrides: Partial<CronJobCreate> = {}): Cron
   return watcher({
     name,
     schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: name },
     ...overrides,
@@ -317,7 +317,7 @@ async function pendingWatcher(overrides: Partial<CronJobCreate>) {
 describe("cron trigger evaluation", () => {
   installHarnessCleanup();
   it.each([
-    { sessionTarget: "main", mutation: "remove" },
+    { sessionTarget: "session:main", mutation: "remove" },
     { sessionTarget: "isolated", mutation: "disable" },
   ] as const)(
     "cancels a pending $sessionTarget condition on $mutation before it can fire",
@@ -325,7 +325,7 @@ describe("cron trigger evaluation", () => {
       const { h, jobId, run, signal, resolve } = await pendingEvaluation({
         sessionTarget,
         payload:
-          sessionTarget === "main"
+          sessionTarget === "session:main"
             ? { kind: "systemEvent", text: "condition payload" }
             : { kind: "agentTurn", message: "condition payload" },
         state: { triggerState: { owner: "previous evaluation" } },
@@ -402,7 +402,7 @@ describe("cron trigger evaluation", () => {
     });
     const job = await h.cron.add(
       watcher({
-        sessionTarget: "main",
+        sessionTarget: "session:main",
         payload: { kind: "systemEvent", text: "base message" },
       }),
     );
@@ -637,7 +637,7 @@ describe("cron trigger startup", () => {
     try {
       // The Gateway accepts cron.add while its scheduler start is still pending.
       const job = await cron.add(
-        watcher({ sessionTarget: "main", payload: { kind: "systemEvent", text: "quiet" } }),
+        watcher({ sessionTarget: "session:main", payload: { kind: "systemEvent", text: "quiet" } }),
       );
       vi.setSystemTime(job.state.nextRunAtMs! + 5_000);
       await cron.start();

@@ -36,7 +36,7 @@ describe("cron target and payload guidance", () => {
 
   it("accepts ordinary agent turns in the main session", () => {
     expect(() =>
-      assertSupportedJobSpec({ sessionTarget: "main", payload: { kind: "agentTurn" } }),
+      assertSupportedJobSpec({ sessionTarget: "session:main", payload: { kind: "agentTurn" } }),
     ).not.toThrow();
   });
 });

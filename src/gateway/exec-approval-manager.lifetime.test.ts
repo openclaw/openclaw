@@ -244,7 +244,7 @@ describe("ExecApprovalManager lifetime", () => {
             name: "Borrowed approval watcher",
             enabled: false,
             schedule: { kind: "stream", command: ["synthetic-source"] },
-            sessionTarget: "main",
+            sessionTarget: "session:main",
             wakeMode: "next-heartbeat",
             payload: { kind: "systemEvent", text: "Synthetic event" },
           });

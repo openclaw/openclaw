@@ -26,7 +26,7 @@ import {
 import { inferCronJobName } from "./service/normalize.js";
 import {
   assertSafeCronSessionTargetId,
-  resolveCronCurrentSessionTarget,
+  INVALID_CRON_SESSION_TARGET_ERROR,
 } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
 import { normalizeCronStreamBatching } from "./stream-schedule.js";
@@ -37,7 +37,7 @@ type UnknownRecord = Record<string, unknown>;
 
 type NormalizeOptions = {
   applyDefaults?: boolean;
-  /** Session context used to resolve "current" sessionTarget during create-time defaulting. */
+  /** Creating conversation of an agent-authored automation. */
   sessionContext?: { sessionKey?: string };
 };
 
@@ -266,7 +266,7 @@ function normalizeSessionTarget(raw: unknown) {
   }
   const trimmed = raw.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower === "main" || lower === "isolated" || lower === "current") {
+  if (lower === "isolated") {
     return lower;
   }
   // Custom session targets must still pass the same session-id safety gate used
@@ -374,7 +374,7 @@ export function normalizeCronJobInput(
     if (normalized) {
       next.sessionTarget = normalized;
     } else {
-      delete next.sessionTarget;
+      throw new Error(INVALID_CRON_SESSION_TARGET_ERROR);
     }
   }
 
@@ -431,40 +431,23 @@ export function normalizeCronJobInput(
         next.name = trimmed;
       }
     }
-    if (!next.sessionTarget && isRecord(next.payload)) {
-      const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
-      // Agent turns bind to the creating conversation by default: the run carries
-      // that chat's context and announces its result there. Callers without session
-      // context are downgraded to isolated by resolveCronCurrentSessionTarget.
-      if (kind === "systemEvent") {
-        next.sessionTarget = "main";
-      } else if (kind === "agentTurn") {
-        next.sessionTarget = "current";
-      } else if (kind === "command" || kind === "script") {
-        next.sessionTarget = "isolated";
-      }
-    }
-
-    const normalizedSessionTarget =
-      typeof next.sessionTarget === "string" ? next.sessionTarget : undefined;
-    const resolvedCurrentSessionKey =
+    const sourceKey =
       options.sessionContext?.sessionKey ??
       (typeof next.sessionKey === "string" ? next.sessionKey : undefined);
-    const resolvedSessionTarget = resolveCronCurrentSessionTarget({
-      sessionTarget: normalizedSessionTarget,
-      sessionKey: resolvedCurrentSessionKey,
-    });
-    if (resolvedSessionTarget !== undefined) {
-      next.sessionTarget = resolvedSessionTarget;
+    if (!next.sessionTarget && isRecord(next.payload)) {
       if (
-        next.sessionTarget !== "isolated" &&
-        normalizedSessionTarget === "current" &&
-        resolvedCurrentSessionKey?.trim()
+        next.payload.kind === "agentTurn" ||
+        next.payload.kind === "command" ||
+        next.payload.kind === "script"
       ) {
-        next.sessionKey = assertSafeCronSessionTargetId(resolvedCurrentSessionKey);
+        next.sessionTarget = "isolated";
+        if (next.payload.kind === "agentTurn" && sourceKey?.trim()) {
+          next.includeRecentChat ??= true;
+        }
       }
-    } else {
-      delete next.sessionTarget;
+    }
+    if (next.includeRecentChat === true && sourceKey?.trim()) {
+      next.sessionKey = assertSafeCronSessionTargetId(sourceKey);
     }
     if (
       "schedule" in next &&
@@ -487,8 +470,6 @@ export function normalizeCronJobInput(
     const payload = isRecord(next.payload) ? next.payload : null;
     const payloadKind = payload && typeof payload.kind === "string" ? payload.kind : "";
     const sessionTarget = typeof next.sessionTarget === "string" ? next.sessionTarget : "";
-    // Agent turns resolve to current with context and isolated without it.
-    // Current and custom session ids share isolated announce semantics.
     const hasDelivery = "delivery" in next && next.delivery !== undefined;
     if (!hasDelivery && shouldDefaultCronDeliveryToAnnounce({ payloadKind, sessionTarget })) {
       next.delivery = { mode: "announce" };

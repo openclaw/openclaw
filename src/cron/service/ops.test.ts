@@ -66,7 +66,7 @@ function createFutureEveryJob(now: number, id: string, overrides: Partial<CronJo
     createdAtMs: now - 60_000,
     updatedAtMs: now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-    sessionTarget: "main",
+    sessionTarget: "session:main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: id },
     state: {},
@@ -511,7 +511,7 @@ describe("cron service operations", () => {
       name: "lifecycle target",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
@@ -544,7 +544,7 @@ describe("cron service operations", () => {
       name: "added target",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "added" },
     });

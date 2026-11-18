@@ -24,7 +24,7 @@ describe("Cron issue regressions", () => {
       name: "hourly",
       enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
@@ -68,7 +68,7 @@ describe("Cron issue regressions", () => {
       name: "due-preserved",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "due-preserved" },
     });
@@ -76,7 +76,7 @@ describe("Cron issue regressions", () => {
       name: "other-job",
       enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "other" },
     });
@@ -104,7 +104,7 @@ describe("Cron issue regressions", () => {
       name: "disabled-cron",
       enabled: false,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
@@ -138,7 +138,7 @@ describe("Cron issue regressions", () => {
       createdAtMs: pastAt - 60_000,
       updatedAtMs: pastAt,
       schedule: { kind: "at", at: new Date(pastAt).toISOString() },
-      sessionTarget: "main",
+      sessionTarget: "session:main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "⏰ Reminder" },
     } as const;

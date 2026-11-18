@@ -26,7 +26,9 @@ export function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("invalid cron sessionTarget session id") ||
     message.startsWith('cron sessionTarget "') ||
     message.includes("has no upcoming run time and would never fire") ||
-    message.includes('sessionTarget "main" is only valid for the default agent') ||
+    message.includes("Expected cron sessionTarget") ||
+    message.includes("A system event requires an explicit conversation") ||
+    message.includes("Include recent chat requires") ||
     message.includes('cron.update payload.kind="systemEvent" requires text') ||
     message.includes('cron.update payload.kind="agentTurn" requires message') ||
     message.includes("cron webhook delivery requires") ||

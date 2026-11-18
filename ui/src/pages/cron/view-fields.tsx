@@ -26,6 +26,8 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   activeHoursEnd: "cron.form.activeHoursEnd",
   activeHoursTimezone: "cron.form.timezoneOptional",
   triggerScript: "cron.form.triggerScript",
+  executionConversation: "cron.form.conversation",
+  recentChatConversation: "cron.form.recentChatConversation",
   payloadText: "cron.form.assistantTaskPrompt",
   payloadModel: "cron.form.model",
   payloadThinking: "cron.form.thinking",

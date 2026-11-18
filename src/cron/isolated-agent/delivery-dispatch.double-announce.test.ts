@@ -1101,7 +1101,7 @@ describe("dispatchCronDelivery", () => {
     async (archived) => {
       const params = makeBaseParams({
         synthesizedText: "must not escape before commit",
-        sessionTarget: "current",
+        includeRecentChat: true,
       });
       params.resolvedDelivery = {
         ok: false,
@@ -1134,7 +1134,7 @@ describe("dispatchCronDelivery", () => {
     async (channel) => {
       const params = makeBaseParams({
         synthesizedText: channel ? "Committed report" : "scheduled dashboard report",
-        sessionTarget: "current",
+        includeRecentChat: true,
         runStartedAt: channel ? 1_500 : 1_000,
       });
       const dashboardSessionKey = "agent:main:dashboard:c5557dcf-54bf-46b0-9bf2-a1f6ad1d0667";
@@ -1172,7 +1172,7 @@ describe("dispatchCronDelivery", () => {
     "hands the finalized current-target media projection to outbound with descendant=%s",
     async (descendant) => {
       const params = makeBaseParams({
-        sessionTarget: "current",
+        includeRecentChat: true,
         runStartedAt: descendant ? 3_500 : 2_500,
       });
       if (descendant) {

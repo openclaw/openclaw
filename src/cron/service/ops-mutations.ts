@@ -427,10 +427,7 @@ export async function remove(state: CronServiceState, id: string, opts?: CronRem
       afterCommit: () => {
         noteActiveCronJobRemoval(id, opts?.commitGuard, (activeMarker) => {
           activeRunCancellationRequested = activeMarker?.cancellation?.kind === "requested";
-          if (
-            sessionStorePath &&
-            (removedJob.sessionTarget === "isolated" || removedJob.sessionTarget === "current")
-          ) {
+          if (sessionStorePath && removedJob.sessionTarget === "isolated") {
             let finish!: () => void;
             const done = new Promise<void>((resolve) => {
               finish = resolve;
