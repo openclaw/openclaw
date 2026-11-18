@@ -1,0 +1,150 @@
+name: UI Receipt Inner Causality
+run-name: UI receipt inner causality ${{ github.sha }}
+on:
+  push:
+    branches: [diagnostic/frv7-ui-receipt-inner]
+permissions:
+  contents: read
+concurrency:
+  group: ui-receipt-inner-causality-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  original-case:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      CI: "true"
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_VITEST_RUNTIME: node
+      OPENCLAW_VITEST_MAX_WORKERS: "2"
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+      OPENCLAW_UI_E2E_RUN_DESKTOP: "false"
+      OPENCLAW_CAPTURE_UI_PROOF: "0"
+      OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM: ""
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: ""
+      RUNNER_ENVIRONMENT: github-hosted
+      FROZEN_TARGET: "false"
+    steps:
+      - name: Validate immutable invocation
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$TARGET_SHA" = "$WORKFLOW_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Setup original hosted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          cache-mode: restore
+          dependency-cache: "false"
+          vitest-fs-cache: "true"
+          vitest-worker-cache: "true"
+          vitest-worker-preset: full
+          node-compile-cache: "true"
+      - name: Verify source and original host shape
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/ui-receipt-inner-hosted
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import fs from 'node:fs';
+          import os from 'node:os';
+          import { execFileSync } from 'node:child_process';
+          const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
+          const contract = JSON.parse(fs.readFileSync('scripts/qualification/ui-receipt-inner-source.json', 'utf8'));
+          assert.equal(git('rev-parse', 'HEAD'), process.env.TARGET_SHA);
+          assert.equal(git('rev-parse', 'HEAD^'), contract.overlayCommit);
+          assert.equal(git('status', '--porcelain', '--untracked-files=all'), '');
+          assert.deepEqual(git('diff', '--name-only', 'HEAD^', 'HEAD').split('\n').sort(), contract.hostedPaths);
+          for (const file of contract.sourceFiles) {
+            assert.equal(createHash('sha256').update(fs.readFileSync(file.path)).digest('hex'), file.sha256);
+          }
+          assert.equal(process.version, 'v24.22.1');
+          assert.equal(os.availableParallelism(), 4);
+          assert(os.totalmem() >= 15 * 2 ** 30 && os.totalmem() <= 17 * 2 ** 30);
+          const root = '.artifacts/ui-receipt-inner-hosted/';
+          fs.writeFileSync(root + 'host-source.json', JSON.stringify({
+            base: contract.base, overlayCommit: contract.overlayCommit,
+            source: process.env.TARGET_SHA, workflow: process.env.WORKFLOW_SHA,
+            node: process.version, platform: process.platform, arch: process.arch,
+            kernel: os.release(), cpus: os.availableParallelism(), memory: os.totalmem(),
+            imageOS: process.env.ImageOS, imageVersion: process.env.ImageVersion,
+          }, null, 2) + '\n');
+          const files = [...contract.sourceFiles.map(file => file.path), ...contract.hostedPaths].sort();
+          fs.writeFileSync(root + 'source-sha256.json', JSON.stringify(files.map(path => ({
+            path, sha256: createHash('sha256').update(fs.readFileSync(path)).digest('hex'),
+          })), null, 2) + '\n');
+          JS
+      - name: Setup canonical managed Playwright Chromium
+        uses: ./.github/actions/setup-playwright-chromium
+        with:
+          cache-mode: restore
+          compatibility-target: "false"
+      - name: Record managed browser identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { createRequire } from 'node:module';
+          import { resolve } from 'node:path';
+          import { spawnSync } from 'node:child_process';
+          const require = createRequire(resolve('ui/package.json'));
+          const { chromium } = require('playwright');
+          const result = spawnSync(chromium.executablePath(), ['--version'], { encoding: 'utf8' });
+          assert.equal(result.status, 0, 'Managed Chromium must run; no fallback or skip');
+          fs.writeFileSync('.artifacts/ui-receipt-inner-hosted/browser.json', JSON.stringify({
+            playwright: require('playwright/package.json').version,
+            version: result.stdout.trim(), managed: true,
+          }, null, 2) + '\n');
+          JS
+      - name: Build canonical private QA runtime and Control UI
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+          OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1"
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm build 2>&1 | tee .artifacts/ui-receipt-inner-hosted/build.log
+      - name: Run only the original descendant PR case
+        env:
+          OPENCLAW_UI_E2E_ARTIFACT_DIR: .artifacts/control-ui-e2e/receipt-inner-causality
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/receipt-inner-causality
+        shell: bash
+        run: |
+          set -euo pipefail
+          env -u OPENCLAW_TASK_PR_LIVE_GITHUB node scripts/run-vitest.mjs run \
+            --config test/vitest/vitest.ui-e2e-prebuilt.config.ts \
+            --configLoader runner \
+            --project ui-e2e-real-gateway \
+            --maxWorkers 2 \
+            ui/src/e2e/task-pull-requests.real-gateway.e2e.test.ts \
+            --testNamePattern 'shows three persisted descendant PRs while keeping the parent branch unpublished' \
+            --reporter verbose 2>&1 | tee .artifacts/ui-receipt-inner-hosted/test.log
+      - name: Retain original diagnostics and proof artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-receipt-inner-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/ui-receipt-inner-hosted/
+            .artifacts/control-ui-e2e/receipt-inner-causality/
+            .artifacts/control-ui-e2e-timeouts/receipt-inner-causality/
+          if-no-files-found: warn
+          retention-days: 7

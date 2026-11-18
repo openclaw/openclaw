@@ -1,0 +1,46 @@
+{
+  "base": "942a7e61e4755a9e8d19f0835b10430f8dae96f9",
+  "overlayCommit": "c194a814adfc5670d365b1b61936dafcbfb4afe9",
+  "hostedPaths": [
+    ".github/workflows/ui-receipt-inner-causality.yml",
+    "scripts/qualification/ui-receipt-inner-source.json"
+  ],
+  "sourceFiles": [
+    {
+      "path": "src/gateway/control-ui-session-pr-diagnostics.ts",
+      "sha256": "92fd3a6f287abc45586b2f0826746b4936e28f2d5cd0f068c82758db544819d5"
+    },
+    {
+      "path": "src/gateway/control-ui-session-prs.ts",
+      "sha256": "56bac0876a976767d3d5b93247d9755c94c0b51bcdf1a8811a0922265debc845"
+    },
+    {
+      "path": "src/gateway/control-ui-session-task-prs.ts",
+      "sha256": "4645120902728435ad66be118159f2b71d217ca4af93fff137498b67eaa7bcc7"
+    },
+    {
+      "path": "src/state/github-publication-worker.ts",
+      "sha256": "9072123f7d8a89fd96f75bb261c02902031118574c928449fb42c1247a1e5e41"
+    },
+    {
+      "path": "src/state/openclaw-state-read.types.ts",
+      "sha256": "8caebe3f01ca5443e9ef82abb7170843aefbe3b12a7dd2dc50cb76f71ef8c7a6"
+    },
+    {
+      "path": "src/state/openclaw-state-db-readonly.ts",
+      "sha256": "c5313a2d9c98f18f903bf3d5dcdec12efa9f01fda532bba67498ee0c2c56ea27"
+    },
+    {
+      "path": "src/state/openclaw-state-read-operation.ts",
+      "sha256": "8ec740a2eb9b10aef52de713c1c0a43fe5814a6abd0b64685e2117bfa32500ec"
+    },
+    {
+      "path": "src/state/openclaw-state-read-worker.ts",
+      "sha256": "af54541d3a7b323e1b184c8430adcdeaab821ec4307575551d8a828d956446ef"
+    },
+    {
+      "path": "ui/src/e2e/task-pull-requests.diagnostics.test-support.ts",
+      "sha256": "d87cd4c70d199ae41cf10a8a14378fc73b79737f8433e319f8060f98ce0a47dc"
+    }
+  ]
+}
