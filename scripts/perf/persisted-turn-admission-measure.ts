@@ -14,8 +14,10 @@ import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 
@@ -42,8 +44,14 @@ process.env = {
   OPENCLAW_STATE_DIR: stateDir,
 };
 if (values["baseline-dir"]) {
-  process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["baseline-dir"]);
-  await import("./worker-retained-heap-preload.ts");
+  const owner = "src/agents/embedded-agent-runner/run/pre-persisted-user-turn.ts";
+  const original = new URL(`../../${owner}`, import.meta.url).href;
+  const replacement = pathToFileURL(path.resolve(values["baseline-dir"], owner)).href;
+  registerHooks({
+    load(url, context, nextLoad) {
+      return nextLoad(url === original ? replacement : url, context);
+    },
+  });
 }
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
 const currentTurn = await import("../../src/agents/sessions/session-manager-current-turn.js");

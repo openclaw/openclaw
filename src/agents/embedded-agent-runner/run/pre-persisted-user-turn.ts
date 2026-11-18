@@ -331,8 +331,9 @@ export async function preparePersistedCurrentUserTurn(params: {
   const readCurrentTurn = async (
     signal: AbortSignal | undefined,
     consume: (prepared: CurrentTurnReplayWitness | undefined) => void,
+    initial?: Pick<TranscriptEntryAnchor, "entryId" | "generation">,
   ) => {
-    let selection: CurrentTurnReplaySelection | undefined;
+    let selection: { entryId: string; generation: string | null } | undefined = initial;
     let consumed = false;
     const read = () =>
       withSource(signal, async (target, assertSource) => {
@@ -351,8 +352,8 @@ export async function preparePersistedCurrentUserTurn(params: {
           if (
             selection &&
             (!current ||
-              current.entryId !== selection.entryId ||
-              current.version.generation !== selection.version.generation)
+              current.anchor.entryId !== selection.entryId ||
+              current.anchor.generation !== selection.generation)
           ) {
             throw new SessionWorkStartChangedError(
               "Persisted user turn changed before replay admission. Retry the turn.",
@@ -404,7 +405,9 @@ export async function preparePersistedCurrentUserTurn(params: {
         assertSource();
         assertCurrent();
         const prepared = await select();
-        selection ??= prepared;
+        if (prepared) {
+          selection ??= { entryId: prepared.entryId, generation: prepared.version.generation };
+        }
         await validate(target, assertSource, prepared, signal, accept);
         return witness;
       });
@@ -486,27 +489,19 @@ export async function preparePersistedCurrentUserTurn(params: {
         ? AbortSignal.any([signal, params.signal])
         : signal;
     replaySignal?.throwIfAborted();
-    const accept = (prepared: CurrentTurnReplayWitness | undefined, onAdmitted?: () => void) => {
-      if (
-        !prepared ||
-        prepared.anchor.entryId !== initial.entryId ||
-        prepared.anchor.generation !== initial.generation
-      ) {
-        throw new SessionWorkStartChangedError(
-          "Persisted user turn changed before replay admission. Retry the turn.",
-        );
-      }
-      if (onAdmitted) {
-        if (!pending) {
-          throw new Error("Persisted user turn replay was already consumed");
-        }
-        pending = false;
-        onAdmitted();
-      }
-    };
     assertCurrent();
     return async (onAdmitted) => {
-      await readCurrentTurn(replaySignal, (prepared) => accept(prepared, onAdmitted));
+      await readCurrentTurn(
+        replaySignal,
+        () => {
+          if (!pending) {
+            throw new Error("Persisted user turn replay was already consumed");
+          }
+          pending = false;
+          onAdmitted();
+        },
+        initial,
+      );
     };
   };
 }
