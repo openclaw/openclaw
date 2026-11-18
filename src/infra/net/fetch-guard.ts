@@ -13,6 +13,12 @@ import {
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
   type ConfiguredLocalOriginManagedProxyBypass,
 } from "./configured-local-origin-bypass.js";
+import {
+  GuardedFetchRedirectError,
+  getRedirectVisitKey,
+  isRedirectStatus,
+} from "./fetch-redirect.js";
+export { GuardedFetchRedirectError } from "./fetch-redirect.js";
 import { captureGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { responseWithAbortSignal } from "./guarded-body-stream.js";
 import { PinnedDispatcherPool, type PinnedDispatcherLease } from "./pinned-dispatcher-pool.js";
@@ -108,23 +114,13 @@ export type GuardedFetchOptions = {
 
 export type GuardedFetchResult = {
   response: Response;
+  /** The request caller/deadline signal, active until release. */
+  signal?: AbortSignal;
   finalUrl: string;
   release: () => Promise<void>;
   refreshTimeout?: () => void;
   dispatcherReused?: boolean;
 };
-
-export class GuardedFetchRedirectError extends Error {
-  readonly status: number;
-  readonly maxRedirects: number;
-
-  constructor(params: { status: number; maxRedirects: number }) {
-    super(`Too many redirects (limit: ${params.maxRedirects})`);
-    this.name = "GuardedFetchRedirectError";
-    this.status = params.status;
-    this.maxRedirects = params.maxRedirects;
-  }
-}
 
 type GuardedFetchInternalOptions = GuardedFetchOptions & {
   managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
@@ -145,10 +141,6 @@ type GuardedFetchPresetOptions = Omit<
 
 const DEFAULT_MAX_REDIRECTS = 3;
 const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
-
-function getRedirectVisitKey(url: string, init: RequestInit | undefined): string {
-  return `${init?.method?.toUpperCase() ?? "GET"} ${url}`;
-}
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   // This flag relaxes an outbound-network security boundary. Keep exact lowercase
@@ -277,10 +269,6 @@ async function assertExplicitProxyAllowed(
     policy: proxyPolicy,
     signal,
   });
-}
-
-function isRedirectStatus(status: number): boolean {
-  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
 }
 
 function isAmbientGlobalFetch(params: {
@@ -787,6 +775,7 @@ async function fetchWithSsrFGuardInternal(
           : response;
       return {
         response: returnedResponse,
+        signal,
         finalUrl: currentUrl,
         release: async () => finishRequest(releaseDispatcher),
         refreshTimeout: refresh,

@@ -278,6 +278,17 @@ export const pluginRuntimeProcessManifest = {
       distWorkerPath: "document-extractor.worker.js",
     },
   },
+  webReadability: {
+    ...pluginRuntimeProcess(
+      "web-readability",
+      "web-content-extractor-worker.runtime",
+      "web-content-extractor.worker",
+    ),
+    package: {
+      name: "@openclaw/web-readability-plugin",
+      distWorkerPath: "web-content-extractor.worker.js",
+    },
+  },
   fileTransferDirFetch: {
     plugin: "file-transfer",
     ownerSource: "extensions/file-transfer/src/node-host/dir-fetch-archive.ts",

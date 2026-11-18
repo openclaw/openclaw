@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { Worker } from "node:worker_threads";
+import { describe, expect, it, vi } from "vitest";
 import { createReadabilityWebContentExtractor } from "./web-content-extractor.js";
 
 const SAMPLE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8" /><title>Example Article</title></head><body><nav><ul><li><a href="/home">Home</a></li><li><a href="/about">About</a></li></ul></nav><main><article>
@@ -26,6 +27,20 @@ async function extractArticle(html: string, extractMode: "text" | "markdown" = "
 }
 
 describe("web readability extractor", () => {
+  it("extracts through a worker rather than parsing on the calling thread", async () => {
+    const postMessage = vi.spyOn(Worker.prototype, "postMessage");
+    try {
+      const extracted = await extractArticle(SAMPLE_HTML);
+      expect(extracted.text).toContain("Main content starts here");
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ input: expect.objectContaining({ html: SAMPLE_HTML }) }),
+        expect.any(Array),
+      );
+    } finally {
+      postMessage.mockRestore();
+    }
+  });
+
   it("extracts readable markdown", async () => {
     const extracted = await extractArticle(SAMPLE_HTML, "markdown");
     expect(extracted.text).toContain("Main content starts here");
