@@ -127,12 +127,6 @@ Other authors need a command comment from a user with either role. Dependency
 changes instead require a repository admin or an active member of
 `@openclaw/openclaw-secops`, either as the PR author or as the command approver:
 
-Maintainer-authored mechanical release alignment in the supported core/package
-and extension manifests is informational; third-party dependency, lockfile,
-patch, and workspace-policy changes still require admin or SecOps authority.
-See [Security review checks](https://docs.openclaw.ai/ci/pipeline#security-review-checks)
-for the exact exception.
-
 - `/allow-security-sensitive-change` for sensitive product changes.
 - `/allow-dependencies-change` from a repository admin or SecOps member for dependency changes that require approval.
 

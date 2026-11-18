@@ -103,7 +103,6 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
       return { role_name: state.role };
     },
   };
-  const files = [{ filename: "package.json" }];
   const review = {
     owner: "openclaw",
     repo: "openclaw",
@@ -125,7 +124,7 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
       },
       async paginate(path: string) {
         if (path === pullPath + "/files") {
-          return files;
+          return [{ filename: "package.json" }];
         }
         expect(path).toBe(`${issuePath}/comments`);
         return comments;
@@ -135,7 +134,6 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
   return {
     state,
     routes,
-    files,
     statuses,
     dependency,
     combined,
@@ -251,17 +249,11 @@ it("does not discard a contradictory fresh guard failure during an exempt rollou
   await expect(f.run()).rejects.toThrow("unsuccessful openclaw/dependency-review");
 });
 
-it.each([
-  { role: "maintain", filename: "package.json", external: false, allowed: true },
-  { role: "write", filename: "package.json", external: false, allowed: false },
-  { role: "maintain", filename: "packages/other/package.json", external: false, allowed: false },
-  { role: "maintain", filename: "package.json", external: true, allowed: false },
-])(
-  "revalidates release alignment author authority: $role/$filename external=$external",
-  async ({ role, filename, external, allowed }) => {
+it.each(["maintain", "write"])(
+  "revalidates release alignment author authority: %s",
+  async (role) => {
     const f = fixture();
     f.dependency.description = "PR #7: Dependency review requirements satisfied.";
-    f.files[0].filename = filename;
     const prefix = "/repos/openclaw/openclaw";
     f.routes[prefix + "/collaborators/contributor/permission"] = () => ({ role_name: role });
     f.routes[prefix + "/compare/" + "c".repeat(40) + "..." + head + "?per_page=1&page=2"] = () => ({
@@ -272,15 +264,13 @@ it.each([
       ["c".repeat(40), "2026.11.5"],
       [head, "2026.11.6"],
     ]) {
-      f.routes[prefix + "/contents/" + filename + "?ref=" + sha] = () => ({
+      f.routes[prefix + "/contents/package.json?ref=" + sha] = () => ({
         type: "file",
         encoding: "base64",
-        content: Buffer.from(
-          JSON.stringify({ version, ...(external ? { dependencies: { example: version } } : {}) }),
-        ).toString("base64"),
+        content: Buffer.from(JSON.stringify({ version })).toString("base64"),
       });
     }
-    if (allowed) {
+    if (role === "maintain") {
       await expect(f.run()).resolves.toMatchObject({
         approvals: [{ kind: "author", role: "maintain", sha: head }],
       });

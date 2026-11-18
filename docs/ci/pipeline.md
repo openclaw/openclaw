@@ -669,11 +669,11 @@ All four scans use `scripts/install-periphery.sh` to install the checksum-pinned
 Security review separates product changes that maintainers can approve from the
 small set of security policy and enforcement files that require SecOps approval.
 
-| Change                                     | User account with `maintain` or `admin` access                           | Other authors                                                                                       |
-| ------------------------------------------ | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| Sensitive product code                     | Informational notice; no extra security approval                         | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access                    |
-| Dependency changes requiring review        | Admin authors exempt; Maintain authors exempt only for release alignment | `/allow-dependencies-change` from a repository admin or active SecOps member; SecOps authors exempt |
-| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval                                   | Independent SecOps code-owner approval                                                              |
+| Change                                     | User account with `maintain` or `admin` access       | Other authors                                                                                       |
+| ------------------------------------------ | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Sensitive product code                     | Informational notice; no extra security approval     | `/allow-security-sensitive-change` from a user with `maintain` or `admin` access                    |
+| Dependency changes requiring review        | Admin authors exempt; Maintain alone is insufficient | `/allow-dependencies-change` from a repository admin or active SecOps member; SecOps authors exempt |
+| SecOps-owned files in `.github/CODEOWNERS` | Independent SecOps code-owner approval               | Independent SecOps code-owner approval                                                              |
 
 The **Security Review** workflow runs both guards from trusted repository code.
 It publishes a commit status named `openclaw/ci-gate` that requires both the
@@ -839,16 +839,6 @@ remove its review requirement.
 The **Dependency Guard** publishes `openclaw/dependency-review` and retains its
 dependency classification and lockfile autoscrub behavior. Dependency removals
 that already qualify as informational remain informational.
-Maintainer-authored release alignment also remains informational: the only
-changed dependency fields may be package versions in `package.json`,
-`packages/{ai,gateway-client,gateway-protocol}/package.json`, and
-`extensions/*/package.json`, plus existing `>=` OpenClaw version floors in
-extension `devDependencies.openclaw` and `peerDependencies.openclaw`.
-The author must be a GitHub user with current `maintain` or `admin` access.
-Added, removed, or renamed manifests, third-party dependency changes, lockfiles,
-patches, and workspace policy changes do not qualify. Maintainers cannot use this
-exception to approve another author's PR. GitHub App bot authors are not exempt.
-The same author and change classification is revalidated during merge admission.
 Automatic lockfile cleanup is best effort. If neither cleanup App can provide a
 write token, or GitHub explicitly denies the cleanup mutation's permissions, the
 dependency notice explains how to remove the remaining changes or request
@@ -858,7 +848,7 @@ job or satisfy dependency review. Unexpected cleanup errors remain failures.
 Edit `.github/security-review-policy.yml` to change path classification. Its
 `categories` group product paths with descriptions and review guidance;
 `exclude` names the product-only exclusions; and `dependencies` lists manifests,
-lockfiles, other dependency files, and the release-alignment manifest allowlist. Paths are quoted, repository-relative
+lockfiles, and other dependency files. Paths are quoted, repository-relative
 globs: `*` stays within a path segment, `**` crosses directories, and `{a,b}`
 matches either alternative. Hidden paths are included. Matching is
 case-sensitive unless an exclusion explicitly sets `case-insensitive: true`.

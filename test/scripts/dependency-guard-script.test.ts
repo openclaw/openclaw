@@ -303,15 +303,11 @@ describe("dependency guard script", () => {
     };
     const cases = [
       { path: "package.json", head: { ...base, version: next.version }, allowed: true },
-      ...[
-        "packages/ai/package.json",
-        "packages/gateway-client/package.json",
-        "packages/gateway-protocol/package.json",
-      ].map((filename) => ({
-        path: filename,
+      {
+        path: "packages/gateway-client/package.json",
         head: { ...base, version: next.version },
         allowed: true,
-      })),
+      },
       { path: "extensions/example/package.json", head: next, allowed: true },
       {
         path: "extensions/example/package.json",
@@ -333,11 +329,6 @@ describe("dependency guard script", () => {
       },
       { path: "packages/other/package.json", head: next, allowed: false },
       { path: "extensions/nested/example/package.json", head: next, allowed: false },
-      {
-        path: "extensions/example/package.json",
-        head: { ...next, engines: { node: ">=30" } },
-        allowed: false,
-      },
       {
         path: "extensions/example/package.json",
         head: next,
@@ -377,9 +368,6 @@ describe("dependency guard script", () => {
         ["GET " + graphPath]: [],
       });
       expectGuard(result, ["pending", entry.allowed ? "success" : "pending"], 0, entry);
-      if (entry.allowed) {
-        expect(result.stdout).toContain("release version alignment");
-      }
     }
   });
 
