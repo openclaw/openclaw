@@ -191,6 +191,22 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     });
   });
 
+  it("streams whitespace-only deltas as append-only assistant text", async () => {
+    const { projector, onAgentEvent } = await fixture.observe();
+    const deltas = ["X", "\n\n", "```text", "\n", "a b", "\n", "```", " ", "done", "\n"];
+    const answer = deltas.join("");
+    await fixture.start(projector, finalItem("answer", ""));
+    for (const value of deltas) {
+      await fixture.delta(projector, value, "answer");
+    }
+    await fixture.complete(projector, finalItem("answer", answer));
+
+    const assistantEvents = fixture.events(onAgentEvent, "assistant");
+    expect(assistantEvents.map((event) => event.data.delta).join("")).toBe(answer);
+    expect(assistantEvents.some((event) => event.data.replace)).toBe(false);
+    expect(assistantEvents.at(-1)?.data.text).toBe(answer);
+  });
+
   it.each(
     ["item", "raw", "turn"].flatMap((completion) =>
       ["Final", "NO_REPLY"].map((text) => ({ completion, text })),
