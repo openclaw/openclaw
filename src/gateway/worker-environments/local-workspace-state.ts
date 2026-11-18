@@ -12,7 +12,7 @@ import {
   initializeLocalWorkspaceProjection,
 } from "./local-workspace-checkout.js";
 import {
-  pendingLocalWorkspaceDirection as pendingDirection,
+  recoverLocalWorkspaceCheckpoint,
   prepareLocalWorkspaceCheckpoint,
   prehashLocalWorkspaceCheckpoint,
   selectLocalWorkspaceCheckpoint,
@@ -52,10 +52,8 @@ import {
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
-  parseWorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
-import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   hasWorkerWorkspaceResultRef,
@@ -82,6 +80,7 @@ export function projectionOperations(
 ) {
   let checkpointPreparation: LocalWorkspacePreparedEntry[] | undefined;
   let checkpointObjects: Array<[string, string]> | undefined;
+  let refreshStartedHere = false;
   const signal = store.signal;
   let row = initialRow;
   const selectCurrent = (assertCurrent: (() => void) | undefined) => {
@@ -110,12 +109,16 @@ export function projectionOperations(
       row = await store.reject(selected, value, owner.workerAuthority);
     },
   });
-  const { read: readManifest, repair: repairBaseline } = createLocalWorkspaceManifestReader({
+  const {
+    read: readManifest,
+    repair: repairBaseline,
+    probeUnchanged,
+  } = createLocalWorkspaceManifestReader({
     store,
     current,
-    canonicalRoot: owner.worktree.path,
+    owner,
     accept: async (prepared) => {
-      row = await store.accept(prepared, owner.workerAuthority);
+      return (row = await store.accept(prepared, owner.workerAuthority));
     },
   });
   const baselineDocument = async () => {
@@ -229,31 +232,15 @@ export function projectionOperations(
     preparedInputPaths = undefined;
     return checkpoint;
   };
-  const recover = async () => {
-    const selected = current();
-    if (!selected.journal_json) {
-      return;
-    }
-    await quiescence?.pause();
-    quiescence?.markPhase("recovery");
-    if (!selected.journal_pack || !pendingDirection(selected.pending_target)) {
-      throw new Error("Local workspace recovery metadata is incomplete");
-    }
-    // A base refresh keeps its receipt and paused runtime until both sides accept it, so an
-    // interrupted application resumes from the files it already wrote. Restoring them would
-    // discard that progress, and a refresh longer than one turn's deadline could never finish.
-    if (!isLocalWorkspaceBaseRefreshRef(selected.pending_ref)) {
-      const plan = parseWorkerWorkspaceReconciliationPlan(selected.journal_json);
-      await recoverWorkerWorkspaceReconciliation({
-        root: targetPath(pendingDirection(selected.pending_target)!),
-        journal: { ...plan, basePack: selected.journal_pack },
-        buildCacheInputs: await buildCacheInputs(),
-        assertCurrent,
-        workerAuthority,
-      });
-    }
-    await update({ journal_json: null, journal_pack: null });
-  };
+  const recover = () =>
+    recoverLocalWorkspaceCheckpoint({
+      selected: current(),
+      canonicalRoot: owner.worktree.path,
+      buildCacheInputs,
+      update,
+      application: { assertCurrent, workerAuthority },
+      quiescence,
+    });
   const cleanupAccepted = async () => {
     const selected = current();
     if (!selected.pending_ref || selected.pending_target) {
@@ -377,10 +364,10 @@ export function projectionOperations(
       // The Git result now owns the command's bytes. Canonical-only reconciliation
       // can run beside later guest writes; command completion still awaits acceptance.
       await afterCapture?.();
-      // A base refresh owns both namespaces until its two-sided transfer settles.
-      // Ordinary results already own immutable Git bytes, so materialization and
-      // patch generation need no guest freeze. Imports re-fence before confirmation.
-      if (!refresh) {
+      // Fresh receipts have not changed guest files; prepare their immutable Git
+      // input while it runs. A resumed refresh may already have partially applied
+      // files, so recovery retains its freeze until settlement.
+      if (!refresh || refreshStartedHere) {
         await quiescence?.resume();
       }
       quiescence?.markPhase("materialization");
@@ -525,6 +512,9 @@ export function projectionOperations(
     return await prepareLocalWorkspaceCheckpoint({
       operation,
       baselineRef: selected.baseline_ref,
+      settle,
+      probeUnchanged,
+      quiescence,
       synchronize,
       current,
       signal,
@@ -541,6 +531,7 @@ export function projectionOperations(
     capture,
     buildCacheInputs,
     baselineDocument,
+    probeUnchanged,
     prepare,
     reuse: async () => (row?.baseline_ref ? await prepare(undefined, "reuse") : undefined),
     synchronize,
@@ -568,7 +559,12 @@ export function projectionOperations(
       });
       inputPaths = undefined;
       preparedInputPaths = undefined;
-      await settle();
+      refreshStartedHere = true;
+      try {
+        await settle();
+      } finally {
+        refreshStartedHere = false;
+      }
     },
     restoreSnapshot: async () => {
       await buildCacheInputs();
