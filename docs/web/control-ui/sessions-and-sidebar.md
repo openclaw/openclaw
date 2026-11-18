@@ -287,7 +287,7 @@ Enter opens the typed path; use Up or Down first to open a highlighted folder.
 Tab completes a folder name. If the starting workspace does not exist yet, Browse
 opens the home folder. Errors for paths you enter remain visible.
 
-For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows recent projects and folders derived only from sessions created by that profile. These conveniences follow the person across browsers; they do not grant access to a project or path.
+For connections with a durable user profile, the Gateway stores each agent's latest folder, worktree, model, thinking, and fast-mode choices. New sessions restore the last fast-mode choice, including an explicit off choice, for supported providers. The new-session picker also shows up to five recent places, including the agent workspace, derived only from sessions created by that profile. Helper sessions that an agent spawns are left out, so their task checkouts do not appear as recents. These conveniences follow the person across browsers; they do not grant access to a project or path.
 
 For a selected project, **Checkout** uses the Gateway's availability decision for
 the chosen agent. If Current checkout is unavailable and a managed checkout is
