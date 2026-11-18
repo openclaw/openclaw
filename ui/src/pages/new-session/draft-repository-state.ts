@@ -97,12 +97,24 @@ export class DraftRepositoryStateOwner {
     );
   }
 
-  get checkoutVisible(): boolean {
+  checkoutVisible(projectSelected: boolean): boolean {
+    // Do not label a provisional checkout before discovery can resolve the choice.
+    if (this.checkoutPending || (this.repositoryValue.kind === "direct" && !projectSelected)) {
+      return false;
+    }
     return (
-      this.refreshing ||
+      projectSelected ||
       this.repositoryValue.kind === "unavailable" ||
       this.available() ||
       ((this.read().remotePlacement || this.worktree) && !this.remoteRepository)
+    );
+  }
+
+  private get checkoutPending(): boolean {
+    return (
+      this.repositoryValue.kind === "checking" ||
+      this.currentCheckoutUnavailable === "checking" ||
+      (this.refreshing && this.checkoutSubmissionBlocked)
     );
   }
 
