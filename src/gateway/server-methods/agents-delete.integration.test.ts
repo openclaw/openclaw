@@ -34,6 +34,7 @@ import type {
   NativeBindingClientTestApi,
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../../infra/worker-task-capacity.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
@@ -267,6 +268,15 @@ it.for(["active", "restart-draining"] as const)(
             : {}),
         };
         writeEntry(sessionKey, session);
+        // Restart recovery must drain idle history larger than the pool's pending-task budget.
+        if (scenario === "restart-draining") {
+          for (let index = 0; index < 3 * DEFAULT_WORKER_PENDING_TASKS; index++) {
+            writeEntry(`agent:${agentId}:subagent:idle-${index}`, {
+              sessionId: `idle-deletion-${index}`,
+              updatedAt: 1,
+            });
+          }
+        }
         await fs.mkdir(state.sessionsDir(agentId), { recursive: true });
         await fs.writeFile(
           path.join(state.sessionsDir(agentId), "owned-attachment.txt"),
@@ -655,6 +665,7 @@ it.for(["active", "restart-draining"] as const)(
           ).rejects.toThrow("deletion cleanup is still pending");
           await deletionRecovery.resumeAgentDeletions(context);
           expect(context.logGateway.warn).not.toHaveBeenCalled();
+
           expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
           await expectDeletedStorage(state, agentId, workspace, databasePath);
           expect(getRuntimeConfig().agents?.entries).not.toHaveProperty(agentId);
