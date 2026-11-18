@@ -42,6 +42,7 @@ import {
   scanDoctorSessionEntryRecords,
 } from "./doctor/shared/session-entry-rewrite.js";
 import {
+  inspectLegacyRestartTombstone,
   migrateLegacySessionEntryState,
   type SessionEntryStateRepair,
 } from "./doctor/shared/session-entry-shape.js";
@@ -85,7 +86,7 @@ type PreparedSessionEntryRepairParams =
   | (SessionEntryRepairParams & { source: "canonical" })
   | (Omit<SessionEntryRepairParams, "transform"> & {
       source: "raw";
-      rawNeedsRepair: (entry: Record<string, unknown>) => boolean;
+      rawNeedsRepair: (entry: Record<string, unknown>, sessionKey: string) => boolean;
       rawTransform: (
         entry: Record<string, unknown>,
         sessionKey: string,
@@ -118,7 +119,7 @@ function prepareSessionEntryRepairs(params: PreparedSessionEntryRepairParams) {
         scanDoctorSessionEntryRecords(
           scope,
           ({ entry, sessionKey }) => {
-            if (params.rawNeedsRepair(entry)) {
+            if (params.rawNeedsRepair(entry, sessionKey)) {
               sessionKeys.push(sessionKey);
             }
           },
@@ -240,6 +241,7 @@ export function repairCanonicalSessionEntries(
 function needsLegacySessionEntryRepair(entry: Record<string, unknown>): boolean {
   return (
     hasLegacySessionEntryState(entry) ||
+    inspectLegacyRestartTombstone(entry)?.retire ||
     SESSION_ENTRY_NUMERIC_FIELDS.some((field) => typeof entry[field] === "string")
   );
 }
@@ -261,15 +263,35 @@ export async function repairLegacySessionEntryStates(params: {
   ) => void;
 }): Promise<SessionDeliveryStateRepairReport & { warnings?: string[] }> {
   try {
+    const recoveredTombstones = new Set<string>();
+    const retainedWarnings = new Map<string, string>();
+    const reportRetained = () => {
+      for (const [sessionKey, warning] of retainedWarnings) {
+        note(`${sessionKey}: ${warning}`, "Session recovery warning");
+      }
+    };
     const plan = prepareSessionEntryRepairs({
       ...params,
       source: "raw",
-      rawNeedsRepair: needsLegacySessionEntryRepair,
-      rawTransform: (entry, _sessionKey, updatedAt) => {
+      rawNeedsRepair: (entry, sessionKey) => {
+        const tombstone = inspectLegacyRestartTombstone(entry);
+        if (tombstone && !tombstone.retire) {
+          retainedWarnings.set(sessionKey, tombstone.warning);
+        }
+        return needsLegacySessionEntryRepair(entry);
+      },
+      rawTransform: (entry, sessionKey, updatedAt) => {
         if (!needsLegacySessionEntryRepair(entry)) {
           return { entry };
         }
         const next = migrateLegacySessionEntryState(entry, updatedAt);
+        const tombstone = inspectLegacyRestartTombstone(entry);
+        retainedWarnings.delete(sessionKey);
+        if (tombstone?.retire) {
+          recoveredTombstones.add(sessionKey);
+        } else if (tombstone) {
+          retainedWarnings.set(sessionKey, tombstone.warning);
+        }
         return {
           ...next,
           entry: hasLegacySessionProviderState(entry)
@@ -286,6 +308,7 @@ export async function repairLegacySessionEntryStates(params: {
       ...(plan.deferredWarnings.length > 0 ? { warnings: plan.deferredWarnings } : {}),
     };
     if (!params.apply || plan.found === 0) {
+      reportRetained();
       params.onInspectedTargets?.(plan.inspectedTargets);
       return report;
     }
@@ -313,6 +336,13 @@ export async function repairLegacySessionEntryStates(params: {
       assertCurrent();
       note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
       report.repaired = plan.apply(assertTargetCurrent);
+      reportRetained();
+      for (const sessionKey of recoveredTombstones) {
+        note(
+          `Recovered legacy restart tombstone for ${sessionKey}; obsolete claims and pending delivery retired (original state backed up).`,
+          "Session recovery warning",
+        );
+      }
       params.onInspectedTargets?.(plan.inspectedTargets);
       note(
         `- Canonicalized entry state for ${report.repaired} durable session row(s).`,
