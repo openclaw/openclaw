@@ -32,6 +32,13 @@ field map and defaults.
 
 ## Minimal config
 
+**Configuration example — do not run in a terminal.** This is a minimal complete
+file for a new setup. Save it as `~/.openclaw/openclaw.json` only if you do not
+already have a config. For an existing setup, merge only the settings you want
+into the matching objects; do not replace the file or remove unrelated settings.
+Use `openclaw config file` in a terminal to find the active path if it differs
+from the default.
+
 ```json5
 // ~/.openclaw/openclaw.json
 {
@@ -44,17 +51,27 @@ field map and defaults.
 
 <Tabs>
   <Tab title="Interactive wizard">
+    **Terminal commands** — run on the machine hosting your Gateway. Use
+    `openclaw onboard` for onboarding or `openclaw configure` to edit selected
+    settings in an existing setup.
+
     ```bash
     openclaw onboard       # full onboarding flow
     openclaw configure     # config wizard
     ```
+
   </Tab>
   <Tab title="CLI (one-liners)">
+    **Terminal commands** — each command reads or changes only the named path
+    in your active config, preserving unrelated settings. Run only the command
+    for the setting you intend to inspect, change, or remove.
+
     ```bash
     openclaw config get agents.defaults.workspace
     openclaw config set agents.defaults.userTimezone "Europe/Vienna"
     openclaw config unset plugins.entries.brave.config.webSearch.apiKey
     ```
+
   </Tab>
   <Tab title="Control UI">
     Open [http://127.0.0.1:18789](http://127.0.0.1:18789) and use the **Config** tab.
@@ -71,7 +88,10 @@ field map and defaults.
     with **Hide advanced** on the divider to collapse them again.
   </Tab>
   <Tab title="Direct edit">
-    Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](/gateway/configuration/hot-reload)).
+    Edit `~/.openclaw/openclaw.json` directly, preserving unrelated settings.
+    Configuration examples are JSON5, not terminal commands: merge their keys
+    into the matching existing objects instead of replacing your whole file.
+    The Gateway watches the file and applies changes automatically (see [hot reload](/gateway/configuration/hot-reload)).
   </Tab>
 </Tabs>
 
