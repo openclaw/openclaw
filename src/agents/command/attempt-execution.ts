@@ -52,6 +52,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
+import { resolveCyberAccessProgramForProvider } from "../model-catalog-access-programs.js";
 import { isCliProvider } from "../model-selection.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -346,7 +347,10 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
       },
       async (turn) => {
         const { sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult } = turn;
-        const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;
+        const accessProgram = resolveCyberAccessProgramForProvider(
+          params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram,
+          params.providerOverride,
+        ).program;
         if (accessProgram !== undefined && accessProgram !== "standard") {
           throw new Error(
             "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",

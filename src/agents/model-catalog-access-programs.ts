@@ -111,6 +111,25 @@ export function resolveModelCyberAccessProgramDefault(params: {
     : undefined;
 }
 
+// OpenAI models, including the Codex provider ids its plugin owns.
+const OPENAI_ACCESS_PROGRAM_PROVIDERS = new Set(["openai", "openai-codex", "codex", "codex-cli"]);
+
+/**
+ * Daybreak is an OpenAI program. A saved session choice survives model changes so it
+ * applies again on an OpenAI model, but any other provider runs that turn as Standard.
+ * OpenAI routes keep their explicit entitlement and runtime errors.
+ */
+export function resolveCyberAccessProgramForProvider(
+  program: CyberAccessProgram | undefined,
+  provider: string,
+): { program: CyberAccessProgram | undefined; notApplied?: CyberAccessProgram } {
+  return program === undefined ||
+    program === "standard" ||
+    OPENAI_ACCESS_PROGRAM_PROVIDERS.has(normalizeProviderId(provider))
+    ? { program }
+    : { program: "standard", notApplied: program };
+}
+
 /** The application baseline and configured inheritance do not grant Daybreak entitlement. */
 export function projectModelCatalogAccessPrograms(
   params: Parameters<typeof resolveModelCatalogAccessPrograms>[0] & {

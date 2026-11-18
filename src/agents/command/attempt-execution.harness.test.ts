@@ -140,7 +140,7 @@ describe("embedded attempt harness pinning", () => {
   });
 
   it.each(["saved", "run-scoped"] as const)(
-    "rejects a %s Access override before starting an unsupported CLI runtime",
+    "runs a non-OpenAI CLI turn as Standard when a %s Daybreak choice is set",
     async (source) => {
       const sessionKey = "agent:main:access-cli";
       const sessionEntry = makeSessionEntry(
@@ -149,19 +149,24 @@ describe("embedded attempt harness pinning", () => {
       );
       const storePath = path.join(tmpDir, "sessions.json");
       await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
-      await expect(
-        runHarnessAttempt(
-          {
-            providerOverride: "claude-cli",
-            modelOverride: "opus",
-            sessionEntry,
-            storePath,
-            ...(source === "run-scoped" ? { cyberAccessProgram: "daybreak_blue" as const } : {}),
-          },
-          sessionKey,
-        ),
-      ).rejects.toThrow("Daybreak access is unsupported by this CLI runtime");
-      expect(runCliAgentMock).not.toHaveBeenCalled();
+      runCliAgentMock.mockResolvedValueOnce({
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
+      await runHarnessAttempt(
+        {
+          providerOverride: "claude-cli",
+          modelOverride: "opus",
+          sessionEntry,
+          storePath,
+          ...(source === "run-scoped" ? { cyberAccessProgram: "daybreak_blue" as const } : {}),
+        },
+        sessionKey,
+      );
+      expect(runCliAgentMock).toHaveBeenCalledOnce();
+      // The saved choice stays for a later OpenAI turn; this turn simply carries none.
+      expect(sessionEntry.cyberAccessProgram).toBe(
+        source === "saved" ? "daybreak_blue" : undefined,
+      );
     },
   );
 

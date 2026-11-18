@@ -384,7 +384,9 @@ it.each(dispatchCases)(
       let activeControls: ReturnType<typeof laneController.createAttemptControls> | undefined;
       const targetChecked = new Error("prepared transcript target checked");
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
-        expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
+        expect(params.cyberAccessProgram).toBe(
+          cyberAccessProgram === undefined ? undefined : "standard",
+        );
         sourceTurn.expectBinding(params);
         if (transcriptTargetInvalidation) {
           if (
