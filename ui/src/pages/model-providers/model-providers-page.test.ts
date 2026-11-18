@@ -548,7 +548,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
   });
 
-  it("removes a provider only after confirmation and reports the Gateway warning", async () => {
+  it("removes saved provider access only after confirmation and reports the Gateway warning", async () => {
     const shell = document.body.appendChild(document.createElement("div"));
     shell.className = "shell";
     const toast = shell.appendChild(document.createElement("openclaw-toast-host"));
@@ -565,7 +565,7 @@ describe("ModelProvidersPage agent scope", () => {
     const row = await expandProvider(page, "openai");
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
     const { modal } = await getRenderedModalDialog(document.body);
-    expect(modal.textContent).toContain("Remove OpenAI");
+    expect(modal.textContent).toContain("Remove saved access to OpenAI");
     expect(requestCount(request, "models.authLogout")).toBe(0);
     modal.querySelector<HTMLButtonElement>("button.danger")!.click();
     // The saved API-key profile is a provider-wide sign-out; nothing goes through config.
