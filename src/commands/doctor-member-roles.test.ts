@@ -11,7 +11,12 @@ import {
 } from "../flows/doctor-health-context.test-support.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { resolveInitialDoctorHealthContributions } from "../flows/doctor-health-contributions-initial.js";
-import { writeStoredClaw, type StoredClaw } from "../gateway/openclaw-id/claw-store.js";
+import { readDoctorMemberRoles } from "../flows/doctor-member-roles.store.js";
+import {
+  readStoredClaw,
+  writeStoredClaw,
+  type StoredClaw,
+} from "../gateway/openclaw-id/claw-store.js";
 import { stateTest } from "../plugin-state/plugin-state-fixtures.test-support.js";
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -109,7 +114,8 @@ it("reads every undefined member role from the local claw with the Gateway stopp
   state,
 }) => {
   state.applyEnv();
-  await writeStoredClaw(claw({ alice: "researcher", bob: "retired", carol: "viewer" }));
+  await writeStoredClaw(claw({ alice: "researcher", carol: "viewer" }));
+  await clawStore().register("members:1", claw({ bob: "retired" }).authority!.members);
   await closeOpenClawStateDatabaseAsync();
   const findings = await detect(cfg());
   expect(findings.map(({ message }) => message)).toEqual([
@@ -138,6 +144,12 @@ const clawStore = () =>
     retention: "retained",
   });
 
+it("reads member roles from a monolithic claw record", async ({ state }) => {
+  state.applyEnv();
+  await clawStore().register("current", claw({ alice: "retired" }));
+  expect(await readDoctorMemberRoles()).toEqual(new Map([["alice", "retired"]]));
+});
+
 it("reports incomplete local membership instead of passing silently", async ({ state }) => {
   state.applyEnv();
   await writeStoredClaw(claw({ alice: "viewer" }));
@@ -156,9 +168,37 @@ for (const members of [null, [], 42]) {
     state.applyEnv();
     await writeStoredClaw(claw({ alice: "undefined-role" }));
     await clawStore().register("members", members);
+    expect((await readStoredClaw())?.authority?.members).toEqual({});
     expect(await detect(cfg())).toEqual([
       expect.objectContaining({ requirement: "membership-unreadable" }),
     ]);
+    expect(await clawStore().lookup("members")).toEqual(members);
+    await clawStore().register("current", {
+      ...claw({}),
+      authority: { ...claw({}).authority, members },
+    });
+    expect(await detect(cfg())).toEqual([
+      expect.objectContaining({ requirement: "membership-unreadable" }),
+    ]);
+  });
+}
+
+for (const key of ["members", "members:1"]) {
+  it(`refuses a malformed ${key} chunk only in Doctor`, async ({ state }) => {
+    state.applyEnv();
+    for (const value of [null, [], 42, "not a member collection"]) {
+      await writeStoredClaw(claw({ alice: "undefined-role" }));
+      await clawStore().register(key, value);
+      await expect(readDoctorMemberRoles()).rejects.toThrow(
+        "OpenClaw ID claw storage has an invalid member collection",
+      );
+      expect(await detect(cfg())).toEqual([
+        expect.objectContaining({
+          requirement: "membership-unreadable",
+          message: "Doctor could not read OpenClaw ID membership from the local claw record.",
+        }),
+      ]);
+    }
   });
 }
 

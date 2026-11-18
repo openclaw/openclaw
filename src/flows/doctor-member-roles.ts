@@ -1,6 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
-import { readStoredClaw } from "../gateway/openclaw-id/claw-store.js";
 import {
   listMissingMemberRolePresets,
   withMissingMemberRolePresets,
@@ -15,11 +13,12 @@ import {
   recordDoctorHealthWarnings,
   renderStructuredHealthFindings,
 } from "./doctor-health-contribution.js";
+import { readDoctorMemberRoles } from "./doctor-member-roles.store.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const CHECK_ID = "core/doctor/member-roles";
 
-/** Offline diagnostics consume the same local membership and engine owners as Access. */
+/** Offline diagnostics inspect stored membership and use the shared engine availability probe. */
 export const memberRolesCheck: HealthCheck = {
   id: CHECK_ID,
   kind: "core",
@@ -80,23 +79,19 @@ export const memberRolesCheck: HealthCheck = {
     }
     const sandboxUsers: string[] = [];
     try {
-      const claw = await readStoredClaw();
-      if (claw && claw.authority !== null && !isRecord(claw.authority.members)) {
-        throw new Error("Invalid OpenClaw ID member collection");
-      }
-      for (const [accountId, member] of Object.entries(claw?.authority?.members ?? {})) {
-        const definition = Object.hasOwn(roles.definitions, member.role)
-          ? roles.definitions[member.role]
+      for (const [accountId, role] of await readDoctorMemberRoles(env)) {
+        const definition = Object.hasOwn(roles.definitions, role)
+          ? roles.definitions[role]
           : undefined;
         if (!definition) {
           warn(
             "member-role-undefined",
-            `OpenClaw ID member "${accountId}" has undefined role "${member.role}" and cannot connect.`,
-            `Define "${member.role}" in gateway.roles.definitions, or change this member's role on the Access page.`,
+            `OpenClaw ID member "${accountId}" has undefined role "${role}" and cannot connect.`,
+            `Define "${role}" in gateway.roles.definitions, or change this member's role on the Access page.`,
             accountId,
           );
         } else if (definition.sandbox === "required") {
-          sandboxUsers.push(`member "${accountId}" (role "${member.role}")`);
+          sandboxUsers.push(`member "${accountId}" (role "${role}")`);
         }
       }
     } catch {
