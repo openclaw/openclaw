@@ -1,3 +1,4 @@
+import { appendFileSync } from "node:fs";
 import { withRequiredSessionPlacement } from "../../agents/session-placement-admission.js";
 import type {
   PreparedSessionPlacementSandbox,
@@ -56,6 +57,34 @@ import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-acce
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
 const loadRemoteExecTurn = createLazyRuntimeModule(() => import("./workspace-result-finalize.js"));
 const loadRetainedWorkerTurn = createLazyRuntimeModule(() => import("./worker-turn-retained.js"));
+
+// Disposable qualification only: observe the raw load, not its cancellation race.
+let qualificationLoadSequence = 0;
+async function loadObservedWorkerTurnExecution() {
+  const directory = process.env.OPENCLAW_QUALIFICATION_DIR;
+  if (!directory) {
+    return loadWorkerTurnExecution();
+  }
+  const loadId = ++qualificationLoadSequence;
+  const record = (event: "load-begin" | "load-end") => {
+    try {
+      appendFileSync(
+        directory + "/worker-execution-load-" + process.pid + ".jsonl",
+        JSON.stringify({
+          event,
+          loadId,
+          at: Date.now(),
+          cpu: process.cpuUsage(),
+        }) + "\n",
+        { mode: 0o600 },
+      );
+    } catch {
+      // Observation must not replace the original load outcome.
+    }
+  };
+  record("load-begin");
+  return loadWorkerTurnExecution().finally(() => record("load-end"));
+}
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const activeWorkerTurns = new Map<string, workerTurnOwner.ActiveWorkerTurn>();
@@ -439,8 +468,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               const execute = remoteExec
                 ? (await raceNodeWorkerOperation(loadRemoteExecTurn(), turn.abortSignal))
                     .executeRemoteExecTurn
-                : (await raceNodeWorkerOperation(loadWorkerTurnExecution(), turn.abortSignal))
-                    .executeWorkerTurn;
+                : (
+                    await raceNodeWorkerOperation(
+                      loadObservedWorkerTurnExecution(),
+                      turn.abortSignal,
+                    )
+                  ).executeWorkerTurn;
               const { withWorkerTurnTranscriptDatabase } =
                 await import("./worker-turn-transcript-target.js");
               assertPreparationCurrent();
