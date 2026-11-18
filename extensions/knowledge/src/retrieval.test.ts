@@ -545,8 +545,8 @@ it("matches canonical keyword spellings without changing record bytes", async ()
       ]);
     }
   }
-  const hits = await f.service.grep({ query: nfc }, f.owner);
-  for (const hit of hits.hits) {
+  const hits = await f.service.grep({ query: nfc, detail: "full" }, f.owner);
+  for (const hit of hits.hits.filter(isFullHit)) {
     const body = hit.record.id === "canonical_nfc" ? nfc : nfd;
     expect(hit.snippet.text).toBe(body.slice(hit.snippet.start, hit.snippet.end));
   }
