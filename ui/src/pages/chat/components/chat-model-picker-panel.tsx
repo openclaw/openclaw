@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Errored, For, Show, useContext } from "solid-js";
+import { createMemo, createSignal, Errored, For, onSettled, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -217,6 +217,14 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   });
   const searchView =
     search && createChatModelSearchView(search, catalog, (key) => window.reveal(key));
+  const prefetchAccounts = () => {
+    const provider = state().activeProvider;
+    return search?.open() &&
+      (modelSelectionLocked() ||
+        (provider && searchView?.providerOpen(provider) && !searchView.filtering()))
+      ? panel.params.accountSection?.prefetch
+      : undefined;
+  };
   const activeAuth = createMemo(() => {
     const group = state().orderedProviderGroups.find(([provider]) =>
       searchView?.providerOpen(provider),
@@ -492,6 +500,12 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
           : undefined
       }
     >
+      <Show when={prefetchAccounts()} keyed>
+        {(prefetch) => {
+          onSettled(() => prefetch());
+          return null;
+        }}
+      </Show>
       {modelSelectionLocked() ? (
         <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
           <span class="chat-controls__locked-model-value">{panel.params.triggerModelLabel}</span>

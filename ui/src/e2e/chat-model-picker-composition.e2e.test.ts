@@ -27,6 +27,60 @@ const authStatus = (profileId: string, email: string) =>
   modelAuthStatus([{ profileId, type: "oauth", status: "ok", displayName: accountLabel, email }]);
 
 suite.define(() => {
+  it("prefetches saved accounts on provider open without a loading option", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const models = [{ id: "shared-alpha", name: "OpenAI Standard", provider: "openai" }];
+      const gateway = await installMockGateway(page, {
+        agentModel: "openai/shared-alpha",
+        models,
+        methodResponses: {
+          "models.list": {
+            models,
+            accountSelection: { kind: "automatic", label: "Automatic account selection" },
+          },
+        },
+      });
+      await page.goto(new URL("chat", suite.server.baseUrl).href);
+      const { picker, trigger } = modelPicker(page);
+      const rpc = "users.listModelAccounts";
+      expect(await gateway.getRequests(rpc)).toHaveLength(0);
+      await gateway.deferNext(rpc, {});
+      await trigger.click();
+      const accountToggle = picker.locator(".chat-controls__account-trigger");
+      await polledVisible(accountToggle).toBe(true);
+      expect((await gateway.waitForRequest(rpc)).params).toEqual({});
+      await accountToggle.click();
+      const popover = picker.locator(".chat-controls__account-popover:popover-open");
+      const current = popover.locator('[data-chat-account-option="current"]');
+      await polledVisible(current).toBe(true);
+      const list = popover.getByRole("listbox");
+      await polledAttribute(list, "aria-busy").toBe("true");
+      await polledVisible(current.locator(".chat-controls__account-spinner")).toBe(true);
+      expect(await popover.locator('[data-chat-account-option="loading"]').count()).toBe(0);
+      expect(await gateway.getRequests(rpc)).toHaveLength(1);
+      await gateway.resolveDeferred(rpc, {
+        profileId: "test-person",
+        accounts: [
+          {
+            authProfileId: "openai:work",
+            label: "Work account",
+            provider: "openai",
+            authType: "oauth",
+            selected: false,
+          },
+        ],
+        links: [],
+      });
+      await polledAttribute(list, "aria-busy").toBe("false");
+      const alternate = popover.getByRole("option", { name: "Work account" });
+      await polledVisible(alternate).toBe(true);
+      await accountToggle.click();
+      await accountToggle.click();
+      await polledVisible(alternate).toBe(true);
+      expect(await gateway.getRequests(rpc)).toHaveLength(1);
+    });
+  });
+
   it("refreshes the mounted composer's account identity after an auth publication", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];

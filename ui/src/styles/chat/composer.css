@@ -4799,7 +4799,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-popover .chat-controls__account-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) 40px;
   column-gap: 12px;
   min-height: 34px;
   padding: 4px 2px 4px 8px;
@@ -4849,8 +4849,14 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__account-popover .chat-controls__model-option-action {
-  width: 24px;
+  width: 40px;
   margin: 0;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.chat-controls__account-spinner {
+  color: var(--muted);
 }
 
 .chat-controls__account-popover .chat-controls__inline-select-check svg {

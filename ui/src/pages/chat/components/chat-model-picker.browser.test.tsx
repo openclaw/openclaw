@@ -775,6 +775,7 @@ it("opens account choices without covering model choices while closed", async ()
   await page.viewport(1280, 900);
   const { picker, params, update, toggle, trigger } = mountPicker();
   params.accountSection = {
+    prefetch: undefined,
     onClose() {},
     viewProps: (startIndex) => ({
       selectionKind: "automatic",
@@ -784,6 +785,7 @@ it("opens account choices without covering model choices while closed", async ()
       currentValue: "current",
       open: false,
       error: null,
+      loading: null,
       startIndex,
       onToggle() {},
       onSelect() {},

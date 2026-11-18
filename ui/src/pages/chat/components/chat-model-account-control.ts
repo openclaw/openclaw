@@ -19,6 +19,7 @@ type AccountInventory = {
   selection: ChatAccountSelection;
   accounts: UserModelAccount[];
   nextCursor?: string;
+  loaded: boolean;
   loading: boolean;
   open: boolean;
   error: string | null;
@@ -57,12 +58,13 @@ export function renderChatModelAccountControl(params: {
         selection,
         accounts: [],
         nextCursor: undefined,
+        loaded: false,
         loading: false,
         open: false,
         error: null,
         isCurrent: params.ownsSelection,
       },
-      ["accounts", "nextCursor", "loading", "open", "error"],
+      ["accounts", "nextCursor", "loaded", "loading", "open", "error"],
     );
     inventories.set(owner, inventory);
   }
@@ -85,6 +87,7 @@ export function renderChatModelAccountControl(params: {
           ? [...currentInventory.accounts, ...result.accounts]
           : result.accounts;
         currentInventory.nextCursor = result.nextCursor;
+        currentInventory.loaded = true;
       }
     } catch (error) {
       if (ownsInventory()) {
@@ -158,9 +161,6 @@ export function renderChatModelAccountControl(params: {
     ...(params.onAutomatic
       ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
       : []),
-    ...(currentInventory.loading
-      ? [{ value: "loading", label: t("common.loading"), disabled: true }]
-      : []),
     ...(currentInventory.nextCursor
       ? [
           {
@@ -196,18 +196,15 @@ export function renderChatModelAccountControl(params: {
   };
   const toggleAccounts = () => {
     currentInventory.open = !currentInventory.open;
-    // Reopening retries an empty inventory after a failed load; loaded pages are reused.
-    if (
-      currentInventory.open &&
-      currentInventory.accounts.length === 0 &&
-      !currentInventory.loading
-    ) {
+    // An explicit open can retry a failed first page. A successful empty page is cached.
+    if (currentInventory.open && !currentInventory.loaded) {
       void loadAccounts();
     }
   };
   // The picker observes this section snapshot to resynchronize its search DOM.
   const open = currentInventory.open;
   const error = currentInventory.error;
+  const loading = currentInventory.loading ? (currentInventory.loaded ? "more" : "initial") : null;
   const viewProps = (startIndex: number) => ({
     selectionKind: selection.kind,
     disabled: params.disabled,
@@ -216,11 +213,16 @@ export function renderChatModelAccountControl(params: {
     currentValue,
     open,
     error,
+    loading,
     startIndex,
     onToggle: toggleAccounts,
     onSelect: selectAccount,
   });
   return {
+    prefetch:
+      client && !params.disabled && !currentInventory.loaded && !currentInventory.loading && !error
+        ? () => void loadAccounts()
+        : undefined,
     onClose: () => {
       currentInventory.open = false;
     },

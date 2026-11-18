@@ -56,6 +56,7 @@ export function ChatModelAccountOptions(
     const renderer = renderRow();
     return renderer ? renderer(key, render) : render();
   };
+  const loadingOption = () => (props.loading === "initial" ? props.currentValue : "more");
   return (
     <>
       <div
@@ -64,6 +65,7 @@ export function ChatModelAccountOptions(
         data-chat-model-list="true"
         role="listbox"
         aria-label={t("chat.modelAccounts.section")}
+        aria-busy={props.loading ? "true" : "false"}
       >
         <For each={props.options} keyed={(option) => option.value}>
           {(option, index) => {
@@ -82,7 +84,7 @@ export function ChatModelAccountOptions(
                       class={[
                         "chat-controls__inline-select-option chat-controls__model-option",
                         {
-                          "chat-controls__account-row": !["loading", "more", "manage"].includes(
+                          "chat-controls__account-row": !["more", "manage"].includes(
                             option().value,
                           ),
                           "chat-controls__account-manage": option().value === "manage",
@@ -135,6 +137,12 @@ export function ChatModelAccountOptions(
                         </Show>
                       </span>
                       <span class="chat-controls__model-option-action">
+                        <Show when={props.loading && option().value === loadingOption()}>
+                          <span
+                            class="btn__spinner chat-controls__account-spinner"
+                            aria-hidden="true"
+                          />
+                        </Show>
                         <Show when={option().value === props.currentValue}>
                           <span class="chat-controls__inline-select-check" aria-hidden="true">
                             <Icon name="check" />
@@ -149,6 +157,11 @@ export function ChatModelAccountOptions(
           }}
         </For>
       </div>
+      <Show when={!renderRow() && props.open}>
+        <span class="sr-only" role="status">
+          {props.loading ? t("common.loading") : ""}
+        </span>
+      </Show>
       <Show when={props.error}>
         {row("error:accounts", () => (
           <span class="chat-controls__account-error" role="alert">
