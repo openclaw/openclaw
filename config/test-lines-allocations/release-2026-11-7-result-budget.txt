@@ -1,0 +1,3 @@
+152
+# Result-budget backport: 118-line production-dispatch/context-guard page reconstruction
+# regression plus 34-line remote batch discovery regression. Existing budget test adapted in place.
