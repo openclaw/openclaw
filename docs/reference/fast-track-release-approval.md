@@ -108,8 +108,9 @@ implementation or require access to its source.
 
 ## Independent human decision
 
-Service deployment and backend implementation are owned separately and are not
-shipped from this repository. This repository owns only the approval client and
+Service deployment and backend implementation are owned by `openclaw/releases`,
+under `fast-track/` ([service source PR](https://github.com/openclaw/releases/pull/56)),
+and are not shipped from this repository. This repository owns only the approval client and
 release-request/verification contracts.
 Only authenticated Google Chat Workspace add-on button events from the exact
 Vincent/Dallin allowlist can settle requests. Email enrollment is pinned to stable
