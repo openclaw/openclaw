@@ -338,6 +338,124 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].waitForExistence(timeout: 5), file: file, line: line)
     }
 
+    func productionNestedControl(
+        _ path: String, post: Bool = false, deadline: Date? = nil) async throws -> [String: Any]
+    {
+        let environment = ProcessInfo.processInfo.environment
+        let base = try XCTUnwrap(environment["OPENCLAW_IOS_CONVERSATION_CONTROL_URL"].flatMap(URL.init(string:)))
+        XCTAssertEqual(base.scheme, "http")
+        XCTAssertEqual(base.host, "127.0.0.1")
+        let root = try XCTUnwrap(environment["OPENCLAW_IOS_PRODUCTION_CONVERSATION_URL"].flatMap(URL.init(string:)))
+        XCTAssertEqual(root.scheme, "http")
+        XCTAssertEqual(root.host, "127.0.0.1")
+        let url = try XCTUnwrap(URL(string: path, relativeTo: base))
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 10
+        if let deadline {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw URLError(.timedOut) }
+            request.timeoutInterval = min(request.timeoutInterval, remaining)
+        }
+        request.httpMethod = post ? "POST" : "GET"
+        try request.setValue(
+            XCTUnwrap(environment["OPENCLAW_IOS_CONVERSATION_CONTROL_TOKEN"]),
+            forHTTPHeaderField: "x-fixture-token")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    func heldProductionNestedRequest(sessionKey: String, after baseline: Int) async throws -> Int {
+        let deadline = Date().addingTimeInterval(10)
+        repeat {
+            let status = try await self.productionNestedControl("/status")
+            let matches = try self.productionNestedRequests(status, sessionKey: sessionKey, after: baseline)
+            guard matches.count <= 1 else { throw URLError(.cannotParseResponse) }
+            if let row = matches.first, row["released"] as? Bool == false, row["closed"] as? Bool == false {
+                let id = try XCTUnwrap(row["id"] as? Int)
+                let pending = try XCTUnwrap(status["pendingProviderRequestIds"] as? [Int])
+                return try XCTUnwrap(pending.contains(id) ? id : nil, "Correlated provider must actually be pending")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        } while Date() < deadline
+        XCTFail("No actual held provider request contains the complete dedicated session kickoff")
+        throw NSError(domain: "ProductionNestedFixture", code: 1)
+    }
+
+    func productionNestedRequests(
+        _ status: [String: Any], sessionKey: String, after baseline: Int) throws -> [[String: Any]]
+    {
+        let startText = "Start synthetic conversation " + sessionKey
+        let rows = try XCTUnwrap(status["requests"] as? [[String: Any]])
+        var matches: [[String: Any]] = []
+        for row in rows {
+            let id = try XCTUnwrap(row["id"] as? Int)
+            guard id > baseline else { continue }
+            var matched = false
+            let body = try XCTUnwrap(row["body"] as? [String: Any])
+            let input = try XCTUnwrap(body["input"] as? [[String: Any]])
+            for message in input
+                where message["type"] as? String == "message" && message["role"] as? String == "user"
+            {
+                for part in try XCTUnwrap(message["content"] as? [[String: Any]])
+                    where part["type"] as? String == "input_text"
+                {
+                    var text = try XCTUnwrap(part["text"] as? String)
+                    if let timestamp = text.range(
+                        of: #"^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) \d{4}-\d{2}-\d{2} "# +
+                            #"\d{2}:\d{2}(?::\d{2})? [A-Z]{2,5}(?:[+-]\d{1,2}(?::\d{2})?)?\] "#,
+                        options: .regularExpression)
+                    { text.removeSubrange(timestamp) }
+                    let prefix = "Conversation info: ⟦openclaw:ctx⟧\n```json\n"
+                    if text.hasPrefix(prefix) {
+                        let begin = text.index(text.startIndex, offsetBy: prefix.count)
+                        let end = try XCTUnwrap(text.range(of: "\n```\n\n", range: begin..<text.endIndex))
+                        let metadata = try XCTUnwrap(JSONSerialization.jsonObject(
+                            with: Data(text[begin..<end.lowerBound].utf8)) as? [String: Any])
+                        XCTAssertNotNil(metadata["sender"] as? [String: Any])
+                        guard metadata["sender"] is [String: Any] else { throw URLError(.cannotParseResponse) }
+                        text = String(text[end.upperBound...])
+                    }
+                    if text == startText { matched = true }
+                }
+            }
+            if matched { matches.append(row) }
+        }
+        return matches
+    }
+
+    func releaseProductionNestedRequestIfPending(sessionKey: String, after baseline: Int) async throws {
+        let deadline = Date().addingTimeInterval(10)
+        var releasedID: Int?
+        repeat {
+            let status = try await self.productionNestedControl("/status", deadline: deadline)
+            let matches = try self.productionNestedRequests(status, sessionKey: sessionKey, after: baseline)
+            guard matches.count <= 1 else { throw URLError(.cannotParseResponse) }
+            let pending = try XCTUnwrap(status["pendingProviderRequestIds"] as? [Int])
+            if let row = matches.first {
+                let id = try XCTUnwrap(row["id"] as? Int)
+                let released = try XCTUnwrap(row["released"] as? Bool)
+                let closed = try XCTUnwrap(row["closed"] as? Bool)
+                if !pending.contains(id) {
+                    guard released || closed else { throw URLError(.cannotParseResponse) }
+                    return
+                }
+                guard !released, !closed else { throw URLError(.cannotParseResponse) }
+                if releasedID == nil {
+                    releasedID = id
+                    _ = try await self.productionNestedControl("/release?id=\(id)", post: true, deadline: deadline)
+                } else if releasedID != id {
+                    throw URLError(.cannotParseResponse)
+                }
+            }
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 { try await Task.sleep(for: .seconds(min(0.1, remaining))) }
+        } while Date() < deadline
+        // No match is not proof that a lost POST cannot arrive after this window.
+        throw URLError(.timedOut)
+    }
+
     func launchPairedLiveGatewayApp(
         initialTab: String,
         initialDestination: String) throws -> XCUIApplication

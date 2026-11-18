@@ -226,73 +226,6 @@ struct IOSConversationAdapterTests {
         }
     }
 
-    @Test(.timeLimit(.minutes(1)))
-    func `ios nested quiet output and authoritative pending state render in native cells`() async throws {
-        let model = OpenClawChatViewModel(
-            sessionKey: "main",
-            transport: IOSGatewayChatTransport(gateway: GatewayNodeSession()))
-        defer { model.detachTransport() }
-        var quiet = try #require(await OpenClawChatViewModel
-            .decodeMessages([ChatSessionsCodingTests.nestedRaw(ChatSessionsCodingTests.nestedEnvelope)])
-            .first)
-        quiet.activity = []
-        model.messages = [quiet]
-        let scene = try #require(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-            .first { $0.activationState == .foregroundActive })
-        let previousKeyWindow = scene.windows.first(where: \.isKeyWindow)
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 1180, height: 820)
-        let host = NestedTranscriptHost(rootView: OpenClawChatView(
-            viewModel: model, displayOptions: [.toolActivity], composerChrome: .clean))
-        window.rootViewController = host
-        window.makeKeyAndVisible()
-        defer { window.isHidden = true
-            window.rootViewController = nil
-            previousKeyWindow?.makeKeyAndVisible()
-        }
-        try await TestWait.state("native nested host has appeared with a collection cell") {
-            host.view.layoutIfNeeded()
-            return host.hasAppeared && Self.transcriptList(host.view)?.visibleCells.isEmpty == false
-        }
-        let list = try #require(Self.transcriptList(host.view))
-        #expect(!list.visibleCells.flatMap { TranscriptToolAccessibility.nodes(in: $0) }
-            .contains { TranscriptToolAccessibility.identifier(of: $0) == "chat-tool-activity-nested-call" })
-        try await TranscriptToolAccessibility.requireResult(
-            list,
-            host: host,
-            callID: "nested-call",
-            title: "Knowledge Status",
-            status: "Finished",
-            output: "Nested success output",
-            onFailure: { trace in
-                // Observe only this synthetic host after exhaustion; never settle or reactivate it.
-                let facts = [
-                    "messages=\(model.messages.count) transcript=\(model.transcriptMessages.count) " +
-                        "quietMatch=\(model.messages == [quiet]) loading=\(model.isLoading)",
-                    "windowHidden=\(window.isHidden) key=\(window.isKeyWindow) " +
-                        "scene=\(scene.activationState.rawValue) bounds=\(window.bounds) " +
-                        "hostAttached=\(host.view.window === window) hostBounds=\(host.view.bounds)",
-                    "list=\(ObjectIdentifier(list)) sections=\(list.numberOfSections) " +
-                        "items=\((0..<min(list.numberOfSections, 32)).map { list.numberOfItems(inSection: $0) }) " +
-                        "visible=\(list.indexPathsForVisibleItems) updates=\(list.hasUncommittedUpdates)",
-                    "traceCappedAt32=\(trace.count == 32)",
-                ] + trace
-                TranscriptToolAccessibility.recordFailure(trace: facts, list: list, host: host)
-            })
-        var pending = quiet
-        pending.content = Array(pending.content.prefix(1))
-        // A matching canonical start descriptor supplies authority, not a relabeled terminal receipt.
-        pending.activity = [ChatSessionsCodingTests.nestedActivity(status: "running", phase: "start")]
-        model.messages = [pending]
-        try await TestWait.state("native pending custom cell exposes Working without an expandable result") {
-            host.view.layoutIfNeeded()
-            let nodes = list.visibleCells.flatMap { TranscriptToolAccessibility.nodes(in: $0) }
-            return nodes
-                .contains { $0.accessibilityLabel == "Knowledge Status" && $0.accessibilityValue == "Working" } &&
-                !nodes.contains { TranscriptToolAccessibility.identifier(of: $0) == "chat-tool-activity-nested-call" }
-        }
-    }
-
     private func checkNativeConversation(_ probe: ProductionConversationProbe, historyActive: Bool) async throws {
         let key = probe.sessionKey(surface: "native", historyActive: historyActive)
         if historyActive { try await probe.startActive(key) }
@@ -342,61 +275,58 @@ struct IOSConversationAdapterTests {
                     model.healthOK && model.hasAppliedLiveHistory && model.hasRestoredOutboxMessages
                 }
                 #expect(!model.usesWebConversation)
-                let host = UIHostingController(rootView: OpenClawChatView(
-                    viewModel: model, displayOptions: [.toolActivity], composerChrome: .clean))
+                let chat = OpenClawChatView(
+                    viewModel: model, displayOptions: [.toolActivity], composerChrome: .clean)
+                var readerNavigation: (@MainActor (UUID) -> Void)?
+                let host: UIViewController = if historyActive {
+                    UIHostingController(rootView: NativeHistoryReader(chat: chat) { readerNavigation = $0 })
+                } else {
+                    UIHostingController(rootView: chat)
+                }
                 let window = try probe.window(host)
-                defer { window.isHidden = true
+                defer { readerNavigation = nil
+                    window.isHidden = true
                     window.rootViewController = nil
                 }
-                try await TestWait.state("native iOS List has laid out real transcript rows") {
+                let entryHeld = historyActive ? try await probe.heldRequest(key) : nil
+                let activeHistoryAdopted = {
+                    model.sessionKey == key && model.pendingRunCount > 0 && !model.isLoading && model.messages
+                        .contains {
+                            $0.role == "user" && $0.content.compactMap(\.text).joined() == probe.startText(key)
+                        }
+                }
+                try await TestWait.state("native iOS List has laid out the selected, adopted history") {
                     host.view.layoutIfNeeded()
-                    return Self.transcriptList(host.view)?.visibleCells.isEmpty == false
+                    guard let list = Self.transcriptList(host.view), !list.visibleCells.isEmpty else { return false }
+                    return !historyActive || (readerNavigation != nil && activeHistoryAdopted() &&
+                        list.window === window &&
+                        !list.hasUncommittedUpdates &&
+                        list.visibleCells.allSatisfy { !$0.frame.isEmpty && $0.frame.height.isFinite })
                 }
                 let list = try #require(Self.transcriptList(host.view))
-                let rowCount = Self.transcriptCount(list)
-                let original = model.messages
-                let controlMessage = original.first { message in
-                    message.role == "user" && message.content
-                        .contains { $0.text == "Synthetic iPad conversation fixture" }
-                }
-                let control = try #require(controlMessage)
-                // Positive control: observe UIKit deletion and insertion, not SwiftUI onChange.
-                model.messages = original.filter { $0.id != control.id }
-                try await Self.appliedTranscript(list, host: host, count: rowCount - 1)
-                model.messages = original
-                try await Self.appliedTranscript(list, host: host, count: rowCount)
-                let visible = original.filter { !$0.content.allSatisfy { $0.type == "redacted_thinking" } }
-                try #require(visible.count < original.count)
-                // Carry the visible-row deletion through hidden-envelope removal. Old rowCount cannot
-                // pass this barrier; reinsertion then proves UIKit applied the filtered snapshot too.
-                model.messages = visible.filter { $0.id != control.id }
-                try await Self.appliedTranscript(list, host: host, count: rowCount - 1)
-                model.messages = visible
-                try await Self.appliedTranscript(list, host: host, count: rowCount)
-                #expect(Self.transcriptCount(list) == rowCount)
-                for size in [CGSize(width: 1180, height: 820), CGSize(width: 820, height: 1180)] {
-                    window.frame.size = size
-                    host.view.frame = window.bounds
-                    host.view.layoutIfNeeded()
-                    // Realize scrollback/media/error rows too; valid long content has no height cap.
-                    for section in 0..<list.numberOfSections {
-                        for item in 0..<list.numberOfItems(inSection: section) {
-                            let path = IndexPath(item: item, section: section)
-                            list.scrollToItem(at: path, at: .top, animated: false)
-                            try await TestWait.state("native scrollback row is realized and laid out") {
-                                list.layoutIfNeeded()
-                                return list.cellForItem(at: path) != nil && !list.hasUncommittedUpdates
-                            }
-                            let cell = try #require(list.cellForItem(at: path))
-                            #expect(cell.frame.height.isFinite && cell.frame.height > 0)
-                            #expect(cell.frame.width > 0 && cell.frame.width <= window.bounds.width)
-                            print("iOS row: section=\(section), item=\(item), viewport=\(size), frame=\(cell.frame)")
-                        }
+                if let entryHeld {
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        list.performBatchUpdates(nil) { _ in continuation.resume() }
                     }
+                    host.view.layoutIfNeeded()
+                    let open = try #require(try await probe.requests(key).first { $0.id == entryHeld.id })
+                    try #require(!open.released && !open.closed)
+                    try #require(activeHistoryAdopted() && list.window === window &&
+                        !list.hasUncommittedUpdates && !list.visibleCells.isEmpty &&
+                        list.visibleCells.allSatisfy { !$0.frame.isEmpty && $0.frame.height.isFinite })
                 }
-                model.messages = original
-                try await Self.appliedTranscript(list, host: host, count: rowCount)
-                try await TranscriptToolAccessibility.requireNestedResults(model: model, list: list, host: host)
+                try await Self.checkNativeTranscriptLayout(
+                    list, model: model, host: host, window: window, held: entryHeld)
+                { id in
+                    let action = try #require(readerNavigation, "History reader host must still be appeared")
+                    action(id)
+                }
+                // Model/transport proof belongs to BOTH native placements, independently of
+                // the XCUI/Inspector measurement of hosted accessibility controls.
+                let nested = try #require(model.messages.first { $0.content.contains { $0.id == "nested-call" } })
+                let activity = ChatToolActivity.items(message: nested).first
+                #expect(activity?.name == "read" && activity?.resultText == "Recorded nested output" && activity?
+                    .isError == true)
                 if !historyActive {
                     model.input = probe.startText(key)
                     let send = try #require(model.send())
@@ -429,13 +359,14 @@ struct IOSConversationAdapterTests {
                 #expect(saved.attachments.map(\.attachment.data) == [probe.png])
                 #expect(model.hasBlockingRunActivity)
                 try await probe.requireOpen(held)
-                try await probe.releaseUntilIdle(key) { !model.hasBlockingRunActivity }
-                #expect(try await probe.requests(key)
-                    .contains { $0.texts.contains(ProductionConversationProbe.followup) })
-                #expect(model.canSend)
+                try await probe.releaseUntilIdle(key, requiringFollowupAfter: held.id) { !model.hasBlockingRunActivity }
+                let deliveredFollowup = try #require(try await probe.requests(key).first {
+                    $0.id > held.id && $0.texts.contains(ProductionConversationProbe.followup)
+                })
+                try #require(deliveredFollowup.released && deliveredFollowup.closed && model.canSend)
                 let imageSend = try #require(model.send())
                 await imageSend.value
-                let imageRequest = try await probe.heldRequest(key, imageAfter: held.id)
+                let imageRequest = try await probe.heldRequest(key, imageAfter: deliveredFollowup.id)
                 #expect(imageRequest.hasImageTurn(text: ProductionConversationProbe.imageText, png: probe.png))
                 #expect(model.attachments.isEmpty)
                 try await probe.releaseUntilIdle(key) { !model.hasBlockingRunActivity }
@@ -454,18 +385,55 @@ struct IOSConversationAdapterTests {
     }
 
     private static func appliedTranscript(
-        _ list: UICollectionView, host: UIViewController, count: Int) async throws
+        _ list: UICollectionView,
+        host: UIViewController,
+        model: OpenClawChatViewModel,
+        phase: String,
+        count: Int) async throws
     {
-        try await TestWait.state("UIKit transcript snapshot reaches observed row count \(count)") {
-            host.view.layoutIfNeeded()
-            return Self.transcriptCount(list) == count && !list.hasUncommittedUpdates
+        do {
+            try await TestWait.state("\(phase): UIKit transcript snapshot reaches observed row count \(count)") {
+                host.view.layoutIfNeeded()
+                guard Self.transcriptCount(list) == count, !list.hasUncommittedUpdates else { return false }
+                print(Self.transcriptContext(list, model: model, phase: phase, stage: "first-matched-count"))
+                return true
+            }
+        } catch {
+            print(self.transcriptContext(list, model: model, phase: phase, stage: "count-wait-failed"))
+            throw error
         }
         // Complete UICollectionView application/layout, not merely the model change callback.
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             list.performBatchUpdates(nil) { _ in continuation.resume() }
         }
         host.view.layoutIfNeeded()
-        #expect(self.transcriptCount(list) == count)
+        let actual = Self.transcriptCount(list)
+        let context = Self.transcriptContext(list, model: model, phase: phase, stage: "post-batch")
+        print(context)
+        try #require(actual == count, "phase=\(phase) expected=\(count) actual=\(actual); \(context)")
+    }
+
+    private static func transcriptContext(
+        _ list: UICollectionView, model: OpenClawChatViewModel, phase: String, stage: String) -> String
+    {
+        // Bounded synthetic observations, not a projection of expected rows or a production journal.
+        let messages = model.messages.prefix(64).map {
+            "\($0.id):\($0.transcriptMessageID ?? "nil"):\($0.role):" +
+                $0.content.prefix(8).map { $0.type ?? "nil" }.joined(separator: ",")
+        }
+        let sections = (0..<min(list.numberOfSections, 16)).map { list.numberOfItems(inSection: $0) }
+        let cells = list.indexPathsForVisibleItems.sorted {
+            $0.section == $1.section ? $0.item < $1.item : $0.section < $1.section
+        }.prefix(16).compactMap { path -> String? in
+            guard let cell = list.cellForItem(at: path) else { return nil }
+            return "\(path.section):\(path.item):\(ObjectIdentifier(cell)):\(cell.frame)"
+        }
+        return "NATIVE_TRANSCRIPT phase=\(phase) stage=\(stage) session=\(model.sessionKey) " +
+            "pending=\(model.pendingRunCount) runs=\(model.pendingRuns.sorted().prefix(4)) " +
+            "loading=\(model.isLoading) snapshot=\(model.latestAppliedRunSnapshotRequestID) " +
+            "modelCount=\(model.messages.count) orderedIDsAndKinds=\(messages) " +
+            "sectionCount=\(list.numberOfSections) sections=\(sections) uncommitted=\(list.hasUncommittedUpdates) " +
+            "window=\(list.window != nil) bounds=\(list.bounds) contentSize=\(list.contentSize) cells=\(cells)"
     }
 
     private static func transcriptList(_ view: UIView) -> UICollectionView? {
@@ -921,14 +889,113 @@ struct IOSConversationAdapterTests {
     }
 }
 
-/// Cell layout alone can finish before UIKit completes the synthetic host's appearance.
-@MainActor
-private final class NestedTranscriptHost: UIHostingController<OpenClawChatView> {
-    private(set) var hasAppeared = false
+extension IOSConversationAdapterTests {
+    private static func checkNativeTranscriptLayout(
+        _ list: UICollectionView,
+        model: OpenClawChatViewModel,
+        host: UIViewController,
+        window: UIWindow,
+        held: ProductionConversationProbe.Request?,
+        navigateEarlier: @MainActor (UUID) throws -> Void) async throws
+    {
+        let rowCount = Self.transcriptCount(list)
+        let pendingRuns = model.pendingRuns
+        let original = model.messages
+        let controlMessage = original.first { message in
+            message.role == "user" && message.content
+                .contains { $0.text == "Synthetic iPad conversation fixture" }
+        }
+        let control = try #require(controlMessage)
+        // Positive control: observe UIKit deletion and insertion, not SwiftUI onChange.
+        print(Self.transcriptContext(list, model: model, phase: "delete-control", stage: "before-mutation"))
+        model.messages = original.filter { $0.id != control.id }
+        try await Self.appliedTranscript(
+            list, host: host, model: model, phase: "delete-control", count: rowCount - 1)
+        print(Self.transcriptContext(list, model: model, phase: "reinsert-control", stage: "before-mutation"))
+        model.messages = original
+        try await Self.appliedTranscript(
+            list, host: host, model: model, phase: "reinsert-control", count: rowCount)
+        let visible = original.filter { !$0.content.allSatisfy { $0.type == "redacted_thinking" } }
+        try #require(visible.count < original.count)
+        // Carry the visible-row deletion through hidden-envelope removal. Old rowCount cannot
+        // pass this barrier; reinsertion then proves UIKit applied the filtered snapshot too.
+        print(Self.transcriptContext(
+            list, model: model, phase: "filter-hidden-delete-control", stage: "before-mutation"))
+        model.messages = visible.filter { $0.id != control.id }
+        try await Self.appliedTranscript(
+            list, host: host, model: model, phase: "filter-hidden-delete-control", count: rowCount - 1)
+        print(Self.transcriptContext(
+            list, model: model, phase: "reinsert-filtered-control", stage: "before-mutation"))
+        model.messages = visible
+        try await Self.appliedTranscript(
+            list, host: host, model: model, phase: "reinsert-filtered-control", count: rowCount)
+        #expect(Self.transcriptCount(list) == rowCount)
+        if let held {
+            let probe = try ProductionConversationProbe()
+            let key = probe.sessionKey(surface: "native", historyActive: true)
+            let open = try #require(try await probe.requests(key).first { $0.id == held.id })
+            try #require(!open.released && !open.closed && model.sessionKey == key &&
+                model.hasBlockingRunActivity && !pendingRuns.isEmpty && model.pendingRuns == pendingRuns)
+            let startY = list.contentOffset.y
+            // Nested reader reach is unproved; calling the proxy earns no navigation or phase credit.
+            try navigateEarlier(control.presentationID)
+            try await TestWait.state("native reader commits earlier content away from the live edge") {
+                host.view.layoutIfNeeded()
+                return list.window === window && !list.hasUncommittedUpdates &&
+                    list.contentOffset.y < startY - 0.5 &&
+                    list.contentSize.height + list.adjustedContentInset.bottom - list.bounds.maxY > 48
+            }
+            let current = try #require(try await probe.requests(key).first { $0.id == held.id })
+            try #require(!current.released && !current.closed && model.sessionKey == key &&
+                model.hasBlockingRunActivity && model.pendingRuns == pendingRuns)
+        }
+        for size in [CGSize(width: 1180, height: 820), CGSize(width: 820, height: 1180)] {
+            window.frame.size = size
+            host.view.frame = window.bounds
+            host.view.layoutIfNeeded()
+            try #require(list.window === window && Self.transcriptList(host.view) === list)
+            // Realize scrollback/media/error rows too; valid long content has no height cap.
+            for section in 0..<list.numberOfSections {
+                for item in 0..<list.numberOfItems(inSection: section) {
+                    let path = IndexPath(item: item, section: section)
+                    try #require(section < list.numberOfSections && item < list.numberOfItems(inSection: section))
+                    list.scrollToItem(at: path, at: .top, animated: false)
+                    try await TestWait.state("native scrollback row is realized and laid out") {
+                        list.layoutIfNeeded()
+                        return list.cellForItem(at: path) != nil && !list.hasUncommittedUpdates
+                    }
+                    let cell = try #require(list.cellForItem(at: path))
+                    try #require(cell.frame.height.isFinite && cell.frame.height > 0)
+                    try #require(cell.frame.width > 0 && cell.frame.width <= window.bounds.width)
+                    // A prepared cell need not be visible; uncommitted updates do not establish animation completion.
+                    let usableViewport = list.bounds.inset(by: list.adjustedContentInset)
+                    try #require(list.window === window && list.indexPathsForVisibleItems.contains(path) &&
+                        cell.frame.intersects(usableViewport))
+                    print("iOS row: section=\(section), item=\(item), viewport=\(size), frame=\(cell.frame)")
+                }
+            }
+        }
+        print(Self.transcriptContext(list, model: model, phase: "restore-original", stage: "before-mutation"))
+        model.messages = original
+        try await Self.appliedTranscript(
+            list, host: host, model: model, phase: "restore-original", count: rowCount)
+    }
+}
 
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        self.hasAppeared = true
+@MainActor
+private struct NativeHistoryReader: View {
+    let chat: OpenClawChatView
+    let setNavigation: @MainActor ((@MainActor (UUID) -> Void)?) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            self.chat.onAppear {
+                self.setNavigation { id in
+                    withAnimation { proxy.scrollTo(id, anchor: .top) }
+                }
+            }
+            .onDisappear { self.setNavigation(nil) }
+        }
     }
 }
 
@@ -1294,10 +1361,18 @@ private struct ProductionConversationProbe {
         #expect(row["released"] as? Bool == false && row["closed"] as? Bool == false)
     }
 
-    func releaseUntilIdle(_ key: String, idle: () -> Bool) async throws {
+    func releaseUntilIdle(
+        _ key: String, requiringFollowupAfter requestID: Int? = nil, idle: () -> Bool) async throws
+    {
         try await TestWait.state("production active run finishes after explicit provider release") {
-            for row in try await self.requests(key) where !row.closed && !row.released {
+            let rows = try await self.requests(key)
+            for row in rows where !row.closed && !row.released {
                 _ = try await self.control("/release?id=\(row.id)", post: true)
+            }
+            if let requestID {
+                return rows.contains {
+                    $0.id > requestID && $0.texts.contains(Self.followup) && $0.released && $0.closed
+                } && idle()
             }
             return idle()
         }

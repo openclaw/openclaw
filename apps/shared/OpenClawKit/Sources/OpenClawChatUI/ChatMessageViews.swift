@@ -427,7 +427,9 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                     .frame(
                         maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth,
                         alignment: .leading)
+                    #if !os(iOS)
                     .contentShape(.accessibility, Rectangle())
+                    #endif
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("chat-assistant-message-body")
                     .assistantSpeakerLabel(

@@ -1,6 +1,8 @@
 import Foundation
+import GRDB
 import OpenClawKit
 import SwiftUI
+import Synchronization
 import Testing
 import UIKit
 import WebKit
@@ -26,8 +28,9 @@ struct IOSConversationControllerTests {
           title: sessionKey, run: {active: false}, connection: 'connected'
         });
         window.addEventListener('openclaw:native-conversation-command', async ({detail}) => {
-          await post({type: 'command-result', requestId: detail.requestId, ok: true});
-          if (detail.type === 'navigate') await window.selectFixtureSession(detail.payload.sessionKey);
+          const reply = detail.type === 'navigate'
+            ? await window.selectFixtureSession(detail.payload.sessionKey) : {ok: true};
+          await post({type: 'command-result', requestId: detail.requestId, ok: reply.ok === true});
         });
         post({type: 'ready', surface: 'conversation', capabilities: []}).then(() =>
           window.selectFixtureSession(path.endsWith('/selected') ? 'agent:main:selected' : 'agent:main:origin'));
@@ -251,43 +254,69 @@ struct IOSConversationControllerTests {
             _ = try await fixture.startWeb()
             let destination = NativeConversationContext(agentId: "main", sessionKey: "agent:main:destination")
             let readEntered = AsyncTestGate()
-            let releaseRead = AsyncTestGate()
-            let model = fixture.model
-            var reads = 0
-            fixture.controller.pendingInputCheck = { context in
-                let pending = await model.hasPendingNativeConversationInput(for: context)
-                if context == destination {
-                    reads += 1
-                    if reads == 2 {
-                        readEntered.open()
-                        await releaseRead.wait()
+            let releaseRead = DispatchSemaphore(value: 0)
+            let reads = Mutex(0)
+            let databases = fixture.store.databases
+            let gatewayID = fixture.store.gatewayID
+            let draftKey = fixture.model.composerSessionKey(for: destination.sessionKey, agentID: destination.agentId)
+            // Hold the actual SQLite destination read, not an alternate controller check.
+            // GRDB invokes this Sendable callback on its database queue, never the main actor.
+            try await Task.detached {
+                try await databases.stateQueue.writeWithoutTransaction { db in
+                    db.trace(options: .statement) { @Sendable event in
+                        guard case let .statement(statement) = event,
+                              statement.sql.hasPrefix("SELECT text, revision FROM composer_drafts "),
+                              statement.expandedSQL.contains("'\(gatewayID)'"),
+                              statement.expandedSQL.contains("'\(draftKey)'") else { return }
+                        let finalRead = reads.withLock { count in
+                            count += 1
+                            return count == 2
+                        }
+                        if finalRead {
+                            readEntered.open()
+                            releaseRead.wait()
+                        }
                     }
                 }
-                return pending
-            }
+            }.value
             let reservation = Task { await fixture.controller.reserve(destination) }
-            defer {
-                reservation.cancel()
-                releaseRead.open()
+            var admission: Task<Void, any Error>?
+            var failure: (any Error)?
+            do {
+                try await readEntered.wait("final destination draft read")
+                // The temporary reservation excludes native sends while the read is suspended.
+                fixture.expectNativeAdmission(destination, allowed: false)
+                let admissionBlocked = AsyncTestGate()
+                let waiting = Task {
+                    try await fixture.waitForNativeAdmission(destination, onBlocked: { admissionBlocked.open() })
+                }
+                admission = waiting
+                try await admissionBlocked.wait("native admission blocked by temporary reservation")
+                fixture.controller.requestNativeControls()
+                #expect(fixture.controller.bridge == nil)
+                #expect(!fixture.model.usesWebConversation)
+                releaseRead.signal()
+                let reserved = try await TestWait.value(of: reservation, "retired destination reservation")
+                #expect(!reserved)
+                try await TestWait.value(of: waiting, "native admission after joined reservation release")
+                fixture.expectNativeAdmission(destination, allowed: true)
+                fixture.expectNativeAdmission(.init(agentId: "main", sessionKey: "agent:main:main"), allowed: true)
+            } catch {
+                failure = error
             }
-            try await readEntered.wait("final destination draft read")
-            // The temporary reservation excludes native sends while the read is suspended.
-            fixture.expectNativeAdmission(destination, allowed: false)
-            let admissionBlocked = AsyncTestGate()
-            let admission = Task {
-                try await fixture.waitForNativeAdmission(destination, onBlocked: { admissionBlocked.open() })
+            // Unblock and join both owned tasks even when the suite cancels a wait. Clear
+            // the installation-wide trace in an uncancelled task before fixture teardown.
+            reservation.cancel()
+            admission?.cancel()
+            releaseRead.signal()
+            _ = await reservation.value
+            _ = await admission?.result
+            try await Task.detached {
+                try await databases.stateQueue.writeWithoutTransaction { db in db.trace(options: []) }
+            }.value
+            if let failure {
+                throw failure
             }
-            defer { admission.cancel() }
-            try await admissionBlocked.wait("native admission blocked by temporary reservation")
-            fixture.controller.requestNativeControls()
-            #expect(fixture.controller.bridge == nil)
-            #expect(!fixture.model.usesWebConversation)
-            releaseRead.open()
-            let reserved = try await TestWait.value(of: reservation, "retired destination reservation")
-            #expect(!reserved)
-            try await TestWait.value(of: admission, "native admission after joined reservation release")
-            fixture.expectNativeAdmission(destination, allowed: true)
-            fixture.expectNativeAdmission(.init(agentId: "main", sessionKey: "agent:main:main"), allowed: true)
         }
     }
 

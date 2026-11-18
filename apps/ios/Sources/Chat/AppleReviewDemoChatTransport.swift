@@ -555,6 +555,7 @@ private actor LocalFixtureChatStore {
     private var permissionMode: OpenClawChatPermissionMode? = .guarded
     private var toolOverrides: OpenClawChatSessionToolOverrides?
     private var reactionOverrides: [String: [OpenClawChatReactionSummary]] = [:]
+    private var nestedSuccessPending = false
 
     init(fixture: LocalChatFixture) {
         self.fixture = fixture
@@ -609,12 +610,13 @@ private actor LocalFixtureChatStore {
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
             // Keep the existing step transcript/latest reply intact. These earlier raw carriers
             // cross the real history JSON decoder; the public message initializer cannot mark them.
-            let nested = try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
+            var nested = try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
             [
               {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
                "__openclaw":{"id":"fixture-nested-pending-row","runId":"fixture-nested-run"},"timestamp":1,
                "content":[{"type":"toolCall","id":"fixture-nested-pending","name":"knowledge_status",
-                 "arguments":{},"runId":"fixture-nested-run","parentToolCallId":"fixture-parent"}]},
+                 "arguments":{"query":"Original pending control"},
+                 "runId":"fixture-nested-run","parentToolCallId":"fixture-parent"}]},
               {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
                "__openclaw":{"id":"fixture-nested-failed-row","runId":"fixture-nested-run"},"timestamp":2,
                "content":[{"type":"toolCall","id":"fixture-nested-failed","name":"read",
@@ -631,6 +633,19 @@ private actor LocalFixtureChatStore {
                   "content":[{"type":"text","text":"Sanitized nested success output"}]}]}
             ]
             """#.utf8))
+            if self.nestedSuccessPending,
+               let index = nested.firstIndex(where: {
+                   $0.dictionaryValue?["__openclaw"]?.dictionaryValue?["id"]?.stringValue ==
+                       "fixture-nested-success-row"
+               }),
+               var carrier = nested[index].dictionaryValue,
+               let content = carrier["content"]?.arrayValue
+            {
+                carrier["content"] = AnyCodable(content.filter {
+                    $0.dictionaryValue?["type"]?.stringValue != "toolResult"
+                })
+                nested[index] = AnyCodable(carrier)
+            }
             historyWireMessages.insert(contentsOf: nested, at: 0)
         }
         return try OpenClawChatHistoryPayload(
@@ -662,7 +677,10 @@ private actor LocalFixtureChatStore {
                   {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
                    "title":"Exec","name":"exec","status":"completed"}
                 ]},
-                {"messageId":"fixture-nested-success-row","items":[]},
+                {"messageId":"fixture-nested-success-row","items":\(self.nestedSuccessPending ? """
+                [{"itemId":"tool:fixture-nested-success","toolCallId":"fixture-nested-success","kind":"tool",
+                  "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}]
+                """ : "[]")},
                 {"messageId":"fixture-nested-pending-row","items":[
                   {"itemId":"tool:fixture-nested-pending","toolCallId":"fixture-nested-pending","kind":"tool",
                    "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}
@@ -675,6 +693,17 @@ private actor LocalFixtureChatStore {
         message: String,
         runId: String) -> OpenClawChatSendResponse
     {
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode"),
+           ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture"),
+           ["main", "agent:main:main"].contains(sessionKey),
+           message == "Transition the nested success fixture to pending"
+        {
+            // This store owns both history content and its canonical descriptor. The normal
+            // terminal-ok send refresh reads the changed history; no timer or model poke.
+            self.nestedSuccessPending = true
+            return OpenClawChatSendResponse(runId: runId, status: "ok")
+        }
         let now = Date().timeIntervalSince1970 * 1000
         let userMessage = Self.message(
             role: "user",
@@ -958,6 +987,7 @@ private actor LocalFixtureChatStore {
         self.duplicateReplaySessionKey = nil
         self.duplicateReplayStarted = false
         self.messages = Self.seedMessages(fixture: self.fixture)
+        self.nestedSuccessPending = false
         self.reactionOverrides.removeAll()
         self.modelID = self.fixture.modelID
         self.thinkingLevel = nil

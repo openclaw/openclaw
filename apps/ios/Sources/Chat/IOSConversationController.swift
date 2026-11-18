@@ -35,7 +35,6 @@ final class IOSConversationController {
     @ObservationIgnored private var observing = false
     @ObservationIgnored private var nativeTarget: NativeConversationContext?
     @ObservationIgnored private let routes = OpenClawWebConversation.RouteReconciliation()
-    @ObservationIgnored var pendingInputCheck: (@MainActor (NativeConversationContext) async -> Bool)?
 
     init(
         owner: OpenClawWebConversation,
@@ -253,8 +252,7 @@ final class IOSConversationController {
         if self.scopes.contains(scope) { return true }
         let revision = self.revision
         let claimOwner = self.claimOwner
-        let pendingInputCheck = self.pendingInputCheck ?? { await viewModel.hasPendingNativeConversationInput(for: $0) }
-        let pendingBeforeReservation = await pendingInputCheck(context)
+        let pendingBeforeReservation = await viewModel.hasPendingNativeConversationInput(for: context)
         guard self.current, !self.retiring, self.revision == revision, self.claimOwner == claimOwner,
               !Task.isCancelled, !pendingBeforeReservation, !viewModel.hasPendingNativeConversationInput,
               !viewModel.isSending, viewModel.pendingRunCount == 0 else { return false }
@@ -265,7 +263,7 @@ final class IOSConversationController {
         guard self.current, !self.retiring, self.revision == revision, self.claimOwner == claimOwner,
               !Task.isCancelled, !viewModel.hasPendingNativeConversationInput,
               !viewModel.isSending, viewModel.pendingRunCount == 0 else { return false }
-        let pendingBeforeTransfer = await pendingInputCheck(context)
+        let pendingBeforeTransfer = await viewModel.hasPendingNativeConversationInput(for: context)
         // Retirement can release the old claims and rotate their owner during the draft read.
         guard self.current, !self.retiring, self.revision == revision, self.claimOwner == claimOwner,
               !Task.isCancelled, !pendingBeforeTransfer, !viewModel.hasPendingNativeConversationInput,

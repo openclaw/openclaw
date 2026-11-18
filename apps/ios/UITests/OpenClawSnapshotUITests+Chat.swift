@@ -448,6 +448,12 @@ extension OpenClawSnapshotUITests {
         self.assertElementHasRenderedContent(finalReply, named: "reply after explicit Jump")
         self.attachScreenshot(named: "reader-returned-to-latest")
 
+        self.assertStatusBarScroll(in: app, transcript: transcript, reply: finalReply, jumpToLatest: jumpToLatest)
+    }
+
+    private func assertStatusBarScroll(
+        in app: XCUIApplication, transcript: XCUIElement, reply finalReply: XCUIElement, jumpToLatest: XCUIElement)
+    {
         // Target the actual system clock AX element without activating SpringBoard.
         XCTAssertEqual(app.state, .runningForeground)
         self.attachScreenshot(named: "reader-before-system-clock")
@@ -599,44 +605,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(quiet.exists, "An explicit empty canonical descriptor must start under Tool details")
         self.attachScreenshot(named: "nested-custom-quiet-collapsed")
         details.tap()
-        self.attachScreenshot(named: "nested-custom-diagnostic-after-original-row-tap")
-        let afterRowTap = XCTAttachment(string: app.debugDescription)
-        afterRowTap.name = "nested-custom-diagnostic-after-original-row-tap-hierarchy"
-        afterRowTap.lifetime = .keepAlways
-        self.add(afterRowTap)
         let originalQuietWait = quiet.waitForExistence(timeout: 5)
-        if !originalQuietWait {
-            let parentCount = app.buttons.matching(identifier: "Tool details").count
-            var observation = "originalQuietWait=false; parentCount=\(parentCount)"
-            var action = "skipped"
-            if parentCount == 1 {
-                let imageCount = details.images.count
-                let collapsedCount = details.images.matching(identifier: "collapsed").count
-                observation += "; images=\(imageCount); collapsed=\(collapsedCount)"
-                if imageCount == 1, collapsedCount == 1 {
-                    let chevrons = details.buttons
-                    let chevronCount = chevrons.count
-                    observation += "; nestedButtons=\(chevronCount)"
-                    if chevronCount == 1 {
-                        let chevron = chevrons.firstMatch
-                        let collapsed = chevron.images.matching(identifier: "collapsed").count == 1
-                        let hittable = chevron.isHittable
-                        observation += "; nestedChevronCollapsed=\(collapsed); nestedChevronHittable=\(hittable)"
-                        if collapsed, hittable {
-                            chevron.tap()
-                            action = "performed; quietAfterChevron=\(quiet.waitForExistence(timeout: 1))"
-                        }
-                    }
-                }
-            }
-            self.attachScreenshot(named: "nested-custom-diagnostic-chevron-contrast")
-            let contrast = XCTAttachment(string: observation + "; diagnosticChevronTap=" + action +
-                "; quietPresentAtCapture=\(quiet.exists)\n" + app.debugDescription)
-            contrast.name = "nested-custom-diagnostic-chevron-contrast-hierarchy"
-            contrast.lifetime = .keepAlways
-            self.add(contrast)
-        }
-        // A diagnostic chevron success cannot satisfy the original row-tap assertion.
         XCTAssertTrue(originalQuietWait)
         guard originalQuietWait else { return }
         for (callID, title, status, text) in [
@@ -670,17 +639,313 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(details.isHittable)
         details.tap()
         XCTAssertTrue(quiet.waitForNonExistence(timeout: 5), "Quiet output must return under its disclosure")
-        let pending = app.descendants(matching: .any).matching(NSPredicate(
-            format: "label == %@ AND value == %@", "Knowledge Status", "Working")).firstMatch
+        let originalPendingRows = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND value == %@", "Knowledge Status", "Working, Original pending control"))
+        let pending = originalPendingRows.firstMatch
         for _ in 0..<4 where !pending.isHittable {
             transcript.swipeDown()
         }
         XCTAssertTrue(pending.waitForExistence(timeout: 5))
+        XCTAssertEqual(originalPendingRows.count, 1)
+        XCTAssertEqual(pending.label, "Knowledge Status")
+        XCTAssertEqual(pending.value as? String, "Working, Original pending control")
         XCTAssertTrue(pending.isHittable)
         XCTAssertNotEqual(pending.elementType, .button)
         XCTAssertFalse(app.buttons["chat-tool-activity-fixture-nested-pending"].exists)
         self.assertElementHasRenderedContent(pending, named: "canonical nested start without result")
         self.attachScreenshot(named: "nested-custom-quiet-recollapsed-and-pending")
+
+        // Keep the old output expanded while the same raw carrier changes authority. A stale
+        // terminal receipt must disappear, not survive under the old disclosure state.
+        for _ in 0..<4 where !details.isHittable {
+            transcript.swipeUp()
+        }
+        XCTAssertTrue(details.isHittable)
+        details.tap()
+        XCTAssertTrue(quiet.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-fixture-nested-success").count, 1)
+        quiet.tap()
+        let oldOutput = app.staticTexts["Sanitized nested success output"]
+        XCTAssertTrue(oldOutput.waitForExistence(timeout: 5))
+        XCTAssertEqual(oldOutput.label, "Sanitized nested success output")
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 5))
+        input.tap()
+        input.typeText("Transition the nested success fixture to pending")
+        let send = app.buttons["chat-send-message"]
+        self.waitForEnabled(send)
+        send.tap()
+        let targetRows = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND value == %@", "Knowledge Status", "Working"))
+        let target = targetRows.firstMatch
+        for _ in 0..<8 where !target.isHittable {
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(target.waitForExistence(timeout: 5))
+        XCTAssertEqual(targetRows.count, 1, "The original pending control cannot satisfy this target")
+        XCTAssertEqual(target.label, "Knowledge Status")
+        XCTAssertEqual(target.value as? String, "Working")
+        XCTAssertNotEqual(target.elementType, .button)
+        XCTAssertTrue(quiet.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(oldOutput.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "chat-tool-activity-fixture-nested-success").count, 0)
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Sanitized nested success output").count, 0)
+        XCTAssertEqual(originalPendingRows.count, 1, "Keep the independent original pending receipt")
+        XCTAssertFalse(app.buttons["chat-tool-activity-fixture-nested-pending"].exists)
+        self.assertElementHasRenderedContent(target, named: "same nested target now canonically pending")
+        self.attachScreenshot(named: "nested-custom-expanded-result-replaced-by-pending")
+    }
+
+    func testProductionNativeNestedResultsOnInitialEntry() async throws {
+        try await self.checkProductionNativeNestedResults(historyActive: false)
+    }
+
+    func testProductionNativeNestedResultsOnProviderHeldEntry() async throws {
+        try await self.checkProductionNativeNestedResults(historyActive: true)
+    }
+
+    /// Cold held entry may validly choose native before WebKit reserves the session.
+    /// This preserves app-entry coverage, not held WebKit handoff or header geometry proof.
+    func testProductionSelectedProviderHeldEntryPreservesSession() async throws {
+        try await self.checkProductionNativeNestedResults(historyActive: true, coldHeldEntry: true)
+    }
+
+    private func checkProductionNativeNestedResults(historyActive: Bool, coldHeldEntry: Bool = false) async throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1")
+        self.executionTimeAllowance = 180
+        // Separate from every adapter history and from the screenshot transport.
+        let state = historyActive ? "active" : "initial"
+        let sessionKey = "agent:main:ipad-xcui-" + state
+        let label = "iPad XCUI " + state
+        let status = try await self.productionNestedControl("/status")
+        XCTAssertTrue(try XCTUnwrap(status["sessionKeys"] as? [String]).contains(sessionKey))
+        if coldHeldEntry {
+            _ = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        } else {
+            // Strict placements immediately relaunch; do not navigate the discarded paired process.
+            let paired = try self.startPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+            let connected = paired.staticTexts["You're connected"]
+            _ = try XCTUnwrap(
+                connected.waitForExistence(timeout: 45) ? connected : nil,
+                "Pairing must complete before the dedicated session relaunch")
+        }
+        var heldID: Int?
+        @MainActor
+        func startHold() async throws -> Int {
+            let before = try await self.productionNestedControl("/status")
+            let rows = try XCTUnwrap(before["requests"] as? [[String: Any]])
+            let ids = try rows.map { try XCTUnwrap($0["id"] as? Int) }
+            let pending = try XCTUnwrap(before["pendingProviderRequestIds"] as? [Int])
+            let existing = try self.productionNestedRequests(before, sessionKey: sessionKey, after: 0).filter { row in
+                let id = try XCTUnwrap(row["id"] as? Int)
+                let released = try XCTUnwrap(row["released"] as? Bool)
+                let closed = try XCTUnwrap(row["closed"] as? Bool)
+                return pending.contains(id) || (!released && !closed)
+            }
+            guard existing.isEmpty, Set(ids).count == ids.count, ids.allSatisfy({ $0 > 0 }),
+                  pending.allSatisfy({ ids.contains($0) })
+            else { throw URLError(.cannotParseResponse) }
+            let baseline = ids.max() ?? 0
+            // Register before POST: assertion aborts need not pass through a Swift catch.
+            self.addTeardownBlock { [self, sessionKey, baseline] () async throws in
+                // Join independent cleanup even if the test or teardown caller is cancelled.
+                let cleanup = Task { @MainActor in
+                    try await self.releaseProductionNestedRequestIfPending(sessionKey: sessionKey, after: baseline)
+                }
+                try await cleanup.value
+            }
+            _ = try await self.productionNestedControl("/start-active?sessionKey=" + sessionKey, post: true)
+            return try await self.heldProductionNestedRequest(sessionKey: sessionKey, after: baseline)
+        }
+        if coldHeldEntry {
+            heldID = try await startHold()
+        }
+        let quietOrigin = historyActive && !coldHeldEntry
+        let app = self.launchProductionNestedSession(quietOrigin ? "agent:main:ipad-xcui-initial" : sessionKey)
+        if quietOrigin {
+            // Admit WebKit on a quiet dedicated origin before starting the target's hold.
+            if !app.webViews.firstMatch.waitForExistence(timeout: 15) {
+                let actions = app.buttons["Chat actions"]
+                XCTAssertTrue(actions.waitForExistence(timeout: 5))
+                actions.tap()
+                let web = app.buttons["Use Mac-style chat"]
+                XCTAssertTrue(web.waitForExistence(timeout: 5))
+                XCTAssertTrue(web.isHittable)
+                web.tap()
+            }
+            let quiet = app.webViews.firstMatch.staticTexts["Dedicated XCUI history: iPad XCUI initial"]
+            _ = try XCTUnwrap(quiet.waitForExistence(timeout: 15) ? quiet : nil, "Quiet WebKit admission required")
+            XCTAssertEqual(
+                app.webViews.firstMatch.staticTexts
+                    .matching(identifier: "Dedicated XCUI history: iPad XCUI initial").count,
+                1)
+            heldID = try await startHold()
+            let session = app.buttons.matching(NSPredicate(
+                format: "label == %@ OR label BEGINSWITH %@", label, label + ","))
+            if !session.firstMatch.isHittable { self.tapSidebarReveal(in: app) }
+            XCTAssertTrue(session.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertEqual(session.count, 1)
+            self.waitForHittable(true, of: session.firstMatch)
+            session.firstMatch.tap()
+            let target = app.webViews.firstMatch.staticTexts["Dedicated XCUI history: " + label]
+            _ = try XCTUnwrap(
+                target.waitForExistence(timeout: 15) ? target : nil,
+                "Held target must remain in WebKit")
+            XCTAssertEqual(
+                app.webViews.firstMatch.staticTexts.matching(identifier: "Dedicated XCUI history: " + label).count,
+                1)
+        }
+        if !coldHeldEntry { XCTAssertTrue(app.webViews.firstMatch.waitForExistence(timeout: 15)) }
+        let marker = app.staticTexts["Dedicated XCUI history: " + label]
+        XCTAssertTrue(marker.waitForExistence(timeout: 15), "The requested real web-backed session must load")
+        XCTAssertEqual(app.staticTexts.matching(identifier: "Dedicated XCUI history: " + label).count, 1)
+        if let heldID { try await self.assertProductionNestedRequestOpen(heldID) }
+        // Strict handoff placements always require WebKit. Only cold app entry is renderer-neutral.
+        if !coldHeldEntry || app.webViews.firstMatch.exists {
+            let native = app.buttons["Voice & attachments"]
+            XCTAssertTrue(native.waitForExistence(timeout: 5))
+            XCTAssertTrue(native.isHittable)
+            self.attachScreenshot(named: "production-nested-" + state + "-web-entry")
+            native.tap()
+            XCTAssertTrue(app.webViews.firstMatch.waitForNonExistence(timeout: 8))
+        }
+        let transcript = try self.chatTranscript(in: app)
+        XCTAssertTrue(transcript.waitForExistence(timeout: 8))
+        XCTAssertTrue(self.chatMessageInput(in: app).waitForExistence(timeout: 8))
+        XCTAssertTrue(marker.waitForExistence(timeout: 8), "Native fallback must keep the selected session")
+        if historyActive {
+            XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 5))
+        } else {
+            XCTAssertFalse(app.buttons["Stop response"].exists, "Initial entry must not inherit another run")
+        }
+        if let heldID { try await self.assertProductionNestedRequestOpen(heldID) }
+        if !coldHeldEntry { try self.assertProductionNestedResults(in: app, transcript: transcript, state: state) }
+        if let heldID {
+            try await self.assertProductionNestedRequestOpen(heldID)
+            _ = try await self.productionNestedControl("/release?id=\(heldID)", post: true)
+            let final = try await self.productionNestedControl("/status")
+            XCTAssertFalse(try XCTUnwrap(final["pendingProviderRequestIds"] as? [Int]).contains(heldID))
+            XCTAssertTrue(app.buttons["Stop response"].waitForNonExistence(timeout: 8))
+        }
+    }
+
+    private func launchProductionNestedSession(_ sessionKey: String) -> XCUIApplication {
+        self.terminateCurrentApp()
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "--openclaw-initial-tab", "chat", "--openclaw-initial-destination", "chat",
+            "--openclaw-chat-session", sessionKey, "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        ]
+        app.launch()
+        self.app = app
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 8))
+        return app
+    }
+
+    private func assertProductionNestedResults(
+        in app: XCUIApplication, transcript: XCUIElement, state: String) throws
+    {
+        let detailsRows = app.buttons.matching(identifier: "Tool details")
+        let details = detailsRows.firstMatch
+        for _ in 0..<12 where !details.isHittable {
+            transcript.swipeDown()
+        }
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertEqual(detailsRows.count, 1)
+        XCTAssertTrue(details.isHittable)
+        let quiet = app.buttons["chat-tool-activity-xcui-quiet"]
+        XCTAssertFalse(quiet.exists, "Canonical routine completion must begin under Tool details")
+        let quietOutput = app.staticTexts["Sanitized quiet nested output"]
+        XCTAssertFalse(quietOutput.exists)
+        XCTAssertEqual(details.value as? String, "Collapsed")
+        self.attachScreenshot(named: "production-nested-" + state + "-quiet-collapsed")
+        details.tap()
+        XCTAssertTrue(quiet.waitForExistence(timeout: 5))
+        XCTAssertEqual(details.value as? String, "Expanded")
+        // Taps prove app interaction, not Inspector's default action or hint announcement.
+        for (callID, title, value, output) in [
+            ("xcui-quiet", "Yield", "Finished", "Sanitized quiet nested output"),
+            ("nested-success", "Knowledge Status", "Finished", "Sanitized nested success output"),
+            ("nested-call", "Read", "Failed, synthetic.txt", "Recorded nested output"),
+        ] {
+            let rows = app.buttons.matching(identifier: "chat-tool-activity-" + callID)
+            let row = rows.firstMatch
+            for _ in 0..<12 where !row.isHittable {
+                transcript.swipeDown()
+            }
+            XCTAssertTrue(row.waitForExistence(timeout: 5))
+            XCTAssertEqual(rows.count, 1, "A nested carrier must expose exactly one result control")
+            XCTAssertTrue(row.isHittable)
+            XCTAssertEqual(row.label, title)
+            XCTAssertEqual(row.value as? String, value)
+            self.assertElementHasRenderedContent(row, named: state + " " + callID + " collapsed control")
+            let text = app.staticTexts[output]
+            XCTAssertFalse(text.exists)
+            row.tap()
+            XCTAssertTrue(text.waitForExistence(timeout: 5))
+            XCTAssertEqual(text.label, output)
+            XCTAssertEqual(app.staticTexts.matching(identifier: output).count, 1)
+            self.assertElementHasRenderedContent(text, named: state + " " + callID + " expanded output")
+            self.attachScreenshot(named: "production-nested-" + state + "-" + callID + "-expanded")
+            XCTAssertEqual(rows.count, 1, "An expanded result must retain exactly one header control")
+            XCTAssertTrue(row.isHittable)
+            let headerFrame = row.frame
+            let outputFrame = text.frame
+            guard !headerFrame.isEmpty, !outputFrame.isEmpty,
+                  headerFrame.origin.x.isFinite, headerFrame.origin.y.isFinite,
+                  headerFrame.size.width.isFinite, headerFrame.size.height.isFinite,
+                  outputFrame.origin.x.isFinite, outputFrame.origin.y.isFinite,
+                  outputFrame.size.width.isFinite, outputFrame.size.height.isFinite
+            else {
+                XCTFail("Expanded header and output need valid nonempty frames: \(headerFrame), \(outputFrame)")
+                throw NSError(domain: "ProductionNestedFixture", code: 2)
+            }
+            guard !headerFrame.intersects(outputFrame) else {
+                XCTFail("The header control must not cover its expanded output: \(headerFrame), \(outputFrame)")
+                throw NSError(domain: "ProductionNestedFixture", code: 3)
+            }
+            row.tap()
+            XCTAssertTrue(text.waitForNonExistence(timeout: 5))
+            if callID == "xcui-quiet" {
+                // Finish the local disclosure cycle before scrolling to independent result controls.
+                XCTAssertEqual(detailsRows.count, 1)
+                XCTAssertTrue(details.isHittable)
+                XCTAssertEqual(details.value as? String, "Expanded")
+                details.tap()
+                XCTAssertTrue(quiet.waitForNonExistence(timeout: 5))
+                XCTAssertEqual(details.value as? String, "Collapsed")
+                XCTAssertFalse(quietOutput.exists)
+            }
+        }
+        let unpairedRows = app.descendants(matching: .any).matching(NSPredicate(
+            format: "label == %@ AND value == %@", "Knowledge Status", "No result, Persisted unpaired control"))
+        let unpaired = unpairedRows.firstMatch
+        for _ in 0..<12 where !unpaired.isHittable {
+            transcript.swipeUp()
+        }
+        XCTAssertTrue(unpaired.waitForExistence(timeout: 5))
+        XCTAssertEqual(unpairedRows.count, 1)
+        XCTAssertEqual(unpaired.label, "Knowledge Status")
+        XCTAssertEqual(unpaired.value as? String, "No result, Persisted unpaired control")
+        XCTAssertTrue(unpaired.isHittable)
+        XCTAssertNotEqual(unpaired.elementType, .button)
+        XCTAssertFalse(app.buttons["chat-tool-activity-xcui-unpaired"].exists)
+        XCTAssertFalse(
+            app.descendants(matching: .any).matching(NSPredicate(
+                format: "label == %@ AND value == %@", "Knowledge Status", "Working, Persisted unpaired control"))
+                .firstMatch.exists,
+            "A live provider cannot make a historical unpaired call Working")
+        self.assertElementHasRenderedContent(unpaired, named: state + " canonical persisted unpaired result")
+        self.attachScreenshot(named: "production-nested-" + state + "-quiet-recollapsed-and-unpaired")
+    }
+
+    private func assertProductionNestedRequestOpen(_ id: Int) async throws {
+        let status = try await self.productionNestedControl("/status")
+        let rows = try XCTUnwrap(status["requests"] as? [[String: Any]])
+        let row = try XCTUnwrap(rows.first { $0["id"] as? Int == id })
+        XCTAssertEqual(row["released"] as? Bool, false)
+        XCTAssertEqual(row["closed"] as? Bool, false)
+        XCTAssertTrue(try XCTUnwrap(status["pendingProviderRequestIds"] as? [Int]).contains(id))
     }
 
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {
