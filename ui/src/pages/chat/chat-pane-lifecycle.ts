@@ -16,7 +16,7 @@ import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annot
 import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { focusComposerInput } from "../../lib/composer-input.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
-import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
+import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/session.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/navigation.ts";

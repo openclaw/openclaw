@@ -14,7 +14,7 @@ import {
   isChatTranscriptMetadata,
   isProgressCard,
   isMessageReactionSummary,
-} from "../../lib/protocol-validators.generated/transcript.js";
+} from "../../lib/protocol-validators.generated/session.js";
 import * as json from "../../lib/snapshot-json.ts";
 import {
   chatHeaderSharingSnapshotSchema,
