@@ -159,6 +159,7 @@ export async function createLlamaCppEmbeddingProvider(
       id: "local",
       inlineQueryTimeoutMs: 5 * 60_000,
       inlineBatchTimeoutMs: 10 * 60_000,
+      inlineIndexConcurrency: 1,
       cacheKeyData: identity.cacheKeyData,
       ...((identity.aliases?.length ?? 0) > 0 ? { indexIdentityAliases: identity.aliases } : {}),
     },

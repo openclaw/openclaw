@@ -294,6 +294,16 @@ it("does not lease a configured local service for a remote endpoint override", a
   expect(acquireLocalService).not.toHaveBeenCalled();
 });
 
+it.each([
+  ["http://127.0.0.1:8090/v1", 1],
+  ["http://localhost:8090/v1", 1],
+  ["http://[::1]:8090/v1", 1],
+  ["http://192.168.1.20:8090/v1", undefined],
+])("limits index concurrency only for loopback endpoints (%s)", async (baseUrl, expected) => {
+  const { runtime } = await providerAt(baseUrl);
+  expect(runtime?.inlineIndexConcurrency).toBe(expected);
+});
+
 it("adds non-secret routing headers to runtime cache identity", async () => {
   const result = await embeddingFixture(undefined, {
     model: "tenant-embedder",
