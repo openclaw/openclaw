@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
+import { parseNodeFailureReport } from "./ci-node-test-evidence.mjs";
 
 // The beta.3 owner accepted these observed failures on 2026-11-14 at 13:30 UTC.
 // CI aggregate causes use workflow job keys, not displayed shard names.
@@ -89,6 +90,41 @@ const RELEASE_VALIDATION_WAIVERS = [
     reason:
       "Accept the observed 2026.11.6 repo/live leaf failure while retaining raw results, required execution, aggregate cause validation, and integrity gates.",
   })),
+  {
+    targetVersion: "2026.11.10-beta.1",
+    childRole: "normalCi",
+    jobName: "checks-node-compact-large-39 (bun)",
+    testFailures: {
+      stepName: "Run Node test shard",
+      signatures: [
+        {
+          kind: "vitest",
+          file: "src/agents/agent-bundle-mcp-instructions-prompt.test.ts",
+          test: "embedded system prompt MCP server instructions > neutralizes application prompt delimiters in server instructions :: Error: listen EADDRINUSE: address already in use 127.0.0.1:20056\n❯ <anonymous> internal:net/server:24:5",
+        },
+      ],
+    },
+    reason:
+      "Dallin Romney authorized known low-risk FRV10/11 test-tooling failures on 2026-11-18 at 16:23 UTC. This grants only the exact MCP fixture listener collision recorded in FRV11 (44290065577/1), including the complete failure signature and completed invocation evidence. It is accepted failure, not a passing test or proof that a replay fixed the original incident. Extra or changed failures, setup errors, incomplete/missing/cancelled coverage, and serious product defects remain blocking. Preserve raw failures and reasons.",
+  },
+  {
+    targetVersion: "2026.11.10-beta.1",
+    childRole: "normalCi",
+    jobName: "checks-node-compact-large-41 (node)",
+    testFailures: {
+      stepName: "Run Node test shard",
+      signatures: [
+        {
+          kind: "vitest",
+          file: "src/cron/service/command-timeout.test.ts",
+          test: 'scheduled command timeouts > settles a real command after deadline without late delivery :: AssertionError: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string\n❯ src/cron/service/command-timeout.test.ts:101:32\n99|           expect.objectContaining({ source: "exec", severity: "error" …\n100|         );\n101|         expect(result.summary).toContain("synthetic progress");\n|                                ^\n102|         expect(result.summary).toContain("synthetic stderr");\n103|         const pid = Number(result.summary?.match(/pid=(\\d+)/)?.[1]);',
+        },
+      ],
+    },
+    reason:
+      "Dallin Romney authorized known low-risk FRV10/11 test-tooling failures on 2026-11-18 at 16:23 UTC. This grants only the exact cron fixture pre-output summary assertion recorded in FRV11 (44290065577/1), including the complete failure signature and completed invocation evidence. It is accepted failure, not a passing test or proof that a replay fixed the original incident. Extra or changed failures, setup errors, incomplete/missing/cancelled coverage, and serious product defects remain blocking. Preserve raw failures and reasons.",
+  },
+
   {
     targetVersion: "2026.11.6",
     childRole: "productPerformance",
@@ -436,6 +472,16 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  if (waiver.testFailures) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: ["checks-node-core-test-nondist-shard finished with failure (selected=true)"],
+        exactCauses: true,
+      },
+    ];
+  }
   if (
     waiver.targetVersion === "2026.11.6" &&
     waiver.childRole === "normalCi" &&
@@ -643,6 +689,34 @@ function exactAggregateCauses(log) {
 }
 
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
+  for (const waiver of policy.waivers) {
+    if (!waiver.testFailures) {
+      continue;
+    }
+    const matches = jobs.filter((job) => job.name === waiver.jobName);
+    const job = matches[0];
+    const failedSteps = job?.steps?.filter(
+      (step) => !["success", "skipped"].includes(step.conclusion),
+    );
+    if (
+      matches.length !== 1 ||
+      job.status !== "completed" ||
+      job.conclusion !== "failure" ||
+      failedSteps?.length !== 1 ||
+      failedSteps[0].conclusion !== "failure" ||
+      failedSteps[0].name !== waiver.testFailures.stepName
+    ) {
+      throw new ReleaseAggregateValidationError(
+        `Release test job has a non-policy failure: ${waiver.jobName}`,
+      );
+    }
+    const signatures = parseNodeFailureReport(String(await getJobLog(job.id)), true);
+    if (!isDeepStrictEqual(signatures, waiver.testFailures.signatures)) {
+      throw new ReleaseAggregateValidationError(
+        `Release test job has an unwaived or incomplete failure: ${waiver.jobName}`,
+      );
+    }
+  }
   for (const aggregate of policy.aggregates) {
     const matches = jobs.filter((job) => job.name === aggregate.jobName);
     if (matches.length !== 1 || matches[0].status !== "completed") {
