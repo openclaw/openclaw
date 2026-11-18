@@ -10,16 +10,19 @@ import type { SidebarFilterMenu, SidebarMenus } from "./sidebar-menus.tsx";
 import { Icon } from "./solid/icon.tsx";
 
 /** Every panel header renders above the list scroller with one geometry, so it stays pinned
-    and clears the scrollbar gutter on Sessions, Pages, and Users alike. */
+    and clears the scrollbar gutter on Sessions, Pages, and Users alike. The panel's own
+    actions trail the collapse toggle so they hold the edge. */
 export function SidebarPanelHeader(props: {
   class?: string;
   onToggleSidebar?: () => void;
   children: JSX.Element;
+  actions?: JSX.Element;
 }) {
   return (
     <div class={["sidebar-panel-header", props.class]} onMouseDown={beginNativeWindowDrag}>
       {props.children}
       <SidebarCollapseToggle onToggle={() => props.onToggleSidebar?.()} />
+      {props.actions}
     </div>
   );
 }
@@ -60,16 +63,20 @@ export function SidebarPanelFilter(props: {
 
 export function SidebarAutomationsHeader(props: { host: AppSidebarRenderHost }) {
   return (
-    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
+    <SidebarPanelHeader
+      onToggleSidebar={props.host.onToggleSidebar}
+      actions={
+        <SidebarPanelFilter
+          menus={props.host.sidebarMenus}
+          menu="automationsFilter"
+          expanded={props.host.sidebarMenus.automationsFilterMenuPosition !== null}
+          filtered={automationsFiltered()}
+          title={t("chat.sidebar.menuFilters")}
+          label={t("chat.sidebar.menuFilters")}
+        />
+      }
+    >
       <span class="sidebar-panel-header__title">{titleForRoute("cron", t)}</span>
-      <SidebarPanelFilter
-        menus={props.host.sidebarMenus}
-        menu="automationsFilter"
-        expanded={props.host.sidebarMenus.automationsFilterMenuPosition !== null}
-        filtered={automationsFiltered()}
-        title={t("chat.sidebar.menuFilters")}
-        label={t("chat.sidebar.menuFilters")}
-      />
     </SidebarPanelHeader>
   );
 }
@@ -106,17 +113,21 @@ export function SidebarPluginSectionHeader(props: { host: AppSidebarRenderHost }
 export function SidebarOnlineHeader(props: { host: AppSidebarRenderHost }) {
   const people = () => props.host.people;
   return (
-    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
+    <SidebarPanelHeader
+      onToggleSidebar={props.host.onToggleSidebar}
+      actions={
+        <SidebarPanelFilter
+          menus={props.host.sidebarMenus}
+          menu="peopleFilter"
+          class="sidebar-online__filter-toggle"
+          expanded={props.host.sidebarMenus.peopleFilterMenuPosition !== null}
+          filtered={people().statusFilter === "running" || people().presenceFilter === "all"}
+          title={t("presence.filters.label")}
+          label={t("presence.filters.label")}
+        />
+      }
+    >
       <span class="sidebar-panel-header__title">{t("presence.peopleTitle")}</span>
-      <SidebarPanelFilter
-        menus={props.host.sidebarMenus}
-        menu="peopleFilter"
-        class="sidebar-online__filter-toggle"
-        expanded={props.host.sidebarMenus.peopleFilterMenuPosition !== null}
-        filtered={people().statusFilter === "running" || people().presenceFilter === "all"}
-        title={t("presence.filters.label")}
-        label={t("presence.filters.label")}
-      />
     </SidebarPanelHeader>
   );
 }

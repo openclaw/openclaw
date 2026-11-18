@@ -30,14 +30,14 @@ suite.define(() => {
         const create = header.getByRole("link", { name: "New session", exact: true });
         await create.waitFor();
         expect(await sidebar.locator(".sidebar-rail .sidebar-new-session").count()).toBe(0);
-        // Filter & sort, New session, then Collapse sidebar.
+        // Collapse sidebar, Filter & sort, then New session at the trailing edge.
         const [filter, plus, collapse] = await Promise.all([
           header.locator(".sidebar-session-sort").boundingBox(),
           create.boundingBox(),
           header.getByRole("button", { name: "Collapse sidebar", exact: true }).boundingBox(),
         ]);
+        expect(filter!.x).toBeGreaterThan(collapse!.x + collapse!.width);
         expect(plus!.x).toBeGreaterThan(filter!.x + filter!.width);
-        expect(plus!.x + plus!.width).toBeLessThan(collapse!.x);
         expect(await create.getAttribute("href")).toBe("/new?agent=main");
         await sidebar.locator('[data-navigation-view="online"]').click();
         await sidebar.locator(".sidebar-online").waitFor();

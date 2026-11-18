@@ -635,6 +635,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 
 .sidebar-session-owner-filter {
   flex: 0 1 auto;
+  margin-inline-end: auto;
   width: auto !important;
   min-width: 0 !important;
 }

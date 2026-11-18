@@ -1183,6 +1183,17 @@ div.shell.shell--onboarding {
   opacity: 1;
 }
 
+/* New session is the header's main action: a hairline outline and full ink give it
+   weight without an accent. The inset ring keeps the shared button geometry. */
+.sidebar-session-toolbar__button.sidebar-new-session {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text);
+}
+
+.sidebar-session-toolbar__button.sidebar-new-session:not(:disabled, [aria-disabled="true"]) {
+  opacity: 1;
+}
+
 .sidebar-session-toolbar__button:is(:disabled, [aria-disabled="true"]),
 .sidebar-session-group-actions[aria-disabled="true"] {
   cursor: not-allowed;
@@ -2681,6 +2692,12 @@ div.shell.shell--onboarding {
 .sidebar-panel-header__title {
   margin-inline-end: auto;
   padding-inline-start: 4px;
+}
+
+/* The header lead owns the free space, so the collapse toggle stays grouped with the
+   panel actions at the edge instead of the filter's own auto margin splitting them. */
+.sidebar-panel-header > .sidebar-session-sort {
+  margin-left: 0;
 }
 
 /* Every sidebar panel title shares one type style, including the Sessions owner
