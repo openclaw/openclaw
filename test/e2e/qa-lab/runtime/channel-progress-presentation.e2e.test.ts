@@ -37,12 +37,19 @@ import {
   deliveryQueueEntriesQuery,
   inflateDeliveryQueueRow,
 } from "../../../../src/infra/delivery-queue-sqlite-bound.js";
+import { resolveDeliveryQueueAttemptCount } from "../../../../src/infra/delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync } from "../../../../src/infra/kysely-sync.js";
 import { OUTBOUND_EXECUTABLE_QUEUE_NAMES } from "../../../../src/infra/outbound/delivery-queue-namespaces.js";
 import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
 import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
+import {
+  createRequestSummary,
+  deliveryErrorCode,
+  deliveryQueueDiagnostics,
+  rethrowWithDeliveryDiagnostics,
+} from "./delivery-diagnostics.test-support.js";
 import { listenLoopback } from "./gateway-recovery.test-support.js";
 
 const MODEL = "mock-openai/progress-fixture";
@@ -1195,6 +1202,9 @@ describe("channel progress presentation through an isolated Gateway", () => {
     let taskRuns: ReturnType<typeof readQaSubagentRuns> = [];
     let queued: { recoveryState?: string; lastError?: string } | undefined;
     let delivery: { status?: string; disposition?: string } | undefined;
+    const settlementHistory: Array<{ at: number; state: object }> = [];
+    let lastSettlementState: string | undefined;
+    const observedQueueIds = new Set<string>();
     await waitForChannel(gateway, "discord", ["connected"]);
     const injected = await injectProviderMessage(
       adapter,
@@ -1234,13 +1244,75 @@ describe("channel progress presentation through an isolated Gateway", () => {
           entry.lastError === "platform send returned no delivery identity",
       );
       queued = pending;
+      // Keep IDs from before the send becomes ambiguous, so a later
+      // compacted receipt can still be matched after it loses its session key.
+      for (const row of pendingRows) {
+        if (
+          observedQueueIds.size < 6 &&
+          row.channel === "discord" &&
+          (row === pending ||
+            row.session?.key === requesterKey ||
+            (childSessionKey && row.session?.key === childSessionKey))
+        ) {
+          observedQueueIds.add(row.id);
+        }
+      }
+      // Reuse the existing poll's observations, including transitions that may
+      // disappear from committed state before the deadline.
+      const state = {
+        execution: task?.execution.status ?? "unobserved",
+        delivery: delivery?.status,
+        disposition: delivery?.disposition,
+        attempts: run?.delivery?.attemptCount,
+        requesterDelivery: run?.delivery?.requesterDelivery?.state,
+        requesterVisibleFinal: Boolean(run?.delivery?.requesterVisibleFinal),
+        errorCode: deliveryErrorCode(run?.delivery?.lastError),
+        queue: pending && {
+          id: pending.id,
+          state: pending.recoveryState,
+          attempts: resolveDeliveryQueueAttemptCount(pending),
+          leaseOwnerPresent: Boolean(pending.producerClaimId || pending.platformSendAttemptId),
+          errorCode: deliveryErrorCode(pending.lastError),
+        },
+      };
+      const serialized = JSON.stringify(state);
+      if (serialized !== lastSettlementState) {
+        lastSettlementState = serialized;
+        settlementHistory.push({ at: Date.now(), state });
+        if (settlementHistory.length > 5) {
+          settlementHistory.splice(1, 1);
+        }
+      }
       return (
         task?.execution.status === "terminal" &&
         delivery?.disposition === "ambiguous" &&
         Boolean(queued) &&
         gateway.logs().includes("automatic completion delivery could not be confirmed")
       );
-    }, "ambiguous announcement settlement");
+    }, "ambiguous announcement settlement").catch((error: unknown) =>
+      rethrowWithDeliveryDiagnostics(error, () => {
+        const requests = createRequestSummary();
+        for (const { method, route } of writes) {
+          const operation = /\/channels\/\d+\/(messages|typing)(?=[/?]|$)/u.exec(route)?.[1];
+          requests.record(method, operation ? `/channels/:id/${operation}` : "/other");
+        }
+        const taskQueueId = task?.delivery?.queueId;
+        return {
+          taskRunId,
+          requesterSettledBeforeWorker,
+          parentAcknowledged,
+          completions,
+          unidentifiedSends: writes.filter((write) => write.identityOmitted).length,
+          settlementHistory,
+          requests: requests.snapshot(),
+          ...deliveryQueueDiagnostics(
+            gateway,
+            childSessionKey ? [requesterKey, childSessionKey] : [requesterKey],
+            { ids: [...observedQueueIds, ...(taskQueueId ? [taskQueueId] : [])] },
+          ),
+        };
+      }),
+    );
     expect(delivery?.status).toBe("pending");
     expect(requesterSettledBeforeWorker).toBe(true);
     expect(parentAcknowledged).toBe(true);
