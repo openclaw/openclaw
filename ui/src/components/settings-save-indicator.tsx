@@ -70,6 +70,14 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     return { retired, command, setCommand, saving, setSaving };
   });
   const [completion, setCompletion] = createSignal<Promise<unknown> | null>(null);
+  const [reload, setReload] = createSignal<{
+    retired: Promise<unknown>;
+    error: string | null;
+  } | null>(null);
+  const activeReload = () => {
+    const state = reload();
+    return state?.retired === props.presentationRetired() ? state : null;
+  };
   const outcome = createMemo(async () => {
     await completion();
     return null;
@@ -113,20 +121,26 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
           : command === "reload"
             ? props.onReload()
             : props.onApply();
-    // Reload publishes its editor lock after draining writes. Keep that read
-    // outside the write action so the lock can land before the read finishes.
+    // A held reload must not hold back the settings editor's lock publication.
+    if (command === "reload") {
+      const request = { retired, error: null };
+      setReload(request);
+      void Promise.race([pending, retired]).then(
+        () => setReload((state) => (state === request ? null : state)),
+        (error: unknown) =>
+          setReload((state) =>
+            state === request ? { retired, error: formatUiError(error) } : state,
+          ),
+      );
+      return;
+    }
+    setReload(null);
     void setCompletion(
-      command === "reload"
-        ? Promise.race([pending, retired]).catch((error: unknown) => {
-            if (current(view)) {
-              throw error;
-            }
-          })
-        : Promise.resolve().then(() => present(view, pending, retired, presentedCommand)),
+      Promise.resolve().then(() => present(view, pending, retired, presentedCommand)),
     );
   }
   const saving = () => presentation().saving();
-  const busy = () => saving() || isPending(outcome);
+  const busy = () => saving() || isPending(outcome) || activeReload()?.error === null;
   const status = createMemo(() => (props.saving ? "saving" : props.status));
   const state = createMemo(() => {
     const command = presentation().command();
@@ -311,6 +325,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
           </ConfigError>
         </Show>
       </Loading>
+      <Show when={activeReload()?.error}>{(error) => <p role="alert">{error()}</p>}</Show>
       <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
         <Loading on={latest(completion)}>{outcome()}</Loading>
       </Errored>
