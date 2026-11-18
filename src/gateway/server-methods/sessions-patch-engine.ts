@@ -611,13 +611,12 @@ export async function executeSessionPatchMutations(params: {
                   },
                   afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                   assertCommitAllowed,
-                  agentId: first.targetAgentId,
                   sessionKeys: selectedSessionKeys,
-                  storePath: first.storePath,
                   skipMaintenance: true,
                 };
                 const applyGroup = createSessionPatchGroupWriter({
                   store: groupStore,
+                  followSharingRegistration: params.followSharingRegistration,
                   targets: group,
                   project: projectGroup,
                   timing: groupTiming,

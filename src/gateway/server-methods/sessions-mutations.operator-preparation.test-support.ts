@@ -269,10 +269,15 @@ export function registerSessionOperatorPreparationTests(fixture: {
         }
       },
     );
-    it.each(["sessions.patch", "sessions.patchMany"] as const)(
-      "keeps %s authorized while creating its own missing session database",
-      async (method) => {
-        const agentId = method === "sessions.patch" ? "cold-patch" : "cold-batch";
+    it.each([
+      ["sessions.patch", "model"],
+      ["sessions.patchMany", "model"],
+      ["sessions.patch", "label"],
+      ["sessions.patchMany", "label"],
+    ] as const)(
+      "keeps %s %s patches authorized while creating their own missing session database",
+      async (method, field) => {
+        const agentId = `cold-${method === "sessions.patch" ? "patch" : "batch"}-${field}`;
         const storePath = resolveOpenClawAgentSqlitePath({ agentId });
         try {
           const { caller, context } = preparedOperator();
@@ -280,11 +285,10 @@ export function registerSessionOperatorPreparationTests(fixture: {
           const cfg = context.getRuntimeConfig();
           cfg.agents!.entries![agentId] = {};
           const key = `agent:${agentId}:dashboard:missing-store`;
-          const model = "openai/gpt-5.6-sol";
+          const patch =
+            field === "model" ? { model: "openai/gpt-5.6-sol" } : { label: "Cold first session" };
           const params =
-            method === "sessions.patchMany"
-              ? { targets: [{ key }], patch: { model } }
-              : { key, model };
+            method === "sessions.patchMany" ? { targets: [{ key }], patch } : { key, ...patch };
           await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
           // Gateway admission retains registry facts before writer preparation begins.
           const resolved = await resolveSessionMutationAuthorizationAsync({
@@ -313,8 +317,9 @@ export function registerSessionOperatorPreparationTests(fixture: {
             method === "sessions.patchMany" ? { outcomes: [{ key, ok: true }] } : { key },
           );
           expect(loadSessionEntry({ agentId, sessionKey: key, storePath })).toMatchObject({
-            providerOverride: "openai",
-            modelOverride: "gpt-5.6-sol",
+            ...(field === "model"
+              ? { providerOverride: "openai", modelOverride: "gpt-5.6-sol" }
+              : { label: "Cold first session" }),
             createdActor: { type: "human", id: fixture.profileId() },
           });
         } finally {
