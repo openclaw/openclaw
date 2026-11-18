@@ -10,11 +10,15 @@ import {
 import { readSqliteSchemaCookie } from "./sqlite-schema-contract.js";
 import { withSqliteSourceReadDatabase } from "./sqlite-source-handle.js";
 
-/** Inspect in a dedicated child: closing a source in the caller can release its POSIX locks. */
+/**
+ * Inspect in a dedicated child: closing a source in the caller can release its POSIX locks.
+ * `preserveSourceArtifacts` reads only a complete WAL family, through a read-only index, so
+ * no source byte changes; any other family returns undefined for the private snapshot owner.
+ */
 export function tryInspectSqliteReadOnlyInProcess<T>(
   pathname: string,
   inspect: (database: DatabaseSync) => T,
-  options: { allowClosedWal?: boolean } = {},
+  options: { allowClosedWal?: boolean; preserveSourceArtifacts?: boolean } = {},
 ): { value: T } | undefined {
   const canonicalPath = fs.realpathSync.native(pathname);
   let mode: ReturnType<typeof readSourceJournalMode>;
@@ -29,11 +33,17 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
   const sidecars = readSourceSidecars(canonicalPath);
   // Live runtime reads and certified clean closes permit empty WAL sidecars.
   // Acquire real read locks; never use immutable mode on a live path.
-  const closedWal = options.allowClosedWal && !sidecars.wal && !sidecars.shm && !sidecars.journal;
-  if (mode === "empty" || (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal)) {
+  const preserve = options.preserveSourceArtifacts === true;
+  const closedWal =
+    !preserve && options.allowClosedWal && !sidecars.wal && !sidecars.shm && !sidecars.journal;
+  if (
+    mode === "empty" ||
+    (mode === "wal" && !(sidecars.wal && sidecars.shm) && !closedWal) ||
+    (preserve && (mode !== "wal" || sidecars.journal))
+  ) {
     return undefined;
   }
-  return withSqliteSourceReadDatabase(canonicalPath, "source", (database) => {
+  const read = (database: DatabaseSync) => {
     try {
       // sqlite-allow-raw -- SQLite connection policy and deferred read admission, not a row query.
       database.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
@@ -54,7 +64,9 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
       const currentSidecars = readSourceSidecars(canonicalPath);
       if (
         (currentMode === "wal" && !(currentSidecars.wal && currentSidecars.shm)) ||
-        (currentMode === "rollback" && currentSidecars.journal && isSqliteReadOnlyError(error))
+        (currentMode === "rollback" && currentSidecars.journal && isSqliteReadOnlyError(error)) ||
+        // A read-only index SQLite cannot use falls back to the private snapshot.
+        (preserve && isSqliteReadOnlyError(error))
       ) {
         return undefined;
       }
@@ -64,7 +76,8 @@ export function tryInspectSqliteReadOnlyInProcess<T>(
     // sqlite-allow-raw -- End the read-only snapshot without committing any source changes.
     database.exec("ROLLBACK;");
     return { value };
-  });
+  };
+  return withSqliteSourceReadDatabase(canonicalPath, "source", read, { readOnlyShm: preserve });
 }
 
 /** The isolated reader lets SQLite distinguish a hot journal from harmless residue. */
