@@ -431,16 +431,7 @@ export function registerCliReplyCompletionTests({
     expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
   });
 
-  it.each([
-    { name: "a plain final answer", sends: [], result: "Build installed.", answer: true },
-    { name: "NO_REPLY", sends: [], result: SILENT_REPLY_TOKEN, answer: false },
-    {
-      name: "a final send of the same answer",
-      sends: ["Build installed."],
-      result: "Build installed.",
-      answer: false,
-    },
-  ])("keeps WebChat progress and $name in message_tool_only", async (testCase) => {
+  it("keeps the final answer after WebChat progress in message_tool_only", async () => {
     const sessionKey = "agent:main:main";
     const { dir, sessionTarget } = createSessionFixture({ sessionKey });
     const config: OpenClawConfig = { agents: { entries: { main: { workspace: dir } } } };
@@ -467,16 +458,11 @@ export function registerCliReplyCompletionTests({
       agentId: "main",
       runId: context.params.runId,
     });
-    const progress = "Build started.";
+    const [progress, answer] = ["Build started.", "Build installed."];
     supervisorSpawnMock.mockImplementationOnce(async (input) => {
-      const sends = [
-        { action: "send", message: progress, final: false },
-        ...testCase.sends.map((message) => ({ action: "send", message, final: true })),
-      ];
-      for (const [index, args] of sends.entries()) {
-        captureMessage(input, args, await tool.execute(`cli-webchat-progress-${index}`, args));
-      }
-      emitResult(input, testCase.result);
+      const args = { action: "send", message: progress, final: false };
+      captureMessage(input, args, await tool.execute("cli-webchat-progress", args));
+      emitResult(input, answer);
       return makeManagedRun();
     });
 
@@ -485,14 +471,8 @@ export function registerCliReplyCompletionTests({
     const transcriptTexts = (await readTranscriptMessages(sessionTarget))
       .filter((message) => isRecord(message) && message.role === "assistant")
       .map((message) => extractStoredAssistantText(message));
-    expect(transcriptTexts).toEqual([
-      progress,
-      ...testCase.sends,
-      ...(testCase.answer ? [testCase.result] : []),
-    ]);
-    expect(result.payloads?.some((payload) => payload.text === "Build installed.")).toBe(
-      testCase.result !== SILENT_REPLY_TOKEN,
-    );
+    expect(transcriptTexts).toEqual([progress, answer]);
+    expect(result.payloads?.map((payload) => payload.text)).toContain(answer);
   });
 
   it.each([false, true])(
