@@ -195,6 +195,16 @@ async function prepareSessionGenerationLease(
         // store, current permissions, and actual closure remain checked below.
         return;
       }
+      if (
+        change.scope === "sessions" &&
+        change.factsInvalidated === undefined &&
+        change.runtimeSession === undefined &&
+        retained
+      ) {
+        // Committed writers install entry and membership before this catalog notification;
+        // the next assertion still checks the retained source and current facts.
+        return;
+      }
       if (typeof change.scope === "object") {
         if (change.scope.agentId && change.scope.agentId !== generation.agentId) {
           return;
