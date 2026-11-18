@@ -395,8 +395,13 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       {
         batch: observed.map((entry) => this.currentValue(entry)),
         custodies: this.completionAuthorities,
-        required: this.requiredCompletionEntries,
         assertCurrent: (entry) => this.assertCompletionEntryCurrent(entry),
+        assertRetainedAuthority: (entry) => {
+          const key = getSubagentRunRuntimeKey(entry);
+          if (this.requiredCompletionEntries.has(key) && !this.completionAuthorities.has(key)) {
+            throw new Error("Subagent completion authority is no longer active");
+          }
+        },
         runWithAuthority: (entry, work) => this.runWithCompletionAuthority(entry, work),
       },
       run,

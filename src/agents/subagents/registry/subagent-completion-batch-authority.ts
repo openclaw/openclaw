@@ -34,13 +34,13 @@ export function runWithSubagentCompletionBatchAuthority<T>(
   params: {
     batch: readonly SubagentRunRecord[];
     custodies: ReadonlyMap<object, SubagentCompletionCustody>;
-    required: Pick<WeakSet<object>, "has">;
     assertCurrent: (entry: SubagentRunRecord) => void;
+    assertRetainedAuthority: (entry: SubagentRunRecord) => void;
     runWithAuthority: (entry: SubagentRunRecord, run: () => T) => T;
   },
   run: () => T,
 ): T {
-  const { batch, custodies, required } = params;
+  const { batch, custodies } = params;
   batch.forEach(params.assertCurrent);
   const resultEntry = batch.find((entry) => !isSubagentCancellationNotice(entry));
   if (!resultEntry) {
@@ -70,9 +70,7 @@ export function runWithSubagentCompletionBatchAuthority<T>(
   // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
   for (const entry of batch) {
     const custody = custodies.get(getSubagentRunRuntimeKey(entry));
-    if (required.has(getSubagentRunRuntimeKey(entry)) && !custody) {
-      throw new Error("Subagent completion authority is no longer active");
-    }
+    params.assertRetainedAuthority(entry);
     custody?.authority.assertCurrent();
     const source = custody?.authority.operatorAuthority;
     if (
