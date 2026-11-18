@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
-import { OpenClawChannelBridge } from "./channel-bridge.js";
+import { OpenClawChannelBridge, resolveGatewayReadyTimeoutMs } from "./channel-bridge.js";
 import type { QueueEvent, SessionMessagePayload } from "./channel-shared.js";
 
 const startup = vi.hoisted(() => ({ options: null as Record<string, unknown> | null }));
@@ -50,7 +50,12 @@ const APPROVAL_DEFAULT_TTL_MS = 30 * ONE_MINUTE_MS;
 
 type BridgeInternals = Pick<
   OpenClawChannelBridge,
-  "handleClaudePermissionRequest" | "listPendingApprovals" | "close" | "start"
+  | "handleClaudePermissionRequest"
+  | "listPendingApprovals"
+  | "close"
+  | "start"
+  | "waitUntilReady"
+  | "listConversations"
 > & {
   queue: QueueEvent[];
   pendingClaudePermissions: Map<string, unknown>;
@@ -119,6 +124,30 @@ test("passes resolved TLS identity and waits for Gateway hello before completing
   }
   onHelloOk();
   await expect(started).resolves.toBeUndefined();
+});
+
+test("fails a tool call loudly when the Gateway accepts the connection but never answers", async () => {
+  vi.useFakeTimers();
+  const bridge = makeBridge();
+  const started = bridge.start();
+  await vi.waitFor(() => expect(startup.options).not.toBeNull());
+
+  // A wedged endpoint keeps the handshake pending forever; the call must not stay pending with no output.
+  // Advance fake time through the production deadline the bridge derives from the shared timeout owners.
+  const deadlineMs = resolveGatewayReadyTimeoutMs();
+  const call = bridge.listConversations({ limit: 1 });
+  const rejected = expect(call).rejects.toThrow(/did not complete its handshake.*never answered/);
+  await vi.advanceTimersByTimeAsync(deadlineMs);
+  await rejected;
+
+  // The connection keeps retrying, so a Gateway that recovers later still serves the next call.
+  const onHelloOk = startup.options?.onHelloOk;
+  if (typeof onHelloOk !== "function") {
+    throw new Error("Expected Gateway hello callback");
+  }
+  onHelloOk();
+  await expect(started).resolves.toBeUndefined();
+  await expect(bridge.waitUntilReady()).resolves.toBeUndefined();
 });
 
 describe("OpenClawChannelBridge", () => {
