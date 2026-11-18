@@ -73,28 +73,32 @@ suite.define(() => {
       }
     }
 
-    await page.evaluate(() => {
-      Object.defineProperty(window.visualViewport!, "height", { configurable: true, value: 600 });
-      Object.defineProperty(window.visualViewport!, "offsetTop", {
-        configurable: true,
-        value: 274,
-      });
-      window.visualViewport!.dispatchEvent(new Event("resize"));
-    });
-    await editor.fill("A longer first prompt.\n".repeat(20));
-    await waitForLayoutSettled(page, ".new-session-page__composer");
-    expect((await editor.boundingBox())!.height).toBeGreaterThan(48);
-    const roomyBox = (await composer.boundingBox())!;
-    expect(roomyBox.y).toBeGreaterThanOrEqual(274);
-    expect(roomyBox.y + roomyBox.height).toBeLessThanOrEqual(274 + 600);
-    expect(
-      await send.evaluate((element) => {
-        const bounds = element.getBoundingClientRect();
-        return element.contains(
-          document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
-        );
-      }),
-    ).toBe(true);
+    for (const visibleHeight of [520, 600]) {
+      const visibleTop = 874 - visibleHeight;
+      await page.evaluate(
+        ({ height, offsetTop }) => {
+          for (const [key, value] of Object.entries({ height, offsetTop })) {
+            Object.defineProperty(window.visualViewport!, key, { configurable: true, value });
+          }
+          window.visualViewport!.dispatchEvent(new Event("resize"));
+        },
+        { height: visibleHeight, offsetTop: visibleTop },
+      );
+      await editor.fill("A longer first prompt.\n".repeat(20));
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      expect((await editor.boundingBox())!.height).toBeGreaterThan(48);
+      const roomyBox = (await composer.boundingBox())!;
+      expect(roomyBox.y).toBeGreaterThanOrEqual(visibleTop);
+      expect(874 - (roomyBox.y + roomyBox.height)).toBe(10);
+      expect(
+        await send.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return element.contains(
+            document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+          );
+        }),
+      ).toBe(true);
+    }
 
     await page.evaluate(() => {
       for (const key of ["height", "offsetTop"]) {

@@ -37,6 +37,9 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             heldMethods: [method],
             agentModel: "openai/gpt-5.5",
+            ...(method === "agents.list"
+              ? { workspace: "/workspace/plain", workspaceGit: false }
+              : {}),
           });
           await page.goto(`${suite.server.baseUrl}new?agent=main`);
           const composer = page.locator(".new-session-page__message");
@@ -53,6 +56,17 @@ suite.define(() => {
           const start = page.getByRole("button", { name: "Start session", exact: true });
           const notice = page.locator(".new-session-page__blocked-submit");
           const frame = page.locator(".new-session-page__composer");
+          const surface = frame.locator(".agent-chat__input");
+          const checkoutPlaceholder = frame.locator(".new-session-page__checkout-skeleton");
+          let reservedCheckoutHeight = 0;
+          if (method === "agents.list") {
+            await checkoutPlaceholder.waitFor({ state: "visible" });
+            const checkout = (await checkoutPlaceholder.boundingBox())!;
+            const folder = (await frame.locator("#new-session-project-trigger").boundingBox())!;
+            reservedCheckoutHeight = checkout.y + checkout.height - (folder.y + folder.height);
+          }
+          const writingBounds = await surface.boundingBox();
+          expect(writingBounds).not.toBeNull();
           const bounds = await frame.boundingBox();
           const stableBounds =
             width === 390 ? { x: bounds?.x, width: bounds?.width, height: bounds?.height } : bounds;
@@ -78,7 +92,19 @@ suite.define(() => {
           expect(await notice.count()).toBe(0);
           expect(await composer.inputValue()).toBe(message);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-          expect(await frame.boundingBox()).toMatchObject(stableBounds!);
+          if (method === "agents.list") {
+            // The plain workspace doesn't need the reserved checkout row.
+            // Its disappearance must not move or resize the docked writing surface.
+            expect(await checkoutPlaceholder.count()).toBe(0);
+            expect(await frame.locator("#new-session-checkout-trigger").count()).toBe(0);
+            expect(await frame.boundingBox()).toMatchObject({
+              ...stableBounds,
+              height: bounds!.height - reservedCheckoutHeight,
+            });
+            expect(await surface.boundingBox()).toEqual(writingBounds);
+          } else {
+            expect(await frame.boundingBox()).toMatchObject(stableBounds!);
+          }
           await composer.press("Enter");
           await waitForCommittedChatRoute(page);
           const creates = await gateway.getRequests("sessions.create");
