@@ -65,6 +65,9 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 Managed agent-database schema extension belongs to private worker backends, not
 the typed public Plugin SDK. Bundled backend authors should follow the
 [private worker schema-extension contract](/reference/database-schemas/worker-access#private-worker-schema-extensions).
+Official harness plugins decode native placement facts through the private-local
+`openclaw/plugin-sdk/agent-harness-session-contracts` facade. It exposes the canonical
+schemas without loading session stores or execution owners during registration.
 
 ## Related
 

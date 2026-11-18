@@ -40,7 +40,7 @@ it("delivers only bounded native classifications through the Gateway logger, nev
   forwarder.nativeExit(7, null);
   await forwarder.finish();
   const records = log.mock.calls.map(([message]) =>
-    JSON.parse(message.split("OPENCLAW_WORKER_DIAGNOSTIC_V1 ")[1]!),
+    JSON.parse(message.split("codex worker diagnostic ")[1]!),
   );
   expect(records).toEqual([
     {

@@ -11,6 +11,7 @@
   "agent-harness-registration",
   "agent-harness-completion",
   "agent-harness-session-runtime",
+  "agent-harness-session-contracts",
   "agent-harness-tool-runtime",
   "agent-runtime-test-contracts",
   "agent-sessions",

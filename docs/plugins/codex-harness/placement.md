@@ -178,3 +178,17 @@ profile, refreshed only after worker acknowledgement, and revoked when the
 duplex ends. Enterprise credentials remain bound to their issuer host. Shared or
 ordinary paired nodes do not receive that credential. Other managed GitHub
 identities still require Gateway-owned execution.
+
+Worker-hosted native bindings record their exact placement owner. Later reconnects
+require that native state, rather than silently starting over when it is missing.
+Retained-session policy applies to worker-hosted app-servers, not Gateway-owned
+app-servers using a remote execution carrier. A confirmed lost-worker replacement
+may bootstrap a fresh native thread only when its placement owner supplies explicit
+predecessor lineage; a failed environment or missing home does not establish loss.
+The placement owner records that lineage only for unexpected destruction confirmed
+by the provider. Unknown leases, failed inspections, dormancy, and requested teardown
+do not authorize a replacement native thread. If another activated replacement is
+lost before its native binding commits, recovery refuses an older unmatched binding
+rather than inventing a transitive ownership chain.
+It never resumes a process from the lost worker. Worker diagnostics report bounded
+exit facts and classifications without forwarding native stderr content.

@@ -47,6 +47,15 @@ export function createWorkerLeaseInspection(
               ...(!teardownExpected
                 ? {
                     terminalState: "failed",
+                    ...(record.leaseId
+                      ? {
+                          confirmedLoss: {
+                            status: "destroyed",
+                            ownerEpoch: record.ownerEpoch,
+                            leaseId: record.leaseId,
+                          },
+                        }
+                      : {}),
                     lastError: "Worker environment disappeared before teardown was requested",
                   }
                 : {}),

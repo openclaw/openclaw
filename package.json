@@ -509,7 +509,8 @@
     "!dist/plugin-sdk/skill-authoring-runtime.d.ts",
     "!dist/plugin-sdk/skill-workshop-host-runtime.d.ts",
     "!dist/plugin-sdk/skill-workshop-host-cli.d.ts",
-    "!dist/plugin-sdk/github-worker-runtime.d.ts"
+    "!dist/plugin-sdk/github-worker-runtime.d.ts",
+    "!dist/plugin-sdk/agent-harness-session-contracts.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1022,6 +1023,9 @@
     },
     "./plugin-sdk/agent-harness-session-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-session-runtime.js"
+    },
+    "./plugin-sdk/agent-harness-session-contracts": {
+      "default": "./dist/plugin-sdk/agent-harness-session-contracts.js"
     },
     "./plugin-sdk/agent-harness-tool-runtime": {
       "default": "./dist/plugin-sdk/agent-harness-tool-runtime.js"

@@ -121,8 +121,6 @@ export type SandboxContext = {
   nativeWorkerPlacement?: NativeWorkerPlacement;
   /** Retained node sessions keep one native conversation across compute windows. */
   placementRetainedSession?: true;
-  /** A provider-observed resume requires the native state from the original disk. */
-  placementRequireExistingNativeState?: true;
   /** Run-owned filesystem projection prepared before synchronous tool assembly. */
   fsPreparation?: SandboxFsPreparation;
   /** Creators release retained authority after last use; supplied contexts remain caller-owned. */

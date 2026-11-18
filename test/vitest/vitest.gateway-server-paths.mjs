@@ -487,6 +487,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/prepared-pool.test.ts",
   "src/gateway/worker-environments/provider-allocation-cleanup.test.ts",
   "src/gateway/worker-environments/provider-bootstrap.test.ts",
+  "src/gateway/worker-environments/provider-confirmed-loss.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
   "src/gateway/worker-environments/provider-create-authority.test.ts",
   "src/gateway/worker-environments/provider-create-recovery.test.ts",

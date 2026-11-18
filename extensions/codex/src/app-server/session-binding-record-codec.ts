@@ -1,5 +1,5 @@
 /** Canonical persisted binding codec; safe to load before worker transaction admission. */
-import { NativeWorkerPlacementOwnerSchema } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { NativeWorkerPlacementOwnerSchema } from "openclaw/plugin-sdk/agent-harness-session-contracts";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.shared.js";
 import type { CodexServiceTier } from "./protocol.js";

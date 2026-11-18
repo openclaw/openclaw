@@ -263,6 +263,7 @@ export function createPlacementTransitionOps(runtime: PlacementStoreRuntime) {
           query(db)
             .updateTable("worker_session_placements")
             .set({
+              // Diagnostics never mint or retire provider-confirmed predecessor facts.
               recovery_error: recoveryError,
               updated_at_ms: updatedAtMs,
               ...(alreadyFailed

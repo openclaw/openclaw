@@ -106,8 +106,6 @@ export function registerThreadRecoveryBindingTests({
       recovery: {
         version: 1 as const,
         predecessor: { ...predecessor, ...(scenario === "wrong owner" ? { ownerEpoch: 6 } : {}) },
-        predecessorGeneration: 9,
-        replacementDispatchGeneration: 10,
       },
     };
     const history = [
@@ -130,7 +128,6 @@ export function registerThreadRecoveryBindingTests({
     const result = startOrResumeThread({
       ...common,
       nativeWorkerPlacement,
-      requireExistingThread: true,
       ...(scenario === "missing budget" ? {} : { historyBootstrapItems: history }),
     });
     if (scenario === "recover") {
@@ -150,7 +147,6 @@ export function registerThreadRecoveryBindingTests({
       await startOrResumeThread({
         ...common,
         nativeWorkerPlacement,
-        requireExistingThread: true,
         historyBootstrapItems: history,
       });
       expect(fixture.request.mock.calls.map(([method]) => method)).not.toContain("thread/start");

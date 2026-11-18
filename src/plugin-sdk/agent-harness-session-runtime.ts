@@ -41,11 +41,3 @@ export {
   wrapNativeSessionDeletionMutation,
   isNativeSessionDeletionUnresolved,
 } from "../agents/harness/native-session/deletion-participant.js";
-
-export {
-  NativeWorkerPlacementOwnerSchema,
-  NativeWorkerLossRecoverySchema,
-  type NativeWorkerPlacementOwner,
-  type NativeWorkerLossRecovery,
-  type NativeWorkerPlacement,
-} from "../agents/harness/native-session/worker-placement.js";

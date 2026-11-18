@@ -233,7 +233,7 @@ export function createWorkerDiagnosticReceiver() {
   let received = 0;
   const log = (event: WorkerDiagnostic | Record<string, unknown>) => {
     embeddedAgentLog.info(
-      `OPENCLAW_WORKER_DIAGNOSTIC_V1 ${JSON.stringify({ version: 1, transportId, ...event })}`,
+      `codex worker diagnostic ${JSON.stringify({ version: 1, transportId, ...event })}`,
     );
   };
   return {

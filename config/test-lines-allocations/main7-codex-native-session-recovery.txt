@@ -1,2 +1,2 @@
-# Native thread continuity, startup retries, binding recovery, and bounded diagnostics regressions.
-55
+# Native startup/binding continuity, bounded diagnostics, and provider-confirmed loss receipt publication, restart, redispatch and refusal contracts.
+314

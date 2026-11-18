@@ -144,6 +144,7 @@
   "agent-harness-runtime",
   "agent-workspace-runtime",
   "agent-harness-session-runtime",
+  "agent-harness-session-contracts",
   "agent-harness-tool-runtime",
   "hook-runtime",
   "html-entity-runtime",

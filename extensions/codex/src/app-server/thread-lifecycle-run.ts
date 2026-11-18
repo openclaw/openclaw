@@ -238,7 +238,7 @@ export async function startOrResumeThread(
         threadId: current.threadId,
         ...details,
       });
-      stageBindingReplacement("rotating a stale thread binding", changed);
+      stageBindingReplacement(`changing ${changed}`, changed);
     };
     const transientDelegationRestriction =
       params.params.delegationCapability === "report_only" ||
@@ -638,10 +638,7 @@ export async function startOrResumeThread(
       }
     }
 
-    if (
-      !lostPredecessor &&
-      (params.requireExistingThread || (params.retainedSession && initialBoundThreadId))
-    ) {
+    if (!lostPredecessor && params.retainedSession && initialBoundThreadId) {
       throw new CodexRetainedThreadResumeRefusedError(refusalReason);
     }
     assertReplacementAllowed("starting a fresh native thread");

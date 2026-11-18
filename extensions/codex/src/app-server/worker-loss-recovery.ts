@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { NativeWorkerPlacement } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import type { NativeWorkerPlacement } from "openclaw/plugin-sdk/agent-harness-session-contracts";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 
 /** Loss lineage never replaces native-owned or unassociated historic contexts. */

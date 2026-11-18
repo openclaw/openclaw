@@ -401,9 +401,6 @@ export function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
   }
   return {
     ...(sandbox.placementRetainedSession === true ? { retainedSession: true as const } : {}),
-    ...(sandbox.placementRequireExistingNativeState === true
-      ? { requireExistingNativeState: true as const }
-      : {}),
     environmentId: sandbox.placementEnvironmentId,
     sessionId: sandbox.placementSessionId,
     ownerEpoch: sandbox.placementOwnerEpoch,
