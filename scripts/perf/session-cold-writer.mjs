@@ -422,6 +422,14 @@ async function measureOwners() {
 }
 
 async function measureFlow() {
+  const { captureRuntimeConfigAsyncReader } = await load("src/config/io.runtime.ts");
+  await captureRuntimeConfigAsyncReader()();
+  if (values["restore-flow"]) {
+    const { resolveMaintenanceConfig } = await load(
+      "src/config/sessions/store-maintenance-runtime.ts",
+    );
+    assert.equal(resolveMaintenanceConfig().maxDiskBytes, null, "Disable fixture disk eviction");
+  }
   const { runSessionColdStorageMaintenance, restoreSessionColdTranscript } = await load(
     "src/config/sessions/session-cold-storage.ts",
   );
