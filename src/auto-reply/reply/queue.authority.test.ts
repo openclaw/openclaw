@@ -190,7 +190,7 @@ describe("followup queue authority", () => {
         using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const config = {
           agents: {
-            list: [{ id: "source", model: { primary: "fixture/a", fallbacks: ["fixture/b"] } }],
+            entries: { source: { model: { primary: "fixture/a", fallbacks: ["fixture/b"] } } },
           },
           gateway: {
             roles: {
@@ -263,7 +263,7 @@ describe("followup queue authority", () => {
           enqueueFollowupRun(key, queued, createQueueSettings({ mode: "followup" }));
           scheduleFollowupDrain(key, execute);
           if (restriction.startsWith("sourceAgent")) {
-            config.agents.list[0].model.fallbacks =
+            config.agents.entries.source.model.fallbacks =
               restriction === "sourceAgent narrowing" ? [] : ["fixture/b", "fixture/c"];
           } else if (restriction.startsWith("model policy")) {
             config.gateway.roles.definitions.writer.modelPolicy = {

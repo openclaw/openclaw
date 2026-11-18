@@ -33,6 +33,7 @@ import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-cha
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
   bindGatewayDeviceRevocation,
+  readGatewayDeviceCommittedSourceAuthority,
   readGatewayDeviceRevocationGuard,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
@@ -386,6 +387,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const capturedAt = performance.now();
   const isSourceCurrent = readGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
   const isDeviceCurrent = readGatewayDeviceRevocationGuard(params.hasCurrentClientAuthority);
+  const isCommittedSourceCurrent = readGatewayDeviceCommittedSourceAuthority(
+    params.hasCurrentClientAuthority,
+  );
   const resolveGatewayContext = params.context.resolveGatewayContext;
   const gatewayContext = resolveGatewayContext?.();
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;
@@ -625,6 +629,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
           revoked ||
           references === 0 ||
           isDeviceCurrent?.() === false ||
+          isCommittedSourceCurrent?.() === false ||
           (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal))
         ) {
           throw createOperatorAuthorityInactiveError(
