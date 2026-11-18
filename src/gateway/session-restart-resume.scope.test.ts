@@ -23,6 +23,8 @@ async function crashSession(
   written: string | undefined,
 ) {
   const target = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId: name };
+  // Database workers copy the environment when they start: set the scope before the first write.
+  setScope(written);
   replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 100 });
   const runId =
     run === "requester-settle"
@@ -40,7 +42,6 @@ async function crashSession(
       },
     });
   }
-  setScope(written);
   const events =
     run === "none"
       ? []
