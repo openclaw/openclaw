@@ -276,7 +276,7 @@ suite.define(() => {
         .filter({ hasText: "Something to know before landing" })
         .waitFor();
       // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Verify rendered label and duration casing.
-      expect(squash(await toggle.innerText())).toBe("Resumed · 9m 32s Later · 3 Sessions");
+      expect(squash(await toggle.innerText())).toBe("Resumed · 9m 32s later · 3 sessions");
       expect(await toggle.getAttribute("aria-expanded")).toBe("true");
       expect((await rule.locator("li").allTextContents()).map(squash)).toEqual([
         `${THIRD} Paused`,

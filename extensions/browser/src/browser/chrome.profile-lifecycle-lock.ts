@@ -5,6 +5,7 @@ import path from "node:path";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
 
+// Reentrancy for nested lifecycle calls; read only on launch/stop/cleanup await chains.
 const operationOwners = new AsyncLocalStorage<ReadonlyMap<string, string>>();
 
 export async function withChromeProfileLifecycleLock<T>(

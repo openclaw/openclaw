@@ -11,7 +11,6 @@ describe("command discovery English loading", () => {
       surface: "palette search",
       load: () => import("../components/command-palette-catalog-search.ts"),
     },
-    { surface: "session transcript search", load: () => import("../pages/sessions/view.tsx") },
     { surface: "shortcut help", load: () => import("../components/keyboard-shortcuts-dialog.tsx") },
   ])("registers fallback copy before $surface reads it", async ({ load }) => {
     const { manager } = await loadI18n();
@@ -32,20 +31,19 @@ describe("command discovery English loading", () => {
     expect(manager.t("chat.commands.menu")).toBe("Slash commands");
   });
 
-  it.each([
-    {
-      surface: "slash commands",
-      key: "chat.commands.menu",
-      expected: "Slash commands",
-      load: () => import("../lib/chat/commands.ts"),
-    },
-    {
-      surface: "chat welcome",
-      key: "chat.welcome.recentSessions",
-      expected: "Recent chats",
-      load: () => import("../pages/chat/components/chat-welcome.tsx"),
-    },
-  ])("loads only $surface copy before discovery opens", async ({ key, expected, load }) => {
+  it.each<[key: string, expected: string, load: () => Promise<unknown>]>([
+    [
+      "sessionsView.transcriptSearchTitle",
+      "Search transcripts",
+      () => import("../pages/sessions/view.tsx"),
+    ],
+    ["chat.commands.menu", "Slash commands", () => import("../lib/chat/commands.ts")],
+    [
+      "chat.welcome.recentSessions",
+      "Recent sessions",
+      () => import("../pages/chat/components/chat-welcome.tsx"),
+    ],
+  ])("loads only %s copy before discovery opens", async (key, expected, load) => {
     const { manager } = await loadI18n();
     await manager.setLocale("de");
     await load();

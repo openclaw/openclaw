@@ -7,6 +7,41 @@ const { runManagedServiceManagerBoundary: runBoundary } =
   useManagedServiceHandoffLifecycleFixture(true);
 const itUnix = it.runIf(process.platform !== "win32");
 
+itUnix("uses the verified installed writer when post-core repair migrates then fails", async () => {
+  const result = await runBoundary("systemd", {
+    ledger: true,
+    controlDisconnect: "transferred",
+    interruptedUpdate: "after",
+    finalizeFailure: true,
+    helperExitCode: 1,
+  });
+  expect(result.state.postCoreRepaired, result.log).toBe(true);
+  expect(result.state.restored).toBeUndefined();
+  expect(result.run, result.log).toMatchObject({ status: "failed", phase: "finished" });
+  expect(result.log).toContain("post-core repair did not complete");
+  expect(result.log).not.toMatch(/no such column|failed to finalize update run/);
+});
+
+itUnix.each(["before-recovery", "service-inspection"] as const)(
+  "does not restart an operator-stopped replacement recorded at %s",
+  async (operatorRestart) => {
+    const result = await runBoundary("systemd", {
+      ledger: true,
+      controlDisconnect: "transferred",
+      interruptedUpdate: operatorRestart === "before-recovery" ? "after" : "before",
+      operatorRestart,
+      helperExitCode: 1,
+    });
+    expect(result.state.operatorRestartError, JSON.stringify(result.state)).toBeUndefined();
+    expect(result.log).toContain("update command exited code=null signal=SIGKILL");
+    expect(result.state.restored, result.log).toBeUndefined();
+    expect(result.state.guardedRestart).toBeUndefined();
+    expect(result.state.postCoreRepaired, result.log).toBeUndefined();
+    expect(result.log).toMatch(/stop intent was superseded/);
+    expect(result.run, result.log).toMatchObject({ status: "failed", phase: "finished" });
+  },
+);
+
 itUnix.each([
   ...(["before", "prepared", "publishing", "after"] as const).map((interruptedUpdate) => ({
     interruptedUpdate,

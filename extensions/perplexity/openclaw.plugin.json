@@ -1,6 +1,9 @@
 {
   "id": "perplexity",
-  "categories": ["web"],
+  "categories": [
+    "web",
+    "models"
+  ],
   "activation": {
     "onStartup": false
   },
@@ -8,7 +11,16 @@
     "providers": [
       {
         "id": "perplexity",
-        "envVars": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+        "envVars": [
+          "PERPLEXITY_API_KEY",
+          "OPENROUTER_API_KEY"
+        ]
+      },
+      {
+        "id": "perplexity-decisions",
+        "envVars": [
+          "PERPLEXITY_API_KEY"
+        ]
       }
     ]
   },
@@ -29,14 +41,21 @@
     }
   },
   "contracts": {
-    "webSearchProviders": ["perplexity"]
+    "webSearchProviders": [
+      "perplexity"
+    ],
+    "decisionProviders": [
+      "perplexity-decisions"
+    ]
   },
   "configGroups": [
     {
       "id": "web-search",
       "title": "Web search",
       "order": 10,
-      "properties": ["webSearch"]
+      "properties": [
+        "webSearch"
+      ]
     }
   ],
   "configSchema": {
@@ -48,7 +67,10 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": ["string", "object"]
+            "type": [
+              "string",
+              "object"
+            ]
           },
           "baseUrl": {
             "type": "string"
@@ -57,6 +79,78 @@
             "type": "string"
           }
         }
+      }
+    }
+  },
+  "providers": [
+    "perplexity-decisions"
+  ],
+  "providerAuthChoices": [
+    {
+      "provider": "perplexity-decisions",
+      "method": "api-key",
+      "choiceId": "perplexity-decisions-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Perplexity API key",
+      "groupId": "perplexity-decisions",
+      "groupLabel": "Perplexity",
+      "optionKey": "perplexityApiKey",
+      "cliFlag": "--perplexity-api-key",
+      "cliOption": "--perplexity-api-key <key>",
+      "cliDescription": "Perplexity API key",
+      "credentialOnly": true
+    }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "perplexity-decisions": {
+        "baseUrl": "https://api.perplexity.ai/v1",
+        "models": [
+          {
+            "id": "pplx-decider-v1.2",
+            "name": "Decider v1.2",
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "perplexity-decisions",
+                "input": [
+                  "text"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "limits": {
+                  "maxQuestions": 128
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs"
+                }
+              }
+            }
+          }
+        ]
       }
     }
   }

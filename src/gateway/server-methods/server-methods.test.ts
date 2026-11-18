@@ -2174,8 +2174,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(async () => {
     const runtimeSpy = vi
-      .spyOn(childRuntime, "readChildRuntimeViability")
-      .mockReturnValue(healthyChildRuntime);
+      .spyOn(childRuntime, "prepareChildRuntimeViability")
+      .mockResolvedValue({ publish: () => healthyChildRuntime });
     restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     await registerLegacyContextEngine();

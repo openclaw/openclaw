@@ -263,6 +263,9 @@ export function LogsView(props: LogsProps) {
     }, READER_INTENT_MS);
   };
   const beginReaderScroll = () => {
+    // Native offsets can precede/coalesce scroll events while an incoming batch renders.
+    // A return gesture starting above the tail must not depend on that earlier event.
+    readerLeftEnd ||= stream.scrollHeight - stream.scrollTop - stream.clientHeight >= 2;
     cancelLayout(scrollRequest);
     readerScrollPending = true;
     virtualizer.cancelScroll();
@@ -608,6 +611,12 @@ export function LogsView(props: LogsProps) {
                   }
                 }}
               >
+                {/* Keep empty-result feedback live without announcing incoming log rows. */}
+                <div role="status">
+                  <Show when={props.status.hasLoaded && rows().length === 0}>
+                    <SettingsEmpty message={t("gatewayLogs.empty")} />
+                  </Show>
+                </div>
                 <Show
                   when={props.status.hasLoaded}
                   fallback={
@@ -625,15 +634,7 @@ export function LogsView(props: LogsProps) {
                       overflow: rows().length > 0 ? "clip" : undefined,
                     }}
                   >
-                    <For
-                      each={rendered()}
-                      keyed={(item) => item.row.id}
-                      fallback={
-                        <Show when={rows().length === 0}>
-                          <SettingsEmpty message={t("gatewayLogs.empty")} />
-                        </Show>
-                      }
-                    >
+                    <For each={rendered()} keyed={(item) => item.row.id}>
                       {(item) => <Row item={item()} />}
                     </For>
                   </div>

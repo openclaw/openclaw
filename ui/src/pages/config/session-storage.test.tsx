@@ -112,7 +112,7 @@ it("shows submission progress and clears a rejected run before retrying", async 
   await waitForSolid(() => expect(button(page, "Running").disabled).toBe(true));
   expect(page.textContent).not.toContain("Maintenance unavailable");
   retry.resolve(inventory(7));
-  await waitText(page, "Batch completed. 0 transcripts archived.");
+  await waitText(page, "Maintenance batch completed. 0 transcripts archived.");
   expect(button(page, "Run now")).toBe(runControl);
   expect(page.querySelector('input[type="number"]')).toBe(ageControl);
   expect(runControl.disabled).toBe(false);
@@ -130,7 +130,7 @@ it("does not hold a replacement submission behind a retired request", async () =
   click(page, "Run now");
   await waitForSolid(() => expect(button(page, "Running").disabled).toBe(true));
   current.resolve(inventory(7));
-  await waitText(page, "Batch completed. 0 transcripts archived.");
+  await waitText(page, "Maintenance batch completed. 0 transcripts archived.");
 
   retired.resolve(inventory(700, { archivedTranscripts: 693 }));
   await retired.promise;
@@ -233,7 +233,7 @@ async function startBackgroundRun() {
     method === "sessions.storage.run" ? Promise.resolve(running) : readStatus(method),
   );
   click(mounted.page, "Run now");
-  await waitText(mounted.page, "Background batch started.");
+  await waitText(mounted.page, "Maintenance batch started.");
   return { ...mounted, running, nextStatus };
 }
 
@@ -250,7 +250,7 @@ it.each(["visible", "hidden"] as const)(
     nextStatus.mockResolvedValue(inventory(5, { lastCompletedAt: 200, archivedTranscripts: 2 }));
     const reads = nextStatus.mock.calls.length;
     show("visible");
-    await waitText(page, "Batch completed. 2 transcripts archived.");
+    await waitText(page, "Maintenance batch completed. 2 transcripts archived.");
     expect(nextStatus).toHaveBeenCalledTimes(reads + 1);
     await expectIdle(request);
   },
@@ -267,7 +267,7 @@ it("follows run completion after reconnect", async () => {
     }),
   );
   publish(true, client);
-  await waitText(page, "Batch completed. 2 transcripts archived.");
+  await waitText(page, "Maintenance batch completed. 2 transcripts archived.");
   expect(page.textContent).toContain("3 compressed archives moved from the database to files.");
   await expectIdle(request);
 });
@@ -290,7 +290,7 @@ it("stops polling after a status failure and resumes only after an explicit refr
   );
   await vi.advanceTimersByTimeAsync(2_000);
   await waitText(page, "Archive publication failed");
-  expect(page.textContent).not.toContain("Batch completed");
+  expect(page.textContent).not.toContain("Maintenance batch completed");
   await expectIdle(request);
 });
 
@@ -306,8 +306,8 @@ it.each(["detach", "disconnect", "replace"])("retires background polling on %s",
   flush();
   await expectIdle(request);
   if (change === "replace") {
-    expect(page.textContent).not.toContain("Background batch started.");
+    expect(page.textContent).not.toContain("Maintenance batch started.");
   } else if (change === "disconnect") {
-    expect(page.textContent).toContain("Background batch started.");
+    expect(page.textContent).toContain("Maintenance batch started.");
   }
 });

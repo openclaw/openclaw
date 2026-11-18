@@ -4,6 +4,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import {
   getCliHistoryWriter,
   runWithCliHistoryWriter,
@@ -19,6 +20,7 @@ import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/tr
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { CliSessionBinding } from "../../config/sessions/types.js";
 import { commitCronConversationResult } from "../../cron/conversation-result.js";
+import { runInAgentRunWriteContext } from "../../infra/agent-run-terminal-writes.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { buildPersistedVoiceMessage } from "../../talk/voice-transcript.js";
@@ -453,6 +455,34 @@ describe("CLI transcript account boundary", () => {
     await f.run("epoch-a", async (allowed) => expect(allowed).toBe(false));
   });
 
+  it("covers the run's own message-tool reply mirrored outside its async context", async () => {
+    const f = await seededFixture();
+    // A message-tool send reaches the Gateway outside the CLI run's async context.
+    const mirror = (runId: string, text: string) =>
+      runWithCliHistoryWriter(undefined, () =>
+        runInAgentRunWriteContext(runId, () =>
+          appendAssistantMessageToSessionTranscript({
+            agentId: f.target.agentId,
+            sessionKey: f.target.sessionKey,
+            expectedSessionId: f.target.sessionId,
+            storePath: f.target.storePath,
+            text,
+          }),
+        ),
+      );
+    await f.run("epoch-a", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      await mirror(params.runId, "own mirrored reply");
+    });
+    await f.run("epoch-a", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      expect(await history(allowed, params)).toContain("own mirrored reply");
+      // Another run's id lends no writer, so its row still breaks coverage.
+      await mirror("unrelated-run", "foreign mirrored reply");
+    });
+    await f.run("epoch-a", async (allowed) => expect(allowed).toBe(false));
+  });
+
   it("cannot launder mixed history by returning to the original account", async () => {
     const f = await seededFixture();
     await f.run("epoch-b", async (allowed, params) => {
@@ -523,6 +553,44 @@ describe("CLI transcript account boundary", () => {
       expect(prompt).toContain("B fresh canary");
       expect(prompt).not.toContain("A private canary");
     });
+  });
+
+  it("an empty reset after more history than the bounded read still starts fresh", async () => {
+    const f = await seededFixture();
+    const appendAsync = (content: string) =>
+      f.manager().appendMessageAsync({ role: "user", content, timestamp: 2 });
+    for (let index = 0; index < 120; index += 1) {
+      await appendAsync(`A long history ${index}`);
+    }
+    const kept = f.manager().getLeafId() ?? undefined;
+    f.manager().appendResetBoundary("reset", kept);
+    await f.run("epoch-b", async (allowed) => expect(allowed).toBe(false));
+    f.manager().appendResetBoundary("reset");
+    await f.run("epoch-b", async (allowed) => {
+      expect(allowed).toBe(true);
+      await appendAsync("B fresh canary");
+    });
+    await f.run("epoch-b", async (allowed, params) => {
+      const prompt = await history(allowed, params);
+      expect(prompt).toContain("B fresh canary");
+      expect(prompt).not.toContain("A long history");
+    });
+    // Once its run closes, the writer that established it cannot read it into a CLI input.
+    const closed = await f.run("epoch-b", async (allowed, params) => {
+      expect(allowed).toBe(true);
+      return { params, writer: expectDefined(getCliHistoryWriter(f.target), "writer") };
+    });
+    await expect(
+      runWithCliHistoryWriter(closed.writer, () => history(true, closed.params)),
+    ).rejects.toThrow();
+    // The new boundary stays account-bound: another account gets nothing, and the original
+    // account does not regain history once a foreign account touched it.
+    for (const epoch of ["epoch-c", "epoch-b"]) {
+      await f.run(epoch, async (allowed, params) => {
+        expect(allowed).toBe(false);
+        expect((await history(allowed, params)) ?? "").not.toContain("B fresh canary");
+      });
+    }
   });
 
   it("admits a finished writer's successor while refusing the live writer", async () => {

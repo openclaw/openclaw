@@ -6,7 +6,7 @@ const shared = en.aboutPage;
 const enAbout = {
   aboutPage: {
     productName: "OpenClaw",
-    tagline: "Your personal AI assistant, running on your own devices.",
+    tagline: "Your personal AI agent, running on your own devices.",
     waveHello: "Wave hello to Clawd",
     linksLabel: "Community and resources",
     linkWebsite: "Website",

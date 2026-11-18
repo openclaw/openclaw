@@ -283,7 +283,7 @@ suite.define(() => {
       },
     ));
 
-  it("omits raw actor ids from phone rows while keeping their full identity reachable", () =>
+  it("keeps unnamed people private when filtering their phone activity", () =>
     suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 844, width: 390 } },
       async ({ page }) => {
@@ -370,10 +370,10 @@ suite.define(() => {
         await expectCount(rowLink("unresolved").locator(".viewer-avatar__initials")).toBe(0);
         await expectText(rowLink("named").locator(".viewer-avatar__initials")).toBe("AC");
 
-        // The filter and identity header still reach the full id.
+        // Selecting the full identity keeps its unnamed heading private.
         await activity.locator(".activity-feed__people-trigger").click();
         await page.locator(`[data-activity-unresolved] [data-activity-person="${rawId}"]`).click();
-        await expectText(activity.locator(".activity-feed__identity h2")).toBe(rawId);
+        await expectText(activity.locator(`[data-activity-identity="${rawId}"] h2`)).toBe("Person");
       },
     ));
 });

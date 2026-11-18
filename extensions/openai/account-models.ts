@@ -47,6 +47,9 @@ export function projectOpenAIAccountModels(params: {
 }): ModelDefinitionConfig[] {
   const catalogIds = new Set(params.catalogModels.map((model) => model.id));
   return params.listedModels.flatMap((model): ModelDefinitionConfig[] => {
+    if (model.inference?.chat === false) {
+      return [model];
+    }
     if (OPENAI_PRE_GPT5_MODEL_ID_PATTERN.test(model.id)) {
       return [];
     }

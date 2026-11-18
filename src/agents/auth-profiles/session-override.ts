@@ -17,7 +17,6 @@ import { shouldPreserveUnavailableSessionAuthProfileOverride } from "../../sessi
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { listUserProfileAuthLinksAsync } from "../../state/user-model-accounts.js";
-import { resolveNativeModelPrimary } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -34,9 +33,9 @@ import { resolveModelProviderAuthConfig } from "../model-auth-provider-route.js"
 import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
+import { resolveSessionAuthProfilePreference } from "./selection-preference.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import {
   ensureAuthProfileStoreAsync,
@@ -198,6 +197,45 @@ function isProfileForProvider(params: {
   );
 }
 
+/** Shared compatibility decision; callers decide whether to persist a cleared pin. */
+export function resolveSessionAuthProfileOverrideCompatibility(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  entry: SessionEntry;
+  store: AuthProfileStore;
+  provider: string;
+  providers: readonly string[];
+}): "available" | "unavailable" | "personal-unavailable" | "incompatible" {
+  const { cfg, agentDir, entry, store, provider, providers } = params;
+  const profileId = entry.authProfileOverride?.trim();
+  if (!profileId) {
+    return "incompatible";
+  }
+  if (
+    !store.profiles[profileId] &&
+    !providers.some((candidateProvider) =>
+      isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider: candidateProvider, profileId }),
+    )
+  ) {
+    if (isUserModelAuthProfileId(profileId)) {
+      return "personal-unavailable";
+    }
+    return providers.some((candidateProvider) =>
+      shouldPreserveUnavailableSessionAuthProfileOverride({
+        cfg,
+        agentDir,
+        entry,
+        store,
+        currentProvider: entry.providerOverride ?? provider,
+        provider: candidateProvider,
+      }),
+    )
+      ? "unavailable"
+      : "incompatible";
+  }
+  return isProfileForProvider({ cfg, providers, profileId, store }) ? "available" : "incompatible";
+}
+
 function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
   return normalizeUniqueTrimmedStringList(
     acceptedProviderIds?.length ? acceptedProviderIds : [provider],
@@ -337,54 +375,35 @@ async function resolveSessionAuthProfileOverride(
     assertCommitAllowed: params.assertCommitAllowed,
   };
 
-  const currentProfileId = current;
-  if (
-    currentProfileId &&
-    !store.profiles[currentProfileId] &&
-    !providers.some((candidateProvider) =>
-      isConfiguredAwsSdkAuthProfileForProvider({
-        cfg,
-        provider: candidateProvider,
-        profileId: currentProfileId,
-      }),
-    )
-  ) {
-    if (isUserModelAuthProfileId(currentProfileId)) {
-      // A missing personal owner must not let the next participant claim this session's billing.
-      throw new Error(
-        "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
-      );
-    }
-    if (
-      providers.some((candidateProvider) =>
-        shouldPreserveUnavailableSessionAuthProfileOverride({
-          cfg,
-          agentDir,
-          entry: sessionEntry,
-          store,
-          currentProvider: sessionEntry.providerOverride ?? provider,
-          provider: candidateProvider,
-        }),
-      )
-    ) {
-      authProfilesLog.warn(
-        "selected session auth profile is unavailable; explicit pin remains strict",
-        {
-          event: "session_auth_profile_unavailable",
-          sessionKey,
-          profileId: currentProfileId,
-          recovery:
-            "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
-          tags: ["auth_profiles", "session_recovery"],
-        },
-      );
-      return { profileId: currentProfileId, store };
-    }
-    await clearSessionAuthProfileOverride(overrideTarget);
-    current = undefined;
+  const compatibility = resolveSessionAuthProfileOverrideCompatibility({
+    cfg,
+    agentDir,
+    entry: sessionEntry,
+    store,
+    provider,
+    providers,
+  });
+  if (compatibility === "personal-unavailable") {
+    // A missing personal owner must not let the next participant claim this session's billing.
+    throw new Error(
+      "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
+    );
   }
-
-  if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
+  if (compatibility === "unavailable") {
+    authProfilesLog.warn(
+      "selected session auth profile is unavailable; explicit pin remains strict",
+      {
+        event: "session_auth_profile_unavailable",
+        sessionKey,
+        profileId: current,
+        recovery:
+          "select a configured model@profile or reconnect the intended account with models auth login --profile-id",
+        tags: ["auth_profiles", "session_recovery"],
+      },
+    );
+    return { profileId: current, store };
+  }
+  if (current && compatibility === "incompatible") {
     await clearSessionAuthProfileOverride(overrideTarget);
     current = undefined;
   }
@@ -601,27 +620,19 @@ export async function resolveSessionAuthSelection(params: {
       ? (resolveSessionAuthProfileOverrideSource(params.sessionEntry) ?? "auto")
       : "auto"
     : undefined;
-  // Person-linked pins carry user strength and outrank the agent's static @profile.
-  const rotatedPinnedProfileId =
-    rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
-  const configuredProfile = splitTrailingAuthProfile(
-    resolveNativeModelPrimary(params.cfg, params.agentId) ?? "",
-  ).profile;
-  const defaultModel = configuredProfile
-    ? resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId })
-    : undefined;
-  const configuredProfileId =
-    params.configuredProfileId?.trim() ||
-    (defaultModel &&
-    resolveModelCatalogIdentityKey({ provider: params.provider, id: modelId }) ===
-      resolveModelCatalogIdentityKey({ provider: defaultModel.provider, id: defaultModel.model })
-      ? configuredProfile
-      : undefined);
-  const profileId = rotatedPinnedProfileId ?? configuredProfileId ?? rotatedProfileId;
-  if (!profileId) {
+  const preference = resolveSessionAuthProfilePreference({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    provider: params.provider,
+    modelId,
+    configuredProfileId: params.configuredProfileId,
+    sessionProfileId: rotatedProfileId,
+    sessionProfileSource: rotatedSource,
+  });
+  if (!preference) {
     return undefined;
   }
-  const source = rotatedPinnedProfileId || configuredProfileId ? "user" : "auto";
+  const { profileId, source } = preference;
   if (params.nativeAuthProfileIds?.includes(profileId)) {
     // Apply pin/default precedence first; native login identities are not stored credentials.
     return { profileId, source, routeRequirement: undefined };
@@ -636,8 +647,7 @@ export async function resolveSessionAuthSelection(params: {
         })
       : store;
   if (
-    !rotatedPinnedProfileId &&
-    profileId === configuredProfileId &&
+    preference.origin === "model" &&
     !isProfileForProvider({
       cfg,
       providers: uniqueProviders(params.provider),
@@ -652,9 +662,7 @@ export async function resolveSessionAuthSelection(params: {
         modelId,
       });
     }
-    throw new Error(
-      `Auth profile "${configuredProfileId}" is not configured for ${params.provider}.`,
-    );
+    throw new Error(`Auth profile "${profileId}" is not configured for ${params.provider}.`);
   }
   return {
     profileId,

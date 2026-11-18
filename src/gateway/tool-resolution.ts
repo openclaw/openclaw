@@ -5,8 +5,9 @@ import {
   type AdmittedRunContext,
 } from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.async.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
-import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.js";
+import { projectAgentToolsExecPolicy } from "../agents/agent-tools.execution-policy.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
@@ -361,6 +362,7 @@ export async function resolveGatewayScopedTools(
     sessionConfigSource: "runtime" as const,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    webSearchModelSelection: params.webSearchModelSelection,
     modelHasVision: params.modelHasVision,
     requesterModel: params.requesterModel,
     pairedNodeComputerUse: params.pairedNodeComputerUse,
@@ -371,6 +373,12 @@ export async function resolveGatewayScopedTools(
     // Transport dispatchers own hooks for both tool factories.
     wrapBeforeToolCallHook: false,
     agentAccountId: params.accountId,
+  });
+  const delegatedExecPolicy = projectAgentToolsExecPolicy({
+    options: { config: params.cfg, exec: params.execOverrides, sessionPermissionPolicy },
+    execConfig: resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId }),
+    agentId: policyAgentId,
+    model: { provider: params.modelProvider, id: params.modelId },
   });
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
@@ -407,7 +415,9 @@ export async function resolveGatewayScopedTools(
         }
       : {}),
     execSession: params.execSession,
-    execOverrides: params.execOverrides,
+    execOverrides: { ...params.execOverrides, ...delegatedExecPolicy },
+    // Exported MCP tools do not certify the client's effective execution policy.
+    // Explicit OpenClaw Full Access and standing delegation grants remain independent.
     approvalReviewerDeviceIds: params.approvalReviewerDeviceId
       ? [params.approvalReviewerDeviceId]
       : undefined,

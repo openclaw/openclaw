@@ -15,6 +15,7 @@ import {
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { buildCodexContinuityCalibration } from "./context-engine-projection.js";
+import { applyCodexAssistantTerminalOutcome } from "./event-projector-assistant-message.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
@@ -325,19 +326,7 @@ export async function finalizeCodexAttempt(
         result.currentAttemptAssistant,
         terminalAssistantSource,
       ]) {
-        if (message?.role === "assistant") {
-          const providerRefusal = message.diagnostics?.some(
-            (diagnostic) => diagnostic.type === "provider_refusal",
-          );
-          // The projector owns refusal classification. Preserve it unless a stronger
-          // local abort or prompt failure supersedes this turn's provider outcome.
-          if (!providerRefusal || finalAborted || finalPromptError) {
-            message.stopReason = finalAborted ? "aborted" : finalPromptError ? "error" : "stop";
-            message.errorMessage = finalPromptError
-              ? formatErrorMessage(finalPromptError)
-              : undefined;
-          }
-        }
+        applyCodexAssistantTerminalOutcome(message, finalAborted, finalPromptError);
       }
       return {
         effectiveTimedOut,
@@ -718,7 +707,7 @@ export async function finalizeCodexAttempt(
     }
     emitLifecycleTerminal({
       phase: finalPromptError ? "error" : "end",
-      ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
+      ...(finalPromptError ? { error: finalPromptError } : {}),
       ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
       ...buildLifecycleTerminalMeta({
         aborted: finalAborted,

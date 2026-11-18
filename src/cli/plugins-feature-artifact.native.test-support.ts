@@ -546,9 +546,9 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     const { rootDir, parent } = await fixture();
     const out = path.join(parent, "review.tgz");
     await fs.writeFile(out, "existing review");
-    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), {
-      code: "EEXIST",
-    });
+    const invalidOutput = runPluginsPackCommand({ root: rootDir, out: `${out}.zip` });
+    await assert.rejects(invalidOutput, { humanOutput: /must end in \.tgz or \.tar\.gz/ });
+    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), { code: "EEXIST" });
     assert.equal(await fs.readFile(out, "utf8"), "existing review");
     await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
     await assert.rejects(runPluginsPackCommand({ root: rootDir }), hasMessage("missing or stale"));

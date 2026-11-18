@@ -1,7 +1,11 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import path from "node:path";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { cancelWorkerNativeSections } from "../../packages/worker-runtime/src/worker-task-native-sections.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SqliteDatabaseAdmissions } from "./sqlite-database-admission-record.js";
 import { expectCalls } from "./worker-task-pool.owned.test-support.js";
 import type { WorkerTaskContext } from "./worker-task-transport.js";
@@ -12,6 +16,8 @@ const boundary = vi.hoisted(() => {
 });
 vi.mock("node:worker_threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:worker_threads")>()),
+  // Served workers resolve SQLite facts through their host, as in a real Worker thread.
+  threadId: 1,
   get parentPort() {
     return boundary.port;
   },
@@ -49,8 +55,10 @@ vi.mock("./worker-idle-gc.js", () => ({
   cancelWorkerIdleGc: vi.fn(),
   scheduleWorkerIdleGc: vi.fn(),
 }));
-const exitCode = process.exitCode;
+const exitCode = process.exitCode ?? 0;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  process.exitCode = exitCode;
   vi.resetModules();
   vi.clearAllMocks();
   boundary.closeMemory.mockReset();
@@ -113,11 +121,17 @@ async function workerFixture() {
     ...(await import("./worker-task-server.js")),
     port,
     closed: closed.promise,
-    task(this: void, taskId: number, context = taskContext(), sampleMemory = false) {
+    task(
+      this: void,
+      taskId: number,
+      context = taskContext(),
+      sampleMemory = false,
+      nativeSections = new SharedArrayBuffer(4),
+    ) {
       result = createDeferred<string>();
       port.emit("message", {
         taskId,
-        nativeSections: new SharedArrayBuffer(4),
+        nativeSections,
         taskContext: context,
         sampleMemory,
       });
@@ -226,6 +240,44 @@ it("retains admission context for asynchronous resource cleanup and successor ta
   }
 });
 
+it("closes a deleted agent's readers without waiting for the in-flight task", async () => {
+  const { port, task, serveOwnedWorkerTasks } = await workerFixture();
+  const entered = createDeferred();
+  const finishTask = createDeferred();
+  const { encodeAgentDatabaseReaderRequest: encode, isDeletedAgentDatabasePath } =
+    await import("./agent-database-readers.js");
+  serveOwnedWorkerTasks(
+    async () => {
+      entered.resolve();
+      await finishTask.promise;
+      return "catalog";
+    },
+    { closeResource: vi.fn() },
+  );
+  const deleted = resourceReceipt();
+  const maintenance = resourceReceipt();
+  const close = (key: string, resourcePort: ReturnType<typeof resourceReceipt>) =>
+    port.emit("message", { closeResource: true, key, resourcePort });
+  try {
+    // Another agent's long catalog build is running when this agent is deleted.
+    const result = task(1);
+    await entered.promise;
+    const candidates = [{ path: "/synthetic/doomed.sqlite" }];
+    close(encode({ kind: "close", deleted: true, agentId: "doomed", candidates }), deleted);
+    await vi.waitFor(() => expect(deleted.postMessage).toHaveBeenCalledWith({ ok: true }, []));
+    expect(isDeletedAgentDatabasePath("/synthetic/doomed.sqlite")).toBe(true);
+    // Offline maintenance can target readers the running task holds, so it still waits.
+    close(encode({ kind: "close", deleted: false, candidates }), maintenance);
+    finishTask.resolve();
+    await result;
+    await maintenance.closed;
+    expect(port.postMessage).toHaveBeenCalledBefore(maintenance.postMessage);
+    expect(maintenance.postMessage).toHaveBeenCalledWith({ ok: true }, []);
+  } finally {
+    finishTask.resolve();
+  }
+});
+
 it("expires a task's admission budget without poisoning its successor or resource cleanup", async () => {
   const { port, task, expectResult, serveOwnedWorkerTasks } = await workerFixture();
   const admission = await admissionFixture();
@@ -257,6 +309,84 @@ it("expires a task's admission budget without poisoning its successor or resourc
   expectCalls(2, admission.exchanges, handler);
   expectCalls(0, port.close, boundary.closeMemory);
   expect(process.exitCode).toBe(exitCode);
+});
+
+async function snapshotFixture(prefix: string) {
+  const root = tempDirs.make(prefix);
+  const staging = await import("./sqlite-snapshot-staging.js");
+  const { removeTempDirectoryAsync } = await import("./sqlite-readonly-location-cleanup.js");
+  const { DatabaseSync } = (await import("./node-sqlite.js")).requireNodeSqlite();
+  const allocate = () => {
+    const directory = staging.createSqliteSnapshotStagingDirectorySync(root);
+    // A child writes the copy in its own nested staging directory, then exits.
+    const child = staging.createSqliteSnapshotStagingTokenSync(directory);
+    const copy = new DatabaseSync(path.join(child.directory, "database.sqlite"));
+    copy.exec("CREATE TABLE copied(value)");
+    copy.close();
+    child.release();
+    return { directory, copy: path.join(child.directory, "database.sqlite") };
+  };
+  return { root, staging, allocate, remove: removeTempDirectoryAsync };
+}
+
+it("retires a cancelled task's snapshot copy unless a live reader still holds it", async () => {
+  const { task, serveOwnedWorkerTasks } = await workerFixture();
+  const admission = await admissionFixture();
+  const sections = new SharedArrayBuffer(4);
+  const {
+    root,
+    staging,
+    allocate,
+    remove: removeTempDirectoryAsync,
+  } = await snapshotFixture("cancelled-snapshot-");
+  const settled = createDeferred<boolean[]>();
+  const settle = async (control: { throwIfCancelled(): void }) => {
+    const [held, idle] = [allocate(), allocate()];
+    const releaseReader = staging.acquireSqliteSnapshotReadToken(held.directory);
+    cancelWorkerNativeSections(new Int32Array(sections));
+    expect(() => control.throwIfCancelled()).toThrow("worker task cancelled");
+    // Cleanup may reclaim the child's directory, but cancelled work mints no new owner.
+    expect(() => staging.createSqliteSnapshotStagingDirectorySync(root)).toThrow(/cancelled/u);
+    const removed = [
+      await removeTempDirectoryAsync(idle.directory),
+      await removeTempDirectoryAsync(held.directory),
+    ];
+    expect(fs.readdirSync(root)).toEqual([path.basename(held.directory)]);
+    expect(fs.existsSync(held.copy)).toBe(true);
+    releaseReader();
+    return [...removed, await removeTempDirectoryAsync(held.directory)];
+  };
+  serveOwnedWorkerTasks((_input, _channel, control) =>
+    settle(control).then(settled.resolve, settled.reject),
+  );
+  const result = task(1, taskContext(admission.port), false, sections);
+  expect(await settled.promise).toEqual([true, false, true]);
+  await result;
+  expect(admission.exchanges).toHaveBeenCalled();
+  expect(fs.readdirSync(root)).toEqual([]);
+});
+
+it("retires a task's snapshot copy after its admission budget lapses", async () => {
+  const { task, serveOwnedWorkerTasks } = await workerFixture();
+  const admission = await admissionFixture();
+  const { root, staging, allocate, remove } = await snapshotFixture("expired-snapshot-");
+  const deadline = Date.now() + 60_000;
+  vi.useFakeTimers({ toFake: ["Date"] });
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
+  const settled = createDeferred<boolean>();
+  serveOwnedWorkerTasks(async () => {
+    const { directory } = allocate();
+    vi.setSystemTime(deadline + 1);
+    // The lapsed budget still refuses new work; only cleanup gets its own grace.
+    expect(() => staging.createSqliteSnapshotStagingDirectorySync(root)).toThrow(/timed out/u);
+    await remove(directory).then(settled.resolve, settled.reject);
+  });
+  await task(1, { ...taskContext(admission.port), databaseAdmissionDeadlineAtMs: deadline });
+  expect(await settled.promise).toBe(true);
+  expect(admission.exchanges).toHaveBeenCalled();
+  expect(fs.readdirSync(root)).toEqual([]);
 });
 
 it.each([undefined, "openclaw doctor --fix"])(

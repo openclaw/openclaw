@@ -105,6 +105,10 @@ export function matchesTranscriptEvent(
   match: SessionTranscriptEventMatch,
   projection?: "navigation",
 ): boolean {
+  if (match.kind === "custom-entry") {
+    const record = asOptionalRecord(event);
+    return record?.type === "custom" && record.customType === match.customType;
+  }
   if (match.kind === "latest") {
     return true;
   }

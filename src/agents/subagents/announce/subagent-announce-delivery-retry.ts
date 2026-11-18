@@ -47,6 +47,7 @@ const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
+  /Session "[^"]+" is archived\. Restore it before starting new work\./i,
 ];
 
 function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => boolean): boolean {

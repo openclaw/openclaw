@@ -504,10 +504,10 @@ export async function snapshotWorktree(
     : parseGitTreePaths(await requireGitBuffer(input.checkoutPath, ["ls-tree", "-r", "-z", tree]));
   assertNoProvisionedTreePaths(treePaths, input.provisionedPaths);
   // Cached trees can bypass write-tree's object checks even in a dirty snapshot.
-  // Verify the final tree before publishing a capture that must remain restorable.
+  // Verify before publication; buffer replies because the complete batch is already supplied.
   const objects = await requireGitBuffer(
     input.checkoutPath,
-    ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+    ["cat-file", "--buffer", "--batch-check=%(objectname) %(objecttype)"],
     {
       input: Buffer.from(
         [...new Set(treePaths.filter((entry) => entry.mode !== "160000").map((entry) => entry.oid))]

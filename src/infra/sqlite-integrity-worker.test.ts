@@ -1,8 +1,11 @@
 import { AsyncResource } from "node:async_hooks";
-import { ChildProcess, fork } from "node:child_process";
+import { type ChildProcess, fork } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
+import { constants, getPriority } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,8 +98,48 @@ function expectElapsed(value: unknown) {
   expect(value).toBeGreaterThanOrEqual(0);
 }
 
+function createIntegrityChild(): ChildProcess {
+  // Native ChildProcess accessors require a spawned handle on some runtimes.
+  return Object.assign(new EventEmitter(), {
+    stderr: new PassThrough(),
+    exitCode: null,
+    signalCode: null,
+    connected: false,
+    killed: false,
+    send: vi.fn(() => true),
+    kill: vi.fn(() => true),
+  }) as unknown as ChildProcess;
+}
+
 describe("SQLite integrity child", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("runs background verification at low process priority", async () => {
+    const { source } = fixture("background", "CREATE TABLE records(value INTEGER)");
+    using database = openNodeSqliteDatabase(source);
+    database.exec("BEGIN EXCLUSIVE");
+    const priorities: number[] = [];
+    vi.mocked(fork).mockImplementationOnce((...args) => {
+      const child = nativeFork(...args);
+      child.on("message", (message) => {
+        if ((message as { phase?: string }).phase === "opening") {
+          priorities.push(getPriority(expectDefined(child.pid, "integrity child PID")));
+          database.exec("COMMIT");
+        }
+      });
+      return child;
+    });
+    await assertSqliteIntegrityInWorker(
+      source,
+      5_000,
+      new AbortController().signal,
+      undefined,
+      undefined,
+      undefined,
+      { priority: "background" },
+    );
+    expect(priorities).toEqual([constants.priority.PRIORITY_LOW]);
+  });
+
   it.each(["payload", "schema_meta"])(
     "preserves schema-only migration scope with damage in %s",
     (damagedTable) => {
@@ -167,8 +210,7 @@ describe("SQLite integrity child", () => {
   it("reports bounded progress while native integrity is blocked and stops after cancellation", async () => {
     const { source } = fixture("progress");
     progress.mockClear();
-    const worker = new ChildProcess();
-    worker.send = vi.fn(() => true);
+    const worker = createIntegrityChild();
     worker.kill = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGKILL"));
       return true;
@@ -225,7 +267,7 @@ describe("SQLite integrity child", () => {
 
   it("reports a SIGTERM close without an integrity verdict as an interruption", async () => {
     const { source } = fixture("signal");
-    const worker = new ChildProcess();
+    const worker = createIntegrityChild();
     worker.send = vi.fn(() => {
       queueMicrotask(() => worker.emit("close", null, "SIGTERM"));
       return true;

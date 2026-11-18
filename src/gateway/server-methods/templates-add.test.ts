@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import type { CronJob } from "../../cron/types.js";
 import { ClawHubSourceError } from "../../templates/clawhub-source.js";
@@ -22,6 +23,13 @@ const readPolicy = vi.hoisted(() => vi.fn());
 const validateDelivery = vi.hoisted(() => vi.fn());
 const reloadPlugin = vi.hoisted(() => vi.fn());
 const deleteAgent = vi.hoisted(() => vi.fn());
+const captureCreator = vi.hoisted(() => vi.fn());
+// mock-isolation: Account persistence and revocation use the native inference-binding
+// suite; this adapter suite supplies capture facts while testing its other fences.
+vi.mock("./cron-input-validation.js", async (original) => ({
+  ...(await original<typeof import("./cron-input-validation.js")>()),
+  captureCronCreatorSession: captureCreator,
+}));
 vi.mock("../../templates/gateway-add-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../templates/gateway-add-plan.js")>()),
   planTemplateAddForGateway: planAdd,
@@ -60,6 +68,7 @@ const ready = { ...complete, readiness: { ready: true, requirements: [] } };
 const onDisk = { ...enabled, agents: { list: [{ id: agentId }] } };
 
 beforeEach(() => {
+  captureCreator.mockResolvedValue({});
   listMcp.mockResolvedValue({ ok: true, mcpServers: {} });
   readPolicy.mockResolvedValue(enabled);
 });
@@ -70,7 +79,12 @@ const params = { source, planIntegrity: "sha256:reviewed", acknowledgeCapabiliti
 const plan = { operation: "add", planIntegrity: "sha256:reviewed", target: { agentId } };
 
 function makeCron<T extends object>(overrides: T) {
-  return { add: vi.fn(), list: vi.fn().mockResolvedValue([]), ...overrides };
+  return {
+    add: vi.fn(),
+    list: vi.fn().mockResolvedValue([]),
+    getDefaultAgentId: () => "main",
+    ...overrides,
+  };
 }
 
 async function callAdd(
@@ -141,8 +155,9 @@ it("plans from the persisted roster, not a stale Gateway cache", async () => {
   expect(planAdd).toHaveBeenCalledWith({
     source,
     config: onDisk,
-    sourceMcpServers: {},
+    sourceMcpServers: expect.any(Function),
   });
+  expect(listMcp).not.toHaveBeenCalled();
   expect(request).toEqual([[true, plan]]);
 });
 
@@ -170,8 +185,9 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   applyAdd.mockImplementation(async (input) => {
     expect(await input.getPlanningContext()).toEqual({
       config: onDisk,
-      sourceMcpServers: {},
+      sourceMcpServers: expect.any(Function),
     });
+    expect(listMcp).not.toHaveBeenCalled();
     input.assertCurrent();
     return ready;
   });
@@ -179,6 +195,79 @@ it("applies the reviewed coordinate against the persisted roster", async () => {
   expect(readPolicySync).not.toHaveBeenCalled();
   expect(request).toEqual([[true, ready]]);
 });
+
+it.each(["applied", "applied-restart-required", "restart-pending"] as const)(
+  "reports the reload owner's %s receipt without admitting an unpublished agent",
+  async (outcome) => {
+    const response = await applyThrough(async (input) => {
+      const application = expectDefined(
+        getRuntimeConfigWriteApplication(input.configWriteOptions!),
+        "Template config application receipt",
+      );
+      const claim = expectDefined(application.claim(), "Template config application claim");
+      claim.settle(outcome);
+      if (outcome === "restart-pending") {
+        await expect(input.waitForAgentRuntime!()).rejects.toThrow(
+          "not confirmed (restart-pending)",
+        );
+      } else {
+        await expect(input.waitForAgentRuntime!()).resolves.toBe(outcome);
+      }
+    });
+    expect(response).toEqual([[true, complete]]);
+  },
+);
+
+it("uses separate exact-write runtime receipts for admission and verified Template initialization", async () => {
+  const response = await applyThrough(async (input) => {
+    const admission = expectDefined(
+      getRuntimeConfigWriteApplication(input.admissionConfigWriteOptions!),
+      "ordinary admission receipt",
+    );
+    const initialization = expectDefined(
+      getRuntimeConfigWriteApplication(input.configWriteOptions!),
+      "Template initialization receipt",
+    );
+    expect(admission).not.toBe(initialization);
+    expectDefined(admission.claim(), "admission claim").settle("applied");
+    await expect(input.waitForAdmissionRuntime!()).resolves.toBe("applied");
+    expect(initialization.claimed).toBe(false);
+    expectDefined(initialization.claim(), "initialization claim").settle(
+      "applied-restart-required",
+    );
+    await expect(input.waitForAgentRuntime!()).resolves.toBe("applied-restart-required");
+  });
+  expect(response).toEqual([[true, complete]]);
+});
+
+it.each(["matching", "stale"] as const)(
+  "validates retained agent against the active runtime: %s",
+  async (state) => {
+    const retained = { agentId, config: { name: "Reviewed", workspace: "/tmp/retained-template" } };
+    const runtime = {
+      ...enabled,
+      agents: {
+        entries: {
+          [agentId]: { ...retained.config, name: state === "matching" ? "Reviewed" : "Changed" },
+        },
+      },
+    };
+    const response = await applyThrough(
+      async (input) => {
+        for (const wait of [input.waitForAdmissionRuntime!, input.waitForAgentRuntime!]) {
+          if (state === "matching") {
+            await expect(wait(retained)).resolves.toBe("applied");
+          } else {
+            await expect(wait(retained)).rejects.toThrow("not active in this Gateway");
+          }
+        }
+      },
+      {},
+      runtime,
+    );
+    expect(response).toEqual([[true, complete]]);
+  },
+);
 
 it("guards live authority while leaving post-admission Labs policy to the Add service", async () => {
   let authorized = true;

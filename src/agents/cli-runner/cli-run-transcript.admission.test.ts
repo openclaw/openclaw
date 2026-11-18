@@ -91,7 +91,8 @@ vi.mock("../../infra/errors.js", () => ({ formatErrorMessage: String }));
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: mocks.warn }),
 }));
-vi.mock("../../routing/session-key.js", () => ({
+vi.mock("../../routing/session-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../routing/session-key.js")>()),
   parseAgentSessionKey: () => ({ agentId: "logical" }),
 }));
 vi.mock("../agent-scope.js", () => ({ resolveSessionAgentId: () => "logical" }));

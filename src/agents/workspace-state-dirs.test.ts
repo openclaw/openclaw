@@ -11,6 +11,11 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./sandbox/shared.js";
+import {
+  assertNoUnmigratedWorkspaceState,
+  LEGACY_WORKSPACE_ATTESTATION_HEADER,
+  resolveLegacyWorkspaceSourcePaths,
+} from "./workspace-legacy-state.js";
 import { assertConfiguredWorkspaceStateReady } from "./workspace-state-dirs.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -46,7 +51,8 @@ function setup(mode: "all" | "non-main" = "all") {
   return {
     ready: () => assertConfiguredWorkspaceStateReady({ cfg, env }),
     databasePath,
-    addLegacyWorkspace(sessionKey: string, required = false) {
+    // Genuine legacy setup also wrote an operator-owned state-dir attestation.
+    addLegacyWorkspace(sessionKey: string, required = false, attested = true) {
       const entry = {
         sessionId: sessionKey,
         updatedAt: 1,
@@ -61,6 +67,11 @@ function setup(mode: "all" | "non-main" = "all") {
       });
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "openclaw-workspace-state.json"), '{"version":1}');
+      if (attested) {
+        const attestation = resolveLegacyWorkspaceSourcePaths(dir).stateDirAttestationPaths[0]!;
+        fs.mkdirSync(path.dirname(attestation), { recursive: true });
+        fs.writeFileSync(attestation, "");
+      }
       return dir;
     },
   };
@@ -99,4 +110,17 @@ it("does not create a missing session store during readiness", async () => {
   const state = setup();
   await expect(state.ready()).resolves.toBeUndefined();
   expect(fs.existsSync(state.databasePath)).toBe(false);
+});
+
+it("does not let sandbox-written files in the sandbox root refuse the Gateway", async () => {
+  const state = setup();
+  const copy = state.addLegacyWorkspace("agent:main:guest", false, false);
+  // A shared-scope sandbox mounts the whole root, including copy siblings.
+  fs.writeFileSync(`${copy}.attested`, `${LEGACY_WORKSPACE_ATTESTATION_HEADER}\n`);
+  closeOpenClawAgentDatabasesForTest();
+  await expect(state.ready()).resolves.toBeUndefined();
+  // The copy's first preparation in this process still refuses it.
+  expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: copy })).toThrow(
+    "Legacy workspace setup state requires migration",
+  );
 });

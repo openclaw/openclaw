@@ -132,7 +132,7 @@ docker_e2e_docker_run_cmd() {
     esac
   done
   printf '::warning file=scripts/e2e/kitchen-sink-rpc-walk.mts,line=1,col=0,title=RSS::fixture overage\\n'
-  return "$FIXTURE_RUN_STATUS"
+  return ${runStatus}
 }
 docker_e2e_sample_stats_until_exit() {
   printf '{"MemUsage":"128MiB / 2GiB","CPUPerc":"1%%"}\\n' > "$3"
@@ -150,7 +150,7 @@ docker_e2e_print_log() { cat "$1"; }
       GITHUB_STEP_SUMMARY: summary,
       TMPDIR: root,
       FIXTURE_ARGS: args,
-      FIXTURE_RUN_STATUS: String(runStatus),
+      OPENCLAW_KITCHEN_SINK_NPM_SPEC: "npm-pack:/fixture/plugin.tgz",
     },
   });
 

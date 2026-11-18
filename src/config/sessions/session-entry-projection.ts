@@ -23,6 +23,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   priorWorkspace: undefined,
+  scheduledMemoryParent: undefined,
   sessionDiffBaselineCapture: undefined,
   transcriptByteCompactionLatch: undefined,
 } satisfies Partial<InternalSessionEntry>;
@@ -37,10 +38,12 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "resumeAfterRestart",
+  "operatorSources",
   "mainRestartRecovery",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "priorWorkspace",
+  "scheduledMemoryParent",
   "sessionDiffBaselineCapture",
   "transcriptByteCompactionLatch",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];

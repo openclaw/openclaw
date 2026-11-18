@@ -1,7 +1,10 @@
 /** Process-local reverse registry from prepared agent directories to agent ids. */
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import {
+  resolveIdentityPathViaExistingAncestor,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "../infra/boundary-path.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -57,16 +60,19 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
     observations.push(
       observeOwnedDirectory(path.dirname(child), (filename) => {
         if (!observedThisTurn && (filename === undefined || filename === basename)) {
-          // One synchronous recovery sweep notifies every ancestor of this path.
+          // One recovery sweep notifies every ancestor; share its in-flight lookup.
           observedThisTurn = true;
-          queueMicrotask(() => {
-            observedThisTurn = false;
-          });
-          if (resolveIdentityPathViaExistingAncestorSync(pathname) === key) {
-            return;
-          }
-          preparedPaths.delete(pathname);
-          prepared.close();
+          void resolveIdentityPathViaExistingAncestor(pathname)
+            .then((resolved) => {
+              if (preparedPaths.get(pathname) === prepared && resolved !== key) {
+                preparedPaths.delete(pathname);
+                prepared.close();
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              observedThisTurn = false;
+            });
         }
       }),
     );

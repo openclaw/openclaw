@@ -15,7 +15,8 @@ import { finalizeAgentTools } from "../../src/agents/agent-tools.finalize.ts";
 import type { AnyAgentTool } from "../../src/agents/agent-tools.types.ts";
 import {
   prepareSessionToolSurface,
-  persistSessionToolSurface,
+  persistSessionSystemPrompt,
+  prepareSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
 } from "../../src/agents/embedded-agent-runner/session-prompt-state.ts";
 import { SessionManager } from "../../src/agents/sessions/session-manager.ts";
@@ -125,7 +126,14 @@ for (let session = 0; session < 24; session++) {
       entries: manager.getEntries(),
       tools: finalized,
     });
-    await persistSessionToolSurface(lease.state, (kind, data) =>
+    // Every session persists its tool pin with the system-prompt series checkpoint.
+    prepareSessionSystemPrompt({
+      state: lease.state,
+      routeKey: "fixture-route",
+      systemPrompt: "fixture prompt",
+      entries: manager.getEntries(),
+    }).commit();
+    await persistSessionSystemPrompt(lease.state, (kind, data) =>
       manager.appendCustomEntryAsync(kind, data),
     );
     const payload = convertResponsesToolPayload(prepared, { strict: false });

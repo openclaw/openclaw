@@ -21,6 +21,8 @@ public struct OpenClawChatTalkControl {
     public var statusText: String
     public var providerLabel: String
     public var level: Double
+    public var isMicrophoneMuted: Bool
+    public var toggleMicrophone: (@MainActor () -> Void)?
     public var partialTranscript: String
     public var recentTranscript: [String]
     public var inputDevices: [OpenClawChatAudioInputDevice]
@@ -38,6 +40,8 @@ public struct OpenClawChatTalkControl {
         statusText: String,
         providerLabel: String,
         level: Double = 0,
+        isMicrophoneMuted: Bool = false,
+        toggleMicrophone: (@MainActor () -> Void)? = nil,
         partialTranscript: String = "",
         recentTranscript: [String] = [],
         inputDevices: [OpenClawChatAudioInputDevice] = [],
@@ -54,6 +58,8 @@ public struct OpenClawChatTalkControl {
         self.statusText = statusText
         self.providerLabel = providerLabel
         self.level = level
+        self.isMicrophoneMuted = isMicrophoneMuted
+        self.toggleMicrophone = toggleMicrophone
         self.partialTranscript = partialTranscript
         self.recentTranscript = recentTranscript
         self.inputDevices = inputDevices

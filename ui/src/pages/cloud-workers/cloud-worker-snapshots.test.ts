@@ -52,12 +52,12 @@ describe("Cloud environments", () => {
       const { page, request, harness, client } = mountTestPage(methods, {
         response: (method) => (method === "config.patch" && hold ? pending.promise : undefined),
       });
-      await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
-      change(input(page, "Pool cap"), "6");
+      await waitForSolid(() => expect(input(page, "Pool limit").disabled).toBe(false));
+      change(input(page, "Pool limit"), "6");
       click(page, "Save pool");
       await configPatch(request);
       await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(true));
-      expect(input(page, "Pool cap").value).toBe("6");
+      expect(input(page, "Pool limit").value).toBe("6");
       if (mode === "reconnect") {
         harness.publish(false, client, null);
         harness.publish(true, client, gatewayHelloForMethods(methods));
@@ -69,7 +69,7 @@ describe("Cloud environments", () => {
         pending.reject(new Error("Synthetic save failure"));
         await waitText(() => page, "Synthetic save failure");
         await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
-        expect(input(page, "Pool cap").value).toBe("6");
+        expect(input(page, "Pool limit").value).toBe("6");
         click(page, "Save pool");
         await waitForSolid(() =>
           expect(request.mock.calls.filter(([method]) => method === "config.patch")).toHaveLength(
@@ -98,8 +98,10 @@ describe("Cloud environments", () => {
     });
     try {
       await waitText(() => page, "Loading");
+      expect(page.textContent).not.toContain("Advanced");
       inventory.resolve({ environments: [buildEnvironmentFixture("failed")], profiles: [] });
       await waitText(() => sheet(page), "github.com/acme/app");
+      expect(page.textContent).toContain("Advanced");
       expect(button(sheet(page), "Rebuild").disabled).toBe(true);
       images.resolve(result);
       await waitForSolid(() => expect(button(sheet(page), "Rebuild").disabled).toBe(false));
@@ -121,6 +123,47 @@ describe("Cloud environments", () => {
       refresh.resolve({ environments: [], profiles: [] });
     }
   });
+
+  it.each(["empty", "failed"])(
+    "settles the initial %s inventory before showing Advanced",
+    async (outcome) => {
+      const inventory = createDeferred<unknown>();
+      const images = createDeferred<unknown>();
+      const emptyImages = { ...snapshotListFixture(), images: [], profiles: [] };
+      const { page } = mountTestPage(methods, {
+        response: (method, params) => {
+          if (method === "environments.list" && params?.includePreparedDetails) {
+            return inventory.promise;
+          }
+          return method === "crabbox.images.list" ? images.promise : undefined;
+        },
+      });
+      try {
+        await waitText(() => page, "Loading");
+        expect(page.textContent).not.toContain("Advanced");
+        if (outcome === "failed") {
+          inventory.reject(new Error("Inventory unavailable"));
+          await waitText(() => page, "Inventory unavailable");
+          expect(page.textContent).not.toContain("No cloud devices yet");
+        } else {
+          inventory.resolve({ environments: [], profiles: [] });
+          await waitText(() => page, "No cloud devices yet");
+          expect(page.textContent).not.toContain("Loading");
+          expect(
+            page.querySelector('a[href="https://docs.openclaw.ai/gateway/cloud-workers"]'),
+          ).not.toBeNull();
+        }
+        expect(page.textContent).toContain("Advanced");
+        const advanced = page.querySelector("summary");
+        images.resolve(emptyImages);
+        await images.promise;
+        await waitForSolid(() => expect(page.querySelector("summary")).toBe(advanced));
+      } finally {
+        inventory.resolve({ environments: [], profiles: [] });
+        images.resolve(emptyImages);
+      }
+    },
+  );
 
   it("coalesces inventory refreshes and ignores retired reads while the replacement is pending", async () => {
     const pending = Array.from({ length: 3 }, () => createDeferred<unknown>());
@@ -173,26 +216,42 @@ describe("Cloud environments", () => {
   });
 
   it("retains loaded environments and pool/policy drafts through a blip, but retires them for another client", async () => {
-    const { page, request, harness, client } = mountTestPage(methods);
+    const replacement = createDeferred<unknown>();
+    let replacing = false;
+    const { page, request, harness, client } = mountTestPage(methods, {
+      response: (method, params) =>
+        replacing && method === "environments.list" && params?.includePreparedDetails
+          ? replacement.promise
+          : undefined,
+    });
     await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
     await waitText(() => page, "github.com/acme/app");
-    change(input(page, "Pool cap"), "7");
+    change(input(page, "Pool limit"), "7");
     change(input(page, "Refresh after"), "6h");
     const hello = gatewayHelloForMethods(methods);
     harness.publish(false, client, null);
     flush();
-    expect(input(page, "Pool cap").value).toBe("7");
+    expect(input(page, "Pool limit").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
     expect(page.textContent).toContain("github.com/acme/app");
     expect(button(page, "Save pool").disabled).toBe(true);
     expect(button(page, "Save retention policy").disabled).toBe(true);
     harness.publish(true, client, hello);
     await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
-    expect(input(page, "Pool cap").value).toBe("7");
+    expect(input(page, "Pool limit").value).toBe("7");
     expect(input(page, "Refresh after").value).toBe("6h");
+    const advanced = expectDefined(page.querySelector("details"), "Advanced disclosure");
+    advanced.open = true;
+    replacing = true;
     harness.publish(true, { request } as unknown as GatewayBrowserClient, hello);
-    flush();
-    expect(input(page, "Pool cap").value).not.toBe("7");
+    try {
+      await waitForSolid(() => expect(page.textContent).not.toContain("github.com/acme/app"));
+      expect(advanced.isConnected).toBe(true);
+      expect(advanced.open).toBe(true);
+    } finally {
+      replacement.resolve({ environments: [], profiles: [] });
+    }
+    await waitForSolid(() => expect(input(page, "Pool limit").value).not.toBe("7"));
     expect(input(page, "Refresh after").value).toBe("24h");
   });
 
@@ -264,7 +323,12 @@ describe("Cloud environments", () => {
     "renders recorded setup phases and failures with a newer successful profile: %s",
     async (newerSuccessfulProfile) => {
       const result = localSnapshot();
-      const phaseDurationsMs = { onCreate: 1200, updateContent: 6400 };
+      const phaseDurationsMs = {
+        inspection: 100,
+        onCreate: 1200,
+        updateContent: 6400,
+        preparedManifest: 8400,
+      };
       const failed = {
         ...result.images[0]!,
         recipePreparationAtMs: 1000,
@@ -292,14 +356,15 @@ describe("Cloud environments", () => {
           : []),
       ];
       const { page } = mountTestPage(methods, { result });
-      await waitText(() => sheet(page), "Dev Container");
+      await waitText(() => sheet(page), "Dev container");
       const details = sheet(page);
       expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
         "github.com/acme/appNeeds attention",
       );
       expect(details.querySelector(".cloud-environments__step--longest")?.textContent).toContain(
-        "updateContentCommand",
+        "Capture prepared manifest",
       );
+      expect(details.textContent).toContain("Inspect retained workspace");
       expect(details.querySelector(".cloud-environments__output")?.textContent).toBe(
         "synthetic package unavailable",
       );
@@ -370,7 +435,7 @@ describe("Cloud environments", () => {
     ).toBeNull();
     change(input(page, "Refresh after"), "30m");
     click(page, "Save retention policy");
-    await waitText(() => page, "Enter a duration of at least 1h");
+    await waitText(() => page, "Use up to eight digits and m, h, or d; minimum 1h.");
     expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
     change(input(page, "Refresh after"), "2h");
     change(input(page, "Retain unused"), "3d");
@@ -408,9 +473,9 @@ describe("Cloud environments", () => {
     const { page, request } = mountTestPage(methods, {
       response: preparedInventory(inventory),
     });
-    await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
-    await waitText(() => page, "1 ready workers · Pool cap");
-    change(input(page, "Pool cap"), "6");
+    await waitForSolid(() => expect(input(page, "Pool limit").disabled).toBe(false));
+    await waitText(() => page, "1 ready cloud devices · Pool limit");
+    change(input(page, "Pool limit"), "6");
     click(page, "Save pool");
     const patch = await configPatch(request);
     expect(JSON.parse(String(patch?.raw))).toEqual({
@@ -536,9 +601,9 @@ it("refreshes rebuild eligibility after a machine save and shows capacity failur
   await waitRebuild(page);
   rebuildButton(page).click();
   await waitRequest(request, "environments.prepare", prepareParams);
-  await waitText(() => page, "The prepared worker pool is full");
+  await waitText(() => page, "No cloud devices are available");
   expect(page.querySelector('[role="alert"]')?.textContent).toBe(
-    "The prepared worker pool is full. Raise the prepared pool cap or destroy an unused worker, then try again.",
+    "No cloud devices are available. Raise the pool limit or remove an unused cloud device, then try again.",
   );
 });
 
@@ -586,7 +651,9 @@ it.each([
     });
     const surface = labeled
       ? await waitForSolid(() => sheet(page))
-      : expectDefined(page.querySelector(".settings-disclosure"), "Advanced");
+      : await waitForSolid(() =>
+          expectDefined(page.querySelector(".settings-disclosure"), "Advanced"),
+        );
     await waitForSolid(() => expect(button(surface, action).disabled).toBe(false));
     if (state !== "provisioning") {
       expect(surface.textContent).toContain("Worker cleanup failed");
@@ -608,6 +675,35 @@ it.each([
   },
 );
 
+it.each(["creating", "retiring"] as const)("keeps %s snapshot guidance accurate", async (state) => {
+  const result = localSnapshot();
+  const image = result.images[0]!;
+  if (state === "creating") {
+    image.capture = { selector: "active-capture", phase: state, stale: false };
+  } else {
+    image.retirement = { checkpointId: image.checkpointId! };
+  }
+  const { page, request } = mountTestPage([...buildMethods, "crabbox.images.delete"], { result });
+  await waitText(() => sheet(page), state === "creating" ? "Building" : "awaiting deletion");
+  expect(sheet(page).textContent).not.toContain("Recover");
+  if (state === "creating") {
+    expectDefined(
+      sheet(page).querySelector<HTMLButtonElement>('[aria-label="Environment actions"]'),
+      "Snapshot actions",
+    ).click();
+    flush();
+    const remove = document.querySelector(
+      '[title="Wait for capture to finish before deleting this snapshot."]',
+    );
+    expect(remove?.getAttribute("aria-disabled")).toBe("true");
+  } else {
+    expect(sheet(page).textContent).toContain(
+      "Cleanup retries at the next capture or cloud device cleanup.",
+    );
+  }
+  expect(request).not.toHaveBeenCalledWith("crabbox.images.delete", expect.anything());
+});
+
 it("fences recovery when the connection changes during confirmation", async () => {
   const result = localSnapshot();
   result.images[0]!.capture = { selector: "capture-app", phase: "uncertain", stale: false };
@@ -621,7 +717,7 @@ it("fences recovery when the connection changes during confirmation", async () =
   click(sheet(fixture.page), "Recover");
   await waitForSolid(() => expect(showConfirmDialog).toHaveBeenCalled());
   expect(vi.mocked(showConfirmDialog).mock.calls[0]?.[0].requiredAcknowledgement).toBe(
-    "I stopped the owning capture and worker and reconciled provider artifacts",
+    "I stopped the capture and cloud device and resolved remaining provider resources",
   );
   fixture.harness.publish(false);
   flush();

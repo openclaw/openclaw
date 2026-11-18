@@ -971,6 +971,10 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.windowCommands.isCommandPalettePresented = true
     }
 
+    func persistComposerDraft() async {
+        await self.viewModel.persistComposerDraft()
+    }
+
     private let conversationController: NativeConversationController?
     private let viewModel: OpenClawChatViewModel
     private let contentController: NSHostingController<MacChatSurface>

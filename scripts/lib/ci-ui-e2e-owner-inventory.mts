@@ -357,8 +357,9 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/browser-tab-preview-urls.e2e.test.ts",
     ["chat"],
-    ["ui/src/pages/chat/components/browser-tab-card.ts"],
+    ["ui/src/lib/chat/tool-cards.ts"],
   ),
+  pageWatch("ui/src/e2e/chat-browser-tool-previews.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-microphone-lifetime.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-ordering.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/browser-talk-start-stop.e2e.test.ts", ["chat", "config"]),
@@ -898,7 +899,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/chat-worked-for-visualization.e2e.test.ts",
     ["chat"],
-    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/components/browser-tab-card.ts"],
+    ["ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
     "ui/src/e2e/chat-workspace-directory-race.e2e.test.ts",
@@ -2098,6 +2099,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["chat"],
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
+  {
+    testFile: "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts",
+    ownerRoots: ["ui/src/lib/openclaw-id/onepassword-save.ts"],
+    watchGlobs: [],
+  },
 ];
 
 export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = ownerWatches.map((watch) => ({

@@ -40,11 +40,14 @@ function mockAgentRun({
     attempts: [],
   });
 }
-function mockChildRun(payloads: unknown[] = []) {
+function mockChildRun(payloads: unknown[] = [], collector = true, meta = {}) {
   mockAgentRun({
     payloads,
     usage: { input: 10, output: 1 },
-    acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
+    meta,
+    acceptedSessionSpawns: [
+      { runId: "run-child", childSessionKey: "agent:default:child", collector },
+    ],
   });
 }
 const failedDeliveryState = (error: string) => ({
@@ -204,17 +207,14 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
-  it("preserves an empty accepted child handoff failure as a cron error", async () => {
+  it.each([true, false])("hands off a silent run only to a collector (%s)", async (collect) => {
     await useRealOutcome();
-    const error = "cron child-session handoff timed out before producing a final assistant payload";
-    mockChildRun();
-    mockDelivery({
-      disposition: { kind: "error", error },
-    });
+    mockChildRun([{ text: "NO_REPLY" }], collect, { terminalReply: { disposition: "silent" } });
+    mockDelivery(collect ? { disposition: { kind: "error", error: "child timed out" } } : {});
     const result = await runTurn();
-    expectObjectFields(result, { status: "error", error, delivered: false });
-    expect(harness.dispatchCronDeliveryMock).toHaveBeenCalledWith(
-      expect.objectContaining({ spawnOnlyHandoff: true }),
+    expectObjectFields(result, { status: collect ? "error" : "ok" });
+    expect(harness.dispatchCronDeliveryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: collect }),
     );
   });
 

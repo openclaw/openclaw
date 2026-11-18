@@ -32,8 +32,10 @@ it("admits a second workspace turn through real prepared runtime after registrat
     const registrations: string[] = [];
     let activeTurn = 0;
     const requests: Array<Context["systemPrompt"]> = [];
+    const messages: string[] = [];
     const stream: StreamFn = (model, context) => {
       requests.push(context.systemPrompt);
+      messages.push(JSON.stringify(context.messages));
       const message = makeAgentAssistantMessage({
         api: model.api,
         provider: model.provider,
@@ -167,10 +169,12 @@ module.exports = { id: ${JSON.stringify(pluginId)}, register(api) {
             expect(network).not.toHaveBeenCalled();
             expect(registrations).toContain(`${siblingPluginId}:0`);
             expect(registrations).toContain(`${siblingPluginId}:1`);
+            // The session keeps its pinned prompt; the edit arrives as an appended update.
             expect(requests).toEqual([
               expect.stringContaining("Original workspace instruction."),
-              expect.stringContaining("Updated workspace instruction."),
+              requests[0],
             ]);
+            expect(messages[1]).toContain("Updated workspace instruction.");
           } finally {
             await resetPreparedModelRuntimeSnapshotsForTest();
             resetPluginLoaderTestStateForTest();

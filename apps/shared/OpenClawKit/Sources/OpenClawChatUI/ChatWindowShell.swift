@@ -528,7 +528,6 @@ public struct OpenClawChatWindowShell: View {
             }
         }
         .menuIndicator(.hidden)
-        .help("Thread actions")
     }
 
     private var commandPalette: some View {

@@ -96,7 +96,8 @@ export function cronUpdateNarrowsTrustedJob(
   return (
     job.scheduledToolPolicy?.mode === "trusted" &&
     callerScope !== undefined &&
-    !callerScope.manageAll &&
+    // Management grants cannot supply the missing requester workspace owner.
+    (!callerScope.manageAll || !job.owner?.sessionKey) &&
     Object.keys(patch).some((key) => !TRUSTED_LIFECYCLE_PATCH_KEYS.has(key))
   );
 }
@@ -107,8 +108,9 @@ export function assertTrustedJobNarrowingOwner(
   callerScope: CronCallerScope | undefined,
 ): void {
   if (!callerScope || !cronTrustedJobOwnedByCaller(job, callerScope, { requireAccount: true })) {
+    const reason = job.owner ? "its owner record has no account" : "it has no owner conversation";
     throw new TypeError(
-      "This automation runs with operator access and its owner record has no account, so from " +
+      `This automation runs with operator access and ${reason}, so from ` +
         "here you can only pause, resume, reschedule or remove it. To change what it runs or its name, " +
         "where it reports or where failures alert, create a new automation here or use the Automations page.",
     );

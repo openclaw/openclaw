@@ -33,6 +33,7 @@ import { captureTemplateInstallSchemaVersionFacts } from "../templates/provenanc
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import { getPreparedSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
+import { preparePluginModelCatalogSave } from "./plugin-model-catalog-save.js";
 import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import {
   CatalogWorkerTaskPool,
@@ -604,9 +605,17 @@ export function createPreparedModelCatalogWorker(
 
   return {
     loadCatalog: async (providerIds, onRecovery, refresh) => {
+      const { input, env } = params.agentFacts;
+      const saveCatalogs = input.readOnly
+        ? undefined
+        : await preparePluginModelCatalogSave(input.agentDir, env);
       const message = await request({ kind: "catalog", providerIds, refresh }, onRecovery);
       if (message.kind !== "catalog") {
         throw new Error("prepared model catalog worker returned an auth refresh result");
+      }
+      if (saveCatalogs) {
+        await saveCatalogs(message.pluginCatalogs);
+        assertCurrent();
       }
       const modelCatalog = markPreparedModelCatalogFull(message.snapshot);
       setPreparedModelFullCatalogAuth(modelCatalog, {

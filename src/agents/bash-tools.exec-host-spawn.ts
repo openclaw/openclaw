@@ -15,7 +15,7 @@ export async function prepareHostExecSpawn(params: {
   githubProfileDir?: string;
   usePty: boolean;
 }) {
-  const { shell, args: shellArgs } = getShellConfig();
+  const { shell, args: shellArgs } = await getShellConfig();
   // The env may predate an approval wait; credential names published since then stay out.
   const env = omitGatewayCredentialEnv(params.env);
   let commandWithPathPrepend = params.execCommand ?? params.command;

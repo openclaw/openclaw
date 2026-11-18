@@ -674,7 +674,7 @@ it.each(["notifications", "usage"] as const)(
   },
 );
 
-it("sends Privacy & Security rows to the pages that own them", () => {
+it("sends Privacy & security rows to the pages that own them", () => {
   const navigate = vi.fn();
   const context = configContext({ navigate });
   const view = mountConfigPage(context, { pageId: "security" });

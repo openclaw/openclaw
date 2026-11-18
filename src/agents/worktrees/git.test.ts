@@ -302,6 +302,44 @@ describe("Git ref mutation ownership", () => {
     await expect(resolveWorktreeBase(root)).rejects.toThrow("Remote default branch is unavailable");
   });
 
+  it("bounds registration waiting without creating a checkout after the caller has failed", async () => {
+    const root = await repository();
+    const commonDir = await fs.realpath(path.join(root, ".git"));
+    const entered = createDeferred();
+    const release = createDeferred();
+    const holder = gitExec.enqueueGitRefMutation(root, commonDir, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    vi.spyOn(fs, "realpath").mockResolvedValue(commonDir);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const destination = path.join(root, "bounded-registration");
+    let failure: unknown;
+    const creation = requireGit(
+      root,
+      ["worktree", "add", "--no-checkout", "-b", "bounded", "--", destination, "HEAD"],
+      { refMutationDirectory: commonDir },
+    ).catch((error: unknown) => {
+      failure = error;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining("waiting for repository repair or another Git operation"),
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+      release.resolve();
+      await Promise.allSettled([holder, creation]);
+    }
+    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      (await runGit(root, ["show-ref", "--verify", "--quiet", "refs/heads/bounded"])).code,
+    ).toBe(1);
+  });
+
   it("serializes bounded default-branch fetching without pruning unrelated refs", async () => {
     const root = await repository();
     const origin = await repository();

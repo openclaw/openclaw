@@ -8,8 +8,18 @@
  * keep the real fsRoot and nested-marker checks; no actual checkout files are scanned.
  * Acceptance: same inventory/publication, fewer Git/capacity requests, no material
  * CPU/allocation regression. Natural GC only; unforced end heap is context.
+ * --native-repo <synthetic-checkout> --temporary-root <owned-scratch> exercises
+ * native Git against an existing fixture (including partial/APFS clones). It writes
+ * refs/openclaw/snapshots/fixture; never point it at a user or production checkout.
+ * Git maintenance and lazy fetch are disabled. Commit identity/dates are fixed.
+ * Native acceptance: identical snapshot commit, lower median/p95 owner wall and
+ * CPU/allocation, no >20% regression; run A/A then five serial interleaved A/B pairs.
+ * Phase timings are inclusive; native mode still excludes hydration, IPC, capacity,
+ * registry writes and restoration, which require the service removal/restore proof.
  */
 import assert from "node:assert/strict";
+import { execFile, execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
@@ -23,10 +33,17 @@ const { values } = parseArgs({
   options: {
     iterations: { type: "string", default: "2000" },
     "base-file": { type: "string" },
+    "native-repo": { type: "string" },
+    "temporary-root": { type: "string" },
+    warmup: { type: "string", default: "5" },
+    "child-cpu": { type: "boolean", default: false },
   },
 });
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
+const warmup = Number(values.warmup);
+assert(Number.isSafeInteger(warmup) && warmup >= 0);
+assert(!values["child-cpu"] || (values["native-repo"] && process.platform === "darwin"));
 const ownerUrl = new URL("../../src/agents/worktrees/snapshot-inventory.ts", import.meta.url).href;
 const baseUrl = values["base-file"]
   ? pathToFileURL(path.resolve(values["base-file"])).href
@@ -35,12 +52,17 @@ if (values["base-file"]) {
   assert((await fs.stat(values["base-file"])).isFile());
 }
 await fs.mkdir(".local", { recursive: true });
-const root = await fs.mkdtemp(path.resolve(".local/worktree-snapshot-measure-"));
-await fs.mkdir(path.join(root, ".git"));
-await fs.mkdir(path.join(root, "temporary"));
-for (let bucket = 0; bucket < 60; bucket++) {
-  await fs.mkdir(path.join(root, "inventory", String(bucket)), { recursive: true });
+const temporary = await fs.mkdtemp(
+  path.resolve(values["temporary-root"] ?? ".local", "worktree-snapshot-measure-"),
+);
+const root = values["native-repo"] ? path.resolve(values["native-repo"]) : temporary;
+if (!values["native-repo"]) {
+  await fs.mkdir(path.join(root, ".git"));
+  for (let bucket = 0; bucket < 60; bucket++) {
+    await fs.mkdir(path.join(root, "inventory", String(bucket)), { recursive: true });
+  }
 }
+await fs.mkdir(path.join(temporary, "index"));
 const head = "a".repeat(40),
   tree = "b".repeat(40),
   commit = "c".repeat(40);
@@ -55,7 +77,9 @@ const indexOutput = Buffer.from(
   paths.map((file, index) => `H 100644 ${blobs[index]} 0\t${file}\0`).join(""),
 );
 const commands = new Set(
-  "rev-parse ls-tree ls-files config status diff-files cat-file commit-tree update-ref".split(" "),
+  "rev-parse ls-tree ls-files config status diff-files cat-file commit-tree update-ref read-tree update-index write-tree".split(
+    " ",
+  ),
 );
 const effects = new Set(
   "worktree.assert-current worktree.snapshot-capacity worktree.snapshot-provisioned-reset".split(
@@ -70,7 +94,18 @@ const fixedOutput: Record<string, string | Buffer> = {
 let commandCounts: Record<string, number> = {},
   effectCounts: Record<string, number> = {};
 let copiedOutputBytes = 0;
-function respond(request: unknown): unknown {
+const phases: Record<string, number[]> = {};
+let childCpuMs = 0;
+let inventoryCounts = { tracked: paths.length, untracked: 0 };
+const phaseKey = Symbol.for("openclaw.perf.snapshot-phases");
+Object.defineProperty(globalThis, phaseKey, {
+  configurable: true,
+  value: (name: string) => {
+    const started = performance.now();
+    return () => (phases[name] ??= []).push(performance.now() - started);
+  },
+});
+async function respond(request: unknown): Promise<unknown> {
   assert(isRecord(request) && typeof request.type === "string" && isRecord(request.input));
   const input = request.input;
   if (request.type === "git.text" || request.type === "git.buffer") {
@@ -82,6 +117,71 @@ function respond(request: unknown): unknown {
     const command = args.find((arg) => commands.has(arg));
     assert(command, "unexpected synthetic Git command");
     commandCounts[command] = (commandCounts[command] ?? 0) + 1;
+    if (values["native-repo"]) {
+      assert(isRecord(input.options));
+      const options = input.options;
+      assert(options.env === undefined || isRecord(options.env));
+      const env = { ...process.env };
+      for (const [key, value] of Object.entries(options.env ?? {})) {
+        assert(value === undefined || typeof value === "string");
+        env[key] = value;
+      }
+      assert(
+        options.input === undefined ||
+          typeof options.input === "string" ||
+          options.input instanceof Uint8Array,
+      );
+      const started = performance.now();
+      const result = await new Promise<{ code: number; stdout: Buffer; stderr: Buffer }>(
+        (resolve, reject) => {
+          const child = execFile(
+            values["child-cpu"] ? "/usr/bin/time" : "git",
+            [
+              ...(values["child-cpu"] ? ["-lp", "git"] : []),
+              "-c",
+              "maintenance.auto=false",
+              "-c",
+              "gc.auto=0",
+              "-c",
+              "core.fsmonitor=false",
+              "-c",
+              "core.hooksPath=/dev/null",
+              ...args,
+            ],
+            {
+              cwd: root,
+              encoding: "buffer",
+              maxBuffer: 64 * 1024 * 1024,
+              env: {
+                ...env,
+                GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z",
+                GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
+                GIT_NO_LAZY_FETCH: "1",
+                GIT_NO_REPLACE_OBJECTS: "1",
+              },
+            },
+            (error, stdout, stderr) => {
+              if (!error) {
+                resolve({ code: 0, stdout, stderr });
+              } else if (typeof error.code === "number") {
+                resolve({ code: error.code, stdout, stderr });
+              } else {
+                reject(new Error("Git subprocess did not exit normally", { cause: error }));
+              }
+            },
+          );
+          child.stdin?.end(options.input);
+        },
+      );
+      (phases[`git.${command}`] ??= []).push(performance.now() - started);
+      if (values["child-cpu"]) {
+        const usage = [...result.stderr.toString().matchAll(/^(?:user|sys) ([\d.]+)$/gm)];
+        assert.equal(usage.length, 2, "Missing native child CPU counters");
+        childCpuMs += usage.reduce((total, match) => total + Number(match[1]) * 1000, 0);
+      }
+      copiedOutputBytes += result.stdout.byteLength;
+      return { ...result, termination: "exit", timeoutMs: 120000 };
+    }
     let output: string | Buffer = fixedOutput[command] ?? "";
     if (command === "rev-parse") {
       output = args.includes("--git-common-dir")
@@ -111,10 +211,14 @@ function respond(request: unknown): unknown {
   }
   effectCounts[request.type] = (effectCounts[request.type] ?? 0) + 1;
   if (request.type === "git.temporary-directory") {
-    return path.join(root, "temporary");
+    return path.join(temporary, "index");
   }
   if (request.type === "worktree.snapshot-inventory") {
-    assert.deepEqual(input, { tracked: paths.length, untracked: 0 });
+    assert(typeof input.tracked === "number" && typeof input.untracked === "number");
+    inventoryCounts = { tracked: input.tracked, untracked: input.untracked };
+    if (!values["native-repo"]) {
+      assert.deepEqual(input, { tracked: paths.length, untracked: 0 });
+    }
   } else {
     assert(effects.has(request.type), "unexpected synthetic effect");
   }
@@ -122,6 +226,19 @@ function respond(request: unknown): unknown {
 }
 const hooks = registerHooks({
   load(url, context, next) {
+    if (url === ownerUrl && values["native-repo"]) {
+      let source = readFileSync(new URL(baseUrl ?? url), "utf8");
+      for (const name of [
+        "collectSnapshotInventory",
+        "inspectOtherPaths",
+        "walkCollapsedPaths",
+        "prepareSnapshotIndex",
+      ]) {
+        source = source.replace(`async function ${name}(`, `async function ${name}Measured(`);
+        source += `\nasync function ${name}(...args: Parameters<typeof ${name}Measured>) { const finish = globalThis[Symbol.for("openclaw.perf.snapshot-phases")](${JSON.stringify(name)}); try { return await ${name}Measured(...args); } finally { finish(); } }\n`;
+      }
+      return { format: "module-typescript", shortCircuit: true, source };
+    }
     return next(url === ownerUrl && baseUrl ? baseUrl : url, context);
   },
 });
@@ -141,10 +258,12 @@ try {
               Array.isArray(value.input.requests),
           );
           return {
-            input: value.input.requests.map((request: unknown) => ({
-              ok: true,
-              value: respond(request),
-            })),
+            input: await Promise.all(
+              value.input.requests.map(async (request: unknown) => ({
+                ok: true,
+                value: await respond(request),
+              })),
+            ),
             consumed() {},
           };
         },
@@ -163,12 +282,16 @@ try {
         });
       },
     );
-  for (let warmup = 0; warmup < 5; warmup++) {
+  for (let index = 0; index < warmup; index++) {
     await measure();
   }
   commandCounts = {};
   effectCounts = {};
   copiedOutputBytes = 0;
+  childCpuMs = 0;
+  for (const key of Object.keys(phases)) {
+    delete phases[key];
+  }
   const memoryBefore = process.memoryUsage(),
     loadBefore = loadavg();
   const gc = new GCProfiler();
@@ -193,9 +316,26 @@ try {
     JSON.stringify({
       revision: baseUrl ? "base" : "candidate",
       iterations,
-      paths: paths.length,
-      scope:
-        "real snapshot owner + synthetic trusted Git/effects; excludes native Git, SQLite, fsync and IPC",
+      paths: inventoryCounts.tracked,
+      scope: values["native-repo"]
+        ? "real snapshot owner and native Git; excludes worker IPC, hydration and capacity admission"
+        : "real snapshot owner + synthetic trusted Git/effects; excludes native Git, SQLite, fsync and IPC",
+      phases,
+      ...(values["native-repo"]
+        ? {
+            snapshotCommit: execFileSync(
+              "git",
+              ["-C", root, "rev-parse", "refs/openclaw/snapshots/fixture"],
+              { encoding: "utf8" },
+            ).trim(),
+            snapshotMetadata: execFileSync(
+              "git",
+              ["-C", root, "cat-file", "commit", "refs/openclaw/snapshots/fixture"],
+              { encoding: "utf8" },
+            ),
+            childCpuMs: values["child-cpu"] ? childCpuMs : undefined,
+          }
+        : {}),
       commandCounts,
       effectCounts,
       copiedOutputBytes,
@@ -231,5 +371,6 @@ try {
   );
 } finally {
   hooks.deregister();
-  await fs.rm(root, { recursive: true });
+  Reflect.deleteProperty(globalThis, phaseKey);
+  await fs.rm(temporary, { recursive: true });
 }

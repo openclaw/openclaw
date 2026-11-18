@@ -1,8 +1,6 @@
-import {
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-} from "../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/gateway-error-codes.js";
+import { errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/schema/frames.js";
 import type { SessionEntryCreateWithTranscriptResult } from "../config/sessions/session-accessor.types.js";
 
 export function sessionCreationFailure(

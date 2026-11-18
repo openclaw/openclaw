@@ -1,11 +1,14 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -28,6 +31,8 @@ const hello = {
   policy: { hasMultipleSessionSharingIdentities: true },
   auth: { role: "operator", scopes: ["operator.read"] },
 } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
+// mock-isolation: reload confirmations resolve without mounting the shared dialog.
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 beforeEach(() => i18n.setLocale("en"));
 afterEach(() => {
   vi.restoreAllMocks();
@@ -82,6 +87,30 @@ async function loaded(request = replies({}), scopes: string[] = hello.auth.scope
 function clientFile(result: Partial<PersonalFile>) {
   return createTestGatewayClient(vi.fn().mockResolvedValue({ ...file, ...result }));
 }
+function mountRoster(request: GatewayBrowserClient["request"]) {
+  const harness = createConnectedContext(request, { id: "profile-1", name: "Ada" });
+  harness.emitHello({ ...hello, auth: { ...hello.auth, scopes: ["operator.sessions.read"] } });
+  const agents = createAgentCapability(harness.context.gateway);
+  const selection = createAgentSelectionCapability(
+    harness.context.gateway,
+    agents,
+    undefined,
+    undefined,
+    { requireConfiguredAgent: true },
+  );
+  const provider = createSolidApplicationContextProvider({
+    ...harness.context,
+    agents,
+    settingsAgentSelection: selection,
+  });
+  const view = mountSolid(() => <PersonalInstructions />, { wrapper: provider.wrapper });
+  onTestFinished(() => {
+    view.unmount();
+    selection.dispose();
+    agents.dispose();
+  });
+  return view.container;
+}
 async function save(element: HTMLElement, content: string) {
   await input(element, content);
   button(element, "Save").click();
@@ -121,6 +150,61 @@ async function input(element: HTMLElement, content: string) {
   flush();
 }
 
+it("keeps a pending or failed roster distinct from empty and retries through its owner", async () => {
+  const initial = createDeferred<ReturnType<typeof makeBootRoster>>();
+  const retry = createDeferred<ReturnType<typeof makeBootRoster>>();
+  const roster = vi.fn().mockReturnValueOnce(initial.promise).mockReturnValueOnce(retry.promise);
+  const request = vi.fn().mockImplementation((method: string) => {
+    if (method === "agents.list") {
+      return roster();
+    }
+    if (method === "users.personalFile.get") {
+      return Promise.resolve(file);
+    }
+    throw new Error("Unexpected personal-instructions request: " + method);
+  });
+  const element = mountRoster(request);
+  await waitForSolid(() => {
+    expect(busy(element)).not.toBeNull();
+    expect(element.textContent).not.toContain("No agents yet");
+  });
+  expect(request).not.toHaveBeenCalledWith("users.personalFile.get", expect.anything());
+  initial.reject(new Error("Roster unavailable"));
+  await waitForSolid(() => expect(alert(element)?.textContent).toContain("Roster unavailable"));
+  expect(element.textContent).not.toContain("No agents yet");
+  button(element, "Retry").click();
+  await waitForSolid(() => {
+    expect(roster).toHaveBeenCalledTimes(2);
+    expect(alert(element)).toBeNull();
+    expect(busy(element)).not.toBeNull();
+  });
+  retry.resolve(makeBootRoster({ agents: [{ id: "main" }] }));
+  await waitForValue(element, file.content);
+  expect(busy(element)).toBeNull();
+  expect(request).toHaveBeenCalledWith("users.personalFile.get", { agentId: "main" });
+});
+
+it("shows confirmed empty only after the roster read succeeds, without reading a personal file", async () => {
+  const roster = createDeferred<ReturnType<typeof makeBootRoster>>();
+  const request = vi.fn().mockImplementation((method: string) => {
+    if (method === "agents.list") {
+      return roster.promise;
+    }
+    throw new Error("Unexpected empty-roster request: " + method);
+  });
+  const element = mountRoster(request);
+  await waitForSolid(() => expect(busy(element)).not.toBeNull());
+  expect(element.textContent).not.toContain("No agents yet");
+  roster.resolve(makeBootRoster({ agents: [] }));
+  await waitForSolid(() => {
+    expect(element.textContent).toContain("No agents yet");
+    expect(busy(element)).toBeNull();
+  });
+  expect(alert(element)).toBeNull();
+  expect(textarea(element)).toBeNull();
+  expect(request).not.toHaveBeenCalledWith("users.personalFile.get", expect.anything());
+});
+
 it.each(["operator.read", "operator.sessions.read"])(
   "creates the signed-in personal file with %s",
   async (scope) => {
@@ -155,11 +239,31 @@ it.each([
     await idle(element);
     expect(request).not.toHaveBeenCalled();
     expect(textarea(element)).toBeNull();
+    if (!signedIn) {
+      expect(element.textContent).toContain(
+        "Sign in with your personal profile to edit your instructions.",
+      );
+      expect(element.textContent).not.toContain("operator.");
+    }
     if (!multipleProfiles) {
       expect(element.textContent?.trim()).toBe("");
     }
   },
 );
+
+it("asks a signed-in person for access instead of another sign-in", async () => {
+  const request = vi.fn();
+  const { element } = mount(request, true, true, []);
+  await waitForSolid(() => {
+    expect(element.textContent).toContain(
+      "You need permission to view your own sessions to edit your instructions.",
+    );
+  });
+  expect(element.textContent).not.toContain("Sign in");
+  expect(element.textContent).not.toContain("operator.");
+  expect(textarea(element)).toBeNull();
+  expect(request).not.toHaveBeenCalled();
+});
 
 it("preserves a conflicting draft, confirms reload, and keeps it when reload fails", async () => {
   const request = replies(
@@ -172,17 +276,17 @@ it("preserves a conflicting draft, confirms reload, and keeps it when reload fai
   await save(element, "My draft");
   expect(value(element)).toBe("My draft");
   expect(alert(element)?.textContent).toContain("changed since read");
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const confirm = vi.mocked(showConfirmDialog).mockResolvedValue(false);
   button(element, "Reload").click();
   await idle(element);
   expect(request).toHaveBeenCalledTimes(2);
-  confirm.mockReturnValue(true);
+  confirm.mockResolvedValue(true);
   button(element, "Reload").click();
+  await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
   await idle(element);
   expect(value(element)).toBe("My draft");
   button(element, "Reload").click();
-  await idle(element);
-  expect(value(element)).toBe("External edit");
+  await vi.waitFor(() => expect(value(element)).toBe("External edit"));
   expect(button(element, "Reload")).toBeUndefined();
 });
 

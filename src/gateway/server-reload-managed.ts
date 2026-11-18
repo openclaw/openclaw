@@ -419,6 +419,9 @@ export function startManagedGatewayConfigReloader(
         );
       }
       params.acceptTerminalConfig(restart);
+      params
+        .resolveGatewayContext?.()
+        ?.openclawIdService?.observeConfigApplication(nextConfig, acceptance.runtimeApplied);
       configCandidatePending = false;
       publishDeferredAppliedConfigHash();
     },

@@ -35,7 +35,7 @@ import {
 import { restoreArchivedDispatchSession } from "./dispatch-session-archive.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { readReplySourceInput } from "./reply-source-binding.js";
-import { extractShortModelName } from "./response-prefix-template.js";
+import { resolveModelResponsePrefixContext } from "./response-prefix-template.js";
 import { assertPreparedConversationBindingRouteCurrent } from "./session-conversation-binding.js";
 
 export async function prepareDispatchOperation(state: PrepareDispatchOperationContextReadyState) {
@@ -147,10 +147,10 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
       };
       const responsePrefixContext = {
         identityName: normalizeOptionalString(resolveAgentIdentity(cfg, sessionAgentId)?.name),
-        provider: selectedModel.provider,
-        model: extractShortModelName(selectedModel.model),
-        modelFull: `${selectedModel.provider}/${selectedModel.model}`,
-        thinkingLevel: modelSelection.thinkLevel ?? "off",
+        ...resolveModelResponsePrefixContext({
+          ...selectedModel,
+          thinkLevel: modelSelection.thinkLevel ?? "off",
+        }),
       };
       const commandId = scopeCommandTranscriptId(
         normalizeOptionalString(state.messageIdForHook),

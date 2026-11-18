@@ -16,6 +16,7 @@ import {
   refresh,
 } from "solid-js";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsRow,
@@ -177,28 +178,29 @@ function AgentSkillsContent(
 
   return (
     <>
-      {!params.configForm ? (
-        <div class="callout info">{t("agents.skillsPanel.loadConfig")}</div>
-      ) : undefined}
-      <div class="callout info">
+      <InlineAlert tone="info">
         {t(
-          usingAllowlist()
-            ? !params.explicit
-              ? "agents.skillsPanel.inheritedAllowlist"
-              : "agents.skillsPanel.customAllowlist"
-            : "agents.skillsPanel.allEnabled",
+          !params.configForm
+            ? "agents.skillsPanel.loadConfig"
+            : usingAllowlist()
+              ? !params.explicit
+                ? "agents.skillsPanel.inheritedAllowlist"
+                : "agents.skillsPanel.customAllowlist"
+              : "agents.skillsPanel.allEnabled",
         )}
-      </div>
+      </InlineAlert>
       {!params.report && !params.pending ? (
-        <div class="callout info">{t("agents.skillsPanel.loadAgent")}</div>
+        <InlineAlert tone="info">{t("agents.skillsPanel.loadAgent")}</InlineAlert>
       ) : undefined}
       {params.readError ? (
-        <div class="callout danger">{params.readError}</div>
+        <InlineAlert tone="danger">{params.readError}</InlineAlert>
       ) : (
         <Show when={params.command} keyed>
           {(command) => (
             <Errored
-              fallback={(error) => <div class="callout danger">{formatUiError(error())}</div>}
+              fallback={(error) => (
+                <InlineAlert tone="danger">{formatUiError(error())}</InlineAlert>
+              )}
             >
               <AgentSkillsResetCompletion completion={command.completion} />
             </Errored>
@@ -209,8 +211,8 @@ function AgentSkillsContent(
         title={t("agents.skillsPanel.title")}
         description={
           <>
-            {t("agents.skillsPanel.subtitle")}
-            {rawSkills().length > 0 ? (
+            {t("agents.skillsPanel.subtitle")}{" "}
+            {params.configForm && rawSkills().length > 0 ? (
               <span class="mono">
                 {enabledCount()}/{rawSkills().length}
               </span>
@@ -230,7 +232,7 @@ function AgentSkillsContent(
               onClick={() => params.onClear()}
             />
             <AgentPanelAction
-              label={params.pending ? t("common.loading") : t("common.refresh")}
+              label={params.pending ? t("common.refreshing") : t("common.refresh")}
               disabled={params.pending}
               onClick={params.onRefresh}
             />

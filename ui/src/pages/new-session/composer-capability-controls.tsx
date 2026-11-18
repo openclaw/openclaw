@@ -10,19 +10,15 @@ import type {
   ChatComposerCapabilityMenuSource,
 } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
-import type { NewSessionVisibility } from "./create-params.ts";
 
 registerNewSessionSetupEnglish();
 
 type NewSessionComposerCapabilityOptions = {
   submitting: boolean;
   messageLocked?: boolean;
-  visibility?: NewSessionVisibility;
-  draftAvailable?: boolean;
   capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onChange: () => void;
-  onVisibilityChange?: (visibility: NewSessionVisibility) => void;
 };
 
 export function NewSessionPlusMenu(props: {
@@ -42,20 +38,6 @@ export function NewSessionPlusMenu(props: {
       open: textarea.capabilityMenuOpen,
       view: textarea.capabilityMenuView,
       toolOverrides: options.toolOverrides,
-      rootToggles:
-        options.draftAvailable || options.visibility === "draft"
-          ? [
-              {
-                value: "new-session-draft",
-                label: t("newSession.draft"),
-                icon: "draft",
-                checked: options.visibility === "draft",
-                disabled,
-                title: t("newSession.draftDescription"),
-                onChange: (checked) => options.onVisibilityChange?.(checked ? "draft" : "normal"),
-              },
-            ]
-          : undefined,
       onOpenChange: (open) => {
         textarea.capabilityMenuOpen = open;
         if (!open) {

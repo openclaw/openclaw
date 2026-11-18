@@ -1,7 +1,9 @@
 /** SQLite startup maintenance without the unrelated full-Gateway fixture lifecycle. */
 import fs from "node:fs";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runDoctorSessionSqlite } from "../commands/doctor-session-sqlite.js";
 import {
@@ -19,11 +21,18 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
+import * as factsBackfill from "../config/sessions/session-transcript-facts-backfill.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import * as transcriptReconcile from "../config/sessions/session-transcript-reconcile.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { hasPersistedOpenClawAgentCanonicalValidation } from "../state/openclaw-agent-canonical-validation-receipt.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
@@ -42,8 +51,13 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import {
   prepareGatewayStartupSessions,
   runGatewaySessionStartupMaintenance,
+  createGatewaySessionFactsBackfillScheduler,
 } from "./server-startup-session-migration.js";
 import { runStartupSessionMaintenanceForTest } from "./server-startup-session-migration.test-support.js";
 import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
@@ -106,6 +120,97 @@ async function seedHistory(
 }
 
 describe("runStartupSessionMaintenanceForTest", () => {
+  it("backfills a shared physical store once across normal and deferred agent discovery", async () => {
+    const { stateDir, env } = fleetFixture(["main", "worker"]);
+    const sharedPath = path.join(stateDir, "shared.sqlite");
+    const cfg: OpenClawConfig = {
+      session: { store: sharedPath },
+      agents: {
+        entries: { main: {}, worker: {} },
+        defaults: { sessionStore: { agentId: "main" } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    await seedHistory(
+      {
+        agentId: "main",
+        env,
+        storePath: sharedPath,
+        sessionId: "shared",
+        sessionKey: "agent:main:shared",
+      },
+      "shared-entry",
+      "retained shared history",
+    );
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "worker",
+      paths: [resolveOpenClawAgentSqlitePath({ agentId: "worker", env })],
+      pending: true,
+      reason: "native worker database preparation is pending",
+    });
+    recordAgentDatabaseAdmissions([refusal], { env, source: "startup" });
+    resetGatewayWorkAdmission();
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const ticks: Promise<unknown>[] = [];
+    try {
+      const log = makeLog();
+      const normal = await prepareGatewayStartupSessions({ cfg, env, log });
+      let deferred: typeof normal = [];
+      await preparePendingAgentDatabase(refusal, { env, assertCurrent() {} }, async () => {
+        deferred = await prepareGatewayStartupSessions({
+          cfg,
+          env,
+          log,
+          agentIds: new Set(["worker"]),
+        });
+      });
+      for (const databases of [normal, deferred]) {
+        expect(databases.filter(({ database }) => database.path === sharedPath)).toHaveLength(1);
+      }
+      const start = vi
+        .spyOn(factsBackfill, "createSessionTranscriptFactsBackfill")
+        .mockImplementation(({ database }) => ({
+          async runBatch() {
+            if (database.path === sharedPath) {
+              entered.resolve();
+              await release.promise;
+            }
+            return { complete: true, delayMs: 250 };
+          },
+          async close() {},
+        }));
+      const sharedStarts = () =>
+        start.mock.calls.filter(([params]) => params.database.path === sharedPath);
+      const schedule = createGatewaySessionFactsBackfillScheduler({
+        scheduler,
+        signal: scheduler.signal,
+        log,
+      });
+      schedule(normal);
+      ticks.push(Promise.resolve(clock.advanceBy(250)));
+      await entered.promise;
+      schedule(deferred);
+      ticks.push(Promise.resolve(clock.advanceBy(250)));
+      await nextTurn();
+      expect(sharedStarts()).toHaveLength(1);
+      release.resolve();
+      await Promise.all(ticks);
+      schedule(deferred);
+      await clock.advanceBy(250);
+      expect(sharedStarts()).toHaveLength(1);
+      expect(log.warn).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.all(ticks);
+      await scheduler.stop();
+      resetGatewayWorkAdmission();
+      recordAgentDatabaseAdmissions([], { env, source: "startup" });
+    }
+  });
+
   it("certifies a cold empty fleet then keeps both restarts read-only", async () => {
     const agentIds = ["fleet-a", "fleet-b", "fleet-c", "fleet-d"];
     const { env, cfg } = fleetFixture(agentIds);

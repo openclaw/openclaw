@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { modelSessionList } from "./chat-runtime-fixtures.test-support.ts";
@@ -8,6 +9,69 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
+  it("hides the routed-model suffix and standard-only speed controls without changing the route", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const id = "anthropic/claude-opus-5-5";
+      const name = "Claude Opus 5.5 via ClawRouter";
+      await installMockGateway(page, {
+        agentModel: `clawrouter/${id}`,
+        models: [
+          {
+            id,
+            name,
+            alias: name,
+            provider: "clawrouter",
+            reasoning: true,
+            thinkingLevels: ["low", "medium", "high", "xhigh", "max"].map((level) => ({
+              id: level,
+              label: level,
+            })),
+            supportsFastMode: false,
+            serviceTiers: ["default"],
+          },
+        ],
+        methodResponses: {
+          "sessions.list": modelSessionList(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              model: id,
+              modelProvider: "clawrouter",
+              thinkingLevel: "medium",
+              updatedAt: 1,
+            },
+            { model: id, modelProvider: "clawrouter" },
+          ),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__input").first();
+      const trigger = composer.locator("[data-chat-model-select]");
+      await trigger.waitFor({ state: "visible" });
+      await expect.poll(() => trigger.textContent()).toBe("Claude Opus 5.5");
+      await composer.screenshot({ path: `${suite.artifactDir}/clawrouter-model-label.png` });
+      await trigger.click();
+      const option = page.locator(`[data-chat-model-option="clawrouter/${id}"]`);
+      await option.waitFor({ state: "visible" });
+      expect(await option.textContent()).toContain("Claude Opus 5.5");
+      expect(await option.textContent()).not.toContain("via ClawRouter");
+      expect(await option.getAttribute("aria-selected")).toBe("true");
+      await page.keyboard.press("Escape");
+      // A fresh canonical descriptor must preserve the same model and effort facts.
+      await evaluateControlUiContext(page, async (app) => {
+        const reconcile = app.sessions.captureReconcile();
+        const { session } = await app.sessions.describe(
+          { key: "agent:main:main", agentId: "main" },
+          { refresh: true },
+        );
+        reconcile(session ?? undefined);
+      });
+      await composer.locator('[data-chat-thinking-select="true"]').click();
+      await composer.locator("[data-chat-thinking-slider]").waitFor({ state: "visible" });
+      expect(await composer.locator(".chat-controls__speed-panel").count()).toBe(0);
+    });
+  });
+
   it("keeps a large pending model catalog usable in /chat", async () => {
     const contextOptions = { viewport: { width: 1280, height: 900 }, hasTouch: true };
     await suite.withPage(contextOptions, async ({ page }) => {
@@ -228,23 +292,14 @@ suite.define(() => {
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
         await composer.locator("textarea").click();
         await model.click();
-        const heading = composer.locator('[data-chat-model-provider="openai"]');
-        await expect
-          .poll(() => heading.textContent())
-          .toContain("Subscription · personal@example.com");
-        const picker = composer.locator("[data-chat-account-selection]");
-        const trigger = picker.locator("[data-chat-account-group-toggle]");
+
+        const picker = composer.locator(".chat-controls__model-picker");
+        const trigger = picker.locator(".chat-controls__account-trigger");
         const currentOption = picker.locator('[data-chat-account-option="current"]');
         await expect.poll(() => trigger.textContent()).toContain(personal.label);
         for (const width of [320, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
-          expect(await heading.getAttribute("title")).toBe("Subscription · personal@example.com");
-          expect(
-            await heading.locator(".chat-controls__auth-meta svg").evaluate((icon) => ({
-              width: getComputedStyle(icon).width,
-              height: getComputedStyle(icon).height,
-            })),
-          ).toEqual({ width: "13px", height: "13px" });
+
           await expect
             .poll(async () => {
               const box = await trigger.boundingBox();
@@ -266,8 +321,7 @@ suite.define(() => {
         }
         await trigger.press("Enter");
         await expect.poll(() => more.isVisible()).toBe(true);
-        const pendingMoreTarget = await more.elementHandle();
-        expect(pendingMoreTarget).not.toBeNull();
+        const pendingMoreTarget = more;
         if (input === "keyboard") {
           const refresh = await gateway.waitForRequest("users.listModelAccounts", {
             after: refreshRequests.length,
@@ -275,8 +329,8 @@ suite.define(() => {
           expect(refresh.params).toEqual({});
           const loading = picker.locator('[data-chat-account-option="loading"]');
           await expect.poll(() => loading.isVisible()).toBe(true);
-          expect(await pendingMoreTarget!.isDisabled()).toBe(true);
-          await pendingMoreTarget!.focus();
+          expect(await pendingMoreTarget.isDisabled()).toBe(true);
+          await pendingMoreTarget.focus();
           await gateway.resolveDeferred("users.listModelAccounts", {
             profileId: "test-person",
             accounts: [personal],
@@ -284,11 +338,9 @@ suite.define(() => {
             links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
           });
           await expect.poll(() => loading.isVisible()).toBe(false);
-          await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+          await expect.poll(() => pendingMoreTarget.isEnabled()).toBe(true);
           await expect
-            .poll(() =>
-              pendingMoreTarget!.evaluate((element) => element === document.activeElement),
-            )
+            .poll(() => pendingMoreTarget.evaluate((element) => element === document.activeElement))
             .toBe(true);
         } else {
           expect(await gateway.getRequests("users.listModelAccounts")).toEqual(refreshRequests);
@@ -302,7 +354,7 @@ suite.define(() => {
           if (input === "keyboard") {
             await page.keyboard.press("Enter");
           } else {
-            await pendingMoreTarget!.click();
+            await pendingMoreTarget.click();
           }
           await expect
             .poll(
@@ -317,12 +369,12 @@ suite.define(() => {
           });
           expect(request.params).toEqual({ cursor });
           await expect.poll(() => loading.isVisible()).toBe(true);
-          expect(await pendingMoreTarget!.isDisabled()).toBe(true);
+          expect(await pendingMoreTarget.isDisabled()).toBe(true);
           if (input === "keyboard") {
             await page.keyboard.press("Enter");
           } else {
-            await pendingMoreTarget!.hover();
-            expect(await pendingMoreTarget!.evaluate((row) => row.matches(":hover"))).toBe(true);
+            await pendingMoreTarget.hover();
+            expect(await pendingMoreTarget.evaluate((row) => row.matches(":hover"))).toBe(true);
             await page.mouse.down();
             await page.mouse.up();
           }
@@ -340,9 +392,9 @@ suite.define(() => {
           links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 1 }],
         });
         await expect.poll(() => loading.isVisible()).toBe(false);
-        await expect.poll(() => pendingMoreTarget!.isEnabled()).toBe(true);
+        await expect.poll(() => pendingMoreTarget.isEnabled()).toBe(true);
         if (input === "keyboard") {
-          expect(await pendingMoreTarget!.evaluate((row) => row === document.activeElement)).toBe(
+          expect(await pendingMoreTarget.evaluate((row) => row === document.activeElement)).toBe(
             true,
           );
         }
@@ -419,7 +471,8 @@ suite.define(() => {
         });
         await search.clear();
         await expect.poll(() => trigger.textContent()).toContain(work.label);
-        await expect.poll(() => heading.textContent()).toContain("Subscription · work@example.com");
+        await trigger.click();
+        await expect.poll(() => currentOption.textContent()).toContain("work@example.com");
         expect(await gateway.getRequests("users.selectModelAccount")).toHaveLength(0);
         expect(await gateway.getRequests("users.unlinkAuthProfile")).toHaveLength(0);
       },

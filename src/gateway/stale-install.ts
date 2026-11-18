@@ -1,5 +1,8 @@
+import { constants } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileHandleBounded } from "@openclaw/fs-safe/advanced";
 import {
   coerceErrorMessage,
   collectErrorGraphCandidates,
@@ -13,7 +16,6 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { tryReadJson } from "../infra/json-files.js";
 import {
   resolveOpenClawInstallationRootSync,
   resolveOpenClawPackageRootSync,
@@ -132,6 +134,31 @@ function recordReplacement(observer: InstallationObserver, onDisk?: Installation
   observer.onReplacement(fact);
 }
 
+async function readInstallationMetadata(file: string): Promise<unknown> {
+  try {
+    if (!(await fs.lstat(file)).isFile()) {
+      return null;
+    }
+    const handle = await fs.open(
+      file,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    try {
+      if (!(await handle.stat()).isFile()) {
+        return null;
+      }
+      // This is one bounded observation, not write authority. A later tick observes replacement.
+      // Expose only read: fs-safe's optional fd size hint performs synchronous fstat calls.
+      const raw = await readFileHandleBounded({ read: handle.read.bind(handle) }, 16 * 1024);
+      return JSON.parse(raw.toString("utf8"));
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
@@ -148,9 +175,7 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   if (observer.check) {
     return observer.check;
   }
-  observer.check = tryReadJson(path.join(root, "dist", "build-info.json"), {
-    maxBytes: 16 * 1024,
-  })
+  observer.check = readInstallationMetadata(path.join(root, "dist", "build-info.json"))
     .then((value) => {
       const metadata = asNullableRecord(value);
       const version = normalizeNullableString(metadata?.version);

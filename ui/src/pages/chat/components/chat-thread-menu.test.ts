@@ -42,7 +42,7 @@ it("keeps failed context-copy feedback visible and retries before dismissing the
   );
   expect(button.textContent?.trim()).toBe("Copy as markdown");
   button.click();
-  await vi.waitFor(() => expect(button.textContent?.trim()).toBe("Copy failed"));
+  await vi.waitFor(() => expect(button.textContent?.trim()).toBe("Couldn’t copy. Try again."));
   expect(button.isConnected).toBe(true);
   button.click();
   await vi.waitFor(() => expect(button.isConnected).toBe(false));

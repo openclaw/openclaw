@@ -19,6 +19,7 @@ import {
   mapPluginCatalogEntries,
 } from "./lib/bundled-plugin-build-entries.mjs";
 import { linkSourcePluginDependencies } from "./lib/bundled-plugin-dependency-links.mjs";
+import { ensureOpenClawExtensionAlias } from "./lib/bundled-plugin-sdk-alias.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
@@ -32,7 +33,6 @@ import {
   removePathIfExists,
   writeTextFileIfChanged,
 } from "./runtime-postbuild-shared.mjs";
-import { ensureOpenClawExtensionAlias } from "./stage-bundled-plugin-runtime.mts";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);

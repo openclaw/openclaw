@@ -387,6 +387,9 @@ it("drains an admitted standup through the registered service stop", async () =>
   captured.api.runtime.llm.complete = block(async () => completion("Accepted"), entered, release);
   plugin.register({ ...captured.api, runtimeSource });
   const service = services[0]!;
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   const context = {
     config: {},
     stateDir,

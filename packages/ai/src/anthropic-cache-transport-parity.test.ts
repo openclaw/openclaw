@@ -20,6 +20,10 @@ import {
   registerParityHostLifecycle,
   textBlock,
 } from "./provider-transport-parity.test-support.js";
+import {
+  applyAnthropicPayloadHook,
+  serializeAnthropicRequestBody,
+} from "./transports/anthropic-request-body.js";
 import { createAnthropicMessagesTransportStreamFn } from "./transports/anthropic-transport-stream.js";
 import { createZeroUsage } from "./usage.test-support.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./utils/system-prompt-cache-boundary.js";
@@ -337,6 +341,30 @@ describe("Anthropic immutable request bytes", () => {
     expect(changedTail.wire).toContain("Changed tail");
     expect(changedTail.wire).not.toBe(firstTail.wire);
     expect(changedTail.wire).toBe(JSON.stringify(changedTail.payload));
+  });
+
+  it("keeps checked history bytes when a hook later mutates its retained copy", async () => {
+    configureAiTransportHost({
+      ...getAiTransportHost(),
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
+    });
+    const original = {
+      model: model.id,
+      stream: true as const,
+      max_tokens: 1024,
+      messages: [freezeJsonSnapshot({ role: "user" as const, content: "Original" })],
+    };
+    const hooked = await applyAnthropicPayloadHook(original, model, {
+      onPayload: () => undefined,
+    });
+    for (const message of hooked.params.messages) {
+      message.content = "Late edit";
+    }
+    const body = serializeAnthropicRequestBody(hooked.params, hooked.messageSources);
+    expect(await new Response(body).text()).toBe(JSON.stringify(original));
+    expect(await new Response(serializeAnthropicRequestBody(original)).text()).toBe(
+      JSON.stringify(original),
+    );
   });
 
   it.each(["nested edit", "replacement", "opaque JSON"] as const)(

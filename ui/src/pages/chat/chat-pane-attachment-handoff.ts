@@ -158,7 +158,10 @@ export class ChatPaneComposerHandoff {
     if (
       state &&
       captured?.recoveryScope &&
-      !isChatComposerOwnerCurrent({ ...state, connected: false }, captured)
+      !isChatComposerOwnerCurrent(
+        { settings: state.settings, client: state.client, connected: false },
+        captured,
+      )
     ) {
       return null;
     }
@@ -318,7 +321,10 @@ export function preparePaneStagedAttachments(
   // Never mint a handoff for that new account from the retired pane’s input.
   if (
     presentationOwner &&
-    !isChatComposerOwnerCurrent({ ...state, connected: false }, presentationOwner)
+    !isChatComposerOwnerCurrent(
+      { settings: state.settings, client: state.client, connected: false },
+      presentationOwner,
+    )
   ) {
     return;
   }

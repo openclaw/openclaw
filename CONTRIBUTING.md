@@ -7,7 +7,7 @@ Welcome to the lobster tank! 🦞
 - **GitHub:** https://github.com/openclaw/openclaw
 - **Vision:** [`VISION.md`](VISION.md)
 - **Support:** https://community.openclaw.ai/
-- **Discord:** https://discord.gg/clawd
+- **Discord:** https://openclaw.ai/discord?from=github-openclaw-contributing
 - **X/Twitter:** [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
@@ -82,7 +82,7 @@ must declare their own development dependencies rather than rely on hoisting.
 
 ## Before You PR
 
-- Use **Node 24.22.1+ LTS** or **Node 26.12.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
+- Use **Node 24.22.1+ LTS** or **Node 26.12.1+** for source checkouts. Compatible Node 24.16.0+ on 24.x and 26.1.0+ also work with safe SQLite, but warn about missing security patches. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md).
 - Local tests and `pnpm dev` use the pinned OpenClaw Bun fork. See [local development tools](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork) for supported platforms, automatic staging, runtime/tool overrides, and fallbacks, and [CI runtime selection](https://docs.openclaw.ai/ci/pipeline#test-runtime-selection) for CI policy.
 - Test locally with your OpenClaw instance
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
@@ -167,10 +167,10 @@ Use `OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The linked referenc
 covers the pinned fork, supported platforms, overrides, fallbacks, and CI parity.
 Dedicated artifact formatters are listed in the [formatter caller inventory](scripts/README.md#formatting-and-lint-selection).
 
-The normal `pnpm install` setup enables the repository's pre-commit formatting hook
-when `core.hooksPath` is unset. Existing hook selections, including an explicitly
-empty value, are preserved. Git scopes initialization to the current checkout.
-With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
+Outside CI, the normal `pnpm install` setup enables the repository's pre-commit
+formatting hook when `core.hooksPath` is unset. Existing hook selections, including
+an explicitly empty value, are preserved. Git scopes initialization to the current
+checkout. With multiple worktrees, automatic setup requires `extensions.worktreeConfig`;
 otherwise Git reports a warning and installation continues without changing hook
 settings. The repository owner can enable per-worktree configuration following
 [Git's configuration guidance](https://git-scm.com/docs/git-worktree#_configuration_file).

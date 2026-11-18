@@ -44,6 +44,9 @@ describe("failover user copy", () => {
   });
 
   it("renders only the allowlisted selected-profile code", () => {
+    expect(codeCopy("model_chat_unsupported")).toBe(
+      "This model doesn't support chat; pick another model.",
+    );
     expect(codeCopy("selected_auth_profile_unavailable")).toBe(
       "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
     );

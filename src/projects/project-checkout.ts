@@ -23,7 +23,11 @@ export class ProjectCheckoutBusyError extends OpenClawStateLeaseError {
 
 export async function withProjectCheckoutLifecycle<T>(
   repoRoot: string,
-  options: OpenClawStateDatabaseOptions & { signal?: AbortSignal; waitMs?: number },
+  options: OpenClawStateDatabaseOptions & {
+    signal?: AbortSignal;
+    waitMs?: number;
+    operation?: string;
+  },
   run: (lease: OpenClawStateLeaseContext) => Promise<T>,
 ): Promise<T> {
   let entered = false;
@@ -37,7 +41,7 @@ export async function withProjectCheckoutLifecycle<T>(
         leaseMs: PROJECT_CHECKOUT_LEASE_MS,
         waitMs: options.waitMs ?? PROJECT_CHECKOUT_WAIT_MS,
         leaseLabel: "project checkout lease",
-        operationLabel: "projects.checkout.lease",
+        operationLabel: options.operation ?? "projects.checkout.lifecycle",
       },
       (lease) => {
         entered = true;

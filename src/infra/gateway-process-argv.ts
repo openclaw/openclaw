@@ -99,6 +99,8 @@ export function readProcessPackageIdentity(
 type ClassificationOptions = {
   command?: string;
   serviceMarker?: string;
+  /** Darwin observed a JS runtime's argv but not its environment. */
+  serviceMarkerUnavailable?: boolean;
   owner?: GatewayOwnerLeaseIdentity;
   port?: number;
   cwd?: string;
@@ -343,6 +345,13 @@ export function classifyOpenClawArgv(
       ))
   ) {
     return identity.kind === "openclaw" ? identity : { kind: "openclaw" };
+  }
+  if (opts.serviceMarkerUnavailable && !opts.requirePackageIdentity) {
+    return {
+      kind: "unclassified",
+      cause: "service-marker",
+      reason: "process environment is unreadable",
+    };
   }
   let marker = opts.serviceMarker;
   if (

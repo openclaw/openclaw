@@ -114,6 +114,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-repair.ts",
     "src/state/openclaw-state-db-schema-v12-foldin.ts",
     "src/state/openclaw-state-db-schema-v13-widerow.ts",
+    // Versioned migration backfills legacy pending creation evidence during admission.
+    "src/state/openclaw-state-db-schema-v40-worker-provision-source.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db-table-retirements.ts",
     "src/state/openclaw-state-db-fast-path.ts",

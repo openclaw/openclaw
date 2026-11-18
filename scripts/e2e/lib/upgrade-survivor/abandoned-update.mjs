@@ -344,15 +344,17 @@ function createDeadlineHook(packageRoot, artifactRoot) {
       url: pathToFileURL(path.join(dist, file)).href,
       source: fs.readFileSync(path.join(dist, file), "utf8"),
     }));
-  const marker = "async function updatePluginsAfterCoreUpdate(params) {";
+  const declaration = /async function updatePluginsAfterCoreUpdate\((\w+)\)\s*\{/u;
   const plugins = modules.filter(
-    (module) => module.name.startsWith("update-command-plugins-") && module.source.includes(marker),
+    (module) =>
+      module.name.startsWith("update-command-plugins-") && declaration.test(module.source),
   );
   const mutations = modules.filter((module) =>
     /mutateConfigFileWithRetry as \w+/u.test(module.source),
   );
   assert.equal(plugins.length, 1, "one built plugin-convergence owner must be injectable");
   assert.equal(mutations.length, 1, "one built config mutation owner must be exported");
+  const [marker, params] = declaration.exec(plugins[0].source);
   const mutationExport = /mutateConfigFileWithRetry as (\w+)/u.exec(mutations[0].source)[1];
   const output = path.join(artifactRoot, "repair-deadline-hook.mjs");
   fs.writeFileSync(
@@ -385,7 +387,7 @@ if (update >= 2 && process.argv[update + 1] === 'repair') {
     if (url !== ${JSON.stringify(plugins[0].url)}) return loaded;
     const source = typeof loaded.source === 'string' ? loaded.source : Buffer.from(loaded.source).toString('utf8');
     if (!source.includes(${JSON.stringify(marker)})) throw new Error('Plugin deadline injection target changed');
-    return { ...loaded, source: source.replace(${JSON.stringify(marker)}, ${JSON.stringify(`${marker}\n  await globalThis[Symbol.for('openclaw.e2e.repair-deadline')](params);`)}) };
+    return { ...loaded, source: source.replace(${JSON.stringify(marker)}, ${JSON.stringify(`${marker}\n  await globalThis[Symbol.for('openclaw.e2e.repair-deadline')](${params});`)}) };
   }});
 }
 `,

@@ -295,7 +295,9 @@ export function buildOpenAICompletionsRequest(
     supportsTools,
     declaredToolNames: new Set(converted?.projection.tools.map((tool) => tool.name)),
     preserveSystemPromptCacheBoundary:
-      cacheControl !== undefined && !managedCompat?.requiresStringContent,
+      cacheControl !== undefined &&
+      !managedCompat?.requiresStringContent &&
+      !compat.cacheControlSystemOnly,
   });
   applyCompletionsReplay(convertedMessages, context, model, compat);
   let messages: unknown[] = convertedMessages;
@@ -353,7 +355,7 @@ export function buildOpenAICompletionsRequest(
     params.presence_penalty = options.presencePenalty;
   }
   if (policy.mode === "managed" && options?.seed !== undefined) {
-    params.seed = options.seed;
+    params[compat.seedField ?? "seed"] = options.seed;
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop = options.stop;
@@ -412,6 +414,7 @@ export function buildOpenAICompletionsRequest(
       markTools,
       true,
       compat.cacheControlSystemOnly,
+      compat.cacheControlSharedSystem,
     );
   }
   if (policy.mode === "direct" && options?.toolChoice) {
@@ -606,6 +609,7 @@ export function buildOpenAICompletionsRequest(
       markTools,
       !managedCompat?.requiresStringContent,
       compat.cacheControlSystemOnly,
+      compat.cacheControlSharedSystem,
     );
   }
   if (params.tools?.length && isKnownOpenAIEndpoint(model)) {

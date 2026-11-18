@@ -1,10 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createReadinessChecker } from "../gateway/server/readiness.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { createSqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session.js";
+import { observeSettlement } from "./sqlite-readonly.test-support.js";
 
 const originalExecPath = process.execPath;
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -111,3 +118,62 @@ it("publishes a removed runtime observed by readiness before another worker spaw
   expect(recover).toHaveBeenCalledTimes(1);
   expect(() => session()).toThrow("Restart the Gateway.");
 });
+
+it.skipIf(process.platform === "win32").for([false, true])(
+  "retains retired reader custody through async diagnosis (cancel=%s)",
+  async (cancel, { signal }) => {
+    const executable = await runtime(
+      'if [ "$1" = "--version" ]; then echo v26.12.0; exit 0; fi\n' +
+        "dd bs=1 count=1 <&3 >/dev/null 2>&1\nexit 1",
+    );
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const access = fs.access;
+    let held = false;
+    using _ = vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
+      await access(file, mode);
+      if (!held && file === executable) {
+        held = true;
+        entered.resolve();
+        await resume.promise;
+      }
+    });
+    const controller = new AbortController();
+    const reason = new Error("reader cancelled during runtime diagnosis");
+    const worker = session();
+    const result = worker.run("fixture", { mode: "staging-create", signal: controller.signal });
+    const outcome = result.catch((error: unknown) => error);
+    const request = observeSettlement(result);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          outcome,
+          "Reader settled before asynchronous runtime diagnosis",
+        ),
+        signal,
+      );
+      expect(worker.isRetired()).toBe(true);
+      const closing = worker.close();
+      const close = observeSettlement(closing);
+      if (cancel) {
+        controller.abort(reason);
+      }
+      await withinTest(nextEventLoopTurn(), signal);
+      expect([request.settled, close.settled]).toEqual([false, false]);
+      resume.resolve();
+      if (cancel) {
+        expect(await withinTest(outcome, signal)).toBe(reason);
+      } else {
+        expect(await withinTest(outcome, signal)).toMatchObject({
+          message: "SQLite read-only worker exited with code 1",
+        });
+      }
+      await withinTest(closing, signal);
+    } finally {
+      resume.resolve();
+      await worker.close();
+      await outcome;
+    }
+  },
+);

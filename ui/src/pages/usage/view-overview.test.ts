@@ -57,8 +57,8 @@ describe("UsageInsights", () => {
     expect(text(cacheCard, ".usage-summary-value")).toBe("30.0%");
     expect(text(cacheCard, ".usage-summary-sub")).toBe("300 cached · 1.0K prompt");
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
-    expect(buttons).toHaveLength(9);
-    expect(tooltips).toHaveLength(9);
+    expect(buttons).toHaveLength(5);
+    expect(tooltips).toHaveLength(5);
     expect(
       [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -94,11 +94,14 @@ describe("UsageInsights", () => {
       messages: { ...current.messages, total: 8 },
     }));
     flush();
-    expect(container.querySelector("#usage-summary-hint-messages")).toBe(button);
+    expect(container.querySelector("#usage-summary-hint-throughput")).toBe(button);
     expect(button.closest("openclaw-tooltip")).toBe(tooltip);
     expect(tooltip.shadowRoot?.querySelector(".tooltip-surface[popover]")).toBe(popup);
     expect(document.activeElement).toBe(button);
-    expect(text(button.closest(".usage-summary-card"), ".usage-summary-value")).toBe("8");
+    const messagesCard = [...container.querySelectorAll(".usage-summary-card")].find(
+      (card) => card.querySelector(".usage-summary-title")?.textContent === "Messages",
+    );
+    expect(text(messagesCard ?? null, ".usage-summary-value")).toBe("8");
   });
   it("labels usage without a known price as unpriced, never free", () => {
     const unpriced = { ...totals, totalCost: 0, missingCostEntries: 3 };
@@ -381,11 +384,25 @@ describe("SessionsCard", () => {
       expect(value()).toBe(englishValue);
       setDisplay({ ...base.display, chartMode: "cost" });
       flush();
-      expect(value()).toBe("$0.00");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
       await i18n.setLocale("en");
       flush();
       expect(container.querySelector(".session-bar-row")).toBe(row);
-      expect(value()).toBe("$0.00");
+      expect(value()).toBe(
+        new Intl.NumberFormat(i18n.getLocale(), {
+          style: "currency",
+          currency: "USD",
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }).format(0),
+      );
       expect(average()).toBe("$0.00 avg");
     } finally {
       await restoreI18n();

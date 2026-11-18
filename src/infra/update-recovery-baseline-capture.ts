@@ -11,7 +11,7 @@ import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-preparation.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
 import {
@@ -203,6 +203,8 @@ export function captureUpdateRecoveryBaseline(params: {
         stateDir,
         warnings,
         requireLocalResources: true,
+        assertCurrent,
+        signal: params.signal,
         ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
           ? {
               manifestRegistry: (

@@ -1,6 +1,8 @@
 import type { SkillLibraryFile } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { Skill } from "./loading/skill-contract.js";
 
+export const SKILLS_DISCOVERY_KEY = Symbol.for("openclaw.skillsDiscovery");
+
 export type SkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";

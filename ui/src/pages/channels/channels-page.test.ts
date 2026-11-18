@@ -400,6 +400,50 @@ describe("ChannelsPage lifecycle", () => {
     ]);
   });
 
+  it.each([
+    {
+      notification: "failed",
+      commandOwnerBootstrap: "not-requested",
+      notice: "DM access approved. Couldn’t notify the requester.",
+    },
+    {
+      notification: "sent",
+      commandOwnerBootstrap: "unavailable",
+      notice: "DM access approved. Couldn’t set the command owner. Ask an admin to set one.",
+    },
+    {
+      notification: "failed",
+      commandOwnerBootstrap: "unavailable",
+      notice:
+        "DM access approved. Couldn’t notify the requester or set the command owner. Ask an admin to set the owner.",
+    },
+  ] as const)(
+    "keeps approval successful when follow-ups fail: $notification / $commandOwnerBootstrap",
+    async ({ notification, commandOwnerBootstrap, notice }) => {
+      const approved = {
+        requestId: "opaque-request-id",
+        senderId: "12345",
+        notification,
+        commandOwnerBootstrap,
+      };
+      const gateway = createGateway(["operator.pairing", "operator.admin"], {
+        "channels.pairing.approve": () => approved,
+        "channels.pairing.list": () => pairingSnapshot({ requests: [] }),
+      });
+      const source = createContext(gateway);
+      source.channels.state.pairingSnapshot = pairingSnapshot();
+      const approve = vi.spyOn(source.channels, "approvePairing");
+      const page = mountPage(source.context);
+      profileButton(page, "Approve").click();
+      await settle();
+      findButton(page, ".channels-pairing-dialog button.primary").click();
+      await waitForSolid(() => expect(page.textContent).toContain(notice));
+      expect(approve).toHaveBeenCalledTimes(1);
+      expect(page.querySelector(".channels-pairing-dialog")).toBeNull();
+      expect(page.textContent).toContain("No DM access requests yet.");
+    },
+  );
+
   it.each(["cancel", "disconnect"] as const)(
     "releases a held pairing presentation on %s without cancelling its owner",
     async (retirement) => {

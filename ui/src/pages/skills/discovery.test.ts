@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { pages } from "./route.ts";
+import { mountSkills, personalLibrary } from "./skills-page.test-support.tsx";
+import { libraryEntry } from "./skills.test-support.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
 afterEach(cleanupSkillsViews);
@@ -29,6 +34,58 @@ const remoteSkill = (owner = "alice", slug = "repo", displayName = "Repo") => ({
 });
 
 describe("unified skill discovery", () => {
+  it("shows first content before installed status and adopts the route result once", async () => {
+    const entry = libraryEntry();
+    const report = createReport([
+      createSkill({ skillKey: "prefetched-status", name: "Prefetched status" }),
+    ]);
+    const status = Promise.withResolvers<typeof report>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.status") {
+        return status.promise;
+      }
+      if (method === "skills.library.list") {
+        return { ...personalLibrary, entries: [entry] };
+      }
+      if (method === "skills.search") {
+        return { results: [] };
+      }
+      throw new Error("Unexpected method: " + method);
+    });
+    const mounted = mountSkills(request, "discovery", { pendingRoute: true });
+    const loader = pages[0].loader!;
+    const route = Promise.resolve(
+      loader(
+        mounted.context,
+        createRouteLoaderOptions({ pathname: "/skills", search: "", hash: "" }),
+      ),
+    ).then((result) => {
+      if ("type" in result) {
+        throw new Error("Expected Skills route data, received " + result.type);
+      }
+      mounted.publishRouteData(result);
+    });
+    try {
+      await waitForFast(() =>
+        expect(
+          mounted.container.querySelector('[data-skill-id="library:' + entry.skillId + '"]'),
+        ).not.toBeNull(),
+      );
+      expect(
+        mounted.container.querySelector('[data-skill-id="local:prefetched-status"]'),
+      ).toBeNull();
+    } finally {
+      status.resolve(report);
+      await route;
+    }
+    await waitForFast(() =>
+      expect(
+        mounted.container.querySelector('[data-skill-id="local:prefetched-status"]'),
+      ).not.toBeNull(),
+    );
+    expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
+  });
+
   it("keeps cards visible without a loading label while loading", () => {
     const container = document.createElement("div");
     for (const loading of [true, false]) {

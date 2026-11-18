@@ -1,9 +1,10 @@
 import { onSettled } from "solid-js";
-import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
+import { createOverlayAnchor, type OverlayPlacement } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { registryFor } from "../../../components/overlay-registry.ts";
 import "../../../components/solid/overlay.css";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
@@ -25,7 +26,8 @@ function bindChatPickerOverlay(
   details: HTMLDetailsElement,
   trigger: HTMLElement,
   surface: HTMLElement,
-  onOpenChange?: (details: HTMLDetailsElement) => void,
+  onOpenChange: ((details: HTMLDetailsElement) => void) | undefined,
+  placement: OverlayPlacement,
 ) {
   const overlay = createOverlay(`chat-picker-${++nextPickerId}`, findOverlayParent(trigger), {
     exclusiveGroup: "menu",
@@ -48,7 +50,7 @@ function bindChatPickerOverlay(
     ).matches;
     anchor.update(
       mobile ? (details.closest<HTMLElement>(".agent-chat__input") ?? trigger) : trigger,
-      "top-end",
+      mobile ? "top-end" : placement,
     );
     if (!overlay.request(details.open)) {
       details.open = overlay.open;
@@ -95,13 +97,16 @@ function bindChatPickerOverlay(
 }
 
 /** The ref only publishes the node; the component owner binds and releases its surface. */
-export function createChatPickerOverlay(onOpenChange?: (details: HTMLDetailsElement) => void) {
+export function createChatPickerOverlay(
+  onOpenChange?: (details: HTMLDetailsElement) => void,
+  placement: OverlayPlacement = "top-end",
+) {
   let details!: HTMLDetailsElement;
   let trigger!: HTMLElement;
   let surface!: HTMLElement;
   let binding: ReturnType<typeof bindChatPickerOverlay> | undefined;
   onSettled(() => {
-    const current = bindChatPickerOverlay(details, trigger, surface, onOpenChange);
+    const current = bindChatPickerOverlay(details, trigger, surface, onOpenChange, placement);
     binding = current;
     return () => {
       binding = undefined;
@@ -192,7 +197,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     menu.element.parentElement?.dispatchEvent(
       new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT, { bubbles: true }),
     );
-    menu.getTextarea()?.focus({ preventScroll: true });
+    focusComposerInput(menu.getTextarea(), { preventScroll: true });
   }
 
   listen(ownerDocument, "pointerdown", dismissChatComposerPickersOutside, options);

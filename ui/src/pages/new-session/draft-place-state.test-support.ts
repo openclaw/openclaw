@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -16,6 +16,18 @@ export function createRepositoryFixture(
     cloudProfiles?: DraftGatewayState["cloudProfiles"];
   } = {},
 ) {
+  if (typeof HTMLDialogElement !== "undefined" && !HTMLDialogElement.prototype.show) {
+    // JSDOM lacks show(); keep this nonmodal-dialog shim local to picker tests.
+    onTestFinished(() => {
+      Reflect.deleteProperty(HTMLDialogElement.prototype, "show");
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "show", {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+      },
+    });
+  }
   const changed = vi.fn();
   const persistPreference = vi.fn();
   const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));

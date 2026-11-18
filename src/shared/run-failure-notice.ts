@@ -1,9 +1,27 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
-/** A diagnostic-only display row owned by the settled run, not a model attempt. */
-export type RunFailureNotice = { runId: string; summary: string };
+/** The provider fact that ended a run, as the run's error observation classified it. */
+export type RunFailureCause = { provider: string; failoverReason?: string };
 
-export function readRunFailureNotice(message: unknown): RunFailureNotice | undefined {
+/** A diagnostic-only display row owned by the settled run, not a model attempt. */
+export type RunFailureNotice = { runId: string; summary: string; cause?: RunFailureCause };
+
+// Provider ids and failover reason codes are short identifiers; anything longer is not one.
+const readCauseField = (value: unknown) =>
+  typeof value === "string" && value.length <= 120 ? value.trim() || undefined : undefined;
+
+/** Keeps only a bounded provider id and failover reason from an error observation. */
+export function readRunFailureCause(value: unknown): RunFailureCause | undefined {
+  const source = asOptionalRecord(value);
+  const provider = readCauseField(source?.provider);
+  const failoverReason = readCauseField(source?.failoverReason);
+  return provider ? { provider, ...(failoverReason && { failoverReason }) } : undefined;
+}
+
+export function readRunFailureNotice(
+  message: unknown,
+  options?: { audience: "desktop" },
+): RunFailureNotice | undefined {
   const notice = asOptionalRecord(asOptionalRecord(message)?.openclawRunError);
   if (
     typeof notice?.runId !== "string" ||
@@ -13,5 +31,12 @@ export function readRunFailureNotice(message: unknown): RunFailureNotice | undef
   ) {
     return undefined;
   }
-  return { runId: notice.runId, summary: notice.summary };
+  const cause = readRunFailureCause(notice.cause);
+  const summary =
+    options?.audience === "desktop" &&
+    typeof notice.desktopSummary === "string" &&
+    notice.desktopSummary.trim()
+      ? notice.desktopSummary
+      : notice.summary;
+  return { runId: notice.runId, summary, ...(cause ? { cause } : {}) };
 }

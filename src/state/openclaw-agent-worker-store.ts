@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
+import { performance } from "node:perf_hooks";
 import { deserialize, serialize } from "node:v8";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
@@ -144,6 +145,9 @@ type AgentWorkerPublicationExecution = Pick<
 type AgentWorkerPublicationOptions = {
   moduleUrl: URL;
   input: unknown;
+  priority?: "background";
+  /** Admitted publication execution, including preparation and reply, excluding FIFO wait. */
+  observeWriteExecution?: (elapsedMs: number) => void;
   assertAdmission?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest;
   observeAdmission?: (
     admission: SqliteWorkerOperationAdmission,
@@ -446,16 +450,31 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
     };
     const result = (async () => {
       let completed: Result<T, unknown>;
+      let writeStartedAt: number | undefined;
       try {
         const publicationValue = await runOpenClawAgentWorkerWrite(
           options,
-          () => operation(execution, source),
+          () => {
+            if (worker.observeWriteExecution) {
+              writeStartedAt = performance.now();
+            }
+            return operation(execution, source);
+          },
           undefined,
           signal,
+          worker.priority,
         );
         completed = { ok: true, value: publicationValue };
       } catch (error) {
         completed = { ok: false, error };
+      }
+      if (writeStartedAt !== undefined) {
+        try {
+          worker.observeWriteExecution?.(performance.now() - writeStartedAt);
+        } catch (error) {
+          // Observation cannot turn a committed publication into a replayable failure.
+          reportCompletedPublicationCleanupFailure(error);
+        }
       }
       let releasing: OpenClawAgentDatabaseExecution | undefined = execution;
       if (

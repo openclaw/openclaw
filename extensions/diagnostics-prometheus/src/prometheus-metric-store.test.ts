@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import renderShape from "../benchmarks/render-shape.json" with { type: "json" };
 import {
@@ -276,7 +276,7 @@ it("does not retain unrelated pool slabs between scrapes while series stay live"
   }
   const control = new WeakRef({});
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   expect(references.filter((reference) => reference.deref() !== undefined)).toHaveLength(0);
   expectLines(store.render().toString(), `${depth}{index="31"} 31`);

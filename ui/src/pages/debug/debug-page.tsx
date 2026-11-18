@@ -21,6 +21,7 @@ import {
   SettingsRow as Row,
   SettingsSection as Section,
   SettingsStatus as Status,
+  SettingsEmpty,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -498,7 +499,7 @@ export function DebugPage() {
         <Section title={t("debug.eventLogTitle")} description={t("debug.eventLogSubtitle")}>
           <For
             each={events.read().entries}
-            fallback={<div class="settings-empty">{t("debug.noEvents")}</div>}
+            fallback={<SettingsEmpty message={t("debug.noEvents")} />}
           >
             {(event) => (
               <Row

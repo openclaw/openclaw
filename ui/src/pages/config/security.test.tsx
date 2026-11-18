@@ -58,7 +58,9 @@ describe("Security", () => {
     expect(expectRowByTitle(container, "Available tools").querySelector("select")?.disabled).toBe(
       true,
     );
-    expect(expectRowByTitle(container, "Exec policy").matches("button:not(:disabled)")).toBe(true);
+    expect(
+      expectRowByTitle(container, "Command permissions").matches("button:not(:disabled)"),
+    ).toBe(true);
     expect(expectRowByTitle(container, "Devices").matches("button:not(:disabled)")).toBe(true);
   });
 
@@ -70,7 +72,10 @@ describe("Security", () => {
     ["unknown", "Unknown", false],
     ["hand-edited", "hand-edited", false],
   ])("shows %s auth without vouching for it", (gatewayAuth, label, warns) => {
-    const row = expectRowByTitle(renderSecurity({ gatewayAuth }).container, "Gateway auth");
+    const row = expectRowByTitle(
+      renderSecurity({ gatewayAuth }).container,
+      "Gateway authentication",
+    );
     expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
     expect(row.querySelector(".settings-status")?.className).toBe(
       warns ? "settings-status settings-status--warn" : undefined,
@@ -89,7 +94,7 @@ describe("Security", () => {
     [
       { kind: "custom", host: "gw.example.test" },
       "token",
-      "Custom host",
+      "Custom address",
       "gw.example.test, as configured. A startup flag can override this.",
       false,
     ],
@@ -156,10 +161,10 @@ describe("Security", () => {
   });
 
   it.each([
-    ["Gateway auth", "onOpenGatewaySettings"],
+    ["Gateway authentication", "onOpenGatewaySettings"],
     ["Network access", "onOpenGatewaySettings"],
     ["Devices", "onOpenDevices"],
-    ["Exec policy", "onOpenDevices"],
+    ["Command permissions", "onOpenDevices"],
     ["Approvals", "onOpenApprovals"],
   ] as const)("opens the owner of %s", (title, handler) => {
     const open = vi.fn();
@@ -295,12 +300,12 @@ describe("extractQuickSettingsSecurity", () => {
     expect(row.querySelector(".settings-status")).toBeNull();
     expect(row.querySelector(".settings-row__control")?.textContent?.trim()).toBe(label);
     expect(row.querySelector(".settings-row__desc")?.textContent).toBe(CONFIGURED);
-    expect(row.textContent).not.toContain("This device only");
+    expect(row.textContent).not.toContain("This computer only");
   });
 
   it.each([
-    [{ kind: "reportedLoopback" }, "token", "This device only", undefined, "ok"],
-    [{ kind: "reportedLoopback" }, "none", "This device only", undefined, "ok"],
+    [{ kind: "reportedLoopback" }, "token", "This computer only", undefined, "ok"],
+    [{ kind: "reportedLoopback" }, "none", "This computer only", undefined, "ok"],
     [{ kind: "reportedAllInterfaces" }, "token", "All interfaces", undefined, null],
     [{ kind: "reportedAllInterfaces" }, "none", "All interfaces", undefined, "warn"],
     [
@@ -313,7 +318,7 @@ describe("extractQuickSettingsSecurity", () => {
     [
       { kind: "reportedHost", host: "192.0.2.10" },
       "token",
-      "Custom host",
+      "Custom address",
       "Listening on 192.0.2.10.",
       null,
     ],
@@ -375,7 +380,7 @@ describe("extractQuickSettingsSecurity", () => {
   ])("vouches for %s auth once the Gateway really reports it", (gatewayAuth, label) => {
     const row = expectRowByTitle(
       renderSecurity({ gatewayAuth, gatewayAuthReported: true }).container,
-      "Gateway auth",
+      "Gateway authentication",
     );
     expect(row.querySelector(".settings-status")?.className).toBe(
       "settings-status settings-status--ok",
@@ -386,7 +391,7 @@ describe("extractQuickSettingsSecurity", () => {
   it("still warns about no auth when the Gateway reports it", () => {
     const row = expectRowByTitle(
       renderSecurity({ gatewayAuth: "none", gatewayAuthReported: true }).container,
-      "Gateway auth",
+      "Gateway authentication",
     );
     expect(row.querySelector(".settings-status")?.className).toBe(
       "settings-status settings-status--warn",
@@ -429,7 +434,7 @@ describe("extractQuickSettingsSecurity", () => {
       "Network access",
     );
     expect(row.querySelector(".settings-status")).toBeNull();
-    expect(row.textContent).not.toContain("This device only");
+    expect(row.textContent).not.toContain("This computer only");
   });
 
   it("claims nothing about config it has not read", () => {
@@ -464,7 +469,7 @@ it.each([["operator.admin"], ["operator.read"]])(
       />
     ));
     await waitForSolid(() => {
-      const row = expectRowByTitle(container, "Exec policy");
+      const row = expectRowByTitle(container, "Command permissions");
       expect(row.querySelector(".settings-row__control")?.textContent).toBe("Unknown");
       expect(row.querySelector(".settings-row__desc")).toBeNull();
     });
@@ -505,7 +510,8 @@ it("retires host policy reads across reconnects of the same client", async () =>
   await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
   currentRead.resolve({ resolvedDefaults: { security: "deny", ask: "off" } });
   const policy = () =>
-    expectRowByTitle(container, "Exec policy").querySelector(".settings-row__control")?.textContent;
+    expectRowByTitle(container, "Command permissions").querySelector(".settings-row__control")
+      ?.textContent;
   await waitForSolid(() => expect(policy()).toBe("Deny"));
   oldRead.resolve({ resolvedDefaults: { security: "full", ask: "off" } });
   await oldRead.promise;

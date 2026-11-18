@@ -4,7 +4,7 @@ import type { PreparedModelRuntimeLeaseOptions } from "../agents/prepared-model-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { ImageDescriptionRequest } from "./types.js";
+import type { ImageDescriptionRequest } from "./provider-types.js";
 
 export const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
@@ -12,7 +12,6 @@ const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
 
 const imageRuntimeMocks = vi.hoisted(() => ({
   completeMock: vi.fn(),
-  ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
   getApiKeyForModelMock: vi.fn(
     async (): Promise<{
       apiKey: string;
@@ -35,7 +34,6 @@ const imageRuntimeMocks = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
-  prepareProviderDynamicModelMock: vi.fn(async () => {}),
   prepareProviderRuntimeAuthMock: vi.fn(),
   acquireAgentRunPreparedModelRuntimeMock: vi.fn(),
   releasePreparedModelRuntimeMock: vi.fn(async () => {}),
@@ -45,7 +43,6 @@ const imageRuntimeMocks = vi.hoisted(() => ({
 }));
 const {
   completeMock,
-  ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
   resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
@@ -53,7 +50,6 @@ const {
   discoverModelsMock,
   fetchMock,
   registerProviderStreamForModelMock,
-  prepareProviderDynamicModelMock,
   prepareProviderRuntimeAuthMock,
   acquireAgentRunPreparedModelRuntimeMock,
   releasePreparedModelRuntimeMock,
@@ -70,13 +66,6 @@ vi.mock("../llm/stream.js", async () => {
     complete: completeMock,
   };
 });
-
-vi.mock("../agents/models-config.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/models-config.js")>(
-    "../agents/models-config.js",
-  )),
-  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-}));
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
@@ -100,15 +89,6 @@ vi.mock("../agents/provider-secret-egress.js", async () => ({
   unwrapSecretSentinelsForProviderEgress: unwrapSecretSentinelsForProviderEgressMock,
 }));
 
-// mock-isolation: Image fixtures supply credential setters and model results without opening real stores.
-vi.mock("../agents/agent-model-discovery.js", () => ({
-  discoverAuthStorage: () => ({
-    [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-  }),
-  discoverModelsAsync: async (...args: Parameters<typeof discoverModelsMock>) =>
-    discoverModelsMock(...args),
-}));
-
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: acquireAgentRunPreparedModelRuntimeMock,
 }));
@@ -117,7 +97,6 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
     "../plugins/provider-runtime.js",
   )),
-  prepareProviderDynamicModel: prepareProviderDynamicModelMock,
   shouldPreferProviderRuntimeResolvedModel: shouldPreferProviderRuntimeResolvedModelMock,
 }));
 

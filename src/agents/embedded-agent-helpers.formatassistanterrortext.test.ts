@@ -46,6 +46,18 @@ describe("formatAssistantErrorText", () => {
     expect(formatUserFacingAssistantErrorText(msg)).toBe(expected);
   };
 
+  it.each([401, 403])(
+    "does not treat an upstream %s with a colliding code as a deployment denial",
+    (status) => {
+      const message = {
+        ...makeAssistantError(`HTTP ${status}: invalid API key`),
+        errorCode: "model_request_policy_denied",
+      };
+      expect(classifyAssistantFailoverReason(message)).toBe("auth");
+      expect(formatUserFacingAssistantErrorText(message)).toContain("sign in");
+    },
+  );
+
   it.each([
     [
       '<!DOCTYPE html><html><head><title>Just a moment...</title><link rel="dns-prefetch" href="//chatgpt.com"></head><body><span id="challenge-error-text">Enable JavaScript and cookies to continue</span><script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script></body></html>',

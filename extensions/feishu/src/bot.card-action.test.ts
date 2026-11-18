@@ -186,13 +186,22 @@ it("does not open approval cards when the expiry would exceed a valid Date", asy
   expectNotice(expect.stringContaining("payload is invalid"));
 });
 
-it("preserves p2p callbacks for DM quick actions", async () => {
-  await dispatch(cardEvent(quickAction({ c: { ...context(), t: "p2p" } })), {
-    botOpenId: "ou_bot",
-  });
-  expect(message()).toMatchObject({ chat_id: "chat1", chat_type: "p2p" });
-  expect(message()?.mentions).toBeUndefined();
-});
+it.each(["p2p", "group"] as const)(
+  "preserves explicit %s callbacks during lookup outages",
+  async (chatType) => {
+    getChat.mockRejectedValueOnce(new Error("lookup unavailable"));
+    await dispatch(cardEvent(quickAction({ c: { ...context(), t: chatType } })), {
+      botOpenId: "ou_bot",
+    });
+    expect(message()).toMatchObject({ chat_id: "chat1", chat_type: chatType });
+    expect(message()?.mentions).toEqual(
+      chatType === "group"
+        ? [{ key: "mention_bot", id: { open_id: "ou_bot" }, name: "bot" }]
+        : undefined,
+    );
+    expect(getChat).not.toHaveBeenCalled();
+  },
+);
 
 it.each(["expired", "different user", "different conversation"] as const)(
   "rejects an emitted approval belonging to %s",
@@ -227,17 +236,23 @@ it("does not cache chat types or callback tokens when expiry would exceed a vali
   expect(message()).toMatchObject({ chat_id: "chat1", chat_type: "p2p" });
 });
 
-it.each(["response", "exception"])("falls back to p2p after chat lookup %s", async (failure) => {
-  const detail = "private-card-provider-detail";
-  if (failure === "response") {
-    getChat.mockResolvedValueOnce({ code: 99, msg: detail });
-  } else {
-    getChat.mockRejectedValueOnce(new Error(detail));
-  }
-  await dispatch(cardEvent({ text: "/help" }));
-  expect(message()?.chat_type).toBe("p2p");
-  expect(log.mock.calls.flat().join("\n")).not.toContain(detail);
-});
+it.each(["response", "exception", "missing"])(
+  "refuses actions after chat lookup %s",
+  async (failure) => {
+    const detail = "private-card-provider-detail";
+    if (failure === "response") {
+      getChat.mockResolvedValueOnce({ code: 99, msg: detail });
+    } else if (failure === "exception") {
+      getChat.mockRejectedValueOnce(new Error(detail));
+    } else {
+      getChat.mockResolvedValueOnce({ code: 0, data: {} });
+    }
+    await dispatch(cardEvent({ text: "/help", chat_type: "p2p" }));
+    expect(handleFeishuMessage).not.toHaveBeenCalled();
+    expectNotice(expect.stringContaining("action was not run"));
+    expect(log.mock.calls.flat().join("\n")).not.toContain(detail);
+  },
+);
 
 it("rejects empty callback tokens before dispatch", async () => {
   await dispatch(cardEvent(quickAction(), { token: "   " }));

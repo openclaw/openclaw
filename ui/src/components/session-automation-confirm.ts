@@ -158,7 +158,6 @@ export function withBoundAutomationNotice<T extends ConfirmDialogOptions>(
   return {
     ...options,
     skipPreference: undefined,
-    title: options.title ?? t("sessionsView.automationPauseTitle"),
     message: options.message ? options.message + "\n\n" + notice.message : notice.message,
     ...(notice.details ? { details: notice.details } : {}),
     confirmLabel: t(

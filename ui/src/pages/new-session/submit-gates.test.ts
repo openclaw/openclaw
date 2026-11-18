@@ -259,7 +259,7 @@ describe("DraftSubmissionFlow submit gates", () => {
   it.each([
     {
       reason: "missing-auth",
-      message: "No provider credential is configured for this model. Set it up in Model Setup.",
+      message: "No account is available for this model. Add one in Models.",
     },
     {
       reason: "auth-failed",
@@ -292,7 +292,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
         expect(place.modelControl.modelSelectionBlockedReason(place.selectedAgent())).toContain(
-          "No provider credential",
+          "No account is available",
         ),
       );
       const createParams = restoreCreate(flow, {
@@ -482,10 +482,10 @@ describe("DraftSubmissionFlow submit gates", () => {
       expect(flow.submitBlock()).toEqual({
         gate: "worktree-unavailable",
         reason: missingScope
-          ? `Checking Git for this folder requires ${missingScope} access. Ask the person who manages OpenClaw for access.`
+          ? `You need ${missingScope.slice("operator.".length)} access to check Git for this folder. Ask an admin for access.`
           : result === "forbidden"
-            ? "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access."
-            : "Couldn't verify Git for this folder. Choose it again to retry.",
+            ? "You don’t have permission to check Git for this folder. Ask an admin for access."
+            : "Couldn’t verify Git for this folder. Try again.",
       });
       expect(flow.blockedSubmitNotice()).toBe(flow.submitDisabledReason());
       await flow.submit();
@@ -560,7 +560,7 @@ describe("DraftSubmissionFlow submit gates", () => {
         fixture.flow,
         "worktree-unavailable",
         result === "forbidden"
-          ? "Checking Git for this folder requires operator.admin access. Ask the person who manages OpenClaw for access."
+          ? "You need admin access to check Git for this folder. Ask an admin for access."
           : "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
       );
       await fixture.flow.submit();
@@ -590,7 +590,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));
     fixture.place.selectDevice("build-mac");
 
-    expectGate(fixture.flow, "device-runtime", "This runtime does not support paired devices");
+    expectGate(fixture.flow, "device-runtime", "This runtime doesn’t support paired devices");
     expect(fixture.request).not.toHaveBeenCalledWith("node.list", expect.anything());
   });
 });

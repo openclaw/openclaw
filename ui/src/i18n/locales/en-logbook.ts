@@ -28,7 +28,7 @@ const enLogbook = {
       analyzeNow: "Analyze now",
     },
     empty: {
-      title: "Nothing on the timeline yet.",
+      title: "No activity yet.",
       subtitle:
         "Logbook is collecting snapshots; cards appear after the first analysis batch completes.",
     },
@@ -49,7 +49,7 @@ const enLogbook = {
     },
     ask: {
       title: "Ask your day",
-      placeholder: "When did I review the gateway PR?",
+      placeholder: "When did I review the Gateway PR?",
       submit: "Ask",
     },
   },

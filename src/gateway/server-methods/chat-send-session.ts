@@ -34,6 +34,7 @@ import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/sessio
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import type { SessionTranscriptAnchorFacts } from "../../config/sessions/session-transcript-anchor-read.types.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -42,6 +43,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
@@ -62,6 +64,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
+import { readIncognitoActivePath } from "./chat-send-active-leaf.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -240,6 +243,13 @@ async function loadChatSendSessionContext(params: {
     { sessionKey: rawSessionKey, agentId: requestedAgentId },
   ]);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
+  if (!request.stopCommand) {
+    await waitForAgentInputAdmission(requestedAgentId, {
+      cfg: runtimeConfig,
+      sessionKey: sessionLoadKey,
+      owner: context.agentDatabaseStartup,
+    });
+  }
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
     "gateway.chat_send.load_session",
@@ -491,13 +501,32 @@ export function withCurrentChatSendSession<T>(params: {
     return params.consume(latest, membership, assertSourceCurrent);
   };
   if (isIncognitoSessionKey(session.sessionKey)) {
-    return withGatewaySessionEntry(
-      session.sessionLoadKey,
-      { ...session.sessionLoadOptions, includeMembership: params.includeMembership },
-      consume,
-      session.cfg,
-      assertConfigCurrent,
-    );
+    const expectedLeafEntryId = session.expectedLeafEntryId;
+    const readEntry = (transcript?: SessionTranscriptAnchorFacts) =>
+      withGatewaySessionEntry(
+        session.sessionLoadKey,
+        { ...session.sessionLoadOptions, includeMembership: params.includeMembership },
+        transcript
+          ? (latest, membership, assertSourceCurrent) => {
+              // Matches the facts qualified worker reads attach to their entry snapshot.
+              const current = { ...latest, transcript };
+              return consume(current, membership, assertSourceCurrent);
+            }
+          : consume,
+        session.cfg,
+        assertConfigCurrent,
+      );
+    return params.includeActivePath && expectedLeafEntryId !== undefined
+      ? readIncognitoActivePath(
+          {
+            canonicalKey: session.sessionTarget.storeKey,
+            entry: session.entry,
+            storePath: session.storePath,
+          },
+          session.agentId,
+          expectedLeafEntryId,
+        ).then(readEntry)
+      : readEntry();
   }
   return withQualifiedGatewaySessionEntry({
     cfg: session.cfg,

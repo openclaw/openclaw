@@ -94,7 +94,7 @@ runs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
-        key: pnpm-store-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ steps.setup-pnpm.outputs.package-manager }}-${{ hashFiles(inputs.lockfile-path) }}
+        key: pnpm-store-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ steps.setup-pnpm.outputs.package-manager }}-${{ hashFiles(inputs.lockfile-path) }}${{ runner.os == 'Linux' && runner.environment == 'github-hosted' && '-fresh' || '' }}
         restore-keys: |
           pnpm-store-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ steps.setup-pnpm.outputs.package-manager }}-
 

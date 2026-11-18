@@ -175,6 +175,6 @@ Check the configured node ID and `linkGitHubIdentities`. Both profiles need the 
 
 - [Connect a node](/cli/connect)
 - [Node command allowlists](/nodes#restrict-the-node-command-surface)
-- [Team setup](/start/teams)
+- [Multiplayer](/start/multiplayer)
 - [Beam](/plugins/beam)
 - [User model](/concepts/user-model)

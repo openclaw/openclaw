@@ -294,65 +294,75 @@ describe("runEmbeddedAttempt tool boundaries", () => {
     },
   );
 
-  it("attributes awaited bundle work separately from synchronous catalog preparation", async () => {
-    const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
-    const runtimeToolPolicy = await import("../../runtime-plan/tools.js");
-    const systemPromptReport = await import("../../system-prompt-report.js");
-    const { buildSystemPromptReport } = await vi.importActual<typeof systemPromptReport>(
-      "../../system-prompt-report.js",
-    );
-    vi.spyOn(systemPromptReport, "buildSystemPromptReport").mockImplementation(
-      buildSystemPromptReport,
-    );
-    const { log } = await import("../logger.js");
-    let clock = Date.now();
-    vi.spyOn(Date, "now").mockImplementation(() => clock);
-    const warn = vi.spyOn(log, "warn");
-    const acquired = createDeferred();
-    const release = createDeferred();
-    const dispose = vi.fn(async () => {});
-    vi.spyOn(bundleLspTools, "createBundleLspToolRuntime").mockImplementationOnce(async () => {
-      acquired.resolve();
-      await release.promise;
-      return { tools: [], sessions: [], dispose };
-    });
-    vi.spyOn(runtimeToolPolicy, "logAgentRuntimeToolDiagnostics").mockImplementation(() => {
-      clock += 37;
-    });
-    getHoisted().createOpenClawCodingToolsMock.mockReturnValue([createStubTool("read")]);
-    const attempt = runAttempt({
-      config: { tools: { codeMode: true } },
-      sessionKey: "agent:main:bundle-timing",
-    });
-    try {
-      await awaitGateBeforeSettlement(
-        acquired.promise,
-        attempt,
-        "Attempt completed before bundle acquisition",
+  it.each([5_000, 5_001])(
+    "warns for the complete tool-preparation phase above 5000ms (%sms)",
+    async (elapsed) => {
+      const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
+      const runtimeToolPolicy = await import("../../runtime-plan/tools.js");
+      const systemPromptReport = await import("../../system-prompt-report.js");
+      const { buildSystemPromptReport } = await vi.importActual<typeof systemPromptReport>(
+        "../../system-prompt-report.js",
       );
-      clock += 6_000;
-      release.resolve();
-      const result = await attempt;
-      expect(result.terminal).toEqual({ kind: "ok" });
-      expect(dispose).toHaveBeenCalledOnce();
-      const summary = warn.mock.calls
-        .map(([message]) => message)
-        .find(
-          (message) => message.includes("prep stages:") && message.includes("phase=stream-ready"),
+      vi.spyOn(systemPromptReport, "buildSystemPromptReport").mockImplementation(
+        buildSystemPromptReport,
+      );
+      const { log } = await import("../logger.js");
+      let clock = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => clock);
+      const warn = vi.spyOn(log, "warn");
+      const acquired = createDeferred();
+      const release = createDeferred();
+      const dispose = vi.fn(async () => {});
+      vi.spyOn(bundleLspTools, "createBundleLspToolRuntime").mockImplementationOnce(async () => {
+        acquired.resolve();
+        await release.promise;
+        return { tools: [], sessions: [], dispose };
+      });
+      vi.spyOn(runtimeToolPolicy, "logAgentRuntimeToolDiagnostics").mockImplementation(() => {
+        clock += 37;
+      });
+      getHoisted().createOpenClawCodingToolsMock.mockReturnValue([createStubTool("read")]);
+      const attempt = runAttempt({
+        config: { tools: { codeMode: true } },
+        sessionKey: "agent:main:bundle-timing",
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          acquired.promise,
+          attempt,
+          "Attempt completed before bundle acquisition",
         );
-      for (const stage of [
-        "bundle-tools:6000",
-        "tool-catalog:37",
-        "tool-preparation:6037",
-        "system-prompt:0",
-      ]) {
-        expect(summary).toContain(`${stage}ms@`);
+        clock += elapsed - 37;
+        release.resolve();
+        const result = await attempt;
+        expect(result.terminal).toEqual({ kind: "ok" });
+        expect(dispose).toHaveBeenCalledOnce();
+        const preparationWarnings = warn.mock.calls.filter(([message]) =>
+          message.includes("tool preparation completed"),
+        );
+        expect(preparationWarnings).toHaveLength(elapsed > 5_000 ? 1 : 0);
+        if (preparationWarnings.length) {
+          expect(preparationWarnings[0]?.[0]).toContain(`totalMs=${elapsed}`);
+        }
+        const summary = warn.mock.calls
+          .map(([message]) => message)
+          .find(
+            (message) => message.includes("prep stages:") && message.includes("phase=stream-ready"),
+          );
+        for (const stage of [
+          `bundle-tools:${elapsed - 37}`,
+          "tool-catalog:37",
+          `tool-preparation:${elapsed}`,
+          "system-prompt:0",
+        ]) {
+          expect(summary).toContain(`${stage}ms@`);
+        }
+      } finally {
+        release.resolve();
+        await attempt;
       }
-    } finally {
-      release.resolve();
-      await attempt;
-    }
-  });
+    },
+  );
 
   it.each([
     { kind: "cancel", errorName: "AbortError" },

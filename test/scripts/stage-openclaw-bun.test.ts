@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
@@ -20,7 +20,12 @@ function toolRunner(root: string, command: CommandFixture) {
   return async (bin: string, args: string[]) => {
     const result = await command.run(bin, args, {
       cwd: root,
-      env: { HOME: root, TMPDIR: root, PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+      env: {
+        HOME: root,
+        TMPDIR: root,
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        DEVELOPER_DIR: process.env.DEVELOPER_DIR,
+      },
     });
     if (result.status !== 0 || result.error) {
       throw new Error(`${bin}: ${result.stderr}`, { cause: result.error });
@@ -65,7 +70,12 @@ int main(int argc, char **argv) {
 
 it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
   ["cached", ""],
+  ["cached-metadata-corruption", ""],
   ["download", ""],
+  ["api-fallback", ""],
+  ["api-identity", "release tag mismatch"],
+  ["api-duplicate", "Missing or duplicate Bun release asset"],
+  ["api-asset-id", "Invalid Bun release asset ID"],
   ["archive-checksum", "sha256 mismatch"],
   ["executable-checksum", "executable checksum mismatch"],
   ["architecture", "executable architecture mismatch"],
@@ -88,7 +98,8 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
       const run = toolRunner(root, command);
       const checksum = (kind: string, value: string) =>
         scenario === kind ? "0".repeat(64) : value;
-      const redownload = ["download", "archive-checksum"].includes(scenario);
+      const apiFallback = scenario.startsWith("api-");
+      const redownload = apiFallback || ["download", "archive-checksum"].includes(scenario);
       const binaries = await revisionExecutables(root, command);
       const tag = "fixture-release";
       await mkdir(file("downloads"));
@@ -138,6 +149,10 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
       };
       const releaseBytes = Buffer.from(JSON.stringify(release));
       await write("downloads/manifest.json", releaseBytes);
+      if (scenario === "cached-metadata-corruption") {
+        await write(`.cache/openclaw-bun/${tag}/manifest.json`, "invalid cached metadata");
+        await write(`.cache/openclaw-bun/${tag}/SHA256SUMS`, "invalid cached checksums");
+      }
       await write(
         "downloads/SHA256SUMS",
         [
@@ -148,14 +163,47 @@ it.runIf(["darwin", "linux"].includes(process.platform)).concurrent.for([
           ),
         ].join("\n") + "\n",
       );
+      const assets = [
+        "SHA256SUMS",
+        "manifest.json",
+        ...Object.values(artifacts).map((a) => a.asset),
+      ].map((name, index) => ({ name, id: index + 1 }));
+      await write(
+        "downloads/release.json",
+        JSON.stringify({
+          tag_name: scenario === "api-identity" ? "different-release" : tag,
+          assets:
+            scenario === "api-duplicate"
+              ? [...assets, assets[0]]
+              : scenario === "api-asset-id"
+                ? [{ ...assets[0], id: "../unexpected" }]
+                : assets,
+        }),
+      );
+      for (const asset of assets) {
+        await copyFile(file(`downloads/${asset.name}`), file(`downloads/${asset.id}`));
+      }
       const curlLog = file("curl-log");
       await write(
         "tools/curl",
         `#!/bin/bash
 set -euo pipefail
-printf 'download\\n' >> "$fixture_curl_log"
-while [[ "$1" != --output ]]; do shift; done
-cp "$fixture_downloads/$(basename "$2")" "$2"
+output=""
+url=""
+while (( $# )); do
+  if [[ "$1" == --output ]]; then output="$2"; shift 2; else url="$1"; shift; fi
+done
+name="$(basename "$output")"
+if [[ "$fixture_scenario" == api-* ]]; then
+  case "$url" in
+    https://github.com/*) printf 'primary\\n' >> "$fixture_curl_log"; exit 22 ;;
+    */releases/tags/*) printf 'index\\n' >> "$fixture_curl_log"; name=release.json ;;
+    */releases/assets/*) printf 'asset\\n' >> "$fixture_curl_log"; name="$(basename "$url")" ;;
+  esac
+else
+  printf 'download\\n' >> "$fixture_curl_log"
+fi
+cp "$fixture_downloads/$name" "$output"
 `,
         0o755,
       );
@@ -170,13 +218,19 @@ cp "$fixture_downloads/$(basename "$2")" "$2"
             PATH: `${file("tools")}:${nodeDirectory}:/usr/bin:/bin`,
             TMPDIR: root,
             fixture_downloads: file("downloads"),
+            fixture_scenario: scenario,
             fixture_curl_log: curlLog,
             HOME: root,
+            DEVELOPER_DIR: process.env.DEVELOPER_DIR,
           },
         },
       );
       const downloadsMade = await readFile(curlLog, "utf8");
-      expect(downloadsMade).toBe("download\ndownload\n" + (redownload ? "download\n" : ""));
+      expect(downloadsMade).toBe(
+        apiFallback
+          ? "primary\nindex\n" + (expectedError ? "" : "asset\n".repeat(3))
+          : "download\ndownload\n" + (redownload ? "download\n" : ""),
+      );
       if (expectedError) {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain(expectedError);
@@ -194,5 +248,29 @@ cp "$fixture_downloads/$(basename "$2")" "$2"
       expect(await run(bun, ["--revision"])).toBe(revision);
       expect(await run(bun, ["-p", "Bun.revision"])).toBe(commit);
       expect(JSON.parse(await readFile(file("runtime/bun-manifest.json"), "utf8")).tag).toBe(tag);
+      if (scenario === "cached" || scenario === "api-fallback") {
+        const sharedCache = command.createTempDir("openclaw-bun-shared-cache-");
+        await cp(file(".cache/openclaw-bun"), sharedCache, { recursive: true });
+        await write(`.ci-harness/${stageScript}`, await readFile(stageScript));
+        await write(".ci-harness/scripts/lib/openclaw-bun.json", JSON.stringify(pin));
+        const repeated = await command.run(
+          "/bin/bash",
+          [file(`.ci-harness/${stageScript}`), file("runtime"), process.platform, ...arches],
+          {
+            env: {
+              PATH: `${file("tools")}:${nodeDirectory}:/usr/bin:/bin`,
+              TMPDIR: root,
+              fixture_downloads: file("downloads"),
+              fixture_scenario: scenario,
+              fixture_curl_log: curlLog,
+              HOME: root,
+              DEVELOPER_DIR: process.env.DEVELOPER_DIR,
+              OPENCLAW_BUN_CACHE_ROOT: sharedCache,
+            },
+          },
+        );
+        expect(repeated.status, repeated.stderr).toBe(0);
+        expect(await readFile(curlLog, "utf8")).toBe(downloadsMade);
+      }
     }),
 );

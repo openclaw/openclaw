@@ -9,11 +9,13 @@ import { templatesHandlers } from "./templates.js";
 import type { RespondFn } from "./types.js";
 
 const listClawHubTemplates = vi.hoisted(() => vi.fn());
+const readClawHubTemplatesOverview = vi.hoisted(() => vi.fn());
 const readClawHubTemplateDetail = vi.hoisted(() => vi.fn());
 const readClawHubTemplatePreview = vi.hoisted(() => vi.fn());
 vi.mock("../../templates/clawhub-source.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../templates/clawhub-source.js")>()),
   listClawHubTemplates,
+  readClawHubTemplatesOverview,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
 }));
@@ -50,9 +52,34 @@ describe("ClawHub Template catalog Gateway methods", () => {
     expect(listClawHubTemplates).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "returns a bounded overview while Labs remains enabled (%s)",
+    async (complete) => {
+      const overview = { featured: [entry], sections: [] };
+      readClawHubTemplatesOverview.mockResolvedValue(complete ? overview : undefined);
+      expect(
+        (await catalogRequest("templates.catalog.search", { overview: true, limit: 8 }))[0]?.[1],
+      ).toEqual({
+        entries: [],
+        ...(complete ? { overview } : {}),
+      });
+      expect(listClawHubTemplates).not.toHaveBeenCalled();
+      const source = createDeferredCore<unknown>();
+      readClawHubTemplatesOverview.mockReturnValue(source.promise);
+      let labsEnabled = true;
+      const pending = catalogRequest("templates.catalog.search", { overview: true }, () =>
+        labsEnabled ? enabled : {},
+      );
+      labsEnabled = false;
+      source.resolve(overview);
+      expectError(await pending, "FORBIDDEN");
+    },
+  );
+
   it.each([
     ["templates.catalog.search", listClawHubTemplates, {}, "entries", [entry]],
     ["templates.catalog.detail", readClawHubTemplateDetail, release, "detail", release],
+    ["templates.catalog.detail", readClawHubTemplateDetail, entry, "detail", release],
     ["templates.catalog.preview", readClawHubTemplatePreview, previewParams, "preview", preview],
   ] as const)(
     "%s returns the requested result only while Labs remains enabled",

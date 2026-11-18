@@ -520,7 +520,11 @@ describe("native declaration preparation", () => {
         expect(stale.status, stale.stdout + stale.stderr).toBe(1);
         expect(stale.stderr).toContain("different source or toolchain inputs");
         expect(consumer.has(outputPath)).toBe(false);
-        expect(success(consumer, "restore").stdout).toContain("native preparation will run");
+        const fallback = success(consumer, "restore").stdout;
+        expect(fallback).toContain("native preparation will run");
+        expect(fallback).toContain(
+          "compiler signature changed (inputs, config, toolchain or runtime)",
+        );
         expect(consumer.has(outputPath)).toBe(false);
         expect(consumer.has(consumer.recordPath)).toBe(false);
         await consumer.run();

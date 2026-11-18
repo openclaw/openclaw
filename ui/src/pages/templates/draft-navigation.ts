@@ -10,12 +10,23 @@ export type TemplateDraftTarget = {
 };
 
 export function canCreateTemplateDraft(context: ApplicationContext): boolean {
-  return (
-    canCallGatewayMethod(context.gateway.snapshot, "templates.drafts.create", "operator.admin") &&
-    canCallGatewayMethod(context.gateway.snapshot, "chat.send", "operator.write") &&
-    resolveLabFeatureState(currentConfigObject(context.runtimeConfig.state), TEMPLATES_LAB_FEATURE)
+  return templateDraftUnavailableReason(context) === null;
+}
+
+export function templateDraftUnavailableReason(context: ApplicationContext) {
+  if (
+    !resolveLabFeatureState(currentConfigObject(context.runtimeConfig.state), TEMPLATES_LAB_FEATURE)
       .enabled
-  );
+  ) {
+    return "disabled";
+  }
+  return canCallGatewayMethod(
+    context.gateway.snapshot,
+    "templates.drafts.create",
+    "operator.admin",
+  ) && canCallGatewayMethod(context.gateway.snapshot, "chat.send", "operator.write")
+    ? null
+    : "unavailable";
 }
 
 export function templateDraftTargetFromSearch(search: string): TemplateDraftTarget | null {

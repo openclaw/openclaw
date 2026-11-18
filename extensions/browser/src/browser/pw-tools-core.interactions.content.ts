@@ -171,14 +171,16 @@ export async function waitForViaPlaywright(
         }
         throwIfInteractionAborted(opts.signal);
         await waitFor(
-          page.waitForFunction(
-            evaluateBrowserWaitPredicate,
-            {
-              document: documentHandle,
-              source: predicateSource,
-            } satisfies BrowserWaitPredicateState,
-            { timeout },
-          ),
+          page
+            .waitForFunction(
+              evaluateBrowserWaitPredicate,
+              {
+                document: documentHandle,
+                source: predicateSource,
+              } satisfies BrowserWaitPredicateState,
+              { timeout },
+            )
+            .then((result) => result.dispose()),
         );
       } finally {
         await documentHandle.dispose();

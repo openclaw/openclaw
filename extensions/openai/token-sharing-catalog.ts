@@ -1,4 +1,4 @@
-import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import {
   getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,

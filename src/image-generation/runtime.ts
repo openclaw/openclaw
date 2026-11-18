@@ -5,7 +5,6 @@ import {
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getImageGenerationProvider,
   listImageGenerationProviders,
@@ -16,6 +15,7 @@ import {
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
+import { createCapabilityProviderLookup } from "../plugins/provider-registry-shared.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationIgnoredOverride, ImageGenerationResult } from "./types.js";
@@ -48,7 +48,7 @@ export async function generateImage(
     return runImageGeneration(params, deps);
   }
   return withImageGenerationProviders(params.cfg, (providers) => {
-    const lookup = createMediaProviderLookup(providers);
+    const lookup = createCapabilityProviderLookup(providers);
     return runImageGeneration(params, {
       ...deps,
       getProvider: deps.getProvider ?? lookup.getProvider,
@@ -190,6 +190,17 @@ async function runImageGeneration(
           throw new Error(
             `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
           );
+        }
+        if (params.size && sanitized.size && /^\d+x\d+$/.test(sanitized.size)) {
+          const { getImageMetadata } = await import("../media/media-services.js");
+          for (const image of result.images) {
+            // Keep a completed image even when its dimensions cannot be inspected.
+            const dimensions = await getImageMetadata(image.buffer).catch(() => null);
+            if (dimensions && `${dimensions.width}x${dimensions.height}` !== sanitized.size) {
+              ignoredOverrides.push({ key: "size", value: params.size });
+              break;
+            }
+          }
         }
         return {
           images: result.images,

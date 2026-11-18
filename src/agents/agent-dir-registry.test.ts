@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as boundaryPath from "../infra/boundary-path.js";
+import * as directoryWatch from "../infra/directory-watch-host.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   isPathOwnedByAnotherRegisteredAgent as ownedByOther,
@@ -15,42 +17,22 @@ import {
 vi.mock("node:worker_threads", () => ({ isMainThread: true }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-const nativeWatchFs: {
-  watch(
-    filename: fs.PathLike,
-    options: fs.WatchOptionsWithStringEncoding,
-    listener: fs.WatchListener<string>,
-  ): fs.FSWatcher;
-} = fs;
-
-class ReplayWatch extends EventEmitter implements fs.FSWatcher {
-  close() {}
-  ref() {
-    return this;
-  }
-  unref() {
-    return this;
-  }
-}
-
 beforeEach(() => {
-  // These tests inject notifications; native transport has separate integration proof.
-  if (process.platform === "darwin") {
-    Object.defineProperty(process, "platform", { ...platform, value: "linux" });
-  }
-  vi.spyOn(nativeWatchFs, "watch").mockImplementation((directory, _options, listener) => {
-    fs.accessSync(directory, fs.constants.R_OK);
-    const watch = new ReplayWatch();
-    watch.on("change", listener);
+  const access = fs.accessSync;
+  vi.spyOn(fs.promises, "access").mockImplementation(async (...args) => access(...args));
+  // Inject owner notifications; directory-watch-host.test.ts proves native transport.
+  vi.spyOn(directoryWatch, "watchDirectory").mockImplementation((directory) => {
+    const watch = Object.assign(new EventEmitter(), { close() {} });
+    try {
+      fs.accessSync(directory, fs.constants.R_OK);
+    } catch (error) {
+      queueMicrotask(() => watch.emit("error", error, true));
+    }
     return watch;
   });
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  Object.defineProperty(process, "platform", platform);
-});
+afterEach(() => vi.restoreAllMocks());
 
 function registered(owner: Parameters<typeof registerDir>[0]) {
   registerDir(owner);
@@ -58,7 +40,7 @@ function registered(owner: Parameters<typeof registerDir>[0]) {
 }
 
 function observeOwners(owners: Array<{ agentId: string; agentDir: string }>) {
-  const watch = vi.spyOn(fs, "watch");
+  const watch = vi.spyOn(directoryWatch, "watchDirectory");
   owners.forEach((owner) => registerDir(owner));
   const closes = watch.mock.results.map((result) => {
     if (result.type !== "return") {
@@ -167,13 +149,13 @@ describe("agent directory registry", () => {
     if (parent?.type !== "return") {
       throw new Error("Missing agent directory ancestor watch");
     }
-    parent.value.emit("change", "change", path.basename(agentDir));
+    watch.mock.calls[parentIndex]![1]("change", path.basename(agentDir));
     expect(closes[parentIndex]).not.toHaveBeenCalled();
     expect(ownerOf(agentDir)).toBe("main");
     expect(watch).toHaveBeenCalledTimes(count);
   });
 
-  it("resolves each prepared identity once per ancestor recovery sweep", async () => {
+  it("resolves prepared identities once per recovery sweep without synchronous filesystem calls", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
     const root = tempDirs.make("openclaw-agent-dir-recovery-");
@@ -181,13 +163,18 @@ describe("agent directory registry", () => {
     fs.mkdirSync(agentDir, { recursive: true });
     try {
       using _ = observeOwners([{ agentId: "main", agentDir }]);
-      using realpath = vi.spyOn(fs.realpathSync, "native");
-      vi.advanceTimersByTime(30_000);
+      using realpath = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestor");
+      using synchronous = vi.spyOn(fs.realpathSync, "native");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all(realpath.mock.results.map((result) => result.value));
+      expect(synchronous).not.toHaveBeenCalled();
       expect(realpath).toHaveBeenCalledExactlyOnceWith(agentDir);
       expect(ownerOf(agentDir)).toBe("main");
       await Promise.resolve();
       realpath.mockClear();
-      vi.advanceTimersByTime(30_000);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all(realpath.mock.results.map((result) => result.value));
+      expect(synchronous).not.toHaveBeenCalled();
       expect(realpath).toHaveBeenCalledExactlyOnceWith(agentDir);
     } finally {
       vi.useRealTimers();
@@ -226,7 +213,9 @@ describe("agent directory registry", () => {
       fs.symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
       expect(unregisterDir({ agentId: "main", agentDir })).toBe(false);
       expect(ownedByOther({ agentId: "other", pathname: original })).toBe(true);
+      using realpath = vi.spyOn(boundaryPath, "resolveIdentityPathViaExistingAncestor");
       await vi.advanceTimersByTimeAsync(30_000);
+      await Promise.all(realpath.mock.results.map((result) => result.value));
       expect(ownerOf(agentDir)).toBeUndefined();
       expect(ownerOf(path.join(original, "agent"))).toBe("main");
       registerDir({ agentId: "replacement", agentDir });

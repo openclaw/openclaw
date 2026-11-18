@@ -131,7 +131,7 @@ it.for(
       operation!.freezeAbort();
       emitAgentEvent({ runId, stream: "assistant", data: { text: "Final answer" } });
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
-      return undefined;
+      return { text: "Final answer" };
     });
     const mutate = createMutation(fixture, action);
     const invoke = (respond: RespondFn) => clientRequest.runInAsyncScope(() => mutate(respond));

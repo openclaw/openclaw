@@ -4,7 +4,10 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { ProcessSession } from "./bash-process-registry.js";
-import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "./subagents/spawn/subagent-capabilities.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 /** Restart completions are fresh host input, never restored requester continuations. */
@@ -54,7 +57,8 @@ export async function prepareAdoptedDurableProcessNotification(
       entry?.sessionId !== persistedSessionId ||
       entry.archivedAt !== undefined ||
       entry.incognito ||
-      isSubagentEnvelopeSession(sessionKey, { entry })
+      (isSubagentEnvelopeSession(sessionKey, { entry }) &&
+        !isVisibleSpawnedSession(sessionKey, { entry }))
     ) {
       session.notifyOnExit = false;
       return;

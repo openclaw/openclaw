@@ -35,6 +35,10 @@ export const lightpandaEngine: BrowserEngineAdapter = {
   defaultSnapshotRefs: "aria",
   createCdpNormalizer: createLightpandaCdpNormalizer,
   supportsRequest({ path, actionKind, actionSelector, snapshot }) {
+    if (path === "/operator/input") {
+      // The route answers from profile capabilities with the code the panel falls back on.
+      return true;
+    }
     if (!SEMANTIC_ROUTES.has(path)) {
       return false;
     }

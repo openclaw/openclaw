@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { revealChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { catalogModel } from "./model-catalog-fixtures.test-support.ts";
@@ -12,18 +13,50 @@ import {
   pollAttribute,
   pollCount,
 } from "./new-session-page.test-support.ts";
-import {
-  unavailableError,
-  pollVisible,
-  pollFocused,
-  pollOpacity,
-} from "./new-session-shard.test-support.ts";
+import { unavailableError, pollVisible, pollFocused } from "./new-session-shard.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
 
 suite.define(() => {
-  it("keeps picker geometry stable while shortcut visibility follows focus", async () => {
+  it.each([320, 400, 560])(
+    "keeps mobile model loading steady at %s px under CPU throttling",
+    async (width) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 900 } },
+        async ({ context, page }) => {
+          const cpu = await context.newCDPSession(page);
+          await cpu.send("Emulation.setCPUThrottlingRate", { rate: 6 });
+          const gateway = await installMockGateway(page, { heldMethods: ["models.list"] });
+          await page.goto(`${suite.server.baseUrl}new`);
+          await gateway.waitForRequest("models.list");
+          const trigger = page.locator('[data-chat-model-select="true"]');
+          await pollAttribute(trigger, "aria-busy").toBe("true");
+          await page.evaluate(() => document.fonts.ready);
+          const controls = page.locator(
+            ".new-session-page__composer .agent-chat__composer-controls",
+          );
+          const before = await controls.boundingBox();
+          const shifts = await observeLayoutShifts(page);
+          await gateway.resolveDeferred("models.list");
+          await pollAttribute(trigger, "aria-busy").toBe("false");
+          await page.evaluate(
+            () =>
+              new Promise((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+              }),
+          );
+          expect(await controls.boundingBox()).toEqual(before);
+          const result = await shifts.evaluate((probe) => probe.read());
+          expect(result.value, JSON.stringify(result, null, 2)).toBe(0);
+          await shifts.evaluate((probe) => probe.stop());
+          await shifts.dispose();
+          await cpu.detach();
+        },
+      );
+    },
+  );
+  it("keeps picker geometry stable without numeric keycaps while focus moves", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -33,17 +66,19 @@ suite.define(() => {
         const modelSelect = page.locator('[data-chat-model-select="true"]');
         const picker = page.locator(".chat-controls__model-picker");
         const search = page.locator('[data-chat-model-search="true"]');
-        const secondModel = page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]');
+        const providerModel = page.locator(
+          '[data-chat-model-option="anthropic/claude-sonnet-4-6"]',
+        );
 
         await modelSelect.click();
         await pollAttribute(picker, "open").toBe("");
         // Opening the picker moves focus to its filter so typing filters models.
         await pollFocused(search).toBe(true);
-        await revealChatModelOption(page, "openai/gpt-5.5");
-        await revealChatModelOption(page, "anthropic/claude-sonnet-4-6");
+        await picker.locator('[data-chat-model-provider-toggle="anthropic"]').click();
         await modelSelect.focus();
-        const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
-        await pollCount(secondShortcut).toBe(1);
+        // Numeric shortcuts index the visible provider, not the whole catalog.
+        await pollAttribute(providerModel, "aria-keyshortcuts").toBe("1");
+        await pollCount(picker.locator("kbd")).toBe(0);
         // Finish the picker's opening scale before recording its baseline. The top
         // transform origin keeps the anchor gap stable while box geometry still grows.
         await picker.locator(":scope > [data-anchored-overlay]").evaluate(finishElementAnimations);
@@ -52,7 +87,7 @@ suite.define(() => {
             const anchor = document.querySelector('[data-chat-model-select="true"]');
             const menu = document.querySelector(".chat-controls__model-menu");
             const action = document.querySelector(
-              '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-option-action',
+              '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-favorite-slot',
             );
             if (!anchor || !menu || !action) {
               return null;
@@ -76,14 +111,13 @@ suite.define(() => {
               },
             };
           });
-        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(4);
+        await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(8);
         const geometryBeforeFocus = await menuGeometry();
         expect(geometryBeforeFocus).not.toBeNull();
-        await pollOpacity(secondShortcut).toBe("1");
 
         await search.focus();
         await pollFocused(search).toBe(true);
-        await pollOpacity(secondShortcut).toBe("0");
+        await pollCount(picker.locator("kbd")).toBe(0);
         await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
       },
     );

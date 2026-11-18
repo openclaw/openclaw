@@ -167,7 +167,11 @@ export function createSessionRowProjectionFixture(params: {
   const storePath = params.storePath ?? "";
   const rowContext = params.rowContext ?? buildSessionListRowMetadataContext({ now: Date.now() });
   const rows = new Map<string, Row>();
-  const childActivity = createSessionRowChildActivity();
+  const childActivity = createSessionRowChildActivity((link) =>
+    matching({ key: link.key, agentId: link.agentId, storePath: link.storePath }).flatMap(
+      (row) => row.materialized?.source.childLinks ?? [],
+    ),
+  );
   const childVisibility = createSessionRowChildVisibility();
   const revisions = createSessionRowProjectionRevisions(rows, new Map());
   const store = { ...params.store };
@@ -362,6 +366,7 @@ export function createSessionRowProjectionFixture(params: {
         now,
         subagentRuns: options?.subagentRuns ?? rowContext.subagentRuns.atTime(now),
         activeModel: record.fallbackModel,
+        preparedRunState: options?.preparedRunState,
         excludedChildKeys: options?.excludedChildKeys,
         childActivity:
           options?.childActivity ??

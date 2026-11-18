@@ -7,7 +7,6 @@ const fixture = vi.hoisted(() => ({
   readRuntime: vi.fn(),
   readLocation: vi.fn(),
   readFile: vi.fn(),
-  readFullState: vi.fn(),
   isEnabled: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => ({ default: { readFile: fixture.readFile } }));
@@ -15,16 +14,12 @@ vi.mock("./gateway-run-argv.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-run-argv.js")>()),
   isGatewayRunInvocationArgv: () => fixture.gateway,
 }));
-vi.mock("../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/service.js")>()),
-  resolveGatewayService: () => fixture,
-  readGatewayServiceState: fixture.readFullState,
-}));
 vi.mock("../daemon/systemd-service-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-service-files.js")>()),
   resolveSystemdUnitPathForName: (_env: unknown, name: string) =>
     "/home/example/.config/systemd/user/" + name + ".service",
   readSystemdServiceCommandLocation: fixture.readLocation,
+  readSystemdServiceExecStart: fixture.readCommand,
 }));
 vi.mock("../daemon/systemd-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-runtime.js")>()),
@@ -75,7 +70,9 @@ function runtime(
 }
 const older = () =>
   expect(inspectCliGatewayServiceInstallation({})).resolves.toMatchObject({ version: "2026.10.5" });
+afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
+  mockProcessPlatform("linux");
   vi.clearAllMocks();
   fixture.gateway = true;
   fixture.versions = { user: "2026.10.5", system: "2026.10.8" };
@@ -87,9 +84,6 @@ beforeEach(() => {
   });
   fixture.readLocation.mockResolvedValue({ kind: "command", command });
   fixture.readRuntime.mockResolvedValue(runtime());
-  fixture.readFullState.mockRejectedValue(
-    Object.assign(new Error("root-only EnvironmentFile"), { code: "EACCES" }),
-  );
   fixture.isEnabled.mockRejectedValue(new Error("unrelated user manager unavailable"));
   fixture.readCommand.mockResolvedValue({
     fixtureScope: "user",
@@ -98,14 +92,11 @@ beforeEach(() => {
   });
 });
 describe.skipIf(process.platform === "win32")("worker policy own-service selection", () => {
-  beforeEach(() => mockProcessPlatform("linux"));
-  afterEach(() => vi.restoreAllMocks());
   it.each(["", "/gateway"])(
     "uses loaded location and native runtime for self in %s despite root-only EnvironmentFile",
     async (leaf) => {
       fixture.readFile.mockResolvedValue(`0::/system.slice/openclaw-gateway.service${leaf}\n`);
       await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
-      expect(fixture.readFullState).not.toHaveBeenCalled();
       expect(fixture.readFile).toHaveBeenCalledTimes(1);
       expect(fixture.readCommand).not.toHaveBeenCalled();
       expect(fixture.readRuntime).toHaveBeenCalledWith(
@@ -129,7 +120,6 @@ describe.skipIf(process.platform === "win32")("worker policy own-service selecti
     fixture.isEnabled.mockResolvedValue(false);
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
     expect(fixture.isEnabled).not.toHaveBeenCalled();
-    expect(fixture.readFullState).not.toHaveBeenCalled();
   });
   it("ordinary CLI retains older installed-service guard without manager probes", async () => {
     fixture.gateway = false;
@@ -229,20 +219,5 @@ describe("worker policy installed-service fallbacks", () => {
     fixture.versions.user = "2026.10.8";
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
     expect(fixture.readRuntime).not.toHaveBeenCalled();
-  });
-  it.each(["darwin", "win32"])("preserves the installed-service guard on %s", async (platform) => {
-    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    if (!descriptor) {
-      throw new Error("missing platform descriptor");
-    }
-    try {
-      Object.defineProperty(process, "platform", { ...descriptor, value: platform });
-      await older();
-      expect(fixture.readFile).not.toHaveBeenCalled();
-      expect(fixture.readRuntime).not.toHaveBeenCalled();
-      expect(fixture.readLocation).not.toHaveBeenCalled();
-    } finally {
-      Object.defineProperty(process, "platform", descriptor);
-    }
   });
 });

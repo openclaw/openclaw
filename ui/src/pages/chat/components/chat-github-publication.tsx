@@ -423,8 +423,8 @@ function PublicationRefresh(props: {
   return (
     <Errored fallback={operation.error}>
       <openclaw-tooltip
-        content={props.tooltip ?? t("githubPublication.refresh")}
-        prop:disabled={props.hideTooltip}
+        content={props.tooltip ?? ""}
+        prop:disabled={props.hideTooltip || !props.tooltip}
       >
         <button
           ref={(element) => controlRef?.(element)}

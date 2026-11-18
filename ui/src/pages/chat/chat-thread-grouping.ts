@@ -21,6 +21,7 @@ import {
   assistantMessageKind,
 } from "./chat-assistant-reply.ts";
 import { prepareMessagesForGrouping } from "./chat-thread-duplicates.ts";
+import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import { transcriptRunId } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,
@@ -203,13 +204,13 @@ export function groupMessages(
       state = {};
     }
     if (item.kind === "stream") {
-      stateBefore.set(item.key, state);
+      stateBefore.set(item.key, { ...state });
     }
     if (item.kind !== "group") {
       continue;
     }
     for (const source of item.messages) {
-      stateBefore.set(source.key, state);
+      stateBefore.set(source.key, { ...state });
     }
     if (item.role === "user") {
       for (const source of item.messages) {
@@ -269,7 +270,7 @@ export function groupMessages(
   // Rows outside the context (live output) take the state of the next row that
   // has one, or the transcript end.
   const states: ReplyState[] = [];
-  let next = state;
+  let next: ReplyState = state;
   for (let index = result.length - 1; index >= 0; index -= 1) {
     const item = result[index]!;
     const known =
@@ -281,9 +282,21 @@ export function groupMessages(
     next = known ?? next;
     states[index] = next;
   }
+  let previousMessageId: string | undefined;
   for (const [index, item] of result.entries()) {
     const { sender, message, turnSource } = states[index]!;
+    if (item.kind === "group" || item.kind === "stream") {
+      item.replyPreviousMessageId = previousMessageId;
+    }
     if (item.kind === "group") {
+      // Excerpts are redundant only when their source is in the displayed projection.
+      if (item.role === "user" || item.role === "assistant") {
+        for (const source of item.messages) {
+          if (source.hasVisibleContent) {
+            previousMessageId = persistedMessageEntryId(source.message) ?? undefined;
+          }
+        }
+      }
       // Every strip follows the thread: an unattributed source is "You" only in 1:1.
       if (shared) {
         item.replyShared = true;

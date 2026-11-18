@@ -1,0 +1,9 @@
+# Candidate-owned update rehearsal: a new two-sided protocol. The excess covers the
+# updater-side fallback table (nine invalid-result shapes), receipt acknowledgement
+# ordering, liveness and cancellation timing, inconclusive candidate outcomes, and
+# real-subprocess cases for acceptance, fallback, a refused receipt, and custody of
+# an abandoned check process. Review added regressions for a stalled Gateway treated
+# as a refusal (with controls that keep genuine refusals), receipts the updater cannot
+# read or deliver, state-copy commands missing from process custody, and removal of
+# the state copy after the updater stops answering.
+450

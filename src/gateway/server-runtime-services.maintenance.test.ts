@@ -43,11 +43,13 @@ describe("post-ready maintenance scheduling", () => {
     const startMaintenance = vi.fn(async () => null);
     const cron = { start: vi.fn(async () => undefined) };
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    const facts = vi.fn();
     vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
     scheduleGatewayPostReadyMaintenance(
       createPostReadyMaintenanceScheduleParams({
         scheduler,
         waitForPostReadyWork: () => ready.promise,
+        scheduleSessionFactsBackfill: facts,
         startMaintenance,
         cronState: createTestCronState(cron),
       }),
@@ -59,6 +61,7 @@ describe("post-ready maintenance scheduling", () => {
       ready.resolve();
       await pending;
       expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      expect(facts).toHaveBeenCalledOnce();
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
       expect(startMaintenance).toHaveBeenCalledOnce();
       expect(cron.start).toHaveBeenCalledOnce();
@@ -67,6 +70,7 @@ describe("post-ready maintenance scheduling", () => {
       await clock.advanceBy(1_000);
       await clock.advanceBy(1_000);
       expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+      expect(facts).toHaveBeenCalledOnce();
       expect(cron.start).toHaveBeenCalledOnce();
     } finally {
       ready.resolve();

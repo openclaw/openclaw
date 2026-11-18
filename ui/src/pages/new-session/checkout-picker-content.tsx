@@ -1,5 +1,6 @@
 import { createMemo, createSignal, Errored, For, Loading, onSettled, type Element } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { MenuHeading } from "../../components/solid/menu-heading.tsx";
 import { Popover } from "../../components/solid/popover.tsx";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -129,7 +130,7 @@ function WorktreeFields(props: {
     />
   );
   return (
-    <>
+    <div class="new-session-page__checkout-fields">
       <div class="new-session-page__menu-field">
         <span>{t("newSession.worktreeBaseRef")}</span>
         {suggestions().length ? (
@@ -202,15 +203,13 @@ function WorktreeFields(props: {
         )}
       </div>
       <RepositoryRead read={props.params.place.repositoryState.repositoryRead}>
-        {() => (
-          <div class="new-session-page__menu-note">
-            {t(
-              branches()?.branchesUnavailable
-                ? "newSession.worktreeBranchesUnavailable"
-                : "newSession.worktreeBranchesLimited",
-            )}
-          </div>
-        )}
+        {() =>
+          branches()?.branchesUnavailable ? (
+            <div class="new-session-page__menu-note" role="status">
+              {t("newSession.worktreeBranchesUnavailable")}
+            </div>
+          ) : undefined
+        }
       </RepositoryRead>
       {props.params.place.remoteRepository ? undefined : (
         <>
@@ -233,7 +232,7 @@ function WorktreeFields(props: {
           </div>
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -252,7 +251,7 @@ export function CheckoutPickerContent(props: {
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   return (
     <div class="new-session-page__picker-root">
-      <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
+      <MenuHeading class="new-session-page__menu-title" label={t("newSession.checkout")} />
       {repositoryNotice() ? (
         <div class="new-session-page__menu-note" role="status">
           {repositoryNotice()}
@@ -286,7 +285,6 @@ export function CheckoutPickerContent(props: {
                   value: "worktree",
                   label: t("newSession.checkoutWorktree"),
                   icon: <Icon name="gitBranch" />,
-                  sub: t("newSession.checkoutWorktreeSub"),
                   checked: props.params.place.worktree,
                   disabled: !worktreeAvailable(),
                   title: worktreeAvailable()

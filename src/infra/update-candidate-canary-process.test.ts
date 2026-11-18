@@ -3,7 +3,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { launchCanary } from "./update-candidate-canary-process.js";
+import { launchCanary, withCanaryProcessObserver } from "./update-candidate-canary-process.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn<typeof import("node:child_process").spawn>() }));
 // mock-isolation: observe native launch arguments without executing a real Gateway.
@@ -68,4 +68,41 @@ it("routes a CLI target through the standalone command entry", async () => {
     ["gateway", "run"],
     expect.objectContaining({ cwd: root }),
   );
+});
+
+it("reports a check's process to the rehearsal owner and opens stdin only on request", async () => {
+  mocks.spawn.mockImplementationOnce(() => {
+    const child = new ChildProcess();
+    Object.defineProperty(child, "pid", { value: 777 });
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    queueMicrotask(() => child.emit("close", 0, null));
+    return child;
+  });
+  const seen: string[] = [];
+  const launch = (stdin?: "pipe") =>
+    launchCanary({
+      target: { kind: "cli", entryPath: path.join(root, "dist/index.js") },
+      args: ["doctor"],
+      root,
+      env: {},
+      stateDir: root,
+      capture() {},
+      stdin,
+    });
+
+  const observed = withCanaryProcessObserver(
+    { started: (pid) => seen.push(`started ${pid}`), closed: (pid) => seen.push(`closed ${pid}`) },
+    () => launch("pipe"),
+  );
+  expect(seen).toEqual(["started 777"]);
+  await observed.closed;
+  expect(seen).toEqual(["started 777", "closed 777"]);
+  // Outside a rehearsal owner's scope nothing is reported, and stdin stays closed.
+  await launch().closed;
+  expect(seen).toHaveLength(2);
+  expect(mocks.spawn.mock.calls.map((call) => call[2].stdio)).toEqual([
+    ["pipe", "pipe", "pipe"],
+    ["ignore", "pipe", "pipe"],
+  ]);
 });

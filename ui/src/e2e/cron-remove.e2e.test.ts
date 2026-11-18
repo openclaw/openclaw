@@ -57,8 +57,9 @@ suite.define(() => {
       await chooseRemove(page);
       const cancelled = await waitForConfirmModal(page);
       await expect(cancelled.textContent()).resolves.toContain(job.name);
-      await expect(cancelled.textContent()).resolves.toContain("permanently deletes");
-      await expect(cancelled.textContent()).resolves.toContain("stops all future runs");
+      await expect(cancelled.textContent()).resolves.toContain(
+        "This deletes the automation and stops future activity. This can’t be undone.",
+      );
       expect(await cancelled.getByRole("checkbox").count()).toBe(0);
       await expect.poll(async () => gateway.getRequests("cron.remove")).toHaveLength(0);
       await cancelled.getByRole("button", { name: "Cancel" }).click();
@@ -72,14 +73,14 @@ suite.define(() => {
       const socketCount = await gateway.getSocketCount();
       await gateway.closeLatest(1012, "Reconnect during automation removal confirmation");
       await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-      await stale.getByRole("button", { name: "Remove" }).click();
+      await stale.getByRole("button", { name: "Delete" }).click();
       await expect.poll(async () => gateway.getRequests("cron.remove")).toHaveLength(0);
       await waitForControlUiGatewayReady(page);
       await detail.waitFor({ state: "visible", timeout: 10_000 });
       expect(await detail.locator(".cron-detail-title").textContent()).toContain(job.name);
       await chooseRemove(page);
       const stable = await waitForConfirmModal(page);
-      const remove = stable.getByRole("button", { name: "Remove" });
+      const remove = stable.getByRole("button", { name: "Delete" });
       await expect.poll(() => remove.getAttribute("class")).toContain("danger");
       await gateway.setMethodResponse("cron.list", cronListResponse([]));
       await remove.press("Enter");
@@ -89,7 +90,7 @@ suite.define(() => {
       await expect.poll(() => row.count()).toBe(0);
       const search = page.locator('.cron-search-box input[type="search"]');
       expect(await search.evaluate((el) => el === document.activeElement)).toBe(true);
-      await page.getByRole("tab", { name: "Run history", exact: true }).press("Enter");
+      await page.getByRole("tab", { name: "Activity history", exact: true }).press("Enter");
       const create = page.locator(".cron-new-task");
       await create.press("Enter");
       await back.press("Enter");

@@ -130,6 +130,17 @@ export const WorktreesGcResultSchema = closedObject({
   removed: Type.Array(NonEmptyString),
   orphansDeleted: Type.Integer({ minimum: 0 }),
   snapshotsPruned: Type.Integer({ minimum: 0 }),
+  scratch: Type.Optional(
+    closedObject({
+      entriesRemoved: Type.Integer({ minimum: 0 }),
+      bytesRemoved: Type.Integer({ minimum: 0 }),
+      filesRemoved: Type.Integer({ minimum: 0 }),
+      skippedLive: Type.Integer({ minimum: 0 }),
+      scanned: Type.Integer({ minimum: 0 }),
+      deferred: Type.Integer({ minimum: 0 }),
+      errors: Type.Array(Type.String()),
+    }),
+  ),
   gitMaintenance: Type.Optional(
     closedObject({
       repoRoot: NonEmptyString,

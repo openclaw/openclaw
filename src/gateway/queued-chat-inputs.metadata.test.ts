@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveStateDir } from "../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -9,6 +10,7 @@ import {
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -17,11 +19,17 @@ import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { readMentionInbox } from "./mention-inbox.test-support.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+  persistDevices,
+} from "./operator-run-recovery.test-support.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./server-methods/chat-send-pending-inputs.test-support.js";
+import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { persistRunningSessionsForRestart } from "./session-restart-resume.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "./test-helpers.js";
 
@@ -67,6 +75,17 @@ async function createFixture() {
       },
     },
   });
+  const source = await createOperatorRecoveryFixture({
+    stateDir: resolveStateDir(),
+    context: fixture.context,
+    profileId: profile.id,
+    config: getRuntimeConfig(),
+    ...fixture.scope,
+    scopes: ["operator.read", "operator.write", "operator.admin"],
+    device: pairedOperator(),
+  });
+  Object.assign(fixture.client, source.client);
+  fixture.client.internal!.operatorAccessAuthority = null;
   return { fixture, profile };
 }
 
@@ -85,12 +104,88 @@ async function retireOriginalInputs(fixture: Fixture) {
     throw new Error("Expected the queued inputs' physical database");
   }
   return {
+    ...marker,
     target: { ...fixture.scope, storePath: physical.path },
-    queuedInputIds: marker.queuedInputIds,
     signal: new AbortController().signal,
     assertCurrent() {},
   };
 }
+
+it("retains each accepted input's scope ceiling when the same person sends through another source", async () => {
+  const created = await createFixture();
+  await using fixture = created.fixture;
+  const entryLifetime = new GatewayRequestEntryLifetime();
+  fixture.context.requestEntryLifetime = entryLifetime;
+  fixture.client.connect.scopes = ["operator.read", "operator.write"];
+  expectStarted(await fixture.send(undefined, {}));
+  fixture.client.connect.scopes = ["operator.admin"];
+  expectStarted(
+    await fixture.send(
+      undefined,
+      {},
+      {
+        ...fixture.params,
+        idempotencyKey: "independent-admin-input",
+      },
+    ),
+  );
+  entryLifetime.beginClose();
+  const physical = await prepareSqliteScope(fixture.scope);
+  const captured = await captureSessionQueuedInputsForRestart({
+    ...fixture.scope,
+    storePath: physical.path!,
+  });
+  const retained = await retireOriginalInputs(fixture);
+  fixture.context.requestEntryLifetime = new GatewayRequestEntryLifetime();
+  const dispatchedScopes: string[][] = [];
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    const authority = input.replyOptions?.operatorAuthority;
+    expect(authority).toBeDefined();
+    authority?.assertCurrent();
+    dispatchedScopes.push([...(authority?.scopes ?? [])]);
+    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+    return {};
+  });
+  await continueSessionQueuedInputs(fixture.context, retained.target, {
+    ...retained,
+    queuedInputSources: captured.queuedInputSources,
+  });
+  await fixture.finishDispatch();
+  expect(dispatchedScopes).toEqual([["operator.read", "operator.write"], ["operator.admin"]]);
+});
+
+it.each(["missing source", "different run", "revoked device"] as const)(
+  "cancels queued input with %s despite the sender's local administrator role",
+  async (change) => {
+    const created = await createFixture();
+    await using fixture = created.fixture;
+    expectStarted(await fixture.send());
+    const retained = await retireOriginalInputs(fixture);
+    const inputId = retained.queuedInputIds[0]!;
+    if (change === "revoked device") {
+      persistDevices(resolveStateDir(), [], "both");
+    }
+    const original = retained.queuedInputSources![inputId]!;
+    await continueSessionQueuedInputs(fixture.context, retained.target, {
+      ...retained,
+      queuedInputSources:
+        change === "missing source"
+          ? undefined
+          : {
+              [inputId]:
+                change === "different run" ? { ...original, runId: "another-run" } : original,
+            },
+    });
+    await fixture.finishDispatch();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
+      { id: inputId, state: "cancelled" },
+    ]);
+    expect(fixture.context.logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("was not sent after restart"),
+    );
+  },
+);
 
 it("readmits accepted delivery, reply, and runtime intent with the sender's current role", async () => {
   const created = await createFixture();

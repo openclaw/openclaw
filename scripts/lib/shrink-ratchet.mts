@@ -68,6 +68,7 @@ function resolvesCommit(root: string, ref: string) {
   try {
     execFileSync("git", ["rev-parse", "--verify", ref + "^{commit}"], {
       cwd: root,
+      env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
       stdio: "ignore",
     });
     return true;

@@ -59,7 +59,7 @@ it.each([
       timeoutMs: 8_000,
       prompt: params.conversation,
       agentHarnessRuntimeOverride: "openclaw",
-      systemPrompt: expect.stringContaining("Never suggest granting approval"),
+      systemPrompt: expect.stringContaining("Never hand the decision back"),
       authProfileId: choice === "conversation" ? "profile:chosen" : undefined,
     }),
   );

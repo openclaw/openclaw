@@ -173,6 +173,7 @@ it.each([32, 44])(
       createGateway({} as GatewayBrowserClient),
       harness.sessions,
     );
+    sidebar.setSessionSortMode("created");
     const scroller = sizeSidebar(sidebar, 240);
     sidebar
       .querySelector<HTMLElement>(".sidebar-shell")!
@@ -275,6 +276,7 @@ it("omits offscreen categories while retaining selected rows across scrolling", 
     createGateway({} as GatewayBrowserClient),
     harness.sessions,
   );
+  sidebar.setSessionSortMode("created");
   const scroller = sizeSidebar(sidebar, 240);
   scroller.style.height = "180px";
   sidebar.sessionsGrouping = "category";
@@ -370,10 +372,10 @@ it.each(["chip", "roster"] as const)(
     for (let update = 1; update <= 3; update++) {
       const refreshed = {
         ...result,
-        sessions: roster.result!.sessions.map((row) =>
+        sessions: roster.result!.sessions.map((row, index) =>
           Object.assign({}, row, {
             label: row.label + " " + update,
-            updatedAt: 1000 + update,
+            updatedAt: 1000 + update + index,
             lastMessagePreview: "Progress update " + update,
           }),
         ),

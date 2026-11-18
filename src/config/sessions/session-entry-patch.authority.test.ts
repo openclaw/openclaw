@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -26,7 +28,10 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: History eviction is independent of the live mutation authority being tested.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 
 it.each([false, true])(
   "creates an entry and patches its admitted read target (creation witness: %s)",
@@ -54,16 +59,99 @@ it.each([false, true])(
         if (!target) {
           throw new Error("Session read did not return its admitted target");
         }
+        const stat = vi.spyOn(fs, "statSync");
+        syncBuiltinESMExports();
+        const admissionStats: number[] = [];
+        const createAdmission = admission.createSqliteWorkerOperationAdmission;
+        vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+          (callback, attachment) =>
+            createAdmission((request, grant) => {
+              stat.mockClear();
+              const result = callback(request, grant);
+              admissionStats.push(stat.mock.calls.length);
+              return result;
+            }, attachment),
+        );
         const updated = { sessionId: entry.sessionId, label: "updated through read target" };
         await expect(
           patchSessionEntryTarget(target, () => ({ label: updated.label }), {
             skipMaintenance: true,
           }),
         ).resolves.toMatchObject(updated);
+        expect(admissionStats.length).toBeGreaterThan(0);
+        expect(admissionStats.every((count) => count === 0)).toBe(true);
         await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(updated);
+        if (!target.readSource) {
+          throw new Error("Session read did not capture its physical source");
+        }
+        await expect(
+          patchSessionEntryTarget(
+            {
+              ...target,
+              readSource: {
+                ...target.readSource,
+                databaseBirthtime: `${target.readSource.databaseBirthtime}1`,
+              },
+            },
+            () => ({ label: "must not commit" }),
+            { skipMaintenance: true },
+          ),
+        ).rejects.toThrow();
       } finally {
         await creator.release();
       }
+    });
+  },
+);
+
+// Windows SQLite handles do not permit renaming an open database.
+it.skipIf(process.platform === "win32").each(["transaction", "commit"] as const)(
+  "refuses physical replacement while awaiting the native %s grant",
+  async (replaceAt) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const original = f.read();
+      const retiredPath = `${f.database.path}.retired`;
+      const replacement = Buffer.from("synthetic replacement must remain untouched");
+      let replaced = false;
+      const committed = vi.fn();
+      const createAdmission = admission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (callback, attachment) =>
+          createAdmission((request, grant) => {
+            const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+            if (
+              !replaced &&
+              request.stage === replaceAt &&
+              isRecord(publication) &&
+              typeof publication.kind === "string" &&
+              publication.kind.startsWith("session-entry-patch-")
+            ) {
+              fs.renameSync(f.database.path, retiredPath);
+              fs.writeFileSync(f.database.path, replacement);
+              replaced = true;
+            }
+            return callback(request, grant);
+          }, attachment),
+      );
+      try {
+        await expect(
+          patchInternalSessionEntry(f.scope, () => ({ label: "must not commit" }), {
+            workerGuard: {},
+            skipMaintenance: true,
+            onCommitted: committed,
+          }),
+        ).rejects.toThrow();
+        expect(replaced).toBe(true);
+        expect(committed).not.toHaveBeenCalled();
+        expect(fs.readFileSync(f.database.path)).toEqual(replacement);
+      } finally {
+        if (replaced) {
+          fs.unlinkSync(f.database.path);
+          fs.renameSync(retiredPath, f.database.path);
+        }
+      }
+      expect(f.read()).toEqual(original);
     });
   },
 );

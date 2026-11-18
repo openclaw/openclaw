@@ -25,6 +25,7 @@ import {
   publishModelRuntimeSnapshot,
   rebindInputToCommittedConfiguredOwner,
   resolveConfiguredOwner,
+  resolveInventoryInput,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeOwner,
@@ -338,10 +339,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       );
     }
 
-    // Gateway inventory belongs to the configured agent; the session cwd only controls execution.
-    const inventoryInput = context.getGatewayLifecycleActive()
-      ? { ...input, workspaceDir: configuredOwner?.input.workspaceDir }
-      : input;
+    const inventoryInput = resolveInventoryInput(input, configuredOwner);
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&

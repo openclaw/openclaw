@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -109,6 +109,24 @@ async function keepRailAnchored(page: Page, count: number, direction: string) {
   const bounds = () => track.evaluate((element) => element.getBoundingClientRect().toJSON());
   const collapsed = await bounds();
   const transcriptBounds = (await transcript.boundingBox())!;
+  const contentEdges = await transcript.evaluate((element) => {
+    const left = element.getBoundingClientRect().left + element.clientLeft;
+    return { left, right: left + element.clientWidth };
+  });
+  expect(
+    direction === "rtl" ? contentEdges.right - collapsed.right : collapsed.left - contentEdges.left,
+  ).toBeCloseTo(4, 1);
+  expect((await markers.first().boundingBox())!.height).toBe(10);
+  if (count > 1) {
+    const [first, second] = await markers.evaluateAll((elements) =>
+      elements.slice(0, 2).map((element) => ({
+        top: element.getBoundingClientRect().top,
+        index: Number(element.parentElement!.getAttribute("aria-posinset")),
+      })),
+    );
+    assert(first && second, "Expected two rendered rail markers");
+    expect((second.top - first.top) / (second.index - first.index)).toBe(10);
+  }
   expect(collapsed.left).toBeGreaterThanOrEqual(transcriptBounds.x);
   expect(collapsed.right).toBeLessThanOrEqual(transcriptBounds.x + transcriptBounds.width);
   const collapsedComposer = (await composer.boundingBox())!;

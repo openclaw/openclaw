@@ -36,11 +36,7 @@ import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
 import { resolveCodexAppServerFallbackApiKeyCacheKey } from "./auth-cache-key.js";
 import { releaseCodexAppServerLiveThread } from "./client-runtime.js";
 import { CodexAppServerRpcError, CodexAppServerClient } from "./client.js";
-import {
-  readCodexPluginConfig,
-  resolveCodexAppServerRuntimeOptions,
-  resolveCodexSupervisionAppServerRuntimeOptions,
-} from "./config.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { flattenSpecsWithNamespace } from "./dynamic-tools.test-support.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
@@ -48,10 +44,7 @@ import { CodexAppServerEventProjector } from "./event-projector.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
-import {
-  buildCodexAppServerConnectionFingerprint,
-  buildCodexPluginAppCacheKey,
-} from "./plugin-app-cache-key.js";
+import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 import {
   appInfo,
@@ -112,6 +105,7 @@ import {
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
+import { writeExistingBinding } from "./run-attempt.existing-binding.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
 import { registerCodexUsageLimitTests } from "./run-attempt.usage-limits.test-support.js";
 import { registerCodexWorkspacePolicyTests } from "./run-attempt.workspace-policy.test-support.js";
@@ -151,36 +145,6 @@ import { buildDeveloperInstructions } from "./thread-prompt.js";
 import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
-
-const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
-  "features.standalone_web_search": false,
-  web_search: "disabled",
-});
-
-async function writeExistingBinding(
-  sessionFile: string,
-  workspaceDir: string,
-  overrides: Partial<Parameters<typeof writeCodexAppServerBinding>[1]> = {},
-) {
-  const supervisionFingerprint =
-    overrides.connectionScope === "supervision" && !overrides.appServerRuntimeFingerprint
-      ? buildCodexAppServerConnectionFingerprint(
-          resolveCodexSupervisionAppServerRuntimeOptions({
-            pluginConfig: { supervision: { enabled: true } },
-          }),
-        )
-      : undefined;
-  await writeCodexAppServerBinding(sessionFile, {
-    threadId: "thread-existing",
-    cwd: workspaceDir,
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    historyCoveredThrough: new Date().toISOString(),
-    webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
-    ...(supervisionFingerprint ? { appServerRuntimeFingerprint: supervisionFingerprint } : {}),
-    ...overrides,
-  });
-}
 
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
@@ -427,7 +391,7 @@ function createGoogleCalendarRequest(
     }
     if (method === "config/read") {
       expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
-      return { config: {}, layers: [] };
+      return { config: {}, origins: {}, layers: [] };
     }
     if (
       method === "app/installed" &&
@@ -583,7 +547,8 @@ async function runSettledFailureClientReplacementTest(
   );
   const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
   await failedThreadRead.promise;
-  await vi.advanceTimersByTimeAsync(2_000);
+  // Codex's 10s unload confirmation window (thread-lifecycle-adoption.ts).
+  await vi.advanceTimersByTimeAsync(10_000);
   const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",
@@ -805,7 +770,7 @@ describe("runCodexAppServerAttempt", () => {
         : { enabled: true, backendId: "codex-test-sandbox", workspaceAccess: "rw" };
       const request = vi.fn(async (method: string, _requestParams?: unknown) => {
         if (method === "config/read") {
-          return execServer ? { config: {}, origins: {}, layers: [] } : { config: {}, layers: [] };
+          return { config: {}, origins: {}, layers: [] };
         }
         if (execServer && method === "configRequirements/read") {
           return { requirements: null };
@@ -1505,7 +1470,7 @@ describe("runCodexAppServerAttempt", () => {
     params.onAgentEvent = onAgentEvent;
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "config/read") {
-        return { config: {}, layers: [] };
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "configRequirements/read") {
         return { requirements: null };
@@ -1740,6 +1705,11 @@ describe("runCodexAppServerAttempt", () => {
       const hookInput = JSON.stringify(event);
       expect(hookInput).toContain("previous visible request");
       expect(hookInput).not.toContain(marker);
+      // The rebuild after thread start reports the projected history it now carries.
+      expect(hook.mock.calls.map((call) => (call as unknown[])[0])).toEqual([
+        expect.objectContaining({ continuity: { state: "fresh", history: "none" } }),
+        expect.objectContaining({ continuity: { state: "fresh", history: "included" } }),
+      ]);
     } finally {
       parseSpy.mockRestore();
       cloneSpy.mockRestore();
@@ -2141,6 +2111,12 @@ describe("runCodexAppServerAttempt", () => {
   );
 
   it("projects only newer visible history when a resumed Codex binding is stale", async () => {
+    const hook = vi.fn(() => undefined);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_prompt_build", requiresToolAuthority: true, handler: hook },
+      ]),
+    );
     const { sessionFile, workspaceDir, params } = createRunFixture();
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const bindingUpdatedAt = await bindingTimestamp(sessionFile);
@@ -2174,6 +2150,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("is the previous message trustworthy?");
     expect(inputText).not.toContain("old native-owned context");
+    expect(hook).toHaveBeenCalledWith(
+      expect.objectContaining({ continuity: { state: "resumed", history: "included" } }),
+      expect.anything(),
+    );
   });
   it("sizes stale-binding resume continuity from the session's recorded density", async () => {
     const { sessionFile, workspaceDir, params } = createRunFixture();
@@ -2341,8 +2321,8 @@ describe("runCodexAppServerAttempt", () => {
     setAgentWorkspaceForTest(params, workspaceDir);
     const harness = createStartedThreadHarness();
     const result = await finishRun(runCodexAppServerAttempt(params), harness);
-    const threadDeveloperInstructions =
-      getRequestParams(harness.requests, "thread/start")?.developerInstructions ?? "";
+    const threadStart = getRequestParams(harness.requests, "thread/start");
+    const threadDeveloperInstructions = threadStart?.developerInstructions ?? "";
     const collaborationInstructions =
       getRequestParams(harness.requests, "turn/start")?.collaborationMode?.settings
         ?.developer_instructions ?? "";
@@ -2374,7 +2354,9 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(inputText).toBe("hello");
-    expect(systemPromptReport.systemPrompt.chars).toBe(threadDeveloperInstructions.length);
+    expect(systemPromptReport.systemPrompt.chars).toBe(
+      `${threadStart?.baseInstructions}\n\n${threadDeveloperInstructions}`.length,
+    );
     const fileStats = new Map(
       systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),
     );

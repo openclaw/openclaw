@@ -442,7 +442,7 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
         },
         (result) => {
           const request = requireFirstSynthesisRequest("utf16 truncated TTS request");
-          const spokenText = String(request.text);
+          const spokenText = request.text;
           expect(spokenText).toBe(`${"a".repeat(7)}...`);
           expect(result.spokenText).toBe(spokenText);
         },

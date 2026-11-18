@@ -250,13 +250,31 @@ describe("full release execution plan", () => {
       ],
     });
     writeFileSync(gh, "#!/bin/sh\nprintf '%s\\n' 'HTTP 503: Service unavailable' >&2\nexit 1\n");
+    const clock = join(root, "retry-clock.mjs");
+    const sleeps = join(root, "retry-sleeps.txt");
+    writeFileSync(
+      clock,
+      `import { appendFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import timers from "node:timers/promises";
+let now = Date.now();
+Date.now = () => now;
+timers.setTimeout = async (delay) => {
+  now += delay;
+  appendFileSync(${JSON.stringify(sleeps)}, delay + "\\n");
+};
+syncBuiltinESMExports();
+`,
+    );
     const unavailable = runPlanSubprocess(
       { childPhaseVersion: 3, childReuse },
       {
+        NODE_OPTIONS: `--import=${pathToFileURL(clock).href}`,
         PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
       },
     );
     expect(unavailable.result.status).toBe(2);
+    expect(readFileSync(sleeps, "utf8")).toBe("2000\n4000\n8000\n");
     expect(JSON.parse(readFileSync(unavailable.output, "utf8"))).toMatchObject({
       blockers: [],
       errors: [expect.objectContaining({ kind: "api_error" })],
@@ -818,7 +836,7 @@ describe("full release execution plan", () => {
     });
   });
 
-  it("does not require candidate acquisition when reusing release evidence", () => {
+  it("routes candidate acquisition for fresh qualified packages but not reused evidence", () => {
     expect(
       plan({
         candidateAcquisitionResult: "skipped",
@@ -831,6 +849,16 @@ describe("full release execution plan", () => {
       required: false,
       result: "skipped",
     });
+
+    const result = plan({
+      candidateRequired: true,
+      childPhaseVersion: 3,
+      rerunGroup: "qualified-package",
+    });
+    const selected = result.children.filter((entry) => entry.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.key).toBe("releaseChecksCandidate");
+    expect(result.gates.at(-1)?.required).toBe(true);
   });
 
   it("retains every required artifact qualification result as a parent gate", () => {

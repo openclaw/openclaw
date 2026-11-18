@@ -67,14 +67,14 @@ describe("chat model controls", () => {
     searchFor(search, "anth");
 
     const visibleOptions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
+      container.querySelectorAll<HTMLElement>("[data-chat-model-option]"),
     ).filter((option) => !option.hidden);
     expect(visibleOptions.map((option) => option.dataset.chatModelOption)).toEqual([
       "anthropic/claude-sonnet-4-6",
       "google/gemini-2.5-pro",
       "google/unavailable",
     ]);
-    expect(visibleOptions[2]?.disabled).toBe(true);
+    expect(visibleOptions[2]?.getAttribute("aria-disabled")).toBe("true");
     expect(
       visibleOptions[0]?.querySelector(".chat-controls__model-option-provider"),
     ).not.toBeNull();

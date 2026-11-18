@@ -217,7 +217,7 @@ describe("agents_wait", () => {
     const result = await runUntilCompleted({
       execTool,
       waitTool,
-      code: 'const [wait] = await catalog.search("agents_wait"); const description = await wait.describe(); const file = await API.read("tools/agents_wait.d.ts"); const result = await wait({ids:["ready"],timeoutSeconds:0}); return {description, file, ids:result.completed.map(item=>item.runId), structured:result.completed[0].structured};',
+      code: 'const [wait] = await catalog.search("agents_wait"); const description = await wait.describe({ includeRarelyNeededOutputSchema: true }); const file = await API.read("tools/agents_wait.d.ts"); const result = await wait({ids:["ready"],timeoutSeconds:0}); return {description, file, ids:result.completed.map(item=>item.runId), structured:result.completed[0].structured};',
     });
     expect(result).toMatchObject({
       status: "completed",

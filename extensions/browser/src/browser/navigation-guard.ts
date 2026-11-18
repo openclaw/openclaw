@@ -11,6 +11,7 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/security-runtime";
+import { isOperatorOnlyBrowserPageUrl } from "./cdp-target-filter.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
@@ -53,6 +54,8 @@ export type BrowserNavigationPolicyOptions = {
   browserProxyMode?: BrowserNavigationProxyMode;
   /** Live authority for an invocation-scoped navigation exception. */
   assertNavigationCurrent?: () => void;
+  /** Operator's Control UI request opening a new tab; never set for agent or CLI callers. */
+  allowOperatorPages?: true;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -67,10 +70,14 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: Pick<BrowserNavigationPolicyOptions, "browserProxyMode" | "assertNavigationCurrent">,
+  opts?: Pick<
+    BrowserNavigationPolicyOptions,
+    "browserProxyMode" | "assertNavigationCurrent" | "allowOperatorPages"
+  >,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.allowOperatorPages ? { allowOperatorPages: true } : {}),
     ...(opts?.assertNavigationCurrent
       ? { assertNavigationCurrent: opts.assertNavigationCurrent }
       : {}),
@@ -114,7 +121,10 @@ export async function assertBrowserNavigationAllowed(
   const parsed = parseBrowserNavigationUrl(opts.url);
 
   if (!NETWORK_NAVIGATION_PROTOCOLS.has(parsed.protocol)) {
-    if (isAllowedNonNetworkNavigationUrl(parsed)) {
+    if (
+      isAllowedNonNetworkNavigationUrl(parsed) ||
+      (opts.allowOperatorPages === true && isOperatorOnlyBrowserPageUrl(parsed.href))
+    ) {
       return;
     }
     throw new InvalidBrowserNavigationUrlError(
@@ -226,6 +236,7 @@ export async function assertBrowserNavigationRedirectChainAllowed(
       ssrfPolicy: opts.ssrfPolicy,
       browserProxyMode: opts.browserProxyMode,
       assertNavigationCurrent: opts.assertNavigationCurrent,
+      allowOperatorPages: opts.allowOperatorPages,
       signal: opts.signal,
     });
   }

@@ -121,7 +121,7 @@ describe("Search settings", () => {
     });
     await waitForSolid(() =>
       expect(page.element.querySelector('[role="alert"]')?.textContent).toContain(
-        "Search settings are not ready",
+        "Couldn’t load search settings",
       ),
     );
     expect(page.input("Search query")).toBeNull();
@@ -141,7 +141,7 @@ describe("Search settings", () => {
     page.click("Refresh search status");
     await waitForSolid(() =>
       expect(page.element.querySelector('[role="alert"]')?.textContent).toContain(
-        "Search settings are not ready",
+        "Couldn’t load search settings",
       ),
     );
     expect(page.input("Search query")).toBe(query);
@@ -455,7 +455,7 @@ describe("Search settings", () => {
         }
       }
       await page.settle();
-      page.expectText(outcome === "success" ? "Search succeeded" : "Search failed");
+      page.expectText(outcome === "success" ? "Search succeeded" : "Couldn’t search. Try again.");
       expect(query.disabled).toBe(false);
       expect(page.calls("webSearch.test")[0]?.[1]).toMatchObject({ query: "Query A" });
       if (outcome === "success") {
@@ -603,12 +603,21 @@ describe("Search configuration lifecycle", () => {
       apiKey: { type: "string", title: "Example API key" },
     });
     if (options.advanced) {
+      const group = (title: string, properties: JsonSchema["properties"]): JsonSchema => ({
+        type: "object",
+        title,
+        additionalProperties: false,
+        properties,
+      });
       Object.assign(
         (schema.properties ??= {}),
         schemaAt(searchPath, {
           enabled: { type: "boolean" },
           provider: { type: "string" },
           maxResults: { type: "integer", title: "Result limit", default: 5 },
+          openaiCodex: group("OpenAI Codex", {
+            userLocation: group("User location", { city: { type: "string", title: "City" } }),
+          }),
         }).properties,
       );
     }
@@ -721,6 +730,23 @@ describe("Search configuration lifecycle", () => {
         ? atPath(endpointPath, value)
         : atPath([...searchPath, "maxResults"], Number(value));
     expect(JSON.parse(submitted.raw)).toMatchObject(expected);
+    page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
+    await page.runtime.flushFormChanges();
+  });
+
+  it("gives nested advanced settings their own rows", async () => {
+    const page = await mount({ advanced: true });
+    page.element.querySelector<HTMLDetailsElement>("details")!.open = true;
+    const label = "OpenAI Codex: User location: City";
+    const row = page.input(label).closest(".settings-row--stacked-on-narrow")!;
+    expect(row.querySelector(".settings-row__title")?.textContent).toBe(label);
+    expect(row.querySelectorAll("input")).toHaveLength(1);
+    expect(row.textContent!.split(label)).toHaveLength(2);
+    page.edit(label, "Bengaluru");
+    const submitted = await page.writeStarted.promise;
+    expect(JSON.parse(submitted.raw)).toMatchObject(
+      atPath([...searchPath, "openaiCodex", "userLocation", "city"], "Bengaluru"),
+    );
     page.save.resolve({ config: JSON.parse(submitted.raw), hash: "saved-2" });
     await page.runtime.flushFormChanges();
   });

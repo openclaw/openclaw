@@ -24,6 +24,7 @@ import {
   readSessionActorTransactionState,
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
+import { createSessionTranscriptActiveFactsInserter } from "./session-transcript-active-facts.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -36,6 +37,7 @@ import {
 import {
   prepareSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionState,
+  type TranscriptIndexAppend,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
 import {
@@ -55,13 +57,6 @@ type TranscriptIndexDatabase = Pick<
 
 export type { SessionTranscriptProjectionState } from "./session-transcript-projection-append.js";
 
-type TranscriptIndexAppend = {
-  seq: number;
-  event: unknown;
-  eventId: string | null;
-  createdAt: number;
-};
-
 type SessionTranscriptIndexProjectionRow =
   PreparedSessionTranscriptProjection["activeRows"][number] & {
     ftsEntry?: TranscriptIndexEntry;
@@ -78,6 +73,7 @@ export type SessionTranscriptIndexProjection = {
 // work near a 250 ms event-loop stall and leave larger projections to the reconcile worker.
 export const SYNC_REBUILD_MAX_ROWS = 4_000;
 export const SYNC_REBUILD_MAX_BYTES = 4 * 1024 * 1024;
+const REBUILD_FTS_BATCH_MAX_BYTES = 256 * 1024;
 
 function getIndexKysely(db: EngineConnection) {
   return getNodeSqliteKysely<TranscriptIndexDatabase>(db);
@@ -272,6 +268,7 @@ function createActiveEventInserter(db: EngineConnection, sessionId: string) {
         ),
     );
   const inserts = new Map<number, ReturnType<typeof prepare>>();
+  const insertFacts = createSessionTranscriptActiveFactsInserter(db, sessionId);
   return (rows: readonly ActiveRow[]) => {
     for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
       const chunk = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
@@ -279,7 +276,10 @@ function createActiveEventInserter(db: EngineConnection, sessionId: string) {
       if (!inserts.has(chunk.length)) {
         inserts.set(chunk.length, write);
       }
-      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(chunk));
+      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
+        write(chunk);
+        insertFacts(chunk);
+      });
     }
   };
 }
@@ -605,6 +605,7 @@ function rebuildSessionTranscriptIndexInTransaction(db: EngineConnection, sessio
   const pendingActiveRows: PreparedSessionTranscriptProjection["activeRows"] = [];
   const insertFts = createSessionTranscriptFtsInserter(db, sessionId);
   const pendingFtsRows: TranscriptIndexEntry[] = [];
+  let pendingFtsBytes = 0;
   const projection = visitSessionTranscriptProjection(db, sessionId, {
     activeRow: (row) => {
       pendingActiveRows.push(row);
@@ -614,11 +615,19 @@ function rebuildSessionTranscriptIndexInTransaction(db: EngineConnection, sessio
       }
     },
     ftsRow: (row) => {
-      pendingFtsRows.push(row);
-      if (pendingFtsRows.length === TRANSCRIPT_INSERT_BATCH_SIZE) {
+      const bytes = Buffer.byteLength(row.text);
+      // Bound retained payloads, not just row count; oversized messages remain whole.
+      if (
+        pendingFtsRows.length &&
+        (pendingFtsRows.length === TRANSCRIPT_INSERT_BATCH_SIZE ||
+          pendingFtsBytes + bytes > REBUILD_FTS_BATCH_MAX_BYTES)
+      ) {
         insertFts(pendingFtsRows);
         pendingFtsRows.length = 0;
+        pendingFtsBytes = 0;
       }
+      pendingFtsRows.push(row);
+      pendingFtsBytes += bytes;
     },
   });
   insertActive(pendingActiveRows);

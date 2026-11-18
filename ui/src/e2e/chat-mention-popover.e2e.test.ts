@@ -26,10 +26,10 @@ async function openComposer(page: Page, route: string, users: MentionUser[]) {
       : controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"),
   );
   await e2e.waitForGatewayRecoveryScope(page);
-  const textarea = page.locator(
-    route === "new" ? ".new-session-page__message" : ".agent-chat__composer-combobox textarea",
+  const composer = page.locator(
+    route === "new" ? ".new-session-page__composer" : ".agent-chat__composer-combobox",
   );
-  return { gateway, textarea };
+  return { gateway, input: composer.getByRole("textbox"), rawValue: composer.locator("textarea") };
 }
 
 suite.define(() => {
@@ -51,39 +51,48 @@ suite.define(() => {
           });
         });
         try {
-          const { textarea } = await openComposer(page, route, [
+          const { input, rawValue } = await openComposer(page, route, [
             { profileId, displayName: "Casey Vale", avatarUrl, online: true },
           ]);
-          await textarea.pressSequentially("@Casey");
+          await input.pressSequentially("@Casey");
           const menu = page.getByRole("listbox", { name: "Mention a person" });
           await e2e.pollCount(menu.getByRole("option")).toBe(1);
           await expect.poll(() => requests).toEqual([avatarUrl]);
-          await textarea.press("Enter");
-          await e2e.pollValue(textarea).toBe("@Casey Vale ");
-          const avatar = page.locator(
-            '.composer-context-strip__person .chat-author-avatar[aria-label="Casey Vale"]',
-          );
-          const initials = avatar.locator(".chat-author-avatar__initials");
-          await expect.poll(() => initials.isVisible()).toBe(true);
-          expect((await initials.textContent())?.trim()).toBe("CV");
+          await input.press("Enter");
+          await e2e.pollValue(rawValue).toBe("@Casey Vale ");
+          const mention = input.locator(".chat-composer-mention");
+          expect(await mention.getAttribute("data-profile-id")).toBe(profileId);
+          const avatar = mention.locator(".markdown-person-reference__avatar");
+          await expect
+            .poll(() => avatar.evaluate((element) => getComputedStyle(element, "::after").content))
+            .toBe('"CV"');
           const size = () =>
             avatar.evaluate((element) => {
               const { width, height } = element.getBoundingClientRect();
               return { width, height };
             });
           const pendingSize = await size();
-          expect(pendingSize).toEqual({ width: 16, height: 16 });
+          const fontSize = await avatar.evaluate((element) =>
+            Number.parseFloat(getComputedStyle(element).fontSize),
+          );
+          expect(pendingSize).toEqual({ width: fontSize + 2, height: fontSize + 2 });
           releasePhoto();
           await expect
             .poll(() =>
               avatar.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth),
             )
             .toBeGreaterThan(0);
-          expect(await initials.isVisible()).toBe(true);
+          expect(await avatar.locator("img").isVisible()).toBe(true);
           expect(
             await avatar.locator("img").evaluate((image) => {
               const { x, y, width, height } = image.getBoundingClientRect();
-              return document.elementFromPoint(x + width / 2, y + height / 2) === image;
+              const avatarBounds = image.parentElement!.getBoundingClientRect();
+              const hit = document.elementFromPoint(x + width / 2, y + height / 2);
+              return (
+                width === avatarBounds.width &&
+                height === avatarBounds.height &&
+                image.closest(".chat-composer-mention")!.contains(hit)
+              );
             }),
           ).toBe(true);
           expect(await size()).toEqual(pendingSize);
@@ -110,8 +119,8 @@ suite.define(() => {
         }));
         const lastPerson = users.at(-1);
         assert(lastPerson, "The mention fixture must include a selectable person.");
-        const { gateway, textarea } = await openComposer(page, route, users);
-        await textarea.pressSequentially("@");
+        const { gateway, input, rawValue } = await openComposer(page, route, users);
+        await input.pressSequentially("@");
         await gateway.waitForRequest("users.mentionable");
         const menu = page.getByRole("listbox", { name: "Mention a person" });
         const options = menu.getByRole("option");
@@ -125,7 +134,7 @@ suite.define(() => {
           expect(await options.filter({ hasText: person.displayName }).count()).toBe(1);
         }
 
-        await textarea.press("ArrowUp");
+        await input.press("ArrowUp");
         const last = options.last();
         await e2e.pollAttribute(last, "aria-selected").toBe("true");
         const viewports = [{ width: 1440, height: 900 }];
@@ -135,8 +144,8 @@ suite.define(() => {
         for (const viewport of viewports) {
           await page.setViewportSize(viewport);
           // Re-enter the last option so its owner scrolls after the viewport changes.
-          await textarea.press("ArrowDown");
-          await textarea.press("ArrowUp");
+          await input.press("ArrowDown");
+          await input.press("ArrowUp");
           await expect
             .poll(() =>
               last.evaluate((element) => {
@@ -153,12 +162,12 @@ suite.define(() => {
         }
         await last.hover();
         expect(await last.textContent()).not.toContain(lastPerson.profileId.slice(-8));
-        await textarea.press("Enter");
-        await e2e.pollValue(textarea).toBe(`@${lastPerson.displayName} `);
+        await input.press("Enter");
+        await e2e.pollValue(rawValue).toBe(`@${lastPerson.displayName} `);
         await e2e.pollCount(menu).toBe(0);
-        expect(await page.locator(".chat-reply-preview").textContent()).toContain(
-          lastPerson.displayName,
-        );
+        const mention = input.locator(".chat-composer-mention");
+        expect(await mention.textContent()).toContain(lastPerson.displayName);
+        expect(await mention.getAttribute("data-profile-id")).toBe(lastPerson.profileId);
       }),
   );
 });

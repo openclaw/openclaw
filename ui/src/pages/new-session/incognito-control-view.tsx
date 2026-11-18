@@ -35,7 +35,7 @@ function VisibilityToggle(props: {
   const description = () =>
     draft()
       ? t("newSession.draftDescription")
-      : (reason() ?? t("sessionsView.incognitoDescription"));
+      : (reason() ?? t("sessionsView.incognitoDescriptionTooltip"));
   const toggleClass = () => `new-session-page__${props.mode}-toggle`;
   return (
     <openclaw-tooltip prop:content={description()}>

@@ -12,8 +12,34 @@ import {
   readConnectErrorRecoveryAdvice as recoveryAdvice,
   readConnectPairingRequiredMessage as readPairingMessage,
   readPairingConnectErrorDetails as readPairingDetails,
+  gatewayOperatorAccessError,
+  readGatewayOperatorAccessClose,
   resolveAuthConnectErrorDetailCode as authCode,
 } from "./connect-error-details.js";
+
+it("keeps the longest access diagnostic within the WebSocket close reason budget", () => {
+  const error = gatewayOperatorAccessError("access-record-inactive");
+  expect(new TextEncoder().encode(error.message).byteLength).toBeLessThanOrEqual(123);
+  expect(readGatewayOperatorAccessClose(4001, error.message)).toMatchObject({
+    message: error.message,
+    retryable: false,
+    details: { code: "OPERATOR_ACCESS_DENIED", accessCause: "access-record-inactive" },
+  });
+  expect(readGatewayOperatorAccessClose(1008, error.message)).toBeNull();
+});
+
+it("keeps uncoded access denial terminal without guessing its cause or stopping unrelated policy recovery", () => {
+  expect(
+    readGatewayOperatorAccessClose(
+      4001,
+      "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.",
+    ),
+  ).toMatchObject({
+    retryable: false,
+    details: { accessCause: "policy-check-failed" },
+  });
+  expect(readGatewayOperatorAccessClose(4001, "gateway auth changed")).toBeNull();
+});
 
 const pairingDetails = { code: "PAIRING_REQUIRED", reason: "scope-upgrade", requestId: "req-123" };
 const protocolDetails = {

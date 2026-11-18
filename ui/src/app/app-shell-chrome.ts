@@ -93,6 +93,7 @@ export interface ShellChromeHost
   readonly updateComplete: Promise<boolean>;
   readonly queryRenderedElement: (tagName: string) => Element | null;
   navDrawerOpen: boolean;
+  readonly initialConnectionPending?: boolean;
   desktopNavigationExpanded: boolean;
   navDrawerTrigger: HTMLElement | null;
   setNativeHistoryState(state: NativeHistoryState): void;
@@ -191,6 +192,7 @@ export class ShellChromeOwner {
     if (
       !context ||
       host.onboardingMode ||
+      (host.initialConnectionPending && isMobileNavLayout()) ||
       (isSettingsTakeover(host.routeState.routeId) && !isMobileNavLayout())
     ) {
       return;

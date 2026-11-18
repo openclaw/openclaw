@@ -43,6 +43,7 @@ export type CronCompactJob = Pick<
     | "lastTriggerEvalAtMs"
     | "runningAtMs"
     | "autoDisabled"
+    | "admissionDeferred"
     | "lastDelivered"
     | "lastDeliveryStatus"
     | "lastDeliveryError"

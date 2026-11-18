@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
   type WorkerTaskHandler,
+  type SynchronousWorkerTaskHandler,
 } from "@openclaw/worker-runtime/worker";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
@@ -30,7 +31,7 @@ export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output, Input = unknown>(
-  handler: WorkerTaskHandler<Output, Input>,
+  handler: WorkerTaskHandler<Output, Input> | SynchronousWorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
@@ -41,9 +42,12 @@ export function serveWorkerTasks<Output, Input = unknown>(
   serveOwnedWorkerTasks(handler, options);
 }
 
-/** Every served worker closes its agent database readers by path between tasks; owners may add more. */
+/**
+ * Every served worker closes its agent database readers by path, between tasks except for
+ * deleted-agent closes and revives; owners may add more.
+ */
 export function serveOwnedWorkerTasks<Output, Input = unknown>(
-  handler: WorkerTaskHandler<Output, Input>,
+  handler: WorkerTaskHandler<Output, Input> | SynchronousWorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
@@ -86,28 +90,38 @@ export function serveOwnedWorkerTasks<Output, Input = unknown>(
       : run();
   };
   serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(
-    (input, channel, control) =>
-      withSqliteDatabaseAdmissionWait(
-        {
-          deadlineAtMs: databaseAdmissionDeadlineAtMs,
-          assertActive: () => control.throwIfCancelled(),
-        },
-        () =>
-          runWithTaskContext(async () => {
-            const result = await handler(input, channel, control);
-            // Some handlers encode database failures as results; their dead endpoints
-            // still require the same retirement as a thrown transport failure.
-            const failure = postgresPoolWorkerFailure();
-            if (failure) {
-              throw failure;
-            }
-            return result;
-          }),
-      ),
+    typeof handler !== "function"
+      ? handler
+      : (input, channel, control) =>
+          withSqliteDatabaseAdmissionWait(
+            {
+              deadlineAtMs: databaseAdmissionDeadlineAtMs,
+              assertActive: () => control.throwIfCancelled(),
+            },
+            () =>
+              runWithTaskContext(async () => {
+                const result = await handler(input, channel, control);
+                // Some handlers encode database failures as results; their dead endpoints
+                // still require the same retirement as a thrown transport failure.
+                const failure = postgresPoolWorkerFailure();
+                if (failure) {
+                  throw failure;
+                }
+                return result;
+              }),
+          ),
     {
       ...options,
       get retireOnError() {
         return options.retireOnError || postgresPoolWorkerFailure() !== undefined;
+      },
+      // The deletion fence is set before these closers run and matches only the deleted agent's
+      // paths. A running read of that agent (an auth-profile or catalog read, for example) then
+      // fails visibly instead of holding agents.delete behind it; the usual running task is
+      // another agent's catalog build, which can take up to 180 s.
+      closesBesideExecution: (key) => {
+        const request = decodeAgentDatabaseReaderRequest(key);
+        return request?.kind === "revive" || (request?.kind === "close" && request.deleted);
       },
       closeResource: (key) =>
         runWithTaskContext(async () => {

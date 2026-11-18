@@ -244,7 +244,16 @@ function resolveBaseline(
     );
   }
   const sha = row[0]!;
-  git(rootDir, "fetch", "--no-tags", "origin", ref);
+  const shallow = git(rootDir, "rev-parse", "--is-shallow-repository").trim() === "true";
+  git(
+    rootDir,
+    "fetch",
+    "--no-tags",
+    "--refmap=",
+    ...(shallow ? ["--filter=blob:none", "--depth=1"] : []),
+    "origin",
+    ref,
+  );
   if (git(rootDir, "rev-parse", "FETCH_HEAD").trim() !== sha) {
     throw new Error(`Release source mapping changed while reading ${ref}.`);
   }

@@ -9,11 +9,15 @@ import {
 } from "./discovery-worker-contract.js";
 
 const worker = vi.hoisted(() => ({
-  read: undefined as ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) | undefined,
+  read: undefined as
+    | ((input: SkillsDiscoveryInput) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>)
+    | undefined,
 }));
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
-  serveWorkerTasks: (read: (input: SkillsDiscoveryInput) => SkillsDiscoveryOutput) => {
+  serveWorkerTasks: (
+    read: (input: SkillsDiscoveryInput) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>,
+  ) => {
     worker.read = read;
   },
 }));
@@ -28,6 +32,10 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => {
 // mock-isolation: Skill scans do not read or validate interactive preview bundles.
 vi.mock("../loading/plugin-skill-bundle.js", () => {
   throw new Error("Skill discovery must not load plugin skill preview readers");
+});
+// mock-isolation: Ordinary skill scans do not need status cards or registry links.
+vi.mock("../discovery/status-files.js", () => {
+  throw new Error("Skill scans must not load status readers");
 });
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -45,7 +53,7 @@ it("scans workspace and prepared plugin skills without loading metadata discover
   if (!worker.read) {
     throw new Error("Discovery worker did not register its task handler");
   }
-  const result = worker.read({
+  const result = await worker.read({
     kind: "scan",
     path: "",
     requests: [
@@ -94,7 +102,7 @@ it("scans workspace and prepared plugin skills without loading metadata discover
     ],
   });
 
-  const plan = worker.read({
+  const plan = await worker.read({
     kind: "plan",
     input: {
       workspaceDir,

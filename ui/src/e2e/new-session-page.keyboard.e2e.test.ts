@@ -32,9 +32,7 @@ suite.define(() => {
     });
     await page.goto(suite.server.baseUrl + "new");
     await page.locator("#new-session-checkout-trigger").click();
-    await page
-      .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
-      .click();
+    await page.getByRole("button", { name: "New worktree", exact: true }).click();
     await page.keyboard.press("Escape");
     const editor = page.locator(".new-session-page__message");
     const composer = page.locator(".new-session-page__composer");
@@ -74,6 +72,29 @@ suite.define(() => {
         ).toBe(true);
       }
     }
+
+    await page.evaluate(() => {
+      Object.defineProperty(window.visualViewport!, "height", { configurable: true, value: 600 });
+      Object.defineProperty(window.visualViewport!, "offsetTop", {
+        configurable: true,
+        value: 274,
+      });
+      window.visualViewport!.dispatchEvent(new Event("resize"));
+    });
+    await editor.fill("A longer first prompt.\n".repeat(20));
+    await waitForLayoutSettled(page, ".new-session-page__composer");
+    expect((await editor.boundingBox())!.height).toBeGreaterThan(48);
+    const roomyBox = (await composer.boundingBox())!;
+    expect(roomyBox.y).toBeGreaterThanOrEqual(274);
+    expect(roomyBox.y + roomyBox.height).toBeLessThanOrEqual(274 + 600);
+    expect(
+      await send.evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return element.contains(
+          document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2),
+        );
+      }),
+    ).toBe(true);
 
     await page.evaluate(() => {
       for (const key of ["height", "offsetTop"]) {

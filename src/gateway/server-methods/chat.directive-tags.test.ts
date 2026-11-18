@@ -2882,13 +2882,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     "delivers a settled fallback only while its writer remains current (replaced=%s)",
     async (replaced) => {
       await createTranscriptFixture("openclaw-chat-send-settled-fallback-");
-      const idempotencyKey = "run-settled:settled-finalization-fallback";
+      const idempotencyKey = `${mockState.agentRunId}:settled-finalization-fallback`;
       const text =
         "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
       await appendSourceReplyMirrorEntry({ idempotencyKey, text });
       mockState.sessionEntry = {
         lifecycleRevision: "revision-a",
-        activeWriterRunId: "run-settled",
+        activeWriterRunId: mockState.agentRunId,
       };
       await seedSqliteSessionEntry(mockState.sessionEntry);
       if (replaced) {
@@ -2911,14 +2911,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           agentId: "main",
           expectedLifecycleRevision: "revision-a",
           expectedSessionId: mockState.sessionId,
-          expectedWriterRunId: "run-settled",
+          expectedWriterRunId: mockState.agentRunId,
           sessionKey: "main",
           storePath: mockState.storePath,
         },
       });
       setAgentRunReplies([reply]);
       const { context, send } = createChatRequestFixture();
-      await send({ idempotencyKey: "idem-settled-fallback", waitFor: "dedupe" });
+      await send({ idempotencyKey: mockState.agentRunId, waitFor: "dedupe" });
       if (replaced) {
         expect(context.broadcast).not.toHaveBeenCalled();
         expect(context.nodeSendToSession).not.toHaveBeenCalled();
@@ -4309,10 +4309,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("leaves ACP bridge user persistence to the agent runtime", async () => {
+  it("persists ACP bridge photos as durable user-turn media", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-acp-images-");
     mockState.triggerAgentRunStart = true;
-    setSavedMediaResults(["/tmp/should-not-be-used.png", "image/png"]);
+    setSavedMediaResults(["/tmp/acp.png", "image/png", "acp.png"]);
     await createChatRequestFixture().send({
       idempotencyKey: "idem-user-transcript-acp-images",
       message: "bridge image",
@@ -4332,16 +4332,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
+    // The bridge defers its commit to the agent runtime, so the resolved user turn is
+    // the durable record the Control UI reloads. Only the managed claim survives there:
+    // the staged path and the uploaded bytes stay out, and the model still receives the
+    // photo exactly once, from the inline prompt image.
     await waitForAssertion(() => {
-      expect(mockState.savedMediaCalls).toStrictEqual([]);
-      expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual(
-        createExpectedAcpUserTurn({
-          content: "bridge image",
-          idempotencyKey: "idem-user-transcript-acp-images:user",
-          provenance: { kind: "external_user" },
-        }),
-      );
+      const userTurn = mockState.lastDispatchUserTurnInput as { content?: unknown } | undefined;
+      const claim = [expect.objectContaining({ url: "media://inbound/acp.png", kind: "image" })];
+      expect(mockState.savedMediaCalls).toHaveLength(1);
+      expect(mockState.lastDispatchImages).toHaveLength(1);
+      expect(userTurn?.content).toBe("bridge image");
+      expectClaimOnlyTranscriptMedia(userTurn, claim, ["/tmp/acp.png"]);
     });
   });
 

@@ -99,10 +99,21 @@ export class ComposerDictationSession {
       this.options && "inputDeviceId" in this.options
         ? this.options.inputDeviceId
         : loadSettings().realtimeTalkInputDeviceId?.trim() || undefined;
+    // Start the audio graph while the browser opens the microphone instead of
+    // after it. Microphone errors still win; stopCapture() closes the context.
+    try {
+      this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
+    } catch {
+      this.context = null;
+    }
     const media = await this.input.open(inputDeviceId);
     if (this.stopped) {
       return;
     }
+    if (this.context?.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
+      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
+    }
+    const context = this.context;
     this.unsubscribe = this.client.addEventListener((frame) => {
       const payload = eventPayload(frame);
       if (
@@ -139,19 +150,11 @@ export class ComposerDictationSession {
         this.reportFailure(t("chat.composer.dictationDisconnected"));
       }
     });
-    try {
-      this.context = new AudioContext({ sampleRate: DICTATION_SAMPLE_RATE_HZ });
-    } catch {
-      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
-    }
-    if (this.context.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
-      throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
-    }
     if (this.callbacks.onLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
-      this.inputMeter.start(media, this.context);
+      this.inputMeter.start(media, context);
     }
-    this.inputPump.start(media, this.context, (samples) => {
+    this.inputPump.start(media, context, (samples) => {
       if (this.stopped) {
         return;
       }

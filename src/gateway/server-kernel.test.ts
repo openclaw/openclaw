@@ -219,7 +219,7 @@ describe("createGatewayKernel", () => {
           await server.startupSettled;
         } else {
           kernel = await createGatewayKernel(port, options);
-          kernel.kernel.unlockStartupMethods();
+          await kernel.kernel.unlockStartupMethods();
           kernel.kernel.markSidecarsReady();
           kernel.kernel.setDispatchReady(true);
         }
@@ -407,7 +407,7 @@ describe("createGatewayKernel", () => {
         ok: true,
         payload: { runId, status: "ok" },
       });
-      kernel.kernel.unlockStartupMethods();
+      await kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
       expect(getReadiness()).toMatchObject(notReady);
@@ -416,7 +416,7 @@ describe("createGatewayKernel", () => {
         ok: true,
         status: "started",
       });
-      expectCoreAgentDatabaseReadiness(getReadiness, state);
+      await expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(dispatch("chat.send", chatParams)).resolves.toEqual({ runId, status: "ok" });
 
       const { promise: firstStop, resolve: releaseFirstStop } = createDeferred();

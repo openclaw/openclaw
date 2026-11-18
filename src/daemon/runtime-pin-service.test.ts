@@ -29,7 +29,10 @@ const native = vi.hoisted(() => ({
   loaded: vi.fn(),
   runtime: vi.fn(),
   stop: vi.fn(),
+  start: vi.fn(),
+  restart: vi.fn(),
 }));
+// mock-isolation: Keep native launchd reads and mutations outside the synthetic service fixture.
 vi.mock("./launchd.js", () => ({
   installLaunchAgent: native.install,
   stageLaunchAgent: native.stage,
@@ -38,8 +41,8 @@ vi.mock("./launchd.js", () => ({
   isLaunchAgentEnabled: vi.fn(),
   isLaunchAgentLoaded: native.loaded,
   readLaunchAgentRuntime: native.runtime,
-  restartLaunchAgent: vi.fn(),
-  startLaunchAgent: vi.fn(),
+  restartLaunchAgent: native.restart,
+  startLaunchAgent: native.start,
   stopLaunchAgent: native.stop,
 }));
 vi.mock("../infra/tmp-openclaw-dir.js", () => ({
@@ -59,6 +62,8 @@ vi.mock("../infra/gateway-supervision.js", () => ({
 }));
 beforeEach(() => {
   native.command = null;
+  native.start.mockReset();
+  native.restart.mockReset();
   native.loaded.mockReset().mockResolvedValue(true);
   native.runtime.mockReset().mockResolvedValue({ status: "running" });
   native.stop.mockReset().mockImplementation(async (args: Service.GatewayServiceControlArgs) => {
@@ -81,7 +86,6 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
-
 function pinFixture(env: NodeJS.ProcessEnv, kind: "gateway" | "node") {
   const scope = { kind, env };
   const pin = { runtime: "node" as const, path: "/runtime/node" };
@@ -145,6 +149,19 @@ async function withoutSnapshots(run: () => Promise<void>) {
     snapshots.mockRestore();
   }
 }
+it.for(["start", "restart"] as const)(
+  "keeps pending pin migration out of unchanged service %s",
+  async (action, { state }) => {
+    const service = resolveGatewayService();
+    native.command = gatewayCommand("/runtime/node");
+    expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
+    await service[action]({ env: state.env, stdout: process.stdout, preserveDefinition: true });
+    expect(native[action]).toHaveBeenCalledOnce();
+    expect(native.command).toEqual(gatewayCommand("/runtime/node"));
+    expect(readDaemonRuntimePinMigrationPending(state.env)).toBe(true);
+    expect(fs.existsSync(state.statePath("state", "openclaw.sqlite"))).toBe(false);
+  },
+);
 it.for(["gateway", "node"] as const)(
   "admits pending migration before %s uninstall",
   async (kind, { state }) => {

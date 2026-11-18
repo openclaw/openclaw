@@ -1,7 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createPendingSteerLookup, type PendingSteer } from "../chat-pending-inputs.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { createChatMessageHarness, buildItems } from "./chat-message-render.test-support.tsx";
@@ -15,6 +17,10 @@ import {
 } from "./chat-message.test-support.ts";
 
 const harness = createChatMessageHarness();
+it("labels unnamed agent replies with the localized product noun", () => {
+  harness.renderAssistantMessage(createAssistantMessage("Ready"), { assistantName: undefined });
+  expect(harness.elementText(".chat-sender-name")).toBe("Agent");
+});
 const {
   render,
   renderStreamGroup,
@@ -70,6 +76,105 @@ it.each([
 });
 
 describe("grouped chat rendering", () => {
+  const steerInput = (steerNow: { status: "available" | "blocked"; tools: string[] }) => ({
+    id: "steer",
+    runId: "send",
+    acceptedAt: 1,
+    state: "queued" as const,
+    message: {},
+    steerNow,
+  });
+  const renderSteer = (steer: PendingSteer, canSteer = true) =>
+    renderGroupedMessage(createUserMessage("Use the shorter approach."), "user", {
+      pendingSteer: () => steer,
+      onSteerNow: canSteer ? vi.fn() : undefined,
+      onRewind: vi.fn(),
+    });
+  it.each([
+    { tools: [], canSteer: true, reason: "on the next model turn" },
+    { tools: ["upload"], canSteer: true, reason: "when the current step finishes" },
+    { tools: [], canSteer: false, reason: "when the current step finishes", available: true },
+    { tools: [], canSteer: true, reason: "on the next model turn", queued: true },
+  ])(
+    "labels the newest waiting steer in its footer slot (%j)",
+    ({ tools, canSteer, reason, available, queued }) => {
+      const status = available ? "available" : "blocked";
+      renderSteer(
+        {
+          ...steerInput({ status, tools }),
+          queued: queued || undefined,
+          newest: true,
+          sendNow: available || undefined,
+        },
+        canSteer,
+      );
+      const label = requireElement(
+        ".chat-group-footer .chat-steer-now [role=status]",
+        HTMLSpanElement,
+      );
+      expect(label.textContent).toBe(queued ? "Queued" : "Steering…");
+      expect(label.getAttribute("aria-label")).toBe(
+        queued ? "Queued" : `Steering — sends ${reason}.`,
+      );
+      expect(label.title).toBe(label.getAttribute("aria-label"));
+      expectAbsent(".chat-steer-now button");
+      // Identity, time and actions follow delivery.
+      expectAbsent(".chat-group-footer-actions");
+      expectAbsent(".chat-group-footer__meta");
+    },
+  );
+  it("offers Send now only on the newest sendable steer", () => {
+    renderSteer({ ...steerInput({ status: "available", tools: [] }), sendNow: true });
+    expectPresent(".chat-group-footer .chat-steer-now button");
+    expectAbsent(".chat-steer-now [role=status]");
+  });
+  it.each([
+    { name: "an earlier steer", steer: steerInput({ status: "blocked", tools: ["upload"] }) },
+    {
+      name: "the newest when an earlier steer carries Send now",
+      steer: {
+        ...steerInput({ status: "blocked", tools: ["upload"] }),
+        newest: true,
+        deferToSendNow: true,
+      },
+    },
+  ] as const)("shows no steer row for $name", ({ steer }) => {
+    renderSteer(steer);
+    expectPresent(".chat-group-footer");
+    expectAbsent(".chat-steer-now");
+    expectAbsent(".chat-group-footer-actions");
+  });
+  it("keeps the delivered user footer", () => {
+    renderGroupedMessage(createUserMessage("Use the shorter approach."), "user", {
+      onRewind: vi.fn(),
+    });
+    expectPresent(".chat-group-footer .chat-group-footer-actions");
+    expectAbsent(".chat-steer-now");
+  });
+  it("assigns one steer row across steers waiting together", () => {
+    const input = (id: string, acceptedAt: number, status: "available" | "blocked") => ({
+      ...steerInput({ status, tools: status === "blocked" ? ["exec"] : [] }),
+      id,
+      runId: `run-${id}`,
+      acceptedAt,
+    });
+    const lookup = createPendingSteerLookup([
+      input("a", 1, "available"),
+      input("b", 2, "available"),
+      input("c", 3, "blocked"),
+    ]);
+    const row = (id: string) => {
+      const steer = lookup?.({
+        role: "user",
+        content: "x",
+        id: `${CHAT_PENDING_INPUT_MESSAGE_PREFIX}${id}`,
+      });
+      return { newest: steer?.newest, sendNow: steer?.sendNow, defer: steer?.deferToSendNow };
+    };
+    expect(row("a")).toEqual({ newest: undefined, sendNow: undefined, defer: undefined });
+    expect(row("b")).toEqual({ newest: undefined, sendNow: true, defer: undefined });
+    expect(row("c")).toEqual({ newest: true, sendNow: undefined, defer: true });
+  });
   function applyNotice(
     host: ReturnType<typeof createHost>,
     seq: number,
@@ -345,7 +450,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-group--reply")).not.toBeNull();
   });
 
-  it("morphs one assistant turn from working status to its terminal recap", () => {
+  it("settles one assistant turn without a token recap", () => {
     const message = createAssistantMessage("First result is ready.", { timestamp: 1_000 });
 
     renderAssistantMessage(message, {
@@ -362,19 +467,11 @@ describe("grouped chat rendering", () => {
     // The footer row is reserved but empty until the turn settles.
     expect(element(".chat-group-footer")?.childElementCount).toBe(0);
 
-    renderAssistantMessage(message, {
-      turnRecap: { runtimeMs: 4 * 3_600_000 + 2 * 60_000, outputTokens: 1 },
-    });
+    renderAssistantMessage(message);
 
     expectCount(".chat-group.assistant", 1);
     expectAbsent(".chat-working-indicator");
-    // Usage leads and the duration follows, matching the live indicator's order.
-    expect(
-      Array.from(element(".chat-turn-recap--continuation")!.children, (child) =>
-        child.textContent?.trim(),
-      ),
-    ).toEqual(["1 output token", "·", "Done in 4 hours, 2 minutes"]);
-    expectAbsent(".chat-turn-recap__claw");
+    expectAbsent(".chat-turn-recap");
     expectPresent(".chat-group-footer");
   });
 

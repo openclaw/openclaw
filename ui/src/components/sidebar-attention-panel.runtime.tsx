@@ -1,4 +1,4 @@
-import { createMemo, For, Match, onSettled, Show, Switch } from "solid-js";
+import { createMemo, createSignal, For, Match, onSettled, Show, Switch } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -16,6 +16,7 @@ import {
   sharedAgentsProjection,
   sharedSessionsRevision,
 } from "../lib/reactive/shared-application-projections.ts";
+import { createTimeout } from "../lib/reactive/timers.ts";
 import { registerModalSurface } from "./overlay-registry.ts";
 import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
@@ -328,12 +329,28 @@ export function SidebarAttentionPanel(
       : []),
   ]);
   const mentionsTab = createMemo(() => props.selectedTab === "mentions");
-  const showMentionStatus = createMemo(
+  const mentionsShown = createMemo(
     () =>
       gateway.read().snapshot.phase === "connected" &&
-      (mentionsTab() || props.selectedTab === "all") &&
+      (mentionsTab() || props.selectedTab === "all"),
+  );
+  // Loading stands in only for an empty list; loaded rows stay put while mentions refresh.
+  const mentionsLoading = createMemo(
+    () => mentionsShown() && mentions.read().phase === "loading" && visibleEntries().length === 0,
+  );
+  // Fast loads settle before the indicator appears, so it never flashes; each load re-arms it.
+  const [loadingDue, setLoadingDue] = createSignal(() => {
+    mentionsLoading();
+    return false;
+  });
+  createTimeout(
+    () => setLoadingDue(true),
+    () => (mentionsLoading() ? 300 : undefined),
+  );
+  const showMentionStatus = createMemo(
+    () =>
+      mentionsShown() &&
       (mentions.read().error !== null ||
-        mentions.read().phase === "loading" ||
         (mentionsTab() && mentions.read().phase === "unavailable")),
   );
   const tabCounts = createMemo(() => sidebarInboxTabCounts(props.entries));
@@ -460,9 +477,7 @@ export function SidebarAttentionPanel(
                     {t(
                       mentions.read().error !== null
                         ? "attention.mentions.error"
-                        : mentions.read().phase === "loading"
-                          ? "attention.mentions.loading"
-                          : "attention.mentions.unavailable",
+                        : "attention.mentions.unavailable",
                     )}
                   </span>
                   <Show when={mentions.read().error !== null}>
@@ -479,7 +494,15 @@ export function SidebarAttentionPanel(
                   </Show>
                 </div>
               </Show>
-              <Show when={visibleEntries().length === 0 && !showMentionStatus()}>
+              <Show when={mentionsLoading() && loadingDue()}>
+                <div class="sidebar-issues-panel__loading" role="status">
+                  <span class="btn__spinner" aria-hidden="true" />
+                  <span class="sr-only">{t("attention.mentions.loading")}</span>
+                </div>
+              </Show>
+              <Show
+                when={visibleEntries().length === 0 && !mentionsLoading() && !showMentionStatus()}
+              >
                 <div class="sidebar-issues-panel__empty">
                   <strong>
                     {t(mentionsTab() ? "attention.mentions.emptyTitle" : "attention.emptyTitle")}

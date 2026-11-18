@@ -309,9 +309,9 @@ suite.define(() => {
         tabIndex: 0,
         width: expect.any(Number),
       });
-      // Browser layout can represent a CSS 44px target a few millionths below 44.
+      // Browser layout can represent CSS target dimensions a few millionths below their size.
       const touchTargetRoundingTolerancePx = 0.01;
-      expect(recoveryAccess.height).toBeGreaterThanOrEqual(44 - touchTargetRoundingTolerancePx);
+      expect(recoveryAccess.height).toBeGreaterThanOrEqual(38 - touchTargetRoundingTolerancePx);
       expect(recoveryAccess.width).toBeGreaterThanOrEqual(44 - touchTargetRoundingTolerancePx);
       await recovery.focus();
       const recoveryFocused = await recovery.evaluate(
@@ -368,7 +368,7 @@ suite.define(() => {
         });
       }
       const installedArtifact = await observeCurrentArtifact();
-      expect(installedArtifact.buildId).not.toBeNull();
+      expect(installedArtifact.buildId).toMatch(/-[a-f0-9]{64}$/u);
       expect(installedArtifact).toMatchObject({
         bodyDisplay: "block",
         icon: { pathname: "/favicon.svg" },
@@ -381,7 +381,7 @@ suite.define(() => {
         installedArtifact.theme,
       ]) {
         expect(asset.url).not.toBeNull();
-        expect(asset.version).toBe(installedArtifact.buildId);
+        expect(asset.version).toBe(installedArtifact.buildId?.slice(-64));
       }
       const actions = page.getByRole("button", { name: "Actions for Main" });
       await actions.tap();

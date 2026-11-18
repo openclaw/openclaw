@@ -387,7 +387,7 @@ it("aggregates selected tokens while counting actual loaded message roles", () =
   const breakdown = texts(container, ".timeseries-breakdown .legend-item").map((value) =>
     value?.replaceAll(/\s+/g, " "),
   );
-  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache Write 5", "Cache Read 12"]);
+  expect(breakdown).toEqual(["Output 20", "Input 10", "Cache write 5", "Cache read 12"]);
   expect(text(container, ".timeseries-breakdown .cost-breakdown-total")).toContain("47");
 
   const full = mount(points, data);
@@ -445,7 +445,7 @@ it.each(["tool", "user"] as const)("keeps stale counts independent of %s and sea
     {},
   ]);
   expect(container.querySelectorAll(".session-log-entry")).toHaveLength(role === "user" ? 1 : 0);
-  expect(text(container, ".usage-detail-error--conversation")).toContain("Showing stale data");
+  expect(text(container, ".usage-detail-error--conversation")).toContain("Showing last known data");
 });
 
 it("counts repeated assistant calls without counting toolResult results in the selected range", () => {
@@ -502,8 +502,8 @@ it("renders detail request failure messages without retry buttons", () => {
   });
 
   for (const [kind, message] of [
-    ["timeline", "Could not load usage over time: timeline unavailable"],
-    ["conversation", "Could not load conversation: logs unavailable"],
+    ["timeline", "Couldn’t load usage over time. Try again. timeline unavailable"],
+    ["conversation", "Couldn’t load conversation. Try again. logs unavailable"],
   ]) {
     const error = container.querySelector(`.usage-detail-error--${kind}`);
     expect(error?.textContent).toContain(message);
@@ -546,7 +546,7 @@ it("keeps loaded details visible and marks them stale after refresh failures", a
       expect(container.textContent).toContain("retained message");
       expect(container.textContent).toContain("undated message");
       expect(container.textContent).toContain(
-        locale === "en" ? "Showing stale data" : t("common.staleData"),
+        locale === "en" ? "Showing last known data" : t("common.staleData"),
       );
       const timestamps = [...container.querySelectorAll(".session-log-meta > span:nth-child(2)")];
       expect(timestamps.map((element) => element.textContent)).toEqual([

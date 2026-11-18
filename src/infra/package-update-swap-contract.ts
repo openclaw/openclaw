@@ -20,6 +20,8 @@ export type PackageUpdateTransaction = {
   backupRoot: string;
   /** Capture root outside journal retirement; cleared when snapshots must be retained. */
   databaseBackupRoot?: string;
+  /** Drops server-side captures; retirement calls it before removing the snapshot root. */
+  discardDatabaseCaptures?: () => Promise<void>;
   assertRollbackSafe?: () => Promise<void>;
   rollback: (
     assertCurrent: () => void,

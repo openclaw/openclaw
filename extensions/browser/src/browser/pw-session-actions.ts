@@ -306,8 +306,7 @@ export async function listPagesViaPlaywright(opts: {
   if (timeoutMs !== undefined) {
     timer = setTimeout(() => {
       controller.abort(new Error(`Playwright page enumeration timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    timer.unref?.();
+    }, timeoutMs).unref();
   }
   const signal = controller.signal;
   try {
@@ -512,6 +511,7 @@ export async function createPageViaPlaywright(
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
     assertNavigationCurrent: opts.assertNavigationCurrent,
+    allowOperatorPages: opts.allowOperatorPages,
   });
   await assertBrowserNavigationAllowed({
     url: targetUrl,

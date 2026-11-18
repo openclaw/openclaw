@@ -2,6 +2,9 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
+import type { ToolCardOutput } from "../../../lib/chat/tool-cards.ts";
+import type { InlineCommandPresentation } from "../chat-inline-command-presentation.ts";
+import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRowContext } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -43,6 +46,8 @@ export type ToolRenderOptions = {
   presented?: boolean;
   mediaReadAllowed?: boolean;
   runActive?: boolean;
+  inlineCommands?: InlineCommandPresentation;
+  toolMessageSource?: ChatToolMessageSource;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onPermissionRetry?: (message: string) => void;
@@ -53,6 +58,7 @@ export type ToolRenderOptions = {
 export function toolResultSurfaceProps(
   card: ToolCard,
   options: Pick<ToolRenderOptions, "sessionKey" | "agentId"> & { expanded: boolean },
+  output?: ToolCardOutput,
 ): ControlUiSurfaceProps["tool-result"] {
   return {
     sessionKey: options.sessionKey ?? "",
@@ -61,7 +67,7 @@ export function toolResultSurfaceProps(
     toolCallId: card.callId ?? card.id,
     input: card.args,
     output: {
-      text: card.outputText,
+      text: output ? output.outputText : card.outputText,
       details: card.details,
       isError: card.isError,
       completed: card.completed,

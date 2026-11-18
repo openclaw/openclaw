@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import OpenClawKit
+import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -116,7 +118,64 @@ private func transientVerificationErrorResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingDashboardHandoffTests {
-    @Test func `fresh inference connection finishes onboarding once`() {
+    @Test(
+        .enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil),
+        arguments: ["primary", "browser", "node"])
+    func `node and browser completion do not offer primary Gateway actions`(completion: String) async throws {
+        let output = try OnboardingRenderTests.outputDirectory()
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.isPaused = true
+        let view = OnboardingView(state: state)
+        if completion == "browser" { view.savedBrowserGatewayName = "Fixture browser Gateway" }
+        if completion == "node" { view.finishState.connectionCompletion = .node("Fixture node Gateway") }
+        _ = AppKitTestSupport.application
+        let hosting = NSHostingView(rootView: view.readyPage()
+            .frame(width: OnboardingView.windowWidth, height: OnboardingView.windowHeight)
+            .environment(\.locale, Locale(identifier: "en_US")))
+        hosting.setFrameSize(hosting.fittingSize)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer {
+            window.contentView = nil
+            window.close()
+        }
+        hosting.layoutSubtreeIfNeeded()
+        let elements = try await AppKitTestSupport.accessibilityElements(in: hosting)
+        let names = elements.flatMap { element -> [String] in
+            let value: Any? = element.accessibilityValue?()
+            return [element.accessibilityLabel?(), AppKitTestSupport.accessibilityTitle(of: element), value as? String]
+                .compactMap(\.self)
+        }
+        try #require(names.contains("You’re all set!"))
+        #expect(names.contains("Gateway added") == (completion == "browser"))
+        #expect(names.contains("Node setup complete") == (completion == "node"))
+        #expect(names.contains("Open Dashboard → Settings → Channels") == (completion == "primary"))
+        #expect(names.contains("Open Dashboard → Skills") == (completion == "primary"))
+        if completion != "primary" {
+            try OnboardingRenderTests.capturePage(
+                view.readyPage(),
+                name: "done-\(completion)",
+                label: "Native page · \(completion) completion fixture · navigation omitted",
+                output: output)
+        }
+    }
+
+    @Test func `saving a primary route clears browser completion and restores AI verification`() {
+        let state = AppState(preview: true)
+        state.connectionMode = .remote
+        let view = OnboardingView(state: state, aiSetupRouteIdentityProvider: { nil })
+        view.savedBrowserGatewayName = "Fixture browser Gateway"
+        #expect(!view.pageOrder.contains(view.aiPageIndex))
+        view.didSaveRemoteConnection()
+        #expect(view.savedBrowserGatewayName == nil)
+        #expect(view.pageOrder.contains(view.aiPageIndex))
+        #expect(!view.aiSetup.connected)
+        view.configuredGatewayProbe.invalidate()
+    }
+
+    @Test func `fresh inference waits for the optional native steps before finishing once`() {
         let state = AppState(preview: true)
         state.connectionMode = .local
         var handoffs: [OnboardingDashboardHandoff] = []
@@ -127,6 +186,9 @@ struct OnboardingDashboardHandoffTests {
         view.prepareSystemAgentHandoff()
         view.aiSetup.onConnected?()
 
+        #expect(!view.finishState.didFinish)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(view.finishState.didFinish)
         // Fresh connections own the remaining first-run steps via the custodian.
         #expect(handoffs == [.custodianOnboarding])
@@ -252,6 +314,9 @@ struct OnboardingDashboardHandoffTests {
             #expect(OnboardingSystemAgentResumeStore.activationOwner(for: "local", defaults: defaults) == nil)
         } else {
             #expect(view.aiSetup.connected)
+            #expect(!view.finishState.didFinish)
+            #expect(handoffs.isEmpty)
+            #expect(view.finish())
             #expect(view.finishState.didFinish)
             #expect(handoffs == [utility ? .custodianOnboarding : .dashboard])
             #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
@@ -306,6 +371,9 @@ struct OnboardingDashboardHandoffTests {
 
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "existing-model")
+        #expect(!view.finishState.didFinish)
+        #expect(handoffs.isEmpty)
+        #expect(view.finish())
         #expect(view.finishState.didFinish)
         #expect(handoffs == [.dashboard])
         #expect(!view.finish())
@@ -558,6 +626,9 @@ struct OnboardingDashboardHandoffTests {
         } else {
             #expect(aiSetup.connected)
             #expect(!aiSetup.verifiedExistingInference)
+            #expect(!view.finishState.didFinish)
+            #expect(handoffs.isEmpty)
+            #expect(view.finish())
             #expect(view.finishState.didFinish)
             #expect(handoffs == [.custodianOnboarding])
             #expect(OnboardingSystemAgentResumeStore.pendingState(

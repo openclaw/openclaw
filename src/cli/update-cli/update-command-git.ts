@@ -64,6 +64,7 @@ import { readPackageUpdateIdentity } from "./update-command-package-identity.js"
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
+import { assessSnapshotCapacityOfferingCleanup } from "./update-snapshot-space-cleanup.js";
 
 export async function retireStandaloneGitWrapper(params: {
   previousRoot: string;
@@ -442,16 +443,21 @@ export async function updateGitInstall(params: {
     const { config, env } = await params.getSnapshotSource();
     const backupProject =
       installTarget && resolveNativePackageProjectRoot(installTarget, installEnv);
-    const snapshot = await assessInitialUpdateSnapshotCapacity({
-      config,
-      stateDir: resolveStateDir(env),
-      env,
-      backupDirectory: params.switchToGit
-        ? backupProject
-          ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
-          : (installTarget?.globalRoot ?? path.dirname(params.root))
-        : path.join(params.root, ".artifacts"),
-    });
+    // An interactive update was offered cleanup before it started; here it is only named.
+    const snapshot = await assessSnapshotCapacityOfferingCleanup(
+      () =>
+        assessInitialUpdateSnapshotCapacity({
+          config,
+          stateDir: resolveStateDir(env),
+          env,
+          backupDirectory: params.switchToGit
+            ? backupProject
+              ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
+              : (installTarget?.globalRoot ?? path.dirname(params.root))
+            : path.join(params.root, ".artifacts"),
+        }),
+      { prompt: false, env, print: () => {} },
+    );
     await reportUpdateStepCompletion(params.progress, { ...snapshot, index: 0, total: 0 });
     assertCurrent?.();
     if (snapshot.exitCode !== 0) {

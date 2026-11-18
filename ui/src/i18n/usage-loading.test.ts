@@ -35,7 +35,7 @@ describe("Usage English loading", () => {
       usage: { presets: { today: "Heute" } },
     }));
     const details = en.usage.details;
-    expect(manager.t("usage.heatmap.title")).toBe("Token Activity");
+    expect(manager.t("usage.heatmap.title")).toBe("Token activity");
     expect(manager.t("usage.details.collapse")).toBe("Collapse");
     expect(manager.t("usage.details.noUsageData")).toBe("usage.details.noUsageData");
     expect(manager.t("usage.scope.instance")).toBe("usage.scope.instance");

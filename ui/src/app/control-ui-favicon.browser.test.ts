@@ -14,6 +14,7 @@ import {
   applyControlUiPresentation,
 } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
+import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { client, createGatewayHarness } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
@@ -345,19 +346,27 @@ it("reuses palette reads through session publications while retaining retries an
     await vi.waitFor(() => expect(environmentPath()).not.toBeNull());
     await expectDot("rgb(20, 100, 180)");
     await changePresentation(() => mascot("none"));
-    expectMark("rgb(180, 20, 40)", "rgb(250, 250, 250)");
+    expectMark(
+      "rgb(180, 20, 40)",
+      getComputedStyle(root).getPropertyValue("--primary-foreground").trim(),
+    );
     expect(environmentPath()).toBeNull();
     expect(dotColor()).toBe("rgb(20, 100, 180)");
     await changePresentation(() => {
       root.dataset.theme = "favicon-neutral";
     });
-    expectMark("rgb(190, 30, 50)", "rgb(240, 240, 240)");
+    expectMark(
+      "rgb(190, 30, 50)",
+      getComputedStyle(root).getPropertyValue("--primary-foreground").trim(),
+    );
     await changePresentation(() => {
       root.style.setProperty("--primary", "rgb(160, 40, 60)");
     });
     expectSvg("rect", "fill", "rgb(160, 40, 60)");
     await changePresentation(() => mascot("claw"));
     expect(environmentPath()).not.toBeNull();
+    // Reset the injected primary color through its owner, independently of environment updates.
+    applyControlUiAccent();
     applyControlUiPresentation({ environment: null });
     await vi.waitFor(() => expect(animations().length).toBeGreaterThan(0));
     await expectDot("rgb(20, 100, 180)");

@@ -144,7 +144,7 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   const expected = {
     plugins: {
       title: "Plugins",
-      subtitle: "Extend your Claw with tools",
+      subtitle: "Add capabilities with plugins.",
       docs: "https://docs.openclaw.ai/plugins/manage-plugins",
     },
     skills: {

@@ -1,3 +1,4 @@
+import { freezeTrustedJsonSnapshot } from "../../../shared/immutable-data.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -140,11 +141,12 @@ export class SubagentSessionReadLookup {
 
   /** Durable comparison bases share immutable links until their row owner changes. */
   captureTopology(): readonly Readonly<RunIdentity>[] {
-    return (this.#topology ??= Object.freeze(
+    return (this.#topology ??= freezeTrustedJsonSnapshot(
       [...this.#memberships.values()]
-        .map(({ entry: { childSessionKey, requesterSessionKey } }) =>
-          Object.freeze({ childSessionKey, requesterSessionKey }),
-        )
+        .map(({ entry: { childSessionKey, requesterSessionKey } }) => ({
+          childSessionKey,
+          requesterSessionKey,
+        }))
         .toSorted(
           (left, right) =>
             left.childSessionKey.localeCompare(right.childSessionKey) ||
@@ -220,8 +222,11 @@ export class SubagentSessionReadLookup {
     return { sessionKeys: selected, cacheKeys: this.#select(buckets.byChild, selected) };
   }
 
-  selectChildren(childKeys: ReadonlySet<string>): string[] {
-    return this.#select(this.#sessionBuckets().byChild, childKeys);
+  selectChildren(
+    childKeys: ReadonlySet<string>,
+    additionalCacheKeys: readonly string[] = [],
+  ): string[] {
+    return this.#select(this.#sessionBuckets().byChild, childKeys, additionalCacheKeys);
   }
 
   selectControllers(controllerKeys: ReadonlySet<string>): string[] {

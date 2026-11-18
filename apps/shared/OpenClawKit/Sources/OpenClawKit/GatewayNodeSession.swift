@@ -82,6 +82,7 @@ public actor GatewayNodeSession {
     private static let computerInvokeReceiptLimit = 256
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
+    private var activeWorkerTransportURL: String?
     private var activeCredentials: GatewayNodeSessionCredentials?
     private var activeSessionIdentity: ObjectIdentifier?
     private var channelGeneration: UInt64 = 0
@@ -110,6 +111,7 @@ public actor GatewayNodeSession {
     var reactionAccess: GatewayReactionAccessFacts?
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
+    private var controlUiBasePath: String?
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -152,6 +154,7 @@ public actor GatewayNodeSession {
         credentials: GatewayNodeSessionCredentials,
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
+        workerTransportURL: String? = nil,
         extraHeadersProvider: (@Sendable () async throws -> [String: String])? = nil,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
@@ -166,6 +169,7 @@ public actor GatewayNodeSession {
         let ownerChanged = self.connectOptions?.deviceAuthGatewayID.map { Array($0.utf8) } !=
             connectOptions.deviceAuthGatewayID.map { Array($0.utf8) }
         let shouldReconnect = self.activeURL != url ||
+            self.activeWorkerTransportURL != workerTransportURL ||
             self.activeCredentials != credentials ||
             self.connectOptions != connectOptions || ownerChanged ||
             self.activeSessionIdentity != nextSessionIdentity ||
@@ -216,6 +220,7 @@ public actor GatewayNodeSession {
                 extraHeadersProvider: extraHeadersProvider)
             self.channel = channel
             self.activeURL = url
+            self.activeWorkerTransportURL = workerTransportURL
             self.activeCredentials = credentials
             self.activeSessionIdentity = nextSessionIdentity
             self.activeTLSRouteMetadataProvider = nextTLSRouteMetadataProvider
@@ -295,6 +300,7 @@ public actor GatewayNodeSession {
 
     private func clearActiveRoute() {
         self.activeURL = nil
+        self.activeWorkerTransportURL = nil
         self.activeCredentials = nil
         self.activeSessionIdentity = nil
         self.activeTLSRouteMetadataProvider = nil
@@ -566,30 +572,26 @@ public actor GatewayNodeSession {
             socketGeneration: socketGeneration)
     }
 
-    /// Private app-worker context from the authenticated socket, never configured fallback routes.
+    /// Private app-worker context from the authenticated socket. Native transports
+    /// supply their bounded worker bridge rather than expose the logical public URL.
+    /// That bridge carries worker ingress/HTTP transfers, not ticketed portal attachments.
     public func workerConnectionData(ifCurrentRoute route: GatewayNodeSessionRoute) async -> Data? {
         guard self.isCurrentRoute(route), let channel, let url = self.activeURL,
               let hello = self.workerHello else { return nil }
         let edge = await channel.currentWorkerEdgeCredentials()
         guard self.isCurrentRoute(route), self.channel === channel else { return nil }
         var connection: [String: Any] = [
-            "url": url.absoluteString,
+            "url": self.activeWorkerTransportURL ?? url.absoluteString,
             "protocol": hello.protocolVersion,
-            "capabilities": hello.capabilities.sorted(),
+            "capabilities": hello.capabilities.filter {
+                self.activeWorkerTransportURL == nil || $0 != "node-worker-portal-stream-v1"
+            }.sorted(),
         ]
         if let fingerprint = self.activeTLSRouteMetadataProvider?.effectiveTLSFingerprintSHA256 {
             connection["tlsFingerprint"] = fingerprint
         }
         if let edge { connection["cloudflareAccess"] = edge }
         return try? JSONSerialization.data(withJSONObject: connection)
-    }
-
-    /// Native adapters preserve the authentication method of this exact socket.
-    public func authBinding(ifCurrentRoute route: GatewayNodeSessionRoute) async -> GatewayAuthBinding? {
-        guard self.isCurrentRoute(route), let channel else { return nil }
-        let binding = await channel.authBinding(ifCurrentConnectionGeneration: route.socketGeneration)
-        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
-        return binding
     }
 
     /// HTTP readers reuse only credentials accepted by this physical socket.
@@ -630,8 +632,50 @@ public actor GatewayNodeSession {
         self.currentRouteValue(self.operatorScopes, ifCurrentRoute: route)
     }
 
+    /// The released Control UI accepts only shared startup credentials. Return
+    /// them only when this exact live operator route selected them.
+    public func controlUIDashboardLegacyCredentials(
+        ifCurrentRoute route: GatewayNodeSessionRoute) async -> [String: String]?
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui"
+        else { return nil }
+        let credentials = await channel.controlUIDashboardLegacyCredentials(
+            ifCurrentConnectionGeneration: route.socketGeneration)
+        guard self.isCurrentRoute(route), self.channel === channel else { return nil }
+        return credentials
+    }
+
+    /// Builds a native Dashboard challenge response from the current operator
+    /// socket. Route and scope checks bracket the channel's signing operation.
+    public func controlUIDashboardAuthorization(
+        ifCurrentRoute route: GatewayNodeSessionRoute,
+        nonce: String,
+        signedAtMs: Int64) async throws -> Data
+    {
+        guard self.isCurrentRoute(route),
+              let channel = self.channel,
+              self.connectOptions?.role == "operator",
+              self.connectOptions?.clientMode == "ui",
+              let scopes = self.currentOperatorScopes(ifCurrentRoute: route)
+        else { throw CancellationError() }
+        let data = try await channel.controlUIDashboardAuthorization(
+            ifCurrentConnectionGeneration: route.socketGeneration,
+            scopes: scopes.sorted(),
+            nonce: nonce,
+            signedAtMs: signedAtMs)
+        guard self.isCurrentRoute(route), self.channel === channel else { throw CancellationError() }
+        return data
+    }
+
     public func currentAttachmentLimits(ifCurrentRoute route: GatewayNodeSessionRoute) -> GatewayAttachmentLimits? {
         self.currentRouteValue(self.attachmentLimits, ifCurrentRoute: route)
+    }
+
+    public func currentControlUiBasePath(ifCurrentRoute route: GatewayNodeSessionRoute) -> String? {
+        self.currentRouteValue(self.controlUiBasePath, ifCurrentRoute: route)
     }
 
     private func currentRouteValue<T>(
@@ -806,6 +850,7 @@ extension GatewayNodeSession {
         self.reactionAccess = GatewayReactionAccessFacts(hello: snapshot)
         self.attachmentLimits = snapshot.advertisedAttachmentLimits()
         self.mainSessionKey = snapshot.snapshot.sessiondefaults?["mainSessionKey"]?.stringValue?.trimmedNonEmpty
+        self.controlUiBasePath = snapshot.controluibasepath?.trimmedNonEmpty
     }
 
     private func handlePush(
@@ -846,6 +891,7 @@ extension GatewayNodeSession {
         self.reactionAccess = nil
         self.attachmentLimits = nil
         self.mainSessionKey = nil
+        self.controlUiBasePath = nil
     }
 
     private func handleChannelDisconnected(

@@ -148,7 +148,7 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
       [shellCommand("pnpm", ["frv", "status", "--run", state.validate.runId])],
     );
   }
-  await ctx.run(
+  const dispatch = await ctx.run(
     "pnpm",
     retained ? ["ci:full-release", "--", "--reconcile-request", requestFile] : args,
     { allowFailure: true },
@@ -169,18 +169,10 @@ export async function validate(ctx: ReleaseContext): Promise<void> {
     !positiveInteger(request.run.attempt)
   ) {
     throw new ReleaseRefusal(
-      `Full Release Validation request ${requestFile} has no observed run.`,
+      `Full Release Validation request ${requestFile} has no observed run. Follow the canonical helper's recovery advice below; only it verifies whether resume is safe.
+${dispatch.stdout}${dispatch.stderr}`,
       [
         shellCommand("pnpm", ["ci:full-release", "--", "--reconcile-request", requestFile]),
-        ...(isRecord(request) &&
-        request.kind === "openclaw.full-release-dispatch/v2" &&
-        request.phase === "prepared" &&
-        isRecord(request.request) &&
-        request.request.trustedWorkflowRef === "candidate" &&
-        isRecord(request.refs) &&
-        request.refs.workflow === "intended"
-          ? [shellCommand("pnpm", ["ci:full-release", "--", "--resume-request", requestFile])]
-          : []),
         ctx.resume("validate"),
       ],
     );

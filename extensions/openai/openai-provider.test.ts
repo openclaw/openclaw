@@ -1,4 +1,3 @@
-import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
@@ -7,6 +6,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { forceFullGc } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   OPENAI_API_BASE_URL,
@@ -16,6 +16,7 @@ import {
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import discoveryProvider from "./provider-discovery.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import {
   mocks,
@@ -178,14 +179,13 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
-    const provider = buildOpenAIProvider();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }))
       .mockResolvedValueOnce(Response.json({ models: [] }));
 
     try {
-      const result = await provider.catalog?.run({
+      const result = await discoveryProvider.catalog?.run({
         providerIds: ["openai"],
         resolveProviderAuth: () => ({
           mode: "api_key",
@@ -218,7 +218,6 @@ describe("buildOpenAIProvider", () => {
   it.each(["azure-openai-responses"])(
     "does not resolve OpenAI credentials or fetch for %s-only catalog scope",
     async (providerId) => {
-      const provider = buildOpenAIProvider();
       const resolveProviderAuth = vi.fn(() => ({
         mode: "api_key" as const,
         apiKey: "sk-openai",
@@ -231,7 +230,7 @@ describe("buildOpenAIProvider", () => {
 
       try {
         await expect(
-          provider.catalog?.run({
+          discoveryProvider.catalog?.run({
             providerIds: [providerId],
             resolveProviderAuth,
             resolveProviderApiKey,
@@ -251,7 +250,6 @@ describe("buildOpenAIProvider", () => {
 
   it("keeps locked OAuth resolution failures on the selected profile", async () => {
     mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("expired oauth profile"));
-    const provider = buildOpenAIProvider();
     const resolveProviderApiKey = vi.fn(() => ({
       apiKey: "sk-openai",
       discoveryApiKey: "sk-discovery",
@@ -263,7 +261,7 @@ describe("buildOpenAIProvider", () => {
     );
 
     try {
-      const result = await provider.catalog?.run({
+      const result = await discoveryProvider.catalog?.run({
         resolveProviderAuth: () => ({
           mode: "oauth",
           apiKey: "stale-oauth-token",
@@ -304,7 +302,7 @@ describe("buildOpenAIProvider", () => {
       .mockResolvedValue(Response.json({ data: [{ id: "gpt-5.5", object: "model" }] }));
 
     try {
-      const result = await buildOpenAIProvider().catalog?.run({
+      const result = await discoveryProvider.catalog?.run({
         resolveProviderAuth: () => ({
           mode: "api_key",
           apiKey: "secretref-managed",
@@ -335,7 +333,7 @@ describe("buildOpenAIProvider", () => {
     mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("secret unavailable"));
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-    const result = await buildOpenAIProvider().catalog?.run({
+    const result = await discoveryProvider.catalog?.run({
       resolveProviderAuth: () => ({
         mode: "api_key",
         apiKey: "secretref-managed",
@@ -442,7 +440,7 @@ describe("buildOpenAIProvider", () => {
     );
 
     try {
-      const result = await provider.catalog?.run({
+      const result = await discoveryProvider.catalog?.run({
         resolveProviderAuth: () => ({
           mode: "oauth",
           apiKey: "stale-oauth-token",
@@ -531,7 +529,6 @@ describe("buildOpenAIProvider", () => {
       profileId: "openai:chatgpt",
       accountId: "acct-openai-workspace",
     });
-    const provider = buildOpenAIProvider();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({
         models: [
@@ -545,7 +542,7 @@ describe("buildOpenAIProvider", () => {
     );
 
     try {
-      const result = await provider.catalog?.run({
+      const result = await discoveryProvider.catalog?.run({
         resolveProviderAuth: () => ({
           mode: "none",
           apiKey: undefined,
@@ -689,7 +686,7 @@ describe("buildOpenAIProvider", () => {
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
-    queryObjects(WeakRef);
+    forceFullGc();
     expect(rows.map((row) => row.deref() !== undefined)).toEqual([false, false]);
   });
 

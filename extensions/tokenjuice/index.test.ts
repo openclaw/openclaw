@@ -17,6 +17,9 @@ vi.mock("./runtime-api.js", () => ({
     () => (api: { on: (event: string, handler: unknown) => void }) =>
       api.on("tool_result", toolResultHandler),
 }));
+// mock-isolation: Cache cleanup is independent of the external reducer implementation.
+vi.mock("tokenjuice", () => ({ clearRuleCache: vi.fn() }));
+import { clearRuleCache } from "tokenjuice";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createTokenjuiceAgentToolResultMiddleware } from "./tool-result-middleware.js";
@@ -40,7 +43,29 @@ async function applyBashResult(details: unknown) {
 }
 
 describe("tokenjuice plugin", () => {
-  beforeEach(() => toolResultHandler.mockReset().mockResolvedValue(undefined));
+  beforeEach(() => {
+    toolResultHandler.mockReset().mockResolvedValue(undefined);
+    vi.mocked(clearRuleCache).mockClear();
+  });
+  it("releases rule cache capacity even when concurrent reducers reject", async () => {
+    toolResultHandler.mockRejectedValue(new Error("synthetic reducer failure"));
+    const middleware = createTokenjuiceAgentToolResultMiddleware();
+    const settled = await Promise.allSettled(
+      Array.from(
+        { length: 128 },
+        async (_, worktree) =>
+          await middleware(
+            {
+              ...toolEvent("exec", completed),
+              args: { command: "git status", workdir: `/synthetic-tokenjuice/error-${worktree}` },
+            },
+            { runtime: "openclaw" },
+          ),
+      ),
+    );
+    expect(settled.every((result) => result.status === "rejected")).toBe(true);
+    expect(clearRuleCache).toHaveBeenCalled();
+  });
   it("registers all runtimes and compacts oversized exec results within the details limit", async () => {
     const captured = capturePluginRegistration({
       id: "tokenjuice",

@@ -2,10 +2,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import "../plugins/plugin-source-capture-context.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { closePostgresPool } from "../infra/postgres-sync/pool-state.js";
+import { NATIVE_WORKER_LIFETIMES_KEY } from "../infra/worker-native-lifecycle.types.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  resetGlobalSingletonLifecycleState,
+  resolveGlobalSingleton,
+} from "../shared/global-singleton.js";
+import { SKILLS_DISCOVERY_KEY } from "../skills/types.js";
+import { STATE_DATABASE_LIFECYCLE_KEY } from "../state/openclaw-state-db-contract.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
 import { installCliSignalExitHandlers, registerSignalExitGate } from "./signal-exit-barrier.js";
 
@@ -63,14 +70,8 @@ export async function withCliCommandCleanup<T>(
     return run();
   }
   const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
-  // A command can replace its own package. Retain cleanup before it can remove
-  // the files; another importer's module cache does not preserve this resolution.
+  // Registered owner callbacks survive package replacement without loading dormant runtimes.
   const { runCliDisposerAfterPending } = await import("./runtime-cleanup.js");
-  const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db-cache.js");
-  const { closeDefaultRetainedNativeWorkerSource } =
-    await import("../infra/worker-native-lifecycle.js");
-  const { closePostgresPool } = await import("../infra/postgres-sync/pool.js");
-  const { closeSkillsWatchers } = await import("../skills/runtime/refresh.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
@@ -83,7 +84,7 @@ export async function withCliCommandCleanup<T>(
     scheduler,
     harnesses: new Map(),
     registries: new Set(),
-    closeSkillsWatchers,
+    closeSkillsWatchers: () => resetGlobalSingletonLifecycleState(SKILLS_DISCOVERY_KEY),
     pluginResources,
   };
   const finished = createDeferredCore();
@@ -102,8 +103,8 @@ export async function withCliCommandCleanup<T>(
         } finally {
           // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
           await runCliDisposerAfterPending("shared-state", async () => {
-            await closeOpenClawStateDatabaseAsync();
-            await closeDefaultRetainedNativeWorkerSource();
+            await resetGlobalSingletonLifecycleState(STATE_DATABASE_LIFECYCLE_KEY);
+            await resetGlobalSingletonLifecycleState(NATIVE_WORKER_LIFETIMES_KEY);
             await closePostgresPool();
           });
         }

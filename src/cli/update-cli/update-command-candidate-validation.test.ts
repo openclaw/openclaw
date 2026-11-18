@@ -7,6 +7,7 @@ import {
   createCanaryProcessFixture,
   createCanaryStartupRuntimeFixture,
 } from "../../infra/update-candidate-canary.test-support.js";
+import { runDelegatedUpdateCandidateRehearsal } from "../../infra/update-candidate-delegated-rehearsal.js";
 import * as rehearsals from "../../infra/update-candidate-rehearsal.js";
 import { createUpdateRun, getUpdateRunAsync } from "../../infra/update-run-ledger.js";
 import * as exec from "../../process/exec.js";
@@ -73,6 +74,136 @@ if (args.includes("--help")) {
     );
   return { root, validate, snapshot, rehearsal, run };
 }
+
+type CandidateBehavior = "passes" | "ends-without-result" | "abandons-a-check";
+
+/**
+ * Replaces the fixture entry with a candidate that rehearses itself: it reads the request,
+ * waits for the updater's answer to each receipt, and marks when its announced check starts.
+ */
+async function installRehearsingCandidate(root: string, behavior: CandidateBehavior) {
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    '{"version":"2026.9.5","type":"module","openclaw":{"updateRehearsalProtocol":1}}',
+  );
+  const entry = path.join(root, "dist", "index.js");
+  await fs.writeFile(
+    entry,
+    `import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { createInterface } from "node:readline";
+if (process.argv.includes("rehearse")) {
+  const behavior = ${JSON.stringify(behavior)};
+  const request = JSON.parse(fs.readFileSync(process.argv.at(-1), "utf8"));
+  const emit = (event) => process.stderr.write("openclaw-update-rehearsal-event: " + JSON.stringify(event) + "\\n");
+  const answers = createInterface({input: process.stdin})[Symbol.asyncIterator]();
+  let seq = 0;
+  const receipt = async (event) => {
+    emit({...event, seq: ++seq});
+    const answer = await answers.next();
+    if (answer.done || !JSON.parse(answer.value).ok) process.exit(2);
+  };
+  const step = {name: "candidate-doctor", command: "doctor --fix", cwd: process.cwd(), durationMs: 1, exitCode: 0};
+  await receipt({type: "progress", step: {step: "candidate-doctor", status: "in_progress", detail: "candidate protocol " + request.protocol}});
+  fs.writeFileSync("check-started", "");
+  if (behavior === "abandons-a-check") {
+    const check = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {detached: true, stdio: "ignore"});
+    check.unref();
+    fs.writeFileSync("check.pid", String(check.pid));
+    emit({type: "process", pid: check.pid});
+    process.exit(1);
+  }
+  await receipt({type: "step", step});
+  if (behavior === "passes") {
+    console.log(JSON.stringify({protocol: 1, result: {status: "ok", phase: "readiness", durationMs: 1, logTail: [], steps: [step], candidateSchemaVersions: {state: 7, agent: 9}}}));
+  }
+  process.exitCode = behavior === "passes" ? 0 : 2;
+  process.stdin.destroy();
+}
+${await fs.readFile(entry, "utf8")}`,
+  );
+}
+
+it.each([
+  ["accepts the candidate's own rehearsal", "passes"],
+  ["runs its own rehearsal when the candidate's ends without a result", "ends-without-result"],
+] as const)("%s", async (_name, behavior) => {
+  const { root, validate, snapshot, run } = await prepareValidation();
+  await installRehearsingCandidate(root, behavior);
+
+  const result = await validate();
+
+  expect(result).toMatchObject({ status: "ok", phase: "readiness" });
+  if (behavior === "passes") {
+    // The candidate's receipt reached the run ledger.
+    const saved = await getUpdateRunAsync(run.runId, { env: run.env });
+    expect(saved?.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ step: "candidate-doctor", detail: "candidate protocol 1" }),
+      ]),
+    );
+    // The updater did not snapshot or check anything itself, and says who did.
+    expect(snapshot).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      "The candidate release ran its own update checks.",
+    );
+    expect(result.candidateSchemaVersions).toEqual({ state: 7, agent: 9 });
+    expect(result.steps.map(({ name }) => name)).toEqual(["candidate-doctor"]);
+  } else {
+    expect(snapshot).toHaveBeenCalledOnce();
+    expect(result.steps.map(({ name }) => name)).toContain("candidate-gateway-startup");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Candidate rehearsal did not return a valid result (exit-2)"),
+    );
+  }
+});
+
+it("stops a real candidate before its announced check when a receipt is refused", async () => {
+  const { root, run } = await prepareValidation();
+  await installRehearsingCandidate(root, "passes");
+  const refused = new Error("ledger writer lost");
+
+  await expect(
+    runDelegatedUpdateCandidateRehearsal({
+      root,
+      config: {},
+      stateDir: path.join(root, "source"),
+      env: run.env,
+      onProgress: () => Promise.reject(refused),
+    }),
+  ).rejects.toBe(refused);
+
+  await expect(fs.access(path.join(root, "check-started"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it("stops a check that a crashed candidate left running", async () => {
+  const { root, run } = await prepareValidation();
+  await installRehearsingCandidate(root, "abandons-a-check");
+  let abandoned: number | undefined;
+  try {
+    const outcome = await runDelegatedUpdateCandidateRehearsal({
+      root,
+      config: {},
+      stateDir: path.join(root, "source"),
+      env: run.env,
+    });
+    abandoned = Number(await fs.readFile(path.join(root, "check.pid"), "utf8"));
+
+    expect(outcome).toMatchObject({ owner: "installed", fallbackReason: "exit-1" });
+    // Signal 0 only probes: the check's own process group is gone before fallback starts.
+    expect(() => process.kill(abandoned!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+  } finally {
+    if (abandoned) {
+      try {
+        process.kill(-abandoned, "SIGKILL");
+      } catch {
+        // Already stopped, which is the expected outcome.
+      }
+    }
+  }
+});
 
 it("preserves each size-aware check budget after a long snapshot and Doctor", async () => {
   const { validate, snapshot, rehearsal, run } = await prepareValidation(undefined, true);

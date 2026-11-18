@@ -9,6 +9,7 @@ import { replayScheduledContextFixture } from "../../src/cron/execution-context.
 import { resolveScheduledRequester } from "../../src/cron/execution-context.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import { decodeGatewayOperatorRecoverySource } from "../../src/gateway/operator-run-recovery-source.codec.js";
 
 vi.mock("../../src/cron/isolated-agent/model-selection.js", async (importOriginal) => {
   const actual =
@@ -83,21 +84,54 @@ const liveRow = {
   sandboxRequired: false,
 };
 
-function parentFixture(row: Parameters<typeof anonymizeParentRow>[0] = liveRow) {
-  const job = storedJob({ operatorSource });
+function parentFixture(
+  row: Parameters<typeof anonymizeParentRow>[0] = liveRow,
+  source = operatorSource,
+) {
+  const job = storedJob({ operatorSource: source });
   return { job: anonymize(job, "ops", 1), parentRow: anonymizeParentRow(row, job) };
 }
 
 describe("cron context replay fixtures", () => {
-  it("keeps an operator-source parent as the fixture's principal", () => {
-    const fixture = parentFixture();
+  it.each(["control-ui", "principal"] as const)(
+    "keeps a %s operator-source parent as the fixture's principal",
+    (sourceIngress) => {
+      const source = structuredClone(operatorSource);
+      if (sourceIngress === "principal") {
+        const {
+          authPolicy: _auth,
+          device: _device,
+          sharedGeneration: _generation,
+          ...snapshot
+        } = source.source.snapshot;
+        source.source.snapshot = {
+          ...snapshot,
+          sourceIngress,
+          ingress: {
+            pluginId: "private-plugin",
+            audienceId: "private-audience",
+            recoveryId: "private-issuance",
+          },
+          controlUiAdmin: false,
+          localOperator: false,
+        };
+      }
+      const fixture = parentFixture(liveRow, source);
+      expect(fixture.job.operatorSource?.source.snapshot.sourceIngress).toBe(sourceIngress);
+      expect(() =>
+        decodeGatewayOperatorRecoverySource(fixture.job.operatorSource?.source),
+      ).not.toThrow();
+      if (sourceIngress === "principal") {
+        expect(fixture.job.operatorSource?.source.snapshot).not.toHaveProperty("authPolicy");
+      }
 
-    expect(JSON.stringify(fixture)).not.toMatch(/private/);
-    expect(replayScheduledContextFixture(fixture)).toMatchObject({
-      status: "ready",
-      principal: "parent",
-    });
-  });
+      expect(JSON.stringify(fixture)).not.toMatch(/private/);
+      expect(replayScheduledContextFixture(fixture)).toMatchObject({
+        status: "ready",
+        principal: "parent",
+      });
+    },
+  );
 
   it("keeps a channel requester", () => {
     const job = storedJob({

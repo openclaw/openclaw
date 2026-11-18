@@ -311,6 +311,7 @@ async function createBackupArchiveInScope(
     (await resolveBackupPlanFromDisk({
       includeWorkspace,
       excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
+      localCompanion: opts.localCompanion,
       onlyConfig,
       nowMs,
     }));
@@ -453,10 +454,13 @@ async function createBackupArchiveInScope(
     }
     const clientDirectories = new Set(
       inventory.coreDatabases
-        .filter((database) => database.role === "client" && database.identity)
+        .filter(
+          (database) =>
+            (database.role === "client" || database.role === "services") && database.identity,
+        )
         .map((database) => path.dirname(database.sourcePath)),
     );
-    // Emit private client directories before snapshots create implicit tar parents.
+    // Emit private store directories before snapshots create implicit tar parents.
     const requiredSourcePaths = new Set([
       ...clientDirectories,
       ...sourcePathRemaps.keys(),

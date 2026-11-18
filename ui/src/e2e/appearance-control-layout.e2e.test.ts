@@ -87,8 +87,8 @@ suite.define(() => {
           has: page.locator(".settings-row__title", { hasText: "Color mode" }),
         });
         for (const [width, direction] of [
-          [768, "column"],
-          [769, "row"],
+          [640, "column"],
+          [641, "row"],
         ] as const) {
           await page.setViewportSize({ height: 1000, width });
           await polledStyle(colorMode, "flexDirection").toBe(direction);

@@ -1,4 +1,4 @@
-import { constants, closeSync, fsyncSync, lstatSync, openSync, realpathSync } from "node:fs";
+import { constants, closeSync, lstatSync, openSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
@@ -9,6 +9,7 @@ import {
   tableHasColumn,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { Check } from "typebox/value";
+import { syncKnowledgeDirectory } from "./directory-sync.js";
 import type { IdentityStore } from "./real-vault.js";
 import {
   ensureKnowledgeSchema,
@@ -196,12 +197,7 @@ export class SqliteIdentityStore implements IdentityStore {
       throw e instanceof UnrecognizedSchema ? unavailable() : e;
     }
     if (created) {
-      const parent = openSync(path.dirname(this.filename), constants.O_RDONLY);
-      try {
-        fsyncSync(parent);
-      } finally {
-        closeSync(parent);
-      }
+      syncKnowledgeDirectory(path.dirname(this.filename));
     }
     installAdditiveTables(db);
   }

@@ -85,7 +85,7 @@ export type SubagentForkedTurnParams<T> = {
   model?: string;
   /** Caller-chosen id so tools' records can be found even when the run fails; unique per run. */
   runId?: string;
-  /** Capped at 120 seconds. */
+  /** Defaults to 120 seconds; a larger value runs longer (the agent timeout, for example). */
   timeoutMs?: number;
   signal?: AbortSignal;
   /**

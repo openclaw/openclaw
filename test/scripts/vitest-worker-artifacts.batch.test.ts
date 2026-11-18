@@ -31,6 +31,8 @@ const gatewaySubscriptions = "src/gateway/server-runtime-subscriptions.test.ts";
 const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
 const codeModeWorker = "src/agents/code-mode.import-boundary.test.ts";
 const agentsCoreConfig = agentVitestProjectOwners.core.config;
+const windowsGitBash = "src/agents/sessions/windows-git-bash-path.test.ts";
+const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
 const discordCapture = "test/e2e/gateway-transcripts-discord-capture.e2e.test.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 
@@ -73,6 +75,10 @@ it.for([
     ["src/agents/code-mode.test.ts"],
   ],
   ["unrelated agents stay lazy", agentsCoreConfig, ["src/agents/code-mode-runtime.test.ts"], false],
+  ["Git Bash basename filter", unitFastConfig, [path.basename(windowsGitBash, ".test.ts")], true],
+  ["Git Bash shard include", unitFastConfig, [], true, [windowsGitBash]],
+  ["Git Bash excluded", unitFastConfig, [windowsGitBash, "--exclude", windowsGitBash], false],
+  ["unrelated fast unit stays lazy", unitFastConfig, [], false, ["src/infra/errors.test.ts"]],
 ] satisfies Array<[string, string, string[], boolean, string[]?]>)(
   "selects eager worker preparation for %s",
   async ([, config, args, prepare, include]) => {
@@ -90,6 +96,7 @@ subprocess.for([
           "code-mode",
           "capture",
           "gateway-runtime-config",
+          "windows-git-bash",
           "failure",
           "cancel",
           "excluded",
@@ -120,7 +127,9 @@ subprocess.for([
               ? [discordCapture, e2eConfig]
               : mode === "gateway-runtime-config"
                 ? ["src/gateway/server-runtime-config.test.ts", gatewayServerConfig]
-                : [coreWorker, infraConfig];
+                : mode === "windows-git-bash"
+                  ? [windowsGitBash, unitFastConfig]
+                  : [coreWorker, infraConfig];
         const compiled = path.join(directory, "compiled.jsonl");
         const launched = path.join(directory, "launched.json");
         const loans = path.join(directory, "loans.jsonl");
@@ -276,7 +285,13 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
           ...fixturePreloadEnv(preload, "node"),
           ...(route === "built-source"
-            ? { CHANNEL_NODE_OPTIONS: "--max-old-space-size=8192", RUNNER_TEMP: directory }
+            ? {
+                // This CI runner must not reuse a local cache slot before cleanup is observed.
+                CI: "1",
+                OPENCLAW_VITEST_WORKER_CACHE: undefined,
+                CHANNEL_NODE_OPTIONS: "--max-old-space-size=8192",
+                RUNNER_TEMP: directory,
+              }
             : {}),
           ...(route === "batch"
             ? {
@@ -299,6 +314,7 @@ process.exitCode = await runVitestBatch({config:${JSON.stringify(infraConfig)},a
           "code-mode",
           "capture",
           "gateway-runtime-config",
+          "windows-git-bash",
         ].includes(mode);
         const prepared = ready || mode === "failure" || mode === "cancel";
         expect(fs.existsSync(compilerReceipt)).toBe(prepared);

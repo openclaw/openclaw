@@ -3,15 +3,15 @@ import {
   buildNativeHookRelayCommandWithStateDatabase,
   resolveNativeHookRelayCommandTimeoutMs,
 } from "./native-hook-relay-command.js";
+import type {
+  NativeHookRelayRegistrationHandle,
+  RegisterNativeHookRelayParams,
+} from "./native-hook-relay-contexts.js";
 import {
   nativeHookRelayEventHasLocalWork,
   nativeHookRelayEventToolMatcher,
 } from "./native-hook-relay-events.js";
-import {
-  NATIVE_HOOK_RELAY_EVENTS,
-  type NativeHookRelayRegistrationHandle,
-  type RegisterNativeHookRelayParams,
-} from "./native-hook-relay-types.js";
+import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
 
 export type NativeHookRelayCommandPlan = Pick<
   NativeHookRelayRegistrationHandle,

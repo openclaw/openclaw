@@ -22,6 +22,100 @@ const skeletonFixture = styleDocument(
 );
 
 fixture.describe("Control UI shimmer", () => {
+  it.each(["normal", "reduced", "forced-colors"] as const)(
+    "keeps panel skeleton styles inside a shadow parent in %s mode",
+    async (mode) => {
+      await withBrowserPage(
+        fixture.page({
+          reducedMotion: mode === "reduced" ? "reduce" : "no-preference",
+          forcedColors: mode === "forced-colors" ? "active" : "none",
+        }),
+        async (page) => {
+          await page.setContent(
+            styleDocument(
+              readStyles("styles/base"),
+              `<div id="reference" class="skeleton"></div><openclaw-panel-loading-skeleton><style>${readStyles("styles/panel-loading-skeleton")}</style><div class="skeleton line"></div></openclaw-panel-loading-skeleton>`,
+            ),
+          );
+          const result = await page.evaluate(() => {
+            const host = document.querySelector("openclaw-panel-loading-skeleton")!;
+            const child = host.querySelector(".skeleton")!;
+            const probe = document.createElement("span");
+            probe.style.backgroundColor = "var(--skeleton-base-raised)";
+            host.append(probe);
+            const raisedBackground = getComputedStyle(probe).backgroundColor;
+            probe.remove();
+            const hostStyle = getComputedStyle(host);
+            const read = () => {
+              const style = getComputedStyle(child);
+              const highlight = getComputedStyle(child, "::after");
+              const animations = child.getAnimations({ subtree: true });
+              const sweep = animations.find(
+                (animation) =>
+                  animation instanceof CSSAnimation && animation.animationName === "shimmer",
+              );
+              const effect = sweep?.effect;
+              return {
+                background: style.backgroundColor,
+                overflow: style.overflow,
+                radius: style.borderRadius,
+                gradient: highlight.backgroundImage,
+                animation: highlight.animationName,
+                duration: highlight.animationDuration,
+                easing: highlight.animationTimingFunction,
+                iterations: highlight.animationIterationCount,
+                properties:
+                  effect instanceof KeyframeEffect
+                    ? [...new Set(effect.getKeyframes().flatMap(Object.keys))].filter(
+                        (key) => !["composite", "computedOffset", "easing", "offset"].includes(key),
+                      )
+                    : [],
+                running: animations.some((animation) => animation.playState === "running"),
+              };
+            };
+            const before = read();
+            const container = document.createElement("div");
+            host.before(container);
+            container.attachShadow({ mode: "open" }).append(host);
+            return {
+              before,
+              after: read(),
+              raisedBackground,
+              baseToken: hostStyle.getPropertyValue("--skeleton-base").trim(),
+              raisedToken: hostStyle.getPropertyValue("--skeleton-base-raised").trim(),
+              radius: hostStyle.getPropertyValue("--radius-md").trim(),
+              canonicalGradient: getComputedStyle(document.querySelector("#reference")!, "::after")
+                .backgroundImage,
+            };
+          });
+          expect(result.raisedToken).not.toBe("");
+          expect(result.radius).not.toBe("");
+          expect(result.radius).not.toBe("0px");
+          expect(result.baseToken).toBe(result.raisedToken);
+          for (const styles of [result.before, result.after]) {
+            expect(styles).toMatchObject({ overflow: "hidden", radius: result.radius });
+            if (mode !== "forced-colors") {
+              expect(styles.background).toBe(result.raisedBackground);
+              expect(styles.background).not.toBe("rgba(0, 0, 0, 0)");
+            }
+            if (mode === "normal") {
+              expect(styles).toMatchObject({
+                animation: "shimmer",
+                duration: "2s",
+                easing: "ease-in-out",
+                iterations: "infinite",
+                properties: ["transform"],
+                gradient: result.canonicalGradient,
+              });
+            } else {
+              expect(styles).toMatchObject({ animation: "none", running: false });
+            }
+          }
+          expect(result.after).toEqual(result.before);
+        },
+      );
+    },
+  );
   it.each(["standalone", "gallery"])(
     "clips %s attachment shimmer without clipping status text",
     async (context) => {

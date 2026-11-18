@@ -22,6 +22,8 @@ import * as nativeSqlite from "../../infra/node-sqlite.js";
 import type { SqliteWorkerAdmissionRequest } from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { WorktreeRemovalContentionError } from "../worktrees/errors.js";
+import * as registryRead from "../worktrees/registry-read.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../worktrees/registry.js";
 import { getRegistryWorktree } from "../worktrees/registry.test-support.js";
 import type { ManagedWorktreeRecord } from "../worktrees/types.js";
@@ -57,6 +59,50 @@ async function managedWorkspace(row = localWorkspaceProjectionFixture(randomUUID
   const cfg = { session: { store: storePath } };
   return { row, sessionKey, worktree, scope, session, cfg };
 }
+
+it.each(["unrelated publication", "selected identity", "selected removal"])(
+  "scopes local workspace resolution while reading across %s",
+  async (change) => {
+    const { worktree, scope, cfg } = await managedWorkspace();
+    const read = registryRead.readRegistryWorktree;
+    using _ = vi
+      .spyOn(registryRead, "readRegistryWorktree")
+      .mockImplementationOnce(async (...args) => {
+        const selected = await read(...args);
+        if (change === "unrelated publication") {
+          await insertRegistryWorktree(process.env, {
+            ...worktree,
+            id: randomUUID(),
+            name: "unrelated",
+            path: path.join(state.root, "unrelated"),
+            ownerId: "agent:main:unrelated",
+          });
+        } else {
+          await updateRegistryWorktree(
+            process.env,
+            worktree.id,
+            change === "selected removal"
+              ? { removedAt: 2 }
+              : {
+                  repositoryIdentity: {
+                    repoRoot: path.join(state.root, "replacement"),
+                    repoFingerprint: "replacement",
+                  },
+                },
+          );
+        }
+        return selected;
+      });
+    const resolving = resolveLocalWorkspaceOwner({ ...scope, cfg });
+    if (change === "unrelated publication") {
+      using owner = await resolving;
+      expect(owner?.worktree.id).toBe(worktree.id);
+      expect(() => owner!.assertCurrent()).not.toThrow();
+    } else {
+      await expect(resolving).rejects.toBeInstanceOf(WorktreeRemovalContentionError);
+    }
+  },
+);
 
 it.each([
   ["retired worktree", "Worktree owner or binding changed"],

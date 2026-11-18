@@ -1,8 +1,13 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+// mock-isolation: Static HTTP routes must work when the optional media runtime cannot load.
+vi.mock("./assistant-media-policy.js", () => {
+  throw new Error("Assistant media runtime is unavailable");
+});
 
 const { handleControlUiHttpRequest } = await import("./control-ui.js");
 const { makeMockHttpResponse } = await import("./test-http-response.js");

@@ -51,6 +51,7 @@ export async function readActiveOpenClawAgentDatabaseLeasesReadOnly(
             signal,
             preserveSourceArtifacts: true,
             requireCleanup: true,
+            reuse: true,
           });
     try {
       signal?.throwIfAborted();

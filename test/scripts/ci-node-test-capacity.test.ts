@@ -56,6 +56,26 @@ it("retains capacity when one of several groups is unqualified", () => {
   expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(job.runner);
 });
 
+it.each(["qualified", "unqualified file", "unqualified config"])(
+  "preserves selected Gateway capacity when core and client share a group: %s",
+  (selection) => {
+    const job = selectedCliJob("gateway-core", [
+      "src/gateway/mcp-app-extension-runtime.test.ts",
+      selection === "unqualified file"
+        ? "src/gateway/unqualified.test.ts"
+        : "src/gateway/client-callsites.guard.test.ts",
+    ]);
+    job.groups[0]!.configs.push(
+      `test/vitest/vitest.${selection === "unqualified config" ? "tooling" : "gateway-client"}.config.ts`,
+    );
+    const before = structuredClone(job);
+    expect(resolveSelectedNodeTestRunner(job, "hybrid")).toBe(
+      selection === "qualified" ? "blacksmith-16vcpu-ubuntu-2404" : job.runner,
+    );
+    expect(job).toEqual(before);
+  },
+);
+
 it.each([
   { family: "cli", mode: undefined, targets: undefined },
   { family: "gateway-server", mode: "hybrid", targets: undefined },

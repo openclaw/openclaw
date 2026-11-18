@@ -34,6 +34,12 @@ export type OpenClawAgentDatabase = {
   db: EngineConnection;
   path: string;
   walMaintenance: SqliteWalMaintenance;
+  closeTiming?: {
+    startedAt: number;
+    walStopMs?: number;
+    checkpointMs?: number;
+    nativeCloseMs?: number;
+  };
 };
 
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {

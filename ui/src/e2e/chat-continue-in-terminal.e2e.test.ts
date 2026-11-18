@@ -8,7 +8,6 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { closeChatDetails } from "./chat-details.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { exactButton, polledAttribute, polledClipboard } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -86,7 +85,6 @@ suite.define(() => {
 
         await polledAttribute(menuTrigger, "aria-expanded").toBe("false");
         await menuTrigger.press("Enter");
-        await openSessionMenuSubmenu(page, "Advanced");
         await openSessionMenuSubmenu(page, "Open in");
         const action = dropdown.getByText("Continue in terminal…", { exact: true });
         await action.waitFor({ state: "visible" });
@@ -109,7 +107,6 @@ suite.define(() => {
 
         await dialog.getByRole("button", { name: "Close" }).click();
         await menuTrigger.press("Enter");
-        await openSessionMenuSubmenu(page, "Advanced");
         await openSessionMenuSubmenu(page, "Open in");
         await action.click();
         await dialog.waitFor({ state: "visible" });
@@ -123,7 +120,7 @@ suite.define(() => {
     );
   });
 
-  it("opens terminal continuation after returning to the mobile Advanced page", async () => {
+  it("opens terminal continuation after returning to the mobile root menu", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -137,21 +134,12 @@ suite.define(() => {
 
         await menuTrigger.click();
         await polledAttribute(menuTrigger, "aria-expanded").toBe("true");
-        await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        const advanced = page.locator(
-          '.chat-mobile-host__page[data-mobile-page="session-advanced"]',
-        );
-        await advanced.waitFor();
-        const host = page.locator(".chat-mobile-host");
-        await host
-          .locator(".chat-mobile-host__header")
-          .getByRole("button", { name: "Back", exact: true })
+        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).click();
+        await dropdown.getByRole("menuitem", { name: "Back", exact: true }).click();
+        await dropdown.getByRole("menuitem", { name: "Open in", exact: true }).click();
+        await dropdown
+          .getByRole("menuitem", { name: "Continue in terminal…", exact: true })
           .click();
-        await host.locator('.chat-mobile-details-page[data-details-page="root"]').waitFor();
-        await closeChatDetails(page);
-        await menuTrigger.click();
-        await dropdown.getByRole("menuitem", { name: "Advanced", exact: true }).click();
-        await advanced.getByRole("button", { name: "Continue in terminal", exact: true }).click();
         await page
           .locator("openclaw-modal-dialog.continue-in-terminal-dialog")
           .waitFor({ state: "visible" });

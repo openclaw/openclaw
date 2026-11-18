@@ -1,6 +1,8 @@
 import { createMemo, Show } from "solid-js";
 import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
+import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
+import { NewSessionModelControlView } from "./model-control-view.tsx";
 import type { PaletteSessionDraft } from "./palette-session-draft.ts";
 import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
 
@@ -12,6 +14,30 @@ export function PaletteSessionControls(props: DraftProps) {
     return props.draft.settingsView();
   });
   return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
+}
+
+/** The existing New Session model picker; effort keeps following ordinary defaults. */
+export function PaletteSessionModel(props: DraftProps) {
+  const view = createMemo(() => {
+    void props.revision;
+    return props.draft.settingsView();
+  });
+  return (
+    <Show when={view()}>
+      {(settings) => (
+        <NewSessionModelControlView
+          control={settings().options.draft.place.modelControl}
+          options={{
+            agent: settings().options.draft.place.selectedAgent(),
+            agentId: settings().options.draft.place.agentId,
+            context: settings().options.context,
+            sending: props.draft.messageLocked,
+          }}
+          showEffort={false}
+        />
+      )}
+    </Show>
+  );
 }
 
 export function PaletteSessionAttachments(props: DraftProps) {
@@ -28,7 +54,12 @@ export function PaletteSessionAttachments(props: DraftProps) {
   });
   return (
     <Show when={preview()}>
-      <div class="cmd-palette__attachments">
+      <div
+        class="cmd-palette__attachments"
+        onOpenclaw-comment-action={(event: CustomEvent<ChatCommentAction>) =>
+          props.draft.removeComment(event.detail)
+        }
+      >
         <AttachmentPreview {...preview()!} readRevision={props.revision} />
       </div>
     </Show>

@@ -150,7 +150,13 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
-  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[]; host?: string }
+  | {
+      type: "userProfiles.githubAttribution.resolve";
+      profileIds: readonly string[];
+      host?: string;
+      organizationDefaults?: string;
+      githubAvailability?: boolean;
+    }
   | { type: "userProfiles.catalog" }
   | {
       type: "userProfiles.catalogIdentity";
@@ -208,10 +214,6 @@ export type OpenClawStateReadCommand =
       }[];
     }
   | { type: "workspace.snapshot"; workspaceDir: string }
-  | { type: "sandboxRegistry.list"; workspaceDir?: string }
-  | { type: "sandboxRegistry.get"; containerName: string }
-  | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
-  | { type: "sandboxRegistry.browsers"; workspaceDir?: string }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementPreservation" }
   | { type: "workers.placementEnvironmentOwner"; environmentId: string }
@@ -238,7 +240,9 @@ type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "source
 export type OpenClawStateReadResult =
   | ReadResult<
       ReturnType<
-        typeof import("./openclaw-state-read-handlers.js").readOpenClawStateDatabaseCommand
+        Awaited<
+          ReturnType<typeof import("./openclaw-state-read-handlers.js").prepareOpenClawStateRead>
+        >
       >
     >
   | { type: "meetingTranscripts.export"; result: TranscriptExportResult }

@@ -111,8 +111,9 @@ export const CORE_TOOL_DEFINITIONS = [
     ["sessions_yield"],
     ["subagents"],
     ["session_status", { profiles: ["minimal", "coding", "messaging"] }],
-    ["suggest_task", { profiles: ["coding"] }],
-    ["dismiss_task", { profiles: ["coding"] }],
+    // Offered only when the requesting operator UI can act on suggestion cards.
+    ["suggest_task", { profiles: ["coding"], runGranted: true }],
+    ["dismiss_task", { profiles: ["coding"], runGranted: true }],
   ]),
   ...coreTools("ui", { profiles: ["coding"], includeInOpenClawGroup: true }, [
     ["browser", { executionLocation: "placement", profiles: [], factoryFamily: undefined }],
@@ -145,7 +146,8 @@ export const CORE_TOOL_DEFINITIONS = [
     ["update_goal"],
     ["progress_card"],
     ["ask_user", { profiles: ["coding", "messaging"] }],
-    ["skill_workshop", { executionLocation: "gateway" }],
+    // Owned by the skill-workshop plugin; listed for profile and group membership.
+    ["skill_workshop", { executionLocation: "gateway", factoryFamily: undefined }],
     ["skill_library", { executionLocation: "gateway", runGranted: true }],
     ["skills_search", { factoryFamily: undefined, replay: "blind" }],
     ["skills_read", { factoryFamily: undefined, replay: "blind" }],

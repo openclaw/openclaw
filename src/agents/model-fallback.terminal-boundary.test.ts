@@ -20,6 +20,7 @@ import {
   resolveModelFallbackError,
 } from "./failover-error.js";
 import {
+  AgentHarnessModelRequestPolicyError,
   AgentHarnessPreflightError,
   recordAgentHarnessPreflightOwner,
   SessionControllerAdmissionRequiredError,
@@ -152,6 +153,11 @@ it.each([
     "wrapped transcript conflict",
     () => new Error("worker operation failed", { cause: transcriptConflict() }),
     false,
+  ],
+  [
+    "wrapped deployment denial",
+    () => new Error("run failed", { cause: new AgentHarnessModelRequestPolicyError() }),
+    true,
   ],
   ["cyclic recorded stop", cyclicRecordedStop, true],
   ["recorded supersession", createAgentRunSupersededAbortError, true],

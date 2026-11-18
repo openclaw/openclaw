@@ -75,7 +75,7 @@ it("renders the identity, links, license, and Clawd's active wave", () => {
     "https://docs.openclaw.ai/releases",
     "https://openclaw.ai",
     "https://github.com/openclaw/openclaw",
-    "https://discord.gg/clawd",
+    "https://openclaw.ai/discord?from=openclaw-app-community",
     "https://x.com/openclaw",
   ]);
   for (const link of links) {

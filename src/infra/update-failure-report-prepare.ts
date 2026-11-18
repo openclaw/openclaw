@@ -367,6 +367,14 @@ async function renderBoundedDiagnostics(
         .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
         .map(formatUpdateFailureFact),
     );
+    if (
+      !refused &&
+      publicFacts.some(
+        (fact, index) => facts[index]?.message && fact.message !== facts[index]?.message,
+      )
+    ) {
+      diagnostics.push("Details retained locally in `openclaw update status --json`.");
+    }
   }
   return diagnostics;
 }

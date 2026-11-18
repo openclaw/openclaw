@@ -43,6 +43,30 @@ export type UpdateCandidateAdmissionResult = {
   fallbackReason?: string;
 };
 
+/** Environment for candidate code that inspects the serving profile without update authority. */
+export function createUpdateCandidateInspectionEnv(
+  sourceEnv: NodeJS.ProcessEnv,
+  candidateRoot: string,
+  candidateVersion: string | null,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...sourceEnv };
+  // Preserve live profile selectors, but never inherit an updater continuation.
+  for (const key of Object.keys(env)) {
+    const normalized = key.toUpperCase();
+    if (isUpdateAdmissionAuthorityEnvKey(key) || candidateRuntimeEnvKeys.has(normalized)) {
+      delete env[key];
+    }
+  }
+  // Node sees the cache policy before loading any candidate code.
+  env.NODE_DISABLE_COMPILE_CACHE = "1";
+  env.OPENCLAW_DEV_SOURCE_ROOT = candidateRoot;
+  if (candidateVersion !== null) {
+    env.OPENCLAW_VERSION = candidateVersion;
+  }
+  env.OPENCLAW_NO_RESPAWN = "1";
+  return env;
+}
+
 /** Inspect the passive declaration before running any candidate lifecycle scripts. */
 async function readUpdateAdmissionProtocol(candidateRoot: string): Promise<1 | undefined> {
   const manifest = await tryReadJson<unknown>(path.join(candidateRoot, "package.json"), {
@@ -121,21 +145,11 @@ export async function runUpdateCandidateAdmission(params: {
           mode: 0o600,
           flag: "wx",
         });
-        const env: NodeJS.ProcessEnv = { ...sourceEnv };
-        // Preserve live profile selectors, but never inherit an updater continuation.
-        for (const key of Object.keys(env)) {
-          const normalized = key.toUpperCase();
-          if (isUpdateAdmissionAuthorityEnvKey(key) || candidateRuntimeEnvKeys.has(normalized)) {
-            delete env[key];
-          }
-        }
-        // Node sees the cache policy before loading any candidate code.
-        env.NODE_DISABLE_COMPILE_CACHE = "1";
-        env.OPENCLAW_DEV_SOURCE_ROOT = params.candidateRoot;
-        if (context.target.version !== null) {
-          env.OPENCLAW_VERSION = context.target.version;
-        }
-        env.OPENCLAW_NO_RESPAWN = "1";
+        const env = createUpdateCandidateInspectionEnv(
+          sourceEnv,
+          params.candidateRoot,
+          context.target.version,
+        );
         const budget = resolveTimerTimeoutMs(
           params.timeoutMs ?? context.request.timeoutMs,
           120_000,

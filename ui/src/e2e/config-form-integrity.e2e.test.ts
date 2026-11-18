@@ -2,7 +2,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   configSnapshot,
   objectSchema,
@@ -103,6 +106,7 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const initial = config();
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "config.get"],
         methodResponses: {
           "config.get": configSnapshot(initial, "agent-list-initial", true),
           "config.schema": schema,
@@ -117,16 +121,16 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/ai-agents");
       await page.goto(`${suite.server.baseUrl}settings/ai-agents?section=agents&advanced=1`);
 
-      const mode = page.locator('select[aria-label="Code Mode"]');
+      const mode = page.locator('select[aria-label="Code mode"]');
       await revealControl(mode);
       expect((await mode.locator("option").allTextContents()).map((label) => label.trim())).toEqual(
         ["Default", "On", "Off"],
       );
       expect((await mode.locator("option:checked").textContent())?.trim()).toBe("Default");
       const rawOnly = page.locator(".settings-row").filter({
-        has: page.locator(".settings-row__title").getByText("Agent Code Mode", { exact: true }),
+        has: page.locator(".settings-row__title").getByText("Agent code mode", { exact: true }),
       });
-      await revealControl(rawOnly);
+      await revealControl(rawOnly, ["Tools"]);
       expect(await rawOnly.textContent()).toContain("Unsupported schema node. Use Raw mode.");
       expect(await rawOnly.locator("input,select,textarea").count()).toBe(0);
 
@@ -276,7 +280,9 @@ suite.define(() => {
       await gateway.rejectDeferred("config.set", rejection);
 
       const status = page.locator("openclaw-settings-save-indicator").getByRole("status");
-      await expect.poll(() => status.textContent()).toContain("Settings not applied");
+      await expect
+        .poll(() => status.textContent())
+        .toContain("Couldn’t apply settings. Review your changes.");
       // The reason is in view; clicking it blurs the edited field without resubmitting it.
       await status
         .getByText(

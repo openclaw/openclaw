@@ -322,7 +322,7 @@ it("leaves the accepted run running when waiting for its answer times out", asyn
   expect(h.state.realtimeTalk.snapshot).toMatchObject({
     realtimeTalkStatus: "error",
     realtimeTalkDetail:
-      "Talk stopped waiting. The agent's answer will appear in chat when it finishes.",
+      "Talk stopped waiting. The agent’s reply will appear in Chat when it finishes.",
   });
   // Dismissing the failed call must not turn its earlier detach into an abort.
   await h.state.toggleRealtimeTalk();

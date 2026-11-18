@@ -3,11 +3,12 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import {
-  openProgressHomeDock,
-  waitForProgressScrollIdle as waitForHomeScrollIdle,
-} from "./session-progress-home.test-support.ts";
+  createChatFlowE2eSuite,
+  installMockGateway,
+  waitForTranscriptScrollIdle as waitForHomeScrollIdle,
+} from "./chat-flow.test-support.ts";
+import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -125,6 +126,7 @@ suite.define(() => {
         await card.locator("summary").click();
         await card.locator("summary").click();
         expect(await isOpen()).toBe(true);
+        await waitForHomeScrollIdle(thread);
         if (target === "canceled wheel") {
           await outputScroller.evaluate((element) => {
             element.addEventListener("wheel", (event) => event.preventDefault(), {
@@ -134,7 +136,11 @@ suite.define(() => {
         }
         const wheelPoint = await outputScroller.evaluate((element) => {
           const rect = element.getBoundingClientRect();
-          return { x: rect.left + 100, y: rect.top + 100 };
+          const point = { x: rect.left + 100, y: rect.top + 100 };
+          if (!element.contains(document.elementFromPoint(point.x, point.y))) {
+            throw new Error("Nested output wheel target is not visible");
+          }
+          return point;
         });
         await page.mouse.move(wheelPoint.x, wheelPoint.y);
         const before = {

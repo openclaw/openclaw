@@ -46,6 +46,8 @@ Text mode removes complete link destinations, including nested parentheses.
 An escaped `!` before a link stays literal rather than causing the link text to
 be omitted as an image.
 Readability text output keeps headings, paragraphs, and list items on separate lines.
+HTML text output preserves visible literal syntax, including link and image examples,
+backticks, and leading punctuation, rather than interpreting it as Markdown.
 </ParamField>
 
 <ParamField path="maxChars" type="number">

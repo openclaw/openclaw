@@ -206,7 +206,6 @@ export function ChatWorkingIndicator(props: WorkingProps) {
                 ? t("chat.waitingForApproval")
                 : t("chat.view.workingDetails")
             }
-            title={t("chat.view.activityDetails")}
           >
             <Show when={!attention()}>
               <span class="chat-bubble-dots chat-bubble-dots--working" aria-hidden="true">

@@ -5,7 +5,7 @@ import { performance } from "node:perf_hooks";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createGatewayStartupTrace } from "../gateway/server-startup-trace.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -148,6 +148,84 @@ async function isolated<T>(run: (input: ReturnType<typeof fixture>) => Promise<T
     () => withPluginCache(cache, () => run(fixture())),
   );
 }
+
+it.each([
+  { label: "below threshold", registerMs: 4_999, warning: false },
+  { label: "at threshold", registerMs: 5_000, warning: false },
+  { label: "above threshold", registerMs: 5_001, warning: true },
+  { label: "slow acquisition and import only", registerMs: 0, loadMs: 6_001, warning: false },
+  { label: "failed registration", registerMs: 6_001, fail: true, warning: false },
+  { label: "no tool registrations", registerMs: 6_001, noTools: true, warning: true },
+])("emits only advisory slow-registration warnings: $label", (scenario) =>
+  isolated(async ({ first, options }) => {
+    let clock = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const event = `registration-timing:${first.file}`;
+    const phases: string[] = [];
+    const advance = (phase: string) => {
+      phases.push(phase);
+      clock += phase === "load" ? (scenario.loadMs ?? 0) : scenario.registerMs;
+    };
+    const prepare = preparation.preparePluginGenerationArtifact;
+    vi.spyOn(preparation, "preparePluginGenerationArtifact").mockImplementation(async (params) => {
+      const artifact = await prepare(params);
+      clock += scenario.loadMs ?? 0;
+      return artifact;
+    });
+    const tools = scenario.noTools
+      ? ""
+      : `api.registerTool(() => { throw new Error("factory must stay lazy"); }, {
+          names: ["timing_first", "timing_second", "timing_first"],
+        });
+        api.registerTool(() => { throw new Error("unnamed factory must stay lazy"); });`;
+    fs.writeFileSync(
+      first.file,
+      `const process = require("node:process");
+      process.emit(${JSON.stringify(event)}, "load");
+      module.exports = { id: ${JSON.stringify(first.id)}, register(api) {
+        ${tools}
+        process.emit(${JSON.stringify(event)}, "register");
+        ${scenario.fail ? 'throw new Error("register failed");' : ""}
+      } };`,
+    );
+    writeFixtureJson(first.dir, "openclaw.plugin.json", {
+      id: first.id,
+      configSchema: { type: "object", additionalProperties: false },
+      contracts: { tools: ["timing_first", "timing_second"] },
+    });
+    const warn = vi.fn();
+    process.on(event, advance);
+    try {
+      const registry = await loadOpenClawPluginsAsync({
+        ...options,
+        logger: { info() {}, warn, error() {} },
+      });
+      expect(phases).toEqual(["load", "register"]);
+      expect(registry.plugins.find(({ id }) => id === first.id)?.status).toBe(
+        scenario.fail ? "error" : "loaded",
+      );
+      expect(registry.tools.filter(({ pluginId }) => pluginId === first.id)).toHaveLength(
+        scenario.fail || scenario.noTools ? 0 : 2,
+      );
+      const warnings = warn.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.includes("plugin registration took"));
+      expect(warnings).toEqual(
+        scenario.warning
+          ? [
+              `[plugins] first-external plugin registration took ${scenario.registerMs.toFixed(1)}ms (>5000ms); ` +
+                (scenario.noTools
+                  ? "0 tool registrations; 0 registered tool names. "
+                  : "2 tool registrations; 2 registered tool names. ") +
+                "Registration completed (advisory only).",
+            ]
+          : [],
+      );
+    } finally {
+      process.off(event, advance);
+    }
+  }),
+);
 
 it("reports the shared external preparation worker once in ordinary startup logs", () =>
   isolated(async ({ options }) => {

@@ -7,6 +7,7 @@ import {
   inflateRawSync,
 } from "node:zlib";
 import type { WebSocket } from "ws";
+import { copyOwnedBuffer } from "../../shared/owned-buffer.js";
 import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { SerializedGatewayFrame } from "../serialized-json.js";
 import { gatewayReceiver } from "./ws-receiver.js";
@@ -64,8 +65,10 @@ type NativeZlibStream = {
  * context per message fragments the native heap; ws keeps one per socket instead.
  * Returns null when Node no longer exposes the handle; callers use the one-shot API.
  */
-function sharedZlib(open: () => NativeZlibStream) {
+function sharedZlib(open: () => NativeZlibStream, reuseOutput = false) {
   let stream: NativeZlibStream | undefined;
+  // Calls are synchronous; only exact owned copies escape into queued socket writes.
+  const workspace = reuseOutput ? Buffer.allocUnsafe(MAX_OUTPUT_CHUNK_BYTES) : undefined;
   return (input: Uint8Array, maxOutputLength: number): Buffer | null => {
     if (!stream) {
       stream = open();
@@ -87,7 +90,7 @@ function sharedZlib(open: () => NativeZlibStream) {
     let pending = input.length;
     try {
       do {
-        const output = Buffer.allocUnsafe(chunkBytes);
+        const output = workspace ?? Buffer.allocUnsafe(chunkBytes);
         handle.writeSync(Z_SYNC_FLUSH, input, offset, pending, output, 0, chunkBytes);
         if (stream.destroyed) {
           throw new Error("zlib stream failed");
@@ -97,7 +100,8 @@ function sharedZlib(open: () => NativeZlibStream) {
         if (total > maxOutputLength) {
           throw new RangeError("Max payload size exceeded");
         }
-        parts.push(output.subarray(0, produced));
+        const part = output.subarray(0, produced);
+        parts.push(workspace ? copyOwnedBuffer(part) : part);
         offset += pending - state[1]!;
         pending = state[1]!;
       } while (state[0] === 0);
@@ -228,11 +232,12 @@ export function installGatewayDeflateCodec(socket: WebSocket):
     const key = `${windowBits}:${memLevel}`;
     let deflate = deflateShared.get(key);
     if (!deflate) {
-      deflate = sharedZlib(() => createDeflateRaw(options));
+      // Retained large segments must not pin pooled slabs; small envelopes are short-lived.
+      deflate = sharedZlib(() => createDeflateRaw(options), memLevel === 8);
       deflateShared.set(key, deflate);
     }
     return (input: Uint8Array): Buffer =>
-      deflate(input, kMaxLength) ?? deflateRawSync(input, options);
+      deflate(input, kMaxLength) ?? copyOwnedBuffer(deflateRawSync(input, options));
   };
   // Small envelopes need less hash-table clearing; large payloads retain zlib's default tables.
   const compressSmall = compressorFor(5);
@@ -275,14 +280,7 @@ export function installGatewayDeflateCodec(socket: WebSocket):
         const windows = getOrCreateWeakOwnerMap(deflatedSegments, bytes);
         let piece = windows.get(windowBits);
         if (!piece) {
-          // Avoid retaining pooled slabs for small copies; keep Node's native large-copy path.
-          const compressed = compressPiece(bytes);
-          if (compressed.length < Buffer.poolSize >>> 1) {
-            piece = Buffer.allocUnsafeSlow(compressed.length);
-            compressed.copy(piece);
-          } else {
-            piece = Buffer.from(compressed);
-          }
+          piece = compressPiece(bytes);
           windows.set(windowBits, piece);
         }
         pieces.push(piece);

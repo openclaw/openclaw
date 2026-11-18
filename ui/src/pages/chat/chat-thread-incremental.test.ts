@@ -6,9 +6,14 @@ import * as displayText from "../../lib/strip-thinking-tags.ts";
 import * as chatThreadBuild from "./chat-thread-build.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import * as duplicatePreparation from "./chat-thread-duplicates.ts";
+import * as threadItems from "./chat-thread-items.ts";
 import { createPrependCorpus } from "./chat-thread-prepend-corpus.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
-import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import {
+  buildCachedChatItems,
+  getChatItemsGeneration,
+  resetChatThreadState,
+} from "./chat-thread.ts";
 
 function deepFreeze(value: unknown): void {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -158,7 +163,114 @@ function freezeProjectedMessages(items: ReturnType<typeof buildChatItems>): void
   }
 }
 
+it.each([
+  {},
+  { runWorking: true },
+  { subagentWait: { runId: "child", startedAt: 1 } },
+  { runWorking: true, searchOpen: true, searchQuery: "unmatched" },
+  { subagentWait: { runId: "child", startedAt: 1 }, searchOpen: true, searchQuery: "unmatched" },
+])("does not rebuild populated history when background loading changes for %j", (progress) => {
+  resetChatThreadState();
+  try {
+    const props = createProps({
+      ...progress,
+      messages: [
+        message("request", "user", 1, "Request"),
+        message("reply", "assistant", 2, "Reply"),
+      ],
+      loading: true,
+    });
+    const initial = buildCachedChatItems(props);
+    const generation = getChatItemsGeneration(initial);
+    for (const loading of [false, true, false]) {
+      const items = buildCachedChatItems({ ...props, loading });
+      expect(items).toBe(initial);
+      expect(getChatItemsGeneration(items)).toBe(generation);
+    }
+  } finally {
+    resetChatThreadState();
+  }
+});
+
+it.each([
+  { progress: { runWorking: true }, kinds: [] },
+  { progress: { subagentWait: { runId: "child", startedAt: 1 } }, kinds: [] },
+  {
+    progress: {
+      runWorking: true,
+      reasoning: {
+        runId: "thinking-run",
+        items: [{ itemId: "thinking", text: "Still thinking", startedAt: 1 }],
+      },
+    },
+    kinds: ["stream"],
+  },
+])("preserves initial loading progress transitions for %j", ({ progress, kinds }) => {
+  for (const messages of [
+    [],
+    [message("heartbeat", "assistant", 1, "HEARTBEAT_OK")],
+    [message("hidden-tool", "toolResult", 1, "Hidden tool output")],
+  ]) {
+    resetChatThreadState();
+    try {
+      const props = createProps({ ...progress, messages, showToolCalls: false, loading: true });
+      expect(buildCachedChatItems(props).map((item) => item.kind)).toEqual(kinds);
+      expect(buildCachedChatItems({ ...props, loading: false })).toContainEqual(
+        expect.objectContaining({ kind: "reading-indicator" }),
+      );
+      expect(buildCachedChatItems(props).map((item) => item.kind)).toEqual(kinds);
+    } finally {
+      resetChatThreadState();
+    }
+  }
+});
+
 describe("incremental history build equivalence", () => {
+  it("searches each source once per query across canvas lookahead and visible rows", () => {
+    const messages = [
+      message("request", "user", 1, "Request"),
+      message("match", "assistant", 2, "Needle answer"),
+      message("other-request", "user", 3, "Another request"),
+      message("other-answer", "assistant", 4, "Unrelated answer"),
+    ];
+    const createMatcher = threadItems.createChatSearchMatcher;
+    const matches = vi.fn<(message: unknown) => void>();
+    const factory = vi
+      .spyOn(threadItems, "createChatSearchMatcher")
+      .mockImplementation((...args) => {
+        const matcher = createMatcher(...args);
+        return (source) => {
+          matches(source);
+          return matcher(source);
+        };
+      });
+    try {
+      for (const query of ["Needle", "Unrelated"]) {
+        matches.mockClear();
+        const items = buildChatItems(
+          createProps({ messages, searchOpen: true, searchQuery: query }),
+        );
+        const visible = items.flatMap((item) =>
+          item.kind === "group"
+            ? item.messages.flatMap((entry) =>
+                normalizeMessage(entry.message).content.flatMap((block) =>
+                  block.type === "text" ? [block.text] : [],
+                ),
+              )
+            : [],
+        );
+        expect(visible).toEqual([`${query} answer`]);
+        for (const source of messages) {
+          expect(
+            matches.mock.calls.filter(([sourceMessage]) => sourceMessage === source),
+          ).toHaveLength(1);
+        }
+      }
+    } finally {
+      factory.mockRestore();
+    }
+  });
+
   it.each([
     { searchOpen: false, showToolCalls: true },
     { searchOpen: false, showToolCalls: false },

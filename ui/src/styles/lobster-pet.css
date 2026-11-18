@@ -1562,17 +1562,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-.lobsterdex__mini {
-  display: inline-block;
-  position: relative;
-  width: 26px;
-  aspect-ratio: 120 / 105;
-}
-
-.lobsterdex__mini .lobster-pet__svg {
-  animation: none;
-}
-
 .lobsterdex__mini--unseen {
   filter: grayscale(1) brightness(0.45) opacity(0.55);
 }

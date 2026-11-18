@@ -1,5 +1,7 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayRequestRejected
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -9,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -290,4 +293,85 @@ class ChatControllerCatalogTest {
       val last = requests.last { it.first == "sessions.list" }.second!!
       assertEquals(JsonPrimitive(400), chatControllerTestJson.parseToJsonElement(last).jsonObject["limit"])
     }
+
+  @Test
+  fun metadataRejectionNamesMetadataAndKeepsModelChoices() =
+    runTest {
+      var metadataRejected = false
+      val (controller, requests) =
+        chatControllerTestSetup {
+          respond("chat.metadata") {
+            if (metadataRejected) throw supersededMetadataRead()
+            """{"commands":[]}"""
+          }
+          respond("models.list", """{"models":[{"id":"current","name":"Current","provider":"fixture"}]}""")
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+      assertEquals(listOf("current"), acceptedChoices.map { it.id })
+      val catalogReads = requests.count { it.first == "models.list" }
+
+      metadataRejected = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh chat metadata. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals("A rejected metadata read never reaches the catalog", catalogReads, requests.count { it.first == "models.list" })
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      metadataRejected = false
+      controller.refresh()
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+    }
+
+  @Test
+  fun catalogFailuresReplaceRecoveredMetadataNotice() =
+    runTest {
+      var metadataRejected = false
+      var catalog = "ok"
+      val controller =
+        createScriptedChatController {
+          respond("chat.metadata") {
+            if (metadataRejected) throw supersededMetadataRead()
+            """{"commands":[]}"""
+          }
+          respond("models.list") {
+            if (catalog == "throws") error("catalog unavailable")
+            """{"refreshFailed":${catalog == "refreshFailed"},"models":[{"id":"current","name":"Current","provider":"fixture"}]}"""
+          }
+        }
+      controller.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+      val acceptedChoices = controller.modelCatalog.value
+
+      metadataRejected = true
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh chat metadata. Tap Refresh to try again.", controller.errorText.value)
+
+      metadataRejected = false
+      catalog = "refreshFailed"
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+
+      catalog = "ok"
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertNull(controller.errorText.value)
+
+      catalog = "throws"
+      controller.handleGatewayEvent("chat.metadata.changed", "{}")
+      advanceUntilIdle()
+      assertEquals("Could not refresh models. Tap Refresh to try again.", controller.errorText.value)
+      assertEquals(acceptedChoices, controller.modelCatalog.value)
+    }
+
+  private fun supersededMetadataRead() =
+    GatewayRequestRejected(
+      GatewaySession.ErrorShape("UNAVAILABLE", "Session changed while preparing its metadata. Retry the request."),
+    )
 }

@@ -15,6 +15,7 @@ import {
 import { readConnectErrorDetailCode } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { readMissingScopeError } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
@@ -110,6 +111,7 @@ export const callNodesGatewayCli = async (
   opts: NodesRpcOpts,
   params?: unknown,
   callOpts?: {
+    signal?: AbortSignal;
     scopes?: OperatorScope[];
     useStoredDeviceAuth?: boolean;
     requiredStoredDeviceAuthScopes?: OperatorScope[];
@@ -119,7 +121,7 @@ export const callNodesGatewayCli = async (
   const invokeTimeoutMs =
     method === "node.invoke" && isRecord(params) ? params.timeoutMs : undefined;
   const useLocalBackendSharedAuth = callOpts?.useLocalBackendSharedAuth === true;
-  return await callGatewayFromCliWithTransport(method, opts, params, {
+  const result = await callGatewayFromCliWithTransport(method, opts, params, {
     label: `Nodes ${method}`,
     timeoutMs: resolveNodesTransportTimeoutMs(opts, invokeTimeoutMs),
     scopes: callOpts?.scopes,
@@ -131,15 +133,20 @@ export const callNodesGatewayCli = async (
       : GATEWAY_CLIENT_NAMES.CLI,
     mode: useLocalBackendSharedAuth ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
     sharedStateMode: "read-only",
+    signal: callOpts?.signal,
   });
+  // A reply can settle while the interrupted client closes; Ctrl+C still owns the output.
+  callOpts?.signal?.throwIfAborted();
+  return result;
 };
 
-/** Read node diagnostics with pairing details when authorized, otherwise keep read-only access. */
+/** Read node diagnostics with pairing details when authorized; Ctrl+C stops the read. */
 export const callNodeDiagnosticsGatewayCli = async (
   method: "node.list" | "node.describe",
   opts: NodesRpcOpts,
   params?: unknown,
 ) => {
+  const signal = getAsyncWorkSignal();
   for (const auth of [
     {
       useStoredDeviceAuth: true,
@@ -148,14 +155,14 @@ export const callNodeDiagnosticsGatewayCli = async (
     { scopes: ["operator.read", "operator.pairing"], useLocalBackendSharedAuth: true },
   ] satisfies NonNullable<Parameters<typeof callNodesGatewayCli>[3]>[]) {
     try {
-      return await callNodesGatewayCli(method, opts, params, auth);
+      return await callNodesGatewayCli(method, opts, params, { ...auth, signal });
     } catch (error) {
       if (!isDiagnosticsAuthFallbackError(error)) {
         throw error;
       }
     }
   }
-  return await callNodesGatewayCli(method, opts, params);
+  return await callNodesGatewayCli(method, opts, params, { signal });
 };
 
 /** Call pairing approval methods with explicit operator scopes. */

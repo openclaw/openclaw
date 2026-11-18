@@ -323,7 +323,7 @@ it("commits aliased worker membership and participant facts before publishing, a
       expect(after?.participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 4 }]);
       expect(after?.version).toEqual({ ...before.version, sequence: before.version.sequence + 1 });
       expect(readSessionActorEntryFacts(actorTarget)?.participants).toEqual(after?.participants);
-      expect(participantLifecycle).toHaveBeenCalledTimes(2);
+      expect(participantLifecycle).toHaveBeenCalledTimes(1);
       await expect(
         addSessionMember(scope, {
           identityId: "stale",

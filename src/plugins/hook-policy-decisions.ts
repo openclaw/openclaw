@@ -4,7 +4,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 type PluginHookPolicy = PluginEntryConfig["hooks"];
 
 export function resolvePromptInjectionAllowed(policy?: PluginHookPolicy): boolean {
-  return policy?.allowPromptInjection !== false;
+  return policy?.allowPromptModification !== false;
 }
 
 export function resolveConversationAccessAllowed(

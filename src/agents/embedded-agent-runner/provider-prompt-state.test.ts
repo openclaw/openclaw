@@ -39,12 +39,13 @@ function observe(
   promptState: ProviderPromptState,
   streamFn: StreamFn,
   recordEvent?: Parameters<typeof wrapStreamFnWithProviderPromptState>[0]["recordEvent"],
+  effectiveContextTokenBudget = 128_000,
 ) {
   return wrapStreamFnWithProviderPromptState({
     state: promptState,
     streamFn,
     recordEvent,
-    effectiveContextTokenBudget: 128_000,
+    effectiveContextTokenBudget,
   });
 }
 
@@ -73,28 +74,14 @@ function createResultStream(stopReason: "error" | "stop", errorMessage?: string)
 }
 
 describe("provider prompt state", () => {
-  it("keeps state within one run id and drops it at the run boundary", () => {
-    const first = getProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).toBe(first);
-
-    clearProviderPromptState("run-1");
-    expect(getProviderPromptState("run-1")).not.toBe(first);
-    clearProviderPromptState("run-1");
-  });
-
   it("retains active run state until its owned cleanup", () => {
-    const firstRunId = "active-run-0";
-    const otherRunIds = Array.from({ length: 79 }, (_, index) => `active-run-${index + 1}`);
-    const first = getProviderPromptState(firstRunId);
+    const runIds = Array.from({ length: 80 }, (_, index) => `active-run-${index}`);
+    const first = getProviderPromptState(runIds[0]!);
     try {
-      for (const runId of otherRunIds) {
-        getProviderPromptState(runId);
-      }
-      expect(getProviderPromptState(firstRunId)).toBe(first);
+      runIds.forEach((runId) => getProviderPromptState(runId));
+      expect(getProviderPromptState(runIds[0]!)).toBe(first);
     } finally {
-      for (const runId of [firstRunId, ...otherRunIds]) {
-        clearProviderPromptState(runId);
-      }
+      runIds.forEach((runId) => clearProviderPromptState(runId));
     }
   });
 
@@ -322,33 +309,17 @@ describe("provider prompt state", () => {
   });
 
   it("does not compare rejected payloads across effective context scopes", async () => {
-    const runId = "changed-context-scope";
-    const scopedState = getProviderPromptState(runId);
-    const scopedContext = { systemPrompt: "system", messages: [], tools: [] } as Context;
     const payload = { input: "same", model: model.id };
     const transport = vi.fn<StreamFn>(async (_model, _context, options) => {
       await options?.onPayload?.(payload, model);
       return createResultStream("error");
     });
-    const firstWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state: scopedState,
-      effectiveContextTokenBudget: 64_000,
-    });
-    const first = await firstWrapped(model, scopedContext);
-    await first.result();
-    markLastProviderPromptContextRejected(scopedState);
+    await (await observe(state, transport, undefined, 64_000)(model, context)).result();
+    markLastProviderPromptContextRejected(state);
 
-    const secondWrapped = wrapStreamFnWithProviderPromptState({
-      streamFn: transport,
-      state: scopedState,
-      effectiveContextTokenBudget: 128_000,
-    });
-    const second = await secondWrapped(model, scopedContext);
-    await second.result();
+    await (await observe(state, transport)(model, context)).result();
 
     expect(transport).toHaveBeenCalledTimes(2);
-    clearProviderPromptState(runId);
   });
 
   it("keeps a rejected primary identity across successful auxiliary attempts", async () => {

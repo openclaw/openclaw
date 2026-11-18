@@ -8,7 +8,6 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
-import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const pageOptions = {
@@ -102,8 +101,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
       const sidebar = page.locator("openclaw-app-sidebar");
       const ownerTitle = sidebar.locator("#sidebar-session-owner-title");
-      await expect.poll(() => ownerTitle.getAttribute("aria-label")).toBe("Owners: My sessions");
-      await selectAllSidebarSessions(page);
+      await expect.poll(() => ownerTitle.getAttribute("aria-label")).toBe("Owners: All owners");
       const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
       const card = page.locator(".session-progress-hovercard");
       await row.waitFor({ state: "visible" });

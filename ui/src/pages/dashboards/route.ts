@@ -7,7 +7,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
-import type { DashboardsRouteData } from "./view.tsx";
+import type { DashboardsRouteData } from "./gallery-filters.ts";
 
 export function dashboardsRouteData(
   context: ApplicationContext,

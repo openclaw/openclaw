@@ -34,9 +34,7 @@ export async function provisionIncludedFiles(
   if (inspection.paths.length === 0) {
     return [];
   }
-  return await timeWorktreePreparationPhase("provisionCopy", () =>
-    copyProvisionedPathsInWorker(repoRoot, worktreePath, inspection.paths, options),
-  );
+  return await copyProvisionedPathsInWorker(repoRoot, worktreePath, inspection.paths, options);
 }
 
 /** Restores provisioned bytes and modes from SQLite, never from the mutable source checkout. */

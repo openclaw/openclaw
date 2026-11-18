@@ -241,7 +241,16 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         messageId: result.messageId,
       };
     },
-    updateEntry: async ({ cfg, accountId, context, entry, payload, request, approvalKind }) => {
+    updateEntry: async ({
+      cfg,
+      accountId,
+      context,
+      entry,
+      payload,
+      request,
+      approvalKind,
+      remainingEntries,
+    }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return;
@@ -276,21 +285,25 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
             messageThreadId: originThreadId,
             directMessagesTopicId: parsedOrigin?.directMessagesTopicId,
           };
-          // An edit reaches only its own topic; General uses the sender's root normalization.
-          if (
-            (approvalTargetKey(entry) !== approvalTargetKey(origin) || editError !== undefined) &&
-            !terminalizedSystemAgentApprovals.has(request.id)
-          ) {
-            await sendMessageTelegram(originChatId, escapeTelegramHtml(payload.text), {
-              ...resolved.options(),
-              textMode: "html",
-              ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
-              ...(origin.directMessagesTopicId != null
-                ? { directMessagesTopicId: origin.directMessagesTopicId }
-                : {}),
-            });
+          // Wait for a later origin card before deciding whether a fallback is needed.
+          const originKey = approvalTargetKey(origin);
+          const needsFallback = approvalTargetKey(entry) !== originKey || editError !== undefined;
+          const awaitingOrigin =
+            needsFallback &&
+            remainingEntries?.some((pending) => approvalTargetKey(pending) === originKey);
+          if (!awaitingOrigin) {
+            if (needsFallback && !terminalizedSystemAgentApprovals.has(request.id)) {
+              await sendMessageTelegram(originChatId, escapeTelegramHtml(payload.text), {
+                ...resolved.options(),
+                textMode: "html",
+                ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
+                ...(origin.directMessagesTopicId != null
+                  ? { directMessagesTopicId: origin.directMessagesTopicId }
+                  : {}),
+              });
+            }
+            terminalizedSystemAgentApprovals.add(request.id);
           }
-          terminalizedSystemAgentApprovals.add(request.id);
         }
       }
       if (editError !== undefined) {

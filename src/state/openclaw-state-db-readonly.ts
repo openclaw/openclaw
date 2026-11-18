@@ -73,6 +73,7 @@ import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-c
 
 export { isArtifactPreservingStateRead, withArtifactPreservingStateReads };
 
+const REUSE_IMAGE = { reuse: true } as const;
 const disposableStateReads = resolveGlobalSingleton(
   Symbol.for("openclaw.disposableStateReads"),
   () => new AsyncLocalStorage<RetainedReadScope[]>(),
@@ -409,7 +410,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
     if (!opened) {
       opened = openOpenClawStateReadOnlyLocation(
         pathname,
-        prepareSqliteReadOnlyLocationSync(pathname),
+        prepareSqliteReadOnlyLocationSync(pathname, undefined, REUSE_IMAGE),
       );
       readers.set(pathname, opened);
     }
@@ -421,7 +422,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
     return result;
   }
   const prepared = requiresArtifactPreservingSnapshot(pathname)
-    ? prepareSqliteReadOnlyLocationSync(pathname)
+    ? prepareSqliteReadOnlyLocationSync(pathname, undefined, REUSE_IMAGE)
     : undefined;
   // Maintenance must release readers before replacing store files.
   return withOpenClawStateReadOnlyLocation(
@@ -693,14 +694,16 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
     const directRead =
       (isStatePostgres() || options.allowNativeRead || isLiveStateRead()) &&
       (!isArtifactPreservingStateRead() || isLiveStateRead()) &&
-      !openStateSchemaReadAdmission;
+      // Admission still gets a fresh reader. Host guards repeat throughout an
+      // update, so they must not copy the whole database for each check.
+      (!openStateSchemaReadAdmission || options.allowNativeRead === true);
     if (!directRead) {
       assertStateFileSnapshotAllowed();
     }
     return withOpenClawStateReadOnlyLocation(
       operation,
       pathname,
-      directRead ? pathname : prepareSqliteReadOnlyLocationSync(pathname),
+      directRead ? pathname : prepareSqliteReadOnlyLocationSync(pathname, undefined, REUSE_IMAGE),
       openStateSchemaReadAdmission,
     );
   });
@@ -742,6 +745,7 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
     }
     const prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
+      reuse: true,
     });
     try {
       // Verification can quarantine the live path while the snapshot child is running.

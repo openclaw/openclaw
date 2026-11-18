@@ -138,7 +138,7 @@ export function scheduleUnownedCronJobsInWorker(
         if (
           !job ||
           activeJobIds.has(row.job_id) ||
-          (input.options?.preserveExpiredPacedNextRunJobId === row.job_id && !job.enabled)
+          (input.options?.preserveDisabledJobId === row.job_id && !job.enabled)
         ) {
           continue;
         }

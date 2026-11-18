@@ -22,7 +22,7 @@ import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
 import { holdCanaryProgress, stubHealthyGateway } from "./update-candidate-canary.test-support.js";
 import * as candidateIo from "./update-candidate-io.js";
-import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
+import { UpdateInterruptedError } from "./update-requester-authority.js";
 import { createUpdateRun, getUpdateRunAsync } from "./update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
@@ -251,7 +251,7 @@ export function registerCanaryProgressWorkerTests(
           if (deadline) {
             await expect(pending).rejects.toBe(expired);
           } else {
-            await expect(pending).rejects.toBeInstanceOf(UpdateRequesterRevokedError);
+            await expect(pending).rejects.toBeInstanceOf(UpdateInterruptedError);
           }
           expect(commits).toBe(2);
           const saved = await getUpdateRunAsync(run.runId, { env });
@@ -267,9 +267,7 @@ export function registerCanaryProgressWorkerTests(
               exitCode: 1,
               failureFacts: expect.arrayContaining([
                 expect.objectContaining({
-                  message: expect.stringContaining(
-                    deadline ? expired.message : "requester-revoked",
-                  ),
+                  message: expect.stringContaining(deadline ? expired.message : "interrupted"),
                 }),
               ]),
             }),

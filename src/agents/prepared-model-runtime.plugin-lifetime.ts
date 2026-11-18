@@ -52,12 +52,17 @@ import type {
   PreparedModelRuntimeLease,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
+import {
+  createRuntimePluginWork,
+  releaseRuntimePluginWork,
+  retainRuntimePluginWork,
+} from "./runtime-plugin-work.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 const runUnscoped = <T>(run: () => T): T => run();
 type Lifetime = ReturnType<typeof createLifetime> & {
-  overlapInstances?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
+  instances?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
+  deferredCapabilities?: ReadonlySet<PluginInstanceHandle>;
 };
 type PreparedPluginGenerationResources = Pick<
   PreparedModelRuntimePluginGeneration,
@@ -201,11 +206,21 @@ export function ownPreparedPluginGeneration(
       (registry) => registry !== undefined,
     ),
   );
-  let overlapInstances: Map<PluginInstanceHandle, PluginRegistry> | undefined;
+  let instances: Map<PluginInstanceHandle, PluginRegistry> | undefined;
+  const deferredCapabilities = new Set<PluginInstanceHandle>();
   for (const registry of selectedRegistries) {
-    for (const instance of collectRegistryInvocationInstances(registry, true)) {
-      if (!overlapInstances?.has(instance)) {
-        (overlapInstances ??= new Map()).set(instance, registry);
+    // Hooks can first run at finalization; model providers can first resolve at fallback.
+    const deferredIds = new Set(
+      [...registry.hooks, ...registry.typedHooks, ...registry.providers].map(
+        ({ pluginId }) => pluginId,
+      ),
+    );
+    for (const instance of collectRegistryInvocationInstances(registry)) {
+      if (!instances?.has(instance)) {
+        (instances ??= new Map()).set(instance, registry);
+      }
+      if (deferredIds.has(instance.pluginId) && !instance.owner?.record.generationOverlap) {
+        deferredCapabilities.add(instance);
       }
     }
   }
@@ -244,8 +259,8 @@ export function ownPreparedPluginGeneration(
     void lifetime.close().catch(() => {});
     throw error;
   }
-  // The immutable generation owns this selection; ordinary leases need no callable scope.
-  Object.assign(lifetime, { overlapInstances });
+  // Immutable selection is shared; each lease retains only the capabilities it invokes.
+  Object.assign(lifetime, { instances, deferredCapabilities });
   generations.set(generation, lifetime);
   return lifetime;
 }
@@ -259,27 +274,53 @@ export function retainPreparedPluginGeneration(
   };
 }
 
+/** Shared builds outlive their requesting turn: they hold the generation, not the turn's scope. */
+export function runWithPreparedPluginGeneration<T>(
+  generation: PreparedModelRuntimePluginGeneration,
+  build: () => Promise<T>,
+): Promise<T> {
+  return pluginInvocationContext.exit(async () => {
+    await using _ = { [Symbol.asyncDispose]: retainPreparedPluginGeneration(generation) };
+    return await build();
+  });
+}
+
 /** Each admitted lease owns callable authority independently of its parent's lifetime. */
 export function createPreparedModelRuntimeLease(
   snapshot: PreparedModelRuntimeSnapshot,
   pluginGeneration: PreparedModelRuntimePluginGeneration,
   onRelease?: () => void,
 ): PreparedModelRuntimeLease {
-  const registryByInstance = ownPreparedPluginGeneration(pluginGeneration).overlapInstances;
+  const lifetime = ownPreparedPluginGeneration(pluginGeneration);
+  const registryByInstance = lifetime.instances;
   const registry = registryByInstance?.values().next().value;
+  const work = createRuntimePluginWork("prepared-generation-lease", (pluginId, yieldHold) =>
+    handover(pluginId, yieldHold),
+  );
+  const handover = captureTurnHandoverRequest(
+    new Set(registryByInstance?.values()),
+    () => scope?.pendingReplacementInstances ?? [],
+  );
   const scope =
     registryByInstance && registry
       ? new PluginInvocationScope(registry, registryByInstance.keys(), {
-          retained: true,
+          // Overlap promises already-admitted leases access after ordinary admission closes.
+          retained: (instance) => instance.owner?.record.generationOverlap === true,
+          work,
           parent: pluginInvocationContext.getStore(),
           registryByInstance,
         })
       : undefined;
   let releaseGeneration: () => Promise<void>;
   try {
-    releaseGeneration = retainPreparedPluginGeneration(pluginGeneration);
+    for (const instance of lifetime.deferredCapabilities ?? []) {
+      work.retain(instance);
+    }
+    const release = lifetime.retain();
+    releaseGeneration = () => releaseRuntimePluginWork(release, work.release);
   } catch (error) {
     scope?.release();
+    work.release();
     throw error;
   }
   if (!scope && !onRelease) {

@@ -38,6 +38,7 @@ import type {
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { captureEnvironmentKey } from "../shared/environment-key.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { APPROVALS_SCOPE, normalizeOperatorScopeList } from "./operator-scopes.js";
@@ -439,6 +440,7 @@ export async function loadGatewayPlugins(params: {
     autoEnabledReasons: params.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
     env: params.env ?? process.env,
+    environmentKey: captureEnvironmentKey(params.env),
     logger,
     preferBuiltPluginArtifacts: true,
     expectedSourceDigests: params.pluginLifecycle?.expectedSourceDigests,

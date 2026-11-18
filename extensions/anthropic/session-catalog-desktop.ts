@@ -557,7 +557,7 @@ export async function readDesktopOverlay(
   if (
     !forceRefresh &&
     entry &&
-    entry.refreshedAt + CLAUDE_DESKTOP_SCAN_TTL_MS > Date.now() &&
+    entry.refreshedAt + CLAUDE_DESKTOP_SCAN_TTL_MS > performance.now() &&
     dirty !== "all" &&
     !(dirty instanceof Set && dirty.size > 0)
   ) {
@@ -567,7 +567,7 @@ export async function readDesktopOverlay(
   const watch = entry?.watch ?? createDirtyDirectoryWatch(desktopSessionsDir(homeDir), 3);
   const current: DesktopOverlayCacheEntry = {
     watch,
-    refreshedAt: Date.now(),
+    refreshedAt: performance.now(),
     refreshing: true,
     overlay: Promise.resolve(emptyDesktopOverlay),
   };

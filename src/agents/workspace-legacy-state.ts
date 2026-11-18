@@ -128,9 +128,15 @@ export function legacyWorkspaceSiblingAttestationMayExist(filePath: string): boo
   }
 }
 
-function findUnmigratedWorkspaceSource(sources: LegacyWorkspaceSourcePaths): string | undefined {
+function findUnmigratedWorkspaceSource(
+  sources: LegacyWorkspaceSourcePaths,
+  stateDirOnly = false,
+): string | undefined {
   const withClaims = (paths: string[]) =>
     paths.flatMap((filePath) => [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]);
+  if (stateDirOnly) {
+    return withClaims(sources.stateDirAttestationPaths).find(pathMayExistSync);
+  }
   return (
     withClaims([...sources.setupStatePaths, ...sources.stateDirAttestationPaths]).find(
       pathMayExistSync,
@@ -160,6 +166,8 @@ function workspaceMigrationError(
 /** Recheck lifecycle readiness without reusing a running turn's verified-absence cache. */
 export function assertWorkspaceStateMigrationReady(params: {
   workspaceDirs: readonly string[];
+  /** Sandbox-writable dirs: only state-dir attestations, which sandboxes cannot write, count. */
+  sandboxWritableDirs?: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   operation?: "doctor";
@@ -169,6 +177,7 @@ export function assertWorkspaceStateMigrationReady(params: {
   const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
     const sourcePath = findUnmigratedWorkspaceSource(
       resolveLegacyWorkspaceSourcePaths(workspaceDir, params),
+      params.sandboxWritableDirs?.has(workspaceDir),
     );
     return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
   });

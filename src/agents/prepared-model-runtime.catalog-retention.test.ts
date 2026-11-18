@@ -2,8 +2,8 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
+import { expectCollected, forceFullGc } from "../test-utils/retention.js";
 import type { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
@@ -52,8 +52,7 @@ it("releases superseded catalog inventories across neutral reloads", async () =>
   }
   for (let attempt = 0; attempt < 20; attempt++) {
     await setImmediate();
-    // queryObjects performs a full collection without V8-only flag mutation.
-    queryObjects(WeakRef);
+    forceFullGc();
     if (inventories.slice(0, -1).every((inventory) => inventory.deref() === undefined)) {
       break;
     }
@@ -82,11 +81,11 @@ it("releases the reload caller while a superseded acquisition signal remains ret
       return caller;
     };
     commit();
+    return new WeakRef(caller);
   }
-  commitReload();
+  const caller = commitReload();
   vi.clearAllMocks();
-  await setImmediate();
-  expect(queryObjects(ReloadCaller)).toBe(0);
+  await expectCollected(caller);
   expect(signal!.aborted).toBe(true);
   expect(signal!.reason).toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
 });

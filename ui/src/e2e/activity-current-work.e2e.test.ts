@@ -102,9 +102,7 @@ suite.define(() => {
       expect(await current.getByText("Check documentation links", { exact: true }).count()).toBe(1);
       expect(await rows.count()).toBe(1);
       expect(
-        await current
-          .getByText("Connect to the Gateway to load active sessions.", { exact: true })
-          .count(),
+        await current.getByText("Reconnect to load active sessions.", { exact: true }).count(),
       ).toBe(0);
       await gateway.setMethodResponse("sessions.list", listing([]));
       const previousReads = await gateway.deferNext("sessions.list", { activeOnly: true });
@@ -125,7 +123,7 @@ suite.define(() => {
       await gateway.emitGatewayEvent("sessions.changed", { reason: "update" });
       // Cross the full refresh window and deliver its nested mock response timer.
       await page.clock.runFor(5_001);
-      await showText(current, "Could not load active sessions.");
+      await showText(current, "Couldn’t load active sessions. Try again.");
       await page.clock.resume();
       await gateway.setMethodResponse("sessions.list", listing([]));
       await current.getByRole("button", { name: "Retry", exact: true }).click();

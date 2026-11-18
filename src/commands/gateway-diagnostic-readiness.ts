@@ -17,11 +17,12 @@ export async function waitForGatewayDiagnostic(
     ...opts,
     deadlineMs,
     onProgress: (phase) => {
-      if (!opts.json) {
+      if (!opts.json && !opts.signal?.aborted) {
         runtime.log(`Gateway is still starting (phase: ${sanitizeTerminalText(phase)}).`);
       }
     },
   });
+  opts.signal?.throwIfAborted();
   // RPC timeout fields require integer milliseconds.
   const remainingMs = Math.max(0, Math.ceil(deadlineMs - performance.now()));
   if (

@@ -119,6 +119,28 @@ async function fixture() {
 }
 
 describe("Pages navigation identity", () => {
+  it("renders the approved Quiver Blobster for Templates in Pages and the pinned rail", async () => {
+    const { sidebar } = await fixture();
+    sidebar.enabledRouteIds = ["templates"];
+    sidebar.sidebarEntries = ["route:templates"];
+    await settleLitElement(sidebar);
+    const templates = pageEntry(sidebar, "route:templates");
+    const pinned = sidebar.querySelector(
+      '.sidebar-rail [data-sidebar-entry="route:templates"] svg',
+    );
+    expect(pinned).not.toBeNull();
+    for (const icon of [templates.icon, pinned!]) {
+      expect(icon.querySelectorAll('circle[fill="currentColor"]')).toHaveLength(2);
+      expect(icon.getAttribute("fill")).toBe("none");
+      expect(icon.getAttribute("stroke")).toBe("currentColor");
+      expect(icon.getAttribute("viewBox")).toBe("0 0 24 24");
+    }
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    templates.link.click();
+    expect(navigate).toHaveBeenCalledExactlyOnceWith("templates", undefined);
+  });
+
   it.each(["revision", "session", "registry", "hello"] as const)(
     "retains page rows, icons and keyboard focus across a %s update",
     async (update) => {

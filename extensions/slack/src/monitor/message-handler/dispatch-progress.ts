@@ -595,6 +595,11 @@ export function createSlackProgressRuntime(runtimeParams: {
       return false;
     }
     if (!isProgressMode) {
+      // Each merge reprocesses the accumulated reasoning, so a long stream with
+      // no preview to show it would block the event loop for nothing.
+      if (!previewToolProgressEnabled) {
+        return false;
+      }
       const normalized = progressDraft
         .mergeReasoningProgress(payload.text, {
           snapshot: payload.isReasoningSnapshot === true,

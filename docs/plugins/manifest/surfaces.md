@@ -390,7 +390,13 @@ Each entry is a closed object with exactly these fields:
 | `disposition`    | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
 | `scope`          | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
 | `relativePath`   | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| `profile`        | No       | `"local-companion"`          | Apply a regenerable exclusion only to local-companion checkpoints.                     |
 | `databaseFamily` | No       | `"state"`                    | Associate an included state-scoped resource with the shared-state database family.     |
+
+`profile: "local-companion"` is optional and valid only for `regenerable`
+resources. It limits that exclusion to `backup create --local-companion`; full
+archives still include the resource. Without `profile`, the declaration applies
+to both archive modes. Durable `include` resources cannot be profile-limited.
 
 `databaseFamily` requires `disposition: "include"` and `scope: "state"`.
 Port, backup, update capture, and Doctor discover database files within that
@@ -520,7 +526,9 @@ Paths must stay inside the plugin package, use `/` separators, and end in `.svg`
 URLs, absolute paths, and `..` segments are rejected. Ship the file with your package.
 Icons are limited to 16 KiB and must be self-contained, without scripts, embedded
 documents, or external references. Missing, unreadable, symlinked, oversized, or
-invalid artwork falls back to the generic panel icon without disabling the panel.
+invalid artwork falls back to the panel's registered `icon` name, or the generic
+`plug` icon when that name is omitted or unknown, without disabling the panel.
+Manifest artwork takes precedence over the optional per-panel registry name.
 Icon bytes are captured with the browser revision; rebuild and reload the plugin UI
 after changing the declaration or artwork.
 

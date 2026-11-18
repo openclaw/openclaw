@@ -14,7 +14,13 @@ export type MutableSession = {
   isCompacting: boolean;
   isStreaming: boolean;
   subscribe: AgentSession["subscribe"];
-  agent: {
+  agent: Pick<
+    Agent,
+    | "hasPendingSteeringMessage"
+    | "getToolInterruptionStatus"
+    | "interruptTools"
+    | "subscribeToolInterruptionStatus"
+  > & {
     convertToLlm: Agent["convertToLlm"];
     prompt?: (...args: unknown[]) => Promise<unknown>;
     streamFn?: (...args: Parameters<StreamFn>) => Promise<unknown>;

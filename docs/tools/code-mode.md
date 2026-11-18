@@ -64,6 +64,12 @@ job. Open the page that matches your task.
 | [Code Mode executors](/tools/code-mode/executors)         | You want to choose Node or QuickJS and understand their security boundaries.       |
 | [Code Mode configuration](/tools/code-mode/configuration) | You need the configuration fields, the preferred-model list, and activation order. |
 
+The optional [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+can prioritize frequently and recently used tools within the same index budget.
+It is off by default, keeps core coding tools pinned, reserves room for newcomers,
+and freezes its ranking for the prompt series. It does not change callable tools
+or apply to Codex-native Code Mode.
+
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool

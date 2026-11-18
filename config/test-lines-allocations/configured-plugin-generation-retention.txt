@@ -1,2 +1,0 @@
-# Regression: Gateway cleanup preserves configured executables and reclaims them after release.
-41

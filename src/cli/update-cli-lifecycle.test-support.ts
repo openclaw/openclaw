@@ -75,7 +75,6 @@ type UpdateCliLifecycleFixture = {
   baseSnapshot: ConfigFileSnapshot;
   fixtureRoot: string;
   globalNpmConfig: string;
-  initializeExistingUpdateProfile: () => void;
   mockGatewayHealth: (version: string, connId: string) => void;
   primeNpmChannelTag: (tag: string, version: string | null) => void;
   reportCandidateSteps: <T extends { steps: UpdateRunResult["steps"] }>(
@@ -358,7 +357,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     );
     fixture.setTty(false);
     fixture.setStdoutTty(false);
-    fixture.initializeExistingUpdateProfile();
     // Keep guard reads on the fixture connection instead of booting snapshots per read.
     openOpenClawStateDatabase();
   });

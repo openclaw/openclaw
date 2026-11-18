@@ -339,6 +339,7 @@ export function renderSessionSection(params: {
                   target={{ group: group() ?? "" }}
                   class="sidebar-session-group-actions sidebar-new-session"
                   label={t("sessionsView.newSessionInGroup", { group: label() })}
+                  tooltip={t("chat.runControls.newSession")}
                   disabledReason={(() => {
                     const access = newSessionAccess();
                     return access.allowed ? undefined : access.reason;

@@ -21,8 +21,11 @@ and [database access in workers](/reference/database-schemas/worker-access).
 ## Current boundary
 
 Bounded opening already selects raw entries by byte/event budget. The manager's
-entry array and ID index share one payload graph, while initial model-context
-acquisition hydrates overlapping messages separately. Appends and complete
+entry array and ID index share one payload graph. Hydration and actor readers now
+share immutable snapshots, and internal cohort/model preparation reuses their
+frozen payloads. Public getters detach the entries they expose while preserving
+local mutation behavior. This sharing is implemented; the bounded replacement
+and arbitrary-history acquisition design below remains proposed. Appends and complete
 history hydration can enlarge the resident view beyond its opening budget.
 The owners are `session-manager-core.ts`, `session-manager.ts`, and
 `session-accessor.sqlite-active-context.ts` under `src/agents/sessions/` and

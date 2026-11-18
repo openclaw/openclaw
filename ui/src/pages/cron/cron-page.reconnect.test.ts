@@ -5,12 +5,12 @@ import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
   createContext,
   createGateway,
-  createPage,
   createRequest,
   cronListResponse,
   operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
+import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
@@ -25,23 +25,18 @@ it("retains the editor draft, filters and loaded jobs through reconnect while fe
   const stale = createDeferred<ReturnType<typeof cronListResponse>>();
   const fresh = createDeferred<ReturnType<typeof cronListResponse>>();
   const save = createDeferred<CronJob>();
-  const fallback = createRequest();
   let lists = 0;
-  const client = createTestGatewayClient((method) => {
-    if (method === "cron.list") {
-      lists += 1;
-      return lists === 1 ? cronListResponse([job]) : lists === 2 ? stale.promise : fresh.promise;
-    }
-    if (method === "cron.get") {
-      return job;
-    }
-    if (method === "cron.update") {
-      return save.promise;
-    }
-    return fallback(method);
-  });
-  const gateway = createGateway(client, true);
-  const page = createPage(createContext(gateway), { render: true });
+  const client = createTestGatewayClient(
+    cronRpc({
+      "cron.list": () => {
+        lists += 1;
+        return lists === 1 ? cronListResponse([job]) : lists === 2 ? stale.promise : fresh.promise;
+      },
+      "cron.get": () => job,
+      "cron.update": () => save.promise,
+    }),
+  );
+  const { gateway, page } = mountCronPage(client);
   await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(1));
   page.selectJob(job);
   page.patchForm({ name: "Unsaved name", payloadText: "Unsaved prompt" });
@@ -88,34 +83,29 @@ it.each([
   vi.useFakeTimers();
   const linked = createCronViewJob("linked", { name: "Linked automation" });
   const other = createCronViewJob("other", { name: "Other automation" });
-  const fallback = createRequest();
   let refreshed = false;
   const runRequests: unknown[] = [];
-  const request = vi.fn((method: string, params?: unknown) => {
-    if (method === "cron.list") {
-      return cronListResponse([linked, other]);
-    }
-    if (method === "cron.get") {
-      const id = (params as { id: string }).id;
-      const job = id === linked.id ? linked : other;
-      return refreshed ? { ...job, name: `Fresh ${job.name}` } : job;
-    }
-    if (method === "cron.runs") {
-      runRequests.push(params);
-      return {
-        entries: [
-          { ts: 1, jobId: linked.id, action: "finished", runId: "target", summary: "Linked run" },
-        ],
-        total: 1,
-        hasMore: false,
-      };
-    }
-    return fallback(method);
-  });
-  const client = createTestGatewayClient(request);
-  const gateway = createGateway(client, true);
-  const context = createContext(gateway);
-  const page = createPage(context, { render: true });
+  const client = createTestGatewayClient(
+    cronRpc({
+      "cron.list": () => cronListResponse([linked, other]),
+      "cron.get": (params) => {
+        const id = (params as { id: string }).id;
+        const job = id === linked.id ? linked : other;
+        return refreshed ? { ...job, name: `Fresh ${job.name}` } : job;
+      },
+      "cron.runs": (params) => {
+        runRequests.push(params);
+        return {
+          entries: [
+            { ts: 1, jobId: linked.id, action: "finished", runId: "target", summary: "Linked run" },
+          ],
+          total: 1,
+          hasMore: false,
+        };
+      },
+    }),
+  );
+  const { gateway, context, page } = mountCronPage(client);
   page.routeSearch = "?job=linked&run=target";
   await waitForCronPage(() =>
     expect(page.querySelector(".cron-run-entry--highlighted")?.textContent).toContain("Linked run"),
@@ -124,7 +114,7 @@ it.each([
   let expected: CronJob | null = linked;
   if (intent === "show all runs") {
     const showAll = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Show all runs",
+      (button) => button.textContent?.trim() === "Show all activity",
     );
     expect(showAll).toBeDefined();
     showAll!.click();
@@ -138,6 +128,8 @@ it.each([
     expected = null;
     if (intent === "another job") {
       page.querySelector<HTMLElement>('[data-test-id="cron-row-other"]')!.click();
+      await page.settle();
+      page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-history"]')!.click();
       await page.settle();
       expected = other;
     }

@@ -442,7 +442,7 @@ describe("config form and navigation", () => {
       expect(picker.selectedOptions[0]?.textContent?.trim()).toBe("Other");
       const content = () => normalizedText(required(container, ".settings-page", HTMLElement));
       expect(content()).toContain("Group policy");
-      expect(content()).toContain("Model Overrides");
+      expect(content()).toContain("Channel model overrides");
       expect(content()).not.toContain("Bot username");
       props.onSubsectionChange = (key) => {
         props.activeSubsection = key;

@@ -135,6 +135,7 @@ const PUBLIC_CODES = new Set<string>([
   "config-conflict",
   "config-input-changed",
   "requester-revoked",
+  "interrupted",
   "repair-requires-config-change",
 ]);
 

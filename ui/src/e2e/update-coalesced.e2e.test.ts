@@ -100,7 +100,7 @@ suite.define(() => {
       });
       await updateIssue.locator(".sidebar-update-card__actions").tap();
       await expect.poll(() => tooltipHost.getAttribute("data-e2e-after-show")).not.toBeNull();
-      expect(await tooltip.textContent()).toContain("Administrator access is required");
+      expect(await tooltip.textContent()).toContain("Admin access required");
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
     });
   });
@@ -138,7 +138,7 @@ suite.define(() => {
       await page.waitForURL("**/settings/updates");
       await page.locator("openclaw-config-page").waitFor();
       expect(await dialog.count()).toBe(0);
-      expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+      expect(await page.locator(".sidebar-rail openclaw-sidebar-attention").count()).toBe(1);
       await text(page.locator("openclaw-update-run-view"), failureText).first().waitFor();
       expect(pageErrors).toEqual([]);
     });
@@ -288,7 +288,7 @@ suite.define(() => {
           await button(page, "Retry update").click();
         }
         expect(await page.locator("openclaw-modal-dialog").getAttribute("label")).toBe(
-          "Update Mac app + Gateway",
+          "Update Mac app and restart?",
         );
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
         await button(page, "Update Mac app and restart").click();
@@ -302,7 +302,7 @@ suite.define(() => {
 
         await page.keyboard.press("Control+Shift+,");
         await page.locator(".shell--settings").waitFor();
-        expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+        expect(await page.locator(".sidebar-rail openclaw-sidebar-attention").count()).toBe(1);
         await page.evaluate(
           (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
           NATIVE_UPDATE_DECLINED_EVENT,

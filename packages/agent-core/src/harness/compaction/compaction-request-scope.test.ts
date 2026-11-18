@@ -6,20 +6,12 @@ import {
   createContextUsage,
   createMessageEntry as messageEntry,
 } from "./compaction.test-support.js";
+import { assistant as assistantMessage, user } from "./shard-fixtures.test-support.js";
+import { compactionEntry } from "./summary-capture.test-support.js";
 
 const settings = { enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 };
-function assistant(text: string, timestamp: number): AgentMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "test-api",
-    provider: "test-provider",
-    model: "summary-model",
-    usage: createContextUsage(1),
-    stopReason: "stop",
-    timestamp,
-  };
-}
+const assistant = (text: string, timestamp: number): AgentMessage =>
+  assistantMessage(text, { model: "summary-model", usage: createContextUsage(1), timestamp });
 
 function prepare(entries: SessionTreeEntry[], pendingEntryId?: string) {
   const result = prepareCompaction(
@@ -39,16 +31,16 @@ describe("manual compaction requests", () => {
     const request = "Review the patch; do not deploy it.";
     const entries: SessionTreeEntry[] = [
       messageEntry(assistant("Prior retained work", 1), 0),
-      {
-        type: "compaction",
-        id: "prior-compaction",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        firstKeptEntryId: "entry-0",
-        tokensBefore: 100,
-        summary: `## Latest unresolved user request\n${JSON.stringify(request)}\n\nPrior work continues.`,
-        details: { readFiles: [], modifiedFiles: [], latestUnresolvedUserRequest: request },
-      },
+      compactionEntry(
+        1,
+        `## Latest unresolved user request\n${JSON.stringify(request)}\n\nPrior work continues.`,
+        "entry-0",
+        {
+          id: "prior-compaction",
+          tokensBefore: 100,
+          details: { readFiles: [], modifiedFiles: [], latestUnresolvedUserRequest: request },
+        },
+      ),
       messageEntry(assistant("Still working.", 3), 2),
       messageEntry(assistant("Still working after a tool result.", 4), 3),
     ];
@@ -73,15 +65,9 @@ describe("run-owned compaction requests", () => {
   it("attributes a split internal run without reviving completed human work", () => {
     const source = "Inspect the worker artifact; do not publish it.";
     const entries = [
-      messageEntry({ role: "user", content: "Completed human task", timestamp: 1 }, 0),
+      messageEntry(user("Completed human task", 1), 0),
       messageEntry(assistant("Completed.", 2), 1),
-      messageEntry(
-        Object.assign(
-          { role: "user" as const, content: source, timestamp: 3 },
-          { provenance: { kind: "inter_session" } },
-        ),
-        2,
-      ),
+      messageEntry(Object.assign(user(source, 3), { provenance: { kind: "inter_session" } }), 2),
       messageEntry(assistant("The internal task is still running.", 4), 3),
     ];
     const preparation = prepare(entries);
@@ -98,17 +84,14 @@ describe("run-owned compaction requests", () => {
   it("keeps the admitted human request across later internal updates", () => {
     const request = "Review the patch; do not deploy it.";
     const entries = [
-      messageEntry({ role: "user", content: "Completed earlier task", timestamp: 1 }, 0),
+      messageEntry(user("Completed earlier task", 1), 0),
       messageEntry(assistant("Completed.", 2), 1),
-      messageEntry({ role: "user", content: request, timestamp: 3 }, 2),
+      messageEntry(user(request, 3), 2),
       messageEntry(assistant("Review started.", 4), 3),
       messageEntry(
-        Object.assign(
-          { role: "user" as const, content: "Worker update", timestamp: 5 },
-          {
-            provenance: { kind: "inter_session" },
-          },
-        ),
+        Object.assign(user("Worker update", 5), {
+          provenance: { kind: "inter_session" },
+        }),
         4,
       ),
       messageEntry(assistant("Review continues.", 6), 5),
@@ -122,24 +105,24 @@ describe("run-owned compaction requests", () => {
   it("does not carry a prior checkpoint's pending ask into a new internal run", () => {
     const entries: SessionTreeEntry[] = [
       messageEntry(assistant("Prior retained work", 1), 0),
-      {
-        type: "compaction",
-        id: "prior-compaction",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        firstKeptEntryId: "entry-0",
-        tokensBefore: 100,
-        summary:
-          'Generated recovery context.\n\n## Pending user asks\n- Old human ask\n\n## Decisions\nPrior work completed.\n\n## Latest unresolved user request\n"Old human ask"\n\n',
-        details: { readFiles: [], modifiedFiles: [], latestUnresolvedUserRequest: "Old human ask" },
-      },
-      messageEntry(
-        Object.assign(
-          { role: "user" as const, content: "Independent cron task", timestamp: 3 },
-          {
-            provenance: { kind: "internal_system" },
+      compactionEntry(
+        1,
+        'Generated recovery context.\n\n## Pending user asks\n- Old human ask\n\n## Decisions\nPrior work completed.\n\n## Latest unresolved user request\n"Old human ask"\n\n',
+        "entry-0",
+        {
+          id: "prior-compaction",
+          tokensBefore: 100,
+          details: {
+            readFiles: [],
+            modifiedFiles: [],
+            latestUnresolvedUserRequest: "Old human ask",
           },
-        ),
+        },
+      ),
+      messageEntry(
+        Object.assign(user("Independent cron task", 3), {
+          provenance: { kind: "internal_system" },
+        }),
         2,
       ),
       messageEntry(assistant("Working on cron.", 4), 3),

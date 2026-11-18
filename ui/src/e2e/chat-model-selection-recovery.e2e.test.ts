@@ -100,6 +100,13 @@ suite.define(() => {
     ["chat", "focus moved"],
   ] as const)("keeps /%s usable while model choices load (%s)", (route, state) =>
     suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      // Exercise cold demand without racing the shell's intentional idle warmup.
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, "connection", {
+          configurable: true,
+          value: Object.assign(new EventTarget(), { saveData: true, effectiveType: "4g" }),
+        });
+      });
       const held = await holdOptions(page);
       const models = ["Alpha", "Beta"].map((name) => ({
         id: name.toLowerCase(),

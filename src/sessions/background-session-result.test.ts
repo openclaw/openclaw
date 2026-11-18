@@ -16,6 +16,7 @@ import {
   testModel,
 } from "../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
@@ -27,6 +28,7 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { reportGitHubPublicationTranscript } from "../gateway/github-publication-transcript.js";
 import {
   armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
@@ -222,6 +224,68 @@ it("deduplicates background output without breaking live or replayed tool result
     finishTool.resolve();
     await turn;
   }
+});
+
+it("places a GitHub publication receipt that lands during a tool call after the tool result", async () => {
+  const target = await createTarget();
+  // The receipt writer resolves its session store through the runtime config.
+  setRuntimeConfigSnapshot(target.config);
+  const manager = await SessionManager.openAsync(target.scope);
+  const requests: Message[][] = [];
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    requests.push(structuredClone(context.messages));
+    return createAssistantResultStream(
+      requests.length === 1
+        ? createAssistant(
+            model,
+            [{ type: "toolCall", id: "lookup-call", name: "lookup", arguments: {} }],
+            "toolUse",
+          )
+        : createAssistant(model, "Lookup completed"),
+    );
+  });
+  const { session } = await createTestSession({
+    sessionManager: manager,
+    customTools: [
+      {
+        name: "lookup",
+        label: "Lookup",
+        description: "Synthetic lookup",
+        parameters: Type.Object({}),
+        execute: async () => {
+          await reportGitHubPublicationTranscript(
+            () => import("../gateway/session-utils.js"),
+            {
+              markReportedAsync: async () => {},
+              readReportLifecycleAsync: async () => target.generation.lifecycleRevision,
+            },
+            {
+              agentId: "main",
+              sessionKey: target.sessionKey,
+              sessionId: target.sessionId,
+              result: {
+                requestId: "publication-during-tool",
+                status: "published",
+                repository: "example/repository",
+                branch: "publication",
+                url: "https://github.com/example/repository/pull/1",
+                headCommit: "a".repeat(40),
+              },
+            },
+          );
+          return {
+            content: [{ type: "text" as const, text: "Actual lookup result" }],
+            details: {},
+          };
+        },
+      },
+    ],
+  });
+  await withSessionTurn(target, () => session.prompt("Run lookup"));
+  const receipt = { role: "assistant", responseId: "github-publication:publication-during-tool" };
+  expect(requests[1]).toMatchObject([{ role: "user" }, lookupCall, lookupResult, receipt]);
+  const replay = (await SessionManager.openAsync(target.scope)).buildSessionContext().messages;
+  expect(JSON.stringify(replay.slice(0, requests[1]!.length))).toBe(JSON.stringify(requests[1]));
 });
 
 it.each(["tool", "stream"])(

@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
@@ -25,21 +26,25 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
+import * as timeline from "../../infra/diagnostics-timeline.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { isRpcSourceQueued } from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { broadcastFor, createBroadcastPeer } from "../server-broadcast.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import { handleChatHistoryRequest } from "./chat-history-handler.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./chat-send-pending-inputs.test-support.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -53,6 +58,124 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
 type Fixture = Awaited<ReturnType<typeof createFixture>>;
 type DispatchParams = Parameters<typeof dispatchInboundMessage>[0];
 type Gate = ReturnType<typeof createDeferred<void>>;
+
+it.for(["completed", "failed", "cancelled"] as const)(
+  "shows a reply-initialization queue until the active turn is %s",
+  async (outcome, { signal }) => {
+    const fixture = await createFixture({ preserveContent: true });
+    const initialConnId = expectDefined(fixture.client.connId, "browser connection");
+    fixture.params.idempotencyKey = `reply-initialization-${outcome}`;
+    fixture.params.message = "/verbose on Explain the queued request.";
+    const config = steeringConfig(fixture);
+    const dispatchActual = await loadRealChatDispatch();
+    const waiting = createDeferred();
+    const started = createDeferred();
+    const dispatched = createDeferred();
+    const queued = vi.fn();
+    using _ = { [Symbol.dispose]: onSessionLifecycleEvent(queued) };
+    const info = vi.spyOn(fixture.context.logGateway, "info");
+    const realNow = performance.now.bind(performance);
+    let waitMs = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => realNow() + waitMs);
+    const observe = timeline.observeDiagnosticsTimelinePhases;
+    const observing = vi
+      .spyOn(timeline, "observeDiagnosticsTimelinePhases")
+      .mockImplementation((name) => {
+        if (name === "reply.admission.mailbox_wait") {
+          waiting.resolve();
+        }
+        return observe(name);
+      });
+    dispatchInboundMessageMock.mockImplementation((raw: unknown) =>
+      dispatchActual({ ...(raw as DispatchParams), cfg: config }).finally(() =>
+        dispatched.resolve(),
+      ),
+    );
+    runtime.execute.mockReset().mockImplementation(async (params) => {
+      const runId = await recordInput(params);
+      started.resolve();
+      return successfulChatTurn(runId, "Queued request answered.");
+    });
+    try {
+      await fixture.send();
+      await withinTest(
+        awaitGateBeforeSettlement(waiting.promise, dispatched.promise, "did not wait"),
+        signal,
+      );
+      expect.soft(queued).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: fixture.scope.sessionKey,
+          reason: "agent.input.queued",
+        }),
+      );
+      await initializeSessionReadContext(fixture.context);
+      for (const connId of [initialConnId, "reconnected-browser"]) {
+        const params = {
+          sessionKey: fixture.scope.sessionKey,
+          inputRunIds: [fixture.params.idempotencyKey],
+        };
+        const respond = vi.fn<RespondFn>();
+        await handleChatHistoryRequest({
+          req: { type: "req", id: connId, method: "chat.history", params },
+          method: "chat.history",
+          params,
+          respond,
+          context: fixture.context,
+          client: { ...fixture.client, connId },
+          isWebchatConnect: () => true,
+        });
+        expect.soft(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            pendingInputs: expect.objectContaining({
+              queuedCount: 1,
+              items: [
+                expect.objectContaining({ runId: fixture.params.idempotencyKey, queued: true }),
+              ],
+            }),
+            inputReceipts: [
+              { runId: fixture.params.idempotencyKey, state: "pending", queued: true },
+            ],
+          }),
+        );
+      }
+      expect(runtime.execute).not.toHaveBeenCalled();
+      waitMs = 594_031;
+      if (outcome === "failed") {
+        fixture.activeRun!.fail("run_failed", new Error("Synthetic active failure"));
+      }
+      if (outcome === "cancelled") {
+        fixture.activeRun!.abortByUser();
+      }
+      fixture.activeRun!.complete();
+      await withinTest(
+        awaitGateBeforeSettlement(started.promise, dispatched.promise, "did not start"),
+        signal,
+      );
+      await withinTest(dispatched.promise, signal);
+      await fixture.finishDispatch();
+      expect(runtime.execute).toHaveBeenCalledOnce();
+      expect(info).toHaveBeenCalledWith(
+        expect.stringMatching(/slow chat send .*stage=queued .*replyInitialization=\d+ms/),
+      );
+      expect(fixture.context.broadcastToConnIds).toHaveBeenCalledWith(
+        "chat.send_timing",
+        expect.objectContaining({
+          runId: fixture.params.idempotencyKey,
+          phase: "agent-run-started",
+        }),
+        new Set([initialConnId]),
+        { dropIfSlow: true },
+      );
+      expect((await listSessionPendingInputs(fixture.scope)).items).toEqual([]);
+    } finally {
+      now.mockRestore();
+      observing.mockRestore();
+      fixture.activeRun!.complete();
+      await fixture.cleanup();
+    }
+  },
+);
 
 function observeAdmission(params: DispatchParams, queued: Gate, settled: Gate) {
   const lifecycle = expectDefined(params.replyOptions?.turnAdoptionLifecycle, "input custody");

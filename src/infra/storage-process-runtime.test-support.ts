@@ -24,6 +24,9 @@ export const storageProcessTestEntrypoints = {
   lifecycleTimerRetention: entrypoint("lifecycle-timer-retention.test-support"),
   queueTimerRetention: entrypoint("queue-timer-retention.test-support"),
   lifecycleTailRetention: entrypoint("lifecycle-tail-retention.test-support"),
+  publicationSourceRetry: entrypoint(
+    "database-engine/github-publication-reservation.worker.test-support",
+  ),
   sharedStateWalFixture: entrypoint(
     "../state/openclaw-state-worker-wal.test-support",
     "state/openclaw-state-worker-wal.test-support.js",

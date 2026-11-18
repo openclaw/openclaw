@@ -102,7 +102,7 @@ async function createSurface(
       ? createControlUiE2eArtifactDir("mobile-raw", suite.artifactDir)
       : undefined;
   const context = await suite.browser.newContext({
-    colorScheme: "dark",
+    colorScheme: CAPTURE_UI_PROOF ? "light" : "dark",
     hasTouch: viewport.width <= MOBILE_VIEWPORT.width,
     isMobile: viewport.width <= MOBILE_VIEWPORT.width,
     locale: "en-US",
@@ -282,9 +282,11 @@ suite.define(() => {
       await expectMobilePendingLayout(mobile.page);
       expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
       await expectIdentity(mobile.page, "warning", { agent: ["main"], plugin: [], tool: [] }, [
-        "Host",
-        "Node",
+        "Runs on",
+        "Device",
       ]);
+      await mobile.page.getByText("Admin approval", { exact: true }).waitFor();
+      await mobile.page.getByText("This computer", { exact: true }).waitFor();
       await captureProof(mobile.page, "after-pending-exec.png");
       await mobile.page.getByRole("button", { name: "Allow once" }).scrollIntoViewIfNeeded();
       await captureProof(mobile.page, "after-pending-exec-actions.png");
@@ -502,7 +504,7 @@ suite.define(() => {
     });
 
     await surface.page.reload();
-    await surface.page.getByRole("heading", { name: "Approval unavailable" }).waitFor();
+    await surface.page.getByRole("heading", { name: "Couldn’t load approval" }).waitFor();
     await expectStandaloneApprovalPage(surface.page);
     await expectNoDecisionButtons(surface.page);
     expect(surface.pageErrors).toEqual([]);
@@ -516,7 +518,7 @@ suite.define(() => {
 
     await surface.gateway.closeLatest(1012, "test reconnect");
     await Promise.all([
-      surface.page.getByText("Connection interrupted", { exact: true }).waitFor(),
+      surface.page.getByText("Disconnected", { exact: true }).waitFor(),
       expect
         .poll(async () => (await surface.gateway.getRequests("connect")).length)
         .toBeGreaterThan(initialConnectCount),
@@ -526,10 +528,7 @@ suite.define(() => {
     );
     expect(await surface.page.getByRole("button", { name: "Allow once" }).isDisabled()).toBe(true);
     await surface.page
-      .getByText(
-        "OpenClaw cannot confirm or record a decision while disconnected. Reconnect to check the current status.",
-        { exact: true },
-      )
+      .getByText("Reconnect to review this approval and record a decision.", { exact: true })
       .waitFor();
 
     await surface.gateway.resolveDeferred("connect");

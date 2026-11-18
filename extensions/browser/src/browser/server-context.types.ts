@@ -1,4 +1,5 @@
 import type { Server } from "node:http";
+import type { OperatorBrowserPagesOption } from "./cdp-target-filter.js";
 import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
 import type {
@@ -51,7 +52,7 @@ export type BrowserServerState = {
   stopUnhandledRejectionHandler?: () => void;
 };
 
-export type BrowserOperationOptions = {
+export type BrowserOperationOptions = OperatorBrowserPagesOption & {
   signal?: AbortSignal;
   timeoutMs?: number;
 };
@@ -78,7 +79,7 @@ export type ProfileContext = {
   listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (
     url: string,
-    opts?: {
+    opts?: OperatorBrowserPagesOption & {
       label?: string;
       signal?: AbortSignal;
       timeoutMs?: number;

@@ -241,26 +241,57 @@ it.each([false, true])(
     clearNodeSqliteKyselyCacheForDatabase(nativeDb);
     const observed = observeQueries(nativeDb);
     try {
-      const context = runSqliteReadSnapshotSync(nativeDb, () =>
-        readSessionTranscriptBoundedActiveContextCore(scope, {
-          maxEvents: 1,
-          maxBytes: 16_384,
-          transaction: database,
-        }),
-      );
-      expect(context.events.slice(1)).toMatchObject([{ id: "pending-result" }, { id: "tail" }]);
-      // Classification and result selection must share one native navigation projection.
-      expect(dependencyProjections).toBe(1);
+      let full: ReturnType<typeof readSessionTranscriptBoundedActiveContextCore> | undefined;
+      nativeDb.exec("SAVEPOINT active_fact_coverage");
+      try {
+        for (const coverage of ["full", "partial", "none"] as const) {
+          if (coverage !== "full") {
+            nativeDb
+              .prepare(
+                coverage === "partial"
+                  ? `DELETE FROM session_transcript_active_event_facts WHERE session_id = ?
+                    AND seq = (SELECT seq FROM transcript_event_identities
+                      WHERE session_id = ? AND event_id = 'pending-result')`
+                  : "DELETE FROM session_transcript_active_event_facts WHERE session_id = ?",
+              )
+              .run(
+                ...(coverage === "partial"
+                  ? [scope.sessionId, scope.sessionId]
+                  : [scope.sessionId]),
+              );
+          }
+          dependencyProjections = 0;
+          const context = runSqliteReadSnapshotSync(nativeDb, () =>
+            readSessionTranscriptBoundedActiveContextCore(scope, {
+              maxEvents: 1,
+              maxBytes: 16_384,
+              transaction: database,
+            }),
+          );
+          expect(context.events.slice(1)).toMatchObject([{ id: "pending-result" }, { id: "tail" }]);
+          full ??= context;
+          expect(context).toEqual(full);
+          // A covered dependency must never execute the native payload projection.
+          expect(dependencyProjections).toBe(coverage === "full" ? 0 : 1);
+        }
+      } finally {
+        nativeDb.exec("ROLLBACK TO active_fact_coverage; RELEASE active_fact_coverage");
+      }
       const dependencies = [...observed.statements.values()].filter(({ columns }) =>
         columns.includes("navigation_json"),
       );
-      expect(dependencies).toHaveLength(1);
+      expect(dependencies.length).toBeGreaterThanOrEqual(1);
       const eventSearches = observed
         .plans(dependencies)
         .filter((detail) => typeof detail === "string" && detail.startsWith("SEARCH event "));
       // Dependency discovery must never drive a whole-session payload-index range scan.
-      expect(eventSearches).toHaveLength(1);
-      expect(eventSearches[0]).toMatch(/\(session_id=\? AND seq=\?\)/u);
+      expect(eventSearches.length).toBeGreaterThan(0);
+      for (const search of eventSearches) {
+        expect(search).toMatch(/\(session_id=\? AND seq=\?\)/u);
+      }
+      expect(observed.plans(dependencies)).toContainEqual(
+        expect.stringMatching(/SEARCH facts USING PRIMARY KEY \(session_id=\? AND seq=\?\)/u),
+      );
     } finally {
       observed.restore();
       await closeOpenClawAgentDatabaseByPathAsync(database.path);

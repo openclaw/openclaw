@@ -94,7 +94,7 @@ describe("ModelProvidersPage profile actions", () => {
 
     await waitForSolid(() => {
       expect(page.view.props.authStatus?.unavailable?.code).toBe("PREPARED_MODEL_AUTH_UNAVAILABLE");
-      expect(toast.toast?.message).toBe(warning);
+      expect(toast.toasts[0]?.options.message).toBe(warning);
     });
     await toast.updateComplete;
     await vi.dynamicImportSettled();
@@ -268,14 +268,14 @@ describe("ModelProvidersPage profile actions", () => {
         await waitForSolid(() =>
           expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
         );
-        click(page, '[aria-label="Log out work@example.com"]');
+        click(page, '[aria-label="Sign out of work@example.com?"]');
         await page.updateComplete;
         return getRenderedModalDialog(document.body);
       };
       const { modal: initialModal, dialog } = await openConfirmation();
       let modal = initialModal;
       expect(page.renderRoot.contains(modal)).toBe(false);
-      expect(dialog.getAttribute("aria-label")).toBe("Log out work@example.com");
+      expect(dialog.getAttribute("aria-label")).toBe("Sign out of work@example.com?");
       expectContent(modal, ["work@example.com"]);
       expect(requestCount(request, "models.authLogout")).toBe(0);
       click(modal, "button[autofocus]");
@@ -320,7 +320,7 @@ describe("ModelProvidersPage profile actions", () => {
       expectAbsent(document.body, "openclaw-modal-dialog");
       expect(requestCount(request, "models.authLogout")).toBe(1);
       await waitForSolid(() =>
-        expectDisabled(page, '[aria-label="Log out work@example.com"]', false),
+        expectDisabled(page, '[aria-label="Sign out of work@example.com?"]', false),
       );
 
       ({ modal } = await openConfirmation());
@@ -345,7 +345,7 @@ describe("ModelProvidersPage profile actions", () => {
       );
       expect(requestCount(request, "models.authLogout")).toBe(2);
       await waitForSolid(() =>
-        expectDisabled(page, '[aria-label="Log out personal@example.com"]', false),
+        expectDisabled(page, '[aria-label="Sign out of personal@example.com?"]', false),
       );
       expect(
         [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
@@ -353,8 +353,8 @@ describe("ModelProvidersPage profile actions", () => {
         ),
       ).toEqual(["personal"]);
       await toast.updateComplete;
-      expectContent(toast.querySelector('[role="status"]'), ["Logged out."]);
       await waitForSolid(() => expectContent(toast, ["Authentication refresh failed."]));
+      expect(toast.textContent).not.toContain("Signed out");
       expect(context.runtimeConfig.patch).not.toHaveBeenCalled();
     } finally {
       logout.resolve();
@@ -498,7 +498,7 @@ describe("Models account recovery", () => {
       await waitForProviders(page);
       expectAbsent(page, "[data-models-account-recovery]");
       await expandProvider(page, "example");
-      click(page, '[aria-label="Log out original@example.invalid"]');
+      click(page, '[aria-label="Sign out of original@example.invalid?"]');
       await page.updateComplete;
       const { modal } = await getRenderedModalDialog(document.body);
       click(modal, "button.danger");

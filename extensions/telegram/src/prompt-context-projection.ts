@@ -21,7 +21,7 @@ function parseTranscriptMessageId(value: unknown): string | undefined {
   return typeof id === "string" && id.trim() ? id : undefined;
 }
 
-export function isTelegramTextOnlyChannelData(
+function isTelegramTextOnlyChannelData(
   channelData: NonNullable<ReplyPayload["channelData"]>,
 ): boolean {
   if (Object.keys(channelData).length !== 1 || !isRecord(channelData.telegram)) {
@@ -199,3 +199,11 @@ export function resolveCompleteTelegramPromptContextProjectionIds(
   }
   return complete;
 }
+
+/** Final-text replay policy for Telegram's durable message adapter. */
+export const telegramDurableFinalPolicy = {
+  isTextOnlyChannelData: isTelegramTextOnlyChannelData,
+  // The Bot API has no idempotency key, so a lost response cannot be reconciled;
+  // one resend after an ambiguous failure is preferred over a lost reply.
+  replayAmbiguousFinalText: true,
+};

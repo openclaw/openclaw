@@ -1,7 +1,9 @@
 import {
   DEFAULT_WORKER_PENDING_BYTES,
+  DEFAULT_WORKER_PENDING_TASKS,
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
+import { WorkerTaskError } from "./worker-task-error.js";
 
 /** Owns a pool's admitted inputs and notifies rejected callers when their budget can fit. */
 export class WorkerTaskAdmission {
@@ -31,17 +33,30 @@ export class WorkerTaskAdmission {
     return this.byteCount;
   }
 
-  admit(inputBytes: number): boolean {
-    if (
-      this.taskCount >= this.maxPendingTasks ||
-      this.byteCount + inputBytes > this.maxPendingBytes ||
-      (this.shared && !this.shared.admit(inputBytes))
-    ) {
-      return false;
+  /** Formats diagnostics only on refusal; successful admission returns undefined. */
+  admit(inputBytes: number, describeTask: () => string | undefined): WorkerTaskError | undefined {
+    let detail: string;
+    if (this.taskCount >= this.maxPendingTasks) {
+      detail = `pool pending tasks: pendingTasks=${this.taskCount} maxPendingTasks=${this.maxPendingTasks} inputBytes=${inputBytes}`;
+    } else if (this.byteCount + inputBytes > this.maxPendingBytes) {
+      detail = `pool pending bytes: pendingBytes=${this.byteCount} maxPendingBytes=${this.maxPendingBytes} inputBytes=${inputBytes}`;
+    } else if (this.shared && !this.shared.admit(inputBytes)) {
+      const { pendingTasks, pendingBytes } = this.shared.getSnapshot();
+      detail =
+        pendingTasks >= DEFAULT_WORKER_PENDING_TASKS
+          ? `shared compute pending tasks: pendingTasks=${pendingTasks} maxPendingTasks=${DEFAULT_WORKER_PENDING_TASKS} inputBytes=${inputBytes}`
+          : `shared compute pending bytes: pendingBytes=${pendingBytes} maxPendingBytes=${DEFAULT_WORKER_PENDING_BYTES} inputBytes=${inputBytes}`;
+    } else {
+      this.taskCount++;
+      this.byteCount += inputBytes;
+      return undefined;
     }
-    this.taskCount++;
-    this.byteCount += inputBytes;
-    return true;
+    const label = describeTask();
+    return new WorkerTaskError(
+      `worker task capacity reached [${label ? `task=${label} ` : ""}${detail}]`,
+      "overloaded",
+      { capacityAvailable: this.waitForCapacity(inputBytes) },
+    );
   }
 
   finish(inputBytes: number): void {

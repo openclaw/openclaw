@@ -18,6 +18,7 @@ import { prepareCodexWorkspaceDeveloperInstructions } from "./attempt-workspace-
 import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-approvals.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import { codexNativeHookRemoteCredentialPath } from "./native-hook-relay-remote.js";
 import {
@@ -287,6 +288,7 @@ export async function prepareCanonicalCodexFork(params: {
     cwd,
     appServer,
     dynamicTools,
+    preserveNativeCollaboration: true,
     developerInstructions,
     config: threadConfig,
     nativeCodeModeEnabled: true,
@@ -296,7 +298,10 @@ export async function prepareCanonicalCodexFork(params: {
     hostSystemAgentActive: false,
   });
   return {
-    request,
+    request: {
+      ...request,
+      developerInstructions: renderCodexThreadPolicy(request.developerInstructions),
+    },
     provisionalAppIds: apps?.provisionalAppIds ?? [],
     bindingPolicy: {
       nativeHookRelayGeneration: generation,

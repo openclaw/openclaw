@@ -114,7 +114,7 @@ it("pins from a recovered turn that keeps the session's inline widget catalog", 
     "board.widget.put",
     expect.objectContaining({ sessionKey: agentSessionKey, name: "status" }),
   );
-  expect(pinned.content[0]).toMatchObject({ text: expect.stringContaining('"status": "pinned"') });
+  expect(pinned.content[0]).toMatchObject({ text: expect.stringContaining('"status":"pinned"') });
   await expect(recovered!.execute("inline-call", call)).rejects.toThrow(
     "no connected client can show inline widgets this turn; set pin=true",
   );

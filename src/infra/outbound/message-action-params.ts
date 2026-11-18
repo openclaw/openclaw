@@ -390,7 +390,7 @@ export async function hydrateAttachmentParamsForAction(params: {
   extraParamKeys?: readonly string[];
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
-  if (params.action === "send") {
+  if (params.action === "send" || params.action === "thread-reply") {
     const { args, preserveSendBuffer } = params;
     if (hasExplicitSendMediaSource(args, params.extraParamKeys)) {
       const contentType = readAttachmentContentType(args);

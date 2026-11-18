@@ -171,35 +171,19 @@ describe("buildStatusMessageParts presentation", () => {
 
 describe("buildStatusMessage cost snapshot", () => {
   it.each([
-    ["recorded per-call total", 0.25, true, "Cost: $0.25", true],
-    ["recorded zero", 0, true, "Cost: $0.0000", true],
-    ["unknown tiered total", undefined, true, undefined, true],
-    ["legacy flat estimate", undefined, false, "Cost: $0.30", true],
-    ["cost-only zero total", 0, true, "Cost: $0.0000", false],
+    ["recorded per-call total", 0.25, "Cost: $0.25", true],
+    ["recorded zero", 0, "Cost: $0.0000", true],
+    ["unknown tiered total", undefined, undefined, true],
+    ["prepared flat estimate", 0.3, "Cost: $0.30", true],
+    ["cost-only zero total", 0, "Cost: $0.0000", false],
   ] as const)(
-    "uses %s without repricing combined calls",
-    (_name, recorded, tiered, expected, tokens) => {
+    "renders %s without repricing combined calls",
+    (_name, recorded, expected, tokens) => {
       const text = buildStatusMessage({
         modelRefs: statusModelRefs({ provider: "fixture", model: "priced" }),
         agent: { model: "fixture/priced" },
-        config: providerConfig("fixture", "https://fixture.invalid", [
-          {
-            ...statusTestModel("priced", "Priced", 1_000_000),
-            cost: {
-              input: 1,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              ...(tiered
-                ? {
-                    tieredPricing: [
-                      { input: 2, output: 0, cacheRead: 0, cacheWrite: 0, range: [200_000] },
-                    ],
-                  }
-                : {}),
-            },
-          },
-        ]),
+        config: {},
+        estimatedCostUsd: recorded,
         sessionEntry: {
           sessionId: "status-cost",
           updatedAt: 0,

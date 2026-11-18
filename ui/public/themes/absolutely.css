@@ -39,7 +39,7 @@
   --primary-foreground: #241f1b;
   /* White action glyphs keep their contrast when hover and press step the fill. */
   --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--primary-foreground));
-  --sidebar-rail-action-hover-bg: var(--chat-send-hover-bg);
+  --sidebar-rail-action-hover-bg: var(--accent-hover);
   --sidebar-rail-action-active-bg: color-mix(
     in srgb,
     var(--sidebar-rail-action-hover-bg) 90%,

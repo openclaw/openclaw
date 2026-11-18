@@ -41,6 +41,23 @@ export type SqliteWorkerAdmissionRequest = {
   deadlineMs?: number;
 };
 
+export type SqliteWorkerAdmissionHandler = (
+  request: SqliteWorkerAdmissionRequest,
+  grant: (beforeRelease?: () => void) => boolean,
+) => void;
+
+export type SqliteWorkerDatabaseAuthority = {
+  /** Canonical identity captured when the database owner was admitted. */
+  databasePath: string;
+  databaseIdentity?: SqliteWorkerRequest["databaseIdentity"];
+  /** Only the broker can identify an initial open of its captured primary database. */
+  coldOpenPath?: string;
+  assertRequest?(): void;
+  assertAccess(): void;
+  assertCreate?(databasePath: string): void;
+  acquireSchema(): { assertCurrent(): void; release(): void };
+};
+
 // Each side measures admission deadlines on its own thread's monotonic clock
 // captured at import: fake timers replace `process.hrtime` with a clock that
 // starts at zero, and Bun's real `process.hrtime` origin differs per thread.

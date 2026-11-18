@@ -145,7 +145,10 @@ export type SelectionChange =
       id: string;
       key: string;
       agentId: string;
+      storePath: string;
       row: SelectionRow | undefined;
+      /** Display-only replacements still update indexed entry references. */
+      factsChanged?: boolean;
       /** Synchronous internal publication scope; deferred refreshes have no causal label. */
       scope?: string;
     };
@@ -202,6 +205,7 @@ export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
   active?: boolean;
   subagentRuns?: SessionListRowContext["subagentRuns"];
   preparedFacts?: ReturnType<NonNullable<Row["facts"]>["present"]>;
+  preparedRunState?: Parameters<typeof rowProjection.presentSessionRow>[1]["preparedRunState"];
 };
 export type Lookup = { agentId: string; key: string; storePath?: string };
 type RowTarget = Pick<Row, "agentId" | "key" | "storeTarget">;
@@ -507,6 +511,7 @@ export function present(
     excludedChildKeys: options.excludedChildKeys,
     childActivity: options.childActivity,
     backgroundProcessCount: options.backgroundProcessCount,
+    preparedRunState: options.preparedRunState,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;

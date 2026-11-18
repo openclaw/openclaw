@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
@@ -15,9 +16,16 @@ import type {
 } from "../infra/sqlite-readonly-location.types.js";
 import { runSqliteReadOnlyOperation } from "../infra/sqlite-readonly-worker.js";
 import {
+  captureReusableSqliteSource,
+  isSqliteSnapshotReuseActive,
+  leaseReusableSqliteSnapshot,
+  publishReusableSqliteSnapshot,
+} from "../infra/sqlite-snapshot-reuse.js";
+import {
   prepareSqliteReadOnlyLocationAwaited,
   startSqliteReadOnlyLocationAsync,
 } from "../infra/sqlite-snapshot-source.js";
+import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import { isUpdateRunAdmissionReadCommand } from "../infra/update-run-admission.types.js";
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
@@ -55,6 +63,38 @@ export function isStateReadReply<Type extends OpenClawStateReadCommand["type"]>(
   type: Type,
 ): reply is StateReadReply<Type> {
   return reply.ok && reply.type === type;
+}
+
+/**
+ * Reads repeat far more often than this owner commits, and each backup copies the whole
+ * file. A retained owner of a replaced path keeps its own bytes, so it never shares them.
+ */
+async function prepareOwnedStateReadImage(
+  database: DatabaseSync,
+  pathname: string,
+  expectedIdentity: DatabaseFileIdentity | undefined,
+  authority: { assertCurrent: () => void },
+  signal: AbortSignal,
+) {
+  const lease =
+    expectedIdentity && !database.isTransaction
+      ? leaseReusableSqliteSnapshot(pathname, expectedIdentity, { logicalReader: true })
+      : undefined;
+  if (lease) {
+    return lease;
+  }
+  const source = expectedIdentity ? captureReusableSqliteSource(pathname) : undefined;
+  const prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+    database,
+    authority.assertCurrent,
+    signal,
+    "async",
+  );
+  return source
+    ? publishReusableSqliteSnapshot(pathname, source, prepared, () => prepared.cleanupAsync(), {
+        logicalOnly: true,
+      })
+    : prepared;
 }
 
 type Selection = {
@@ -333,19 +373,28 @@ export function startOpenClawStateReadOperation(
       if (isPostgresSqlConnection(native.database.db)) {
         requireNativeDatabaseFile("postgres", "file-snapshot");
       }
-      prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+      prepared = await prepareOwnedStateReadImage(
         native.database.db,
-        authority.assertCurrent,
+        pathname,
+        canReadWarmNativeSourceIndependently(
+          native.database,
+          pathname,
+          context.admission.identity.key,
+        )
+          ? context.admission.identity
+          : undefined,
+        authority,
         signal,
-        "async",
       );
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
       const sourceIdentity = { key: context.admission.identity.key };
-      if (selection.snapshotPreparation === "awaited") {
+      if (selection.snapshotPreparation === "awaited" || isSqliteSnapshotReuseActive()) {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
           signal,
           expectedSourceIdentity: sourceIdentity,
+          reuse: true,
           allowLiveOwner:
+            selection.snapshotPreparation === "awaited" &&
             command.type === "plugins.metadata.read" &&
             context.maintenanceScope?.ownsSchemaMaintenance !== true &&
             !getStateDatabaseSchemaLease(pathname),
@@ -355,6 +404,7 @@ export function startOpenClawStateReadOperation(
           preserveSourceArtifacts: true,
           signal,
           expectedSourceIdentity: sourceIdentity,
+          reuse: true,
         });
         const location = await preparation.result;
         prepared = location;
