@@ -325,11 +325,7 @@ describe("createExecApprovalIosPushDelivery", () => {
     );
     const delivery = createExecApprovalIosPushDelivery({ log: {} });
     expect(await delivery.handleRequested(approvalRequest("approval-mixed-relays"))).toBe(true);
-    await delivery.handleResolved({
-      id: "approval-mixed-relays",
-      decision: "allow-once",
-      resolvedAtMs: 2,
-    });
+    await delivery.handleResolved({ id: "approval-mixed-relays" });
     for (const send of [mocks.execAlert, mocks.execWake]) {
       expect(send.mock.calls.map(([push]) => [push.nodeId, push.relayConfig?.baseUrl])).toEqual(
         nodes.map((id, index) => [id, origins[index]]),
