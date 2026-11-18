@@ -17,6 +17,7 @@ extension OpenClawChatViewModel {
             !isSubmittingDraft &&
             !isSending &&
             self.attachmentStagingCount == 0 &&
+            self.rejectedVideos.isEmpty &&
             !self.isSwitchingSessionBranch &&
             (!self.hasBlockingRunActivity || self.canSendDuringRun) &&
             self.composerModelAvailabilityMessage == nil &&
@@ -340,7 +341,8 @@ extension OpenClawChatViewModel {
             // attachment. Do not let a programmatic send overtake that owner.
             return nil
         }
-        guard !self.isSwitchingSessionBranch,
+        guard self.rejectedVideos.isEmpty,
+              !self.isSwitchingSessionBranch,
               !self.hasBlockingRunActivity || self.canSendDuringRun
         else {
             return nil

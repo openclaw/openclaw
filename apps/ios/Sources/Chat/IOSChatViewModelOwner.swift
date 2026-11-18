@@ -18,6 +18,7 @@ final class IOSChatViewModelOwner {
     private var transportAgentID = ""
     private var routingContract = ""
     private var wasConnected = false
+    private var wasFollowingDefaultChat = false
     @ObservationIgnored private var hydratedComposerModel: (@MainActor () -> OpenClawChatViewModel?)?
     @ObservationIgnored private var controlUIInputs: GatewayConnectConfig.ControlUIInputs?
     @ObservationIgnored private var isObservingPendingSend = false
@@ -31,6 +32,8 @@ final class IOSChatViewModelOwner {
         self.viewModel?.attachmentOwnerActivityChanged()
         let ownerID = appModel.chatViewModelOwnerID
         let agentID = Self.transportAgentID(appModel.chatDeliveryAgentId)
+        let sessionKey = appModel.chatSessionKey
+        let isFollowingDefaultChat = appModel.isFollowingDefaultChat
         let routingContract = appModel.chatSessionRoutingContract ?? ""
         let connected = appModel.isOperatorGatewayConnected
         let controlUIInputs = appModel.activeGatewayConnectConfig?.controlUIInputs
@@ -46,8 +49,9 @@ final class IOSChatViewModelOwner {
                 self.routingContract = routingContract
                 viewModel.syncSessionRoutingContract(appModel.chatSessionRoutingContract)
             }
-            viewModel.syncSession(to: appModel.chatSessionKey)
+            viewModel.syncSession(to: sessionKey)
             if !viewModel.isAttachmentOwnerPinned {
+                self.wasFollowingDefaultChat = isFollowingDefaultChat
                 self.capturePresentationIdentity(appModel: appModel)
             }
             if let controlUIInputs { self.controlUIInputs = controlUIInputs }
@@ -56,10 +60,14 @@ final class IOSChatViewModelOwner {
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.
         guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
+        // During first connection, the Gateway can replace the placeholder
+        // main key while the user stays in the automatic default conversation.
+        let resolvesDefaultChatAlias = self.routingContract.isEmpty &&
+            self.wasFollowingDefaultChat && isFollowingDefaultChat
         let isDefaultAgentHydration = self.viewModel?.isQuestionAuthorityRetired == false &&
             self.ownerID == ownerID && self.controlUIInputs == controlUIInputs &&
             self.transportAgentID.isEmpty && !agentID.isEmpty &&
-            self.viewModel?.sessionKey == appModel.chatSessionKey
+            (self.viewModel?.sessionKey == sessionKey || resolvesDefaultChatAlias)
         // Preserve the accepted turn and optimistic row until its captured run settles.
         if isDefaultAgentHydration, self.hasPendingSend,
            Self.transportAgentID(appModel.selectedAgentId).isEmpty,
@@ -69,23 +77,23 @@ final class IOSChatViewModelOwner {
             return
         }
         // Resolving the default agent replaces its transport without changing the draft's owner.
-        let draft = isDefaultAgentHydration ? self.viewModel?.input : nil
-        let previousPresentation = self.ownerID == ownerID && controlUIInputs != nil &&
+        let previousOwner = self.ownerID == ownerID &&
             self.controlUIInputs == controlUIInputs ? self.viewModel : nil
         // Initial route hydration changes transport, but the same draft keeps its native editor.
-        if draft == nil { self.presentationID = UUID() }
+        if !isDefaultAgentHydration { self.presentationID = UUID() }
         self.viewModel?.detachTransport()
         self.ownerID = ownerID
         self.transportAgentID = agentID
         self.routingContract = routingContract
         self.controlUIInputs = controlUIInputs
+        self.wasFollowingDefaultChat = isFollowingDefaultChat
         self.capturePresentationIdentity(appModel: appModel)
         let offlineStore = appModel.makeChatOfflineStore()
         let voiceNoteRecorder = appModel.voiceNoteRecorder
         let agentName = self.presentationAgentName
         let agentBadge = self.presentationAgentBadge
         let viewModel = OpenClawChatViewModel(
-            sessionKey: appModel.chatSessionKey,
+            sessionKey: sessionKey,
             transport: appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID),
             activeAgentId: appModel.chatDeliveryAgentId,
             sessionRoutingContract: appModel.chatSessionRoutingContract,
@@ -110,10 +118,12 @@ final class IOSChatViewModelOwner {
                 }
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
-        if let previousPresentation { viewModel.inheritTranscriptPresentation(from: previousPresentation) }
+        if let previousOwner {
+            if controlUIInputs != nil { viewModel.inheritTranscriptPresentation(from: previousOwner) }
+            viewModel.inheritComposerDraftState(from: previousOwner, preservingVisibleInput: isDefaultAgentHydration)
+        }
         self.viewModel = viewModel
-        if let draft { viewModel.input = draft }
-        self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
+        self.hydratedComposerModel = isDefaultAgentHydration ? viewModel.composerModelResolver() : nil
         viewModel.load()
     }
 

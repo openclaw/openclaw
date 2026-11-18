@@ -1349,9 +1349,9 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(relaunched.chatSessionKey != alphaChat)
     }
 
-    @Test(arguments: [false, true]) @MainActor
+    @Test(arguments: [false, true], [false, true]) @MainActor
     func `chat preserves a typed draft on initial agent resolution only for the same account`(
-        changesAccount: Bool) throws
+        changesAccount: Bool, resolvesCustomMain: Bool) throws
     {
         let appModel = NodeAppModel()
         appModel.enterScreenshotFixtureMode()
@@ -1371,9 +1371,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         original.input = "Keep this draft while the default agent resolves"
 
         appModel.gatewayDefaultAgentId = "main"
+        if resolvesCustomMain { appModel.applyMainSessionKey("work-main") }
         if changesAccount { appModel.activeGatewayConnectConfig = second }
         #expect(appModel.chatViewModelOwnerID == gatewayOwner)
-        #expect(appModel.chatSessionKey == sessionKey)
+        #expect(appModel.chatSessionKey == (resolvesCustomMain ? "work-main" : sessionKey))
         owner.sync(appModel: appModel)
 
         let current = try #require(owner.viewModel)

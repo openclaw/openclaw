@@ -284,6 +284,7 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored var outboxRestoreEvidence = OutboxRestoreEvidence()
     /// "Not sent" notices for messages restored into a composer, by composer key.
     var composerNoticesBySession: [String: String] = [:]
+    var rejectedVideosBySession: [String: [OpenClawRejectedVideo]] = [:]
     /// Recent canonical keys let the MainActor resolve proof that arrives
     /// after SQLite cancellation commits but before its UI continuation runs.
     @ObservationIgnored
@@ -751,8 +752,10 @@ public final class OpenClawChatViewModel {
             sessionKey: self.sessionKey,
             agentID: self.explicitSessionAgentID ?? nextAgentId,
             routingContract: nextContract)
+        let previousDraftKey = !agentChanged || self.activeAgentId == nil ? self.provisionalComposerKey : nil
         self.activeAgentId = nextAgentId
         self.sessionRoutingContract = nextContract
+        self.rekeyRejectedVideos(from: previousDraftKey)
         self.syncComposerDraftKey()
         let bootstrapIdentityChanged =
             (agentChanged && self.usesMutableAgentRouting) ||

@@ -77,7 +77,27 @@ struct ChatDictationActivityRow: View {
     }
 }
 
-struct ChatAttachmentActivityRow: View {
+struct ChatAttachmentContextRows: View {
+    let viewModel: OpenClawChatViewModel
+
+    var body: some View {
+        if self.viewModel.attachmentStagingCount > 0 {
+            ChatAttachmentActivityRow(title: "Preparing attachments…")
+        } else if self.viewModel.isSendingAttachmentDraft {
+            ChatAttachmentActivityRow(title: "Sending attachments…")
+        } else if self.viewModel.isSubmittingDraft, !self.viewModel.attachments.isEmpty {
+            ChatAttachmentActivityRow(title: "Preparing message…")
+        }
+        let rejectedVideos = self.viewModel.rejectedVideos
+        if let video = rejectedVideos.first {
+            ChatRejectedVideoRow(video: video, remainingCount: rejectedVideos.count) {
+                self.viewModel.removeRejectedVideo(video.id)
+            }
+        }
+    }
+}
+
+private struct ChatAttachmentActivityRow: View {
     let title: LocalizedStringKey
 
     var body: some View {
@@ -93,5 +113,53 @@ struct ChatAttachmentActivityRow: View {
         .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("chat-attachment-activity")
+    }
+}
+
+private struct ChatRejectedVideoRow: View {
+    let video: OpenClawRejectedVideo
+    let remainingCount: Int
+    let onRemove: () -> Void
+
+    private var title: String {
+        if self.remainingCount == 1 { return String(localized: "Video not attached") }
+        return String(format: String(localized: "%lld videos not attached"), Int64(self.remainingCount))
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(OpenClawChatTheme.warning)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(verbatim: self.title)
+                    .font(OpenClawChatTypography.caption.weight(.semibold))
+                Text(verbatim: self.video.fileName)
+                let limit = ByteCountFormatter.string(fromByteCount: Int64(self.video.maximumBytes), countStyle: .file)
+                if let byteCount = self.video.byteCount {
+                    let size = ByteCountFormatter.string(fromByteCount: Int64(byteCount), countStyle: .file)
+                    Text(verbatim: String(
+                        format: String(localized: "%@ • %@ available for attachments"), size, limit))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(verbatim: String(format: String(localized: "%@ available for attachments"), limit))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(OpenClawChatTypography.caption)
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 0)
+            Button("Remove", action: self.onRemove)
+                .font(OpenClawChatTypography.caption.weight(.semibold))
+                .buttonStyle(.plain)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel(Text(verbatim: String(
+                    format: String(localized: "Remove rejected video %@"), self.video.fileName)))
+                .accessibilityIdentifier("chat-remove-rejected-video")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 }

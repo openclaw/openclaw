@@ -3311,6 +3311,10 @@ extension NodeAppModel {
         Self.trimmedOrNil(self.focusedChatSessionKey) ?? self.mainSessionKey
     }
 
+    var isFollowingDefaultChat: Bool {
+        Self.trimmedOrNil(self.focusedChatSessionKey) == nil && Self.trimmedOrNil(self.selectedAgentId) == nil
+    }
+
     func openChat(sessionKey: String?) {
         self.focusChatSession(sessionKey)
         self.openChatRequestID &+= 1
