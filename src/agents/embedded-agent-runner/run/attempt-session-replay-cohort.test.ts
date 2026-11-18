@@ -11,8 +11,10 @@ import { upsertSessionEntryCore } from "../../../config/sessions/session-accesso
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { SessionEntryChangedDuringReadError } from "../../../config/sessions/session-entry-read-errors.js";
 import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
+import { SessionTranscriptReadFenceError } from "../../../config/sessions/session-transcript-read-fence-error.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import * as historyReaders from "../../../config/sessions/session-transcript-worker-readers.js";
+import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db.js";
@@ -21,6 +23,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { sessionManagerPrepareCurrentTurnReplay } from "../../sessions/session-manager-current-turn.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { withInterruptedTurn } from "./attempt-session-replay.test-support.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.js";
@@ -101,6 +104,60 @@ describe("transcript replay cohorts", () => {
         },
         { selectedOwner: true, admittedReceipt: true, interruptedTurn: false },
       );
+    },
+  );
+
+  it.each(["metadata", "new-user", "keeps-advancing"] as const)(
+    "refreshes initial persisted replay at most once after concurrent %s",
+    async (change) => {
+      await withInterruptedTurn(false, async (fixture) => {
+        const select = SessionManager.prototype[sessionManagerPrepareCurrentTurnReplay];
+        let selections = 0;
+        const spy = vi
+          .spyOn(SessionManager.prototype, sessionManagerPrepareCurrentTurnReplay)
+          .mockImplementation(async function (this: SessionManager, ...args) {
+            const result = await select.apply(this, args);
+            if (++selections === 1 || change === "keeps-advancing") {
+              const writer = await SessionManager.openAsync(fixture.target);
+              if (change === "new-user") {
+                await writer.appendMessageAsync({
+                  role: "user",
+                  content: "A newer request",
+                  timestamp: 2,
+                });
+              } else {
+                await writer.appendThinkingLevelChange("high");
+              }
+            }
+            return result;
+          });
+        try {
+          if (change !== "metadata") {
+            await expect(fixture.prepare()).rejects.toBeInstanceOf(
+              change === "new-user"
+                ? SessionWorkStartChangedError
+                : SessionTranscriptReadFenceError,
+            );
+            expect(selections).toBe(2);
+            return;
+          }
+          const prepared = await fixture.prepare();
+          expect(selections).toBe(2);
+          expect(prepared.sessionManager.getLeafEntry()?.type).toBe("thinking_level_change");
+          const admitted = vi.fn();
+          const admit = await prepared.prepareInitialUserTurnReplay?.();
+          await admit!(admitted);
+          expect(admitted).toHaveBeenCalledOnce();
+          expect(await prepared.prepareInitialUserTurnReplay?.()).toBeUndefined();
+          expect(
+            prepared.sessionManager
+              .getBranch()
+              .filter((entry) => entry.type === "message" && entry.message.role === "user"),
+          ).toHaveLength(1);
+        } finally {
+          spy.mockRestore();
+        }
+      });
     },
   );
 

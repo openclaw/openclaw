@@ -5306,6 +5306,10 @@ Persisted-turn replay admission validates the exact session writer row and the
 prepared transcript version in the anchor reader's single snapshot. Each scan
 retains its physical source through validation and cleanup; later preparation
 phases must select that same physical file and obtain fresh reader authority.
+Initial preparation and final consumption share one bounded refresh when a
+concurrent append invalidates selection. The refreshed current user must retain
+the original entry ID and generation; a newer user or completed turn still fails.
+Once consumption starts, its callback is never retried.
 Final consumption retains writer FIFO custody and the native mutation witness
 through synchronous prompt publication and core entry. Current run ownership,
 permission generation, cancellation, and one-time replay consumption remain live
