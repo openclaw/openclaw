@@ -305,6 +305,15 @@ authority. OpenClaw retains cancellation, watchdogs, session policy, and MCP
 grant ownership. Paired-node execution and
 manual compaction continue through the existing host-managed process path.
 
+The optional, run-bound `observeToolMutation` callback observes native file
+mutations; it never grants permission. Report `phase: "before"` after permission
+and input rewrites, before execution, then `phase: "after"` only after success,
+with the same `toolCallId`, native `toolName`, `toolInput`, and native `cwd`.
+The bundled Claude transport uses `PreToolUse` and `PostToolUse` for `Edit` and
+`Write`; the host retains canonical preimages and updates existing memory
+provenance. Failed or missing completions do not claim a successful write,
+and callbacks retained past turn closure are rejected.
+
 Reusable transports receive a run-bound `liveSession` capability. Before creating
 an initial or replacement process, await `liveSession.restart()` unless the
 current process is reusable. This joins the previous process exit and its

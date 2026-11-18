@@ -53,6 +53,7 @@ import { createCliPluginWatchdog } from "./execute-plugin-watchdog.js";
 import { createSteeredCliMessageInjection } from "./execute-plugin.steered-transcript.js";
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
+import { createNativeMemoryProvenanceObserver } from "./native-memory-provenance.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import { isCliNativeToolCallable, normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -626,6 +627,9 @@ export async function executePluginOwnedProcess(params: {
             }
           : {}),
         requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
+        observeToolMutation: AsyncLocalStorage.bind(
+          createNativeMemoryProvenanceObserver(params.context, assertCurrent),
+        ),
         requestUserInput: AsyncLocalStorage.bind(
           createPluginUserInputHandler({
             context: params.context,

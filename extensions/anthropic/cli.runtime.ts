@@ -17,6 +17,7 @@ import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
 import * as promptHooks from "./cli-runtime-prompt-context.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
+import { handleClaudeToolHook } from "./cli-tool-hooks.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
@@ -210,35 +211,16 @@ async function handleRequest(
       ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } }
       : {};
   }
-  if (request.callback_id === "PreToolUse" && input.hook_event_name === "PreToolUse") {
-    if (
-      turn &&
-      !signal.aborted &&
-      typeof input.tool_name === "string" &&
-      input.tool_name.startsWith("mcp__openclaw__")
-    ) {
-      return { continue: true };
-    }
-    // Native settings can grant tools before can_use_tool. This hook preserves host policy.
-    const decision = await authorizeTool(
-      session,
-      {
-        tool_name: input.tool_name,
-        input: input.tool_input,
-        cwd: input.cwd,
-        tool_use_id: request.tool_use_id ?? input.tool_use_id,
-      },
-      signal,
-    );
-    return {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: decision.behavior,
-        ...(decision.behavior === "allow"
-          ? { updatedInput: decision.updatedInput }
-          : { permissionDecisionReason: decision.message }),
-      },
-    };
+  const toolHookResponse = await handleClaudeToolHook({
+    request,
+    input,
+    context: turn?.context,
+    isCurrent: () => activeTurn(session) === turn,
+    signal,
+    authorize: (toolRequest) => authorizeTool(session, toolRequest, signal),
+  });
+  if (toolHookResponse !== undefined) {
+    return toolHookResponse;
   }
   throw new Error("Unknown Claude CLI hook callback.");
 }
@@ -662,6 +644,7 @@ export async function* executeClaudeCli(
             hooks: {
               UserPromptSubmit: [{ hookCallbackIds: promptHooks.PROMPT_CONTEXT_HOOK_IDS }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+              PostToolUse: [{ matcher: "Edit|Write", hookCallbackIds: ["PostToolUse"] }],
             },
           },
           onMessage: (message) => acceptMessage(session, message),

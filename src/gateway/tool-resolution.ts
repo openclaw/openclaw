@@ -15,6 +15,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
+import { getAdmittedRunTurnTaintState } from "../agents/embedded-agent-runner/run/turn-taint-state.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
@@ -147,16 +148,14 @@ export async function resolveGatewayScopedTools(
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   }).sessionAgentId;
-  const hasSeparateRuntimePolicyIdentity = Boolean(
-    params.runtimePolicySessionKey?.trim() || params.runtimePolicyAgentId?.trim(),
-  );
-  const runtimePolicyAgentId = hasSeparateRuntimePolicyIdentity
-    ? resolveSessionAgentIds({
-        config: params.cfg,
-        sessionKey: runtimePolicySessionKey,
-        agentId: params.runtimePolicyAgentId,
-      }).sessionAgentId
-    : sessionAgentId;
+  const runtimePolicyAgentId =
+    params.runtimePolicySessionKey?.trim() || params.runtimePolicyAgentId?.trim()
+      ? resolveSessionAgentIds({
+          config: params.cfg,
+          sessionKey: runtimePolicySessionKey,
+          agentId: params.runtimePolicyAgentId,
+        }).sessionAgentId
+      : sessionAgentId;
   const surface = params.surface ?? "http";
   const { senderIsOwner, scheduledTools } = resolveGatewaySenderAuthority(params, surface);
   const stableSessionSurface = surface === "loopback" && params.admittedRunContext !== undefined;
@@ -500,6 +499,7 @@ export async function resolveGatewayScopedTools(
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? await createOpenClawCodingToolsInternalAsync({
           ...commonToolOptions(),
+          isTurnTainted: getAdmittedRunTurnTaintState(params.admittedRunContext)?.isTainted,
           sessionEventSourcePolicy: params.sessionEventSourcePolicy,
           agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,

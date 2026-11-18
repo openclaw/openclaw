@@ -24,6 +24,7 @@ import type {
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
 import { isClaudeForegroundAgentToolName } from "../cli-output-records.js";
+import { getAdmittedRunTurnTaintState } from "../embedded-agent-runner/run/turn-taint-state.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
 import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
@@ -256,11 +257,16 @@ export function createCliEventHandlers(params: {
         startedAt: startedCall?.startedAt,
       }).catch(() => {});
     }
+    const strippedName = stripOpenClawMcpToolPrefix(event.name);
+    const resultContentSource = tracked
+      ? context.resultContentSourceByToolName?.get(strippedName)
+      : undefined;
+    getAdmittedRunTurnTaintState(runParams.admittedRunContext)?.observe({
+      toolName: strippedName,
+      resultContentSource,
+      presentationOnly: !tracked,
+    });
     if (emitLiveEvents) {
-      const strippedName = stripOpenClawMcpToolPrefix(event.name);
-      const resultContentSource = tracked
-        ? context.resultContentSourceByToolName?.get(strippedName)
-        : undefined;
       const startedArgs = startedCall?.args;
       const planUpdate =
         tracked &&

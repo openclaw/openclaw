@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
+import { getAdmittedRunTurnTaintState } from "../agents/embedded-agent-runner/run/turn-taint-state.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
@@ -468,6 +469,9 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                   },
                   signal,
                   authorizeToolCall,
+                  observeToolOutcome: getAdmittedRunTurnTaintState(
+                    boundClientGrant?.admittedRunContext,
+                  )?.observe,
                   onToolCallPrepared: cliCaptureHandle
                     ? ({ toolName: preparedToolName, args }) => {
                         updateMcpLoopbackToolCallCapture(cliCaptureHandle, {

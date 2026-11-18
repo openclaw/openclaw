@@ -14,6 +14,7 @@ import {
   protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
 } from "../agents/tool-execution-error.js";
+import type { ToolOutcomeObserver } from "../agents/tool-outcome-observation.js";
 import { resolveToolResultFailureKind } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
@@ -73,6 +74,8 @@ export async function handleMcpJsonRpc(params: {
   signal?: AbortSignal;
   /** Revalidate short-lived client authority immediately before side effects. */
   authorizeToolCall?: () => boolean;
+  /** Host-owned admitted-turn observation, before any result reaches the CLI. */
+  observeToolOutcome?: ToolOutcomeObserver;
   onToolCallResult?: (
     call: {
       toolName: string;
@@ -234,6 +237,8 @@ export async function handleMcpJsonRpc(params: {
           throw tool.resultContentSource === "network"
             ? protectNetworkToolExecutionError(error, "tool execution failed", params.signal)
             : error;
+        } finally {
+          params.observeToolOutcome?.({ toolName, resultContentSource: tool.resultContentSource });
         }
         const failureKind = resolveToolResultFailureKind(result);
         reportToolCallResult(
