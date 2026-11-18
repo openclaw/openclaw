@@ -68,6 +68,13 @@ export type ProvisionCopyDetails = {
     | "helper-unavailable";
   batchCount: number;
   sourceBytes: number;
+  clonedFiles?: number;
+  clonedBytes?: number;
+  copiedFiles?: number;
+  copiedBytes?: number;
+  unreportedFiles?: number;
+  unreportedBytes?: number;
+  reflinkFallbackReason?: string;
   spawnCount: number;
   spawnMs: number;
   childMs: number;

@@ -9,12 +9,46 @@ title: "OpenAI models"
 sidebarTitle: "Models"
 ---
 
+## GPT-6.2 Astra and Sol
+
+Select `openai/gpt-6.2-astra` or `openai/gpt-6.2-sol` explicitly. Both support
+OpenAI Platform API keys and eligible paid ChatGPT/Codex subscriptions (Plus,
+Pro, Enterprise, and Edu); the selected account catalog decides availability.
+Adding support does not change an existing model, auth order, or default.
+
+Both accept text and images, with a 1,050,000-token physical context window,
+922,000 maximum input tokens, and 128,000 maximum output tokens. OpenClaw keeps
+the conservative 272,000-token default budget; opt into longer context as
+described in [setup](/providers/openai/setup#context-window-defaults-and-long-context-opt-in).
+Account-reported subscription budgets remain authoritative.
+
+Reasoning cannot be disabled. Use `low`, `medium` (the starting default),
+`high`, `xhigh`, or `max`; `minimal` maps to `low`. Tool-bearing turns require
+the Responses API, including when an official Chat Completions adapter was
+configured. Do not send temperature, top-p, or log-probability controls.
+Standard, Fast, and Ultrafast use the existing speed controls; account and
+workspace policy can restrict a tier. Ultrafast requires Pro 200 for Sol,
+Pro 500 for both models, or eligible workspace access.
+
+Standard API pricing per million tokens is $8 input / $0.40 cached input /
+$40 output for Astra, and $2 / $0.10 / $10 for Sol. Thirty-minute cache writes
+cost $10 and $2.50 respectively; 12-hour writes cost $20 and $5. Above 272,000
+input tokens, input/cache rates double and output rates multiply by 1.5 for
+the full request. Fast costs 2× Standard. Ultrafast costs 3× through February
+28, 2027, then 6× beginning March 1, 2027 (Pacific time). Subscription usage
+and API billing remain separate.
+
+See the official [Astra reference](https://developers.openai.com/api/docs/models/gpt-6.2-astra),
+[Sol reference](https://developers.openai.com/api/docs/models/gpt-6.2-sol), and
+[migration guide](https://developers.openai.com/api/docs/guides/latest-model).
+
 ## Quick choice
 
 | Goal                                              | Use                                                                | Notes                                                               |
 | ------------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------- |
 | ChatGPT/Codex subscription, native Codex runtime  | `openai/gpt-6-astra`                                               | Fresh subscription setup; sign in with Codex auth.                  |
 | Direct API-key billing for agent turns            | `openai/gpt-6-astra` plus an ordered API-key auth profile          | Fresh API-key setup uses Astra.                                     |
+| GPT-6.2 Astra or Sol                              | `openai/gpt-6.2-astra` or `openai/gpt-6.2-sol`                     | Select explicitly with API-key or eligible subscription auth.       |
 | GPT-6.1 Sol                                       | `openai/gpt-6.1-sol`                                               | Select explicitly; reasoning cannot be disabled.                    |
 | GPT-6 Sol                                         | `openai/gpt-6-sol`                                                 | Select explicitly; account access can differ between auth routes.   |
 | Lower-cost GPT-6 Luna                             | `openai/gpt-6-luna`                                                | Select explicitly; check the account catalog for availability.      |

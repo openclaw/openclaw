@@ -196,8 +196,11 @@ Restore preparation verifies the chunk manifest and compressed hashes before wri
 admission. The transaction decodes each chunk once, consuming one record at a time;
 invalid records or mismatched totals roll back the entire restoration. Restore
 requests share the existing archive-worker queue across agent stores.
-One large window can exceed the normal background byte budget because its removal
-is atomic; the worker yields between windows.
+One large window can exceed the normal background byte budget because its archive
+publication is atomic. Payload and search cleanup release the writer between
+units of at most 256 rows; embedded archive cleanup releases it after each chunk.
+Queued foreground writes can run between units. Interrupted cleanup resumes from
+the existing cold marker, and restoration cancels further cleanup.
 
 Selection reads window metadata and transcript endpoints. The worker checks event sizes
 only when preparation reaches that window within the pass's byte budget, outside the
@@ -217,8 +220,9 @@ events. An event whose encoded envelope and restore metadata cannot fit one chun
 also stays in SQLite. Existing single-file archives remain readable unchanged.
 
 The worker writes, syncs, and verifies an immutable archive before a guarded
-transaction records its location and removes the corresponding transcript
-rows. The archive preserves the original serialized events and their restore
+transaction records its location. Readers then use the complete archive while
+background cleanup clears the retained navigation rows' payloads and search index.
+The archive preserves the original serialized events and their restore
 metadata. A failed or interrupted preparation leaves the SQLite transcript
 intact. A file published before an uncommitted transaction may remain as an
 unreferenced archive.

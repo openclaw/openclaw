@@ -9,8 +9,12 @@ import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
+import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { readSessionWatchdogFailure } from "../sessions/session-controller.watchdog-error.js";
+import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../sessions/session-controller.watchdog-state.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
@@ -30,6 +34,7 @@ import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.t
 import { SessionManager } from "./sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "./timeout.js";
 import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -121,6 +126,86 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it.each([undefined, 1_800_000])(
+    "names an off-VM wait at watchdog stop (deadline=%s)",
+    async (deadline) => {
+      await import("./session-placement-admission.js");
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(0);
+      const harness = createHarness({ name: "await-diagnostic", timeoutMs: 2_000 });
+      const operation = harness.replyOperation;
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        runId: harness.runId,
+        cancel: () => {
+          harness.runAbortController.abort();
+          operation.complete();
+        },
+      });
+      const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const started = createDeferred();
+      const target = tool(
+        "stalled",
+        "Wait for an external operation",
+        async (_id, _args, signal) => {
+          recordDiagnosticToolExecutionDeadline(deadline);
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return jsonResult({ done: true });
+        },
+      );
+      const surface = applyCodeModeCatalog({
+        ...harness,
+        tools: [...harness.tools, target],
+        toolHookContext: { runId: harness.runId, watchdogAttempt },
+      });
+      const exec = expectDefined(
+        surface.tools.find((entry) => entry.name === "exec"),
+        "exec",
+      );
+      const execution = exec
+        .execute(
+          "await-cell",
+          { code: "return await stalled({});", awaitResults: true },
+          harness.runAbortController.signal,
+        )
+        .catch((error: unknown) => error);
+      try {
+        await started.promise;
+        // The host can dispatch before the worker publishes its parked frontier.
+        await vi.waitFor(() =>
+          expect(
+            readSessionWatchdogFailure(operation.watchdog.describeStop().error)?.pendingTools[0]
+              ?.awaiting,
+          ).toHaveLength(1),
+        );
+        const stoppedAtMs = (deadline ?? 0) + SESSION_WATCHDOG_QUIET_TOOL_MS + 1;
+        vi.setSystemTime(stoppedAtMs);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+        expect(readSessionWatchdogFailure(operation.abortSignal.reason)?.pendingTools[0]).toEqual({
+          toolName: "exec",
+          toolCallId: "await-cell",
+          elapsedMs: stoppedAtMs,
+          awaiting: [
+            {
+              kind: "bridge",
+              method: "callValue",
+              deadlineAtMs: deadline ?? null,
+              elapsedMs: stoppedAtMs,
+            },
+          ],
+        });
+      } finally {
+        harness.runAbortController.abort();
+        await execution;
+      }
+    },
+  );
+
   it("preserves a silent host exec deadline without ambient caller context", async () => {
     await import("./session-placement-admission.js");
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -184,6 +269,101 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     });
     expect(cancel).not.toHaveBeenCalled();
   });
+
+  it.each(["finite", "unlimited"] as const)(
+    "keeps quiet nested Auto Review alive within its %s parent allowance, then reaps a hang",
+    async (parent) => {
+      await import("./session-placement-admission.js");
+      const { createAutoReviewTool } = await loadBundledPluginFacade<{
+        createAutoReviewTool: (context: OpenClawPluginToolContext<2>) => AnyAgentTool | null;
+      }>({ pluginId: "autoreview", artifactBasename: "api.js" });
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(10);
+      const harness = createHarness({ name: `review-${parent}`, timeoutMs: 2_000 });
+      const operation = harness.replyOperation;
+      operation.setPhase("running");
+      const cancel = vi.fn(() => {
+        harness.runAbortController.abort();
+        operation.complete();
+      });
+      operation.attachBackend({ kind: "embedded", runId: harness.runId, cancel });
+      const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const bound = parent === "finite" ? 1_800_000 : Date.now() + DEFAULT_AGENT_TIMEOUT_MS;
+      const started = createDeferred();
+      const review = expectDefined(
+        createAutoReviewTool({
+          assertInvocationCurrent() {},
+          assertCompleteResult() {},
+          modelExecution: {
+            cliEntryPath: "/fixture/openclaw.mjs",
+            async run() {
+              throw new Error("The stalled helper must not start a reviewer");
+            },
+          },
+          sandbox: {
+            workspaceDir: "/guest/repo",
+            installedSkillRoots: { autoreview: "/protected/autoreview" },
+            run: async ({ signal }) => {
+              started.resolve();
+              return await new Promise<never>((_, reject) => {
+                signal?.addEventListener(
+                  "abort",
+                  () => reject(new DOMException("Cancelled", "AbortError")),
+                  { once: true },
+                );
+              });
+            },
+          },
+        }),
+        "Auto Review",
+      );
+      const surface = applyCodeModeCatalog({
+        ...harness,
+        tools: [...harness.tools, wrapToolWithBeforeToolCallHook(review, { runId: harness.runId })],
+        toolHookContext: {
+          runId: harness.runId,
+          sessionKey: harness.sessionKey,
+          watchdogAttempt,
+          getRunAbortDeadlineAtMs: () => (parent === "finite" ? bound : undefined),
+        },
+      });
+      const exec = expectDefined(
+        surface.tools.find((entry) => entry.name === "exec"),
+        "exec",
+      );
+      const execution = wrapToolWithBeforeToolCallHook(exec, { watchdogAttempt }).execute(
+        "review-cell",
+        { code: "return await autoreview({ mode: 'local' });", awaitResults: true },
+        harness.runAbortController.signal,
+      );
+      // Observe cancellation immediately, including the pre-fix watchdog abort.
+      const settled = execution.catch((error: unknown) => error);
+      try {
+        await started.promise;
+        // Drive the owning watchdog boundary independently of bridge timers.
+        vi.setSystemTime(Date.now() + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() =>
+          expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+        );
+        expect(operation.abortSignal.reason).toBeUndefined();
+        expect(cancel).not.toHaveBeenCalled();
+        expect(new Set(operation.watchdog.snapshot().tools.map((entry) => entry.toolName))).toEqual(
+          new Set(["autoreview", "exec"]),
+        );
+        vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS - 1);
+        expect((await operation.watchdog.tick(Date.now())).action).toBe("observe");
+        vi.setSystemTime(bound + SESSION_WATCHDOG_QUIET_TOOL_MS + 1);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+        expect(operation.abortSignal.reason).toMatchObject({ staleReason: "no_activity" });
+        await settled;
+      } finally {
+        harness.runAbortController.abort();
+        await settled;
+      }
+    },
+  );
 
   it.each(executors)(
     "%s admits nested activity when consecutive assistant responses reuse exec_0",

@@ -816,7 +816,8 @@ span.new-session-page__select {
   );
 }
 
-.new-session-page__composer::after {
+/* Tint the message surface without taking dictation’s ::after border. */
+.new-session-page__composer > .agent-chat__input::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -828,7 +829,7 @@ span.new-session-page__select {
   transition: opacity 140ms cubic-bezier(0.23, 1, 0.32, 1);
 }
 
-.new-session-page__composer[data-attachment-drop-active]::after {
+.new-session-page__composer[data-attachment-drop-active] > .agent-chat__input::before {
   opacity: 0.1;
 }
 
@@ -1538,7 +1539,8 @@ span.new-session-page__select {
 
   /* The picker holds the track while its chip hugs the label. Anchor the
      chevron beside the actions so background catalog names do not move it. */
-  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger {
+  .new-session-page .chat-controls__model-picker > .chat-controls__model-trigger,
+  .new-session-page [data-chat-model-setup] {
     display: flex;
     width: fit-content;
     margin-inline-start: auto;
