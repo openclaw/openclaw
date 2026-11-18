@@ -16,6 +16,7 @@ import {
 } from "../solid-render-lifecycle.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
+  TranscriptReadPresentation,
   TranscriptRowKeyContext,
   type TranscriptContent,
   type TranscriptLayoutProps,
@@ -203,9 +204,15 @@ function TranscriptRows(props: {
                     aria-hidden={active() ? undefined : "true"}
                   >
                     <TranscriptRowKeyContext value={() => row()?.key}>
-                      <ContentPresentation value={() => presented() && (active() || preparing())}>
-                        <RowContent value={content()} />
-                      </ContentPresentation>
+                      <TranscriptReadPresentation
+                        value={() =>
+                          presented() && active() && !props.snapshot.initialPositionPending()
+                        }
+                      >
+                        <ContentPresentation value={() => presented() && (active() || preparing())}>
+                          <RowContent value={content()} />
+                        </ContentPresentation>
+                      </TranscriptReadPresentation>
                     </TranscriptRowKeyContext>
                   </div>
                 </>

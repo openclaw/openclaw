@@ -35,6 +35,7 @@ import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { createChatMentionReadRef } from "./chat-mention-read.ts";
 import { OmittedMedia, PairingQrNotices } from "./chat-message-attachment-status-solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import {
@@ -126,11 +127,12 @@ export function GroupedMessage(props: {
                 entryRef?.(element);
                 return () => entryRef?.(undefined);
               });
+              const mentionRead = createChatMentionReadRef(() => props.options);
               return (
                 <>
                   <div
                     class={state().bubbleClasses}
-                    ref={[bindEntry]}
+                    ref={[bindEntry, mentionRead]}
                     data-message-id={props.messageKey}
                     data-file-session-key={props.options.fileLinkSessionKey}
                     data-entry-id={props.options.entryId || undefined}

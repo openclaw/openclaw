@@ -38,9 +38,14 @@ export function projectOverlays(source: ApplicationOverlays) {
   return projectOwner(source, (overlays) => overlays.snapshot);
 }
 
-export function projectMentions(source: MentionsCapability) {
-  return projectOwner(source, (mentions) => mentions.snapshot);
-}
+export const projectMentions = createSharedOwnerProjection(
+  (mentions: MentionsCapability) => mentions.snapshot,
+);
+
+/** Message visibility consumers share the Inbox owner without activating its presenter. */
+export const projectSidebarMentions = createSharedOwnerProjection(
+  (attention: SidebarAttentionStore) => attention.mentions,
+);
 
 export function projectSidebarAttention(source: SidebarAttentionStore) {
   return projectOwner(source, (attention) => attention.entries);
