@@ -35,6 +35,7 @@ type DeviceBearingContext = {
 
 /** Drops the reported device from a hook context when the run holds input from another source. */
 export function projectHookRequesterDevice<T>(ctx: T): T {
+  // SAFETY: agent and tool hook contexts are plain objects; the fields read here are optional.
   const context = ctx as DeviceBearingContext | undefined;
   const entry = context?.runId ? injectedInputDevices.get(context.runId) : undefined;
   if (!entry || !context) {
@@ -46,8 +47,10 @@ export function projectHookRequesterDevice<T>(ctx: T): T {
   }
   const { requesterDeviceId: _agentDevice, ...rest } = context;
   if (!rest.requester?.deviceId) {
+    // SAFETY: rest is ctx without its optional requesterDeviceId, so it still satisfies T.
     return rest as T;
   }
   const { deviceId: _toolDevice, ...requester } = rest.requester;
+  // SAFETY: only the optional requesterDeviceId and requester.deviceId fields are removed from ctx.
   return { ...rest, requester } as T;
 }

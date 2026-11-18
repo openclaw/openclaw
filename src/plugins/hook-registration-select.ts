@@ -14,6 +14,7 @@ export function getHooksForName<K extends PluginHookName>(
   ctx?: unknown,
   toolName?: string,
 ): PluginHookRegistration<K>[] {
+  // SAFETY: the hookName filter below keeps only registrations for K.
   return (registry.typedHooks as PluginHookRegistration<K>[])
     .filter((hook) => hook.hookName === hookName && isHookContextEligible(hook, ctx))
     .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
