@@ -1536,9 +1536,7 @@ const startupEnglish = {
     mentions: {},
     cloudWorkerFailed: "Couldn’t continue this session. Check its device and try again. {error}",
     errorDetails: "Error details",
-    errorSummary: "Couldn’t complete this action. Try again.",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
-    errorReplyTitle: "Couldn’t finish this reply",
     historyUnavailableTitle: "Couldn’t load this conversation",
     historyUnavailableBody: "Try again to load its messages.",
     recovery: {
@@ -1574,13 +1572,6 @@ const startupEnglish = {
     waitingForApproval: "Waiting for approval",
     waitingOnSubagents: "Waiting on subagents",
     waitingForMessage: "Waiting for a message",
-    waitingOnSubagent: "Waiting on {name}",
-    waitingOnSessions: "Waiting on {count} sessions",
-    sessionsNeedInputOne: "1 needs your input",
-    sessionsNeedInput: "{count} need your input",
-    sessionsPaused: "{count} paused",
-    sessionPausedNote: "{name} is paused",
-    sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
     continuationSource: {
       exec: "Background command finished",

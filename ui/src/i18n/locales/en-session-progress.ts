@@ -44,12 +44,10 @@ const enSessionProgress = {
     },
     activity: {
       updated: "Updated {time}",
-      completed: "Completed {time}",
       failed: "Failed {time}",
       stopped: "Stopped {time}",
     },
     outcome: {
-      completed: "Completed",
       failed: "Failed",
       stopped: "Stopped",
     },
