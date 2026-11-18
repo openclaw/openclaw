@@ -199,6 +199,15 @@ For an ordinary decision question, if it expires or is cancelled before an answe
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question.
 
+In the Control UI, sending a new ordinary prompt from the composer supersedes
+the Gateway questions already docked in that conversation, including child-session
+questions shown there. They are cancelled through the normal question lifecycle,
+not answered: an ordinary question returns `status: "no_answer"`, and a required
+manual step remains `action_unresolved`. A new prompt never grants approval, requests
+verification, or proves the manual step complete. Blank, rejected, and command
+submissions do not dismiss questions. Questions arriving during the send remain
+answerable; failed cancellation leaves the question and its error visible.
+
 Gateway question records include the optional originating `runId`. Clients can
 use it to keep the prompt and its terminal answer summary with the correct agent
 turn, including after reconnecting and recovering the question with

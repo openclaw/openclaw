@@ -167,8 +167,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       placementStartup !== null,
     );
     const multiIdentity = this.hasMultipleIdentities();
-    const catalogReason = this.catalogComposerReason(catalogKey);
-    const catalogDisabledReason = catalogReason?.text ?? null;
+    const catalogDisabledReason = this.catalogComposerReason(catalogKey)?.text ?? null;
     const { closePanelSlot, openPanelSlot, onFindWorkspaceFile, sessionWorkspace } =
       createChatPaneRails({
         state,
@@ -435,6 +434,13 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
+        prompts: conversationAttention.gatewayQuestionPrompts,
+        sendActions: createChatPaneSendActions(state, {
+          canSend: composerAvailability.canSend,
+          modelRequiredReason: composerAvailability.modelRequiredReason,
+          continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
+          addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
+        }),
         canSend: composerAvailability.canSend && nativeConversation && state.connected,
         isCurrent: () => this.state === state,
       }),
@@ -595,12 +601,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,
       onRemoveAttachment: this.removeBrowserAnnotation,
-      ...createChatPaneSendActions(state, {
-        canSend: composerAvailability.canSend,
-        modelRequiredReason: composerAvailability.modelRequiredReason,
-        continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
-        addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
-      }),
       ...createChatPaneRunRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
         onRewindMessage: selectedSessionArchived
