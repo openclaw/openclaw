@@ -1965,8 +1965,6 @@ const startupEnglish = {
     adminRequired: {},
     tabs: {},
     list: {},
-    suggestions: {},
-    stats: {},
     detail: {},
     actions: {},
     runNotStarted: {},
