@@ -29,6 +29,27 @@ export function createIngressFailureReporter<TPayload, TMetadata>(
     log(
       `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} failed after ${failure.attempt} attempts (${failure.reason}): ${failure.message}; dead-lettered`,
     );
+    // Use the original queue identity before run admission; never invent a runId.
+    // Failure reporting remains best effort, with the retained failed row owning recovery.
+    try {
+      const { getGlobalHookRunner } = await import("../../plugins/hook-runner-global.js");
+      const runner = getGlobalHookRunner();
+      if (runner?.hasHooks("channel_ingress_failed")) {
+        await runner.runChannelIngressFailed(
+          {
+            eventId: claim.id,
+            queueName: claim.queueName,
+            receivedAt: claim.receivedAt,
+            attempts: failure.attempt,
+          },
+          { channelId: claim.channelId, accountId: claim.accountId },
+        );
+      }
+    } catch {
+      log(
+        "channel ingress failure observation unavailable; retained dead letter remains authoritative",
+      );
+    }
     if (!onDeadLetter) {
       return;
     }

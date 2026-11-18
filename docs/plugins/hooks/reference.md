@@ -165,6 +165,7 @@ they reach the provider; see
 | Hook                        | Kind          | Purpose                                                                      |
 | --------------------------- | ------------- | ---------------------------------------------------------------------------- |
 | `before_channel_ingress`    | Modify / gate | Transform a raw channel event before durable storage; failures refuse intake |
+| `channel_ingress_failed`    | Observe       | Content-free original identity after a committed pre-adoption failure        |
 | `inbound_claim`             | Claim         | Claim an inbound message for the plugin that owns its conversation binding   |
 | `channel_pairing_requested` | Observe       | Observe newly created DM pairing requests                                    |
 | `message_received`          | Observe       | Observe inbound content, sender, thread, and metadata                        |
