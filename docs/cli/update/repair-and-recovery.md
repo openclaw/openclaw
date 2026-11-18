@@ -328,7 +328,9 @@ while a surviving Doctor process finishes; retry when that process exits. Run
 remains pending.
 
 The next `openclaw update` settles the plugin recovery a killed command-line
-update reserved, and continues without a repair. When the killed update had
+update reserved, and continues without a repair. On a source checkout this
+needs the checkout unchanged since that update installed its build: the same
+commit, no local changes, and the same build. When the killed update had
 replaced the installed version without confirming it, had begun rolling back on
 it, or left the Gateway stopped, the update first finishes that version the way
 `openclaw update repair` does: Doctor, plugin convergence, and a Gateway restart.

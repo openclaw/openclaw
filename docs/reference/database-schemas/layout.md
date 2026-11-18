@@ -484,6 +484,18 @@ step and outcome writes retain their existing failure behavior. Encoding
 reserves space for exact identity bytes before bounding and redacting other
 origin diagnostics.
 
+An update of a source checkout that replaces the checkout's build in place
+records optional `origin.gitActivation` in the same `origin_json` column, before
+it reserves its plugin recovery: `sha` (the activated commit), `buildId` (the
+activated build) and `previousBuildId` (the build it replaced, or `null`). The
+next `openclaw update` reads it only for a killed run and only together with the
+checkout on disk; it never grants execution authority. It is an exact retained
+receipt like the driver identities: when the origin outgrows its byte budget,
+driver `namespace` values are dropped first and the activation stays exact.
+Public history projections omit it. This is
+additive JSON metadata with no new columns, tables, or schema versions; older
+readers drop the key, and runs without it keep the earlier behavior.
+
 The ledger owns abandonment classification and terminalization. Automatic
 recovery requires more than 30 minutes since both `updated_at_ms` and the latest
 step timestamp, plus positive evidence that every recorded driver is dead on the
