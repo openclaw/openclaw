@@ -70,7 +70,6 @@ it("logs an unavailable recovery reason as data while preserving the refusal not
     replaceSessionEntrySync(target, {
       ...loadExactSessionEntry(target)!.entry,
       resumeAfterRestart: {
-        queuedInputIds: [],
         operatorSource: { kind: "unavailable", reason: "no-auth-method" },
       },
     });
