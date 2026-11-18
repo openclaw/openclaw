@@ -4,8 +4,10 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
+import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { registerSandboxBackend } from "./sandbox/backend.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { resolveAttemptWorkspaceSandbox, resolveHarnessWorkspace } from "./workspace-sandbox.js";
 import { readRegistryWorktrees } from "./worktrees/registry-read.js";
@@ -19,6 +21,63 @@ const runParams = (workspaceDir: string, sessionId = "execution") => ({
   sessionKey: "agent:main:" + sessionId,
   agentId: "main",
 });
+
+it.each(["main", "research"])(
+  "prepares a %s file flush outside the source worktree under the source sandbox policy",
+  async (agentId) => {
+    await withOpenClawTestState({ label: "memory-sandbox-workspace" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
+      const sourceKey = "agent:main:project";
+      const project = state.path("project");
+      const memoryWorkspace = state.path("agent-memory", agentId);
+      const record = makeWorktreeRecord(project, "source-worktree", { ownerId: sourceKey });
+      await insertRegistryWorktree(state.env, record);
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: sourceKey },
+        {
+          sessionId: "source",
+          updatedAt: 1,
+          worktree: { id: record.id, branch: record.branch, repoRoot: record.repoRoot },
+        },
+      );
+      // Stop at the backend boundary: ownership and policy run for real, without a container.
+      using runtimeErrors = vi.spyOn(defaultRuntime, "error");
+      const backendReached = new Error("synthetic backend reached after workspace admission");
+      const restore = registerSandboxBackend("docker", async (params) => {
+        expect(params.workspaceDir).toBe(memoryWorkspace);
+        expect(params.cfg.workspaceAccess).toBe("rw");
+        throw backendReached;
+      });
+      try {
+        await expect(
+          resolveAttemptWorkspaceSandbox({
+            agentId,
+            sessionId: "detached-memory",
+            sessionKey: "agent:" + agentId + ":internal:memory-flush",
+            sandboxSessionKey: sourceKey,
+            memoryFlushWritePath: "memory/2026-11-18.md",
+            workspaceDir: memoryWorkspace,
+            cwd: memoryWorkspace,
+            config: {
+              agents: {
+                ownership: "explicit",
+                entries: {
+                  main: { sandbox: { mode: "all", workspaceAccess: "rw" } },
+                  research: { sandbox: { mode: "off", workspaceAccess: "none" } },
+                },
+                defaults: { skipBootstrap: true },
+              },
+            },
+          }),
+        ).rejects.toMatchObject({ code: "sandbox_provisioning", cause: backendReached });
+        expect(runtimeErrors).not.toHaveBeenCalled();
+        await expect(fs.stat(project)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        restore();
+      }
+    });
+  },
+);
 
 it("records native and plugin workspace use on the managed checkout", async () => {
   await withOpenClawTestState({ label: "workspace-activity" }, async (state) => {
@@ -147,53 +206,62 @@ it.each(["realpath", "mkdir"] as const)(
   },
 );
 
-it.each([false, true])("uses independent policy session (required=%s)", async (required) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const identity = "UNMATERIALIZED_SANDBOX_IDENTITY";
-    await captureRuntimeConfigAsyncReader()();
-    const sessionId = required ? "required" : "optional";
-    const sessionKey = "agent:main:" + sessionId;
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        sessionId,
-        updatedAt: 1,
-        sandboxMode: "off",
-        ...(required ? { sandbox: "required" as const } : {}),
-      },
-    );
-    const prepare = () =>
-      resolveAttemptWorkspaceSandbox({
-        ...runParams(state.workspaceDir),
-        sandboxSessionKey: sessionKey,
-        config: sandboxConfig({
-          mode: required ? "off" : "all",
-          ...(required && {
-            backend: "ssh",
-            ssh: {
-              target: "sandbox@example.invalid",
-              identityData: { source: "env" as const, provider: "default", id: identity },
-            },
+it.each([
+  { required: false, fileFlush: false },
+  { required: true, fileFlush: false },
+  { required: false, fileFlush: true },
+  { required: true, fileFlush: true },
+])(
+  "uses independent policy session (required=$required, fileFlush=$fileFlush)",
+  async ({ required, fileFlush }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const identity = "UNMATERIALIZED_SANDBOX_IDENTITY";
+      await captureRuntimeConfigAsyncReader()();
+      const sessionId = required ? "required" : "optional";
+      const sessionKey = "agent:main:" + sessionId;
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId,
+          updatedAt: 1,
+          sandboxMode: "off",
+          ...(required ? { sandbox: "required" as const } : {}),
+        },
+      );
+      const prepare = () =>
+        resolveAttemptWorkspaceSandbox({
+          ...runParams(state.workspaceDir),
+          sandboxSessionKey: sessionKey,
+          memoryFlushWritePath: fileFlush ? "memory/2026-11-18.md" : undefined,
+          config: sandboxConfig({
+            mode: required ? "off" : "all",
+            ...(required && {
+              backend: "ssh",
+              ssh: {
+                target: "sandbox@example.invalid",
+                identityData: { source: "env" as const, provider: "default", id: identity },
+              },
+            }),
           }),
-        }),
+        });
+      if (required) {
+        await expect(prepare()).rejects.toMatchObject({
+          code: "sandbox_provisioning",
+          cause: { code: "SECRET_SURFACE_UNAVAILABLE", ownerId: "agent-sandbox:main" },
+        });
+        return;
+      }
+      using mkdir = vi.spyOn(fs, "mkdir");
+      const observed = observeHostDataSql();
+      using sql = { queries: observed.queries, [Symbol.dispose]: observed.restore };
+      expect(await prepare()).toMatchObject({
+        sandbox: null,
+        sandboxReport: { mode: "all", sandboxed: false },
       });
-    if (required) {
-      await expect(prepare()).rejects.toMatchObject({
-        code: "sandbox_provisioning",
-        cause: { code: "SECRET_SURFACE_UNAVAILABLE", ownerId: "agent-sandbox:main" },
-      });
-      return;
-    }
-    using mkdir = vi.spyOn(fs, "mkdir");
-    const observed = observeHostDataSql();
-    using sql = { queries: observed.queries, [Symbol.dispose]: observed.restore };
-    expect(await prepare()).toMatchObject({
-      sandbox: null,
-      sandboxReport: { mode: "all", sandboxed: false },
+      expect(mkdir.mock.calls.filter(([dir]) => dir === state.workspaceDir)).toHaveLength(1);
+      expect(
+        sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
+      ).toEqual([]);
     });
-    expect(mkdir.mock.calls.filter(([dir]) => dir === state.workspaceDir)).toHaveLength(1);
-    expect(
-      sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
-    ).toEqual([]);
-  });
-});
+  },
+);

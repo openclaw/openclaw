@@ -1,5 +1,8 @@
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { filterToolsByMessageProvider } from "../../agents/agent-tools.message-provider-policy.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
@@ -69,7 +72,12 @@ export async function prepareMemoryFlushAttempt(params: {
     model: selection.model,
     auth: followupRun.run,
   }).run;
-  if (isToolsMemoryFlushPlan(plan)) {
+  if (!isToolsMemoryFlushPlan(plan)) {
+    // File memory belongs to the agent, not the source session's project/worktree.
+    // Re-root only this maintenance copy; tools-based plans keep their execution context.
+    maintenanceRun.workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+    maintenanceRun.cwd = maintenanceRun.workspaceDir;
+  } else {
     const context = buildEmbeddedRunContext({
       run: maintenanceRun,
       sessionCtx: {},
@@ -159,12 +167,12 @@ export async function prepareMemoryFlushAttempt(params: {
         storePath: sourceStorePath,
       },
       runId: params.flushRunId,
-      workspaceDir: followupRun.run.workspaceDir,
+      workspaceDir: maintenanceRun.workspaceDir,
       signal: params.abortSignal,
     });
     if (!isToolsMemoryFlushPlan(plan)) {
       await ensureMemoryFlushTargetFile({
-        workspaceDir: followupRun.run.workspaceDir,
+        workspaceDir: maintenanceRun.workspaceDir,
         relativePath: plan.relativePath,
         assertCurrent: params.assertCurrent,
       });

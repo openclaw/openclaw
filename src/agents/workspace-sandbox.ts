@@ -28,6 +28,7 @@ export type WorkspaceSandboxParams = Pick<
   | "config"
   | "cwd"
   | "execOverrides"
+  | "memoryFlushWritePath"
   | "permissionMode"
   | "sandboxSessionKey"
   | "sandboxAgentId"
@@ -185,7 +186,9 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
               config: params.config,
               agentId: sandboxRuntimeStatus.agentId,
               execOverrides: params.execOverrides,
-              sessionKey: sandboxSessionKey,
+              // A detached file flush owns agent memory, not the source worktree.
+              // Keep its prepared sandbox policy below bound to the source session.
+              sessionKey: params.memoryFlushWritePath ? sessionKey : sandboxSessionKey,
               skillsSnapshot: params.skillsSnapshot,
               workspaceDir: resolvedWorkspace,
               assertCurrent,

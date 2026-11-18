@@ -312,7 +312,10 @@ do not replace provider-reported token usage in session status.
 
 The flush uses a private copy of the conversation, so its housekeeping messages
 never appear in later user turns, even if interrupted. Its writes to memory
-are still saved normally.
+are still saved normally. Memory Core creates and writes its daily note in the
+configured agent workspace, even when the session runs in a selected project or
+managed worktree. Ordinary turns keep their project context. Existing project-local
+memory files are not moved or deleted automatically.
 
 Memory Core's file flush requires writable workspace access. Sessions whose sandbox
 requires read-only or no workspace access skip the flush, including sessions

@@ -729,6 +729,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/get-reply.timeout.test.ts",
   "src/auto-reply/reply/get-reply.workspace-failure.test.ts",
   "src/auto-reply/reply/agent-runner-memory.private-transcript.test.ts",
+  // Real flush preparation and writing require the host-owned session database.
+  "src/auto-reply/reply/agent-runner-memory.workspace.test.ts",
   "src/auto-reply/reply/agent-runner-required-maintenance.pending-input.test.ts",
   "src/auto-reply/reply/agent-runner-compaction-fallback.test.ts",
   "src/auto-reply/reply/abort.acp-boundary.test.ts",
