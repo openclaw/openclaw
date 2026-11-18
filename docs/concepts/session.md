@@ -518,10 +518,11 @@ The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions. Exporting is the owner-only in-chat
 [`/export-session`](/tools/slash-commands#core-commands) command (`/export`
 alias): it writes the current session as a self-contained HTML transcript
-inside the workspace; explicit paths replace existing workspace files. There is
-no bulk `sessions export` CLI subcommand — headless or multi-session archival is
-ecosystem-side. Checks resume on subsequent activity;
-`openclaw sessions cleanup --enforce` remains available immediately.
+inside the workspace; explicit paths replace existing workspace files. It
+exports only the current session — to archive other sessions headlessly, use
+[`openclaw sessions archive`](/cli/sessions#archive-sessions). Checks resume on
+subsequent activity; `openclaw sessions cleanup --enforce` remains available
+immediately.
 
 Cleanup first tries to truncate the WAL without waiting for readers. If readers
 prevent truncation, a complete PASSIVE checkpoint is sufficient: frames relevant
