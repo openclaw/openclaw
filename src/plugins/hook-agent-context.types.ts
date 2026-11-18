@@ -95,7 +95,8 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   /**
    * Turns that started the commands this run continues, such as a background exec whose
    * completion this run reports. Set by the host from its exec ownership records, one entry
-   * per owning request; absent when the run continues no other request.
+   * per owning request; absent when the run continues no other request. This is ancestry
+   * metadata only: it does not grant the run the starter's authority or approvals.
    */
   execRequestOwners?: readonly PluginHookExecRequestOwner[];
   /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
