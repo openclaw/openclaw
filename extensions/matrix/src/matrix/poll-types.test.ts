@@ -11,10 +11,7 @@ const parsedPoll = {
   question: "Lunch?",
   kind: "m.poll.disclosed" as const,
   maxSelections: 1,
-  answers: [
-    { id: "a1", text: "Pizza" },
-    { id: "a2", text: "Sushi" },
-  ],
+  answers: ["Pizza", "Sushi"].map((text, index) => ({ id: `a${index + 1}`, text })),
 };
 
 const vote = (
@@ -80,11 +77,9 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
     maxSelections: 2,
   });
 
-  expect(content["org.matrix.msc3381.poll.start"]?.max_selections).toBe(2);
-  expect(content["org.matrix.msc3381.poll.start"]?.kind).toBe(
-    "org.matrix.msc3381.poll.undisclosed",
-  );
   expect(content["org.matrix.msc3381.poll.start"]).toMatchObject({
+    max_selections: 2,
+    kind: "org.matrix.msc3381.poll.undisclosed",
     question: { "org.matrix.msc1767.text": "Lunch?" },
     answers: [
       { id: "answer1", "org.matrix.msc1767.text": "Pizza" },
@@ -97,11 +92,8 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
 });
 
 it("poll relation parsing: extracts poll relation targets", () => {
-  expect(
-    resolvePollReferenceEventId({
-      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-    }),
-  ).toBe("$poll");
+  const relation = { rel_type: "m.reference", event_id: "$poll" };
+  expect(resolvePollReferenceEventId({ "m.relates_to": relation })).toBe("$poll");
 });
 
 it("counts only the latest valid response from each sender", () => {
@@ -153,12 +145,8 @@ it.each([
 
 it("formats disclosed poll results with vote totals", () => {
   const text = formatPollResultsAsText({
-    question: "Lunch?",
-    kind: "m.poll.disclosed",
-    entries: [
-      { id: "a1", text: "Pizza", votes: 1 },
-      { id: "a2", text: "Sushi", votes: 0 },
-    ],
+    ...parsedPoll,
+    entries: parsedPoll.answers.map((answer, index) => ({ ...answer, votes: 1 - index })),
     totalVotes: 1,
     closed: false,
   });
