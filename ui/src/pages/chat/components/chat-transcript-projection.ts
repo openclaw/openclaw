@@ -579,7 +579,7 @@ export function projectChatTranscript(
         options: {
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
-          swarm: swarmsByFrame.get(item.key)?.view,
+          swarms: swarmsByFrame.get(item.key)?.views,
           streamOptions: streamGroupOptions,
           renderGroupOptions,
           partDependencies: renderDependencies,
