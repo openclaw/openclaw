@@ -1425,21 +1425,13 @@ const startupEnglish = {
   usage: {
     common: {
       emptyValue: "—",
-      unknown: "unknown",
     },
-    loading: {
-      badge: "Loading usage…",
-    },
-    metrics: {
-      tokens: "Tokens",
-      cost: "Cost",
-    },
+    loading: {},
+    metrics: {},
+    // Settings search uses these headings before the Usage route loads.
     heatmap: {
       title: "Token activity",
       subtitle: "Daily token intensity in this range, up to one year.",
-      cellTokens: "{tokens} tokens",
-      less: "Less",
-      more: "More",
     },
     providerUsage: {},
     presets: {},
@@ -1456,9 +1448,6 @@ const startupEnglish = {
       input: "Input",
       cacheWrite: "Cache write",
       cacheRead: "Cache read",
-      total: "Total",
-      tokensByType: "Tokens by type",
-      costByType: "Cost by type",
     },
     overview: {
       title: "Usage overview",
