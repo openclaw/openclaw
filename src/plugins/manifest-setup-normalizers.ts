@@ -336,6 +336,7 @@ export function normalizeProviderAuthChoices(
           : undefined,
       credentialOnly: entry.credentialOnly === true ? true : undefined,
       channelLogin: normalizeProviderChannelLogin(entry.channelLogin),
+      agentRuntimeLogin: normalizeOptionalString(entry.agentRuntimeLogin),
       onboardingScopes: onboardingScopes.length > 0 ? onboardingScopes : undefined,
     });
   });

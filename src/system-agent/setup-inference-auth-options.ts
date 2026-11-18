@@ -185,13 +185,21 @@ export function listSetupInferenceAuthOptions(
 }
 
 /**
- * The OpenAI sign-in a native Codex setup starts. OpenAI lists Sign in with
- * ChatGPT first for new setups; choosing Codex still signs in with Codex login.
+ * First option, in picker order, that signs in to the given agent runtime's own
+ * account. OpenAI lists Sign in with ChatGPT first for new setups; Codex setup
+ * still starts the choices OpenAI's manifest marks as Codex login.
  */
-export function findCodexSignInOption<T extends Pick<SetupInferenceAuthOption, "brandId" | "kind">>(
+export function findAgentRuntimeSignInOption<T extends { id: string }>(
   options: readonly T[],
+  choices: readonly ProviderAuthChoiceMetadata[],
+  runtimeId: string,
 ): T | undefined {
-  return options.find((option) => option.brandId === "openai" && option.kind === "device-code");
+  const ids = new Set(
+    choices
+      .filter((choice) => choice.agentRuntimeLogin === runtimeId)
+      .map((choice) => choice.choiceId),
+  );
+  return options.find((option) => ids.has(option.id));
 }
 
 export function listSetupInferenceEnableOptions(

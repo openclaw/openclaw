@@ -54,6 +54,18 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
   loadManifestMetadataSnapshot: () => ({ plugins: [] }),
 }));
+// mock-isolation: Manifest choices decide which sign-ins are Codex login.
+vi.mock("../../plugins/provider-auth-choices.js", () => ({
+  resolveManifestProviderAuthChoices: () =>
+    ["openai-codex", "openai-device-code"].map((choiceId) => ({
+      pluginId: "openai",
+      providerId: "openai",
+      methodId: choiceId,
+      choiceId,
+      choiceLabel: choiceId,
+      agentRuntimeLogin: "codex",
+    })),
+}));
 // mock-isolation: Never append audit events to the operator's database.
 vi.mock("../../system-agent/audit.js", () => ({ appendSystemAgentAuditEntry: fixture.audit }));
 
@@ -93,13 +105,21 @@ const chatGptSignIn = {
   kind: "device-code" as const,
   featured: false,
 };
-// OpenAI lists Sign in with ChatGPT first; Codex setup must still offer Codex login.
+// OpenAI lists Sign in with ChatGPT first, and another OpenAI device-code sign-in
+// may sort ahead of Codex; Codex setup must still offer Codex login.
 const siwcSignIn = {
   id: "openai-token-sharing",
   brandId: "openai",
   label: "Sign in with ChatGPT",
   kind: "oauth" as const,
   featured: true,
+};
+const otherDeviceCodeSignIn = {
+  id: "openai-other-device-code",
+  brandId: "openai",
+  label: "Other OpenAI sign-in",
+  kind: "device-code" as const,
+  featured: false,
 };
 const separateSignIn = { authOptionId: chatGptSignIn.id, label: chatGptSignIn.label };
 
@@ -109,7 +129,7 @@ function detection(
 ): SetupInferenceDetection {
   return {
     candidates,
-    authOptions: [siwcSignIn, chatGptSignIn],
+    authOptions: [siwcSignIn, otherDeviceCodeSignIn, chatGptSignIn],
     manualProviders: [],
     recommendedInstalls: [],
     unavailableCandidates: [],
@@ -382,8 +402,8 @@ describe("Gateway automatic inference setup", () => {
               id: "openai-codex",
               brandId: "openai",
               label: "ChatGPT",
-              kind: "device-code",
-              featured: false,
+              kind: "oauth",
+              featured: true,
             },
           ],
         }),

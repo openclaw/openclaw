@@ -492,6 +492,7 @@
       "choiceId": "openai",
       "appGuidedAuth": "oauth",
       "credentialOnly": true,
+      "agentRuntimeLogin": "codex",
       "choiceLabel": "Codex login (browser)",
       "choiceHint": "Sign in to Codex locally with your ChatGPT account",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",
@@ -510,6 +511,7 @@
       "channelLogin": {
         "aliases": ["codex"]
       },
+      "agentRuntimeLogin": "codex",
       "choiceLabel": "Codex login (device code)",
       "choiceHint": "Use a browser code when OpenClaw runs on a remote VM",
       "docsUrl": "https://docs.openclaw.ai/providers/openai/authentication",

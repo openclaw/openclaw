@@ -150,6 +150,18 @@ describe("plugin contract registry", () => {
     }
   });
 
+  it("marks only OpenAI's Codex login choices as signing in to the Codex runtime", () => {
+    const registry = loadPluginManifestRegistryCore({});
+    const choices = registry.plugins.flatMap((entry) =>
+      entry.origin === "bundled" ? (entry.providerAuthChoices ?? []) : [],
+    );
+    expect(
+      choices
+        .filter((choice) => choice.agentRuntimeLogin === "codex")
+        .map((choice) => choice.choiceId),
+    ).toEqual(["openai", "openai-device-code"]);
+  });
+
   it("exposes the GitHub Copilot non-interactive onboarding token flag from manifest metadata", () => {
     const registry = loadPluginManifestRegistryCore({});
     const plugin = registry.plugins.find(

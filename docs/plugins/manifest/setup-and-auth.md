@@ -84,6 +84,7 @@ When a manifest choice is selected, setup resolves its `provider` and `method` i
 | `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                                                                         |
 | `credentialOnly`       | No       | `boolean`                                                             | The method supports saving credentials without starter-model discovery or activation. Omitted means setup only.                                            |
 | `channelLogin`         | No       | `{ aliases?: string[] }`                                              | A fixed-input OAuth or device-code method that private chat can run. Requires `credentialOnly`; aliases enable explicit commands such as `/login codex`.   |
+| `agentRuntimeLogin`    | No       | `string`                                                              | Agent runtime id, such as `codex`, whose own account this method signs in to. Setup for that runtime offers these methods, whatever the picker order.      |
 | `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.                                                   |
 
 `platforms` uses Node.js platform names; unknown names are removed. The restriction

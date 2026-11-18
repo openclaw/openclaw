@@ -690,6 +690,8 @@ export type PluginManifestProviderAuthChoice = {
   credentialOnly?: boolean;
   /** Fixed-input sign-in offered in private owner-only chat. */
   channelLogin?: { aliases?: string[] };
+  /** Agent runtime id (such as `codex`) whose own account this choice signs in to. */
+  agentRuntimeLogin?: string;
   /**
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.

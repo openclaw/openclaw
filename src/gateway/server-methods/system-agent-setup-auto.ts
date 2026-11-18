@@ -10,9 +10,13 @@ import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { transformConfigWithPendingPluginInstalls } from "../../plugins/install-record-commit.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import {
+  resolveManifestProviderAuthChoices,
+  type ProviderAuthChoiceMetadata,
+} from "../../plugins/provider-auth-choices.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { appendSystemAgentAuditEntry } from "../../system-agent/audit.js";
-import { findCodexSignInOption } from "../../system-agent/setup-inference-auth-options.js";
+import { findAgentRuntimeSignInOption } from "../../system-agent/setup-inference-auth-options.js";
 import { prepareAutomaticSetupCodex } from "../../system-agent/setup-inference-codex.js";
 import {
   SetupInferenceActivationIndeterminateError,
@@ -86,12 +90,22 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
   let codexFailed = false;
   let shared = false;
   let authOptions = detection.authOptions;
+  let authChoices: ProviderAuthChoiceMetadata[] | undefined;
+  const findCodexSignIn = (options: typeof authOptions) => {
+    authChoices ??= resolveManifestProviderAuthChoices({
+      config: initialSnapshot.runtimeConfig ?? initialSnapshot.config,
+      workspaceDir: detection.workspace,
+      includeUntrustedWorkspacePlugins: false,
+      includeWorkspacePlugins: false,
+    });
+    return findAgentRuntimeSignInOption(options, authChoices, "codex");
+  };
   const result = (
     status: SystemAgentSetupAutoResult["status"],
     selected?: SetupInferenceCandidate,
   ): SystemAgentSetupAutoResult => {
     assertCurrent();
-    const separateSignIn = shared ? findCodexSignInOption(authOptions) : undefined;
+    const separateSignIn = shared ? findCodexSignIn(authOptions) : undefined;
     return {
       status,
       ...(selected
@@ -300,7 +314,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       return result("activated", codex);
     }
     if (!codex || codexNeedsSignIn) {
-      const signIn = findCodexSignInOption(refreshed.authOptions);
+      const signIn = findCodexSignIn(refreshed.authOptions);
       if (signIn) {
         return {
           ...result("needs-sign-in"),

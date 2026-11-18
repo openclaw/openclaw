@@ -23,7 +23,7 @@ import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capabili
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createQuickstartNotePrompter } from "./setup-apply.js";
 import {
-  findCodexSignInOption,
+  findAgentRuntimeSignInOption,
   listSetupInferenceAuthOptions,
 } from "./setup-inference-auth-options.js";
 import {
@@ -281,7 +281,7 @@ export async function stageCodexCandidate(
       );
       const choice =
         options.find((option) => option.id === ctx.params.authChoice) ??
-        findCodexSignInOption(options);
+        findAgentRuntimeSignInOption(options, choices, "codex");
       if (!choice) {
         return {
           error:
