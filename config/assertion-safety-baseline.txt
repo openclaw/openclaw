@@ -1786,7 +1786,7 @@ src/gateway/worker-environments/bundle.ts	5
 src/gateway/worker-environments/inference-runtime.ts	2
 src/gateway/worker-environments/node-worker-workspace-fallback.ts	2
 src/gateway/worker-environments/placement-state.ts	2
-src/gateway/worker-environments/service-validation.ts	2
+src/gateway/worker-environments/service-validation.ts	1
 src/gateway/worker-environments/state.ts	1
 src/gateway/worker-environments/worker-session-tool-executor.ts	1
 src/gateway/worker-environments/worker-turn-admission.ts	3

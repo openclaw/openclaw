@@ -70,7 +70,6 @@ describe("prepared project retention compatibility", () => {
     let current = true;
     sourceAdmission.mockResolvedValue({
       project,
-      recoverySource: undefined,
       setupRecipe: "e".repeat(40),
       recipe: {
         source: "script",
@@ -119,7 +118,6 @@ describe("prepared project retention compatibility", () => {
     });
     sourceAdmission.mockResolvedValue({
       project,
-      recoverySource: undefined,
       setupRecipe: undefined,
       recipe: { source: "none", inputs: {}, env: {} },
       assertCurrent: () => {},

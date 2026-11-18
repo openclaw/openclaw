@@ -39,10 +39,12 @@ function fixture(
   tools: Record<string, string> = Object.fromEntries(
     ["node", "npm", "npx", "corepack"].map((name) => [name, "#!/bin/sh\necho v22.21.1\n"]),
   ),
+  releaseVersion = "22.21.1",
 ) {
   const root = tempDirs.make("node-toolchain-");
   const bin = path.join(root, "bin");
-  const release = path.join(root, "release");
+  const archiveRoot = "node-v" + releaseVersion + "-linux-x64";
+  const release = path.join(root, archiveRoot);
   write(
     path.join(bin, "uname"),
     '#!/bin/sh\ncase "$1" in -s) echo Linux;; *) echo x86_64;; esac\n',
@@ -51,7 +53,7 @@ function fixture(
     write(path.join(release, "bin", name), script);
   }
   const archive = path.join(root, "release.tgz");
-  execFileSync("tar", ["-czf", archive, "-C", root, "release"]);
+  execFileSync("tar", ["-czf", archive, "-C", root, archiveRoot]);
   const digest = createHash("sha256").update(fs.readFileSync(archive)).digest("hex");
   write(path.join(bin, "curl"), downloadScript);
   const env = { ...process.env, HOME: root, PATH: bin + path.delimiter + process.env.PATH };
@@ -215,6 +217,7 @@ it("resolves a repository .nvmrc=24 declaration and gives session commands its P
     Object.fromEntries(
       ["node", "npm", "npx", "corepack"].map((name) => [name, "#!/bin/sh\necho v24.22.1\n"]),
     ),
+    "24.22.1",
   );
   const fetchUrls: string[] = [];
   const { home } = f;
@@ -239,11 +242,14 @@ it.each([
 ])(
   "runs worker Corepack for repository Node %s under a Node its engines accept",
   async (version, runner) => {
-    const f = fixture({
-      node: `#!/bin/sh\nif [ "$1" = --version ]; then echo v${version}; else FIXTURE_NODE=repository exec '${process.execPath}' "$@"; fi\n`,
-      npm: `#!/bin/sh\necho ${version}\n`,
-      npx: `#!/bin/sh\necho ${version}\n`,
-    });
+    const f = fixture(
+      {
+        node: `#!/bin/sh\nif [ "$1" = --version ]; then echo v${version}; else FIXTURE_NODE=repository exec '${process.execPath}' "$@"; fi\n`,
+        npm: `#!/bin/sh\necho ${version}\n`,
+        npx: `#!/bin/sh\necho ${version}\n`,
+      },
+      version,
+    );
     const corepackBin = workerCorepack(f.root);
     const outside = path.join(f.root, "outside");
     fs.mkdirSync(outside, { mode: 0o755 });
