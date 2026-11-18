@@ -99,6 +99,7 @@ function runPluginManifest(
   runtimePolicy = "",
   targetRoot?: string,
   runnerBackend = "",
+  boatJobLimit = "20",
 ) {
   const workflow = readPluginPrereleaseWorkflow();
   const step = workflow.jobs.preflight.steps.find(
@@ -119,10 +120,13 @@ function runPluginManifest(
     env: {
       FULL_RELEASE_VALIDATION: eventName === "schedule" ? "false" : "true",
       GITHUB_EVENT_NAME: eventName,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ATTEMPT: "1",
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
       PHASE: phase,
       OPENCLAW_CI_RUNNER_BACKEND: runnerBackend,
+      OPENCLAW_CI_BOAT_NODE_JOB_LIMIT: boatJobLimit,
       OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
     },
   });
@@ -565,7 +569,7 @@ export const createExtensionTestShards = () => [{
       ).if,
     ).toBe("matrix.requires_bun == true");
 
-    const hourly = runPluginManifest("independent", "schedule");
+    const hourly = runPluginManifest("independent", "schedule", "", undefined, "boat", "");
     const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat");
     const release = runPluginManifest("independent");
     const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
@@ -593,15 +597,14 @@ export const createExtensionTestShards = () => [{
     const boatRows = JSON.parse(
       expectDefined(outputs(boatHourly.output).plugin_prerelease_extension_matrix, "Boat matrix"),
     ).include;
-    expect(boatRows).toEqual(
-      physicalRows.map((row: Record<string, unknown>) =>
-        Object.assign({}, row, {
-          runner_label: row.runner_label === "blacksmith-4vcpu-ubuntu-2404" ? "boat-large" : "boat",
-        }),
-      ),
-    );
+    expect(
+      boatRows.filter((row: { runner_label: string }) => row.runner_label.startsWith("boat")),
+    ).toHaveLength(20);
+    expect(
+      boatRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row),
+    ).toEqual(physicalRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row));
+    expect(boatRows.slice(20)).toEqual(physicalRows.slice(20));
     const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
-    expect(boatLabels).toEqual(new Set(["boat", "boat-large"]));
     for (const runner_label of boatLabels) {
       for (const releaseRunnerGroup of ["", "release-runners"]) {
         for (const eventName of ["schedule", "workflow_dispatch"] as const) {

@@ -409,8 +409,6 @@ export async function executePreparedReplyRun(
           channel: messageProvider,
           senderId: sessionCtx.SenderId,
           accountId: ctx.AccountId ?? sessionCtx.AccountId,
-          replyAccountId: replyRoute.accountId,
-          commandSenderId: command.senderId,
         })
       : undefined;
   const followupRun = {

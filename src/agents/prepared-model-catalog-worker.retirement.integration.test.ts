@@ -16,6 +16,7 @@ import * as providerRuntime from "../plugins/provider-runtime.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { updateAuthProfileStoreWithLock } from "./auth-profiles/store-runtime.js";
 import { configFor } from "./model-auth.fixtures.test-support.js";
 import { model } from "./model-catalog-fixtures.test-support.js";
 import * as catalogWorker from "./prepared-model-catalog-worker.js";
@@ -216,6 +217,13 @@ it("keeps models.list responsive and aborts superseded held discovery", async ({
     [REF_ONLY_API_ENV]: "ref-only-api-secret-not-real",
     [REF_ONLY_TOKEN_ENV]: "ref-only-token-secret-not-real",
   };
+  // Establish the real source before observing a synthetic snapshot of the empty store.
+  const store = await updateAuthProfileStoreWithLock({
+    agentDir,
+    stateDir: env.OPENCLAW_STATE_DIR,
+    updater: () => true,
+  });
+  expect(store).toMatchObject({ version: 1, profiles: {} });
   replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: { version: 1, profiles: {} } }]);
 
   const input = catalogInput({ agentDir, workspaceDir, config, env });

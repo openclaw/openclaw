@@ -26,6 +26,8 @@ Use the shared [release-process improvement rules](../SKILL.md#shared-release-bo
 for branch backports and independently pinned Q/P tooling; preserve intake
 approval, frozen-candidate identity, and required requalification.
 
+The required [bundled Codex update](preparation.md#update-and-pin-bundled-codex-required) is not subject to these optional hotfix thresholds.
+
 For product hotfixes:
 
 - **Extended-stable:** generally take only P0 and P1 hotfixes.
