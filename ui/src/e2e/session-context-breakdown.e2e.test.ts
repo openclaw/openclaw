@@ -315,6 +315,79 @@ suite.define(() => {
     });
   });
 
+  it("keeps the session cache rate when the latest run has no cache split", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
+      const session = {
+        key: sessionKey,
+        sessionId: "context-instance",
+        kind: "direct" as const,
+        label: "Context breakdown",
+        model: "demo-model",
+        modelProvider: "example",
+        contextTokens: 100_000,
+        totalTokens: 20_000,
+        totalTokensFresh: true,
+        inputTokens: 1_000,
+        outputTokens: 10,
+        estimatedCostUsd: 0.01,
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "sessions.usage"],
+        sessionKey,
+        sessions: [session],
+        agentModel: "example/demo-model",
+        models: [
+          { id: "demo-model", provider: "example", name: "Demo model", contextWindow: 100_000 },
+        ],
+        historyMessages: [
+          { role: "user", content: "Hi." },
+          {
+            role: "assistant",
+            content: "Hello.",
+            usage: {
+              input: 1_000,
+              output: 10,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cacheTelemetry: { state: "unavailable" },
+            },
+          },
+        ],
+        methodResponses: {
+          "sessions.usage": {
+            sessions: [
+              {
+                key: sessionKey,
+                sessionId: "context-instance",
+                contextWeight: report,
+                usage: {
+                  totalCost: 1.5,
+                  missingCostEntries: 0,
+                  input: 2_000,
+                  output: 40,
+                  cacheRead: 3_000,
+                  cacheWrite: 0,
+                  cacheUnmeasuredInput: 1_000,
+                },
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.waitForRequest("sessions.messages.subscribe");
+      await page.locator(".context-ring").filter({ visible: true }).click();
+      const summary = page.locator(".context-usage__popover").filter({ visible: true });
+      const total = summary.locator('[data-chat-session-cost="true"]');
+      await total.waitFor();
+      // The session's measured calls earn the column; the unmeasured run shows a dash.
+      expect(await total.textContent()).toMatch(/Session total\s*75\.00%\s*\$1\.50/);
+      expect(await summary.locator('[data-chat-usage-row="run"]').textContent()).toMatch(
+        /Latest run\s*—\s*\$0\.01/,
+      );
+    });
+  });
+
   it.each([
     { width: 1440, height: 1000, mode: "dark" as const },
     { width: 390, height: 844, mode: "light" as const },
