@@ -282,14 +282,14 @@ it("retires idle history workers under critical pressure after active scopes rel
   observed.unregister.mockImplementation(unregistered.resolve);
   await withSessionHistoryWorkerDatabase(request.database, async (owner) => {
     expect(await owner.readEntryPresence(request.scope)).toBe(false);
-    pressure.publish(undefined);
+    pressure.publish(true);
     expect(observed.rotate).not.toHaveBeenCalled();
   });
 
-  pressure.publish(undefined);
+  pressure.publish(true);
   expect(observed.rotate).toHaveBeenCalledTimes(1);
   expect(observed.unregister).not.toHaveBeenCalled();
-  pressure.publish(undefined);
+  pressure.publish(true);
   expect(observed.rotate).toHaveBeenCalledTimes(1);
   retirement.resolve();
   await unregistered.promise;

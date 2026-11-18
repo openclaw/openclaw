@@ -7,10 +7,7 @@ import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
-import {
-  historyLane,
-  targetDiscoveryLane,
-} from "../../config/sessions/session-transcript-worker-resources.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withAgentDatabaseMaintenanceLease } from "../../state/openclaw-agent-db-maintenance-lease.js";
 import { ensureOpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db-schema.js";
@@ -126,8 +123,8 @@ it("rejects a persisted quarantine through the history worker without retargetin
       reason,
     });
     const { manager, before } = retainedManager(2);
-    // The closed database makes this a cold read, which runs on the target-discovery lane.
-    const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
+    // Streaming callbacks retain the history lane even when the database is cold.
+    const dispatch = vi.spyOn(historyLane.pool, "run");
     try {
       const failure = await manager.setSessionTargetAsync(target).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
@@ -141,7 +138,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
         error: { kind: "read-error" },
       });
       expect(managerView(manager)).toEqual(before);
-      expect(targetDiscoveryLane.pool.getSnapshot()).toMatchObject({
+      expect(historyLane.pool.getSnapshot()).toMatchObject({
         activeTasks: 0,
         pendingTasks: 0,
       });

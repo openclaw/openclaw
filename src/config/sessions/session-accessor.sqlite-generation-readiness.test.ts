@@ -177,7 +177,7 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
       // Exec wakes check identity and settings synchronously after tool-preparation awaits.
       generation.assertCurrent();
       if (setting === "lifecycleRunId") {
-        expect(generation.readSessionSettings()).toMatchObject(settings);
+        expect(generation.readSessionSettings()).toBe(initialSettings);
       } else {
         expect(generation.readSessionSettings).toThrow(
           expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
@@ -188,7 +188,10 @@ it.for(["permissionMode", "toolOverrides", "lifecycleRunId"] as const)(
       generation.assertCurrent();
       expect(generation.readSessionSettings()).toMatchObject(settings);
       if (setting === "lifecycleRunId") {
-        expect(generation.readSessionSettings()).toBe(initialSettings);
+        expect(generation.readSessionSettings()).toStrictEqual({
+          ...initialSettings,
+          lifecycleRunId: "completion-wake",
+        });
       }
     } finally {
       held.close();
