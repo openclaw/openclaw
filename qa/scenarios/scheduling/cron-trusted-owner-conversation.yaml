@@ -80,7 +80,7 @@ flow:
             expr: "await ask(config.conversationId, `Cron trusted owner ready. Reply exactly \\`${config.readyMarker}\\`.`, config.readyMarker)"
         - set: addTrustedJob
           value:
-            expr: "async (owner) => await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-trusted-owner-${randomUUID()}`, enabled: true, deleteAfterRun: false, owner, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', message: 'Operator check-in.', toolsAllow: ['read'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
+            expr: "async (owner) => await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-trusted-owner-${randomUUID()}`, enabled: true, owner, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', message: 'Operator check-in.', toolsAllow: ['read'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
         - set: legacyJob
           value:
             expr: "await addTrustedJob({ agentId: 'qa', sessionKey: ownerSessionKey })"
@@ -202,7 +202,7 @@ flow:
             expr: "`qa-trusted-owner-${randomUUID().slice(0, 8)}`"
         - set: keyedJob
           value:
-            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-trusted-keyed-${randomUUID()}`, declarationKey, enabled: true, deleteAfterRun: false, owner: { agentId: 'qa', sessionKey: ownerSessionKey, accountId: 'default' }, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', message: 'Operator check-in.', toolsAllow: ['read'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
+            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-trusted-keyed-${randomUUID()}`, declarationKey, enabled: true, owner: { agentId: 'qa', sessionKey: ownerSessionKey, accountId: 'default' }, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', message: 'Operator check-in.', toolsAllow: ['read'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
         - set: keyedBefore
           value:
             expr: "keyedJob.job ?? keyedJob"

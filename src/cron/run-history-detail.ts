@@ -98,6 +98,8 @@ const cronRunLogEntrySchema = z.looseObject({
   delivery: z.custom<{ [key: string]: JsonValue }>(isJsonObject).optional().catch(undefined),
   sessionId: optionalNonBlankCronStringSchema,
   sessionKey: optionalNonBlankCronStringSchema,
+  jobName: optionalNonBlankCronStringSchema,
+  retryAvailable: z.boolean().optional().catch(undefined),
 });
 
 /** Native JSON parsing keeps released scalar/null and numeric-overflow semantics. */
@@ -176,6 +178,8 @@ export function parseCronRunLogEntryObject(
     delivery: entryObj.delivery,
     sessionId: entryObj.sessionId,
     sessionKey: entryObj.sessionKey,
+    ...(entryObj.jobName ? { jobName: entryObj.jobName } : {}),
+    ...(entryObj.retryAvailable ? { retryAvailable: true } : {}),
   };
 }
 
@@ -184,6 +188,7 @@ export function cronRunLogEntryToDetail(
   entry: CronRunLogEntry,
   options: {
     storeKey: string;
+    archivedJob?: unknown;
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
   },
@@ -196,6 +201,9 @@ export function cronRunLogEntryToDetail(
     summary: entry.summary ?? null,
     result: entry.result,
     storeKey: options.storeKey,
+    jobName: entry.jobName,
+    retryAvailable: entry.retryAvailable,
+    archivedJob: options.archivedJob,
     errorReason: entry.errorReason,
     diagnostics: entry.diagnostics,
     delivered: entry.delivered,

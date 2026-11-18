@@ -28,7 +28,6 @@ let baseNow = 0;
 function dueJob(id: string): CronJob {
   return cronTestJob({
     id,
-    deleteAfterRun: false,
     createdAtMs: baseNow,
     updatedAtMs: baseNow,
     delivery: { mode: "none" },

@@ -155,9 +155,6 @@ flow:
             message:
               expr: "`model created wrong one-off schedule: ${JSON.stringify(oneShotJob?.schedule)}`"
         - assert:
-            expr: "oneShotJob.deleteAfterRun === true"
-            message: model-created one-off did not receive delete-after-success semantics
-        - assert:
             expr: "recurringJob.schedule.kind === 'every' && recurringJob.schedule.everyMs === config.recurringEveryMs"
             message:
               expr: "`model created wrong recurring schedule: ${JSON.stringify(recurringJob?.schedule)}`"
@@ -173,7 +170,7 @@ flow:
             expr: "jobs.every((job) => JSON.stringify(job.payload.toolsAllow) === JSON.stringify(['*']))"
             message:
               expr: "`model-created jobs did not persist the wildcard cap: ${JSON.stringify(jobs.map((job) => job.payload))}`"
-      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}:${oneShotJob.deleteAfterRun}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}; authority=${jobs.map((job) => JSON.stringify(job.payload.toolsAllow)).join(';')}`"
+      detailsExpr: "`author=${authorReply.text}; cron-tool-calls=${cronToolCalls.length}; at=${oneShotJob.id}:${oneShotJob.name}:${oneShotJob.schedule.kind}:${oneShotJob.schedule.at}; every=${recurringJob.id}:${recurringJob.name}:${recurringJob.schedule.kind}:${recurringJob.schedule.everyMs}; targets=${jobs.map((job) => job.sessionTarget).join(',')}; delivery=${jobs.map((job) => job.delivery?.mode).join(',')}; authority=${jobs.map((job) => JSON.stringify(job.payload.toolsAllow)).join(';')}`"
 
     - name: scheduler fires one-off once and recurring repeatedly
       actions:

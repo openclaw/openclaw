@@ -1020,10 +1020,6 @@
                   "minLength": 1,
                   "type": "string"
                 },
-                "deleteAfterRun": {
-                  "description": "Delete one-shot after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.",
-                  "type": "boolean"
-                },
                 "delivery": {
                   "additionalProperties": true,
                   "properties": {

@@ -231,14 +231,6 @@ export function Advanced(
               help={t("cron.form.startEnabledHelp")}
             />
           ) : undefined}
-          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
-            <ToggleRow
-              {...props}
-              field="deleteAfterRun"
-              label={t("cron.form.deleteAfterRun")}
-              help={t("cron.form.deleteAfterRunHelp")}
-            />
-          ) : undefined}
         </SettingsSection>
         <SettingsSection title={t("cron.form.advancedTask")}>
           {props.form.payloadLocked ? (

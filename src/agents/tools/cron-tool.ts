@@ -663,7 +663,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               return jsonResult({
                 ...result,
                 note: result.finished
-                  ? `Finished, but its run history is not visible to this turn (a one-shot may have deleted itself after succeeding); ${followUp} if needed.`
+                  ? `Finished, but its run history is not visible to this turn (a one-time automation may already have ended); ${followUp} if needed.`
                   : `Not finished yet: it is still running, or it runs in this session and starts after this turn. Its delivery follows the job settings; ${followUp}. Do not schedule a verification job.`,
               });
             }

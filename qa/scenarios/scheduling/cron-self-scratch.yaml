@@ -52,7 +52,7 @@ flow:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - set: job
           value:
-            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-self-scratch-${randomUUID()}`, enabled: true, deleteAfterRun: false, owner: { agentId: 'qa', sessionKey: `agent:qa:qa-channel:group:group:${config.conversationId}`, accountId: 'default' }, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', timeoutSeconds: 90, message: `Automation self scratch QA check: content=${config.runContent} marker=${config.marker}`, toolsAllow: ['automations'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
+            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-self-scratch-${randomUUID()}`, enabled: true, owner: { agentId: 'qa', sessionKey: `agent:qa:qa-channel:group:group:${config.conversationId}`, accountId: 'default' }, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', timeoutSeconds: 90, message: `Automation self scratch QA check: content=${config.runContent} marker=${config.marker}`, toolsAllow: ['automations'] }, delivery: { mode: 'none' } }, { timeoutMs: 30000 })"
         - assert:
             expr: "job.scheduledToolPolicy?.mode === 'trusted'"
             message:

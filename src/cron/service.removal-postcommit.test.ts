@@ -23,7 +23,6 @@ async function createFixture() {
   const runAtMs = nowMs - 60_000;
   const job = cronTestJob({
     id: "one-shot-removal",
-    deleteAfterRun: true,
     schedule: { kind: "at", at: new Date(runAtMs).toISOString() },
     state: { nextRunAtMs: runAtMs },
   });
@@ -73,7 +72,6 @@ describe("cron one-shot removal", () => {
     expect(relevantEvents.at(-1)?.job).toMatchObject({
       id: job.id,
       name: job.name,
-      deleteAfterRun: true,
       state: { lastRunStatus: "ok", lastStatus: "ok" },
     });
     await expect(Promise.all(durableStateAtRemoval)).resolves.toEqual([

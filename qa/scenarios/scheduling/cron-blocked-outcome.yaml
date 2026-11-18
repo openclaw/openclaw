@@ -81,7 +81,7 @@ flow:
             message: owner conversation did not finish its setup reply
         - set: addJob
           value:
-            expr: "async (testCase, extra) => await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-blocked-${testCase}-${randomUUID()}`, enabled: true, deleteAfterRun: false, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', timeoutSeconds: 90, message: `Cron blocked outcome QA check: case=${testCase}. Run the monthly report command and post the result.` }, delivery: { mode: 'none' }, ...extra }, { timeoutMs: 30000 })"
+            expr: "async (testCase, extra) => await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-blocked-${testCase}-${randomUUID()}`, enabled: true, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', timeoutSeconds: 90, message: `Cron blocked outcome QA check: case=${testCase}. Run the monthly report command and post the result.` }, delivery: { mode: 'none' }, ...extra }, { timeoutMs: 30000 })"
         - set: runJob
           value:
             expr: "async (jobId) => { const runStartedAt = Date.now(); await env.gateway.call('cron.run', { id: jobId, mode: 'force' }, { timeoutMs: 30000 }); return await waitForCronRunCompletion({ callGateway: env.gateway.call.bind(env.gateway), jobId, afterTs: runStartedAt, timeoutMs: liveTurnTimeoutMs(env, 120000) }); }"

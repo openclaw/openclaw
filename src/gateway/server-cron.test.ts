@@ -1143,7 +1143,6 @@ describe("buildGatewayCronService", () => {
             schedule: { kind: "on-exit", command: "true" },
             sessionTarget,
             wakeMode: "now",
-            deleteAfterRun: false,
           },
         );
         await state.reconcileExitWatchers();
@@ -1481,7 +1480,6 @@ describe("buildGatewayCronService", () => {
         "silent-command",
         "process.stdout.write('NO_REPLY\\n')",
         {
-          deleteAfterRun: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         },
       );
@@ -1553,7 +1551,6 @@ describe("buildGatewayCronService", () => {
               }
             : { kind: "script" as const, script: "return { notify: 'scheduled result' }" },
           {
-            deleteAfterRun: true,
             delivery: {
               mode: "announce",
               channel: "telegram",
@@ -1628,7 +1625,6 @@ describe("buildGatewayCronService", () => {
         "script partial announcement",
         "return { notify: 'scheduled result' }",
         {
-          deleteAfterRun: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         },
       );
@@ -1668,7 +1664,6 @@ describe("buildGatewayCronService", () => {
         "command no unsafe retry",
         "process.stdout.write('scheduled result')",
         {
-          deleteAfterRun: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         },
       );
@@ -1701,7 +1696,6 @@ describe("buildGatewayCronService", () => {
     try {
       await withCronService(createCronConfig("cron-cancelled-retry"), async (state) => {
         const job = await addCommandJob(state, "cancelled", "console.log('scheduled result')", {
-          deleteAfterRun: false,
           delivery: { mode: "announce", channel: "telegram", to: "123" },
         });
         await state.cron.run(job.id, "force");
@@ -1741,7 +1735,6 @@ describe("buildGatewayCronService", () => {
           "failed-headless-command",
           "process.stderr.write('failed'); process.exit(7)",
           {
-            deleteAfterRun: false,
             schedule: { kind: "every", everyMs: 20_000, anchorMs: Date.now() },
           },
         );
@@ -1778,7 +1771,7 @@ describe("buildGatewayCronService", () => {
         state,
         "successful-command-required-delivery",
         "process.stdout.write('ok')",
-        { deleteAfterRun: true, delivery: { mode: "announce", bestEffort: false } },
+        { delivery: { mode: "announce", bestEffort: false } },
       );
 
       await state.cron.run(job.id, "force");
@@ -1825,7 +1818,6 @@ describe("buildGatewayCronService", () => {
           "script-announce",
           "return { notify: 'queue changed' }",
           {
-            deleteAfterRun: false,
             delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
           },
         );
@@ -1883,7 +1875,6 @@ describe("buildGatewayCronService", () => {
       cfg,
       async (state) => {
         const job = await addScriptJob(state, "script failure detail", "return invalid", {
-          deleteAfterRun: false,
           failureAlert: { after: 1 },
           delivery: {
             mode: "announce",
@@ -1955,7 +1946,6 @@ describe("buildGatewayCronService", () => {
           `script ${name}`,
           "return { notify: 'queue changed' }",
           {
-            deleteAfterRun: true,
             delivery: {
               mode: "announce",
               channel: "telegram",
@@ -1986,64 +1976,58 @@ describe("buildGatewayCronService", () => {
   );
 
   it.each([
-    { mode: "webhook", notify: "queue changed", deleteAfterRun: false },
-    { mode: "webhook", notify: undefined, deleteAfterRun: false },
-    { mode: "announce", notify: undefined, deleteAfterRun: true },
-  ] as const)(
-    "delivers $mode script notify=$notify and retains=$deleteAfterRun",
-    async ({ mode, notify, deleteAfterRun }) => {
-      const cfg = createTriggerConfig("server-cron-script-notify");
-      mockScriptResult(notify);
-      if (notify) {
-        mocks.fetch.mockResolvedValueOnce({
-          response: new Response(null, { status: 204 }),
-          finalUrl: "https://example.invalid/cron",
-          release: vi.fn(async () => {}),
-        });
-      }
-      await withCronService(cfg, async (state) => {
-        const job = await addScriptJob(
-          state,
-          "script-notify",
-          notify ? "return { notify: 'queue changed' }" : "return {}",
-          {
-            deleteAfterRun,
-            delivery:
-              mode === "webhook"
-                ? { mode, to: "https://example.invalid/cron-finished" }
-                : { mode, channel: "telegram", to: "123" },
-          },
-        );
-        await state.cron.run(job.id, "force");
-        if (notify) {
-          expect(mocks.fetch).toHaveBeenCalledOnce();
-          const request = callRecord(mocks.fetch);
-          expect(String(requireRecord(request.init, "fetch init").body)).toContain(
-            '"summary":"queue changed"',
-          );
-        } else if (mode === "webhook") {
-          expect(mocks.fetch).not.toHaveBeenCalled();
-        } else {
-          expect(mocks.announce).not.toHaveBeenCalled();
-          expect(state.cron.getJob(job.id)).toBeUndefined();
-          expect(mocks.changed.mock.calls.map(([event]) => event)).toContainEqual(
-            expect.objectContaining({
-              jobId: job.id,
-              action: "finished",
-              status: "ok",
-              completionStatus: "succeeded",
-              deliveryStatus: "not-delivered",
-              delivered: false,
-              deliverySuppressionReason: "empty",
-            }),
-          );
-        }
-        if (!deleteAfterRun) {
-          expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
-        }
+    { mode: "webhook", notify: "queue changed" },
+    { mode: "webhook", notify: undefined },
+    { mode: "announce", notify: undefined },
+  ] as const)("delivers $mode script notify=$notify", async ({ mode, notify }) => {
+    const cfg = createTriggerConfig("server-cron-script-notify");
+    mockScriptResult(notify);
+    if (notify) {
+      mocks.fetch.mockResolvedValueOnce({
+        response: new Response(null, { status: 204 }),
+        finalUrl: "https://example.invalid/cron",
+        release: vi.fn(async () => {}),
       });
-    },
-  );
+    }
+    await withCronService(cfg, async (state) => {
+      const job = await addScriptJob(
+        state,
+        "script-notify",
+        notify ? "return { notify: 'queue changed' }" : "return {}",
+        {
+          delivery:
+            mode === "webhook"
+              ? { mode, to: "https://example.invalid/cron-finished" }
+              : { mode, channel: "telegram", to: "123" },
+        },
+      );
+      await state.cron.run(job.id, "force");
+      if (notify) {
+        expect(mocks.fetch).toHaveBeenCalledOnce();
+        const request = callRecord(mocks.fetch);
+        expect(String(requireRecord(request.init, "fetch init").body)).toContain(
+          '"summary":"queue changed"',
+        );
+      } else if (mode === "webhook") {
+        expect(mocks.fetch).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.announce).not.toHaveBeenCalled();
+        expect(state.cron.getJob(job.id)).toBeUndefined();
+        expect(mocks.changed.mock.calls.map(([event]) => event)).toContainEqual(
+          expect.objectContaining({
+            jobId: job.id,
+            action: "finished",
+            status: "ok",
+            completionStatus: "succeeded",
+            deliveryStatus: "not-delivered",
+            delivered: false,
+            deliverySuppressionReason: "empty",
+          }),
+        );
+      }
+      expect(state.cron.getJob(job.id)).toBeUndefined();
+    });
+  });
 
   it.each([
     {
@@ -2071,12 +2055,14 @@ describe("buildGatewayCronService", () => {
         };
       }
       await withCronService(cfg, async (state) => {
-        const job = await addCommandJob(state, "redacted-command", source, {
-          deleteAfterRun: false,
-          ...(destination === "announce"
+        const job = await addCommandJob(
+          state,
+          "redacted-command",
+          source,
+          destination === "announce"
             ? { delivery: { mode: "announce", channel: "telegram", to: "123" } }
-            : {}),
-        });
+            : {},
+        );
         if (destination === "hook") {
           mocks.changed.mockClear();
         }
@@ -2174,7 +2160,6 @@ describe("buildGatewayCronService", () => {
     const state = createCronService(cfg);
     try {
       const job = await addSystemEventJob(state, "ssrf-webhook-blocked", "hello", {
-        deleteAfterRun: false,
         sessionTarget: "main",
         delivery: {
           mode: "webhook",

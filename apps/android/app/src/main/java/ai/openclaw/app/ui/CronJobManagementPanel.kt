@@ -232,15 +232,6 @@ private fun CronEditorPanel(
       onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(enabled = it))) },
       enabled = enabled,
     )
-    if (edit.schedule is GatewayCronScheduleEdit.At) {
-      CronSwitchRow(
-        title = nativeString("Delete after run"),
-        subtitle = nativeString("Remove this automation after a successful one-shot run."),
-        checked = edit.deleteAfterRun,
-        onCheckedChange = { onDraftChange(draft.withEdit(edit.copy(deleteAfterRun = it))) },
-        enabled = enabled,
-      )
-    }
     ClawTextField(
       value = edit.name,
       onValueChange = { onDraftChange(draft.withEdit(edit.copy(name = it))) },

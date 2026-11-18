@@ -500,14 +500,12 @@ it("creates a one-shot webhook system event with an explicit keep policy", async
       "--at": "+30m",
       "--system-event": "hi",
       "--webhook": " https://example.invalid/openclaw ",
-      "--keep-after-run": true,
     },
     "Reminder",
   );
   expect(params).toMatchObject({
     name: "Reminder",
     sessionTarget: "main",
-    deleteAfterRun: false,
     schedule: { kind: "at", at: "2026-05-25T00:30:00.000Z" },
     payload: { kind: "systemEvent", text: "hi" },
   });
@@ -737,9 +735,9 @@ it.each([
   ],
   ["disables failure alerts", ["--no-failure-alert"], { failureAlert: false }],
   [
-    "converts to a zoned one-shot with keep-after-run",
-    ["--at", "+002027-01-15T12:00:00", "--tz", "America/New_York", "--keep-after-run"],
-    { schedule: { kind: "at", at: "2027-01-15T17:00:00.000Z" }, deleteAfterRun: false },
+    "converts to a zoned one-shot",
+    ["--at", "+002027-01-15T12:00:00", "--tz", "America/New_York"],
+    { schedule: { kind: "at", at: "2027-01-15T17:00:00.000Z" } },
   ],
 ] satisfies Array<[string, string[], Record<string, unknown>]>)(
   "%s",

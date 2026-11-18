@@ -78,7 +78,6 @@ flow:
               name:
                 expr: "`qa-cron-archived-parent-${randomUUID()}`"
               enabled: true
-              deleteAfterRun: false
               schedule:
                 kind: every
                 everyMs: 3600000

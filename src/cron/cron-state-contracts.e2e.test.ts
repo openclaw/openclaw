@@ -56,7 +56,6 @@ it("deduplicates isolated scheduler execution and persisted run history across r
           id: "state-contract-isolated-dedup",
           name: "isolated dedup lifecycle",
           enabled: true,
-          deleteAfterRun: false,
           schedule: { kind: "at", at: new Date(atMs).toISOString() },
           sessionTarget: "isolated",
           wakeMode: "now",

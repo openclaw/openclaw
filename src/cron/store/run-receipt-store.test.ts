@@ -474,7 +474,6 @@ it.each(["legacy-running", "legacy-terminal", "started-terminal", "receiptless"]
     const now = Date.now();
     const job = makeCronRecoveryJob("ambiguous-one-shot", now);
     job.schedule = { kind: "at", at: new Date(now).toISOString() };
-    job.deleteAfterRun = true;
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     if (kind !== "receiptless") {
       const receipt = claimCronRunReceiptForTest(storePath, job, now);

@@ -1147,7 +1147,7 @@ var External = [
     /(^sessionKey$|^sessionAgentId$|^includeDisabled$|^limit$|^offset$|^query$|^enabled$|^scheduleKind$|^lastRunStatus$|^trigger$|^sortBy$|^sortDir$|^agentId$|^compact$|^includeDeliveryPreviews$)/u,
     /(^id$)/u,
     /(^jobId$)/u,
-    /(^name$|^declarationKey$|^displayName$|^owner$|^agentId$|^sessionKey$|^description$|^enabled$|^deleteAfterRun$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^cyberAccessProgram$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$)/u,
+    /(^name$|^declarationKey$|^displayName$|^owner$|^agentId$|^sessionKey$|^description$|^enabled$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^cyberAccessProgram$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$)/u,
     /\S/u,
     /(^agentId$|^sessionKey$|^accountId$)/u,
     /(^kind$|^source$|^options$)/u,
@@ -1174,7 +1174,7 @@ var External = [
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^to$)/u,
     /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
     /(^id$|^patch$|^expectedConfigRevision$)/u,
-    /(^ownerProfileId$|^name$|^displayName$|^agentId$|^sessionKey$|^description$|^enabled$|^deleteAfterRun$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^cyberAccessProgram$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$|^state$)/u,
+    /(^ownerProfileId$|^name$|^displayName$|^agentId$|^sessionKey$|^description$|^enabled$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^cyberAccessProgram$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$|^state$)/u,
     /\S/u,
     /(^min$|^max$)/u,
     /(^start$|^end$|^timezone$)/u,
@@ -1191,8 +1191,8 @@ var External = [
     /(^jobId$|^patch$|^expectedConfigRevision$)/u,
     /(^id$|^expectedConfigRevision$)/u,
     /(^jobId$|^expectedConfigRevision$)/u,
-    /(^id$|^mode$|^expectedProcessInstanceId$|^waitTimeoutMs$)/u,
-    /(^jobId$|^mode$|^expectedProcessInstanceId$|^waitTimeoutMs$)/u,
+    /(^id$|^mode$|^retryRunId$|^expectedProcessInstanceId$|^waitTimeoutMs$)/u,
+    /(^jobId$|^mode$|^retryRunId$|^expectedProcessInstanceId$|^waitTimeoutMs$)/u,
     /(^agentId$|^view$|^scope$|^id$|^jobId$|^runId$|^limit$|^offset$|^statuses$|^status$|^deliveryStatuses$|^deliveryStatus$|^query$|^sortDir$)/u,
     /^[^/\\]+$/u,
     /(^id$|^runId$|^runAtMs$|^cursor$|^limit$)/u,
@@ -10745,9 +10745,6 @@ var External = [
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_18(value.sessionKey)) &&
     (value.description === void 0 || !("description" in value) || check_276(value.description)) &&
     (value.enabled === void 0 || !("enabled" in value) || check_181(value.enabled)) &&
-    (value.deleteAfterRun === void 0 ||
-      !("deleteAfterRun" in value) ||
-      check_181(value.deleteAfterRun)) &&
     check_1611(value.schedule) &&
     (value.pacing === void 0 || !("pacing" in value) || check_1627(value.pacing)) &&
     (value.activeHours === void 0 || !("activeHours" in value) || check_1628(value.activeHours)) &&
@@ -11174,9 +11171,6 @@ var External = [
     (value.sessionKey === void 0 || !("sessionKey" in value) || check_18(value.sessionKey)) &&
     (value.description === void 0 || !("description" in value) || check_276(value.description)) &&
     (value.enabled === void 0 || !("enabled" in value) || check_181(value.enabled)) &&
-    (value.deleteAfterRun === void 0 ||
-      !("deleteAfterRun" in value) ||
-      check_181(value.deleteAfterRun)) &&
     (value.schedule === void 0 || !("schedule" in value) || check_1674(value.schedule)) &&
     (value.pacing === void 0 || !("pacing" in value) || check_1675(value.pacing)) &&
     (value.activeHours === void 0 || !("activeHours" in value) || check_1677(value.activeHours)) &&
@@ -11607,6 +11601,7 @@ var External = [
     ) &&
     check_6(value.id) &&
     (value.mode === void 0 || !("mode" in value) || check_1747(value.mode)) &&
+    (value.retryRunId === void 0 || !("retryRunId" in value) || check_63(value.retryRunId)) &&
     (value.expectedProcessInstanceId === void 0 ||
       !("expectedProcessInstanceId" in value) ||
       check_63(value.expectedProcessInstanceId)) &&
@@ -11630,6 +11625,7 @@ var External = [
     ) &&
     check_6(value.jobId) &&
     (value.mode === void 0 || !("mode" in value) || check_1747(value.mode)) &&
+    (value.retryRunId === void 0 || !("retryRunId" in value) || check_63(value.retryRunId)) &&
     (value.expectedProcessInstanceId === void 0 ||
       !("expectedProcessInstanceId" in value) ||
       check_63(value.expectedProcessInstanceId)) &&

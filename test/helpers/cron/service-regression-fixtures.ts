@@ -118,13 +118,11 @@ export function createDueIsolatedJob(params: {
   id: string;
   nowMs: number;
   nextRunAtMs: number;
-  deleteAfterRun?: boolean;
 }): CronJob {
   return {
     id: params.id,
     name: params.id,
     enabled: true,
-    deleteAfterRun: params.deleteAfterRun ?? false,
     createdAtMs: params.nowMs,
     updatedAtMs: params.nowMs,
     schedule: { kind: "at", at: new Date(params.nextRunAtMs).toISOString() },

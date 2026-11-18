@@ -184,7 +184,6 @@ it("saves exact event timing and clears its owner", async () => {
     payload: { kind: "systemEvent", text: "updated" },
     delivery: { mode: "none" },
   });
-  expect(patch).not.toHaveProperty("deleteAfterRun");
 });
 
 it("clears persisted delivery routing", async () => {
@@ -542,7 +541,6 @@ it("omits an unchanged minute but sends a genuinely changed minute", async () =>
   const originalAt = new Date(2030, 0, 2, 3, 4, 56, 789).toISOString();
   const original = makeJob({
     schedule: { kind: "at", at: originalAt },
-    deleteAfterRun: true,
   });
 
   const unchanged = editJob(original);

@@ -202,7 +202,6 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
     enabled: job.enabled,
-    deleteAfterRun: job.deleteAfterRun ?? job.schedule.kind === "at",
     scheduleKind: job.schedule.kind,
     eventSource: "mcp-events",
     eventServer: "",

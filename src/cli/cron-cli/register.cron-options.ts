@@ -12,12 +12,6 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--name <name>", "Job name")
     .option("--display-name <name>", "Human-readable job label")
     .option("--description <text>", "Job description")
-    .option(
-      "--delete-after-run",
-      "Delete one-shot after successful completion (confirmed/no delivery, intentional silence, or best effort); failed/unknown required delivery retains it disabled",
-      false,
-    )
-    .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
     .option("--agent <id>", "Agent id for this job")
     .option("--session <target>", "Session target (main|isolated|current|session:<id>)")
     .option("--session-key <key>", "Session key for job routing")

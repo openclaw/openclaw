@@ -29,6 +29,17 @@ import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
 
+export function canRetryCronHistory(
+  client: GatewayRequestHandlerOptions["client"],
+  context: GatewayRequestHandlerOptions["context"],
+): boolean {
+  return (
+    client?.connect?.scopes?.includes("operator.admin") === true &&
+    !client.internal?.agentRuntimeIdentity &&
+    !createCronSessionVisibility(client, context).resolve()
+  );
+}
+
 function isLegacyCreatorPromptUpdate(job: CronJob, patch: CronJobPatch): boolean {
   // A prompt edit keeps the legacy execution policy; it cannot establish new
   // authority or transfer management to another session/account.
@@ -80,7 +91,6 @@ const TRUSTED_LIFECYCLE_PATCH_KEYS: ReadonlySet<string> = new Set([
   "schedule",
   "displayName",
   "description",
-  "deleteAfterRun",
   "wakeMode",
   "pacing",
   "activeHours",

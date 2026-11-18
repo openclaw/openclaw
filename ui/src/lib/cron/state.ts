@@ -17,7 +17,6 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   sessionKey: "",
   clearAgent: false,
   enabled: true,
-  deleteAfterRun: false,
   scheduleKind: "every",
   eventSource: "mcp-events",
   eventServer: "",

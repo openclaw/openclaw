@@ -362,7 +362,6 @@ describe("cron service operations", () => {
     await withStateDirForStorePath(storePath, async () => {
       const replacement = createDueIsolatedJob(now);
       replacement.id = "startup-rescheduled-finalized-one-shot-true";
-      replacement.deleteAfterRun = true;
       replacement.schedule = { kind: "at", at: new Date(replacementAt).toISOString() };
       replacement.updatedAtMs = now - 10_000;
       replacement.state = { runningAtMs: startedAt, nextRunAtMs: replacementAt };

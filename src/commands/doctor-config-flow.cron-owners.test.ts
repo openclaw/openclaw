@@ -245,7 +245,6 @@ it("preserves a due legacy one-shot through Doctor ownership repair, then runs i
   const dueAt = Date.now() - 1_000;
   await saveJobs(storePath, {
     id: "pending-one-shot",
-    deleteAfterRun: false,
     schedule: { kind: "at", at: new Date(dueAt).toISOString() },
     payload: { kind: "agentTurn", message: "Run after owner repair", toolsAllow: [] },
     state: { nextRunAtMs: dueAt },

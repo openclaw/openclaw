@@ -187,7 +187,13 @@ export function finalizeCronRunsInWorker(
             }
             recordCronRunInDatabase(
               db,
-              cronRunResultHistory(input.storeKey, job, completed, policy.defaultAgentId),
+              cronRunResultHistory(
+                input.storeKey,
+                job,
+                completed,
+                policy.defaultAgentId,
+                Boolean(shouldDelete && currentJob && ownsRunningMarker),
+              ),
             );
             outcome.eventPlans.push({ outcomeIndex, job });
           }

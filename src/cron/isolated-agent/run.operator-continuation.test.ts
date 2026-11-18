@@ -376,7 +376,6 @@ it.each([
                           : ["github_publish"],
                     },
                     delivery: { mode: "none" },
-                    deleteAfterRun: false,
                   },
                 });
                 if (queuedEdit) {

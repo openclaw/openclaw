@@ -132,7 +132,6 @@ flow:
                           name:
                             expr: "`qa-event-spawn-${attemptId}`"
                           enabled: true
-                          deleteAfterRun: true
                           schedule:
                             kind: at
                             at:

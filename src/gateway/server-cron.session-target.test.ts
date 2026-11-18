@@ -56,7 +56,6 @@ it("refuses a stored job whose explicit session belongs to another agent", async
   const job = await addAgentTurnJob(state, "mismatched-session", "hello", {
     agentId: "main",
     sessionTarget: "session:agent:ops:scheduled-report",
-    deleteAfterRun: false,
   });
 
   await state.cron.run(job.id, "force");

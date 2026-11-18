@@ -143,7 +143,7 @@ function observe(promise: Promise<unknown>) {
   };
 }
 
-async function addCommand(original: StartedGatewayCron, name: string, deleteAfterRun: boolean) {
+async function addCommand(original: StartedGatewayCron, name: string) {
   return original.cron.add({
     name,
     enabled: true,
@@ -152,7 +152,6 @@ async function addCommand(original: StartedGatewayCron, name: string, deleteAfte
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     delivery: { mode: "none" },
-    deleteAfterRun,
   });
 }
 
@@ -269,7 +268,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     let run: Promise<unknown> | undefined;
     let drain: Promise<void> | undefined;
     try {
-      const job = await addCommand(original, "finalization drain", false);
+      const job = await addCommand(original, "finalization drain");
       jobId = job.id;
       run = original.cron.run(job.id, "force");
       await awaitGateBeforeSettlement(
@@ -303,33 +302,30 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     }
   });
 
-  it.each([false, true])(
-    "publishes a one-shot binding removal after completion (delete=%s)",
-    async (deleteAfterRun) => {
-      const original = await startGatewayCron(`one-shot-${deleteAfterRun}`, false);
-      const changed = vi.fn();
-      let stop = () => {};
-      try {
-        const job = await addCommand(original, "one-shot binding", deleteAfterRun);
-        const key = `agent:main:cron:${job.id}`;
-        expect(sessionHasAutomation(key, original.cfg)).toBe(true);
-        stop = sessionChanges.subscribe(changed);
-        expect(await original.cron.run(job.id, "force")).toMatchObject({
-          ok: true,
-          ran: true,
-        });
-        expect(original.cron.getJob(job.id)?.state.lastError).toBeUndefined();
-        expect(sessionHasAutomation(key, original.cfg)).toBe(false);
-        const automation = changed.mock.calls
-          .map(([change]) => change)
-          .filter((change) => change.scope === "automation");
-        expect(automation).toEqual([{ sessionKey: key, scope: "automation" }]);
-        expect(original.cron.getJob(job.id)?.enabled).toBe(deleteAfterRun ? undefined : false);
-      } finally {
-        stop();
-      }
-    },
-  );
+  it("publishes a one-shot binding removal after completion", async () => {
+    const original = await startGatewayCron("one-shot", false);
+    const changed = vi.fn();
+    let stop = () => {};
+    try {
+      const job = await addCommand(original, "one-shot binding");
+      const key = `agent:main:cron:${job.id}`;
+      expect(sessionHasAutomation(key, original.cfg)).toBe(true);
+      stop = sessionChanges.subscribe(changed);
+      expect(await original.cron.run(job.id, "force")).toMatchObject({
+        ok: true,
+        ran: true,
+      });
+      expect(original.cron.getJob(job.id)?.state.lastError).toBeUndefined();
+      expect(sessionHasAutomation(key, original.cfg)).toBe(false);
+      const automation = changed.mock.calls
+        .map(([change]) => change)
+        .filter((change) => change.scope === "automation");
+      expect(automation).toEqual([{ sessionKey: key, scope: "automation" }]);
+      expect(original.cron.getJob(job.id)?.enabled).toBe(undefined);
+    } finally {
+      stop();
+    }
+  });
 
   it.each(["drain", "superseded restart"] as const)(
     "waits for cancelled exit watchers before completing %s",

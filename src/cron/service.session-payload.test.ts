@@ -221,7 +221,6 @@ describe("unstarted scheduled admission", () => {
       const job = await cron.add(
         jobInput({
           name: `Active hours ${scheduleKind}`,
-          deleteAfterRun: false,
           schedule: schedule(scheduleKind, Date.parse("2026-10-20T09:00:00Z")),
           activeHours: { start: "10:00", end: "17:00", timezone: "UTC" },
           payload: { kind: "agentTurn", message: "Run inside active hours" },
@@ -291,7 +290,6 @@ describe("unstarted scheduled admission", () => {
       const job = await cron.add(
         jobInput({
           name: `Idle ${scheduleKind} ${boundary}`,
-          deleteAfterRun: false,
           schedule: schedule(scheduleKind, scheduler.now() + 1_000),
           idleOnly: true,
           payload: { kind: "agentTurn", message: "Check once idle" },

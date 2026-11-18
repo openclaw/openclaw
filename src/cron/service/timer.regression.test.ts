@@ -164,10 +164,9 @@ describe("cron service timer regressions", () => {
     resetActiveCronTaskRunsForTests();
   });
 
-  it("#131491: retains a deleteAfterRun one-shot whose stale guard suppressed its delivery", async () => {
+  it("#131491: archives a one-shot whose stale guard suppressed its delivery", async () => {
     const job = {
       ...dueJob("stale-delivery"),
-      deleteAfterRun: true,
       delivery: { mode: "announce" as const },
     };
     now += 18 * HOUR;
@@ -185,17 +184,7 @@ describe("cron service timer regressions", () => {
     const { state, storePath } = await setup([job], { runIsolatedAgentJob });
     await tick(state);
     const persisted = await loadCronStore(storePath);
-    expect(persisted.jobs).toHaveLength(1);
-    expect(jobIn(persisted.jobs, job.id)).toMatchObject({
-      enabled: false,
-      state: {
-        lastStatus: "ok",
-        lastDelivered: false,
-        lastDeliveryStatus: "not-delivered",
-        lastDeliveryError: expect.stringContaining("skipping stale delivery"),
-      },
-    });
-    expect(jobIn(persisted.jobs, job.id).state.nextRunAtMs).toBeUndefined();
+    expect(persisted.jobs).toHaveLength(0);
     stop(state);
     const restarted = createCronServiceState(state.deps);
     await tick(restarted);

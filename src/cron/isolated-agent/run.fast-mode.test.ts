@@ -287,7 +287,10 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
             .dispatchCronDelivery,
         );
       }
-      const result = await runJob({ deleteAfterRun: true, delivery });
+      const result = await runJob({
+        schedule: { kind: "at", at: "2026-01-01T00:00:00Z" },
+        delivery,
+      });
       if (rejected) {
         expect(result).toMatchObject({
           status: "error",

@@ -102,7 +102,6 @@ export function readPluginCommandCreation(params: Record<string, unknown>) {
     job.sessionTarget !== expected.sessionTarget ||
     job.declarationKey !== expected.declarationKey ||
     job.name !== expected.name ||
-    job.deleteAfterRun !== expected.deleteAfterRun ||
     !isDeepStrictEqual(job.schedule, expected.schedule) ||
     !isDeepStrictEqual(job.delivery, { mode: "none" }) ||
     payload?.kind !== "agentTurn" ||

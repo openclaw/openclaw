@@ -97,7 +97,6 @@ flow:
               name:
                 expr: "`qa-cron-failure-repair-${randomUUID()}`"
               enabled: true
-              deleteAfterRun: false
               schedule:
                 kind: at
                 at:
@@ -195,7 +194,6 @@ flow:
               name:
                 expr: "`qa-cron-failure-repair-control-${randomUUID()}`"
               enabled: true
-              deleteAfterRun: false
               schedule:
                 kind: at
                 at:

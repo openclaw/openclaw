@@ -528,7 +528,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
           agentId: "main",
           sessionKey: "cron:test-job",
           job: makeIsolatedAgentJobFixture({
-            deleteAfterRun: true,
             delivery: { mode: "announce", bestEffort },
           }),
         }),

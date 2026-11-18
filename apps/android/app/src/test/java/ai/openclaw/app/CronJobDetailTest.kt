@@ -179,7 +179,6 @@ class CronJobDetailTest {
           "name": "Daily report",
           "description": "Daily digest",
           "enabled": true,
-          "deleteAfterRun": false,
           "createdAtMs": 1000,
           "updatedAtMs": 2000,
           "configRevision": "sha256:fixture",

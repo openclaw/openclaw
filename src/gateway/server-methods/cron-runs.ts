@@ -13,6 +13,7 @@ import {
 import { cronJobMatchesCallerScope, readCronCallerScope } from "./cron-caller-scope.js";
 import {
   assertCronReadCurrent,
+  canRetryCronHistory,
   resolveCronJobId,
   respondCronJobNotFound,
   respondInvalidCronParams,
@@ -99,13 +100,14 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
           ? job
           : undefined;
       // Operator history survives deletion; scoped reads need a live matching owner.
-      if ((callerScope || p.agentId || visibility) && !matchedJob) {
+      if ((callerScope || visibility || (p.agentId && job)) && !matchedJob) {
         respondCronJobNotFound(respond, jobId!);
         return undefined;
       }
       return {
         storeKey,
         jobId,
+        ...(job ? {} : { agentId: p.agentId }),
         ...cronRunLogPageFilters(p),
         jobNameById:
           matchedJob && typeof matchedJob.name === "string"
@@ -166,6 +168,11 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
         runId: undefined,
       },
     ).entries;
+    if (!canRetryCronHistory(client, context)) {
+      for (const entry of entries) {
+        delete entry.retryAvailable;
+      }
+    }
     // A concurrently removed run or revoked session can shorten this page; refresh fills it.
     respond(true, { ...selection.page, entries }, undefined);
   } catch (error) {

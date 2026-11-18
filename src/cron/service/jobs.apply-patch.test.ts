@@ -31,44 +31,6 @@ const clearedFailureDestination = {
 };
 const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
 
-describe("applyJobPatch schedule retention", () => {
-  it.each([undefined, false] as const)(
-    "converts recurring to at with cleanup policy %s",
-    (policy) => {
-      const job =
-        policy === undefined
-          ? makeJob({ schedule: { kind: "cron", expr: "0 * * * *" } })
-          : makeJob({ deleteAfterRun: true });
-      applyJobPatch(job, {
-        schedule: { kind: "at", at: "2026-07-19T09:00:00.000Z" },
-        ...(policy === undefined ? {} : { deleteAfterRun: policy }),
-      });
-      expect(job).toMatchObject({ schedule: { kind: "at" }, deleteAfterRun: policy ?? true });
-    },
-  );
-
-  it.each([
-    { kind: "at", at: "2026-07-19T09:00:00.000Z" },
-    { kind: "on-exit", command: "true" },
-  ] as const)(
-    "clears inherited $kind cleanup on recurring conversion but honors explicit policies",
-    (previous) => {
-      for (const deleteAfterRun of [undefined, false, true]) {
-        const job = makeJob({ schedule: previous, deleteAfterRun: true });
-
-        applyJobPatch(job, {
-          schedule: { kind: "cron", expr: "0 * * * *" },
-          ...(deleteAfterRun === undefined ? {} : { deleteAfterRun }),
-        });
-
-        expect(job.schedule.kind).toBe("cron");
-        expect(job.deleteAfterRun).toBe(deleteAfterRun);
-        expect(Object.hasOwn(job, "deleteAfterRun")).toBe(deleteAfterRun !== undefined);
-      }
-    },
-  );
-});
-
 describe("schedule activation ownership", () => {
   it("ignores caller-supplied activation state during creation", () => {
     const now = Date.parse("2026-07-30T00:00:00.000Z");

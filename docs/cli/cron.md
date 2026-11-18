@@ -283,7 +283,7 @@ Invalid `--tz` values are rejected before saving a job; use an IANA timezone suc
 daylight-saving transition are reported separately as `--at` errors.
 
 <Note>
-One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
+A one-time automation leaves the list when its final attempt ends, even if the run fails or delivery cannot be confirmed. Use automations Run history to inspect the outcome. An administrator can select **Retry** for an eligible run. This starts a new attempt rather than replaying a delivery receipt.
 </Note>
 
 An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.

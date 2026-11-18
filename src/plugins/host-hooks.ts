@@ -314,16 +314,13 @@ type PluginSessionTurnScheduleCommonParams = {
 export type PluginSessionTurnScheduleParams =
   | ({
       at: string | number | Date;
-      deleteAfterRun?: boolean;
     } & PluginSessionTurnScheduleCommonParams)
   | ({
       delayMs: number;
-      deleteAfterRun?: boolean;
     } & PluginSessionTurnScheduleCommonParams)
   | ({
       cron: string;
       tz?: string;
-      deleteAfterRun?: false;
     } & PluginSessionTurnScheduleCommonParams);
 
 export type PluginSessionTurnUnscheduleByTagParams = {

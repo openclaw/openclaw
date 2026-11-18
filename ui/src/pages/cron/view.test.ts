@@ -108,20 +108,20 @@ describe("cron view editor", () => {
         .textContent,
     ).toBe("Every");
     selectSchedule(everyContainer, "cron");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron", deleteAfterRun: false });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron" });
     selectSchedule(everyContainer, "at");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at", deleteAfterRun: true });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
     expect(
       (await renderEditor({ scheduleKind: "at" })).querySelector("#cron-schedule-at"),
     ).not.toBeNull();
     const cronContainer = await renderEditor(
-      { scheduleKind: "cron", cronExpr: "*/15 * * * *", deleteAfterRun: true },
+      { scheduleKind: "cron", cronExpr: "*/15 * * * *" },
       { onFormChange },
     );
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
     expect(findToggleByLabel(cronContainer, "Delete after it runs")).toBeNull();
     selectSchedule(cronContainer, "every");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every" });
     const onExitFormChange = vi.fn();
     const onExitContainer = await renderEditor(
       { scheduleKind: "on-exit" },

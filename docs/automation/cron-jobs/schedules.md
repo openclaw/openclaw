@@ -35,8 +35,6 @@ An `on-exit` job disables itself when its payload is queued to run. Re-enable th
 
 The Gateway owns the watched command's process tree, including cleanup after failed startup. Cleanup must finish before its payload fires or a replacement command starts. If cleanup cannot be confirmed, the Gateway reports the failure, keeps a suspension blocker, and refuses to rearm that watch in the same process. Inspect and stop any remaining command processes, then restart the Gateway; disabling and re-enabling the job does not clear uncertain cleanup.
 
-Changing an `at` or `on-exit` job to an `every` or `cron` schedule clears its inherited `deleteAfterRun` setting. An explicit `deleteAfterRun` value in the same update takes precedence.
-
 ### Heartbeat task migration
 
 Run `openclaw doctor --fix` to convert supported heartbeat configuration,

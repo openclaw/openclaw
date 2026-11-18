@@ -87,6 +87,7 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
     entry.diagnostics?.summary ?? "",
     ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
     entry.jobId,
+    entry.jobName ?? "",
     jobNameById?.[entry.jobId] ?? "",
     entry.delivery?.intended?.channel ?? "",
     entry.delivery?.resolved?.channel ?? "",

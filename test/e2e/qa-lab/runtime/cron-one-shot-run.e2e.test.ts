@@ -28,7 +28,6 @@ describe("one-shot cron run background work", () => {
       agentId: "qa",
       enabled: true,
       // Keep the run session: deleting it stops the commands it still runs.
-      deleteAfterRun: false,
       schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
       sessionTarget: "isolated",
       wakeMode: "now",

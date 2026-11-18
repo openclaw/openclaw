@@ -58,12 +58,10 @@ export function autoDisableCronJob(params: {
   consecutiveErrors: number;
   failureNotificationDetail?: CronFailureNotificationDetail;
   deferredNotifications: DeferredCronNotifications;
-  /** A terminal one-shot is already disabled when its notification is finalized. */
-  terminalOneShot?: boolean;
   notify?: boolean;
 }): boolean {
   const { job } = params;
-  if ((!job.enabled && !params.terminalOneShot) || job.state.autoDisabled) {
+  if (!job.enabled || job.state.autoDisabled) {
     return false;
   }
 
