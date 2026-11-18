@@ -62,6 +62,11 @@ export async function startWorkerResponses(receiptEndpoint: string) {
   const errors: unknown[] = [];
   const server = createServer((request, response) => {
     void (async () => {
+      if (request.method === "GET" && request.url === "/codex/latest") {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ version: "1.0.0" }));
+        return;
+      }
       if (
         request.method === "GET" &&
         ["/platform/models", "/platform/access-programs"].includes(request.url ?? "")
