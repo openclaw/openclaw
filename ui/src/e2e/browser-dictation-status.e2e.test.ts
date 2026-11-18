@@ -128,6 +128,11 @@ suite.define(() => {
         sessionKey: "agent:main:main",
       });
       expect(await gateway.getRequests("talk.config")).toHaveLength(0);
+      const composerHeight = () =>
+        page
+          .locator(".agent-chat__composer-shell")
+          .evaluate((shell) => shell.getBoundingClientRect().height);
+      const idleHeight = await composerHeight();
       await button(page, "Start voice input", true).hover();
       await page.mouse.down();
       await gateway.waitForRequest("talk.session.create");
@@ -135,6 +140,9 @@ suite.define(() => {
       await admit();
       await emit("Guest dictation stays in this draft.");
       await expectDraft(textarea, "Guest dictation stays in this draft.");
+      // The listening status shares the button row, so the draft does not move.
+      await page.locator(".agent-chat__dictation-phase--listening").waitFor();
+      expect(await composerHeight()).toBe(idleHeight);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await button(page, "Stop and keep text", true).click();
       await gateway.waitForRequest("talk.session.close");
@@ -515,6 +523,80 @@ suite.define(() => {
       expect(await gateway.getRequests("talk.session.close")).toHaveLength(1);
       await captureComposer(page, "dictation-new-session-tooltip-cancelled.png");
     }));
+
+  it.each([
+    { route: "chat", width: 390, draft: "", resting: true },
+    { route: "chat", width: 320, draft: "The rollout is ready.", resting: false },
+    { route: "new", width: 390, draft: "The rollout is ready.", resting: false },
+  ] as const)(
+    "keeps pending-transcript status clear in $route on a $width px phone after Stop",
+    ({ route, width, draft, resting }) =>
+      suite.withPage(
+        {
+          permissions: ["microphone"],
+          viewport: { width, height: 844 },
+          isMobile: true,
+          hasTouch: true,
+        },
+        async ({ page }) => {
+          const { gateway, textarea, admit } = await openDictation(page, {
+            route,
+            deferredMethods: ["talk.session.create", "talk.session.close"],
+          });
+          await textarea.waitFor();
+          if (draft) {
+            await textarea.fill(draft);
+          }
+          const shell = page.locator(
+            route === "new" ? ".new-session-page__composer" : ".agent-chat__composer-shell",
+          );
+          if (route === "chat") {
+            await expect
+              .poll(async () => (await shell.getAttribute("data-composer-resting")) === "true")
+              .toBe(resting);
+          }
+          await shell
+            .getByRole("button", {
+              name: route === "new" ? "Dictate" : "Dictation",
+              exact: true,
+            })
+            .click();
+          await admit();
+          await button(page, "Stop and keep text").click();
+          await gateway.waitForRequest("talk.session.close");
+          // Stop ends capture while the transcript is still pending, so the status stays.
+          await expect.poll(() => shell.locator(".agent-chat__input--dictating").count()).toBe(0);
+          const status = shell.locator(".agent-chat__dictation-status");
+          await status.waitFor();
+          const overlaps = await status.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return [
+              ".agent-chat__composer-input-row",
+              ".agent-chat__composer-controls button",
+              ".agent-chat__composer-actions",
+            ].flatMap((selector) =>
+              [...element.closest(".agent-chat__input")!.querySelectorAll(selector)]
+                .filter((target) => {
+                  const other = target.getBoundingClientRect();
+                  return (
+                    other.top < box.bottom &&
+                    box.top < other.bottom &&
+                    other.left < box.right &&
+                    box.left < other.right
+                  );
+                })
+                .map(() => selector),
+            );
+          });
+          expect(overlaps).toEqual([]);
+          expect(
+            await status.evaluate((element) => element.scrollWidth <= element.clientWidth),
+          ).toBe(true);
+          await expectDraft(textarea, draft);
+          await captureComposer(page, `dictation-pending-${route}-${width}.png`);
+        },
+      ),
+  );
 
   it("keeps the slow microphone permission hint whole and the starting highlight moving in a narrow composer", () =>
     suite.withPage(
