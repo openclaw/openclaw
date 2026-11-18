@@ -1,7 +1,4 @@
-import {
-  GATEWAY_CLIENT_IDS,
-  isNativeAppUiClient,
-} from "../../../packages/gateway-protocol/src/client-info.js";
+import { isControlUiClient } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -29,11 +26,7 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
       const live =
         client?.connId &&
         context.getClientConnIds?.((candidate) => candidate === client).has(client.connId);
-      if (
-        !live ||
-        (client.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI &&
-          !isNativeAppUiClient(client.connect.client))
-      ) {
+      if (!live || !isControlUiClient(client.connect.client)) {
         respondError(
           respond,
           ErrorCodes.INVALID_REQUEST,
@@ -65,11 +58,7 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
         activations: ReturnType<typeof listControlUiPluginActivations>;
       }> = [];
       context.getClientConnIds?.((client) => {
-        if (
-          client.connId &&
-          (client.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI ||
-            isNativeAppUiClient(client.connect.client))
-        ) {
+        if (client.connId && isControlUiClient(client.connect.client)) {
           clients.push({
             connId: client.connId,
             activations: listControlUiPluginActivations(client, params.pluginId),

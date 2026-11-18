@@ -228,11 +228,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         mode: GATEWAY_CLIENT_MODES.UI,
         modelCatalog: { agentId: "bravo" },
       });
-      await withTestTimeout(
-        native.published,
-        10_000,
-        `${clientName} did not receive its negotiated model catalog`,
-      );
+      await withinTest(native.published, signal);
       expect(native.snapshots).toMatchObject(snapshot({ agentId: "bravo" }, [model("second")]));
       expect(publications).toHaveLength(1);
     }

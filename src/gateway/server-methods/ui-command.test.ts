@@ -125,12 +125,18 @@ describe("ui.command gateway method", () => {
     );
   });
 
-  it("navigates only the requester, even when another user and another tab share the session", async () => {
+  it.each([
+    GATEWAY_CLIENT_IDS.CONTROL_UI,
+    GATEWAY_CLIENT_IDS.MACOS_APP,
+    GATEWAY_CLIENT_IDS.LINUX_APP,
+    GATEWAY_CLIENT_IDS.IOS_APP,
+    GATEWAY_CLIENT_IDS.ANDROID_APP,
+  ])("navigates only the capable %s requester, not another user or tab", async (id) => {
     const params = {
       command: { kind: "navigate", sessionKey: "agent:main:other" },
       sessionKey: "agent:main:main",
     };
-    const requester = client("alice-tab-one", undefined, undefined, "alice");
+    const requester = client("alice-tab-one", id, undefined, "alice");
     const result = await call(
       params,
       [
@@ -361,8 +367,8 @@ describe("ui.command gateway method", () => {
 });
 
 describe("portal presentation feedback", () => {
-  function fixture() {
-    const requester = client("portal-requester");
+  function fixture(id: string = GATEWAY_CLIENT_IDS.CONTROL_UI) {
+    const requester = client("portal-requester", id);
     const connection = new AbortController();
     requester.connectionSignal = connection.signal;
     const respond = vi.fn();
@@ -405,28 +411,37 @@ describe("portal presentation feedback", () => {
     return { show, report, respond, connection };
   }
 
-  it("returns the requesting browser's block, rejecting another browser and another portal", async () => {
-    const f = fixture();
-    const finished = f.show();
-    const blocked = {
-      portalId: "app",
-      status: "blocked",
-      reason: "remote-ingress-required",
-    } as const;
-    expect(await f.report(blocked, client("other-tab"))).toHaveBeenCalledWith(true, { ok: false });
-    expect(await f.report({ ...blocked, portalId: "other-app" })).toHaveBeenCalledWith(true, {
-      ok: false,
-    });
-    expect(f.respond).not.toHaveBeenCalled();
-    await f.report(blocked);
-    await finished;
-    expect(f.respond).toHaveBeenCalledWith(true, {
-      ok: true,
-      delivery: "dispatched",
-      presentation: blocked,
-    });
-    expect(await f.report(blocked)).toHaveBeenCalledWith(true, { ok: false });
-  });
+  it.each([
+    GATEWAY_CLIENT_IDS.CONTROL_UI,
+    GATEWAY_CLIENT_IDS.MACOS_APP,
+    GATEWAY_CLIENT_IDS.LINUX_APP,
+  ])(
+    "returns the requesting %s renderer's block, rejecting another client and portal",
+    async (id) => {
+      const f = fixture(id);
+      const finished = f.show();
+      const blocked = {
+        portalId: "app",
+        status: "blocked",
+        reason: "remote-ingress-required",
+      } as const;
+      expect(await f.report(blocked, client("other-tab"))).toHaveBeenCalledWith(true, {
+        ok: false,
+      });
+      expect(await f.report({ ...blocked, portalId: "other-app" })).toHaveBeenCalledWith(true, {
+        ok: false,
+      });
+      expect(f.respond).not.toHaveBeenCalled();
+      await f.report(blocked);
+      await finished;
+      expect(f.respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        delivery: "dispatched",
+        presentation: blocked,
+      });
+      expect(await f.report(blocked)).toHaveBeenCalledWith(true, { ok: false });
+    },
+  );
 
   it.each(["timeout", "disconnect"] as const)(
     "never reports delivery verified after %s",

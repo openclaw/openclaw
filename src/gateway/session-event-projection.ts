@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
+  isControlUiClient,
   hasGatewayClientCap,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -204,7 +204,7 @@ export function prepareSessionEventProjection(
     const runProjector = connection.createRunProjector();
     return (client) => {
       // Check before audience payload/encoding caches: equal sharing scopes do not imply equal UI.
-      if (prepared?.controlUiOnly && client.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI) {
+      if (prepared?.controlUiOnly && !isControlUiClient(client.connect.client)) {
         return undefined;
       }
       if (!connection.isCurrentProjection(projection) || !projection.isCurrent(record)) {

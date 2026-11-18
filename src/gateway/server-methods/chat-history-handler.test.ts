@@ -117,7 +117,7 @@ function createPersonalMetadataFixture() {
   return { owner, authProfileId, client, clients, config, metadata, readChatMetadata, request };
 }
 
-it("serves notices only to Control UI through worker history, startup, delta, and exact hydration", () =>
+it("serves notices to browser and native UI through worker history, startup, delta, and exact hydration", () =>
   withHistoryState(async () => {
     const scope = await seedSession("plugin-steering");
     const guidance = "Keep the change small.";
@@ -164,9 +164,16 @@ it("serves notices only to Control UI through worker history, startup, delta, an
         provenance: { kind: "internal_system", sourceTool: "exec" },
       },
     });
-    for (const id of [GATEWAY_CLIENT_IDS.CONTROL_UI, GATEWAY_CLIENT_IDS.TUI]) {
-      client.connect.client = { ...client.connect.client, id, mode: "webchat" };
-      const visible = id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+    for (const [id, mode, visible] of [
+      [GATEWAY_CLIENT_IDS.CONTROL_UI, "webchat", true],
+      [GATEWAY_CLIENT_IDS.MACOS_APP, "ui", true],
+      [GATEWAY_CLIENT_IDS.LINUX_APP, "ui", true],
+      [GATEWAY_CLIENT_IDS.IOS_APP, "ui", true],
+      [GATEWAY_CLIENT_IDS.ANDROID_APP, "ui", true],
+      [GATEWAY_CLIENT_IDS.ANDROID_APP, "node", false],
+      [GATEWAY_CLIENT_IDS.TUI, "webchat", false],
+    ] as const) {
+      client.connect.client = { ...client.connect.client, id, mode };
       for (const method of ["chat.history", "chat.startup"]) {
         const response = await request(method);
         expect(response.messages).toHaveLength(visible ? 2 : 1);

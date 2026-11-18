@@ -1,4 +1,4 @@
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { isControlUiClient } from "../../packages/gateway-protocol/src/client-info.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 import type { GatewayUiCommandTarget } from "./ui-command-target.types.js";
 
@@ -7,8 +7,9 @@ export function captureGatewayUiCommandTarget(
 ): GatewayUiCommandTarget | undefined {
   const connId = client?.connId?.trim();
   if (
+    !client ||
     !connId ||
-    client?.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI ||
+    !isControlUiClient(client.connect.client) ||
     client.internal?.syntheticClient ||
     client.invalidated ||
     client.connectionSignal?.aborted
