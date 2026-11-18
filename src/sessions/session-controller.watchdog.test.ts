@@ -598,6 +598,7 @@ describe("operation-owned watchdog through controller admission", () => {
     const pendingTools = Array.from({ length: 5 }, (_, index) => ({
       toolName: `host_tool_${index}`,
       toolCallId: `host-call-${index}`,
+      explicitDeadline: false,
       elapsedMs: SESSION_WATCHDOG_QUIET_TOOL_MS,
     }));
     const started = createDeferredCore();

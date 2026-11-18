@@ -524,6 +524,9 @@ src/auto-reply/thinking.shared.ts
 src/auto-reply/thinking.ts
 src/auto-reply/tokens.ts
 src/bootstrap/node-compiler-args.ts
+src/channels/account-configuration.ts
+src/channels/message/adapter.ts
+src/channels/plugins/outbound-message-tool-discovery.ts
 src/channels/bundled-channel-catalog-read.ts
 src/channels/bundled-channel-ids.generated.ts
 src/channels/chat-meta-shared.ts
@@ -1346,6 +1349,7 @@ src/infra/sqlite-snapshot-diagnostics.ts
 src/infra/sqlite-snapshot-exclusive-copy.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
+src/infra/sqlite-snapshot-preconditions.ts
 src/infra/sqlite-snapshot-publication-cleanup.ts
 src/infra/sqlite-snapshot-reclamation.ts
 src/infra/sqlite-snapshot-retirement.ts
