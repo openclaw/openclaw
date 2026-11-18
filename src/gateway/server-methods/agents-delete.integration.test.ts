@@ -249,7 +249,7 @@ it.for(["active", "restart-draining"] as const)(
         expect(created.status).toBe("created");
         const agentId = "doomed";
         const sessionId = "deletion-active-session";
-        const sessionKey = `agent:${agentId}:active`;
+        const sessionKey = `agent:${agentId}:${scenario === "active" ? "active" : "subagent:interrupted"}`;
         const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
         const writeEntry = (
           key: string,
