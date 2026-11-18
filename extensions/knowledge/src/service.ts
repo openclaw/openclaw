@@ -218,7 +218,7 @@ export function createKnowledgeService(
         work(opened.runtime, access),
       );
       if (write && opened.access.scope.visibility === "private") {
-        opened.runtime.live.invalidate();
+        opened.runtime.client.invalidate();
       }
       return result;
     };
@@ -482,9 +482,6 @@ export function createKnowledgeService(
             `This store couldn't be opened. ${(e as Error).message}`,
           );
         }
-        if (scope === "private") {
-          runtime.live.ensureWatching();
-        }
         const canWrite =
           policy.writesEnabled &&
           ((context.source === "tool" && toolGrant(context, stores.grantFor) !== "read") ||
@@ -494,6 +491,7 @@ export function createKnowledgeService(
                   (s: string) => s === "operator.write" || s === "operator.admin",
                 ),
               )));
+
         return {
           ...base,
           checkedAt: catalog.checkedAt,
@@ -502,7 +500,7 @@ export function createKnowledgeService(
           store: "ready" as const,
           scope,
           writesEnabled: canWrite,
-          live: scope === "private" ? runtime.live.state : "stopped",
+          live: scope === "private" ? runtime.client.liveState : "stopped",
           snapshot: catalog.snapshot,
           records: catalog.records,
           validRecords: catalog.records,
