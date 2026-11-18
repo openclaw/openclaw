@@ -53,7 +53,7 @@ export function prepareAgentWaitForTurn(
     queuedBeforeWait?.session ??
     getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
     captureAgentJobSession(runContext);
-  const wait = async () => {
+  const wait = async (options?: { recoverWithSessionAuthorization: true }) => {
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
@@ -64,6 +64,7 @@ export function prepareAgentWaitForTurn(
       source,
       readRestoredCompletion: () => {
         if (
+          !options?.recoverWithSessionAuthorization ||
           source ||
           runContext ||
           context.dedupe.has(pendingChatSendDedupeKey(runId)) ||
@@ -73,13 +74,14 @@ export function prepareAgentWaitForTurn(
           return undefined;
         }
         const completed = getSessionRowProjection(context)?.readRestoredCompletion(runId);
-        return (
-          completed && {
-            status: "ok",
-            startedAt: completed.startedAt,
-            endedAt: completed.endedAt,
-            session: captureAgentJobSession({ ...completed, lifecycleGeneration }),
-          }
+        return completed?.then(
+          (entry) =>
+            entry && {
+              status: "ok" as const,
+              startedAt: entry.startedAt,
+              endedAt: entry.endedAt,
+              session: captureAgentJobSession({ ...entry, lifecycleGeneration }),
+            },
         );
       },
       stopWaiting: () => {

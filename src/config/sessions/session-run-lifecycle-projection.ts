@@ -280,7 +280,8 @@ export function derivePersistedSessionLifecyclePatch(params: {
     event: params.event,
     lastRunError: params.lastRunError,
   });
-  const clientRunId = normalizeLifecycleRunId(params.event.clientRunId) ?? runId;
+  // The caller waits on the original wire ID, including any surrounding whitespace.
+  const clientRunId = params.event.clientRunId || params.event.runId;
   // Execution ownership survives yielded outcomes until the continuation settles.
   return {
     ...snapshot,

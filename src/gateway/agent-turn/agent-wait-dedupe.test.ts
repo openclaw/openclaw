@@ -6,6 +6,7 @@ import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js
 import { enqueueFollowupRun, reserveSteerCandidate } from "../../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { derivePersistedSessionLifecyclePatch } from "../../config/sessions/session-run-lifecycle-projection.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
@@ -36,6 +37,7 @@ import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
+  appendProjectionMessages,
   seedProjectionRow,
   withSessionRowProjectionState,
 } from "../session-row-projection.test-support.js";
@@ -830,11 +832,61 @@ it.each(["lifecycle-first", "dedupe-first"] as const)(
 
 it("waits by the original run ID after reopening a completed session", async () => {
   await withSessionRowProjectionState(async (create) => {
-    const runId = "completed-before-restart";
-    const completed = { status: "done" as const, startedAt: 100, endedAt: 200 };
-    seedProjectionRow("finished", { ...completed, lastRunId: runId });
-    seedProjectionRow("first-collision", { ...completed, lastRunId: "shared-run" });
-    seedProjectionRow("second-collision", { ...completed, lastRunId: "shared-run" });
+    const runId = " completed-before-restart ";
+    const endedAt = Date.now();
+    const startedAt = endedAt - 1;
+    const completed = derivePersistedSessionLifecyclePatch({
+      event: {
+        runId: "execution",
+        clientRunId: runId,
+        ts: endedAt,
+        data: { phase: "end", startedAt, endedAt },
+      },
+      currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+    });
+    expect(completed.lastRunId).toBe(runId);
+    const original = seedProjectionRow("finished", completed);
+    await appendProjectionMessages(original.scope, {
+      role: "user",
+      content: "original",
+      timestamp: startedAt,
+      idempotencyKey: runId + ":user",
+    });
+    await appendProjectionMessages(
+      original.scope,
+      ...Array.from({ length: 34 }, (_, i) => ({
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: String(i) }],
+        timestamp: endedAt,
+      })),
+    );
+    const legacy = seedProjectionRow("legacy", { ...completed, lastRunId: "old-run" });
+    await appendProjectionMessages(legacy.scope, {
+      role: "user",
+      content: "old",
+      timestamp: startedAt,
+      idempotencyKey: " old-run :user",
+    });
+    const oldCollision = seedProjectionRow("first-collision", {
+      ...completed,
+      lastRunId: "shared-run",
+    });
+    await appendProjectionMessages(oldCollision.scope, {
+      role: "user",
+      content: "old",
+      timestamp: startedAt,
+      idempotencyKey: " shared-run :user",
+    });
+    const newCollision = seedProjectionRow("second-collision", {
+      ...completed,
+      lastRunId: " shared-run ",
+    });
+    await appendProjectionMessages(newCollision.scope, {
+      role: "user",
+      content: "new",
+      timestamp: startedAt,
+      idempotencyKey: " shared-run :user",
+    });
     const context = createGatewayRequestContext(makeContextParams());
     setRuntimeConfigSnapshot({});
     const projection = await create({ cfg: {}, modelCatalog: [] });
@@ -844,10 +896,34 @@ it("waits by the original run ID after reopening a completed session", async () 
       expect.objectContaining({
         runId,
         status: "ok",
-        startedAt: 100,
-        endedAt: 200,
+        startedAt,
+        endedAt,
       }),
     );
+    for (const id of [runId.trim(), "old-run"]) {
+      await expectReply(invokeWait(context, id, 0), { runId: id, status: "timeout" });
+    }
+    await expectReply(
+      invokeWait(context, " old-run ", 0),
+      expect.objectContaining({ status: "ok" }),
+    );
+    // No live job/dedupe state remains. The later failed session still retires the restored result.
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:later" },
+      {
+        sessionId: "later",
+        updatedAt: endedAt + 1,
+        lastRunId: runId,
+        status: "failed",
+        endedAt: endedAt + 1,
+      },
+    );
+    await projection.ensureMaterialized();
+    await expectReply(invokeWait(context, runId, 0), { runId, status: "timeout" });
+    await expectReply(invokeWait(context, " shared-run ", 0), {
+      runId: " shared-run ",
+      status: "timeout",
+    });
     await expectReply(invokeWait(context, "shared-run", 0), {
       runId: "shared-run",
       status: "timeout",

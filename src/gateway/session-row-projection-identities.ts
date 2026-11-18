@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
 import {
   controlUiSessionSlug,
@@ -8,7 +9,9 @@ import { isInternalSessionEffectsKey } from "../config/sessions/internal-session
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
+import { samePersistedSessionRun } from "../config/sessions/terminal-status.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import {
   first,
   identity,
@@ -18,6 +21,7 @@ import {
   type Query,
   type Row,
 } from "./session-row-projection-record.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
 import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
 
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
@@ -300,39 +304,104 @@ export function indexSessionRow(
   }
 }
 
-export function createRestoredCompletionReader(
-  rows: ReadonlyMap<string, Row>,
-  isCurrent: () => boolean,
-) {
-  // Only rows loaded at startup can stand in for a previous Gateway's lost job cache.
-  // Run IDs are caller supplied. A collision across sessions has no unique owner.
-  const restoredRuns = new Map<string, string | null>();
-  for (const [id, row] of rows) {
-    const runId = row.storedEntry?.lastRunId;
-    if (runId) {
-      restoredRuns.set(runId, restoredRuns.has(runId) ? null : id);
-    }
-  }
-  return (runId: string) => {
-    const id = restoredRuns.get(runId);
-    const row = id && isCurrent() ? rows.get(id) : undefined;
-    const entry = row?.storedEntry;
-    if (
-      !row ||
-      !entry ||
-      entry.lastRunId !== runId ||
-      entry.status !== "done" ||
-      entry.endedAt === undefined ||
-      entry.endedAt >= performance.timeOrigin
-    ) {
+/** A new Gateway can recover only its initial rows. Later attempts retire the old ID permanently. */
+export function createRestoredCompletionIndex(isReady: () => boolean) {
+  type Completion = Pick<NonNullable<Row["storedEntry"]>, "sessionId" | "startedAt" | "endedAt"> & {
+    agentId: string;
+    sessionKey: string;
+    storePath: string;
+    sourceKey?: Promise<string | undefined>;
+  };
+  const candidates = new Map<string, Completion>();
+  return {
+    restore(rows: Iterable<Row>) {
+      const seen = new Set<string>();
+      for (const row of rows) {
+        const entry = row.storedEntry;
+        if (!entry?.lastRunId) {
+          continue;
+        }
+        // A legacy row can stand for any wire ID with this trimmed spelling.
+        const key = entry.lastRunId.trim();
+        if (seen.has(key)) {
+          candidates.delete(key);
+        } else if (entry.status === "done" && entry.endedAt !== undefined) {
+          candidates.set(key, {
+            storePath: row.storeTarget.storePath,
+            sessionKey: row.key,
+            agentId: row.agentId,
+            sessionId: entry.sessionId,
+            startedAt: entry.startedAt,
+            endedAt: entry.endedAt,
+          });
+        }
+        seen.add(key);
+      }
+      return read;
+    },
+    update(before: Row["storedEntry"], after?: Row["storedEntry"]) {
+      if (candidates.size && !samePersistedSessionRun(before, after)) {
+        for (const key of [before?.lastRunId, after?.lastRunId, after?.lifecycleRunId]) {
+          if (key) {
+            candidates.delete(key.trim());
+          }
+        }
+      }
+    },
+  };
+  function read(runId: string) {
+    // Older writers trimmed the row ID. Its persisted user-turn key still has the wire bytes.
+    const key = runId.trim();
+    const completion = candidates.get(key);
+    if (!completion || !isReady()) {
       return undefined;
     }
-    return {
-      sessionKey: row.key,
-      agentId: row.agentId,
-      sessionId: entry.sessionId,
-      startedAt: entry.startedAt,
-      endedAt: entry.endedAt,
-    };
-  };
+    completion.sourceKey ??= readUserKey(completion).catch((error: unknown) => {
+      completion.sourceKey = undefined;
+      throw error;
+    });
+    const inputKey = buildRunUserTurnIdempotencyKey(runId);
+    return completion.sourceKey.then((source) =>
+      isReady() && candidates.get(key) === completion && source === inputKey
+        ? completion
+        : undefined,
+    );
+  }
+  async function readUserKey(completion: Completion) {
+    let offset = 0;
+    while (isReady()) {
+      const page = await readSessionTranscriptBoundedMessageTailPageAsync(completion, {
+        offset,
+        maxMessages: 32,
+        maxBytes: 256 * 1024,
+        readOnly: true,
+      });
+      if (page.scannedMessages === 0) {
+        return undefined;
+      }
+      // A single oversized message can exhaust the page budget. Read that event alone.
+      const tail = page.newestContiguousEventCount
+        ? page
+        : await readSessionTranscriptBoundedMessageTailPageAsync(completion, {
+            offset,
+            maxMessages: 1,
+            maxBytes: Number.MAX_SAFE_INTEGER,
+            readOnly: true,
+          });
+      if (!tail.newestContiguousEventCount) {
+        return undefined;
+      }
+      for (const { event } of tail.events.slice(-tail.newestContiguousEventCount).reverse()) {
+        const message = asOptionalRecord(asOptionalRecord(event)?.message);
+        if (message?.role === "user") {
+          return typeof message.idempotencyKey === "string" ? message.idempotencyKey : undefined;
+        }
+      }
+      offset += tail.newestContiguousEventCount;
+      if (offset >= tail.totalMessages) {
+        return undefined;
+      }
+    }
+    return undefined;
+  }
 }
