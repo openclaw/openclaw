@@ -825,12 +825,17 @@ describe("cold transcript storage workers", () => {
         expect(readOnly().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         await restoreSessionColdTranscript(fixture.scope);
         expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
-        expect(changes).toHaveBeenCalledExactlyOnceWith({
-          storePath: fixture.scope.storePath,
-          sessionKey: fixture.scope.sessionKey,
-          scope: "transcript",
-        });
-        expect(changes.mock.results[0]?.value).toBe(false);
+        expect(changes.mock.calls).toEqual([
+          [{ all: true, scope: { agentId: fixture.options.agentId, topology: true } }],
+          [
+            {
+              storePath: fixture.scope.storePath,
+              sessionKey: fixture.scope.sessionKey,
+              scope: "transcript",
+            },
+          ],
+        ]);
+        expect(changes.mock.results.map(({ value }) => value)).toEqual([true, false]);
       } finally {
         unsubscribe();
         inspection?.close();
