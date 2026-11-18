@@ -719,6 +719,13 @@
   text-align: left;
 }
 
+/* Touch layouts enlarge the settings pickers' text; the Agent row's trigger matches "Runs in". */
+@media (pointer: coarse), (max-width: 640px) {
+  .cron-editor-placement .agent-select__trigger {
+    font-size: max(16px, var(--control-ui-touch-input-size, 1em));
+  }
+}
+
 /* Read-only script/command payload: a highlighted code block sized like the
    textarea it replaces, scrollable and focusable so keyboard users can reach it.
    `resize` needs an explicit height (not max-height) as the resize origin, so the
@@ -1656,7 +1663,8 @@
 
   .cron-editor-schedule .cron-tray-input,
   .cron-editor-placement .settings-input,
-  .cron-editor-placement .picker-select__trigger {
+  .cron-editor-placement .picker-select__trigger,
+  .cron-editor-placement .agent-select__trigger {
     margin-inline-start: auto;
     border-radius: var(--radius-md);
     background: var(--cron-phone-control);
@@ -1687,7 +1695,8 @@
     text-align: end;
   }
 
-  .cron-editor-placement .picker-select__trigger {
+  .cron-editor-placement .picker-select__trigger,
+  .cron-editor-placement .agent-select__trigger {
     white-space: nowrap;
   }
 

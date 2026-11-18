@@ -303,12 +303,6 @@ export function Advanced(
               />
             </>
           ) : undefined}
-          <ToggleRow
-            {...props}
-            field="clearAgent"
-            label={t("cron.form.clearAgentOverride")}
-            help={t("cron.form.clearAgentHelp")}
-          />
         </AdvancedGroup>
         <AdvancedGroup title={t("cron.form.advancedConditions")}>
           <ToggleRow
