@@ -366,8 +366,9 @@ describe("renderSidebarUpdateSurface", () => {
   it("leads with the restart that finishes the plugin updates its last run owes", async () => {
     const now = Date.parse("2026-11-18T12:00:00Z");
     vi.useFakeTimers({ now, toFake: ["Date"] });
-    // The update.status reply a Gateway sends during an owed-plugin retry countdown: the
-    // installing run succeeded but owes plugin convergence, and the campaign has no target.
+    // The update.status reply shape a live Gateway sent during an owed-plugin retry countdown
+    // (installed-package owed-plugin-retry Docker cell): the installing run succeeded but owes
+    // plugin convergence, nothing newer is available, and the campaign has no target.
     const lastRun = createUpdateRunFixture({
       status: "succeeded",
       phase: "finished",
@@ -393,7 +394,13 @@ describe("renderSidebarUpdateSurface", () => {
       },
     };
     const { overlays, context } = updateFixture(
-      async () => ({ lastRun, schedule, updateAvailable: null }),
+      async () => ({
+        sentinel: null,
+        lastRun,
+        updateAvailable: null,
+        effectiveChannel: "stable",
+        schedule,
+      }),
       {
         server: { version: "2026.9.2", bootId: "fixture-boot" },
         features: { methods: ["update.run", "update.status", "update.hold"] },
