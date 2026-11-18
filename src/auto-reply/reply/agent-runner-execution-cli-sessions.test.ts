@@ -354,7 +354,8 @@ describe("executeAgentTurn: CLI session routing", () => {
     expect(result.kind).toBe("success");
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       currentInboundEventKind: "room_event",
-      persistAssistantTranscript: false,
+      // Allows only the runner's hidden usage row; room events write no reply row.
+      persistAssistantTranscript: true,
       cliSessionId: "existing-cli-session",
       cliSessionBinding: {
         sessionId: "existing-cli-session",

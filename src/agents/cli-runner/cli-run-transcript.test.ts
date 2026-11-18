@@ -18,11 +18,9 @@ import {
   type InternalSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import type { CliOutput } from "../cli-output-contracts.js";
 import { isIntermediateAssistantTranscriptMessage } from "../embedded-agent-runner/message-visibility.js";
-import {
-  buildCliAssistantTranscriptUsage,
-  persistCliAssistantTranscript,
-} from "./cli-run-transcript.js";
+import { persistCliAssistantTranscript, persistCliRunTranscript } from "./cli-run-transcript.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-coordination-transcript-");
 afterEach(() => resetGlobalHookRunner());
@@ -119,7 +117,7 @@ it.each([
 );
 
 it.each([false, true])("persists CLI usage with separate turn total=%s", async (turnTotal) => {
-  const { target, runParams, persist } = await transcriptFixture("usage");
+  const { target, runParams } = await transcriptFixture("usage");
   const rates = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
   const pricedRunParams = {
     ...runParams,
@@ -129,13 +127,19 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
   };
   const modelId = turnTotal ? "claude-opus-4-8" : "unpriced-cli-test-model";
   const cacheUsage = { input: 4418, output: 5, cacheWrite: 36955, cacheWrite1h: 36955 };
-  const priced = await buildCliAssistantTranscriptUsage({
-    runParams: pricedRunParams,
-    modelId,
+  const runTurn = async (text: string, output: Partial<CliOutput>) =>
+    (
+      await persistCliRunTranscript({
+        runParams: pricedRunParams,
+        modelId,
+        text,
+        output: { text, ...output },
+      })
+    ).agentMeta.costUsd;
+  const costUsd = await runTurn("reply", {
     usage: turnTotal ? cacheUsage : { input: 10, output: 5, cacheRead: 100 },
-    ...(turnTotal ? { turnUsage: { ...cacheUsage, output: 534 } } : {}),
+    ...(turnTotal ? { diagnosticUsage: { ...cacheUsage, output: 534 } } : {}),
   });
-  await persist({ runParams: pricedRunParams, modelId, usage: priced.usage });
   const messages = await transcriptMessages(target);
   expect(messages).toHaveLength(1);
   // One-hour cache writes bill at twice the input rate.
@@ -150,13 +154,12 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
         })
       : expect.objectContaining({ input: 10, output: 5, cacheRead: 100, cacheWrite: 0 }),
   );
-  expect(priced.costUsd).toEqual(turnTotal ? expect.closeTo(turnCost, 12) : undefined);
+  expect(costUsd).toEqual(turnTotal ? expect.closeTo(turnCost, 12) : undefined);
   // Known rates cannot make an unmeasured turn free; a measured zero turn still prices at $0.
-  const turn = async (usage?: { input: number }) =>
-    (await buildCliAssistantTranscriptUsage({ runParams: pricedRunParams, modelId, usage }))
-      .costUsd;
-  expect(turnTotal ? await turn() : undefined).toBeUndefined();
-  expect(turnTotal ? await turn({ input: 0 }) : 0).toBe(0);
+  expect(turnTotal ? await runTurn("", {}) : undefined).toBeUndefined();
+  expect(turnTotal ? await runTurn("", { usage: { input: 0 } }) : 0).toBe(0);
+  // Neither unmeasured turn adds a usage row.
+  expect(await transcriptMessages(target)).toHaveLength(1);
 });
 
 it.each([

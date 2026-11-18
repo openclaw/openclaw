@@ -36,13 +36,12 @@ import {
   settleCliPreparationError,
 } from "./cli-runner/cli-run-settlement.js";
 import {
-  buildCliAssistantTranscriptUsage,
   buildCliHookAssistantMessage,
   buildCliHookUserMessage,
   finalizeCliContextEngineTurn,
   persistApprovedCliUserTurnTranscript,
-  persistCliAssistantTranscript,
   persistCliRunBlock,
+  persistCliRunTranscript,
   resolveCliAssistantStopReason,
   runCliAgentEndHook,
 } from "./cli-runner/cli-run-transcript.js";
@@ -586,31 +585,23 @@ async function runPreparedCliAgentOwned(
                 },
               }
             : undefined;
-        const pricedUsage = await buildCliAssistantTranscriptUsage({
+        const assistantTranscript = await persistCliRunTranscript({
           runParams: params,
           modelId: context.modelId,
           agentDir: context.agentDir,
-          usage: output.usage,
-          turnUsage: output.diagnosticUsage,
-        });
-        const assistantTranscript = await persistCliAssistantTranscript({
-          runParams: params,
+          output,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
           text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
           ...(nativeFinal
             ? { nativeIdentity: nativeFinal.identity, interimReplies: output.interimNativeReplies }
             : {}),
-          modelId: context.modelId,
-          usage: pricedUsage.usage,
-          stopReason: resolveCliAssistantStopReason(output),
-          yielded: output.yielded,
         });
         const runResult = buildCliRunResult({
           ...resultContext,
           preparedContextAgentMeta: {
             ...resultContext.preparedContextAgentMeta,
-            ...(pricedUsage.costUsd !== undefined ? { costUsd: pricedUsage.costUsd } : {}),
+            ...assistantTranscript.agentMeta,
           },
           output,
           preparedReply,

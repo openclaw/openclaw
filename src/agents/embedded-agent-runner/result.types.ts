@@ -61,6 +61,8 @@ export type EmbeddedAgentMeta = {
   usage?: NormalizedUsage;
   /** Terminal cumulative usage for turn-level diagnostics and persisted CLI transcript accounting. */
   diagnosticUsage?: NormalizedUsage;
+  /** The CLI runner recorded this turn's usage on a hidden transcript row; fallbacks must not repeat it. */
+  usageRecorded?: true;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display

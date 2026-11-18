@@ -134,7 +134,7 @@ export async function persistApprovedCliUserTurnTranscript(
  * The counters carry the backend model's API-rate cost (via its `priceAs` provider), so a
  * subscription turn records what the API would charge instead of a $0 placeholder.
  */
-export async function buildCliAssistantTranscriptUsage(params: {
+async function buildCliAssistantTranscriptUsage(params: {
   runParams: Pick<RunCliAgentParams, "provider" | "config">;
   modelId: string;
   agentDir?: string;
@@ -184,6 +184,54 @@ function buildCliTranscriptCounters(
   return usage?.contextUsage ? { ...counters, contextUsage: usage.contextUsage } : counters;
 }
 
+/**
+ * Persists the turn's CLI assistant row with its priced usage. A turn that leaves no row (a
+ * silent or message-tool reply, or a room event) still records its measured usage once, on a
+ * hidden row, and reports that so the command fallback does not count it again.
+ */
+export async function persistCliRunTranscript(
+  params: Pick<
+    Parameters<typeof persistCliAssistantTranscript>[0],
+    "runParams" | "modelId" | "text" | "nativeIdentity" | "interimReplies"
+  > & { agentDir?: string; output: CliOutput },
+) {
+  const { output, agentDir, ...reply } = params;
+  const { runParams, modelId } = reply;
+  const priced = await buildCliAssistantTranscriptUsage({
+    runParams,
+    modelId,
+    agentDir,
+    usage: output.usage,
+    turnUsage: output.diagnosticUsage,
+  });
+  const usage = priced.usage;
+  const stopReason = resolveCliAssistantStopReason(output);
+  const transcript = await persistCliAssistantTranscript({
+    ...reply,
+    usage,
+    stopReason,
+    yielded: output.yielded,
+  });
+  // The usage row carries no native identity or held answers: it is not a reply.
+  const usageRow = transcript.idempotencyKey
+    ? undefined
+    : await persistCliAssistantTranscript({
+        runParams,
+        modelId,
+        text: "",
+        usage,
+        stopReason,
+        usageOnly: true,
+      });
+  return {
+    ...transcript,
+    agentMeta: {
+      ...(priced.costUsd !== undefined ? { costUsd: priced.costUsd } : {}),
+      ...(usageRow?.idempotencyKey ? { usageRecorded: true as const } : {}),
+    },
+  };
+}
+
 export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
@@ -197,20 +245,26 @@ export async function persistCliAssistantTranscript(params: {
   /** Held answers commit before the final run-owned row and retain their own retry identity. */
   interim?: true;
   interimReplies?: CliOutput["interimNativeReplies"];
+  /** A hidden, empty row that records measured usage for a turn with no CLI assistant row. */
+  usageOnly?: true;
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
 }> {
-  const { runParams } = params;
-  if (runParams.currentInboundEventKind === "room_event" || !params.text) {
+  const { runParams, usageOnly } = params;
+  const roomEvent = runParams.currentInboundEventKind === "room_event";
+  if (!usageOnly && (roomEvent || !params.text)) {
     const admission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
     return {
-      owned: runParams.currentInboundEventKind === "room_event",
+      owned: roomEvent,
       ...(admission ? { terminalAnchor: admission } : {}),
     };
   }
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
+    return { owned: false };
+  }
+  if (usageOnly && !params.usage?.totalTokens) {
     return { owned: false };
   }
   // Deduplicate the final answer by its transcript item key, not a session admission pin.
@@ -231,8 +285,10 @@ export async function persistCliAssistantTranscript(params: {
       stopReason: "stop",
     });
   }
-  const idempotencyKey =
-    params.interim && params.nativeIdentity
+  // The command fallback writes the same usage-only key, so the turn counts once.
+  const idempotencyKey = usageOnly
+    ? `cli-usage:${runParams.runId}`
+    : params.interim && params.nativeIdentity
       ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
       : cliAssistantItemId(runParams.runId);
   let committed = false;
@@ -259,7 +315,7 @@ export async function persistCliAssistantTranscript(params: {
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
             runId: runParams.runId,
-            hidden: runParams.privateCompletion === true,
+            hidden: runParams.privateCompletion === true || usageOnly === true,
             inputProvenance: runParams.inputProvenance,
             message: write.message,
           }),
@@ -268,7 +324,7 @@ export async function persistCliAssistantTranscript(params: {
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
               runId: runParams.runId,
-              hidden: runParams.privateCompletion === true,
+              hidden: runParams.privateCompletion === true || usageOnly === true,
               inputProvenance: runParams.inputProvenance,
               message,
             })
@@ -284,7 +340,7 @@ export async function persistCliAssistantTranscript(params: {
             provider: runParams.provider,
             id: params.modelId,
           },
-          content: [{ type: "text", text: params.text }],
+          content: usageOnly ? [] : [{ type: "text", text: params.text }],
           stopReason: params.stopReason,
           usage: params.usage ?? buildUsageWithNoCost({}),
         }),

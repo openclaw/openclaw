@@ -282,7 +282,13 @@ export async function persistCliTurnTranscript(
   const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
   const replyText = resolveCliTranscriptReplyText(result);
   const skipUserTurn = requestedSkipUserTurn === true;
-  const assistantUsageOnly = hasSourceReplyTranscriptMirrors(result);
+  // The runner already recorded this turn's usage on its own hidden row.
+  const usageRecorded = result.meta.agentMeta?.usageRecorded === true;
+  const usage = resolveCliTranscriptUsage(
+    result.meta.agentMeta?.lastCallUsage,
+    result.meta.agentMeta?.diagnosticUsage,
+  );
+  const assistantUsageOnly = hasSourceReplyTranscriptMirrors(result) && !usageRecorded;
 
   return await persistTextTurnTranscript({
     ...transcript,
@@ -301,10 +307,8 @@ export async function persistCliTurnTranscript(
       stopReason: "stop",
       // The marker is terminal for fallback scans: without it, readers could
       // skip this turn and revive an older cumulative usage record as fresh.
-      usage: resolveCliTranscriptUsage(
-        result.meta.agentMeta?.lastCallUsage,
-        result.meta.agentMeta?.diagnosticUsage,
-      ),
+      // A runner-recorded turn keeps only the marker here, so its counters stay on one row.
+      usage: usageRecorded ? { contextUsage: usage.contextUsage } : usage,
     },
   });
 }
