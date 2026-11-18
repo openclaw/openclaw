@@ -64,9 +64,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
         OPENCLAW_CHILD_OOM_SCORE_ADJ: "1",
       };
       const log = await import("../supervisor/supervisor-log.runtime.js");
-      const warning = vi
-        .spyOn(log, "warnProcessSupervisorSpawnFailure")
-        .mockImplementation(() => {});
+      const warning = vi.spyOn(log, "warnProcessSupervisorFailure").mockImplementation(() => {});
       const supervisor = createProcessSupervisor();
       try {
         for (let attempt = 0; attempt < 2; attempt++) {
