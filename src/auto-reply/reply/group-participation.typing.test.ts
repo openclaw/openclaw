@@ -4,7 +4,11 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   readGroupParticipationInputs,
   recordGroupParticipationInput,
@@ -152,6 +156,7 @@ it("keeps a fresh WhatsApp group input quiet while the decision is pending and a
   const decisionStarted = createDeferred();
   const releaseDecision = createDeferred();
   const previousRequests = fixture.requests.length;
+  const previousPartials = fixture.partials.length;
   const onReplyStart = vi.fn();
   decision.mockImplementation(async (batch) => {
     decisionStarted.resolve();
@@ -172,8 +177,40 @@ it("keeps a fresh WhatsApp group input quiet while the decision is pending and a
     releaseDecision.resolve();
     await reply;
   }
+  const result = await reply;
+  expect(
+    (Array.isArray(result) ? result : [result]).flatMap((payload) =>
+      payload?.text ? [payload.text] : [],
+    ),
+  ).toEqual([]);
+  expect(fixture.partials).toHaveLength(previousPartials);
   expect(onReplyStart).not.toHaveBeenCalled();
   expect(fixture.requests).toHaveLength(previousRequests);
+  const sessionKey = "agent:main:whatsapp:group:120363000000003@g.us";
+  const entry = await readSessionEntryInWorker({ storePath: fixture.storePath, sessionKey });
+  if (!entry) {
+    throw new Error("The reply flow did not create its session");
+  }
+  expect(entry.status).toBe("done");
+  expect(entry.lifecycleRunId).toBeUndefined();
+  const events = await loadTranscriptEvents({
+    agentId: "main",
+    sessionId: entry.sessionId,
+    sessionKey,
+    storePath: fixture.storePath,
+  });
+  expect(
+    events.some(
+      (event) =>
+        isIndexedSessionEntry(event) &&
+        event.type === "message" &&
+        event.message.role === "user" &&
+        extractTextFromChatContent(event.message.content, {
+          joinWith: "\n",
+          normalizeText: (text) => text,
+        })?.includes("Bob, see you at lunch."),
+    ),
+  ).toBe(true);
 });
 
 it.for([undefined, "never"] as const)(

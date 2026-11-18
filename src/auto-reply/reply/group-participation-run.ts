@@ -6,36 +6,26 @@ import {
   createRuntimeConfigReader,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
+  selectLiveRuntimeConfig,
 } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
-import type { DecisionRuntimeV1 } from "../../decisions/types.js";
+import type { DecisionRuntimeV1 } from "../../decisions/runtime-types.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
-import type { InternalFollowupRun } from "./agent-runner-execution.types.js";
 import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
-import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { readGroupParticipationEvidence } from "./group-participation-context.js";
-import {
-  assessGroupAttention,
-  type GroupParticipationConcern,
-  type GroupParticipationEvidence,
-} from "./group-participation-decisions.js";
+import { assessGroupAttention } from "./group-participation-decisions.js";
 import {
   readGroupParticipationInputs,
   recordGroupParticipationInput,
 } from "./group-participation-inputs.js";
+import type { InternalFollowupRun } from "./queue/types.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
-import { readSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
+import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
 
-type GroupParticipationMode = "ordinary" | "observe" | "engagement" | "opportunity";
-type GroupParticipationSnapshot = {
-  revision: number;
-  evidence: GroupParticipationEvidence;
-  concerns: GroupParticipationConcern[];
-};
+type GroupParticipationMode = "ordinary" | "observe" | "reply";
 
 export type GroupParticipationRun = ReturnType<typeof createGroupParticipationRun>;
 const runs = new WeakMap<ReplyOperation, GroupParticipationRun>();
@@ -45,16 +35,13 @@ function createGroupParticipationRun(params: {
   operation: ReplyOperation;
   target: SessionTranscriptRuntimeTarget;
   recorder: UserTurnTranscriptRecorder;
-  onOrdinaryBehavior?: () => Promise<void>;
 }) {
   const { operation, target } = params;
   const run = params.run();
   const originalExpectation = run.run.terminalReplyExpectation;
-  const originalDeliveryMode = run.run.sourceReplyDeliveryMode ?? "automatic";
   let mode: GroupParticipationMode = "ordinary";
-  let snapshot: GroupParticipationSnapshot | undefined;
+  let assessedRevision: number | undefined;
   let live = true;
-  let ordinaryRestoration: Promise<void> | undefined;
   const readConfig = createRuntimeConfigReader(run.run.config);
   const currentSelection = () => {
     const config = readConfig();
@@ -76,7 +63,16 @@ function createGroupParticipationRun(params: {
       if (!selection || selection !== currentSelection()) {
         return { status: "unavailable", reason: "disabled" };
       }
-      return evaluateDecision(batch, options);
+      const admittedSelection = selection;
+      return evaluateDecision(batch, {
+        ...options,
+        // The shared runtime carries this live owner check through provider
+        // preparation to guarded HTTP dispatch and answer acceptance.
+        admit: () => {
+          assertCurrent();
+          return admittedSelection === currentSelection();
+        },
+      });
     },
   };
   void operation.ownerSettlement?.then(() => {
@@ -96,8 +92,7 @@ function createGroupParticipationRun(params: {
   };
   const applyExpectation = () => {
     const current = params.run();
-    current.run.terminalReplyExpectation =
-      mode === "observe" || mode === "opportunity" ? "optional" : originalExpectation;
+    current.run.terminalReplyExpectation = mode === "observe" ? "optional" : originalExpectation;
     for (const state of current.replyOperationRunStates ?? []) {
       state.replyCompletion = resolveReplyCompletion(
         current.run.terminalReplyExpectation ?? "required",
@@ -105,30 +100,24 @@ function createGroupParticipationRun(params: {
       );
     }
   };
-  const restoreOrdinaryBehavior = async () => {
-    const current = params.run().run;
-    readSourceReplyDeliveryRuntime(current)?.applyPreparedMode(current, originalDeliveryMode);
-    ordinaryRestoration ??= params.onOrdinaryBehavior?.();
-    await ordinaryRestoration;
-    assertCurrent();
-  };
-  const useOrdinaryBehavior = async () => {
-    const wasPrivate = mode === "observe" || mode === "opportunity";
+  const useOrdinaryBehavior = () => {
     mode = "ordinary";
     applyExpectation();
-    if (wasPrivate || ordinaryRestoration) {
-      await restoreOrdinaryBehavior();
-    }
+    assertCurrent();
   };
-  const refresh = async (): Promise<GroupParticipationSnapshot | undefined> => {
+  const refresh = async (): Promise<void> => {
     for (;;) {
       assertCurrent();
       selection = currentSelection();
       if (!selection || performance.now() >= deadline) {
-        await useOrdinaryBehavior();
-        return undefined;
+        useOrdinaryBehavior();
+        return;
       }
       const inputs = readGroupParticipationInputs(operation);
+      if (inputs.requiresOrdinaryBehavior) {
+        useOrdinaryBehavior();
+        return;
+      }
       const evidence = await readGroupParticipationEvidence({
         agentId: target.agentId,
         agentName: run.groupParticipation?.agentName,
@@ -139,15 +128,20 @@ function createGroupParticipationRun(params: {
         acceptedInputs: inputs.sources,
         adoptedRecorders: inputs.adoptedRecorders,
         signal: operation.abortSignal,
+        timeoutMs: deadline - performance.now(),
       });
       assertCurrent();
       if (selection !== currentSelection()) {
         continue;
       }
+      if (!evidence) {
+        useOrdinaryBehavior();
+        return;
+      }
       const remaining = deadline - performance.now();
       if (remaining <= 0) {
-        await useOrdinaryBehavior();
-        return undefined;
+        useOrdinaryBehavior();
+        return;
       }
       const attention = await assessGroupAttention(runtime, evidence, {
         signal: operation.abortSignal,
@@ -158,70 +152,33 @@ function createGroupParticipationRun(params: {
         continue;
       }
       if (attention.status === "unavailable") {
-        await useOrdinaryBehavior();
-        return undefined;
+        useOrdinaryBehavior();
+        return;
       }
       if (readGroupParticipationInputs(operation).revision !== inputs.revision) {
         continue;
       }
-      snapshot = { revision: inputs.revision, evidence, concerns: attention.concerns };
-      const wasPrivate = mode === "observe" || mode === "opportunity";
-      mode = attention.concerns.some(
-        (item) =>
-          item.reason === "engagement" &&
-          evidence.messages.some(
-            (message) => message.id === item.messageId && message.admission === "current",
-          ),
-      )
-        ? "engagement"
-        : attention.concerns.length
-          ? "opportunity"
-          : "observe";
+      assessedRevision = inputs.revision;
+      mode = attention.shouldReply ? "reply" : "observe";
       applyExpectation();
-      if (mode === "engagement" && wasPrivate) {
-        await restoreOrdinaryBehavior();
-      }
-      return snapshot;
+      return;
     }
   };
-  const isCurrent = (revision: number) =>
+  const isCurrent = () =>
+    assessedRevision !== undefined &&
     selection !== undefined &&
     selection === currentSelection() &&
-    readGroupParticipationInputs(operation).revision === revision;
+    readGroupParticipationInputs(operation).revision === assessedRevision;
   return {
     get mode() {
       return mode;
     },
-    get snapshot() {
-      return snapshot;
+    get isObserving() {
+      return mode === "observe";
     },
-    get isPrivate() {
-      return mode === "observe" || mode === "opportunity";
-    },
-    get ordinaryReplyExpectation() {
-      return originalExpectation;
-    },
-    runtime,
-    timeoutMs,
     refresh,
     useOrdinaryBehavior,
     isCurrent,
-    publicationAuthority: (revision: number) => {
-      assertCurrent();
-      if (!isCurrent(revision)) {
-        return undefined;
-      }
-      const approvedSelection = selection;
-      return {
-        recoveryMode: "reconcile-only" as const,
-        assertCurrent: () => {
-          assertCurrent();
-          if (approvedSelection !== selection || !isCurrent(revision)) {
-            throw new Error("The group participation approval is no longer current");
-          }
-        },
-      };
-    },
   };
 }
 
@@ -232,7 +189,6 @@ export async function prepareGroupParticipationRun(params: {
   sessionKey?: string;
   storePath?: string;
   sessionEntry?: SessionEntry;
-  onOrdinaryBehavior?: () => Promise<void>;
 }): Promise<GroupParticipationRun | undefined> {
   const { operation } = params;
   const run = params.run();
@@ -253,7 +209,7 @@ export async function prepareGroupParticipationRun(params: {
     entry: params.sessionEntry,
     sessionKey: params.sessionKey,
   });
-  const config = resolveQueuedReplyRuntimeConfig(executionRun.config);
+  const config = selectLiveRuntimeConfig(executionRun.config);
   if (!isDecisionAssistanceEligible(config, run.run.agentId)) {
     return undefined;
   }
@@ -278,7 +234,6 @@ export async function prepareGroupParticipationRun(params: {
     run: params.run,
     operation,
     recorder: run.userTurnTranscriptRecorder,
-    onOrdinaryBehavior: params.onOrdinaryBehavior,
     target: {
       agentId: run.run.agentId,
       sessionId: operation.sessionId,

@@ -31,11 +31,7 @@ import {
 } from "./pending-final-delivery.js";
 import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import type {
-  UnexecutedReplyTurnCompletion,
-  PendingReplyDelivery,
-} from "./reply-input-admission.js";
+import type { PendingReplyDelivery } from "./reply-input-admission.js";
 import {
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
@@ -44,6 +40,10 @@ import {
   recordReplyOperationAgentTurn,
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import type {
+  AdmittedFollowupTurn,
+  UnexecutedReplyTurnCompletion,
+} from "./reply-turn-admission.types.js";
 import { buildStalledTurnRecoveryRun, STALLED_TURN_GUIDANCE } from "./stalled-turn-recovery.js";
 
 export function prependCompactionNotices(

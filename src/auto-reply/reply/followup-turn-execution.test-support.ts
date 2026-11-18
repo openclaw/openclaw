@@ -1,18 +1,25 @@
 import assert from "node:assert/strict";
 import { vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-turn-admission.types.js";
 import { createMockReplyOperation, createMockTypingController } from "./test-helpers.js";
 
 const followupTurnTestState = vi.hoisted(() => ({
   execute: vi.fn(),
 }));
 
-vi.mock("./agent-runner-execution.js", () => ({
-  executeAgentTurn: (...args: unknown[]) => followupTurnTestState.execute(...args),
-}));
+vi.mock("./agent-runner-execution.js", async () => {
+  const { runAgentTurnWithOutcome } = await import("./agent-runner-execution-outcome.js");
+  return {
+    executeAgentTurn: (params: AgentTurnParams) =>
+      runAgentTurnWithOutcome(params, params.admittedTurn?.runId ?? "run-1", () =>
+        followupTurnTestState.execute(params),
+      ),
+  };
+});
 
 // mock-isolation: Forward the real persistence owners without loading the unrelated accessor barrel graph.
 vi.mock("../../config/sessions/session-accessor.js", async () => {

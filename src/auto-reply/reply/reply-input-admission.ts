@@ -22,13 +22,10 @@ import {
 } from "../../sessions/session-controller.state.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
-import type { RunReplyAgentParams } from "./agent-runner-core.js";
+import type { InternalFollowupRun } from "./queue/types.js";
 import { readReplyAdmissionSession } from "./reply-input-placement.js";
 import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
-
-export type UnexecutedReplyTurnCompletion =
-  | { kind: "observed" }
-  | { kind: "failed"; error: unknown };
+import type { UnexecutedReplyTurnCompletion } from "./reply-turn-admission.types.js";
 
 export type PendingReplyDelivery = {
   context?: DeliveryContext;
@@ -39,7 +36,7 @@ export type PendingReplyDelivery = {
 
 /** Transfers accepted input and its running identity in one transcript transaction. */
 export function createReplyInputAdmission(params: {
-  followupRun: RunReplyAgentParams["followupRun"];
+  followupRun: InternalFollowupRun;
   replyOperation: ReplyOperation;
   runId: string;
   sessionKey?: string;
