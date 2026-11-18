@@ -17,6 +17,8 @@ OpenClaw can use [Firecrawl](https://www.firecrawl.dev/) in three ways:
 
 It is a hosted extraction/search service that supports bot circumvention and caching, which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
+Firecrawl also gives agents data from many providers through [Firecrawl Alexandria](https://alexandria.firecrawl.dev/).
+
 ## Install plugin
 
 Install the official plugin:
