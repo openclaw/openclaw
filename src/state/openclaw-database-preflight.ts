@@ -357,6 +357,15 @@ export async function preflightOpenClawDatabaseSchemas(
         Object.assign(result, inspection.schemas);
         Object.assign(stateMetrics, inspection.startupMetrics);
         stateInspectionErrors.push(...inspection.inspectionErrors);
+        inspection.schemas.indeterminate.forEach((row, index) => {
+          const error = inspection.inspectionErrors[index];
+          indeterminateCauses.set(
+            row,
+            options.requireStartupMigrationReadiness
+              ? schemaRead.annotateStartupStateInspectionFailure(error, statePath, options.signal)
+              : error,
+          );
+        });
         if (
           startup &&
           inspection.inspectionErrors.length === 0 &&
