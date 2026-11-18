@@ -18,6 +18,18 @@ or P0/P1 discovery below. Use local evidence when access is unavailable.
 
 ## Select by release track
 
+All release channels backport applicable release-tooling and validation changes,
+regardless of P0/P1/P2 severity: workflows, release scripts, release tests,
+qualification harnesses, release policy, and release-skill guidance. These are
+not subject to the product-hotfix thresholds below or to shipped-package filters.
+Use the shared [release-process improvement rules](../SKILL.md#shared-release-boundaries)
+for branch backports and independently pinned Q/P tooling; preserve intake
+approval, frozen-candidate identity, and required requalification.
+
+The required [bundled Codex update](preparation.md#update-and-pin-bundled-codex-required) is not subject to these optional hotfix thresholds.
+
+For product hotfixes:
+
 - **Extended-stable:** generally take only P0 and P1 hotfixes.
 - **Stable:** also consider significant P2 fixes that are easy to port.
 - **Beta:** allow a broader P2 set when fixes are reasonably small, portable,

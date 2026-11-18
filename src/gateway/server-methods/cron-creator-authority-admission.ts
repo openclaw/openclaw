@@ -7,7 +7,11 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
-import { CRON_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
+import {
+  CRON_SCOPE,
+  hasGatewayAdminScope,
+  resolveGatewayUiAdminSource,
+} from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -66,6 +70,7 @@ function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean
 
 function resolveDirectOperatorAuthority(
   params: DirectOperatorAuthorityParams,
+  callerScopedOnly = false,
 ): GatewayCronCreatorAuthorityAdmission | undefined {
   const internal = params.client?.internal;
   const runId = params.runId.trim();
@@ -74,10 +79,12 @@ function resolveDirectOperatorAuthority(
     // A new user admission replaces pending task authority, including for a non-admin caller.
     revokeRequesterCronAuthority(params.resolvedSessionKey);
   }
+  const adminSource = resolveGatewayUiAdminSource(params.client);
   const isDirectOperator =
+    !callerScopedOnly &&
     isDirectTurn &&
     hasGatewayAdminScope(params.client) &&
-    (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
+    (internal?.isLocalClient === true || adminSource !== undefined);
   const isScopedOperator =
     isDirectTurn && operatorScopeSatisfied(CRON_SCOPE, params.client?.connect.scopes ?? []);
   return isDirectOperator || isScopedOperator
@@ -88,8 +95,12 @@ function resolveDirectOperatorAuthority(
           isDirectOperator && internal?.isLocalClient === true
             ? { kind: "local" as const }
             : { kind: "unknown" as const },
-        ...(isDirectOperator && internal?.controlUiAdmin === true
-          ? { managementEntitlement: { source: "control-ui-admin" as const } }
+        ...(isDirectOperator && adminSource !== undefined
+          ? {
+              managementEntitlement: {
+                source: adminSource,
+              },
+            }
           : {}),
         ...(!isDirectOperator || internal?.isLocalClient !== true
           ? { callerScopedCreation: true as const }
@@ -99,7 +110,7 @@ function resolveDirectOperatorAuthority(
     : undefined;
 }
 
-/** Admits scoped scheduling separately from local-owner and Control UI admin management. */
+/** Admits scoped scheduling separately from local-owner and authenticated UI admin management. */
 export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   runId: string;
   resolvedSessionKey?: string;
@@ -192,6 +203,7 @@ export function prepareGatewayCronCreatorAuthorityAdmission(
 }
 
 type GatewayChatUserTurn = {
+  isUncontrolledDashboardChild?: boolean;
   runId: string;
   resolvedSessionKey?: string;
   spawnedBy?: string;
@@ -224,11 +236,20 @@ export function isDirectGatewayChatUserTurn(params: GatewayChatUserTurn): boolea
 export function resolveGatewayChatCronCreatorAuthorityAdmission(
   params: GatewayChatUserTurn,
 ): GatewayCronCreatorAuthorityAdmission | undefined {
-  return resolveDirectOperatorAuthority({
-    ...params,
-    disallowed:
-      params.isIncognito || params.isReconnectResume || !isDirectGatewayChatUserTurn(params),
-  });
+  // A completed spawn is session history, not the sender of fresh Control UI input.
+  // Restore only the caller's own scheduling scope, never local or global management.
+  const childFollowup =
+    params.isUncontrolledDashboardChild === true &&
+    params.client?.internal?.authenticatedControlUi === true;
+  const source = childFollowup ? { ...params, spawnedBy: undefined } : params;
+  return resolveDirectOperatorAuthority(
+    {
+      ...source,
+      disallowed:
+        source.isIncognito || source.isReconnectResume || !isDirectGatewayChatUserTurn(source),
+    },
+    childFollowup,
+  );
 }
 
 /** Template Add is an administrator action; its hidden continuation is not fresh user ingress. */

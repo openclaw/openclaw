@@ -349,6 +349,7 @@ it("reads the bound instance's lifetime cost, flagging lower bounds and unpriced
     totalCost,
     missingCostEntries,
     input: 1_000,
+    output: 200,
     cacheRead: 3_000,
     cacheWrite: 0,
   });
@@ -370,6 +371,8 @@ it("reads the bound instance's lifetime cost, flagging lower bounds and unpriced
     partial: false,
     unpriced: false,
     cacheHitRate: 0.75,
+    input: 1_000,
+    output: 200,
   });
   // The whole history, not today's calendar window, makes up the session total.
   expect(request).toHaveBeenCalledWith(

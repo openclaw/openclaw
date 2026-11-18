@@ -127,6 +127,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
       const assistant = makeCliUsageAssistant("stop");
       const attempt = makeAttempt(
         {
+          pressure: "overflow",
           route: continues ? "truncate_tool_results_only" : "compact_only",
           handled: true,
           ...(continues ? { source: "mid-turn" as const } : {}),

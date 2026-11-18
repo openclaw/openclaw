@@ -132,20 +132,20 @@ without passing a new option. The watchdog includes migration, listener, and hea
 phases; phase changes cannot extend its cap. Explicit readiness budgets supplied
 by newer update callers take precedence.
 
-Ordinary standalone restarts renew their standard readiness window when the
-replacement acquires its listener, supplies its identity, reports a new `/startupz`
-phase through its own listener, or acquires, renews, or completes an observed
-same-process migration. Repeated startup phases and phases from another process
-do not renew the window. The wait remains capped at five minutes; explicit
+Ordinary standalone restarts keep waiting while the replacement process the
+service manager started is still running before its listener opens, for example
+during a state upgrade or plugin loading. After that, they renew their standard
+readiness window when the replacement acquires its listener, supplies its
+identity, or reports a new `/startupz` phase through its own listener. Repeated
+startup phases, phases from another process, and a supervisor's next process do
+not renew the window. The wait remains capped at five minutes; explicit
 readiness deadlines still take precedence.
 
 A running Gateway whose readiness remains unverified is reported as `still-starting`
 (exit 2) when it still owns startup, with the last phase and
 `openclaw gateway status --deep` as the next step. A stopped replacement or a
 definite health or identity failure exits 1; verified readiness succeeds with exit 0.
-A newly observed migration lease gets one heartbeat interval plus polling grace
-before it is considered stalled, and its observed completion earns one fresh
-readiness window within the same cap. See [Restart recovery](/gateway/restart-recovery).
+See [Restart recovery](/gateway/restart-recovery).
 
 On Windows, managed `gateway start` and `gateway restart` allow up to 90 minutes
 for cold startup, using three default update-step budgets for activation, loading,

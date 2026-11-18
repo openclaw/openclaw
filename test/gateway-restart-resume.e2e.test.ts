@@ -10,6 +10,7 @@ import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../src/config/sessions/session-accessor.sqlite-entry-replace.js";
 import { readSessionEntrySummariesInWorker } from "../src/config/sessions/session-entry-read-runtime.js";
+import { readSessionQueuedInputPage } from "../src/config/sessions/session-pending-input-history.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
@@ -48,7 +49,7 @@ const childMarker = (cycle: number) => `RESTART_CHILD_${cycle}`;
 const queued = (cycle: number, ordinal: number) => `QUEUED_BEFORE_RESTART_${cycle}_${ordinal}`;
 const LITERAL_QUEUED_COMMAND = "/stop";
 const fresh = (cycle: number) => `FRESH_AFTER_RESTART_${cycle}`;
-const CRASH_QUEUED = "QUEUED_BEFORE_SIGKILL_MUST_REMAIN_INERT";
+const CRASH_QUEUED = "QUEUED_BEFORE_RESTART_2_0";
 const AFTER_CRASH = "FRESH_AFTER_CRASH_WORKS";
 const WARMUP = "COMPACTION_HISTORY_TO_SUMMARIZE";
 
@@ -97,7 +98,7 @@ async function providerFixture(signal: AbortSignal) {
     resumeInput: boolean;
     ordinal: number;
   }> = [];
-  const summaries: Array<{ cycle: number; ordinal: number }> = [];
+  const summaries: Array<{ cycle: number; name: Case; ordinal: number }> = [];
   const issued = new Set<string>();
   const heldResumes = new Map<number, { response: ServerResponse; ordinal: number }>();
   let finalizer: ServerResponse | undefined;
@@ -151,11 +152,14 @@ async function providerFixture(signal: AbortSignal) {
           };
           const tools = restartToolNames(body);
           if (JSON.stringify(body).includes("You are a context summarization assistant.")) {
-            const cycle = Number(/RESTART_CASE_(\d+)_compact/.exec(input)?.[1]);
+            const match = /RESTART_CASE_(\d+)_(\w+)/.exec(input);
+            const name = CASES.find((candidate) => candidate === match?.[2]);
+            assert(name, `Unexpected synthetic summary input: ${input}`);
+            const cycle = Number(match?.[1]);
             expect(Number.isFinite(cycle)).toBe(true);
-            summaries.push({ cycle, ordinal: requestOrdinal });
+            summaries.push({ cycle, name, ordinal: requestOrdinal });
             text(
-              `## Goal\nContinue ${marker(cycle, "compact")}.\n## Progress\nThe warmup finished. Check current state and finish the pending work.\n## Next Steps\nRead the current session inventory and finish.`,
+              `## Goal\nContinue ${marker(cycle, name)}.\n## Progress\nCheck current state and finish the pending work.\n## Next Steps\nRead the current session inventory and finish.`,
             );
             return;
           }
@@ -653,7 +657,7 @@ it.skipIf(process.platform === "win32")(
         assert(child?.pid, "Owned Gateway process unavailable");
         const closed = once(child, "close");
         provider.restart();
-        expect(child.kill("SIGTERM")).toBe(true);
+        expect(process.kill(child.pid, "SIGTERM")).toBe(true);
         expect(await withinTest(closed, signal), instance.logs()).toEqual([0, null]);
         assert(client, "Healthy sibling client unavailable after marking");
         await client.close();
@@ -805,7 +809,18 @@ it.skipIf(process.platform === "win32")(
             storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
           })
         ).find((row) => row.sessionKey === sessionKey)?.entry;
-        expect(marked?.resumeAfterRestart?.queuedInputIds).toHaveLength(1);
+        expect(marked?.resumeAfterRestart).toBeDefined();
+        assert(marked, "Interrupted session must retain its restart marker");
+        const pending = await readSessionQueuedInputPage({
+          agentId: "other",
+          env: instance.env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+          sessionKey,
+          sessionId: marked.sessionId,
+        });
+        expect(pending.rows.map((row) => row.message_json)).toEqual([
+          expect.stringContaining(queued(2, 1)),
+        ]);
         // The recorded source keeps the connection's own scopes; restart grants no more.
         expect(marked?.operatorSources?.[self.profile.id]?.scopes).toEqual(scopes);
         await closeOpenClawAgentDatabasesAsync();
@@ -1335,7 +1350,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
           expect(children.sessions[0]?.hasActiveRun).toBe(false);
           expect(["queued", "running", "interrupted"]).not.toContain(children.sessions[0]?.status);
           if (cycle === 1) {
-            const summary = provider.summaries.find((request) => request.cycle === cycle);
+            const summary = provider.summaries.find(
+              (request) => request.cycle === cycle && request.name === "compact",
+            );
             const resume = provider.calls.find(
               (request) =>
                 request.cycle === cycle && request.name === "compact" && request.resumeInput,
@@ -1360,7 +1377,18 @@ it.skipIf(process.platform === "win32").for([true, false])(
         provider.release(2);
         await waitFinal(crashKey, "RESUMED_2_stream");
         await send(crashKey, AFTER_CRASH);
+        await waitFinal(crashKey, `HANDLED_${CRASH_QUEUED}`);
         await waitFinal(crashKey, `HANDLED_${AFTER_CRASH}`);
+        const crashInputs = provider.calls
+          .filter((call) => call.cycle === 2 && call.name === "stream")
+          .map((call) => call.current);
+        const crashQueuedIndex = crashInputs.findIndex((input) => input.includes(CRASH_QUEUED));
+        expect(crashQueuedIndex).toBeGreaterThan(
+          crashInputs.findIndex((input) => input.includes(RESUME)),
+        );
+        expect(crashInputs.findIndex((input) => input.includes(AFTER_CRASH))).toBeGreaterThan(
+          crashQueuedIndex,
+        );
         expect(
           provider.calls.filter((call) => call.cycle === 2 && call.current.includes(RESUME)),
         ).toHaveLength(1);
@@ -1389,7 +1417,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await waitProvider("resume:2:stream");
         provider.release(2);
         await waitFinal(crashKey, `HANDLED_${queued(2, 1)}`);
-        expect(provider.calls.some((call) => call.current.includes(CRASH_QUEUED))).toBe(false);
+        expect(
+          provider.calls.filter((call) => call.cycle === 2 && call.current.includes(CRASH_QUEUED)),
+        ).toHaveLength(1);
       },
       () => client?.stopAndWait(),
       provider.releaseFinalizer,

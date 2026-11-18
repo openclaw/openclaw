@@ -964,8 +964,7 @@ openclaw-pending-session-create {
 }
 
 .context-usage__header,
-.context-usage__actions,
-.context-usage__latest {
+.context-usage__actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1042,37 +1041,34 @@ openclaw-pending-session-create {
   margin: 10px 0;
   background: var(--details-separator);
 }
-.context-usage__latest {
-  flex-wrap: wrap;
-  gap: 4px 8px;
-  min-height: 26px;
+/* Usage table: label, then right-aligned Cache and Cost columns shared by every row. */
+.context-usage__usage {
+  display: grid;
+  gap: 4px 16px;
+  align-items: baseline;
   color: var(--muted);
   font-size: 12px;
+  white-space: nowrap;
 }
-.context-usage__stats {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  margin: 0 0 0 auto;
-  font-size: 12px;
-  div {
-    display: inline-flex;
-    align-items: baseline;
-    gap: 3px;
+.context-usage__usage-row {
+  display: contents;
+  > :not(:first-child) {
+    text-align: right;
   }
-  div:not(:last-child)::after {
-    margin: 0 6px;
-    color: color-mix(in srgb, var(--muted) 50%, transparent);
-    content: "·";
-  }
-  dt {
-    color: var(--muted);
-  }
-  dd {
-    margin: 0;
+  b {
     color: var(--text);
     font-weight: 650;
   }
+}
+.context-usage__usage-head > * {
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.context-usage__stats {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 .context-usage__tray {
   --tray: color-mix(in oklab, var(--text) 3.5%, var(--bg-elevated));

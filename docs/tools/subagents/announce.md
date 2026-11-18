@@ -51,6 +51,9 @@ timeout, preparation invalidation and other retryable refusals keep the wake pen
 with its last error, and the sweeper wakes it again. There is no attempt limit,
 retry ladder or expiry. A permanent refusal withholds the result with that error;
 it stays readable in the child session and is not dispatched again.
+A requester bound to a removed managed worktree is a permanent refusal and needs
+an explicit worktree restore before it can accept new work. An in-progress removal
+is transient and keeps the wake pending.
 Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
@@ -62,9 +65,11 @@ By default, delivery depends on requester depth:
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
-Completion follow-up turns retain the requester's authority, including
-session-scoped write access. Gateway admission still checks access to the selected
-requester session; a child completion does not grant global write access.
+Completion follow-up turns retain live operator-source custody when available.
+A batch uses that custody only when every member has the same live source and
+permission ceiling. Missing, revoked, or mixed custody uses the System write-only
+baseline instead; it does not refuse the result or borrow a sibling's permissions.
+Gateway admission still checks access to the selected requester session.
 
 Model fallback and other model-routing updates do not invalidate prepared
 completion or child follow-up authority. Changes to session identity, lifecycle,
@@ -104,13 +109,16 @@ limited to the current message or thread; inline reply and audio directives rema
 restricted. See [message tool access](/tools#configure-access-and-approvals).
 
 After `sessions_yield`, the frozen batch waits for its own children and their
-descendants to settle. A still-running child from an earlier requester turn does
-not delay that batch's result; the earlier batch retains its own completion wake.
+descendants to settle. Children paused to wait for a message remain resumable and
+retain their completion wake, while the batch offers its ready results. A
+still-running child from an earlier requester turn does not delay that batch's
+result; the earlier batch retains its own completion wake.
 
-Private results are addressed to the requester chat by its session key. If a new
+Private results are addressed to the current requester chat by its recorded agent
+and session key, regardless of the session store path recorded at spawn. If a new
 session, a reset or a compaction successor replaces the chat's session before the
-batch can deliver, the results go to the chat as it is now, as private input. A
-deleted chat drops them. A full reset also cancels the chat's unfinished children
+batch can deliver, the results go to the chat as it is now, as private input.
+A deleted chat drops them. A full reset also cancels the chat's unfinished children
 (see [Reset a conversation](/tools/subagents/nesting#reset-a-conversation)).
 
 Completion and settle run IDs stay within the 256-character execution-identity
@@ -135,8 +143,12 @@ A required parent completion that permanently fails also records a visible failu
 notice in the original requester conversation, without starting another agent turn.
 The notice goes to the requester chat as it is now, also after a reset; a deleted requester gets none.
 A confirmed handoff remains delivered even if its receipt
-callback fails; cleanup must not replay an already consumed result. Failures before
+callback fails; cleanup must not replay an already consumed result. A completion
+steered into the requester's active run counts as delivered once the steer commits,
+even if its delivery owner changes afterward. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
+A temporary Gateway access-policy outage refuses only the current delivery attempt:
+the result stays owed and the next lifecycle event retries it.
 
 Restart checkpoint reconciliation retains the confirmed delivery evidence before
 clearing the active recovery claim. Delivered replies, intentionally suppressed
@@ -232,11 +244,11 @@ reads or later mutations. Pending delivery, suspended delivery, cancellation, an
 yielded work keep their payloads until those obligations settle.
 
 Restart recovery includes finished results whose requester has already settled,
-even when that requester has no interrupted-run marker. Retired process authority
-alone does not mean the requester or its store was replaced. Retryable delivery
-is not eligible for completed-run retention cleanup. Existing wakes resume through
-startup recovery under fresh requester authority. An older build may already have
-removed a wake and suppressed completion delivery while leaving a retryable label.
+even when that requester has no interrupted-run marker. Lost process-local custody
+does not block delivery: recovery uses the System baseline when no live same-source
+custody remains. Retryable delivery is not eligible for completed-run retention
+cleanup. Existing wakes resume through startup recovery. An older build may already
+have removed a wake and suppressed completion delivery while leaving a retryable label.
 Upgrading does not recreate that retired wake or replay its possibly consumed input;
 those results require explicit recovery. Permanently suspended deliveries also stay
 suspended.

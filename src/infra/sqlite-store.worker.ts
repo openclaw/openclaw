@@ -87,6 +87,7 @@ type StagedInput = {
   receiver: ReturnType<typeof createSqliteWorkerTransferReceiver>;
   command: unknown;
   timing: SqliteWorkerRequest["timing"];
+  transferredInput?: SqliteWorkerRequest["transferredInput"];
 };
 let pendingInput: StagedInput | undefined;
 const stateContexts = new Map<number, SqliteWorkerStateContext>();
@@ -241,7 +242,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         stateContexts.set(request.actor, request.stateContext);
       }
     }
-    const executeCommand = async (command: unknown) => {
+    const executeCommand = async (
+      command: unknown,
+      transferredInput = request.transferredInput,
+    ) => {
       if (timing) {
         timing.inputReady = performance.now();
       }
@@ -252,6 +256,12 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       const { backend } = actor;
       // SAFETY: The broker serialized a command from this actor's typed store contract.
       const typedCommand = command as SqliteWorkerCommand<SqliteWorkerOperations>;
+      if (transferredInput) {
+        if (!isRecord(typedCommand.input)) {
+          throw new Error("Transferred SQLite input requires an object command input");
+        }
+        Object.assign(typedCommand.input, transferredInput);
+      }
       return withSqliteReaderOwner(
         { operation: typedCommand.type, ownerKind: "worker", actorId: request.actor },
         async () => {
@@ -415,6 +425,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         actor: request.actor,
         timing,
         command: undefined,
+        transferredInput: request.transferredInput,
         receiver: createSqliteWorkerTransferReceiver(request.transfer, (record) => {
           input.command = record.value;
         }),
@@ -437,7 +448,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         pendingInput = undefined;
         retire = false;
-        await executeCommand(input.command);
+        await executeCommand(input.command, input.transferredInput);
       } else {
         inputNext = true;
         retire = false;

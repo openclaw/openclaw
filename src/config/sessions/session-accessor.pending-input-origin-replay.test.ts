@@ -16,7 +16,7 @@ const fixture = useTempSessionsFixture("pending-input-origin-replay-");
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {
   for (const receipt of receipts.splice(0)) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
     await receipt.settled?.();
   }
   await closeOpenClawAgentDatabasesAsync();
@@ -78,7 +78,7 @@ it("preserves pre-normalization requester hashes without reviving unfinished inp
     if (completed) {
       await first.completeAsync!(outcome);
     }
-    first.finish("interrupted");
+    first.finish("interrupted", "failed");
     await first.settled?.();
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
@@ -101,7 +101,7 @@ it("preserves pre-normalization requester hashes without reviving unfinished inp
     const replay = await stage();
     expect(replay).toMatchObject({ state: "consumed", completion: outcome });
     expect(() => replay.run(() => {})).toThrow("already completed");
-    replay.finish("interrupted");
+    replay.finish("interrupted", "failed");
     await replay.settled?.();
   }
 });

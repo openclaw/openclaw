@@ -311,6 +311,7 @@ jobs:
             /src/
             /packages/
             /patches/
+            /test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts
             /extensions/*/package.json
             /examples/*/package.json
             /ui/package.json

@@ -119,7 +119,8 @@ export function buildAgentHookContextIdentityFields(params: {
   senderId?: string | null;
   chatId?: string | null;
   channelContext?: PluginHookChannelContext;
-}): Pick<PluginHookAgentContext, "senderId" | "chatId" | "channelContext"> {
+  approvalReviewerDeviceId?: string | null;
+}): Pick<PluginHookAgentContext, "senderId" | "chatId" | "channelContext" | "requesterDeviceId"> {
   const trigger = normalizeOptionalString(params.trigger);
   if (trigger && trigger !== "user") {
     return {};
@@ -127,6 +128,7 @@ export function buildAgentHookContextIdentityFields(params: {
 
   const senderId = normalizeOptionalString(params.senderId);
   const chatId = normalizeOptionalString(params.chatId);
+  const requesterDeviceId = normalizeOptionalString(params.approvalReviewerDeviceId);
   const sender = senderId
     ? { ...params.channelContext?.sender, id: senderId }
     : params.channelContext?.sender;
@@ -146,5 +148,6 @@ export function buildAgentHookContextIdentityFields(params: {
     ...(senderId ? { senderId } : {}),
     ...(chatId ? { chatId } : {}),
     ...(channelContext ? { channelContext } : {}),
+    ...(requesterDeviceId ? { requesterDeviceId } : {}),
   };
 }

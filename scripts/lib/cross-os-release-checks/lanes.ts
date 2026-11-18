@@ -905,8 +905,11 @@ async function runInstalledGatewaySmoke(
 
 function createLaneState(name: string): LaneState {
   const createdRootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
+  // Canonicalize before deriving the launcher prefix and state paths, not only its environment.
   const rootDir =
-    process.platform === "darwin" ? realpathSync.native(createdRootDir) : createdRootDir;
+    process.platform === "darwin" || process.platform === "win32"
+      ? realpathSync.native(createdRootDir)
+      : createdRootDir;
   const prefixDir = join(rootDir, "prefix");
   const homeDir = join(rootDir, "home");
   const stateDir = join(homeDir, ".openclaw");

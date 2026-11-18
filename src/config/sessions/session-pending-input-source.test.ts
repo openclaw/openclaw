@@ -53,7 +53,7 @@ async function readOnly<T>(run: () => Promise<T>) {
 }
 afterEach(async () => {
   for (const receipt of receipts) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
   }
   await Promise.allSettled(receipts.splice(0).map(async (receipt) => receipt.settled?.()));
 });
@@ -74,7 +74,7 @@ it.each(["pending", "committed"] as const)(
     ).toEqual({
       message: receipt.message,
       source: source === "committed" ? "transcript" : "pending",
-      ...(source === "committed" ? { messageSeq: 1 } : {}),
+      ...(source === "committed" ? { messageSeq: 1 } : { state: "queued", endCause: undefined }),
     });
     const db = database().db;
     const invalidMessages = [

@@ -9,6 +9,7 @@ import {
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { tableHasColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import { parseReadableSessionEntryData } from "./session-accessor.sqlite-entry-read.js";
 import {
   readParticipantRecord,
@@ -225,6 +226,18 @@ export function hydrateSessionActorState(
                   "session_key",
                   "state",
                 ])
+                .select((pending) =>
+                  (tableHasColumn(database.db, "session_pending_inputs", "end_cause")
+                    ? pending.ref("end_cause")
+                    : pending.val(null)
+                  ).as("end_cause"),
+                )
+                .select((pending) =>
+                  (tableHasColumn(database.db, "session_pending_inputs", "origin_source_json")
+                    ? pending.ref("origin_source_json")
+                    : pending.val(null)
+                  ).as("origin_source_json"),
+                )
                 .where(
                   "session_pending_inputs.session_key",
                   "=",

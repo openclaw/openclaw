@@ -244,6 +244,16 @@ function* readSessionTranscriptSearch(
     )
       .where("mapped.id", "=", fullText.identity(textIndex))
       .whereRef("window.session_id", "=", "mapped.session_id")
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom("session_transcript_cold_archives as cold")
+              .select("cold.session_id")
+              .whereRef("cold.session_id", "=", "mapped.session_id"),
+          ),
+        ),
+      )
       .where(match)
       // Depend on the scoped window so SQLite cannot read role before excluding sessions.
       .$if(Boolean(params.role), (builder) =>
