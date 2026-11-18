@@ -28,7 +28,6 @@ const enNewSessionSetup = {
     requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
     requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
-    hint: en.newSession.hint,
     environments: "Devices",
     gateway: "This computer",
     cloudWorkerMachine: "{profile} · {machine}",

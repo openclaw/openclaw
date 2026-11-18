@@ -11,7 +11,7 @@ import { recoveryFixture } from "../operator-run-recovery.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./tunnel-principal.js";
 
 it.each(["edited", "deleted"])(
-  "revokes retained and recovered member work when its definition is %s",
+  "keeps admitted member work but rechecks recovery when its definition is %s",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const profile = ensureProfileForEmail("member-role@example.test");
@@ -65,14 +65,14 @@ it.each(["edited", "deleted"])(
           fixture.setConfig(next);
           setRuntimeConfigSnapshot(next);
           publishOperatorRoleConfigChange(fixture.context);
-          expect(retained.authority.signal?.aborted).toBe(true);
+          expect(retained.authority.signal?.aborted).toBe(false);
           expect(restored.authority.signal?.aborted).toBe(true);
-          expect(retained.authority.assertCurrent).toThrow();
+          expect(retained.authority.assertCurrent).not.toThrow();
           expect(restored.authority.assertCurrent).toThrow();
           await expect(fixture.restore()).rejects.toThrow();
           fixture.setConfig(config);
           setRuntimeConfigSnapshot(config);
-          expect(retained.authority.assertCurrent).toThrow();
+          expect(retained.authority.assertCurrent).not.toThrow();
         } finally {
           retained.release();
           restored.release();
