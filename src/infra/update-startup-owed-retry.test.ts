@@ -333,8 +333,12 @@ describe("automatic retry of owed plugin steps", () => {
     expect(runAuto).not.toHaveBeenCalled();
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
 
-    // The first window a full hour after that attempt starts the retry.
-    clock.setTime(nextWindow(cron, window - 5 * 60_000 + HOUR_MS));
+    // Past the hour, the schedule still decides when the retry may start.
+    const firstEligible = nextWindow(cron, window - 5 * 60_000 + HOUR_MS);
+    clock.setTime(firstEligible + 2 * 60_000);
+    await hourlyCheck(cron);
+    expect(runAuto).not.toHaveBeenCalled();
+    clock.setTime(nextWindow(cron, Date.now()));
     await hourlyCheck(cron);
     expect(runAuto).toHaveBeenCalledOnce();
   });

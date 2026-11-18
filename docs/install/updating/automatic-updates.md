@@ -212,7 +212,8 @@ installed the version, counted in elapsed time even when schedule windows are
 closer together, and while any update is running. Just before it applies,
 the Gateway checks again that the step is still owed and that no update is
 running. If you settle the step first, for example with `openclaw update repair`,
-the campaign ends without an update.
+the campaign ends without an update. A newer release replaces a pending or held
+retry.
 
 Each owed step gets one automatic retry per version. If the retry fails or still
 owes the step, the Gateway does not retry it again; `openclaw update status`
