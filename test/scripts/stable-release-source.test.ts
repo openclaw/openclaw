@@ -92,7 +92,13 @@ describe("stable-release-source compatibility", () => {
       ] as const) {
         expect(
           spawnSync("bash", ["-c", pairCheck], {
-            env: { ...process.env, CLIENT_SHA: sha, CLIENT_RELEASE_TAG: releaseTag },
+            env: {
+              ...process.env,
+              GITHUB_SHA: targetSha,
+              TARGET_SHA: targetSha,
+              CLIENT_SHA: sha,
+              CLIENT_RELEASE_TAG: releaseTag,
+            },
           }).status,
         ).toBe(status);
       }
