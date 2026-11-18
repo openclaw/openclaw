@@ -611,6 +611,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
         manifest: manifest ?? {},
         origin: record.origin,
         entryConfig: params.config.plugins?.entries?.[pluginId],
+        conversationAccessAccepted: manifest?.trust?.conversationAccessAccepted,
       });
       const declared = ownership.ok
         ? resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId)

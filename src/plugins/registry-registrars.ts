@@ -649,13 +649,18 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       );
       return;
     }
-    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    const conversationAccessAllowed = resolveConversationAccessAllowed(
+      record.origin,
+      policy,
+      record.trust?.conversationAccessAccepted,
+    );
     if (PLUGIN_HOOK_METADATA[hookName].conversationAccess && !conversationAccessAllowed) {
       if (record.origin !== "bundled") {
         reportRegistrationWarning(
           record,
-          `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
-            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+          `typed hook "${hookName}" blocked because non-bundled plugins need conversation access: ` +
+            `declare contracts.conversationAccess ["read"] and approve the plugin's capabilities, ` +
+            `or set plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         );
         return;
       }

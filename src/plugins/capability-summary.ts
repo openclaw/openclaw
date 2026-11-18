@@ -22,7 +22,10 @@ import {
 } from "./hook-policy-decisions.js";
 import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index-types.js";
 import type { InstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
-import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
+import {
+  CONVERSATION_ACCESS_SURFACE_ENTRY,
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+} from "./manifest-contract-keys.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
@@ -104,6 +107,14 @@ export function computeDeclaredSurfaceHash(declared: PluginAcceptedDeclaredSurfa
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+/** An approved review, unmodified since approval, that included conversation access. */
+export function isConversationAccessAccepted(record: PluginInstallRecord): boolean {
+  return (
+    record.acceptedSurface?.contracts.includes(CONVERSATION_ACCESS_SURFACE_ENTRY) === true &&
+    record.acceptedSurfaceHash === computeDeclaredSurfaceHash(record.acceptedSurface)
+  );
+}
+
 export function resolvePluginInstallRecordIntegrity(
   record: Pick<PluginInstallRecord, "integrity" | "npmIntegrity" | "clawpackSha256" | "gitCommit">,
 ):
@@ -149,6 +160,8 @@ export function buildPluginCapabilitySummary(params: {
   manifest: PluginCapabilityManifest;
   origin: PluginOrigin | "official";
   entryConfig?: PluginEntryConfig;
+  /** The plugin's approved capability review includes conversation access. */
+  conversationAccessAccepted?: boolean;
 }): { declared: PluginDeclaredSurface; grants: PluginOperatorGrants } {
   const { manifest, entryConfig } = params;
   const hooks = entryConfig?.hooks;
@@ -193,7 +206,7 @@ export function buildPluginCapabilitySummary(params: {
           hooks?.allowPromptModification,
         ),
         allowConversationAccess: buildHookGrant(
-          resolveConversationAccessAllowed(params.origin, hooks),
+          resolveConversationAccessAllowed(params.origin, hooks, params.conversationAccessAccepted),
           hooks?.allowConversationAccess,
         ),
       },
@@ -281,6 +294,15 @@ export function buildPluginCapabilityConsentReview(params: {
     entryConfig: params.config.plugins?.entries?.[pluginId],
   });
   const declared = params.declared ?? summary.declared;
+  // The review shows the grants its approval produces.
+  const grants = declared.contracts.includes(CONVERSATION_ACCESS_SURFACE_ENTRY)
+    ? buildPluginCapabilitySummary({
+        manifest,
+        origin: "global",
+        entryConfig: params.config.plugins?.entries?.[pluginId],
+        conversationAccessAccepted: true,
+      }).grants
+    : summary.grants;
   const spec = record.resolvedSpec ?? record.spec;
   const packageName = record.clawhubPackage ?? record.resolvedName;
   const previousDeclared = params.previousDeclared ?? record.acceptedSurface;
@@ -297,6 +319,7 @@ export function buildPluginCapabilityConsentReview(params: {
       ? { version: manifest.version ?? record.version }
       : {}),
     ...summary,
+    grants,
     declared,
     reviewToken: computeDeclaredSurfaceHash(declared),
     source: {

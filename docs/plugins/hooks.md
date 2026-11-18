@@ -122,12 +122,14 @@ loaded and enabled; `plugins.enabled`, `plugins.allow`, and `plugins.deny` still
 apply. Run `openclaw plugins reload <id>` after changing plugin code. With the default hybrid
 reload mode, hook policy changes hot-reload the existing plugin runtime.
 
-- Non-bundled plugins need explicit
-  `plugins.entries.<id>.hooks.allowConversationAccess: true` for
+- Non-bundled plugins need conversation access for
   `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`,
   `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-  `agent_end`, `before_agent_run`, and `before_channel_ingress`. Bundled plugins are allowed unless this
-  option is explicitly `false`.
+  `agent_end`, `before_agent_run`, and `before_channel_ingress`: either an
+  installed plugin declares [`contracts.conversationAccess: ["read"]`](/plugins/manifest/capabilities)
+  and you approve its capabilities, or you set
+  `plugins.entries.<id>.hooks.allowConversationAccess: true`. Bundled plugins
+  are allowed unless this option is explicitly `false`.
 - `session_end` remains available as a metadata-only lifecycle hook without
   that grant. Its bounded `ctx.endedTranscript` reader is available only when
   the effective conversation-access policy allows it; see the

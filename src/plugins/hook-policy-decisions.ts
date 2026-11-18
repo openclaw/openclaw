@@ -7,11 +7,19 @@ export function resolvePromptInjectionAllowed(policy?: PluginHookPolicy): boolea
   return policy?.allowPromptModification !== false;
 }
 
+/**
+ * Bundled plugins may read conversations unless denied. Other plugins need an explicit config
+ * grant, or an approved capability review that included `contracts.conversationAccess`;
+ * an explicit config value always wins.
+ */
 export function resolveConversationAccessAllowed(
   origin: PluginOrigin | "official",
   policy?: PluginHookPolicy,
+  accepted?: boolean,
 ): boolean {
-  return origin === "bundled"
-    ? policy?.allowConversationAccess !== false
-    : policy?.allowConversationAccess === true;
+  const configured = policy?.allowConversationAccess;
+  if (configured !== undefined) {
+    return configured;
+  }
+  return origin === "bundled" || accepted === true;
 }
