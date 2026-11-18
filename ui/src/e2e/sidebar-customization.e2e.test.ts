@@ -173,8 +173,22 @@ suite.define(() => {
             { entry: "plugin:workboard/workboard", label: "Workboard" },
           ]) {
             if (label === "Workboard") {
-              const pages = await openSidebarPages(page);
-              await pages.getByRole("link", { name: "Operations", exact: true }).click();
+              // Workboard lists its boards in its own sidebar.
+              await sidebar
+                .locator('.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/workboard"] a')
+                .first()
+                .click();
+              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
+              if (
+                width < 900 &&
+                (await navigationDrawerToggle(page).getAttribute("aria-expanded")) === "false"
+              ) {
+                await navigationDrawerToggle(page).click();
+              }
+              await sidebar
+                .locator(".sidebar-plugin-section")
+                .getByRole("link", { name: "Operations", exact: true })
+                .click();
               await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
               await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
               if (
@@ -215,19 +229,16 @@ suite.define(() => {
               Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
             ).toBeLessThanOrEqual(1);
             if (label === "Workboard") {
-              const pages = await openSidebarPages(page);
-              const operationsEntry = pages.locator(
+              const section = sidebar.locator(".sidebar-plugin-section");
+              const operationsEntry = section.locator(
                 '[data-sidebar-entry="plugin:workboard/board-ops"]',
               );
               await operationsEntry
                 .getByRole("link", { name: "Operations", exact: true })
                 .waitFor();
-              // Pages owns a flat entry for every registration, including plugin children.
+              // The Workboard sidebar lists the section and each board.
               expect(
-                await pages.getByRole("link", { name: "Operations", exact: true }).count(),
-              ).toBe(1);
-              expect(
-                await pages
+                await section
                   .locator('[data-sidebar-entry^="plugin:workboard/"] a')
                   .evaluateAll((links) =>
                     links
@@ -235,27 +246,33 @@ suite.define(() => {
                       .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
                   ),
               ).toEqual(["/workboard", "/workboard/default", "/workboard/ops"]);
-              expect(await pages.locator(".nav-item--child").count()).toBe(0);
+              // The pages menu lists only the section, so it does not grow with every board.
+              const pages = await openSidebarPages(page);
+              expect(
+                await pages.getByRole("link", { name: "Workboard", exact: true }).count(),
+              ).toBe(1);
+              expect(
+                await pages.getByRole("link", { name: "Operations", exact: true }).count(),
+              ).toBe(0);
+              await page.keyboard.press("Escape");
               expect(await row.locator(".nav-item--child").count()).toBe(0);
               if (width === 1440) {
-                const operationsPage = pages.locator(".sidebar-pages__entry").filter({
+                const operationsPage = section.locator(".sidebar-pages__entry").filter({
                   has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
                 });
-                // Choosing a page closed the menu; pinning keeps it open.
-                await openSidebarPages(page);
+                await operationsPage.hover();
                 await operationsPage.getByRole("button", { name: "Pin", exact: true }).click();
                 const shortcut = sidebar.locator(
                   '.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/board-ops"]',
                 );
                 await shortcut.getByRole("link", { name: "Operations", exact: true }).waitFor();
-                await pages.locator('a[href="/workboard/default"]').click();
+                await section.locator('a[href="/workboard/default"]').click();
                 await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/default");
                 await shortcut.getByRole("link", { name: "Operations", exact: true }).click();
                 await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
-                await openSidebarPages(page);
-                await pages.getByRole("link", { name: "Workboard", exact: true }).click();
+                await section.getByRole("link", { name: "Workboard", exact: true }).click();
                 await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
-                await openSidebarPages(page);
+                await operationsPage.hover();
                 await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
                 await expect.poll(() => shortcut.count()).toBe(0);
                 expect(await operationsEntry.getByRole("link").count()).toBe(1);
@@ -760,20 +777,15 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const sidebar = page.locator("openclaw-app-sidebar");
-        const pages = await openSidebarPages(page);
-        await pages
-          .locator(".sidebar-pages__entry")
-          .filter({ has: page.getByRole("link", { name: "Sessions", exact: true }) })
-          .getByRole("button", { name: "Pin", exact: true })
-          .click();
         await sidebar.locator('[data-navigation-view="sessions"]').click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
 
         const activity = home.locator(".session-glyph");
+        // Usage is one of the rail's default pins.
         const shortcut = sidebar
-          .locator('.sidebar-rail__pin[data-sidebar-entry="route:sessions"]')
-          .getByRole("link", { name: "Sessions", exact: true });
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"]')
+          .getByRole("link", { name: "Usage", exact: true });
         await expect
           .poll(() => home.locator(".session-glyph--running .session-glyph__ring").count())
           .toBe(1);

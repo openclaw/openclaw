@@ -161,9 +161,11 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("09-desktop-inbox-writer-agent.png", true);
     await sidebar.locator(".sidebar-issues-button").click();
 
+    // The Automations page has no header beside its sidebar; Usage keeps the shared agent scope
+    // in its header.
     const pages = await openSidebarPages(page);
-    await pages.getByRole("link", { name: "Automations", exact: true }).click();
-    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    await pages.getByRole("link", { name: "Usage", exact: true }).click();
+    await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope

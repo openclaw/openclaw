@@ -78,13 +78,11 @@ async function openPeople(
     const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "People", exact: true });
   await online[touch ? "tap" : "click"]();
   if (!touch) {
-    // On a desktop People opens Activity; return to the session with the people list open.
+    // On a desktop People opens Activity, which lists the people in its sidebar.
     await waitForControlUiRoute(page, { routeId: "activity" });
-    await page.goBack();
-    await waitForControlUiRoute(page, { routeId: "chat" });
   }
   return gateway;
 }
@@ -239,6 +237,7 @@ suite.define(() => {
       );
       await expectAttribute(link(card, "View activity"), "href", "/activity/gateway-owner");
       await expectText(onlinePerson(page, "example-person"), "Example person");
+      await page.goBack();
       await expectAttribute(
         page.locator('.chat-pane__presence [data-viewer-id="gateway-owner"]'),
         "aria-label",
@@ -466,6 +465,19 @@ suite.define(() => {
         ],
         methodResponses: { "sessions.list": sessions },
       });
+      // The session header shows both watchers; Activity lists them in its sidebar.
+      await page.goBack();
+      const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
+      await expect
+        .poll(() =>
+          headerFaces.evaluateAll((faces) =>
+            faces
+              .map((face) => face.getAttribute("aria-label") ?? "")
+              .toSorted((a, b) => a.localeCompare(b)),
+          ),
+        )
+        .toEqual([profile.name, raw.name].toSorted((a, b) => a.localeCompare(b)));
+      await page.goForward();
       const profileButton = personLink(page, profile.name);
       await profileButton.waitFor({ state: "visible" });
       await expectCount(page.locator(".sidebar-online__person"), 3);
@@ -479,16 +491,6 @@ suite.define(() => {
       await expectCount(link(rawCard, /^Raw watch(?:\s|$)/), 1);
       await expectCount(link(rawCard, /^Profile watch(?:\s|$)/), 0);
       await expectCount(link(rawCard, "View activity"), 0);
-      const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
-      await expect
-        .poll(() =>
-          headerFaces.evaluateAll((faces) =>
-            faces
-              .map((face) => face.getAttribute("aria-label") ?? "")
-              .toSorted((a, b) => a.localeCompare(b)),
-          ),
-        )
-        .toEqual([profile.name, raw.name].toSorted((a, b) => a.localeCompare(b)));
       const rawLink = link(rawCard, /^Raw watch(?:\s|$)/);
       await rawLink.focus();
       await emitPresence(gateway, [
@@ -544,6 +546,7 @@ suite.define(() => {
           })
           .waitFor({ state: "visible" });
         await expectCount(page.locator(".sidebar-online__person"), 2);
+        await page.goBack();
         await expect
           .poll(() =>
             page.locator(".chat-pane__presence [data-viewer-id]").getAttribute("aria-label"),

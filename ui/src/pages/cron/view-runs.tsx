@@ -372,10 +372,7 @@ export function RunsSection(props: CronRunsSectionProps) {
     </div>
   );
 }
-export function runStatusLabel(
-  value: string,
-  completion?: CronRunLogEntry["completionStatus"],
-): string {
+function runStatusLabel(value: string, completion?: CronRunLogEntry["completionStatus"]): string {
   if (value === "ok" && (completion === "failed" || completion === "unknown")) {
     const completionLabel = t(
       completion === "failed" ? "cron.runs.runStatusError" : "cron.runs.runStatusUnknown",

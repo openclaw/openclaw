@@ -404,7 +404,7 @@ suite.define(() => {
       .poll(() =>
         openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
       )
-      .toBe("Users");
+      .toBe("People");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);

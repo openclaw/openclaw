@@ -106,6 +106,8 @@ it("names the admitted writer in a contending BEGIN and clears it after rollback
 
 it.each([
   "session.lifecycle.delete",
+  "session.cold.batch",
+  "session.cold.sweep",
   "session.transcript.append-turn",
   "session.transcript.prepare-rewrite",
   "session.metadata.append",
