@@ -376,7 +376,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
           <div {...pluginsHubPanel("plugins")}>
-            <Show when={page().loading && !hasInventory()}>
+            <Show when={page().state.catalogDetail && page().loading && !hasInventory()}>
               <div class="muted" role="status">
                 {t("pluginsPage.loading")}
               </div>
