@@ -7,17 +7,6 @@ const ZERO_COST = Object.freeze({
   cacheWrite: 0,
 });
 
-function cloneProvider(provider: ModelProviderConfig): ModelProviderConfig {
-  return {
-    ...provider,
-    models: provider.models.map((model) => ({ ...model })),
-  };
-}
-
-function trimTrailingApiV1(baseUrl: string) {
-  return baseUrl.replace(/\/v1\/?$/i, "");
-}
-
 const DEFAULT_OPENAI_MODEL_IDS = ["gpt-5.6-luna", "gpt-5.6-luna-alt"] as const;
 
 function selectedOpenAiModelIds(
@@ -80,36 +69,26 @@ function createMockOpenAiResponsesProvider(
 
 function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConfig {
   return {
-    baseUrl: trimTrailingApiV1(baseUrl),
+    baseUrl: baseUrl.replace(/\/v1\/?$/i, ""),
     apiKey: "test",
     api: "anthropic-messages",
     request: {
       allowPrivateNetwork: true,
     },
     models: [
-      {
-        id: "claude-opus-4-8",
-        name: "claude-opus-4-8",
-        api: "anthropic-messages",
-        compat: { sendSessionAffinityHeaders: true },
-        reasoning: false,
-        input: ["text", "image"],
-        cost: ZERO_COST,
-        contextWindow: 1_048_576,
-        maxTokens: 128_000,
-      },
-      {
-        id: "claude-sonnet-4-6",
-        name: "claude-sonnet-4-6",
-        api: "anthropic-messages",
-        compat: { sendSessionAffinityHeaders: true },
-        reasoning: false,
-        input: ["text", "image"],
-        cost: ZERO_COST,
-        contextWindow: 200_000,
-        maxTokens: 4096,
-      },
-    ],
+      { id: "claude-opus-4-8", contextWindow: 1_048_576, maxTokens: 128_000 },
+      { id: "claude-sonnet-4-6", contextWindow: 200_000, maxTokens: 4096 },
+    ].map(({ id, contextWindow, maxTokens }) => ({
+      id,
+      name: id,
+      api: "anthropic-messages",
+      compat: { sendSessionAffinityHeaders: true },
+      reasoning: false,
+      input: ["text", "image"],
+      cost: ZERO_COST,
+      contextWindow,
+      maxTokens,
+    })),
   };
 }
 
@@ -124,7 +103,10 @@ export function createMockProviderMap(
   );
   return {
     [primaryProviderId]: primaryProvider,
-    openai: cloneProvider(primaryProvider),
+    openai: {
+      ...primaryProvider,
+      models: primaryProvider.models.map((model) => Object.assign({}, model)),
+    },
     anthropic: createMockAnthropicMessagesProvider(providerBaseUrl),
   };
 }

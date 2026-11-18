@@ -1,266 +1,127 @@
-// Audio transcode tests cover ffmpeg-backed audio conversion behavior.
-import { existsSync, realpathSync } from "node:fs";
+import syncFs, { existsSync, realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { transcodeAudioBuffer, transcodeAudioBufferToOpus } from "./audio-transcode.js";
 
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./ffmpeg-exec.js", () => ({
+vi.mock("./ffmpeg-exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ffmpeg-exec.js")>()),
   runFfmpeg: runFfmpegMock,
 }));
-
-vi.mock("../process/exec.js", () => ({
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: runCommandWithTimeoutMock,
 }));
-
-let transcodeAudioBuffer: typeof import("./audio-transcode.js").transcodeAudioBuffer;
-let transcodeAudioBufferToOpus: typeof import("./audio-transcode.js").transcodeAudioBufferToOpus;
-
-beforeAll(async () => {
-  vi.resetModules();
-  ({ transcodeAudioBuffer, transcodeAudioBufferToOpus } = await import("./audio-transcode.js"));
+afterEach(() => {
+  vi.restoreAllMocks();
+  runCommandWithTimeoutMock.mockReset();
+  runFfmpegMock.mockReset();
 });
 
-afterAll(() => {
-  vi.doUnmock("./ffmpeg-exec.js");
-  vi.resetModules();
-});
-
-type MockWithCalls = { mock: { calls: unknown[][] } };
-
-function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-describe("transcodeAudioBufferToOpus", () => {
-  afterEach(() => {
-    runFfmpegMock.mockReset();
-  });
-
-  it("writes input audio, runs ffmpeg for 48k mono Opus, and cleans temp files", async () => {
-    let capturedInputPath: string | undefined;
-    let capturedOutputPath: string | undefined;
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-      capturedInputPath = args[args.indexOf("-i") + 1];
-      capturedOutputPath = args.at(-1);
-      const inputPath = capturedInputPath;
-      const outputPath = capturedOutputPath;
-      if (!inputPath || !outputPath) {
-        throw new Error("missing ffmpeg paths");
-      }
-      await expect(readFile(inputPath)).resolves.toEqual(Buffer.from("source-mp3"));
-      await import("node:fs/promises").then((fs) =>
-        fs.writeFile(outputPath, Buffer.from("opus-output")),
-      );
-    });
-
-    await expect(
-      transcodeAudioBufferToOpus({
-        audioBuffer: Buffer.from("source-mp3"),
-        inputExtension: "mp3",
-        tempPrefix: "tts-test-",
-        timeoutMs: 1234,
-      }),
-    ).resolves.toEqual(Buffer.from("opus-output"));
-
-    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
-    expect(firstMockCall(runFfmpegMock, "runFfmpeg")).toStrictEqual([
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        capturedInputPath,
-        "-vn",
-        "-sn",
-        "-dn",
-        "-c:a",
-        "libopus",
-        "-b:a",
-        "64k",
-        "-ar",
-        "48000",
-        "-ac",
-        "1",
-        "-f",
-        "opus",
-        capturedOutputPath,
-      ],
-      { timeoutMs: 1234 },
-    ]);
-    const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
-    expect(capturedInputPath?.startsWith(path.join(tempRoot, "tts-test-"))).toBe(true);
-    expect(capturedInputPath ? existsSync(capturedInputPath) : true).toBe(false);
-    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
-  });
-
-  it("sanitizes unsafe input extensions", async () => {
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-      const inputPath = args[args.indexOf("-i") + 1];
-      const outputPath = args.at(-1);
-      if (!inputPath || !outputPath) {
-        throw new Error("missing ffmpeg paths");
-      }
-      expect(path.basename(inputPath)).toBe("input.audio");
-      await import("node:fs/promises").then((fs) =>
-        fs.writeFile(outputPath, Buffer.from("opus-output")),
-      );
-    });
-
-    await transcodeAudioBufferToOpus({
-      audioBuffer: Buffer.from("source"),
+type OpusOptions = Omit<Parameters<typeof transcodeAudioBufferToOpus>[0], "audioBuffer">;
+it.each<[OpusOptions, string, string]>([
+  [{ inputExtension: "mp3", tempPrefix: "tts-test-", timeoutMs: 1234 }, "input.mp3", "voice.opus"],
+  [
+    {
       inputExtension: "../bad",
-    });
-  });
-
-  it("passes the maximum duration to ffmpeg when requested", async () => {
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-      const outputPath = args.at(-1);
-      if (!outputPath) {
-        throw new Error("missing ffmpeg output path");
-      }
-      await writeFile(outputPath, Buffer.from("ogg-opus-output"));
-    });
-
-    await transcodeAudioBufferToOpus({
-      audioBuffer: Buffer.from("source-m4a"),
-      maxDurationSeconds: 300,
-    });
-
-    const ffmpegArgs = firstMockCall(runFfmpegMock, "runFfmpeg")[0] as string[];
-    expect(ffmpegArgs).toEqual(expect.arrayContaining(["-t", "300", "-c:a", "libopus"]));
-  });
-
-  it("keeps temp prefixes and output names inside the preferred temp root", async () => {
-    let capturedInputPath: string | undefined;
-    let capturedOutputPath: string | undefined;
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-      capturedInputPath = args[args.indexOf("-i") + 1];
-      capturedOutputPath = args.at(-1);
-      const outputPath = capturedOutputPath;
-      if (!outputPath) {
-        throw new Error("missing ffmpeg output path");
-      }
-      const outputBaseName = path.basename(outputPath);
-      expect(outputBaseName).toContain("escape.opus");
-      expect(outputBaseName).toMatch(/\.part$/);
-      await import("node:fs/promises").then((fs) =>
-        fs.writeFile(outputPath, Buffer.from("opus-output")),
-      );
-    });
-
-    await transcodeAudioBufferToOpus({
-      audioBuffer: Buffer.from("source"),
-      inputFileName: "voice.wav",
       outputFileName: "../escape.opus",
       tempPrefix: "../bad-prefix",
-    });
-
-    const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
-    expect(capturedInputPath?.startsWith(tempRoot)).toBe(true);
-    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
-  });
-
-  it("preserves Windows-style output filename leaves on POSIX hosts", async () => {
-    let capturedOutputPath: string | undefined;
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-      capturedOutputPath = args.at(-1);
-      const outputPath = capturedOutputPath;
-      if (!outputPath) {
-        throw new Error("missing ffmpeg output path");
+      maxDurationSeconds: 300,
+    },
+    "input.audio",
+    "escape.opus",
+  ],
+  [
+    { inputFileName: "voice.wav", outputFileName: String.raw`C:\Users\Ada\Downloads\reply.opus` },
+    "input.wav",
+    "reply.opus",
+  ],
+])("stages, transcodes and cleans up: %j", async (options, input, output) => {
+  let inputPath = "";
+  let outputPath = "";
+  runFfmpegMock.mockImplementationOnce(
+    async (args: string[], execution: { timeoutMs?: number }) => {
+      inputPath = args[args.indexOf("-i") + 1] ?? "";
+      outputPath = args.at(-1) ?? "";
+      expect(path.basename(inputPath)).toBe(input);
+      expect(path.basename(outputPath)).toContain(output);
+      expect(path.basename(outputPath)).toMatch(/\.part$/);
+      const command = args.join(" ");
+      expect(command).toContain("-c:a libopus -b:a 64k -ar 48000 -ac 1 -f opus");
+      expect(args.includes("-t")).toBe(options.maxDurationSeconds !== undefined);
+      if (options.maxDurationSeconds !== undefined) {
+        expect(command).toContain(`-t ${options.maxDurationSeconds}`);
       }
-      expect(path.basename(outputPath)).toContain("reply.opus");
-      await import("node:fs/promises").then((fs) =>
-        fs.writeFile(outputPath, Buffer.from("opus-output")),
-      );
-    });
-
-    await transcodeAudioBufferToOpus({
-      audioBuffer: Buffer.from("source"),
-      outputFileName: String.raw`C:\Users\Ada\Downloads\reply.opus`,
-    });
-
-    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
-  });
+      expect(execution.timeoutMs).toBe(options.timeoutMs);
+      await expect(readFile(inputPath)).resolves.toEqual(Buffer.from("source-mp3"));
+      await writeFile(outputPath, Buffer.from("opus-output"));
+    },
+  );
+  await expect(
+    transcodeAudioBufferToOpus({ audioBuffer: Buffer.from("source-mp3"), ...options }),
+  ).resolves.toEqual(Buffer.from("opus-output"));
+  const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
+  const prefix = options.tempPrefix === "tts-test-" ? options.tempPrefix : "";
+  expect(inputPath.startsWith(path.join(tempRoot, prefix))).toBe(true);
+  expect([existsSync(inputPath), existsSync(outputPath)]).toEqual([false, false]);
 });
 
-describe("transcodeAudioBuffer", () => {
-  afterEach(() => {
-    __setFsSafeTestHooksForTest(undefined);
-    vi.restoreAllMocks();
-    runCommandWithTimeoutMock.mockReset();
-    runFfmpegMock.mockReset();
-  });
-
-  it("returns a failure and cleans its workspace when input staging fails", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    let workspaceDir: string | undefined;
-    __setFsSafeTestHooksForTest({
-      beforeFileStoreSyncPrivateWrite: (filePath) => {
-        workspaceDir = path.dirname(filePath);
-        throw Object.assign(new Error("input exceeds bounded staging limit"), { code: "EFBIG" });
-      },
-    });
-
-    const result = await transcodeAudioBuffer({
-      audioBuffer: Buffer.from("payload"),
-      sourceExtension: "mp3",
-      targetExtension: "caf",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      reason: "transcoder-failed",
-      detail: "input exceeds bounded staging limit",
-    });
-    expect(workspaceDir).toBeDefined();
-    expect(workspaceDir ? existsSync(workspaceDir) : true).toBe(false);
-    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      "returns noop-same-container when source and target containers match",
-      "mp3",
-      ".mp3",
-      "noop-same-container",
-    ],
-    [
-      "returns no-recipe when no afconvert recipe is defined for the requested pair",
-      "mp3",
-      "flac",
-      "no-recipe",
-    ],
-    ["returns invalid-extension for an empty source extension", "", "caf", "invalid-extension"],
-    ["returns invalid-extension for an empty target extension", "mp3", "", "invalid-extension"],
-    ["rejects path-traversal style extensions", "../etc/passwd", "caf", "invalid-extension"],
-  ])("%s", async (_name, sourceExtension, targetExtension, reason) => {
-    const result = await transcodeAudioBuffer({
-      audioBuffer: Buffer.from("payload"),
-      sourceExtension,
-      targetExtension,
-    });
-    expect(result).toEqual({ ok: false, reason });
-  });
-
-  it("returns platform-unsupported off-Darwin without invoking afconvert", async () => {
-    if (process.platform === "darwin") {
-      return;
+it.each([0, Number.POSITIVE_INFINITY])(
+  "rejects invalid maximum duration %s before ffmpeg",
+  async (maxDurationSeconds) => {
+    await expect(
+      transcodeAudioBufferToOpus({ audioBuffer: Buffer.from("source"), maxDurationSeconds }),
+    ).rejects.toThrow("maxDurationSeconds must be a positive finite number");
+    expect(runFfmpegMock).not.toHaveBeenCalled();
+  },
+);
+it("returns a failure and cleans its workspace when input staging fails", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  let workspaceDir: string | undefined;
+  const lstat = syncFs.lstatSync;
+  vi.spyOn(syncFs, "lstatSync").mockImplementation((...args) => {
+    const [filePath] = args;
+    if (typeof filePath === "string" && path.basename(filePath) === "in.mp3") {
+      workspaceDir = path.dirname(filePath);
+      throw Object.assign(new Error("input exceeds bounded staging limit"), { code: "EFBIG" });
     }
-    const result = await transcodeAudioBuffer({
-      audioBuffer: Buffer.from("payload"),
-      sourceExtension: "mp3",
-      targetExtension: "caf",
-    });
-    expect(result).toEqual({ ok: false, reason: "platform-unsupported" });
+    return lstat(...args);
   });
+
+  const result = await transcodeAudioBuffer({
+    audioBuffer: Buffer.from("payload"),
+    sourceExtension: "mp3",
+    targetExtension: "caf",
+  });
+
+  expect(result).toEqual({
+    ok: false,
+    reason: "transcoder-failed",
+    detail: "input exceeds bounded staging limit",
+  });
+  expect(workspaceDir).toBeDefined();
+  expect(workspaceDir ? existsSync(workspaceDir) : true).toBe(false);
+  expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["mp3", ".mp3", "noop-same-container"],
+  ["mp3", "flac", "no-recipe"],
+  ["", "caf", "invalid-extension"],
+  ["mp3", "", "invalid-extension"],
+  ["../etc/passwd", "caf", "invalid-extension"],
+  ["mp3", "caf", "platform-unsupported"],
+])("converting %j to %j returns %s", async (sourceExtension, targetExtension, reason) => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  const result = await transcodeAudioBuffer({
+    audioBuffer: Buffer.from("payload"),
+    sourceExtension,
+    targetExtension,
+  });
+  expect(result).toEqual({ ok: false, reason });
+  expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
 });

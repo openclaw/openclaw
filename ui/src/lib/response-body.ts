@@ -9,10 +9,7 @@ type ResponseTextLimitOptions = {
 
 function parseContentLength(headers: Headers): number | null {
   const raw = headers.get("content-length");
-  if (!raw) {
-    return null;
-  }
-  if (!/^\d+$/u.test(raw)) {
+  if (!raw || !/^\d+$/u.test(raw)) {
     return null;
   }
   const parsed = Number(raw);

@@ -9,186 +9,156 @@ read_when:
 
 ## Top-level stages
 
-For `rerun_group=all`, a `Check for reusable validation evidence` job runs
-first. It looks for the newest prior green full validation with the same release
-profile, coverage policy, effective soak setting, and validation inputs. Exact-target reruns use
-`exact-target-full-validation-v1`. A descendant whose complete delta includes
-the selected `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its matching
-`CHANGELOG/records/YYYY.M.PATCH.md`, and root `CHANGELOG.md` uses
-`split-changelog-release-v1`. Entry/record additions or modifications and index
-modifications are allowed; renames, deletions, other releases, and docs source
-edits are rejected. Historical root-only receipts retain
-`changelog-only-release-v1`. Under either changelog policy, every product lane is skipped
-and the verifier independently rechecks the GitHub commit comparison, immutable
-parent artifact, child runs, and dispatch logs. Any other target change requires
-a fresh Code SHA validation. Pass `reuse_evidence=false` to force a fresh full
-run. Evidence reuse runs only from `main` or a canonical SHA-pinned
-`release-ci/*` ref whose workflow commit remains on trusted `main` lineage;
-other workflow refs run the selected lanes fresh.
+Q (default C) tests C. Admitted P supplies `full-release-validation-state.mjs`
+for Release Decision, Diagnostic Drain, manifests, and final validation, applying
+[P-owned waivers](/reference/full-release-validation/evidence#release-tooling-waivers).
+Publication requires successful FRV, including package qualification and Docker
+preparation—not just a passing product decision.
 
-The reuse search checks each bound parent manifest for eligibility before
-loading its child runs, job logs, and execution plan. Incompatible profiles,
-inputs, targets, and non-root runs are rejected early. Eligible candidates
-still undergo complete provenance and attempt verification before reuse.
-The verifier reads independent children concurrently (at most seven), retains
-each attempt's job data for its policy checks, and waits for all reads before
-reporting success or failure. Attempts and pagination within each child remain
-sequential. Target resolution and reuse checkouts include only their tooling
-and release metadata; neither needs the complete source tree.
+**Whole-parent reuse.** For `rerun_group=all`, `Check for reusable validation evidence`
+selects the newest green full validation matching profile, coverage policy, effective
+soak, inputs, and exact Q/P identities; child closure equivalence does not apply.
 
-Full validation starts independent npm and Docker producer runs through
-`full-release-artifacts.yml`. The read-only `openclaw-npm-preflight.yml` starts
-source, SDK, dependency, and package preparation together. Package-content and
-lifecycle checks start when the single root/core build and pack finishes. The
-early `openclaw-npm-package-descriptor-<run-id>-<attempt>` artifact also unblocks
-candidate preparation while qualification continues. Final qualification joins
-every successful exact-source proof and seals the same tarball bytes.
-For legacy candidates that ship `npm-shrinkwrap.json`, preparation checks the
-packed root manifest against both the shrinkwrap's root declarations and installed
-package entries before emitting the package descriptor. Tarball qualification
-repeats that check. Missing required runtime dependencies fail validation even if
-npm would exit successfully, a prepared dependency masks the omission in a local
-consumer, or a repacked Docker image works. Repair the candidate's shrinkwrap and
-produce fresh artifact evidence; qualification never repairs frozen package bytes.
-The SDK consumer install retains its smaller dependency context. The final manifest records its immutable descriptor in
-`publicationArtifacts.npmPreflight`. Regular final releases include separate
-SDK compatibility reports for the current npm `beta` and `latest` predecessors,
-sharing the target snapshot. Publication selects its channel's report and
-acknowledgement without rebuilding. Beta prerelease and extended-stable targets
-keep their required channel.
+| Policy                            | Eligible target delta                                                                                                                                                                                                                                                            |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exact-target-full-validation-v1` | Same target                                                                                                                                                                                                                                                                      |
+| `split-changelog-release-v1`      | Descendant including selected `CHANGELOG/YYYY.M.PATCH.md`; only that entry, matching `CHANGELOG/records/YYYY.M.PATCH.md`, and root `CHANGELOG.md`. Entry/record additions or modifications and index modifications only; no renames, deletions, other releases, or docs sources. |
+| `changelog-only-release-v1`       | Historical root-only receipts                                                                                                                                                                                                                                                    |
 
-For directly dispatched `OpenClaw NPM Release` preflight-only runs, if qualification
-fails after source checks and package preparation succeed, rerun the failed
-qualification job. It reuses the exact successful producer jobs
-and package bytes from the earlier attempt, even if that attempt failed or was
-cancelled. Failed or unfinished producer jobs remain ineligible. Final npm
-publication still requires the current producer run to complete successfully
-and every retained proof job to remain the effective successful job. FRV-owned
-standalone producers support the same targeted recovery; the parent adopts
-the verified receipt without rebuilding successful package work.
+Changelog reuse skips every product lane and independently rechecks GitHub comparison,
+immutable parent artifact, children, and dispatch logs. Other changes require fresh
+Code SHA validation. `reuse_evidence=false` forces a fresh run. Reuse requires `main`
+or standard SHA-pinned `release-ci/*` on trusted main lineage; other refs run fresh.
 
-`docker-release-prepare.yml` builds both native architectures, retains OCI
-indexes and their SBOM/provenance, and runs image smoke checks before approval.
-OCI export uses gzip level 1 for new layers and reuses cached layers without
-forced recompression, preserving the image format used by smoke and promotion.
+Search rejects incompatible bound manifests (profiles, inputs, targets, non-root runs)
+before loading children, logs, or plans. Eligible candidates receive full provenance
+and attempt checks. At most seven independent children are read concurrently;
+per-child attempts/pagination remain sequential, job data is retained, and all reads
+finish before a verdict. Resolution/reuse checkouts need only tooling and release metadata.
 
-Default and browser images share the builder's local cache. Preparation does not
-transfer a remote build cache: fresh provenance timestamps invalidate application
-layers, and measured transfers cost more than reusing runtime setup saves.
-Fresh runners rebuild that setup, including mutable Debian and npm updates;
-the sealed OCI artifacts remain the reusable inputs for publication.
-The hosted VM reclaims its local builder when the job ends, so builder-volume
-deletion does not delay sealing after the artifact uploads.
-The final manifest records `publicationArtifacts.docker`. Preparation has no
-publication secrets or registry-write permission. After approval, `Docker
-Release` verifies the source/tag, producer, artifact hashes, and image digests,
-then promotes those bytes to GHCR and Docker Hub. The publication lock covers
-registry writes and selector promotion. Historical evidence without prepared
-images uses the same preparation workflow before promotion.
+**Child reuse.** A green sealed child can outlive a failed, cancelled, or active parent:
 
-If Docker preparation succeeds but publication fails in the same workflow run,
-rerun the failed publication job. The new publisher attempt verifies the original
-successful preparation job and sealed artifacts without rebuilding. A separate
-publisher run still requires the original producer attempt to be active or
-successful; it cannot adopt a failed producer attempt through this retry path.
+- Search bounds: 100 recent dispatch runs, 40 target receipt inventories, five matching
+  receipts per role, two minutes. Nonmatching receipts do not consume the five.
+- Match target, role, nonempty inputs/defaults, and candidate descriptor bytes. Empty
+  inputs equal absent inputs (`github.event.inputs` omits them).
+- Require equal Q or authenticated identical workload closure: owning/reusable workflows,
+  local actions, complete scripts tree, root configuration/dependencies. Different Q
+  requires verified main ancestry; missing, unsupported, or changed closure blocks reuse.
+  Control-only intent is insufficient.
+- Normal CI additionally retains complete `config`, `packages`, `src`, and `test` trees
+  imported by its Q harness; even unrelated changes there invalidate reuse. Other product
+  directories come from C and are excluded. Unrelated parent workflow changes alone do
+  not invalidate normal CI. Other roles retain all workflows and the full root tree;
+  shared-script changes invalidate every child.
+- Dispatch logs explain evaluated rejections, reused children, skipped runs, and fresh
+  dispatches. Sealing, collectors, and final verification repeat tooling/receipt checks.
 
-Fresh package-facing validation passes the prepared root/core bundle to a
-standalone candidate producer that calls `Full Release Candidate`. Its registry carries the exact
-unpublished core dependencies and selected plugins. Installers start that
-registry before resolving the root package, including npm, pnpm, Bun, and
-cross-OS lanes. Published baseline versions remain available through the
-upstream registry. Plugin Prerelease and OpenClaw Release Checks each dispatch an
-independent phase immediately, while their candidate phases wait for acquisition.
-Both candidate phases verify the same package SHA, artifact IDs, service digests,
-producer run attempt, and Docker archive digest before use. The package-independent
-bare Docker layer uses a content-addressed GHCR cache; candidate-specific images
-remain immutable GitHub artifacts. Focused runs with an explicit published
-package spec keep the existing package path instead.
+**Publication artifacts.** `full-release-artifacts.yml` starts independent npm and
+Docker producers:
 
-Preparation also emits a canonical request digest and a seven-day
-`full-release-candidate-v2-<request-sha256>` evidence artifact. Its bounded
-manifest binds the exact target and Tooling SHAs, release and soak policy,
-effective survivor baselines and scenarios, preparation-plan digest, sorted
-plugin package set, producer and publisher workflow/job/run identities, and
-package, registry, and image artifact identities and expiry timestamps. The
-execution plan seals that evidence. Before preparing a candidate, the umbrella may reuse
-the newest artifact with at least fourteen hours of remaining lifetime for the
-same canonical request and exact prepared npm tarball digest only after it revalidates the exact workflow run,
-publisher job identity, archive digest, manifest, producer attempt and job, and
-live metadata for every package, registry, and image artifact.
-A proven absence creates a fresh candidate. Bounded lookup uncertainty and
-failures after selection are blocking so the run cannot silently switch
-candidates. A different prepared tarball requires a fresh candidate even when
-the source SHA is unchanged. Full validation succeeds only after package
-qualification and Docker preparation also succeed; a passing product Release
-Decision alone does not authorize publication.
+- Read-only `openclaw-npm-preflight.yml` starts source, SDK, dependencies, and package
+  preparation together. One root/core build-and-pack unlocks content/lifecycle checks
+  and early `openclaw-npm-package-descriptor-<run-id>-<attempt>` candidate preparation.
+  Final qualification joins all successful exact-source proofs, sealing identical
+  tarball bytes; the manifest records the immutable descriptor in
+  `publicationArtifacts.npmPreflight`. SDK consumer installs retain
+  their smaller dependency context.
+- Legacy `npm-shrinkwrap.json`: preparation (before descriptor emission) and qualification compare the packed root
+  manifest with shrinkwrap root declarations and installed entries. Missing runtime
+  dependencies fail despite npm success, locally prepared dependencies, or working
+  repacked Docker images. Repair the candidate shrinkwrap and regenerate evidence;
+  never repair frozen bytes during qualification.
+- Regular final releases produce separate SDK compatibility reports for current npm
+  `beta` and `latest` predecessors from one target snapshot. Publication selects its
+  channel report/acknowledgement without rebuilding; beta and extended-stable retain
+  their required channel.
+- Selected official plugins: artifact-only `plugin-npm-release.yml` packs, validates,
+  and reads back exact Release SHA tarballs. Release Decision requires sealed
+  `publicationArtifacts.pluginNpm`. Prepared publication adopts exact IDs, digests,
+  producer/attempt without repacking. Source-only files/fixtures are checked only if packed.
+- Normal publication instead repacks/scans with admitted P and its reviewed inventory.
+  When P differs from run tooling, `Prepare exact plugin npm artifacts` concurrently
+  uses P's packer/scanner for every selected plugin with reviewed findings. Changed
+  reviewed hash/path/count fails early, naming package, packed file, and `contentSha256`;
+  inspect before updating `scripts/plugin-npm-security-scan.mts` on `main`.
+- Npm recovery (direct `OpenClaw NPM Release` preflight-only and FRV standalone):
+  follow [original-producer recovery](/reference/full-release-validation/continuation#continue-failed-child-jobs),
+  preserving successful preparation/bytes and effective successful proof jobs. Failed
+  or unfinished producers are ineligible; final publication requires producer success.
+- `docker-release-prepare.yml` builds/smokes both native architectures before approval, including mandatory
+  `runtime-assets` for every release, retaining OCI indexes and SBOM/provenance. New
+  layers use gzip level 1; cached layers are not forcibly recompressed. Default/browser
+  images share local builder cache, not remote transfers. Fresh provenance invalidates
+  application layers; fresh runners rebuild runtime setup (including mutable Debian/npm
+  updates). Sealed OCI artifacts remain reusable. Hosted VM cleanup reclaims builders;
+  builder-volume deletion does not delay post-upload sealing.
+- `publicationArtifacts.docker` preparation has no publication secrets or registry-write
+  permission. After approval, `Docker Release` verifies source/tag, producer, hashes,
+  and image digests, then promotes exact bytes to GHCR/Docker Hub under a registry-write
+  and selector-promotion lock. Historical evidence without images uses the same preparation.
+- Same-run Docker publication failure: rerun publication, verifying original successful
+  preparation/artifacts without rebuilding. Separate publishers require the original
+  producer attempt active or successful; this path cannot adopt failed attempts.
 
-Every release type validates the `runtime-assets` Docker target inside
-mandatory Docker image preparation on both native architectures.
+**Shared candidate.** Fresh package-facing validation sends the prepared root/core
+bundle to a standalone `Full Release Candidate` producer. Its registry serves exact
+unpublished core dependencies/selected plugins; npm, pnpm, Bun, and cross-OS installers
+start it before resolving root. Published baselines remain upstream. Plugin Prerelease
+and Release Checks start independent phases immediately; candidate phases wait and
+verify identical package SHA, artifact IDs, service digests, producer attempt, and Docker
+archive digest. Bare Docker layers use content-addressed GHCR cache; candidate images
+remain immutable GitHub artifacts. Explicit published package specs retain their existing path.
 
-| Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                |
-| Publication preparation | **Jobs:** `Prepare release npm artifacts`, `Qualify release npm artifacts`, and `Prepare release Docker artifacts`<br />**Child workflow:** separate npm and Docker `Full Release Artifacts` runs<br />**Proves:** qualifies the exact root/core npm tarballs and both native Docker architectures before publication. Parent retries recover the original producer records and receipts.<br />**Rerun:** retry failed npm qualification jobs on their original producer run, preserve successful preparation, and let the parent collect the verified receipt. |
-| Shared candidate        | **Job:** `Acquire full release candidate`<br />**Child workflow:** `Full Release Artifacts` calls `Full Release Candidate`, which reuses a trusted candidate or prepares one on a proven miss<br />**Proves:** validates the exact npm tarball, registry, functional image, and producer/publisher binding. Preparation starts after raw npm bytes are ready, before qualification finishes.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group using the same candidate.                                               |
-| Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** the selected CI graph against the target ref. `npm-beta-v1` and `npm-stable-v1` retain Linux/macOS/Windows Node, plugin and channel contracts, Node compatibility, checks, built-artifact smoke, docs, Python skills, and Control UI; they defer macOS Swift/OpenClawKit, iOS, Android, and native i18n. Other coverage policies use full CI.<br />**Rerun:** `rerun_group=ci`.                                                                                                    |
-| Plugin prerelease       | **Jobs:** `Run plugin prerelease independent validation` and `Run plugin prerelease candidate validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** independent static and agentic coverage can start before acquisition, while candidate-dependent Docker lanes consume the sealed package and plugin registry identities.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                |
-| Release checks          | **Jobs:** `Run release checks independent validation` and `Run release checks candidate validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** independent install, QA, and live coverage can start before acquisition, while package, cross-OS, and candidate-dependent Docker lanes consume the sealed candidate. Stable and full profiles retain exhaustive live/E2E and release-path coverage.<br />**Rerun:** classify the failed surface and select one concrete release-check group.                                            |
-| Package Telegram        | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** a focused published-package Telegram E2E when `release_package_spec` or `npm_telegram_package_spec` is set. `npm-beta-v1` defers this child; explicit `npm-telegram` and soak retain it. Package Acceptance owns Telegram proof for unpublished candidates when selected.<br />**Rerun:** `rerun_group=npm-telegram` with `release_package_spec` or `npm_telegram_package_spec`.                                                                          |
-| Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance (`profile=release`, `repeat=3`, `publish_reports=false`) against the target SHA. Selected for `all` except `npm-beta-v1`, or explicit `performance`; selected regressions block in every profile. Selected children still finish and prove their report publisher was skipped.<br />**Rerun:** `rerun_group=performance`.                                                                                              |
-| Release decision        | **Job:** `Release Decision`<br />**Child workflow:** none<br />**Proves:** polls the exact recorded child run IDs and attempts, enforces release policy, and publishes an attempt-bound decision artifact. A decisive failure becomes `blocked_diagnostics_running` while unrelated child diagnostics continue.<br />**Rerun:** fix or rerun only the blocking surface.                                                                                                                                                                                         |
-| Diagnostic drain        | **Job:** `Diagnostic Drain`<br />**Child workflow:** none<br />**Proves:** with `fail_fast=false`, follows every selected exact child to terminal without cancellation and writes timing, failed-job, run-attempt, and Tooling-SHA evidence. Collector cancellation instead writes an immediate `cancelled_with_children` handoff containing active child identities.<br />**Rerun:** recover collection only for `orchestration_error`; product failures do not invalidate the drain.                                                                          |
-| Execution plan          | **Job:** `Seal release execution plan`<br />**Child workflow:** none<br />**Proves:** persists the original parent attempt, exact child identities and titles, required coverage, gates, reuse identity, and fresh candidate request with exact producer and publisher binding in a stable run-bound artifact. Attempt-two collector recovery restores this artifact instead of redispatching.<br />**Rerun:** restore the existing plan only; a missing plan is an orchestration error.                                                                        |
-| Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** downloads the immutable execution plan plus the exact attempt-bound Release Decision and Diagnostic Drain artifacts, verifies their common digest and parent tuple, and accepts only a strict green decision plus terminal drain.<br />**Rerun:** recover the existing collectors or rerun only the failed product surface; the verifier never reclassifies or redispatches children.                                                                                          |
+Preparation emits normalized-request digest and seven-day
+`full-release-candidate-v2-<request-sha256>` evidence, sealed by the execution plan. Its
+bounded manifest binds target/Tooling SHAs, release/soak policy, effective survivor
+baselines/scenarios, preparation-plan digest, sorted plugins, producer/publisher
+workflow/job/run identities, and package/registry/image identities and expiries. Reuse
+selects the newest artifact with ≥14 hours left matching request and exact prepared
+tarball digest, revalidating workflow run, publisher job, archive digest, manifest,
+producer attempt/job, and every artifact's live metadata. Proven absence creates fresh;
+lookup uncertainty or post-selection failure blocks switching. Different tarball bytes
+require a new candidate even at the same source SHA.
 
-The seven child-dispatch jobs own dispatch and exact identity capture only. They
-emit the child run ID, run attempt, and URL, then finish. Release Decision owns
-the blocking answer; Diagnostic Drain owns complete terminal evidence. The
-immutable execution plan owns child identity across collector attempts. The
-decision state is one of `qualifying`, `blocked_diagnostics_running`, `passed`,
-`blocked_complete`, `orchestration_error`, or `cancelled_with_children`.
-Persistent GitHub API failures are orchestration errors. A child whose workflow
-path, display title, ref, Tooling SHA, or run ID changes is a distinct
-provenance mismatch. A monotonically newer attempt is accepted only through the
-composite-attempt rules in [Continue a failed
-validation](/reference/full-release-validation/continuation).
+| Stage / job                                                                                                                                                    | Workflow, proof, and retry                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target resolution — `Resolve target ref`                                                                                                                       | No child; resolve branch/tag/full SHA and selected inputs. Failure: rerun umbrella.                                                                                                                                                                                                                                                                                                         |
+| Publication preparation — `Prepare release npm artifacts`, `Qualify release npm artifacts`, `Prepare plugin npm artifacts`, `Prepare release Docker artifacts` | Producers and recovery above; qualifies exact root/core/plugin tarballs and both Docker architectures.                                                                                                                                                                                                                                                                                      |
+| Shared candidate — `Acquire full release candidate`                                                                                                            | `Full Release Artifacts` calls `Full Release Candidate` as above. Retry affected package, plugin-prerelease, cross-OS, or live/E2E group with same candidate.                                                                                                                                                                                                                               |
+| Vitest and normal CI — `Run normal full CI`                                                                                                                    | `CI`; selected target graph. `npm-beta-v1`/`npm-stable-v1`: Linux/macOS/Windows Node, plugin/channel contracts, Node compatibility, checks, built-artifact smoke, docs, Python skills, Control UI; defer iOS/Android/native i18n. Beta also defers macOS Swift/OpenClawKit; stable retains macOS Swift `tests`/`packages` for shipped app. Other policies: full CI. Retry `rerun_group=ci`. |
+| Plugin prerelease — `Run plugin prerelease independent validation`, `Run plugin prerelease candidate validation`                                               | `Plugin Prerelease`; independent static/agentic and candidate Docker phases above. Retry `rerun_group=plugin-prerelease`.                                                                                                                                                                                                                                                                   |
+| Release checks — `Run release checks independent validation`, `Run release checks candidate validation`                                                        | `OpenClaw Release Checks`; phases above. Stable/full retain exhaustive live/E2E/release-path coverage. Classify failure; retry one concrete release-check group.                                                                                                                                                                                                                            |
+| Package Telegram — `Run package Telegram E2E`                                                                                                                  | `NPM Telegram Beta E2E`; published-package proof with `release_package_spec` or `npm_telegram_package_spec`. `npm-beta-v1` defers; explicit `npm-telegram`/soak retain. Package Acceptance owns selected unpublished-candidate Telegram proof. Retry `rerun_group=npm-telegram` with either spec.                                                                                           |
+| Product performance — `Run product performance evidence`                                                                                                       | `OpenClaw Performance`; target SHA, `profile=release`, `repeat=3`, `publish_reports=false`. Selected for `all` except `npm-beta-v1`, or explicit `performance`; selected regressions block every profile. Retry `rerun_group=performance`.                                                                                                                                                  |
+| Release decision — `Release Decision`                                                                                                                          | No child; poll exact recorded runs/attempts, enforce policy, publish attempt-bound decision. Decisive failure: `blocked_diagnostics_running`. Fix/retry blocking surface only.                                                                                                                                                                                                              |
+| Diagnostic drain — `Diagnostic Drain`                                                                                                                          | No child; `fail_fast=false` follows all selected children to terminal without cancellation, recording timings/failures/attempts/Tooling SHA. Collector cancellation immediately records `cancelled_with_children` and active identities. Recover collection only for `orchestration_error`; product failures do not invalidate drain.                                                       |
+| Execution plan — `Seal release execution plan`                                                                                                                 | No child; seals original attempt, child identities/titles, coverage/gates/reuse, candidate request and producer/publisher binding. Attempt-two recovery restores existing plan, never redispatches; missing plan is orchestration error.                                                                                                                                                    |
+| Umbrella verifier — `Verify full validation`                                                                                                                   | No child; immutable plan plus attempt-bound Decision/Drain must share digest/parent tuple. Requires strict green decision and terminal drain. Recover collectors/failed surface; never reclassify/redispatch.                                                                                                                                                                               |
 
-`blocked_diagnostics_running` is safe for immediate diagnosis but not for a
-retry until Diagnostic Drain is terminal. `orchestration_error` authorizes
-collector recovery against the same exact child identities, never test
-redispatch. `blocked_complete` means diagnostics are complete; it does not
-claim a drain is still running.
+Seven dispatch jobs only capture/emit child run ID, attempt, and URL, then finish.
+Decision owns blocking; Drain owns terminal evidence; immutable plan owns identities
+across collector attempts. States: `qualifying`, `blocked_diagnostics_running`,
+`passed`, `blocked_complete`, `orchestration_error`, `cancelled_with_children`.
 
-When selected, the umbrella dispatches product performance in artifact-only mode.
-`OpenClaw Performance` permits report publication only for scheduled runs or a
-manual dispatch that explicitly sets `publish_reports=true`. The artifact-only
-guard must complete successfully, proving the publisher job stayed skipped.
-Evidence for a selected performance child records
-`controls.performanceReportPublication=artifact-only`; the verifier and reuse
-selector require the matching normalized performance-child proof whenever that
-child is selected. `npm-beta-v1` records performance as deferred instead of
-dispatching a child whose result would still require terminal evidence.
-
-The verifier uploads the canonical manifest as
-`full-release-validation-<run-id>-<run-attempt>`. Evidence tooling validates
-its artifact ID, digest, producer run, and attempt before downloading that exact
-artifact ID. It caps the downloaded ZIP, verifies its bytes against the REST
-`sha256:` digest, and streams the only allowed bounded manifest entry without
-extracting the archive. A stable-name alias remains for older publish
-consumers. The verifier always prefers the attempt-qualified artifact and
-accepts the stable name only for an attempt-1 manifest v2 producer. It rejects
-that stable name for later attempts and for manifest v3, so the alias stops
-applying once a producer emits manifest v3.
-
-Concurrency is keyed by Validation SHA, Tooling SHA, rerun group, release
-profile, and effective soak coverage, and does not cancel an older run. The
-Release Checks child also separates profiles and effective soak, preserving
-independent admission through both workflow levels. Stable/full normalize soak
-to enabled, so explicitly enabling it does not admit a duplicate request.
-Parent cancellation or timeout leaves adopted
-identity-checked children running and records `cancelled_with_children` when
-the state collector can complete its cancellation handoff. Cancel an exact
-child explicitly when it is no longer useful. Do not run a second foreground
-watcher when the SHA-pinned helper already owns the parent; use
-`release-ci-summary --watch` only after the helper has returned or when the
-parent was dispatched separately.
+- Diagnose `blocked_diagnostics_running` immediately; wait for terminal Drain before retry.
+  `blocked_complete` means diagnostics finished. `orchestration_error` permits collector
+  recovery with identical children, never test redispatch.
+- Persistent API failures are orchestration errors. Changed workflow path/title/ref,
+  Tooling SHA, or run ID is provenance mismatch. Newer attempts require
+  [composite-attempt rules](/reference/full-release-validation/continuation).
+- Selected performance must finish with successful artifact-only guard proving publisher
+  skipped. Evidence records `controls.performanceReportPublication=artifact-only`; verifier
+  and reuse require matching normalized child proof. Publication is allowed only for
+  scheduled runs or explicit manual `publish_reports=true`. `npm-beta-v1` records deferred, no child.
+- Manifest `full-release-validation-<run-id>-<run-attempt>`: validate ID/digest/producer/attempt
+  before exact-ID download; cap ZIP, verify REST `sha256:`, stream sole bounded manifest
+  entry without extraction. Prefer attempt-qualified artifact; stable-name fallback only
+  for attempt-1 manifest v2, never later attempts or v3.
+- Concurrency keys: Validation SHA, Tooling SHA, rerun group, profile, effective soak; no
+  cancellation of older runs. Release Checks also separates profile/soak. Stable/full
+  normalize soak enabled, preventing duplicate admission for explicit enablement.
+- Parent cancellation/timeout leaves identity-checked adopted children running; collector
+  records `cancelled_with_children` when possible. Explicitly cancel unneeded exact children.
+  No second foreground watcher while SHA-pinned helper owns parent; use
+  `release-ci-summary --watch` only after helper returns or for separately dispatched parents.

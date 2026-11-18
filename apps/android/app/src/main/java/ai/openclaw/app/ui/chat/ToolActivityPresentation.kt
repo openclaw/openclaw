@@ -12,7 +12,7 @@ internal fun completedToolKind(name: String): CompletedToolKind =
   when (name.trim().lowercase()) {
     "bash", "exec", "shell", "run_command", "run_terminal_cmd", "terminal", "exec_command" -> CompletedToolKind.Command
     "read", "read_file", "readfile", "notebookread", "notebook_read" -> CompletedToolKind.Read
-    "edit", "edit_file", "multiedit", "multi_edit", "apply_patch", "applypatch", "patch" -> CompletedToolKind.Edit
+    "edit", "edit_file", "multiedit", "multi_edit", "notebookedit", "notebook_edit", "apply_patch", "applypatch", "patch" -> CompletedToolKind.Edit
     "write", "write_file", "create_file" -> CompletedToolKind.Write
     "grep", "find", "glob", "ls", "list", "codebase_search" -> CompletedToolKind.Search
     "web_fetch", "webfetch", "fetch" -> CompletedToolKind.Fetch

@@ -1,26 +1,16 @@
 // Line tests cover the media send core routes around the payload owner.
 import { expectDefined } from "@openclaw/normalization-core";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { recordLineQuoteToken } from "./quote-tokens.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 
 const mediaSend = vi.hoisted(() => vi.fn());
 
-// outbound.runtime re-exports each of these from send.js, and the module fails to
-// load if the mock leaves one out.
-vi.mock("./send.js", () => ({
-  createFlexMessage: vi.fn(),
-  createLocationMessage: vi.fn(),
-  createQuickReplyItems: vi.fn(),
-  pushFlexMessage: vi.fn(),
-  pushLocationMessage: vi.fn(),
-  pushMessageLine: vi.fn(),
-  pushMessagesLine: vi.fn(),
-  pushTemplateMessage: vi.fn(),
-  pushTextMessageWithQuickReplies: vi.fn(),
-  sendMessageLine: mediaSend,
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  pushMessageLine: mediaSend,
 }));
 
 const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -37,7 +27,19 @@ describe("the media send core routes around the payload owner", () => {
     mediaSend.mockResolvedValue({
       messageId: "m-media",
       chatId: "Coutbound",
-      receipt: createLineSendReceipt({ messageId: "m-media", chatId: "Coutbound", kind: "text" }),
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [
+          {
+            channel: "line",
+            messageId: "m-media",
+            chatId: "Coutbound",
+            conversationId: "Coutbound",
+            meta: { messageCount: 1 },
+          },
+        ],
+        threadId: "Coutbound",
+        kind: "text",
+      }),
     });
     recordLineQuoteToken({
       accountId: "default",

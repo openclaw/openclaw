@@ -1,6 +1,11 @@
-/**
- * Public SDK subpath for embedding provider registration and runtime access.
- */
+export type { AcquireConfiguredProviderLocalService } from "../agents/provider-local-service-target.js";
+
+export {
+  EMBEDDING_DEADLINE_CONTROL,
+  type EmbeddingDeadlineControl,
+  type EmbeddingDeadlineControlOptions,
+} from "../plugins/embedding-provider-runtime-types.js";
+
 export {
   getEmbeddingProvider,
   listEmbeddingProviders,
@@ -9,10 +14,13 @@ export {
 export type {
   EmbeddingInput,
   EmbeddingProvider,
-  EmbeddingProviderAdapter,
   EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions,
-  EmbeddingProviderCreateResult,
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
-} from "../plugins/embedding-providers.js";
+  EmbeddingUsage,
+} from "../plugins/embedding-provider-runtime-types.js";
+export type {
+  EmbeddingProviderAdapter,
+  EmbeddingProviderCreateOptions,
+  EmbeddingProviderCreateResult,
+} from "../plugins/embedding-provider-types.js";

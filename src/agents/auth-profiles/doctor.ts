@@ -5,7 +5,6 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
@@ -37,17 +36,16 @@ export async function formatAuthDoctorHint(params: FormatAuthDoctorHintParams): 
   ) {
     return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
   }
-  const pluginHint = await buildProviderAuthDoctorHintWithPlugin({
-    provider: normalizedProvider,
-    context: {
-      config: params.cfg,
-      store: params.store,
-      provider: normalizedProvider,
-      profileId: params.profileId,
-    },
-  });
-  if (typeof pluginHint === "string" && pluginHint.trim()) {
-    return pluginHint;
-  }
-  return "";
+  const { withProviderRuntimePlugin } = await import("../../plugins/provider-hook-runtime.js");
+  const pluginHint = await withProviderRuntimePlugin(
+    { config: params.cfg, provider: normalizedProvider },
+    async (provider) =>
+      await provider?.buildAuthDoctorHint?.({
+        config: params.cfg,
+        store: params.store,
+        provider: normalizedProvider,
+        profileId: params.profileId,
+      }),
+  );
+  return typeof pluginHint === "string" && pluginHint.trim() ? pluginHint : "";
 }

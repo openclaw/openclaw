@@ -5,6 +5,7 @@ import {
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
 } from "./config-state.js";
+import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 /** Shares configured-channel eligibility between startup and manifest schema selection. */
@@ -18,25 +19,17 @@ export function canStartConfiguredChannelPlugin(params: {
   activationSource: PluginActivationConfigSource;
 }): boolean {
   const { id, origin, channelIds, config, pluginsConfig, activationSource } = params;
+  const blocked = resolveManifestOwnerBasePolicyBlock({
+    plugin: { id },
+    normalizedConfig: pluginsConfig,
+  });
   if (
-    !pluginsConfig.enabled ||
-    pluginsConfig.deny.includes(id) ||
-    pluginsConfig.entries[id]?.enabled === false
-  ) {
-    return false;
-  }
-  const explicitBundledChannelConfig =
-    origin === "bundled" &&
-    (channelIds ?? []).some((channelId) =>
-      hasExplicitChannelConfig({
-        config: activationSource.rootConfig ?? config,
-        channelId,
-      }),
-    );
-  if (
-    pluginsConfig.allow.length > 0 &&
-    !pluginsConfig.allow.includes(id) &&
-    !explicitBundledChannelConfig
+    blocked &&
+    (blocked !== "not-in-allowlist" ||
+      origin !== "bundled" ||
+      !(channelIds ?? []).some((channelId) =>
+        hasExplicitChannelConfig({ config: activationSource.rootConfig ?? config, channelId }),
+      ))
   ) {
     return false;
   }

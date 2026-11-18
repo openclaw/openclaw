@@ -1,4 +1,6 @@
 /** Automatic live tool-result caps derived from the effective model context. */
+import { AsyncContext } from "../shared/async-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { estimateToolResultTextChars } from "./embedded-agent-runner/tool-result-text-budget.js";
 
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
@@ -9,7 +11,7 @@ const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
 const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
 const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
-export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
+function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens)) {
     return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
   }
@@ -23,7 +25,7 @@ export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): 
   return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 
-export function calculateMaxToolResultCharsWithCap(
+function calculateMaxToolResultCharsWithCap(
   contextWindowTokens: number,
   hardCapChars: number,
 ): number {
@@ -73,4 +75,25 @@ export function toolResultFitsBudget(text: string, budget?: ToolResultBudget): b
     (chars * 2 <= budget.maxContextChars ||
       estimateToolResultTextChars(text, { minimumRawWeight: 2 }) <= budget.maxContextChars)
   );
+}
+
+// The catalog's value APIs retain the complete result before transcript projection.
+const fullToolResultDelivery = resolveGlobalSingleton(
+  Symbol.for("openclaw.fullToolResultDelivery"),
+  () => new AsyncContext<boolean>(Symbol("fullToolResultDelivery")),
+);
+
+export function runWithToolResultDelivery<T>(
+  fullValue: boolean,
+  action: () => Promise<T>,
+): Promise<T> {
+  return fullToolResultDelivery.run(fullValue, action);
+}
+
+export function assertCompleteToolResult(text: string, budget?: ToolResultBudget): void {
+  if (!fullToolResultDelivery.getStore() && (!budget || !toolResultFitsBudget(text, budget))) {
+    throw new Error(
+      "The complete tool result cannot fit this caller's direct output budget. Invoke the tool through Code Mode to consume its full value, or split the review into smaller changes.",
+    );
+  }
 }

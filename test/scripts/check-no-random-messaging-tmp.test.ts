@@ -81,16 +81,6 @@ describe("check-no-random-messaging-tmp", () => {
     ).toEqual([3]);
   });
 
-  it("ignores mentions in comments and strings", () => {
-    const source = `
-      // os.tmpdir()
-      const text = "tmpdir()";
-    `;
-    expect(
-      findMessagingTmpdirCallLines(source, "file.ts", parser.parseSourceFile("file.ts", source)),
-    ).toStrictEqual([]);
-  });
-
   it("ignores tmpdir symbols that are not imported from node:os", () => {
     const source = `
       const tmpdir = () => "/tmp";

@@ -1,12 +1,9 @@
-// Browser CDP helpers connect plugin browser automation to Chrome DevTools Protocol sessions.
 import { redactToolPayloadText } from "../logging/redact.js";
 
 /** Detect an operator-supplied port before WHATWG URL normalization drops default ports. */
 function hasRawExplicitPort(raw: string): boolean {
   const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0] ?? "";
-  const hostPort = authority.includes("@")
-    ? authority.slice(authority.lastIndexOf("@") + 1)
-    : authority;
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
 
   if (hostPort.startsWith("[")) {
     return /^\[[^\]]+\]:\d+$/.test(hostPort);
@@ -49,26 +46,12 @@ export function parseBrowserHttpUrl(raw: string, label: string): BrowserHttpUrlP
   }
 
   const normalized = parsed.toString().replace(/\/$/, "");
-  let normalizedWithPort: string;
-  if (hasExplicitPort && !parsed.port) {
-    // URL normalizes away default ports, but config diagnostics need to preserve
-    // whether the operator explicitly wrote `:80` or `:443`.
-    const proto = parsed.protocol + "//";
-    const rest = normalized.slice(proto.length);
-    const atIdx = rest.indexOf("@");
-    const hostStart = atIdx >= 0 ? atIdx + 1 : 0;
-    const hostPart = rest.slice(hostStart);
-    const hostLen = hostPart.startsWith("[")
-      ? hostPart.indexOf("]") + 1
-      : (() => {
-          const idx = hostPart.search(/[:/]/);
-          return idx < 0 ? hostPart.length : idx;
-        })();
-    const insertAt = hostStart + hostLen;
-    normalizedWithPort = proto + rest.slice(0, insertAt) + ":" + port + rest.slice(insertAt);
-  } else {
-    normalizedWithPort = normalized;
-  }
+  // URL drops default ports; restore them within the authority, before any path,
+  // query, or fragment that could itself contain an `@`.
+  const normalizedWithPort =
+    hasExplicitPort && !parsed.port
+      ? normalized.replace(/^[^:]+:\/\/[^/?#]+/, (authority) => `${authority}:${port}`)
+      : normalized;
 
   return {
     parsed,

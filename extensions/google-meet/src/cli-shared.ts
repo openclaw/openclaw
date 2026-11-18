@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   callGatewayFromCli,
   isGatewayClientRequestError,
@@ -13,7 +14,6 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
-import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
 import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
@@ -92,31 +92,6 @@ export type GoogleMeetExportWarning = {
   message: string;
 };
 
-export type GoogleMeetExportManifest = {
-  generatedAt: string;
-  request?: GoogleMeetExportRequest;
-  tokenSource?: "cached-access-token" | "refresh-token";
-  calendarEvent?: GoogleMeetCalendarLookupResult;
-  inputs: {
-    artifacts?: string;
-    attendance?: string;
-  };
-  counts: {
-    conferenceRecords: number;
-    artifacts: number;
-    attendanceRows: number;
-    recordings: number;
-    transcripts: number;
-    transcriptEntries: number;
-    smartNotes: number;
-    warnings: number;
-  };
-  conferenceRecords: string[];
-  files: string[];
-  zipFile?: string;
-  warnings: GoogleMeetExportWarning[];
-};
-
 export type SetupOptions = {
   json?: boolean;
   mode?: string;
@@ -133,7 +108,7 @@ type GoogleMeetGatewayMethod =
   | "googlemeet.testListen"
   | "googlemeet.testSpeech";
 
-type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
+type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false };
 
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
@@ -179,6 +154,18 @@ export function parseGoogleMeetTransport(
     return value;
   }
   throw new Error(`transport must be chrome, chrome-node, or twilio; received ${value}`);
+}
+
+export function resolveCliJoinRequest(url: string, options: JoinOptions) {
+  return {
+    url,
+    transport: parseGoogleMeetTransport(options.transport),
+    mode: parseGoogleMeetMode(options.mode),
+    message: options.message,
+    dialInNumber: options.dialInNumber,
+    pin: options.pin,
+    dtmfSequence: options.dtmfSequence,
+  };
 }
 
 export function parseGoogleMeetBrowserTransport(
@@ -313,25 +300,29 @@ export function parsePositiveIntegerOption(
 }
 
 export async function callGoogleMeetGateway(params: {
-  callGateway: typeof callGatewayFromCli;
   method: GoogleMeetGatewayMethod;
   payload?: Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<GoogleMeetGatewayCallResult> {
+  // Ctrl+C or SIGTERM cancels reads only; an interrupted read never falls back or prints.
+  const signal =
+    params.method === "googlemeet.status" || params.method === "googlemeet.transcript"
+      ? getAsyncWorkSignal()
+      : undefined;
   try {
     const timeoutMs = resolveGoogleMeetGatewayTimeoutMs(params.timeoutMs);
-    return {
-      ok: true,
-      payload: await params.callGateway(
-        params.method,
-        { json: true, timeout: String(timeoutMs) },
-        params.payload,
-        { progress: false },
-      ),
-    };
+    const payload = await callGatewayFromCli(
+      params.method,
+      { json: true, timeout: String(timeoutMs) },
+      params.payload,
+      { progress: false, ...(signal ? { signal } : {}) },
+    );
+    signal?.throwIfAborted();
+    return { ok: true, payload };
   } catch (err) {
+    signal?.throwIfAborted();
     if (isGatewayUnavailableForLocalFallback(err, params.method)) {
-      return { ok: false, error: err };
+      return { ok: false };
     }
     throw err;
   }

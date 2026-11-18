@@ -115,7 +115,7 @@ internal fun SystemAgentSettingsScreen(
         }
 
         else -> {
-          SystemAgentAccessGate(state = state)
+          SystemAgentAccessGate(access = state.access)
         }
       }
     }
@@ -123,9 +123,9 @@ internal fun SystemAgentSettingsScreen(
 }
 
 @Composable
-private fun SystemAgentAccessGate(state: SystemAgentChatState) {
+private fun SystemAgentAccessGate(access: SystemAgentChatAccess) {
   val title =
-    when (state.access) {
+    when (access) {
       SystemAgentChatAccess.Disconnected -> nativeString("Gateway Required")
       SystemAgentChatAccess.MissingAdminScope -> nativeString("Full Access Required")
       SystemAgentChatAccess.CheckingGateway -> nativeString("Checking Gateway")
@@ -133,7 +133,7 @@ private fun SystemAgentAccessGate(state: SystemAgentChatState) {
       SystemAgentChatAccess.Ready -> ""
     }
   val detail =
-    when (state.access) {
+    when (access) {
       SystemAgentChatAccess.Disconnected -> nativeString("Connect this phone to a Gateway before opening OpenClaw.")
       SystemAgentChatAccess.MissingAdminScope -> nativeString("Reconnect with operator.admin access to review and change Gateway settings.")
       SystemAgentChatAccess.CheckingGateway -> nativeString("Checking whether this Gateway supports the OpenClaw settings assistant.")
@@ -147,7 +147,7 @@ private fun SystemAgentAccessGate(state: SystemAgentChatState) {
       verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Icon(
-        imageVector = if (state.access == SystemAgentChatAccess.Disconnected) Icons.Default.Lock else ClawIcons.OpenClaw,
+        imageVector = if (access == SystemAgentChatAccess.Disconnected) Icons.Default.Lock else ClawIcons.OpenClaw,
         contentDescription = null,
         tint = ClawTheme.colors.warning,
         modifier = Modifier.size(42.dp),

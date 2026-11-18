@@ -1,7 +1,40 @@
-import { execFileSync } from "node:child_process";
-import fs from "node:fs";
+import { execFile, execFileSync } from "node:child_process";
 import path from "node:path";
+import { promisify } from "node:util";
+import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildChromeLaunchEnv } from "./chrome.launch-env.js";
+
+const execFileAsync = promisify(execFile);
+
+/** Check Linux loader failures without starting a browser or touching its profile. */
+export async function getBrowserExecutableError(
+  executablePath: string,
+  signal?: AbortSignal,
+): Promise<string | null> {
+  if (process.platform !== "linux") {
+    return null;
+  }
+  try {
+    await execFileAsync(executablePath, ["--version"], {
+      env: buildChromeLaunchEnv(),
+      timeout: BROWSER_VERSION_TIMEOUT_MS,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024,
+      signal,
+    });
+    return null;
+  } catch (error) {
+    signal?.throwIfAborted();
+    const stderr =
+      error && typeof error === "object" && "stderr" in error && typeof error.stderr === "string"
+        ? error.stderr.trim()
+        : "";
+    const detail = stderr || (error instanceof Error ? error.message : String(error));
+    return `Chromium executable cannot run: ${redactToolPayloadText(detail.slice(-2000))}`;
+  }
+}
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 const BROWSER_VERSION_TIMEOUT_MS = 6000;
@@ -31,7 +64,6 @@ export function execBrowserProbe(
   }
 }
 
-/** Read a browser executable version from platform metadata or a command-line probe. */
 export function readBrowserVersion(executablePath: string): string | null {
   if (process.platform === "darwin") {
     const bundleVersion = readMacBundleBrowserVersion(executablePath);
@@ -50,7 +82,7 @@ export function readBrowserVersion(executablePath: string): string | null {
   if (!output) {
     return null;
   }
-  return output.replace(/\s+/g, " ").trim();
+  return output.replace(/\s+/g, " ");
 }
 
 function readMacBundleBrowserVersion(executablePath: string): string | null {
@@ -99,19 +131,15 @@ function readWindowsBrowserVersion(executablePath: string): string | null {
     { OPENCLAW_BROWSER_EXECUTABLE_PATH: executablePath },
   );
   if (metadataVersion) {
-    return metadataVersion.replace(/\s+/g, " ").trim();
+    return metadataVersion.replace(/\s+/g, " ");
   }
 
   // Standard Chromium installers also keep a versioned child directory. Only
   // trust that layout when it is unambiguous; updates may leave two builds.
-  try {
-    const versionDirs = fs
-      .readdirSync(path.win32.dirname(executablePath), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name));
-    return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
-  } catch {
-    return null;
-  }
+  const versionDirs = readDirectoryEntriesSync(path.win32.dirname(executablePath)).filter(
+    (entry) => entry.isDirectory() && WINDOWS_VERSION_DIR_RE.test(entry.name),
+  );
+  return versionDirs.length === 1 ? (versionDirs[0]?.name ?? null) : null;
 }
 
 function resolveMacAppBundlePath(executablePath: string): string | null {
@@ -123,7 +151,6 @@ function resolveMacAppBundlePath(executablePath: string): string | null {
   return parts.slice(0, appIndex + 1).join(path.sep) || path.sep;
 }
 
-/** Parse a major browser version from a raw version string. */
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {
   const matches = [...(rawVersion ?? "").matchAll(CHROME_VERSION_RE)];
   const match = matches.at(-1);

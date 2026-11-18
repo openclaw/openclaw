@@ -117,5 +117,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether file transfer is ready for my chosen device and folder.",
+    "Help me retrieve a file from a paired device after confirming its source and destination."
+  ]
 }

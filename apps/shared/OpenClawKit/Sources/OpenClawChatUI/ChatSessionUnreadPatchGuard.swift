@@ -85,6 +85,11 @@ struct ChatSessionUnreadPatchGuard {
         return true
     }
 
+    mutating func confirmReceipt(key: String, unread: Bool) {
+        self.confirmedUnreadByKey[key] = unread
+        if key == self.activeSessionKey, self.activeExplicitUnread != nil { self.activeExplicitUnread = unread }
+    }
+
     func confirmedUnread(key: String) -> Bool? {
         self.confirmedUnreadByKey[key]
     }
@@ -106,13 +111,7 @@ struct ChatSessionUnreadPatchGuard {
 
 @MainActor
 final class ChatSessionUnreadMutationQueue {
-    private struct Tail {
-        let id: Int
-        let task: Task<Void, Never>
-    }
-
-    private var nextID = 0
-    private var tails: [String: Tail] = [:]
+    private var tails: [String: Task<Void, Never>] = [:]
 
     func reserve(
         routeLease: Task<OpenClawChatSessionMutationRouteLease?, Never>,
@@ -120,34 +119,30 @@ final class ChatSessionUnreadMutationQueue {
         routeKey: String,
         agentID: String? = nil,
         expectedMarkedUnreadAt: Double?? = nil,
-        unread: Bool) -> Task<Void, Error>
+        expectedSessionID: String? = nil,
+        unread: Bool) -> Task<OpenClawChatSessionPatchReceipt?, Error>
     {
-        let previous = self.tails[queueKey]?.task
-        self.nextID += 1
-        let id = self.nextID
+        let previous = self.tails[queueKey]
         let operation = Task { @MainActor in
             let resolvedRouteLease = await routeLease.value
             await previous?.value
             guard let resolvedRouteLease else {
                 throw OpenClawChatTransportSendError.notDispatched
             }
-            try await resolvedRouteLease.patchSession(
+            return try await resolvedRouteLease.patchSession(
                 key: routeKey,
                 agentID: agentID,
+                expectedSessionID: expectedSessionID,
                 expectedMarkedUnreadAt: expectedMarkedUnreadAt,
-                label: nil,
-                category: nil,
-                pinned: nil,
-                archived: nil,
                 unread: unread)
         }
         let tail = Task { @MainActor in
             _ = try? await operation.value
         }
-        self.tails[queueKey] = Tail(id: id, task: tail)
+        self.tails[queueKey] = tail
         Task { @MainActor in
             await tail.value
-            if self.tails[queueKey]?.id == id {
+            if self.tails[queueKey] == tail {
                 self.tails.removeValue(forKey: queueKey)
             }
         }

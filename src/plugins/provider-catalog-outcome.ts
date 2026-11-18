@@ -1,3 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+
 export type ProviderCatalogOutcome = {
   provider: string;
   /** Auth profile tested by discovery; omission means provider-wide auth. */
@@ -5,6 +8,52 @@ export type ProviderCatalogOutcome = {
   /** Limits an auth rejection to catalog discovery rather than model execution. */
   rejectionScope?: "catalog";
   status: "ready" | "auth-rejected" | "unavailable";
+  /** Accepted selections advertised by this authenticated account, never static model support. */
+  modelAccessPrograms?: readonly {
+    modelId: string;
+    runtimeId: string;
+    /** Physical route for host-owned credentials; native observations stay harness-scoped. */
+    api?: string;
+    baseUrl?: string;
+    cyber: readonly CyberAccessProgram[];
+  }[];
+  /** Private account-scoped observations from successful discovery, never static model hints. */
+  modelServiceTiers?: readonly {
+    modelId: string;
+    runtimeId: string;
+    api: string;
+    baseUrl: string;
+    serviceTiers: readonly string[];
+  }[];
   /** Optional successful discovery order for models already present in the catalog. */
   modelOrder?: readonly string[];
+  /**
+   * Private provenance: every model id a successful account listing returned, including hidden
+   * rows; never projected publicly. Subscription routes for other ids are not entitled.
+   */
+  listedModelIds?: readonly string[];
+  /** Private successful server listing for config advisories, independent of entitlement. */
+  modelIdCatalog?: {
+    baseUrl: string;
+    modelIds: readonly string[];
+    /** Provider-owned matching data, such as variant aliases omitted from picker rows. */
+    aliases?: readonly string[];
+  };
+  /** Advisory only: configured ids absent from this successful server listing; never eligibility. */
+  unlistedConfiguredModelIds?: readonly string[];
 };
+
+/** True when the successful listing made with this exact credential returned the model id. */
+export function isModelInCredentialListing(
+  outcomes: readonly ProviderCatalogOutcome[] | undefined,
+  ref: { provider: string; modelId: string; profileId?: string },
+): boolean {
+  const provider = normalizeProviderId(ref.provider);
+  return (outcomes ?? []).some(
+    (outcome) =>
+      outcome.status === "ready" &&
+      outcome.profileId === ref.profileId &&
+      normalizeProviderId(outcome.provider) === provider &&
+      (outcome.listedModelIds ?? outcome.modelIdCatalog?.modelIds)?.includes(ref.modelId),
+  );
+}

@@ -58,13 +58,23 @@ export function defineValidatedGatewayHandler<T>(
   method: string,
   validate: Validator<T>,
   handler: ValidatedGatewayRequestHandler<NoInfer<T>>,
+  mapError?: (error: unknown) => ErrorShape,
 ): GatewayRequestHandler {
+  const run: ValidatedGatewayRequestHandler<T> = mapError
+    ? async (options) => {
+        try {
+          await handler(options);
+        } catch (error) {
+          options.respond(false, undefined, mapError(error));
+        }
+      }
+    : handler;
   return (options) => {
     if (!hasValidMethodParams(options, validate, method)) {
       return;
     }
     // Opaque request authority is bound to this exact options object.
-    return handler(options);
+    return run(options);
   };
 }
 
@@ -73,6 +83,12 @@ export function defineValidatedGatewayMethod<Method extends keyof GatewayCoreReq
   method: Method,
   validate: Validator<NoInfer<GatewayCoreRequestParams[Method]>>,
   handler: ValidatedGatewayRequestHandler<GatewayCoreRequestParams[Method]>,
+  mapError?: (error: unknown) => ErrorShape,
 ): GatewayRequestHandler {
-  return defineValidatedGatewayHandler<GatewayCoreRequestParams[Method]>(method, validate, handler);
+  return defineValidatedGatewayHandler<GatewayCoreRequestParams[Method]>(
+    method,
+    validate,
+    handler,
+    mapError,
+  );
 }

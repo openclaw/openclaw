@@ -36,23 +36,28 @@ export function registerOpenResponsesContinuationTests({
   expectInvalidRequest: (response: Response, pattern: RegExp) => Promise<unknown>;
   ensureResponseConsumed: (response: Response) => Promise<void>;
 }) {
+  const post = (body: Record<string, unknown> = {}, headers?: Record<string, string>) =>
+    postResponses(getPort(), { model: "openclaw", input: "hi", ...body }, headers);
+  const replyOnce = (text: string) =>
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text }] } as never);
+  const scope = {
+    authSubject: "gateway-auth:none",
+    agentId: "main",
+    sessionKey: "agent:main:openresponses:unreachable",
+  };
+  const terminal = new Set(["response.completed", "response.incomplete", "response.failed"]);
+
   it.each([false, true])(
     "continues across user values but rejects unknown response IDs (stream=%s)",
     async (stream) => {
-      const request = { model: "openclaw", input: "hi" };
       mockAgentOnce([{ text: "First turn." }]);
-      const first = await postResponses(getPort(), { ...request, user: "alice" });
+      const first = await post({ user: "alice" });
       expect(first.status).toBe(200);
       const { id } = (await first.json()) as { id: string };
       const sessionKey = firstAgentOpts().sessionKey;
       expect(sessionKey).toContain("openresponses-user:alice");
-      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Second turn." }] } as never);
-      const continued = await postResponses(getPort(), {
-        ...request,
-        stream,
-        user: "bob",
-        previous_response_id: id,
-      });
+      replyOnce("Second turn.");
+      const continued = await post({ stream, user: "bob", previous_response_id: id });
       expect(continued.status).toBe(200);
       await ensureResponseConsumed(continued);
       expect(firstAgentOpts(1).sessionKey).toBe(sessionKey);
@@ -62,26 +67,14 @@ export function registerOpenResponsesContinuationTests({
         { responseId: `foreign-agent-${stream}`, agentId: "another-agent" },
         { responseId: `foreign-session-${stream}`, requestedSessionKey: "another-session" },
       ]) {
-        await rememberResponseSession(
-          {
-            authSubject: "gateway-auth:none",
-            agentId: "main",
-            sessionKey: "agent:main:openresponses:unreachable",
-            ...mismatch,
-          },
-          () => {},
-        );
+        await rememberResponseSession({ ...scope, ...mismatch }, () => {});
       }
       seedPluginStateEntriesForTests([
         {
           pluginId: "core:openresponses",
           namespace: "response-sessions",
           key: `expired-${stream}`,
-          value: {
-            sessionKey: "agent:main:openresponses:unreachable",
-            authSubject: "gateway-auth:none",
-            agentId: "main",
-          },
+          value: scope,
           expiresAt: Date.now() - 1,
         },
       ]);
@@ -95,8 +88,7 @@ export function registerOpenResponsesContinuationTests({
         `foreign-agent-${stream}`,
         `foreign-session-${stream}`,
       ]) {
-        const payload = { ...request, stream, previous_response_id: previousId };
-        const response = await postResponses(getPort(), payload);
+        const response = await post({ stream, previous_response_id: previousId });
         await expectInvalidRequest(response, /previous_response_id.*full input context/);
         expect(response.headers.get("content-type")).toContain("application/json");
         expect(agentCommandMock).not.toHaveBeenCalled();
@@ -116,11 +108,7 @@ export function registerOpenResponsesContinuationTests({
         return lookup(...args);
       });
     agentCommandMock.mockClear();
-    const pending = postResponses(getPort(), {
-      model: "openclaw",
-      input: "must not run",
-      previous_response_id: "revoked-request",
-    });
+    const pending = post({ previous_response_id: "revoked-request" });
     await entered.promise;
     const policySpy = vi.spyOn(authPolicy, "isGatewayAuthPolicyCurrent").mockReturnValue(false);
     try {
@@ -138,7 +126,6 @@ export function registerOpenResponsesContinuationTests({
   });
 
   it("commits response continuity before replying and retains it after the store reopens", async () => {
-    const port = getPort();
     const bearer = "synthetic-operator-password";
     const headers = { authorization: `Bearer ${bearer}` };
     agentCommandMock.mockClear();
@@ -150,23 +137,12 @@ export function registerOpenResponsesContinuationTests({
       return result.promise as never;
     });
 
-    const responsePromise = postResponses(
-      port,
-      { stream: false, model: "openclaw", input: "delayed hello" },
-      headers,
-    );
-
+    const responsePromise = post({ stream: false }, headers);
     await entered.promise;
-    const pendingId = firstAgentOpts().runId;
-    const sessionKey = firstAgentOpts().sessionKey;
-    const pending = await postResponses(
-      port,
-      { model: "openclaw", input: "too early", previous_response_id: pendingId },
-      headers,
-    );
+    const { runId, sessionKey } = firstAgentOpts();
+    const pending = await post({ previous_response_id: runId }, headers);
     await expectInvalidRequest(pending, /previous_response_id/);
     result.resolve({ payloads: [{ text: "hello" }] });
-
     const res = await responsePromise;
     expect(res.status).toBe(200);
     const json = (await res.json()) as { id?: string };
@@ -180,19 +156,14 @@ export function registerOpenResponsesContinuationTests({
     expect(stored?.value_json).not.toContain(bearer);
     expect(stored?.value_json).not.toContain(createHash("sha256").update(bearer).digest("hex"));
     await closeOpenClawStateDatabaseAsync();
-    const foreign = await postResponses(
-      port,
-      { model: "openclaw", input: "foreign bearer", previous_response_id: json.id },
+    const foreign = await post(
+      { previous_response_id: json.id },
       { authorization: "Bearer synthetic-different-password" },
     );
     await expectInvalidRequest(foreign, /previous_response_id/);
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "continued" }] } as never);
-    const continued = await postResponses(
-      port,
-      { model: "openclaw", input: "continue after reopen", previous_response_id: json.id },
-      headers,
-    );
+    replyOnce("continued");
+    const continued = await post({ previous_response_id: json.id }, headers);
     expect(continued.status).toBe(200);
     await ensureResponseConsumed(continued);
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
@@ -200,138 +171,85 @@ export function registerOpenResponsesContinuationTests({
   });
 
   it.each([
-    { stream: false, runFails: false },
-    { stream: true, runFails: false },
-    { stream: false, runFails: true },
-    { stream: true, runFails: true },
-  ])(
-    "reports persistence failure without masking the run error (%j)",
-    async ({ stream, runFails }) => {
-      const persistenceError = new Error("synthetic continuity write failed");
-      const persistence = vi
-        .spyOn(responseSessions, "rememberResponseSession")
-        .mockRejectedValueOnce(persistenceError);
-      const warnings = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
-      agentCommandMock.mockClear();
-      if (runFails) {
-        agentCommandMock.mockRejectedValueOnce(
-          new FailoverError("synthetic provider throttled", { reason: "rate_limit", status: 429 }),
-        );
-      } else {
-        agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "done" }] } as never);
-      }
-      try {
-        const response = await postResponses(getPort(), { model: "openclaw", input: "hi", stream });
-        expect(response.status).toBe(stream ? 200 : runFails ? 429 : 500);
-        const resource = stream
-          ? (
-              JSON.parse(
-                findSseEvent(parseSseEvents(await response.text()), "response.failed").data,
-              ) as {
-                response: ResponseResource;
-              }
-            ).response
-          : await response.json();
-        expect(resource).toMatchObject({
-          status: "failed",
-          error: runFails
-            ? { code: "rate_limit_error", message: "synthetic provider throttled" }
-            : { code: "api_error", message: "internal error" },
-        });
-        expect(persistence).toHaveBeenCalledTimes(1);
-        expect(warnings).toHaveBeenCalledWith(expect.stringContaining(persistenceError.message));
-      } finally {
-        persistence.mockRestore();
-        warnings.mockRestore();
-      }
-    },
-  );
-
-  it.each([false, true])(
-    "preserves resolved failed-run responses when continuity persistence rejects (stream=%s)",
-    async (stream) => {
-      const privateDetail = "raw provider detail should stay private";
-      const persistence = vi.spyOn(responseSessions, "rememberResponseSession");
-      const warnings = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
-      agentCommandMock.mockClear();
-      try {
-        for (const persistenceError of [
-          undefined,
-          new Error("synthetic continuity write failed"),
-          new ToolAuthorizationError("synthetic continuity write denied"),
-        ]) {
-          if (persistenceError) {
-            persistence.mockRejectedValueOnce(persistenceError);
-          }
+    { stream: false, run: "success" },
+    { stream: false, run: "throws" },
+    { stream: false, run: "failed" },
+    { stream: true, run: "success" },
+    { stream: true, run: "throws" },
+    { stream: true, run: "failed" },
+  ])("keeps run errors on persistence failure (%j)", async ({ stream, run }) => {
+    const persistence = vi.spyOn(responseSessions, "rememberResponseSession");
+    const warnings = vi.spyOn(logger, "logWarn").mockImplementation(() => {});
+    agentCommandMock.mockClear();
+    const privateDetail = "raw provider detail should stay private";
+    const throttled = "synthetic provider throttled";
+    const writeError = new Error("synthetic continuity write failed");
+    const failures =
+      run === "failed"
+        ? [undefined, writeError, new ToolAuthorizationError("synthetic continuity write denied")]
+        : [writeError];
+    try {
+      for (const persistenceError of failures) {
+        if (persistenceError) {
+          persistence.mockRejectedValueOnce(persistenceError);
+        }
+        if (run === "throws") {
+          agentCommandMock.mockRejectedValueOnce(
+            new FailoverError(throttled, { reason: "rate_limit", status: 429 }),
+          );
+        } else if (run === "success") {
+          replyOnce("done");
+        } else {
           agentCommandMock.mockResolvedValueOnce(
             recordAgentRunTerminalOutcome(
               {
                 payloads: [{ text: "Command may have changed state", isError: true }],
                 meta: {
                   error: { kind: "incomplete_turn", message: privateDetail },
-                  agentMeta: {
-                    sessionId: "failed-continuation-session",
-                    provider: "openai",
-                    model: "test-model",
-                    usage: { input: 11, output: 7, total: 18 },
-                  },
+                  agentMeta: { usage: { input: 11, output: 7, total: 18 } },
                 },
               },
               "failed",
             ) as never,
           );
+        }
 
-          const response = await postResponses(getPort(), {
-            model: "openclaw",
-            input: "hi",
-            stream,
-          });
-          expect(response.status).toBe(stream ? 200 : 500);
-          const body = await response.text();
+        const response = await post({ stream });
+        expect(response.status).toBe(stream ? 200 : run === "throws" ? 429 : 500);
+        const body = await response.text();
+        const events = stream ? parseSseEvents(body) : [];
+        const resource: ResponseResource = stream
+          ? JSON.parse(findSseEvent(events, "response.failed").data).response
+          : JSON.parse(body);
+        if (run === "failed") {
           expect(body).not.toContain(privateDetail);
-          let resource: ResponseResource;
+          expect(resource.output).toEqual([]);
           if (stream) {
-            const events = parseSseEvents(body);
             expect(
-              events
-                .filter((event) =>
-                  ["response.completed", "response.incomplete", "response.failed"].includes(
-                    event.event ?? "",
-                  ),
-                )
-                .map((event) => event.event),
+              events.map(({ event }) => event).filter((event) => terminal.has(event ?? "")),
             ).toEqual(["response.failed"]);
             expect(events.at(-1)?.data).toBe("[DONE]");
-            resource = (
-              JSON.parse(findSseEvent(events, "response.failed").data) as {
-                response: ResponseResource;
-              }
-            ).response;
-            expect(resource.usage).toMatchObject({
-              input_tokens: 11,
-              output_tokens: 7,
-              total_tokens: 18,
+            expect(resource).toMatchObject({
+              usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
             });
-          } else {
-            resource = JSON.parse(body) as ResponseResource;
-          }
-          expect(resource).toMatchObject({
-            status: "failed",
-            output: [],
-            error: { code: "api_error", message: "internal error" },
-          });
-          if (persistenceError) {
-            expect(warnings).toHaveBeenCalledWith(
-              expect.stringContaining(persistenceError.message),
-            );
           }
         }
-        expect(agentCommandMock).toHaveBeenCalledTimes(3);
-        expect(persistence).toHaveBeenCalledTimes(3);
-      } finally {
-        persistence.mockRestore();
-        warnings.mockRestore();
+        expect(resource).toMatchObject({
+          status: "failed",
+          error:
+            run === "throws"
+              ? { code: "rate_limit_error", message: throttled }
+              : { code: "api_error", message: "internal error" },
+        });
+        if (persistenceError) {
+          expect(warnings).toHaveBeenCalledWith(expect.stringContaining(persistenceError.message));
+        }
       }
-    },
-  );
+      expect(agentCommandMock).toHaveBeenCalledTimes(failures.length);
+      expect(persistence).toHaveBeenCalledTimes(failures.length);
+    } finally {
+      persistence.mockRestore();
+      warnings.mockRestore();
+    }
+  });
 }

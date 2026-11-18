@@ -12,20 +12,16 @@ const VERIFICATION_NOTICE_PREFIXES = [
   "Matrix verification SAS with ",
 ];
 
-function trimMaybeString(input: unknown): string {
-  return normalizeOptionalString(input) ?? "";
-}
-
 export function isMatrixVerificationEventType(type: unknown): boolean {
-  return trimMaybeString(type).startsWith(VERIFICATION_EVENT_PREFIX);
+  return normalizeOptionalString(type)?.startsWith(VERIFICATION_EVENT_PREFIX) === true;
 }
 
 export function isMatrixVerificationRequestMsgType(msgtype: unknown): boolean {
-  return trimMaybeString(msgtype) === VERIFICATION_REQUEST_MSGTYPE;
+  return normalizeOptionalString(msgtype) === VERIFICATION_REQUEST_MSGTYPE;
 }
 
 function isMatrixVerificationNoticeBody(body: unknown): boolean {
-  const text = trimMaybeString(body);
+  const text = normalizeOptionalString(body) ?? "";
   return VERIFICATION_NOTICE_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
@@ -35,7 +31,7 @@ export function isMatrixVerificationRoomMessage(content: {
 }): boolean {
   return (
     isMatrixVerificationRequestMsgType(content.msgtype) ||
-    (trimMaybeString(content.msgtype) === "m.notice" &&
+    (normalizeOptionalString(content.msgtype) === "m.notice" &&
       isMatrixVerificationNoticeBody(content.body))
   );
 }

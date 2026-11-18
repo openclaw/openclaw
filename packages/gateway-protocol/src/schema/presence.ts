@@ -1,12 +1,15 @@
 import { type Static, Type } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-presence.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
+import { PresenceActivityParamsSchema } from "./presence-activity.js";
 import { NonEmptyString } from "./primitives.js";
 
-/** Interaction signal only; identity and time belong to the authenticated live connection. */
-const PresenceActivityParamsSchema = closedObject({});
 export type PresenceActivityParams = Static<typeof PresenceActivityParamsSchema>;
-export const validatePresenceActivityParams = lazyCompile(PresenceActivityParamsSchema);
+export const validatePresenceActivityParams = createProtocolValidator(
+  PresenceActivityParamsSchema,
+  Checks.isPresenceActivityParams,
+);
 
 export const PresenceQueryParamsSchema = closedObject({
   action: Type.Optional(
@@ -121,6 +124,10 @@ export const PresenceQueryResultSchema = closedObject({
 });
 
 export type PresenceQueryParams = Static<typeof PresenceQueryParamsSchema>;
+export const validatePresenceQueryParams = createProtocolValidator(
+  PresenceQueryParamsSchema,
+  Checks.isPresenceQueryParams,
+);
 export type PresenceQueryResult = Static<typeof PresenceQueryResultSchema>;
 export type PresencePerson = Static<typeof PresencePersonSchema>;
 export type PresenceDevice = Static<typeof PresenceDeviceSchema>;

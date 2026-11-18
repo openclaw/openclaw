@@ -60,12 +60,8 @@ internal enum class AppLanguage(
 }
 
 internal fun appLanguageFromLocales(locales: LocaleListCompat): AppLanguage =
-  if (locales.isEmpty) {
-    AppLanguage.System
-  } else {
-    (0 until locales.size()).firstNotNullOfOrNull { index -> locales[index]?.let(AppLanguage::fromLocale) }
-      ?: AppLanguage.System
-  }
+  (0 until locales.size()).firstNotNullOfOrNull { index -> locales[index]?.let(AppLanguage::fromLocale) }
+    ?: AppLanguage.System
 
 internal fun currentAppLanguage(): AppLanguage = appLanguageFromLocales(AppCompatDelegate.getApplicationLocales())
 

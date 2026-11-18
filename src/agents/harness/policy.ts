@@ -1,6 +1,3 @@
-/**
- * Resolves configured native harness policy for agent ids.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import {
@@ -14,16 +11,12 @@ import {
 } from "../model-runtime-policy.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
 
-/**
- * Effective runtime policy for selecting the agent harness that should execute a turn.
- */
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
   runtimeSource?: "model" | "provider" | "implicit";
   forcedByEnvironment?: true;
 };
 
-/** Resolves model/provider/runtime config into the canonical harness runtime id. */
 export function resolveAgentHarnessPolicy(
   params: {
     provider?: string;
@@ -33,10 +26,16 @@ export function resolveAgentHarnessPolicy(
     requestTransportOverrides?: ProviderRouteOverridePresence;
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
+    resolveOpenAIProviderRoutes?: Parameters<typeof resolveOpenAIImplicitAgentRuntime>[1];
   } & AgentRuntimePolicyScope,
   // Configured selectors can reuse a normalized lookup without losing their route input.
   configured = resolveModelRuntimePolicy(params),
 ): AgentHarnessPolicy {
+  // The required worker owns runtime selection, before implicit provider harness routing.
+  // Explicit session overrides are rejected at session mutation and run admission.
+  if (params.config?.cloudWorkers?.requiredProfile) {
+    return { runtime: "openclaw", runtimeSource: "implicit" };
+  }
   const configuredRuntime = normalizeOptionalAgentRuntimeId(configured.policy?.id);
   const runtime =
     configuredRuntime && configuredRuntime !== "default"
@@ -51,17 +50,17 @@ export function resolveAgentHarnessPolicy(
       ...(configured.forcedByEnvironment ? { forcedByEnvironment: true } : {}),
     };
   }
-  const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
-    ...params,
-    runtimePolicy: configured,
-    api: params.modelApi,
-    baseUrl: params.modelBaseUrl,
-  });
-  if (openAIImplicitRuntime) {
-    return { runtime: openAIImplicitRuntime, runtimeSource };
-  }
+  const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime(
+    {
+      ...params,
+      runtimePolicy: configured,
+      api: params.modelApi,
+      baseUrl: params.modelBaseUrl,
+    },
+    params.resolveOpenAIProviderRoutes,
+  );
   return {
-    runtime,
+    runtime: openAIImplicitRuntime || runtime,
     runtimeSource,
   };
 }

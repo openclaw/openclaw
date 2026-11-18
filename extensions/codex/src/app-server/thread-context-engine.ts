@@ -1,22 +1,23 @@
-import {
-  isActiveHarnessContextEngine,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isActiveHarnessContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { resolveCodexContextEngineProjectionMaxChars } from "./context-engine-projection.js";
 import type {
   CodexAppServerContextEngineBinding,
   CodexAppServerContextEngineProjectionBinding,
 } from "./session-binding.js";
 
-export type CodexContextEngineThreadBootstrapProjection = {
-  mode: "thread_bootstrap";
-  epoch: string;
-  fingerprint?: string;
+export type CodexContextEngineThreadBootstrapProjection = Pick<
+  CodexAppServerContextEngineProjectionBinding,
+  "mode" | "epoch" | "fingerprint"
+> & {
+  /** Final selection identity; the ordinary fingerprint admits the previous native prefix. */
+  deliveredFingerprint?: string;
 };
 
 export function buildContextEngineBinding(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   projection?: CodexContextEngineThreadBootstrapProjection,
+  acknowledged = false,
 ): CodexAppServerContextEngineBinding | undefined {
   const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
@@ -25,6 +26,9 @@ export function buildContextEngineBinding(
   if (!contextEngine || !engineId) {
     return undefined;
   }
+  const configuredContextBudget = params.authoredContextTokenCap
+    ? Math.min(params.authoredContextTokenCap, params.contextTokenBudget ?? Infinity)
+    : undefined;
   return {
     schemaVersion: 1,
     engineId,
@@ -35,9 +39,16 @@ export function buildContextEngineBinding(
       ownsCompaction: contextEngine.info.ownsCompaction === true,
       turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
       citationsMode: params.config?.memory?.citations,
-      contextTokenBudget: params.contextTokenBudget,
+      contextTokenBudget: configuredContextBudget ?? params.contextTokenBudget,
+      ...(configuredContextBudget
+        ? {
+            historyCarrier: "thread/inject_items",
+            modelProvider: params.provider,
+            model: params.modelId,
+          }
+        : {}),
       projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
-        contextTokenBudget: params.contextTokenBudget,
+        contextTokenBudget: configuredContextBudget ?? params.contextTokenBudget,
       }),
     }),
     projection: projection
@@ -45,7 +56,8 @@ export function buildContextEngineBinding(
           schemaVersion: 1,
           mode: "thread_bootstrap",
           epoch: projection.epoch,
-          fingerprint: projection.fingerprint,
+          fingerprint:
+            (acknowledged ? projection.deliveredFingerprint : undefined) ?? projection.fingerprint,
         }
       : undefined,
   };
@@ -55,25 +67,17 @@ export function isContextEngineBindingCompatible(
   previous: CodexAppServerContextEngineBinding | undefined,
   next: CodexAppServerContextEngineBinding,
 ): boolean {
+  const previousProjection = previous?.projection;
+  const nextProjection = next.projection;
   return (
     previous?.schemaVersion === next.schemaVersion &&
     previous.engineId === next.engineId &&
     previous.policyFingerprint === next.policyFingerprint &&
-    areContextEngineProjectionBindingsCompatible(previous.projection, next.projection)
-  );
-}
-
-function areContextEngineProjectionBindingsCompatible(
-  previous: CodexAppServerContextEngineProjectionBinding | undefined,
-  next: CodexAppServerContextEngineProjectionBinding | undefined,
-): boolean {
-  if (!next) {
-    return previous === undefined;
-  }
-  return (
-    previous?.schemaVersion === next.schemaVersion &&
-    previous.mode === next.mode &&
-    previous.epoch === next.epoch &&
-    previous.fingerprint === next.fingerprint
+    (!nextProjection
+      ? previousProjection === undefined
+      : previousProjection?.schemaVersion === nextProjection.schemaVersion &&
+        previousProjection.mode === nextProjection.mode &&
+        previousProjection.epoch === nextProjection.epoch &&
+        previousProjection.fingerprint === nextProjection.fingerprint)
   );
 }

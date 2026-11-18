@@ -14,7 +14,7 @@ struct DashboardBackgroundTests {
             html: "<!doctype html><html><head></head><body></body></html>",
             contentSecurityPolicy: "default-src 'none'; style-src 'unsafe-inline'")
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(),
             auth: auth,

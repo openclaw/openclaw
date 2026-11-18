@@ -1,12 +1,13 @@
 import { Type } from "typebox";
 import { SessionMoveProfileTargetSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { SESSIONS_PATCH_MANY_MAX_TARGETS } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { UsersListParamsSchema } from "../../../packages/gateway-protocol/src/schema/users.js";
 import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   SESSION_COLOR_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { stringEnum } from "../schema/typebox.js";
+import { requesterProfileSchema, stringEnum } from "../schema/typebox.js";
 
 const ACTIONS = [
   "cloud_profiles",
@@ -15,6 +16,7 @@ const ACTIONS = [
   "reset",
   "delete",
   "assign_owner",
+  "owner_profiles",
   "group_list",
   "group_set",
   "group_rename",
@@ -24,12 +26,7 @@ const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 
 const SessionsToolSchema = Type.Object(
   {
-    user: Type.Optional(
-      Type.String({
-        description:
-          "The person's requester_profile.id, required when several people have steered this turn.",
-      }),
-    ),
+    user: requesterProfileSchema({ defaultToTurnOwner: true }),
     action: stringEnum(ACTIONS, { description: "Action" }),
     profileId: Type.Optional({
       ...SessionMoveProfileTargetSchema.properties.profileId,
@@ -38,7 +35,8 @@ const SessionsToolSchema = Type.Object(
     offset: Type.Optional(
       Type.Integer({
         minimum: 0,
-        description: "cloud_profiles: nextOffset from the previous profile-list page.",
+        description:
+          "cloud_profiles or owner_profiles: nextOffset from the previous profile-list page.",
       }),
     ),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
@@ -62,7 +60,7 @@ const SessionsToolSchema = Type.Object(
     expectedSessionId: Type.Optional(
       Type.String({
         description:
-          "Durable identity returned by sessions_list; rejects a replaced session. Required for archive, restore, or delete of another session.",
+          "Durable identity returned by sessions_list; rejects a replaced session. Required to archive, restore, or delete another session, and for non-owner rename of another session.",
       }),
     ),
     runId: Type.Optional(
@@ -132,7 +130,17 @@ const SessionsToolSchema = Type.Object(
         description: "New owner kind for assign_owner",
       }),
     ),
-    ownerId: Type.Optional(Type.String({ description: "New owner id for assign_owner" })),
+    ownerId: Type.Optional(
+      Type.String({
+        description:
+          "assign_owner: canonical Gateway profile ID for a human (prefer trusted requester_profile.id), never a channel sender ID; configured agent ID for an agent.",
+      }),
+    ),
+    githubAccountIds: Type.Optional({
+      ...UsersListParamsSchema.properties.githubAccountIds,
+      description:
+        "owner_profiles: optional verified GitHub account IDs to resolve to canonical Gateway profile IDs. Names and channel sender IDs do not establish a match.",
+    }),
     names: Type.Optional(
       Type.Array(Type.String(), {
         description:
@@ -155,7 +163,8 @@ export const SessionControlToolSchema = Type.Object(
     expectedSessionId: SessionsToolSchema.properties.expectedSessionId,
     archived: Type.Optional(
       Type.Boolean({
-        description: "patch: required; true archives without deleting, false restores.",
+        description:
+          "patch archive/restore: true archives without deleting, false restores. Omit when renaming.",
       }),
     ),
     runId: SessionsToolSchema.properties.runId,
@@ -164,18 +173,31 @@ export const SessionControlToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionRenameToolSchema = Type.Object(
+  {
+    ...Type.Pick(SessionsToolSchema, ["user", "sessionKey", "expectedSessionId", "label"])
+      .properties,
+    action: stringEnum(["patch"], {
+      description: "Rename a session created by the requesting operator.",
+    }),
+    expectedSessionId: Type.Optional(
+      Type.String({
+        description:
+          "Durable identity from sessions_list; required when renaming another session. Current-session rename uses this run's captured identity.",
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 /** Restrict only the newly exposed Stop action; preserve pre-existing collector controls. */
-export function resolveSessionsToolSchema(controlOnly: boolean, stopAllowed: boolean) {
-  const schema = controlOnly ? SessionControlToolSchema : SessionsToolSchema;
+export function resolveSessionsToolSchema(stopAllowed: boolean) {
   if (stopAllowed) {
-    return schema;
+    return SessionsToolSchema;
   }
-  const { runId: _runId, clearQueued: _clearQueued, ...properties } = schema.properties;
+  const { runId: _runId, clearQueued: _clearQueued, ...properties } = SessionsToolSchema.properties;
   return Type.Object(
-    {
-      ...properties,
-      action: stringEnum(controlOnly ? ["patch"] : ACTIONS.filter((action) => action !== "stop")),
-    },
+    { ...properties, action: stringEnum(ACTIONS.filter((action) => action !== "stop")) },
     { additionalProperties: false },
   );
 }

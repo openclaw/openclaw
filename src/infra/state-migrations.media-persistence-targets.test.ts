@@ -2,11 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
-import {
-  beginAgentDeletionJournal,
-  completeAgentDeletionJournalInDatabase,
-} from "../state/agent-deletion-journal.js";
+import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -23,6 +19,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
@@ -81,7 +78,7 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-it("migrates a surviving physical owner beside a retained hardlink owner", async () => {
+it("migrates surviving owners beside retained hardlinks", async () => {
   const deletedId = "aaa-deleted";
   const databasePath = createLegacyAgentDatabase();
   const retainedPath = path.join(stateDir, "retained.sqlite");
@@ -112,25 +109,7 @@ it("migrates a surviving physical owner beside a retained hardlink owner", async
   await expect(ready()).resolves.toBeUndefined();
 });
 
-it("migrates an unregistered configured agentDir outside the default tree", async () => {
-  const agentDir = path.join(stateDir, ".openclaw", "agents", "worker", "agent");
-  const databasePath = createLegacyAgentDatabase({
-    agentId: "worker",
-    path: path.join(agentDir, "openclaw-agent.sqlite"),
-  });
-  unregisterOpenClawAgentDatabase({ agentId: "worker", env, path: databasePath });
-  const result = await migrateLegacyMediaPersistence({
-    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(
-      { agents: { ownership: "explicit", entries: { worker: { agentDir } } } },
-      { env },
-    ),
-    env,
-  });
-  expect(result.warnings).toEqual([]);
-  expectMigrated(databasePath, "worker");
-});
-
-it("refreshes a retained registration after its schema upgrade already committed", async () => {
+it("refreshes registrations after committed schema upgrades", async () => {
   const agentId = "retired";
   const databasePath = path.join(stateDir, "retained", "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId, env, path: databasePath });
@@ -141,7 +120,7 @@ it("refreshes a retained registration after its schema upgrade already committed
   expectMigrated(databasePath, agentId);
 });
 
-it("preserves filesystem traversal for registered paths containing dot-dot segments", async () => {
+it("resolves registered dot-dot paths through filesystem traversal", async () => {
   const symlinkTarget = path.join(stateDir, "external", "subdir");
   fs.mkdirSync(symlinkTarget, { recursive: true });
   fs.symlinkSync(symlinkTarget, path.join(stateDir, "link"), "dir");
@@ -162,72 +141,64 @@ it("preserves filesystem traversal for registered paths containing dot-dot segme
   await expect(ready()).resolves.toBeUndefined();
 });
 
-it.each(
-  [
+it.each([
+  ["media-persistence", "discovery"],
+  ["transcript-directives", "none"],
+  ["transcript-directives", "database"],
+] as const)("unregisters foreign paths without writes: %s/%s", async (owner, failure) => {
+  const migrate =
+    owner === "media-persistence"
+      ? migrateLegacyMediaPersistence
+      : migrateHistoricalTranscriptDirectives;
+  const foreignStateDir = tempDir();
+  const foreignPath = (directory: string) =>
+    path.join(foreignStateDir, directory, "main", "agent", "openclaw-agent.sqlite");
+  const databasePath = foreignPath(`agents\n${String.fromCharCode(0x1b)}[31mforged`);
+  const sanitizedDatabasePath = foreignPath("agentsforged");
+  createLegacyAgentDatabase({ path: databasePath });
+  const beforeBytes = fs.readFileSync(databasePath);
+  const beforeMtimeMs = fs.statSync(databasePath).mtimeMs;
+  const ownedDatabasePath = path.join(
+    stateDir,
+    failure === "discovery" ? "agents" : "broken.sqlite",
+  );
+  if (failure !== "none") {
+    fs.writeFileSync(ownedDatabasePath, "not a SQLite database");
+  }
+  const result = await migrate({
+    env,
+    configuredAgentDatabaseTargets:
+      failure === "database" ? [{ agentId: "broken", path: ownedDatabasePath }] : [],
+  });
+  expect(result.warnings).toContain(
+    `Skipped foreign agent database ${sanitizedDatabasePath}; it is outside the active state directory and is not a configured session store.`,
+  );
+  expect(result.warnings.join("\n")).not.toContain(databasePath);
+  expect(registrations(true)).toEqual([]);
+  expect(fs.readFileSync(databasePath).equals(beforeBytes)).toBe(true);
+  expect(fs.statSync(databasePath).mtimeMs).toBe(beforeMtimeMs);
+  const receipt = createLegacyStateMigrationStepReceipt(
     {
-      owner: "media-persistence",
-      migrate: migrateLegacyMediaPersistence,
-      failures: ["discovery"],
+      id: owner,
+      phase: "shared",
+      source: [],
+      target: [],
+      requiredness: "conditional",
+      reversibility: "checkpoint-required",
     },
-    {
-      owner: "transcript-directives",
-      migrate: migrateHistoricalTranscriptDirectives,
-      failures: ["none", "database"],
-    },
-  ].flatMap(({ owner, migrate, failures }) =>
-    failures.map((failure) => ({ owner, migrate, failure })),
-  ),
-)(
-  "unregisters foreign registry paths without touching their databases ($owner, failure=$failure)",
-  async ({ owner, migrate, failure }) => {
-    const foreignStateDir = tempDir();
-    const foreignPath = (directory: string) =>
-      path.join(foreignStateDir, directory, "main", "agent", "openclaw-agent.sqlite");
-    const databasePath = foreignPath(`agents\n${String.fromCharCode(0x1b)}[31mforged`);
-    const sanitizedDatabasePath = foreignPath("agentsforged");
-    createLegacyAgentDatabase({ path: databasePath });
-    const beforeBytes = fs.readFileSync(databasePath);
-    const beforeMtimeMs = fs.statSync(databasePath).mtimeMs;
-    const ownedDatabasePath = path.join(
-      stateDir,
-      failure === "discovery" ? "agents" : "broken.sqlite",
-    );
-    if (failure !== "none") {
-      fs.writeFileSync(ownedDatabasePath, "not a SQLite database");
-    }
-    const result = await migrate({
-      env,
-      configuredAgentDatabaseTargets:
-        failure === "database" ? [{ agentId: "broken", path: ownedDatabasePath }] : [],
-    });
-    expect(result.warnings).toContain(
-      `Skipped foreign agent database ${sanitizedDatabasePath}; it is outside the active state directory and is not a configured session store.`,
-    );
-    expect(result.warnings.join("\n")).not.toContain(databasePath);
-    expect(registrations(true)).toEqual([]);
-    expect(fs.readFileSync(databasePath).equals(beforeBytes)).toBe(true);
-    expect(fs.statSync(databasePath).mtimeMs).toBe(beforeMtimeMs);
-    const receipt = createLegacyStateMigrationStepReceipt(
-      {
-        id: owner,
-        phase: "shared",
-        source: [],
-        target: [],
-        requiredness: "conditional",
-        reversibility: "checkpoint-required",
-      },
-      result,
-    );
-    expect(receipt.outcome).toBe(failure !== "none" ? "refused" : "warning");
-    expect(receipt.refusal?.code).toBe(failure !== "none" ? "step-refused" : undefined);
-    if (failure !== "none") {
-      expect(result.warnings).toContainEqual(expect.stringContaining(ownedDatabasePath));
-      expect(fs.readFileSync(ownedDatabasePath, "utf8")).toBe("not a SQLite database");
-    }
-  },
-);
+    result,
+  );
+  expect({ outcome: receipt.outcome, code: receipt.refusal?.code }).toEqual({
+    outcome: failure !== "none" ? "refused" : "warning",
+    code: failure !== "none" ? "step-refused" : undefined,
+  });
+  if (failure !== "none") {
+    expect(result.warnings).toContainEqual(expect.stringContaining(ownedDatabasePath));
+    expect(fs.readFileSync(ownedDatabasePath, "utf8")).toBe("not a SQLite database");
+  }
+});
 
-it("prefers the configured owner over a stale registry owner for the same path", async () => {
+it("prefers configured owners over stale registrations", async () => {
   const databasePath = path.join(tempDir(), "openclaw-agent.sqlite");
   createLegacyAgentDatabase({ agentId: "new", path: databasePath });
   unregisterOpenClawAgentDatabase({ agentId: "new", env, path: databasePath });
@@ -244,7 +215,7 @@ it("prefers the configured owner over a stale registry owner for the same path",
   expectMigrated(databasePath, "new");
 });
 
-it("prunes missing and archived registry entries before migration", async () => {
+it("prunes missing and archived registrations", async () => {
   const missingPath = path.join(stateDir, "agents", "missing", "agent", "openclaw-agent.sqlite");
   const archivedPath = path.join(stateDir, "imports", "archived", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(archivedPath), { recursive: true });

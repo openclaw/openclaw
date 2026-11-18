@@ -1,17 +1,12 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
 import { normalizeDiagnosticValue } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   normalizeOptionalString,
   readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  OTEL_EXPORTER_OTLP_CERTIFICATE_ENV,
-  OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV,
-  OTEL_EXPORTER_OTLP_CLIENT_KEY_ENV,
-} from "./service-constants.js";
 import type {
   OtelHttpAgentFactory,
   OtelHttpAgentOptions,
@@ -19,6 +14,9 @@ import type {
 } from "./service-types.js";
 
 const SIGNAL_QUALIFIED_OTLP_PATH_PATTERN = /\/v1\/(traces|metrics|logs)$/iu;
+const OTEL_EXPORTER_OTLP_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CERTIFICATE";
+const OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE_ENV = "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE";
+const OTEL_EXPORTER_OTLP_CLIENT_KEY_ENV = "OTEL_EXPORTER_OTLP_CLIENT_KEY";
 
 function appendOrReplaceSignalPath(value: string, path: string): string {
   const base = value.replace(/\/+$/u, "");
@@ -178,14 +176,6 @@ export function errorCategory(err: unknown): string {
   } catch {
     return "unknown";
   }
-}
-
-function readErrorName(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const name = (err as { name?: unknown }).name;
-  return typeof name === "string" && name.trim() ? name : undefined;
 }
 
 export function readErrorCode(err: unknown): string | number | undefined {

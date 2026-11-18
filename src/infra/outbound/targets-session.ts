@@ -65,12 +65,7 @@ export function resolveSessionDeliveryTarget(params: {
   const sessionLastChannel =
     context?.channel && isNormalizedMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel
-    ? resolveRouteTarget({
-        channel: sessionLastChannel,
-        accountId: context?.accountId,
-        to: context?.to,
-        threadId: context?.threadId,
-      })
+    ? resolveRouteTarget({ ...context, channel: sessionLastChannel })
     : null;
 
   const hasTurnSourceChannel = params.turnSourceChannel != null;
@@ -150,12 +145,11 @@ export function resolveSessionDeliveryTarget(params: {
 
   const inheritedThreadIdSource =
     threadId != null ? (hasTurnSourceThreadId ? "turn-source" : "session") : undefined;
-  const resolvedThreadId = explicitThreadId ?? threadId;
   return {
     channel,
     to,
     accountId,
-    threadId: resolvedThreadId,
+    threadId: explicitThreadId ?? threadId,
     threadIdSource: explicitThreadIdSource ?? inheritedThreadIdSource,
     mode,
     lastChannel,

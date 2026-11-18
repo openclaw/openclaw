@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { diagnoseChromeCdp } from "./chrome.diagnostics.js";
 import * as chrome from "./chrome.js";
 import { createBrowserRouteContext } from "./server-context.js";
@@ -85,10 +86,7 @@ async function startCdpFixture(
       releaseUpgrade();
     }
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const port = (server.address() as AddressInfo).port;
+  const port = await listenOnLoopback(server);
   return {
     url: `http://127.0.0.1:${port}`,
     reached,
@@ -117,20 +115,46 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function cancellableProbe<T>(probing: Promise<T>) {
+  const watchdog = new AbortController();
+  // Bound broken cancellation without advancing the transport's deadline.
+  try {
+    return await Promise.race([
+      probing,
+      delay(2_000, "probe did not cancel", { signal: watchdog.signal }),
+    ]);
+  } finally {
+    watchdog.abort();
+  }
+}
+
+function fixtureProfile(url: string) {
+  const state = makeBrowserServerState({
+    profile: makeBrowserProfile({ cdpUrl: url, cdpPort: Number(new URL(url).port) }),
+  });
+  return createBrowserRouteContext({ getState: () => state }).forProfile();
+}
+
 describe("Chrome CDP diagnostic transport", () => {
   it("diagnoses stale command channels with the discovered WebSocket URL", async () => {
     const fixture = await startCdpFixture({ hold: "command" });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
-      const probing = diagnoseChromeCdp(fixture.url, 1_000, 1_000);
+      const onDiagnostic = vi.fn();
+      const probing = chrome.isChromeCdpReady(fixture.url, 1_000, 1_000, undefined, {
+        onDiagnostic,
+      });
       await fixture.reached.command.promise;
       await vi.advanceTimersByTimeAsync(1_100);
 
-      await expect(probing).resolves.toMatchObject({
-        ok: false,
-        code: "websocket_health_command_timeout",
-        wsUrl: `${fixture.url.replace("http:", "ws:")}/devtools/browser/test`,
-      });
+      await expect(probing).resolves.toBe(false);
+      expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          ok: false,
+          code: "websocket_health_command_timeout",
+          wsUrl: `${fixture.url.replace("http:", "ws:")}/devtools/browser/test`,
+        }),
+      );
       await fixture.disconnected.command.promise;
     } finally {
       await fixture.close();
@@ -161,7 +185,6 @@ describe("Chrome CDP diagnostic transport", () => {
       const fixture = await startCdpFixture({ hold: phase });
       const controller = new AbortController();
       const reason = new Error("diagnostic request cancelled");
-      const watchdog = new AbortController();
       try {
         const probing = diagnoseChromeCdp(
           fixture.url,
@@ -176,18 +199,10 @@ describe("Chrome CDP diagnostic transport", () => {
         await fixture.reached[phase].promise;
         controller.abort(reason);
 
-        // A separate watchdog bounds a broken cancellation path; it never advances
-        // the much longer transport deadline or changes the diagnostic behavior.
-        await expect(
-          Promise.race([
-            probing,
-            delay(2_000, "probe did not cancel", { signal: watchdog.signal }),
-          ]),
-        ).resolves.toBe(reason);
+        await expect(cancellableProbe(probing)).resolves.toBe(reason);
         await fixture.disconnected[phase].promise;
         expect(fixture.requests).toEqual(["/json/version"]);
       } finally {
-        watchdog.abort();
         await fixture.close();
       }
     },
@@ -208,55 +223,37 @@ describe("Chrome CDP diagnostic transport", () => {
   it("cancels discovery through the default-profile context", async () => {
     const fixture = await startCdpFixture({ hold: "http" });
     const controller = new AbortController();
-    const watchdog = new AbortController();
     const reason = new Error("default profile probe cancelled");
-    const state = makeBrowserServerState({
-      profile: makeBrowserProfile({
-        cdpUrl: fixture.url,
-        cdpPort: Number(new URL(fixture.url).port),
-      }),
-    });
-    const context = createBrowserRouteContext({ getState: () => state });
+    const profile = fixtureProfile(fixture.url);
     try {
-      const probing = context
+      const probing = profile
         .isHttpReachable(60_000, controller.signal)
         .catch((error: unknown) => error);
       await fixture.reached.http.promise;
       controller.abort(reason);
-      await expect(
-        Promise.race([probing, delay(2_000, "probe did not cancel", { signal: watchdog.signal })]),
-      ).resolves.toBe(reason);
+      await expect(cancellableProbe(probing)).resolves.toBe(reason);
       await fixture.disconnected.http.promise;
       expect(fixture.requests).toEqual(["/json/version"]);
     } finally {
-      watchdog.abort();
       await fixture.close();
     }
   });
 
   it("stops a profile while its readiness command is pending", async () => {
     const fixture = await startCdpFixture({ hold: "command" });
-    const watchdog = new AbortController();
     vi.spyOn(chrome, "stopOwnedOpenClawChrome").mockResolvedValue({ status: "not-running" });
-    const state = makeBrowserServerState({
-      profile: makeBrowserProfile({
-        cdpUrl: fixture.url,
-        cdpPort: Number(new URL(fixture.url).port),
-      }),
-    });
-    const profile = createBrowserRouteContext({ getState: () => state }).forProfile();
+    const profile = fixtureProfile(fixture.url);
     let stopping: Promise<unknown> | undefined;
     try {
       const probing = profile.isReachable(60_000).catch((error: unknown) => error);
       await fixture.reached.command.promise;
       stopping = profile.stopRunningBrowser();
-      await expect(
-        Promise.race([probing, delay(2_000, "probe did not cancel", { signal: watchdog.signal })]),
-      ).resolves.toMatchObject({ message: expect.stringContaining("lifecycle changed") });
+      await expect(cancellableProbe(probing)).resolves.toMatchObject({
+        message: expect.stringContaining("lifecycle changed"),
+      });
       await expect(stopping).resolves.toEqual({ stopped: true });
       await fixture.disconnected.command.promise;
     } finally {
-      watchdog.abort();
       await fixture.close();
       await stopping;
     }

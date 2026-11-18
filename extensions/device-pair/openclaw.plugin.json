@@ -2,7 +2,7 @@
   "id": "device-pair",
   "categories": ["security"],
   "doctorContract": {
-    "stateMigrations": [{ "id": "device-pair-notify-json-to-plugin-state" }]
+    "stateMigrations": [{ "id": "device-pair-retired-state" }]
   },
   "activation": {
     "onStartup": true
@@ -38,5 +38,9 @@
       "label": "Gateway URL",
       "help": "Public WebSocket URL used for /pair setup codes (ws/wss or http/https)."
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Walk me through pairing a device with this OpenClaw Gateway.",
+    "Help me review pending device-pairing requests without approving them."
+  ]
 }

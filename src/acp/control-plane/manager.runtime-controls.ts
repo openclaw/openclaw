@@ -1,4 +1,3 @@
-/** Applies runtime mode/config controls to live ACP backend sessions. */
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -94,18 +93,13 @@ function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown
   );
 }
 
-function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
-  if (!isThinkingConfigKey(key)) {
-    return false;
-  }
-  if (isUnsupportedControlRejection(error)) {
-    return true;
-  }
+/** The adapter named the config option and refused its value, as claude-agent-acp does for `effort`. */
+export function isRejectedConfigOptionValue(error: unknown, key?: string): boolean {
   const description = describeConfigOptionRejection(error);
   const describesConfigOption =
     description.includes("session/set_config_option") ||
     (description.includes("config option") &&
-      description.includes(normalizeLowercaseStringOrEmpty(key)));
+      (!key || description.includes(normalizeLowercaseStringOrEmpty(key))));
   return (
     describesConfigOption &&
     ACP_CONFIG_REJECTION_CODE_RE.test(description) &&
@@ -113,7 +107,13 @@ function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
   );
 }
 
-/** Resolves backend-advertised controls plus locally inferred runtime control support. */
+function isRejectedThinkingConfigOption(key: string, error: unknown): boolean {
+  return (
+    isThinkingConfigKey(key) &&
+    (isUnsupportedControlRejection(error) || isRejectedConfigOptionValue(error, key))
+  );
+}
+
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -193,9 +193,8 @@ export async function applyManagerRuntimeControls(params: {
     handle: params.handle,
     includeStatusConfigOptionKeys: needsConfigOptionKeys,
   });
-  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const backend = params.handle.backend || params.meta.backend;
-  const runtimeMode = normalizeText(options.runtimeMode);
+  const runtimeMode = options.runtimeMode;
   const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
   const thinkingConfigKey = options.thinking
     ? resolveRuntimeConfigOptionKey("thinking", capabilities.configOptionKeys)
@@ -210,7 +209,7 @@ export async function applyManagerRuntimeControls(params: {
     run: async () => {
       assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
       if (runtimeMode) {
-        if (!capabilities.controls.includes("session/set_mode") || !params.runtime.setMode) {
+        if (!params.runtime.setMode) {
           throw createUnsupportedControlError({
             backend,
             control: "session/set_mode",
@@ -223,10 +222,7 @@ export async function applyManagerRuntimeControls(params: {
       }
 
       if (configOptions.length > 0) {
-        if (
-          !capabilities.controls.includes("session/set_config_option") ||
-          !params.runtime.setConfigOption
-        ) {
+        if (!params.runtime.setConfigOption) {
           throw createUnsupportedControlError({
             backend,
             control: "session/set_config_option",

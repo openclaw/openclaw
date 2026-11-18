@@ -3,7 +3,6 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice";
 import type { ClientOptions, RawData } from "ws";
-import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 
 export const QUICKSILVER_SOCKET_CONTROL_LIMIT = 128;
 export const QUICKSILVER_SOCKET_CONTROL_BYTES = 1024 * 1024;
@@ -80,16 +79,3 @@ export type QuicksilverSocketWorkerData = QuicksilverSocketMediaOptions & {
   url: string;
   options: Parameters<OpenAIQuicksilverSocketFactory>[1];
 };
-
-/** Bounded raw-byte tail: unlike PCM queues this must retain odd-length mu-law chunks. */
-export class QuicksilverSocketAudioQueue extends OpenAIQuicksilverPendingAudio {
-  constructor(limit = QUICKSILVER_SOCKET_AUDIO_BYTES) {
-    super(limit, 1);
-  }
-
-  take(limit = this.length): Buffer {
-    const output = Buffer.alloc(Math.min(limit, this.length));
-    this.readInto(output);
-    return output;
-  }
-}

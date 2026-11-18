@@ -61,6 +61,14 @@ consumes them in the next step:
 - `cf-access-jwt-assertion` — Access's signed assertion. OpenClaw checks only that this
   header is present and non-blank; it does not verify the JWT signature.
 
+### Email-code sign-in
+
+Cloudflare Access one-time PIN sign-in resolves a person through the existing
+verified-email profile. OpenClaw requires a successful Access identity response
+with the `onetimepin` provider and an email matching the authenticated user header.
+It does not infer GitHub credit from this identity. Access policies and OpenClaw
+role and access checks still apply; keep the Access policy limited to intended users.
+
 ### OIDC sign-in and existing people
 
 For OIDC sign-in, configure an Access policy that admits the intended users through
@@ -74,6 +82,12 @@ that email through the existing person profile. Using the same email retains the
 person's profile and role; a different email requires an existing linked alias to
 resolve to that person. GitHub sign-in continues to verify the immutable GitHub
 account ID. Failed identity verification does not fall back to email matching.
+
+Successful identity lookups are reused for the same signed assertion, matching
+principal, and OIDC configuration for at most five minutes, never beyond the
+assertion's expiration. Concurrent matching requests share the lookup. Failures
+are not cached. Proxy admission and current profile roles are still checked on
+each request; this cache does not grant access or retain a role assignment.
 
 Keep the identity provider responsible for verifying email ownership. Creating an
 OpenClaw person profile does not grant access through Cloudflare Access.
@@ -106,8 +120,8 @@ until you explicitly trust one Access issuer, identity-provider ID, and claim na
 The issuer is the Access team origin without a trailing slash. `providerId` is
 the selected integration's ID from Access, not its name or an OIDC user subject.
 The provider must verify ownership of the GitHub account and bind it to the
-verified sign-in email. Its ID token must contain a canonical positive
-decimal-string account ID, such as `"12345"`, within JavaScript's safe-integer
+verified sign-in email. Its ID token must contain a positive
+decimal-string account ID with no leading zeros, such as `"12345"`, within JavaScript's safe-integer
 range. Configure Access to forward that exact [custom OIDC claim](https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/generic-oidc/#custom-oidc-claims).
 OpenClaw reads it from `oidc_fields` in the authenticated
 `/cdn-cgi/access/get-identity` response, or from `custom` when `oidc_fields` is
@@ -175,7 +189,7 @@ the only path for external traffic.
 browser-origin default when `controlUi.allowedOrigins` is omitted. You only need
 an explicit allowlist for a different browser policy; that list replaces the
 default rather than adding to it. For profile, role, GitHub, and operations setup,
-see [Deploy a team server](/gateway/team-server).
+see [Multiplayer: production deployment](/start/multiplayer#production-deployment).
 
 ## Step 4: Decide how nodes and workers get in
 

@@ -36,7 +36,7 @@ private final class DashboardFixtureTrust: NSObject, WKNavigationDelegate {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardBrowserCookieBoundaryTests {
     @Test(arguments: [false, true])
@@ -93,7 +93,7 @@ struct DashboardBrowserCookieBoundaryTests {
             audience: "fixture",
             subject: "fixture-account",
             token: token,
-            expiresAt: Date().addingTimeInterval(300))
+            expiresAt: .fixtureSessionExpiry)
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = DashboardWindowController(
             url: gateway.url(),
@@ -119,9 +119,8 @@ struct DashboardBrowserCookieBoundaryTests {
             "/other-worker",
         ]
         let expected = same + different
-        let deadline = ContinuousClock.now + .seconds(10)
-        while !expected.allSatisfy({ requests[$0] != nil }), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
+        try await TestWait.state("cookie boundary requests") {
+            expected.allSatisfy { requests[$0] != nil }
         }
         for path in expected {
             try #require(requests[path] != nil, "Missing request: \(path)")
@@ -151,7 +150,7 @@ struct DashboardBrowserCookieBoundaryTests {
             audience: "fixture",
             subject: "fixture-account",
             token: "synthetic",
-            expiresAt: Date().addingTimeInterval(300))
+            expiresAt: .fixtureSessionExpiry)
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         try await store.lease(for: session).prepare(for: session.origin, in: WKUserContentController())
         #expect(await store.dataStore.httpCookieStore.allCookies().count == 1)

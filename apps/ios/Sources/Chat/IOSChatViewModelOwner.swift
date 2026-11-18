@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import OpenClawChatUI
 import OpenClawProtocol
+import UIKit
 
 @MainActor
 @Observable
@@ -12,6 +13,7 @@ final class IOSChatViewModelOwner {
     private(set) var presentationAgentID = "main"
     private(set) var presentationAgentName = "Main"
     private(set) var presentationAgentBadge = "M"
+    private(set) var presentationAgentAvatar: UIImage?
     private(set) var hasVerifiedOfflineRoutingIdentity = false
     private var transportAgentID = ""
     private var routingContract = ""
@@ -37,11 +39,8 @@ final class IOSChatViewModelOwner {
         let reconnected = connected && !self.wasConnected
         self.wasConnected = connected
         if authorityChanged { self.viewModel?.retireQuestionAuthority() }
-        if let viewModel, !viewModel.isQuestionAuthorityRetired, !authorityChanged, !Self.requiresViewModelRebuild(
-            currentOwnerID: self.ownerID,
-            nextOwnerID: ownerID,
-            currentTransportAgentID: self.transportAgentID,
-            nextTransportAgentID: agentID)
+        if let viewModel, !viewModel.isQuestionAuthorityRetired, !authorityChanged,
+           self.ownerID == ownerID, self.transportAgentID == agentID
         {
             if self.routingContract != routingContract {
                 self.routingContract = routingContract
@@ -57,27 +56,22 @@ final class IOSChatViewModelOwner {
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.
         guard self.viewModel?.isAttachmentOwnerPinned != true else { return }
+        let isDefaultAgentHydration = self.viewModel?.isQuestionAuthorityRetired == false &&
+            self.ownerID == ownerID && self.controlUIInputs == controlUIInputs &&
+            self.transportAgentID.isEmpty && !agentID.isEmpty &&
+            self.viewModel?.sessionKey == appModel.chatSessionKey
         // Preserve the accepted turn and optimistic row until its captured run settles.
-        if let viewModel, self.hasPendingSend, !viewModel.isQuestionAuthorityRetired,
-           self.ownerID == ownerID, self.controlUIInputs == controlUIInputs,
-           self.transportAgentID.isEmpty, !agentID.isEmpty,
+        if isDefaultAgentHydration, self.hasPendingSend,
            Self.transportAgentID(appModel.selectedAgentId).isEmpty,
-           viewModel.sessionKey == appModel.chatSessionKey,
            self.routingContract.isEmpty || self.routingContract == routingContract
         {
             self.observePendingSend(appModel: appModel)
             return
         }
         // Resolving the default agent replaces its transport without changing the draft's owner.
-        let draft: String? = if let viewModel, !viewModel.isQuestionAuthorityRetired,
-                                self.ownerID == ownerID, self.controlUIInputs == controlUIInputs,
-                                self.transportAgentID.isEmpty, !agentID.isEmpty,
-                                viewModel.sessionKey == appModel.chatSessionKey
-        {
-            viewModel.input
-        } else {
-            nil
-        }
+        let draft = isDefaultAgentHydration ? self.viewModel?.input : nil
+        let previousPresentation = self.ownerID == ownerID && controlUIInputs != nil &&
+            self.controlUIInputs == controlUIInputs ? self.viewModel : nil
         // Initial route hydration changes transport, but the same draft keeps its native editor.
         if draft == nil { self.presentationID = UUID() }
         self.viewModel?.detachTransport()
@@ -116,6 +110,7 @@ final class IOSChatViewModelOwner {
                 }
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
+        if let previousPresentation { viewModel.inheritTranscriptPresentation(from: previousPresentation) }
         self.viewModel = viewModel
         if let draft { viewModel.input = draft }
         self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil
@@ -162,22 +157,14 @@ final class IOSChatViewModelOwner {
         let agent = appModel.gatewayAgents.first { $0.id == self.presentationAgentID }
         let name = agent?.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         self.presentationAgentName = name.isEmpty ? appModel.chatAgentName : name
-        self.presentationAgentBadge = AgentIdentityPresentation.normalizedBadgeEmoji(
-            agent?.identity?["emoji"]?.value as? String) ??
-            AgentIdentityPresentation.initialsBadge(for: self.presentationAgentName)
+        self.presentationAgentBadge = AgentIdentityPresentation.badge(
+            avatarText: agent?.identity?["emoji"]?.value as? String,
+            displayName: self.presentationAgentName)
+        self.presentationAgentAvatar = appModel.agentAvatarImage(for: self.presentationAgentID)
         self.hasVerifiedOfflineRoutingIdentity = appModel.hasVerifiedChatOfflineRoutingIdentity
     }
 
     nonisolated static func transportAgentID(_ value: String?) -> String {
         value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-    }
-
-    nonisolated static func requiresViewModelRebuild(
-        currentOwnerID: String,
-        nextOwnerID: String,
-        currentTransportAgentID: String,
-        nextTransportAgentID: String) -> Bool
-    {
-        currentOwnerID != nextOwnerID || currentTransportAgentID != nextTransportAgentID
     }
 }

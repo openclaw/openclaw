@@ -2,13 +2,14 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentToolResult } from "../../../packages/agent-core/src/types.js";
 import type { AgentToolResultMiddlewareEvent } from "../../plugins/agent-tool-result-middleware-types.js";
-import { runWithToolExecutionValidation } from "../agent-tools.execution-validation.js";
-import type { AnyAgentTool } from "../agent-tools.types.js";
+import { classifyAgentToolSource } from "../../plugins/tool-metadata.js";
 import {
-  consumeTrustedToolNoStartError,
-  isToolResultError,
-  resolveToolResultFailureKind,
-} from "../tool-result-error.js";
+  coerceToolExecutionArguments,
+  runWithToolExecutionValidation,
+} from "../agent-tools.execution-validation.js";
+import type { AnyAgentTool } from "../agent-tools.types.js";
+import { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "../tool-effect-receipt.js";
+import { resolveToolResultFailureKind } from "../tool-result-error.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { resolveAgentHarnessToolResultPresentation } from "./tool-result-facts.js";
 
@@ -63,42 +64,39 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       const prepared = params.prepareArguments(toolArgs, Boolean(prepare));
       preparedArgs = isPromiseLike(prepared) ? await prepared : prepared;
     }
-    boundary.setArguments(isRecord(preparedArgs) ? preparedArgs : initialArguments);
+    // MCP servers own their schemas; forward their arguments as the model sent them.
+    if (params.validateArguments && classifyAgentToolSource(tool).source === "openclaw") {
+      preparedArgs = coerceToolExecutionArguments(tool, tool.parameters, preparedArgs);
+    }
+    const executionArguments = isRecord(preparedArgs) ? preparedArgs : initialArguments;
+    // Preparation can mutate in place; otherwise the initial capture is already exact.
+    if (prepare || params.prepareArguments || executionArguments !== initialArguments) {
+      boundary.setArguments(executionArguments);
+    }
     const beforeExecuteResult = params.beforeExecute?.();
     if (beforeExecuteResult) {
       await beforeExecuteResult;
     }
-    const execute = () => {
-      params.assertCurrent?.();
-      boundary.markDispatched();
-      const shouldValidateArguments = params.shouldValidateArguments?.() ?? true;
-      const invokeTool = () => tool.execute(params.call.toolCallId, preparedArgs, params.signal);
-      return params.validateArguments && shouldValidateArguments
-        ? runWithToolExecutionValidation(
-            params.call.toolCallId,
-            params.validateArguments,
-            invokeTool,
-          )
-        : invokeTool();
-    };
-    rawResult = await execute();
+    params.assertCurrent?.();
+    boundary.markDispatched();
+    const shouldValidateArguments = params.shouldValidateArguments?.() ?? true;
+    const invokeTool = () => tool.execute(params.call.toolCallId, preparedArgs, params.signal);
+    rawResult = await (params.validateArguments && shouldValidateArguments
+      ? runWithToolExecutionValidation(params.call.toolCallId, params.validateArguments, invokeTool)
+      : invokeTool());
     boundary.capture();
-    const executedArguments = boundary.executedArguments;
-    const rawIsError = isToolResultError(rawResult);
-    params.beforeSnapshotResult?.({
+    const resultFacts = {
       boundary,
       startedAt,
-      executedArguments,
+      executedArguments: boundary.executedArguments,
       rawResult,
-      rawIsError,
-    });
+    };
     const rawFailureKind = resolveToolResultFailureKind(rawResult);
+    const rawIsError = rawFailureKind !== undefined;
+    params.beforeSnapshotResult?.({ ...resultFacts, rawIsError });
     const rawResultSnapshot = params.snapshotResult ? params.snapshotResult(rawResult) : rawResult;
     const execution: AgentHarnessToolExecution = {
-      boundary,
-      startedAt,
-      executedArguments,
-      rawResult,
+      ...resultFacts,
       rawResultSnapshot,
       rawIsError,
       rawFailureKind,
@@ -155,7 +153,7 @@ type AgentHarnessToolCall = {
 type AgentHarnessToolExecution = {
   boundary: ReturnType<ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>["begin"]>;
   startedAt: number;
-  executedArguments: Record<string, unknown>;
+  executedArguments: Readonly<Record<string, unknown>>;
   rawResult: AgentToolResult<unknown>;
   rawResultSnapshot: unknown;
   rawIsError: boolean;
@@ -173,6 +171,6 @@ type AgentHarnessToolInvocationFailure = {
   error: unknown;
   boundary: AgentHarnessToolExecution["boundary"];
   startedAt: number;
-  executedArguments: Record<string, unknown>;
+  executedArguments: Readonly<Record<string, unknown>>;
   rawResult: AgentToolResult<unknown> | undefined;
 };

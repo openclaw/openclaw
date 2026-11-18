@@ -1,5 +1,5 @@
-// Normalizes logging config, log paths, and file-size limits.
 import fs from "node:fs";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { displayPath } from "../utils.js";
@@ -24,7 +24,7 @@ export function formatConfigUpdatedMessage(
   opts: LogConfigUpdatedOptions = {},
 ): string {
   const displayConfigPath = theme.muted(formatConfigFilePath(path));
-  const suffix = opts.suffix ? ` ${opts.suffix}` : "";
+  const suffix = opts.suffix ? terminalText` ${opts.suffix}` : "";
   const backupPath = opts.backupPath === undefined ? `${path}.bak` : opts.backupPath;
   const lines = [`Updated config: ${displayConfigPath}${suffix}`];
   if (backupPath && fs.existsSync(backupPath)) {

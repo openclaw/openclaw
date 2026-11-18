@@ -1,32 +1,22 @@
-import {
-  createMeetingBrowserAudioCaptureSource,
-  type MeetingBrowserAudioCaptureRequest,
-  createMeetingLeaveSource,
-  createMeetingTranscriptSource,
-} from "openclaw/plugin-sdk/meeting-page-script-runtime";
+import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { ZOOM_MEETING_SELECTORS } from "./zoom-meetings-selectors.js";
-import { zoomMeetingStatusCallSource } from "./zoom-meetings-status-call-source.js";
-import { zoomMeetingStatusPreludeSource } from "./zoom-meetings-status-prejoin-source.js";
+import { zoomMeetingStatusPrelude } from "./zoom-meetings-status-prejoin-source.js";
 import { normalizeZoomMeetingUrlForReuse } from "./zoom-meetings-urls.js";
 
-export function zoomMeetingAudioCaptureScript(params: MeetingBrowserAudioCaptureRequest): string {
-  return createMeetingBrowserAudioCaptureSource({
-    ...params,
-    audioOutputsGlobal: "__openclawZoomAudioOutputs",
-    ownershipSource: `
-      ${pageIdentityFunctionSource()}
-      const expectedIdentity = ${JSON.stringify(normalizeZoomMeetingUrlForReuse(params.meetingUrl))};
-      const state = window.__openclawZoomMeeting;
-      return Boolean(expectedIdentity && state?.sessionId === sessionId &&
-        state.identity === expectedIdentity && !state.leavePending &&
-        (meetingIdentity(location.href) === expectedIdentity ||
-          (state.inCallUrl === location.href && state.inCallControl?.isConnected)));
-    `,
-  });
-}
-
-function pageIdentityFunctionSource(): string {
-  return `const meetingIdentity = (rawUrl) => {
+export const zoomMeetingPageScripts = MeetingPlatformAdapter.createPageScripts({
+  platform: {
+    audioOutputElementIdPrefix: "openclaw-zoom-audio-output-",
+    manualActionReasonPrefix: "zoom",
+    displayName: "Zoom",
+    globals: {
+      audioOutputs: "__openclawZoomAudioOutputs",
+      captionArchive: "__openclawZoomCaptionArchive",
+      captions: "__openclawZoomCaptions",
+      meeting: "__openclawZoomMeeting",
+    },
+  },
+  normalizeUrl: normalizeZoomMeetingUrlForReuse,
+  pageIdentitySource: () => `const meetingIdentity = (rawUrl) => {
     try {
       const parsed = new URL(rawUrl);
       const host = parsed.hostname.toLowerCase();
@@ -38,13 +28,11 @@ function pageIdentityFunctionSource(): string {
       const webClient = parsed.pathname.match(/^\\/wc\\/(\\d{9,11})\\/join\\/?$/);
       const meetingId = invitation?.[1] || webClient?.[1];
       return meetingId ? "zoom:" + meetingId : undefined;
-    } catch {}
+    } catch { /* Invalid external URLs do not identify a meeting. */ }
     return undefined;
-  };`;
-}
-
-function zoomMeetingToggleStateFunctionSource(): string {
-  return `(input) => {
+  };`,
+  selectors: ZOOM_MEETING_SELECTORS,
+  toggleStateFunction: () => `(input) => {
     const pressed = String(input?.ariaPressed || "").toLowerCase();
     if (pressed === "true") return "on";
     if (pressed === "false") return "off";
@@ -68,62 +56,49 @@ function zoomMeetingToggleStateFunctionSource(): string {
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:off|muted|disabled)\\b/.test(value)) return "off";
     if (/\\b(?:microphone|mic) (?:is |currently )?(?:on|unmuted|enabled)\\b/.test(value)) return "on";
     return undefined;
-  }`;
-}
-
-export function zoomMeetingStatusScript(params: {
-  allowMicrophone: boolean;
-  allowSessionAdoption: boolean;
-  autoJoin: boolean;
-  captureCaptions: boolean;
-  guestName: string;
-  meetingSessionId?: string;
-  meetingUrl: string;
-  readOnly?: boolean;
-  waitForInCallMs: number;
-}) {
-  const selectors = JSON.stringify(ZOOM_MEETING_SELECTORS);
-  const expectedIdentity = normalizeZoomMeetingUrlForReuse(params.meetingUrl);
-  const toggleStateFunction = zoomMeetingToggleStateFunctionSource();
-  return (
-    zoomMeetingStatusPreludeSource({
-      ...params,
-      expectedIdentity,
-      pageIdentitySource: pageIdentityFunctionSource(),
-      selectors,
-      toggleStateFunction,
-    }) + zoomMeetingStatusCallSource()
-  );
-}
-
-export function zoomMeetingTranscriptScript(
-  meetingUrl: string,
-  meetingSessionId: string,
-  finalize: boolean,
-) {
-  const expectedIdentity = normalizeZoomMeetingUrlForReuse(meetingUrl);
-  return createMeetingTranscriptSource({
-    expectedIdentity,
-    finalize,
-    globals: {
-      captionArchive: "__openclawZoomCaptionArchive",
-      captions: "__openclawZoomCaptions",
-      meeting: "__openclawZoomMeeting",
-    },
-    meetingSessionId,
-    pageIdentitySource: pageIdentityFunctionSource(),
-    platformDisplayName: "Zoom",
-  });
-}
-
-export function zoomMeetingLeaveScript(params: {
-  leaveInitiated: boolean;
-  meetingSessionId: string;
-  meetingUrl: string;
-}) {
-  const selectors = JSON.stringify(ZOOM_MEETING_SELECTORS);
-  const expectedIdentity = normalizeZoomMeetingUrlForReuse(params.meetingUrl);
-  return createMeetingLeaveSource({
+  }`,
+  statusPrelude: zoomMeetingStatusPrelude,
+  statusCall: {
+    captionEnableSource: `if (!captionsFinalized && canMutateSession && inCall && !captionsEnabledNow) {
+      let captionButton = first(selectors.captions);
+      if (!captionButton) {
+        (first(selectors.moreActions) || findTextButton(/^more$/i))?.click?.();
+        await waitForUi();
+        captionButton = first(selectors.captions);
+      }
+      if (captionButton) {
+        const captionLabel = label(captionButton);
+        const alreadyEnabled = captionButton.getAttribute?.("aria-checked") === "true" ||
+          /hide (?:live )?captions|turn off captions/i.test(captionLabel) ||
+          Boolean(firstRaw(selectors.captionsOff));
+        if (!alreadyEnabled) {
+          captionButton.click();
+          await waitForUi();
+          const showCaptions = first(selectors.captions);
+          if (showCaptions && showCaptions !== captionButton && /show captions/i.test(label(showCaptions))) {
+            showCaptions.click();
+            await waitForUi();
+          }
+          const saveLanguage = findTextButton(/^save$/i);
+          if (saveLanguage && /caption language/i.test(text(document.body))) {
+            saveLanguage.click();
+            await waitForUi();
+          }
+        }
+        const currentCaptionButton = first(selectors.captions) || captionButton;
+        const currentLabel = label(currentCaptionButton);
+        captionsEnabledNow = currentCaptionButton.getAttribute?.("aria-checked") === "true" ||
+          /hide (?:live )?captions|turn off captions/i.test(currentLabel) ||
+          Boolean(firstRaw(selectors.captionRenderer)) ||
+          Boolean(firstRaw(selectors.captionsOff));
+        if (captionsEnabledNow && !alreadyEnabled) {
+          notes.push("Enabled Zoom live captions for transcript capture.");
+        }
+      }
+    }`,
+    extraResultSource: "meetingEnded,",
+  },
+  leave: {
     controlSource: `const first = (list) => {
     for (const selector of list) {
       const node = document.querySelector(selector);
@@ -148,23 +123,11 @@ export function zoomMeetingLeaveScript(params: {
   try {
     const currentUrl = new URL(location.href);
     webClientHome = !leave && currentUrl.hostname === "app.zoom.us" && /^\\/wc\\/?$/.test(currentUrl.pathname);
-  } catch {}`,
+  } catch { /* An unparseable page URL is not proof of departure. */ }`,
     departedMarkerSource: "(postCall || webClientHome)",
     documentSetupSource: `const topDocument = globalThis.document;
   const document = topDocument.querySelector("#webclient")?.contentDocument || topDocument;`,
-    expectedIdentity,
-    leaveInitiated: params.leaveInitiated,
-    meetingSessionId: params.meetingSessionId,
     meetingStateSource: "sessionId: expectedSessionId || state?.sessionId,",
-    pageIdentitySource: pageIdentityFunctionSource(),
-    platform: {
-      displayName: "Zoom",
-      globals: {
-        audioOutputs: "__openclawZoomAudioOutputs",
-        meeting: "__openclawZoomMeeting",
-      },
-    },
-    selectors,
     sessionMatchSource: `const sessionAdoptedFromUrl = Boolean(
     enforceSessionOwnership &&
     !state?.sessionId &&
@@ -174,5 +137,5 @@ export function zoomMeetingLeaveScript(params: {
   const sessionMatched = !enforceSessionOwnership ||
     state?.sessionId === expectedSessionId ||
     sessionAdoptedFromUrl;`,
-  });
-}
+  },
+});

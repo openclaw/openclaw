@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { signalProcessTree } from "../process/kill-tree.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import {
   inspectNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
@@ -88,9 +89,9 @@ export async function waitForOwnedNodeWorkerTreeDeath(
   timeoutMs?: number,
   isOwnerCurrent?: () => boolean | Promise<boolean>,
 ): Promise<NodeWorkerTreeState> {
-  const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
+  const deadline = timeoutMs === undefined ? Infinity : monotonicNow() + timeoutMs;
   let state = inspectOwnedNodeWorkerTree(worker);
-  while (state === "live" && Date.now() < deadline) {
+  while (state === "live" && monotonicNow() < deadline) {
     if ((await isOwnerCurrent?.()) === false) {
       break;
     }

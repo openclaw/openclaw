@@ -7,7 +7,7 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("spawn broker startup failure", () => {
   it("imports without resolving defaults and starts an explicit captured source after Gateway fallback", () => {
@@ -25,11 +25,11 @@ describe.skipIf(skipBrokerTests)("spawn broker startup failure", () => {
     const script = `
       import assert from 'node:assert/strict';
       import {fileURLToPath} from 'node:url';
-      import {registerHooks} from 'node:module';
+      import nodeModule from 'node:module';
       const {runtimeProcessEntrypoints} = await import(${JSON.stringify(registryUrl)});
       const {resolveRuntimeWorkerUrl} = await import(${JSON.stringify(resolverUrl)});
       const captured = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
-      registerHooks({resolve(specifier, context, nextResolve) {
+      nodeModule.registerHooks({resolve(specifier, context, nextResolve) {
         const importer = context.parentURL?.slice(0, -3);
         const requested = context.parentURL ? new URL(specifier, context.parentURL).href : specifier;
         if (importer === ${JSON.stringify(new URL("./host", import.meta.url).href)} && requested === ${JSON.stringify(registryUrl)}) {

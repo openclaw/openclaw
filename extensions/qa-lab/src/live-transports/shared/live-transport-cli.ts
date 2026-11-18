@@ -11,8 +11,6 @@ import { DEFAULT_QA_LIVE_PROVIDER_MODE, formatQaProviderModeHelp } from "../../p
 import type { QaTransportAdapterFactory } from "../../qa-transport-registry.js";
 
 export type LiveTransportQaCommandOptions = QaRunnerCommandOptions & {
-  channelDriver?: string;
-  concurrency?: number;
   doctor?: boolean;
   scenarioFiles?: string[];
 };

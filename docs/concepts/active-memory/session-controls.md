@@ -52,6 +52,11 @@ follow-up, so channel clients do not flash a separate pre-reply bubble):
 - `/verbose on` adds a status line: `🧩 Active Memory: status=ok elapsed=842ms query=recent summary=34 chars`
 - `/trace on` adds a debug summary: `🔎 Active Memory Debug: Lemon pepper wings with blue cheese.`
 
+An eligible chat turn allowed to use memory clears the previous Active Memory status before
+preflight. A stale `status=policy-disabled` line therefore disappears even when
+that turn intentionally skips recall or preflight cannot finish. An absent status
+line does not mean that recall succeeded.
+
 Example flow:
 
 ```text

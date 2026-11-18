@@ -1,5 +1,4 @@
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-/** Reminder-context projection for cron tool job creation. */
 import { getRuntimeConfig } from "../../config/config.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { REMINDER_CONTEXT_MESSAGES_MAX } from "./cron-tool-schema.js";
@@ -51,8 +50,8 @@ export async function buildReminderContextLines(params: {
     return [];
   }
   const cfg = getRuntimeConfig();
-  const { mainKey, alias } = resolveMainSessionAlias(cfg);
-  const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(cfg);
+  const resolvedKey = resolveInternalSessionKey({ key: sessionKey, alias });
   try {
     const res = await params.callGatewayTool<{ messages: Array<unknown> }>(
       "chat.history",

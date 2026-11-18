@@ -1,4 +1,3 @@
-.plugin-skills-section .plugin-capability__copy > span {
-  display: block;
+.plugin-skills-section .settings-row__desc {
   overflow-wrap: anywhere;
 }

@@ -1,83 +1,43 @@
-// Precomputed help tests cover the strict argv shape required by help fast paths.
 import { describe, expect, it, vi } from "vitest";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
+import { runWithPrecomputedHelpMocks } from "./precomputed-help.test-helpers.js";
 
 describe("tryOutputPrecomputedCommandHelp", () => {
-  it("renders only an unambiguous command help request", async () => {
-    const outputBrowserHelp = vi.fn(() => true);
-
-    await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", "browser", "--help"], {
-        outputPrecomputedBrowserHelpText: outputBrowserHelp,
-        env: {},
-      }),
-    ).resolves.toBe(true);
-    expect(outputBrowserHelp).toHaveBeenCalledOnce();
-  });
-
-  it.each([{ args: ["tasks", "--help"] }, { args: ["--log-level", "warn", "tasks", "--help"] }])(
-    "does not read cached help for the retired Tasks command: $args",
-    async ({ args }) => {
-      const outputSubcommandHelp = vi.fn(() => true);
-
-      await expect(
-        tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
-          outputPrecomputedSubcommandHelpText: outputSubcommandHelp,
-          env: {},
-        }),
-      ).resolves.toBe(false);
-      expect(outputSubcommandHelp).not.toHaveBeenCalled();
+  it.each([
+    { args: ["browser", "--help"], commandName: "browser" },
+    {
+      args: ["--profile", "work", "gateway", "--help"],
+      commandName: "gateway",
     },
-  );
-
-  it("falls back when a command option may own --help as its value", async () => {
-    const outputBrowserHelp = vi.fn(() => true);
-
-    await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", "browser", "--target", "--help"], {
-        outputPrecomputedBrowserHelpText: outputBrowserHelp,
-        env: {},
-      }),
-    ).resolves.toBe(false);
-    expect(outputBrowserHelp).not.toHaveBeenCalled();
-  });
-
-  it("leaves secrets apply --from --help for Commander to parse", async () => {
-    const outputSecretsHelp = vi.fn(() => true);
-
-    await expect(
-      tryOutputPrecomputedCommandHelp(
-        ["node", "openclaw", "secrets", "apply", "--from", "--help"],
-        {
-          outputPrecomputedSecretsHelpText: outputSecretsHelp,
-          env: {},
-        },
-      ),
-    ).resolves.toBe(false);
-    expect(outputSecretsHelp).not.toHaveBeenCalled();
-  });
-
-  it("renders catalog command help after root selectors", async () => {
+  ])("renders unambiguous help $args", async ({ args, commandName }) => {
     const output = vi.fn(() => true);
     await expect(
-      tryOutputPrecomputedCommandHelp(
-        ["node", "openclaw", "--profile", "work", "gateway", "--help"],
-        { outputPrecomputedSubcommandHelpText: output, env: {} },
-      ),
+      runWithPrecomputedHelpMocks(tryOutputPrecomputedCommandHelp, ["node", "openclaw", ...args], {
+        outputPrecomputedCommandHelpText: output,
+        env: {},
+      }),
     ).resolves.toBe(true);
-    expect(output).toHaveBeenCalledExactlyOnceWith("gateway");
+    expect(output.mock.calls).toEqual([[commandName]]);
   });
 
   it.each([
-    [["gateway", "--url", "--help"]],
-    [["--help", "gateway"]],
-    [["gateway", "--", "--help"]],
-    [["gateway", "--help", "--version"]],
-  ])("defers ambiguous catalog help %j to Commander", async (args) => {
+    { args: ["tasks", "--help"] },
+    {
+      args: ["--log-level", "warn", "tasks", "--help"],
+    },
+    { args: ["browser", "--target", "--help"] },
+    {
+      args: ["secrets", "apply", "--from", "--help"],
+    },
+    { args: ["gateway", "--url", "--help"] },
+    { args: ["--help", "gateway"] },
+    { args: ["gateway", "--", "--help"] },
+    { args: ["gateway", "--help", "--version"] },
+  ])("defers unsupported or ambiguous help $args", async ({ args }) => {
     const output = vi.fn(() => true);
     await expect(
-      tryOutputPrecomputedCommandHelp(["node", "openclaw", ...args], {
-        outputPrecomputedSubcommandHelpText: output,
+      runWithPrecomputedHelpMocks(tryOutputPrecomputedCommandHelp, ["node", "openclaw", ...args], {
+        outputPrecomputedCommandHelpText: output,
         env: {},
       }),
     ).resolves.toBe(false);

@@ -1,4 +1,3 @@
-// Sender display-label helpers shared by channel ingress and audit surfaces.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type SenderLabelParams = {
@@ -14,7 +13,6 @@ export type SenderLabelParams = {
 // belongs in a display label suffix.
 const OPAQUE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-/** Resolves the best one-line sender label from available identity fields. */
 export function resolveSenderLabel(params: SenderLabelParams): string | null {
   const display =
     normalizeOptionalString(params.name) ??

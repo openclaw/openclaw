@@ -22,4 +22,8 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
     const { transcribeOpenAiAudioWithContext } = await import("./audio-transcription.js");
     return transcribeOpenAiAudioWithContext(context);
   },
+  async isAudioConfigured(context) {
+    const { isOpenAiAudioConfigured } = await import("./audio-transcription.js");
+    return isOpenAiAudioConfigured(context);
+  },
 };

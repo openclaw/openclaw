@@ -5,6 +5,27 @@ import Testing
 
 @MainActor
 struct ChatSessionSidebarModelTests {
+    @Test func `explicit group placement wins over ancestry while folding stays within each section`() throws {
+        let sessions = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[
+          {"key":"parent","category":"A","childSessions":["child"]},
+          {"key":"child","category":"B","parentSessionKey":"parent","childSessions":["grandchild"]},
+          {"key":"grandchild","category":"B","parentSessionKey":"child"}
+        ]}
+        """#.utf8)).sessions
+        let sections = ChatSessionSidebarModel.sections(
+            sessions: sessions, currentSessionKey: "parent", mainSessionKey: "main",
+            groups: [.init(name: "A", position: 0), .init(name: "B", position: 1)], query: "")
+        #expect(sections.map(\.id) == ["group:A", "group:B"])
+        #expect(sections[0].nodes.map(\.id) == ["parent"])
+        #expect(sections[0].nodes[0].children.isEmpty)
+        let roots = sections[1].nodes
+        #expect(roots.map(\.id) == ["child"])
+        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in true }).map(\.depth) == [0, 1])
+        #expect(ChatSessionSidebarModel.rows(roots, showsChildren: { _ in false }).map(\.id) == ["child"])
+
+    }
+
     private func mixedRoster() throws -> [OpenClawChatSessionEntry] {
         try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
         {"sessions":[
@@ -34,11 +55,12 @@ struct ChatSessionSidebarModelTests {
             sessions: sessions, currentSessionKey: "older", mainSessionKey: "agent:main:main",
             activeAgentID: "main", excludesMainSession: true, query: "", viewOptions: .init())
         #expect(sections.first?.nodes.map(\.id) == ["pinned-new", "pinned-old"])
-        #expect(sections.last?.nodes.map(\.id) == [
-            "named-internal", "human", "newer", "child", "older", "z-tie", "a-tie",
-            "agent:main:slack:channel:demo", "missing",
+        let recent = sections.first(where: { $0.id == "recent" })
+        #expect(recent?.nodes.map(\.id) == [
+            "named-internal", "human", "newer", "child", "older", "z-tie", "a-tie", "missing",
         ])
-        #expect(sections.last?.nodes.first(where: { $0.id == "child" })?.children.map(\.id) == ["grandchild"])
+        #expect(recent?.nodes.first(where: { $0.id == "child" })?.children.map(\.id) == ["grandchild"])
+        #expect(sections.first(where: { $0.id == "groups" })?.nodes.map(\.id) == ["agent:main:slack:channel:demo"])
     }
 
     @Test func `sidebar visibility toggles are independent and selected hidden rows survive`() throws {
@@ -81,11 +103,11 @@ struct ChatSessionSidebarModelTests {
             sessions[index].category = "Work"
         }
         var order = ChatSessionSidebarModel.ObservedOrder()
-        order.observe(sessions.map(\.key))
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
         // A transient paging gap and a reordered refresh must not reverse tied rows.
-        order.observe(["older"])
+        order.observe([OpenClawChatSessionSidebarData.identity(self.entry(key: "older"))])
         sessions.reverse()
-        order.observe(sessions.map(\.key))
+        order.observe(sessions.map(OpenClawChatSessionSidebarData.identity))
         for (sort, expected) in [
             (ChatSessionSidebarModel.Sort.created, ["newer", "older", "z-tie", "a-tie", "missing"]),
             (.updated, ["missing", "older", "newer", "a-tie", "z-tie"]),
@@ -412,10 +434,10 @@ struct ChatSessionSidebarModelTests {
         #expect(Set(sections[1].nodes.map(\.session.key)) == Set(["case", "spaces"]))
     }
 
-    @Test func `pinned descendants move to pinned section independently`() {
+    @Test func `pinned descendants are placed independently of unpinned parents`() {
         let sections = ChatSessionSidebarModel.sections(
             sessions: [
-                self.entry(key: "parent", updatedAt: 200),
+                self.entry(key: "parent", updatedAt: 200, childSessions: ["child"]),
                 self.entry(key: "child", updatedAt: 100, pinned: true, parentSessionKey: "parent"),
             ],
             currentSessionKey: "parent",
@@ -424,6 +446,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.map(\.id) == ["pinned", "recent"])
         #expect(sections[0].nodes.map(\.id) == ["child"])
         #expect(sections[1].nodes.map(\.id) == ["parent"])
+        #expect(sections[1].nodes[0].children.isEmpty)
     }
 
     @Test func `hides onboarding and archived sessions, keeps the active one`() {
@@ -438,6 +461,20 @@ struct ChatSessionSidebarModelTests {
 
         // Other consumers keep the main row unless navigation owns it.
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["main"])
+    }
+
+    @Test func `archive query presentation opts in without changing default visibility`() throws {
+        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[{"key":"active","archived":false},{"key":"archived","archived":true}]}
+        """#.utf8)).sessions
+        func keys(_ options: ChatSessionSidebarModel.ViewOptions?) -> Set<String> {
+            Set(ChatSessionSidebarModel.sections(
+                sessions: rows, currentSessionKey: "active", query: "", viewOptions: options)
+                .flatMap(\.nodes).map(\.session.key))
+        }
+        #expect(keys(nil) == ["active"])
+        #expect(keys(.init()) == ["active"])
+        #expect(keys(.init(status: .all)) == ["active", "archived"])
     }
 
     @Test func `active session gets a placeholder row before lists load`() {
@@ -595,6 +632,70 @@ struct ChatSessionSidebarModelTests {
 
         #expect(sections.isEmpty)
     }
+
+    #if os(macOS)
+    @Test(arguments: [
+        (
+            #"{"key":"agent:ops:thread","label":" Release room ","displayName":"Generated","derivedTitle":"Derived"}"#,
+            "Release room"),
+        (
+            #"{"key":"agent:ops:thread","label":" ","displayName":" Generated ","derivedTitle":"Derived"}"#,
+            "Generated"),
+        (
+            #"{"key":"agent:ops:thread","label":"agent:ops:thread","displayName":"agent:ops:thread","derivedTitle":"Derived"}"#,
+            "Derived"),
+        (
+            #"{"key":"agent:ops:thread","worktree":{"branch":"openclaw/topic","repoRoot":"/repo/project/"},"derivedTitle":"Derived"}"#,
+            "project ⎇ topic"),
+        (
+            #"{"key":"agent:ops:thread","repository":{"url":"https://example.test/project.git","branch":"main"},"derivedTitle":"Derived"}"#,
+            "Derived"),
+        (#"{"key":"agent:ops:standup","autoLabel":"Device title"}"#, "standup"),
+        (#"{"key":"agent:ops:main"}"#, "Main Session"),
+        (#"{"key":"agent:subagent:main","label":"Subagent: named main"}"#, "Subagent: named main"),
+        (#"{"key":"agent:ops:dashboard:00f9d5c1-e6d0-4c9a-9d84-1c2f3a4b5c6d"}"#, "New session"),
+        (#"{"key":"agent:ops:explicit:task-0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d"}"#, "task-…5c6d"),
+        (#"{"key":"agent:ops:node-4de003fbff138fcb9239c9378b2e"}"#, "node-…8b2e"),
+        (#"{"key":"agent:ops:task-123456789"}"#, "task-123456789"),
+        (#"{"key":"agent:ops:subagent:worker","label":"Subagent: Research sources"}"#, "Research sources"),
+        (#"{"key":"agent:ops:subagent:worker"}"#, "Subagent:"),
+        (#"{"key":"agent:ops:cron:daily","label":"Cron Job: nightly"}"#, "Automation: nightly"),
+        (#"{"key":"agent:ops:cron:daily","label":"automation: Existing prefix"}"#, "automation: Existing prefix"),
+        (#"{"key":"agent:ops:telegram:cards:dm:491234567890"}"#, "Telegram · …567890 · cards"),
+        (#"{"key":"agent:ops:telegram:cards:direct:42","displayName":"Alice","accountId":"ops"}"#, "Alice · ops"),
+        (#"{"key":"agent:ops:telegram:direct:42","label":"Alice · cards","accountId":"cards"}"#, "Alice · cards"),
+        (#"{"key":"agent:ops:telegram:default:direct:42","displayName":"Alice"}"#, "Alice"),
+        (#"{"key":"agent:ops:telegram:direct:dm:42"}"#, "Telegram · 42 · direct"),
+        (#"{"key":"agent:ops:telegram:direct:12345😀67890"}"#, "Telegram · …67890"),
+        (#"{"key":"agent:ops:telegram:group:room"}"#, "Telegram Group"),
+        (#"{"key":"agent:ops:telegram:work:group:room"}"#, "telegram:work:group:room"),
+        (#"{"key":"imessage:room"}"#, "iMessage Session"),
+    ])
+    func `mac sidebar titles mirror web wire names without changing shared display`(
+        wire: String,
+        expected: String) throws
+    {
+        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(wire.utf8))
+        #expect(ChatSessionSidebarModel.sidebarDisplayName(for: session) == expected)
+    }
+
+    @Test(arguments: [
+        (
+            #"{"key":"work","worktree":{"branch":"openclaw/topic","repoRoot":"C:\\repo\\project\\"},"execNode":"node-1234567890ab"}"#,
+            "project ⎇ topic · node-…90ab"),
+        (
+            #"{"key":"work","repository":{"url":"https://example.test/project.git","branch":"openclaw/cloud-task"}}"#,
+            "project ⎇ openclaw/cloud-task"),
+        (#"{"key":"work","execNode":"11c38726acc6fac280357576c87acc6fac280357"}"#, "…0357"),
+    ])
+    func `mac sidebar work subtitles retain repository branches and shorten node ids`(
+        wire: String,
+        expected: String) throws
+    {
+        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(wire.utf8))
+        #expect(ChatSessionSidebarModel.sidebarWorkSubtitle(for: session) == expected)
+    }
+    #endif
 
     @Test func `session keys render as human names`() {
         #expect(ChatSessionSidebarModel.displayName(forKey: "agent:main:main") == "main")

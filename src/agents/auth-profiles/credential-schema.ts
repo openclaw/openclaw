@@ -36,6 +36,7 @@ const commonCredentialFields = {
   provider: z.string().min(1),
   email: z.string().optional(),
   displayName: z.string().optional(),
+  /** Explicit copy policy: API keys and static tokens copy by default; OAuth does not. */
   copyToAgents: z.boolean().optional(),
 };
 
@@ -45,12 +46,14 @@ export const inlineAuthProfileCredentialSchema = z.discriminatedUnion("type", [
     ...commonCredentialFields,
     type: z.literal("api_key"),
     key: normalizedSecretSchema,
+    /** Optional provider-specific metadata (e.g., account IDs, gateway IDs). */
     metadata: z.record(z.string(), z.string()).optional(),
   }),
   z.strictObject({
     ...commonCredentialFields,
     type: z.literal("token"),
     token: normalizedSecretSchema,
+    /** Optional expiry timestamp (ms since epoch). */
     expires: z.number().positive().optional(),
   }),
   z.strictObject({

@@ -131,67 +131,6 @@ extension OnboardingAISetupModel {
         }
     }
 
-    @MainActor
-    struct PersistedActivationVerification {
-        let expectedModel: String
-        let modelTarget: ModelTarget?
-        let routeIdentity: String
-        let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner
-        let before: PersistedActivationState?
-
-        func reconcile(
-            gateway: GatewayConnection,
-            defaults: UserDefaults,
-            serverLease: GatewayConnection.ServerLease,
-            deadline: ReconciliationDeadline,
-            isCurrentAttempt: () -> Bool,
-            onVerified: (ActivateResult) -> Bool) async -> Bool
-        {
-            let detectTimeoutMs = deadline.remainingMilliseconds(
-                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
-            guard detectTimeoutMs > 0,
-                  isCurrentAttempt(),
-                  !Task.isCancelled,
-                  OnboardingSystemAgentResumeStore.isOwned(
-                      by: self.activationOwner,
-                      for: self.routeIdentity,
-                      defaults: defaults),
-                  await gateway.activationOwnershipFingerprint(ifCurrentServerLease: serverLease) ==
-                  self.activationOwner.routeFingerprint
-            else { return false }
-            guard let detectData = try? await gateway.request(
-                method: "openclaw.setup.detect",
-                params: [:],
-                timeoutMs: Double(detectTimeoutMs),
-                ifCurrentServerLease: serverLease),
-                await gateway.isCurrentServerLease(serverLease),
-                isCurrentAttempt(),
-                !Task.isCancelled,
-                let detection = try? JSONDecoder().decode(DetectResult.self, from: detectData),
-                OnboardingAISetupModel.activationTransitionWasPersisted(
-                    expectedModel: self.expectedModel,
-                    modelTarget: self.modelTarget,
-                    before: self.before,
-                    after: detection.persistedActivationState)
-            else { return false }
-            let verifyTimeoutMs = deadline.remainingMilliseconds(
-                cappedAt: OnboardingAISetupModel.setupDetectionRequestTimeoutMs)
-            guard verifyTimeoutMs > 0 else { return false }
-            guard let verifyData = try? await gateway.request(
-                method: "openclaw.setup.verify",
-                params: self.modelTarget == .utility ? ["modelTarget": AnyCodable("utility")] : [:],
-                timeoutMs: Double(verifyTimeoutMs),
-                ifCurrentServerLease: serverLease),
-                await gateway.isCurrentServerLease(serverLease),
-                isCurrentAttempt(),
-                !Task.isCancelled,
-                let result = try? JSONDecoder().decode(ActivateResult.self, from: verifyData),
-                result.verifies(modelRef: self.expectedModel, modelTarget: self.modelTarget)
-            else { return false }
-            return onVerified(result)
-        }
-    }
-
     struct DetectResult: Decodable {
         let candidates: [Candidate]
         let unavailableCandidates: [UnavailableCandidate]?
@@ -490,15 +429,16 @@ extension OnboardingAISetupModel {
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
     }
 
-    func continueProviderAuth() {
-        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return }
+    @discardableResult
+    func continueProviderAuth() -> Task<Void, Never>? {
+        guard let step = authStep, wizardStepExecutor(step) != "gateway" else { return nil }
         let value: AnyCodable? = switch wizardStepType(step) {
         case "text": AnyCodable(self.authText)
         case "select": self.selectedAuthWizardOption?.value
         case "confirm": AnyCodable(self.authConfirmation)
         default: nil
         }
-        self.advanceProviderAuth(stepID: step.id, value: value)
+        return self.advanceProviderAuth(stepID: step.id, value: value)
     }
 
     func startProviderPrepare(_ option: PrepareOption) {
@@ -539,25 +479,22 @@ extension OnboardingAISetupModel {
         // Released Gateways do not send prepareOptions. Preserve their two
         // existing rows until the connected Gateway advertises provider-owned choices.
         let legacyOptions = [
+            ("ollama", "Ollama", "Download a tools-capable model from your Ollama server"),
+            (
+                "llama-cpp",
+                "Local model (llama.cpp)",
+                "Download an approximately 5.0 GB local model; requires 16 GB RAM"),
+        ].map { id, label, hint in
             PrepareOption(
-                id: "ollama",
-                label: "Ollama",
-                hint: "Download a tools-capable model from your Ollama server",
+                id: id,
+                label: label,
+                hint: hint,
                 actionLabel: nil,
-                brandId: "ollama",
+                brandId: id,
                 icon: nil,
                 website: nil,
-                modelTarget: nil),
-            PrepareOption(
-                id: "llama-cpp",
-                label: "Local model (llama.cpp)",
-                hint: "Download an approximately 5.0 GB local model; requires 16 GB RAM",
-                actionLabel: nil,
-                brandId: "llama-cpp",
-                icon: nil,
-                website: nil,
-                modelTarget: nil),
-        ]
+                modelTarget: nil)
+        }
         return (advertisedOptions ?? legacyOptions).filter { choice in
             let providerKind = self.providerAutoSetupKind(choiceID: choice.id)
             return !candidates.contains(where: {

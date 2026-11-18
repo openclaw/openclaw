@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { Agent, request } from "node:https";
 import os from "node:os";
@@ -18,6 +17,9 @@ import {
   PROXY_FIXTURE_CERTIFICATE,
   PROXY_FIXTURE_KEY,
 } from "../../../../src/test-helpers/proxy-tls-fixture.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPluginEntryObservation } from "../../../helpers/qa-plugin-entry-observation.js";
+import { fileHash, json, pluginIdentity } from "./candidate-test-support.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../../..");
 const accounts = ["alpha", "beta"] as const;
@@ -33,30 +35,16 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
   const events = new Map<string, ServerRequestEvent[]>();
   const agent = new Agent({ ca: PROXY_FIXTURE_CERTIFICATE });
   const gatewayOwner = createQaGatewayChild();
-  const mockOwner: {
-    server?: Awaited<ReturnType<typeof startQaMockOpenAiServer>>;
-  } = {};
-  onTestFinished(async () => {
-    const errors: unknown[] = [];
-    const stopped = await gatewayOwner.stop();
-    errors.push(...stopped.errors);
-    // Stop the consumer before its native transports, then remove their owned files.
-    for (const close of [
+  const mockOwner: { server?: Awaited<ReturnType<typeof startQaMockOpenAiServer>> } = {};
+  onTestFinished(() =>
+    runQaGatewayFixture(
+      () => stopQaGatewayFixture(gatewayOwner),
       ...servers.map((server) => () => server.close()),
       () => mockOwner.server?.stop(),
-    ]) {
-      try {
-        await close();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    agent.destroy();
-    await fs.rm(directory, { recursive: true, force: true });
-    if (errors.length) {
-      throw new AggregateError(errors, "Candidate cleanup failed");
-    }
-  });
+      () => agent.destroy(),
+      () => fs.rm(directory, { recursive: true, force: true }),
+    ),
+  );
   for (const account of accounts) {
     const records: ServerRequestEvent[] = [];
     events.set(account, records);
@@ -80,23 +68,11 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
   const mock = await startQaMockOpenAiServer();
   mockOwner.server = mock;
   const modelRef = "mock-openai/gpt-5.6-luna";
-  // The built Gateway admits bundled plugins from its owning package root.
-  // Snapshot the declared entry before startup to bind the loaded code to this build.
-  const builtPluginRoot = path.join(await fs.realpath(repoRoot), "dist/extensions/feishu");
-  const builtPackage = JSON.parse(
-    await fs.readFile(path.join(builtPluginRoot, "package.json"), "utf8"),
-  ) as { name: string; openclaw: { extensions: string[] } };
-  expect(builtPackage.name).toBe("@openclaw/feishu");
-  expect(builtPackage.openclaw.extensions).toEqual([
-    expect.stringMatching(/^\.\/index\.(?:c|m)?js$/u),
-  ]);
-  const builtEntry = await fs.realpath(
-    path.resolve(builtPluginRoot, builtPackage.openclaw.extensions[0]!),
+  const { entry: builtEntry, entrySha256: builtEntryHash } = await pluginIdentity(
+    repoRoot,
+    "feishu",
   );
-  expect(path.dirname(builtEntry)).toBe(builtPluginRoot);
-  const builtEntryHash = createHash("sha256")
-    .update(await fs.readFile(builtEntry))
-    .digest("hex");
+  const entryObservation = await createQaPluginEntryObservation({ directory, entry: builtEntry });
   const gateway = await gatewayOwner.start({
     repoRoot,
     providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -108,6 +84,7 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
     controlUiEnabled: false,
     enabledPluginIds: ["feishu"],
     runtimeEnvPatch: { NODE_EXTRA_CA_CERTS: caPath },
+    runtimePreloads: [entryObservation.preloadUrl],
     mutateConfig: (cfg) => ({
       ...cfg,
       logging: { ...cfg.logging, level: "debug", consoleLevel: "debug" },
@@ -149,23 +126,11 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
     }
   };
   await wait(() => accounts.every((account) => stage(account, "websocket.connected").length === 1));
-  const loaded = [...gateway.logs().matchAll(/\[plugins\] loading feishu from ([^\r\n]+)/gu)]
-    .at(-1)?.[1]
-    ?.trim();
-  if (!loaded) {
-    throw new Error("Gateway did not report its actual Feishu executable entry");
-  }
-  expect(await fs.realpath(loaded)).toBe(builtEntry);
-  const entryHash = createHash("sha256")
-    .update(await fs.readFile(loaded))
-    .digest("hex");
+  await entryObservation.verify(gateway.pid, builtEntryHash);
+  const entryHash = await fileHash(builtEntry);
   expect(entryHash).toBe(builtEntryHash);
-  const sourceHash = createHash("sha256")
-    .update(await fs.readFile(path.join(repoRoot, "extensions/feishu/index.ts")))
-    .digest("hex");
-  const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`, { signal });
-  expect(cursorResponse.ok).toBe(true);
-  const { cursor } = (await cursorResponse.json()) as { cursor: number };
+  const sourceHash = await fileHash(path.join(repoRoot, "extensions/feishu/index.ts"));
+  const { cursor } = await json<{ cursor: number }>(`${mock.baseUrl}/debug/request-cursor`, signal);
   const replies = ["中文回复甲", "中文回复乙"];
   for (const [index, account] of accounts.entries()) {
     const server = servers[index]!;
@@ -218,24 +183,23 @@ it("joins two native Feishu accounts through the real Gateway with raw rendering
     const outbound = stage(account, "outbound.accepted")[0]!.body as {
       message: { msg_type: string; chat_id: string; parent_id?: string; body: { content: string } };
     };
-    expect(outbound.message.msg_type).toBe("post");
-    expect(outbound.message.chat_id).toBe("oc_shared_chat");
+    expect(outbound.message).toMatchObject({ msg_type: "post", chat_id: "oc_shared_chat" });
     expect(outbound.message.parent_id).toBeUndefined();
     expect(outbound.message.body.content).toContain(replies[index]);
     expect(outbound.message.body.content).not.toContain(replies[1 - index]);
   }
-  const response = await fetch(`${mock.baseUrl}/debug/requests?after=${cursor}`, { signal });
-  expect(response.ok).toBe(true);
-  const requests = (await response.json()) as MockOpenAiRequestSnapshot[];
+  const requests = await json<MockOpenAiRequestSnapshot[]>(
+    `${mock.baseUrl}/debug/requests?after=${cursor}`,
+    signal,
+  );
   for (const account of accounts) {
     const own = requests.filter((entry) => entry.allInputText.includes(`中文入口 ${account}`));
-    expect(own).toHaveLength(1);
-    expect(own[0]!.outcome).toBe("success");
+    expect(own).toMatchObject([{ outcome: "success" }]);
     expect(own[0]!.allInputText).not.toContain(
       `中文入口 ${account === "alpha" ? "beta" : "alpha"}`,
     );
   }
-  // The import-attempt line is identity evidence only; native replies above prove execution.
+  // Native loader bytes establish identity; the replies above prove execution.
   console.log(
     JSON.stringify({
       proof: "feishu-native-gateway-candidate",

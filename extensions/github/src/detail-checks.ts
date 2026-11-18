@@ -45,12 +45,8 @@ function checkUrl(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 4096) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value);
+  return url?.protocol === "https:" && !url.username && !url.password ? url.href : undefined;
 }
 
 function checkState(entry: Record<string, unknown>, kind: "runs" | "statuses"): CheckState {

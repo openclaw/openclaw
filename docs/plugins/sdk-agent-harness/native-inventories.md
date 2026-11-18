@@ -31,6 +31,11 @@ Unexpected thrown discovery errors keep the host’s generic partial-failure beh
 The host does not infer a provider or authentication rejection from a runtime name
 or arbitrary exception text; a harness must supply its own known provider outcome.
 
+Discovery holds a plugin only while its call into that plugin is running, so
+other plugins, including ones whose lookup already finished, reload while
+discovery continues. A call that is still running keeps its own plugin from
+reloading until it settles, so bound your own native requests with a deadline.
+
 An optional synchronous `readModelCatalogReadiness(params)` returns only
 `{ accountType: string }` for a current native account observation
 covering that exact scope and model. Preserve the native account type; it does
@@ -41,6 +46,32 @@ perform I/O in this callback, or infer it from a successful earlier turn.
 Gateway uses this metadata for native-owned picker rows; authored host routes,
 credentials, and profile locks still use host readiness. This is not execution
 authorization, and all run-time compatibility and permission checks still apply.
+
+### Service-tier picker policy
+
+An optional synchronous `filterModelServiceTiers` hook narrows the tiers shown for
+the harness runtime:
+
+```ts
+filterModelServiceTiers(params: {
+  config: OpenClawConfig;
+  agentId?: string;
+  provider: string;
+  modelId: string;
+  serviceTiers: readonly string[];
+}): readonly string[];
+```
+
+Gateway calls this hook after resolving account and route service-tier evidence,
+for both the selected model row and alternative runtime choices. The supplied
+config is the prepared catalog's snapshot. Interpret plugin-specific policy in
+the harness; core does not read private plugin config.
+
+Return a subset without mutating the input or doing I/O or discovery. Core
+intersects the result with the resolved tiers, preserving their order and
+ignoring added tiers. Without the hook, tiers are unchanged. Unknown tier
+availability remains unknown and does not invoke the hook. This affects picker
+metadata only; the harness must still enforce its policy when executing a turn.
 
 ## Native MCP inventory
 
@@ -71,8 +102,3 @@ The method is optional for existing SDK implementations; automatic one-shot
 recovery treats a missing method as uncertain cleanup. A native facade that owns
 no transport may resolve immediately when its enclosing runtime separately owns
 and verifies the process lifetime.
-
-Harnesses that forward embedded attempt params should pass
-`skillWorkshopProposalOnly` through. Proposal-only skill-workshop runs are
-deliberately narrow single-tool runs, and the runtime keeps them on the raw
-tool surface instead of engaging code mode or a tool-search catalog.

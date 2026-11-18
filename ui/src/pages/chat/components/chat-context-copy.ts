@@ -2,6 +2,7 @@ import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code
 import { markdownTableCopyText } from "../../../components/markdown-tables.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { readAttachmentContextCopy } from "./chat-attachment-context-copy.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -36,19 +37,15 @@ export function resolveChatContextCopy(target: Element): { label: string; text: 
   }
   const attachment = target.closest(".chat-assistant-attachment-card, .chat-attachment-file");
   if (attachment) {
-    // The download owner has already resolved admission and the current media ticket.
-    // Inner media src can instead point at a transient decoded playback buffer.
-    const link = attachment.querySelector<HTMLAnchorElement>(
-      "a.chat-assistant-attachment-card__download[href]:not([aria-disabled='true'])",
-    );
-    if (link?.getAttribute("href")) {
-      return { label: t("chat.messages.copyLink"), text: link.href };
+    const copy = readAttachmentContextCopy(attachment);
+    if (copy?.href) {
+      return {
+        label: t("chat.messages.copyLink"),
+        text: URL.parse(copy.href, attachment.ownerDocument.baseURI)?.href ?? copy.href,
+      };
     }
-    const name = attachment.querySelector(
-      ".chat-assistant-attachment-card__title, .chat-attachment-file__name",
-    )?.textContent;
-    if (name) {
-      return { label: t("chat.messages.copyFileName"), text: name };
+    if (copy?.name) {
+      return { label: t("chat.messages.copyFileName"), text: copy.name };
     }
   }
   return null;

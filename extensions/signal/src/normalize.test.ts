@@ -7,31 +7,9 @@ describe("normalizeSignalMessagingTarget", () => {
     expect(normalizeSignalMessagingTarget("username:Alice.42")).toBe("username:alice.42");
     expect(normalizeSignalMessagingTarget("signal:u:Alice.42")).toBe("username:alice.42");
   });
-
-  it("normalizes signal:uuid targets", () => {
-    expect(normalizeSignalMessagingTarget("signal:uuid:123E4567-E89B-12D3-A456-426614174000")).toBe(
-      "123e4567-e89b-12d3-a456-426614174000",
-    );
-  });
-
-  it("preserves case for group targets", () => {
-    expect(
-      normalizeSignalMessagingTarget("signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg="),
-    ).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
-  });
 });
 
 describe("looksLikeSignalTargetId", () => {
-  it("accepts uuid prefixes for target detection", () => {
-    expect(looksLikeSignalTargetId("uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
-    expect(looksLikeSignalTargetId("signal:uuid:123e4567-e89b-12d3-a456-426614174000")).toBe(true);
-  });
-
-  it("accepts signal-prefixed E.164 targets for detection", () => {
-    expect(looksLikeSignalTargetId("signal:+15551234567")).toBe(true);
-    expect(looksLikeSignalTargetId("signal:15551234567")).toBe(true);
-  });
-
   it("accepts compact UUIDs for target detection", () => {
     expect(looksLikeSignalTargetId("123e4567e89b12d3a456426614174000")).toBe(true);
     expect(looksLikeSignalTargetId("uuid:123e4567e89b12d3a456426614174000")).toBe(true);

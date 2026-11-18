@@ -142,7 +142,6 @@ final class HoverChromeContainerView: NSView {
             btn.bezelStyle = .regularSquare
             btn.imageScaling = .scaleProportionallyDown
             btn.contentTintColor = NSColor.white.withAlphaComponent(0.92)
-            btn.toolTip = "Close"
             return btn
         }()
 
@@ -156,15 +155,12 @@ final class HoverChromeContainerView: NSView {
             self.layer?.borderColor = NSColor.black.withAlphaComponent(0.18).cgColor
             self.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.02).cgColor
 
-            self.dragHandle.translatesAutoresizingMaskIntoConstraints = false
-            self.dragHandle.wantsLayer = true
-            self.dragHandle.layer?.backgroundColor = NSColor.clear.cgColor
-            self.addSubview(self.dragHandle)
-
-            self.resizeHandle.translatesAutoresizingMaskIntoConstraints = false
-            self.resizeHandle.wantsLayer = true
-            self.resizeHandle.layer?.backgroundColor = NSColor.clear.cgColor
-            self.addSubview(self.resizeHandle)
+            for handle in [self.dragHandle, self.resizeHandle] {
+                handle.translatesAutoresizingMaskIntoConstraints = false
+                handle.wantsLayer = true
+                handle.layer?.backgroundColor = NSColor.clear.cgColor
+                self.addSubview(handle)
+            }
 
             self.closeBackground.translatesAutoresizingMaskIntoConstraints = false
             self.addSubview(self.closeBackground)

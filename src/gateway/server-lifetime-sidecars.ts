@@ -1,10 +1,16 @@
-import { getRuntimeConfig } from "../config/config.js";
+import { createConfigIO } from "../config/io.factory.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { purgeExpiredSecretStoreEntries } from "../secrets/store/secret-store.js";
+import {
+  getSecretStoreExpiryDeadline,
+  purgeExpiredSecretStoreEntries,
+  subscribeSecretStoreChanges,
+} from "../secrets/store/secret-store.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
 } from "./github-oauth-lifecycle.js";
+import { startGitHubPublicationDiscovery } from "./github-publication-discovery.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
 import {
   broadcastChatMetadataChanged,
@@ -14,6 +20,7 @@ import { attachSessionChangeEventLifetime } from "./server-methods/session-chang
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { startIncognitoSessionLifetime } from "./session-incognito-lifetime.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 type GatewayChatMetadataLifecycle = Awaited<ReturnType<typeof createGatewayChatMetadataLifecycle>>;
 
@@ -39,12 +46,23 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     params.gatewayRequestContext,
     params.publishSidecars,
   );
+  if (!params.minimalTestGateway) {
+    const { startSessionCostUsageProjectionLifetime } =
+      await import("./session-cost-usage-lifetime.js");
+    params.publishSidecars(
+      startSessionCostUsageProjectionLifetime({
+        getConfig: params.gatewayRequestContext.getRuntimeConfig,
+        warn: params.logWarning,
+      }),
+    );
+  }
   const modelAccountConnect = createModelAccountConnectService({
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
     onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),
   });
   params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;
   params.publishSidecars({
+    name: "model-account-connect",
     stop: async () => {
       await modelAccountConnect.stop();
       if (params.gatewayRequestContext.modelAccountConnectService === modelAccountConnect) {
@@ -55,15 +73,22 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   const githubOAuth = createGitHubOAuthLifecycle({
     scheduler: params.scheduler,
     getConfig: params.gatewayRequestContext.getRuntimeConfig,
-    getPersistedConfig: () => getRuntimeConfig({ pin: false }),
+    getPersistedConfig: () => createConfigIO().loadConfigAsync(),
     warn: params.logWarning,
   });
   params.gatewayRequestContext.githubOAuthService = githubOAuth;
   const uninstallGitHubOAuth = installActiveGitHubOAuthLifecycle(githubOAuth);
   if (!params.minimalTestGateway) {
+    params.publishSidecars(
+      startGitHubPublicationDiscovery({
+        scheduler: params.scheduler,
+        projection: getSessionRowProjection(params.gatewayRequestContext),
+      }),
+    );
     githubOAuth.start();
   }
   params.publishSidecars({
+    name: "github-oauth",
     stop: async () => {
       uninstallGitHubOAuth();
       await githubOAuth.stop();
@@ -73,30 +98,63 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   if (!params.minimalTestGateway) {
+    const expiryScheduler = params.scheduler.scope();
     let warned = false;
-    params.publishSidecars(
-      params.scheduler.schedule({
-        id: "maintenance:secret-expiry",
-        atMs: params.scheduler.now(),
-        everyMs: 60_000,
-        run: () =>
-          purgeExpiredSecretStoreEntries()
-            .then(() => {
-              warned = false;
-            })
-            .catch(() => {
-              if (!warned) {
-                params.logWarning("Secret store expiry cleanup failed; will retry.");
-                warned = true;
-              }
-            }),
-      }),
+    let running = false;
+    const scheduleExpiry = (atMs: number) => {
+      if (!expiryScheduler.signal.aborted) {
+        expiryScheduler.schedule({
+          id: "maintenance:secret-expiry",
+          atMs,
+          mode: "earliest",
+          run: sweep,
+        });
+      }
+    };
+    const sweep = async () => {
+      if (running) {
+        return;
+      }
+      running = true;
+      try {
+        await purgeExpiredSecretStoreEntries();
+        warned = false;
+        const next = getSecretStoreExpiryDeadline();
+        if (next !== null) {
+          scheduleExpiry(next ?? expiryScheduler.now());
+        }
+      } catch {
+        if (!warned) {
+          params.logWarning("Secret store expiry cleanup failed; will retry.");
+          warned = true;
+        }
+        scheduleExpiry(expiryScheduler.now() + 60_000);
+      } finally {
+        running = false;
+      }
+    };
+    const unsubscribe = subscribeSecretStoreChanges(() => scheduleExpiry(expiryScheduler.now()));
+    const unsubscribeLifecycle = registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (event.kind !== "opened") {
+        scheduleExpiry(expiryScheduler.now());
+      }
+    });
+    expiryScheduler.signal.addEventListener(
+      "abort",
+      () => {
+        unsubscribe();
+        unsubscribeLifecycle();
+      },
+      { once: true },
     );
+    params.publishSidecars({ name: "secret-expiry", stop: expiryScheduler.stop });
+    scheduleExpiry(expiryScheduler.now());
   }
   const reconcileGitHubPublications = params.reconcileGitHubPublications;
   if (reconcileGitHubPublications) {
-    params.publishSidecars(
-      params.scheduler.schedule({
+    params.publishSidecars({
+      name: "github-publication-recovery",
+      ...params.scheduler.schedule({
         id: "maintenance:github-publication",
         atMs: params.scheduler.now(),
         everyMs: 60_000,
@@ -105,10 +163,11 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
             params.logWarning("GitHub publication recovery failed; will retry."),
           ),
       }),
-    );
+    });
   }
   attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
     params.publishSidecars({
+      name: "session-change-events",
       stop: async () => {
         await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
       },

@@ -1,4 +1,3 @@
-// Startup launcher spawn admission is independent of Scheduled Task takeover.
 import type { SpawnSyncOptions } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -15,7 +14,6 @@ import {
   makeSpawnSyncResult,
   resetSchtasksBaseMocks,
   withWindowsEnv,
-  writeGatewayScript,
   type SpawnSyncResult,
 } from "./test-helpers/schtasks-fixtures.js";
 
@@ -33,6 +31,7 @@ vi.mock("node:child_process", async (original) => ({
 }));
 beforeEach(() => {
   resetSchtasksBaseMocks();
+  vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   childUnref.mockReset();
   spawn.mockReset().mockImplementation(() => createSpawnChild(childUnref));
@@ -43,148 +42,114 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+async function writeCmdScript(env: Record<string, string | undefined>) {
+  const scriptPath = resolveTaskScriptPath(env);
+  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+  await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
+  return scriptPath;
+}
 describe("Windows Startup launcher", () => {
-  it("rejects asynchronous direct executable spawn failures without detaching", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      await writeGatewayScript(env);
-      const error = Object.assign(new Error("spawn direct ENOENT"), { code: "ENOENT" });
-      spawn.mockImplementationOnce(() => createSpawnChild(childUnref, error));
-
-      await expect(launchFallbackTaskScript(env)).rejects.toThrow("spawn direct ENOENT");
-      expect(childUnref).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects asynchronous cmd fallback spawn failures without detaching", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      const scriptPath = resolveTaskScriptPath(env);
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
-      const error = Object.assign(new Error("spawn cmd ENOENT"), { code: "ENOENT" });
-      spawn.mockImplementationOnce(() => createSpawnChild(childUnref, error));
-
-      await expect(launchFallbackTaskScript(env)).rejects.toThrow("spawn cmd ENOENT");
-      expect(childUnref).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects a missing cmd fallback script before starting cmd", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      await expect(launchFallbackTaskScript(env)).rejects.toThrow(/ENOENT|no such file/i);
-      expect(spawn).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects an ACL-denied cmd fallback script before starting cmd", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      const scriptPath = resolveTaskScriptPath(env);
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
-      const denied = Object.assign(new Error("open fallback script EACCES"), { code: "EACCES" });
-      vi.spyOn(fs, "open").mockRejectedValueOnce(denied);
-
-      await expect(launchFallbackTaskScript(env, null)).rejects.toThrow(
-        "open fallback script EACCES",
-      );
-      expect(spawn).not.toHaveBeenCalled();
-      expect(childUnref).not.toHaveBeenCalled();
-    });
-  });
-
-  it("rejects denied cmd script access even when Node opens it with backup privileges", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
-      env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state & %USERPROFILE%");
-      const scriptPath = resolveTaskScriptPath(env);
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(scriptPath, "@echo off\r\n", "utf8");
-      spawnSync.mockReturnValueOnce(makeSpawnSyncResult({ status: 1 }));
-
-      await expect(launchFallbackTaskScript(env, null)).rejects.toMatchObject({ code: "EACCES" });
-      expect(spawnSync).toHaveBeenCalledWith(
-        getWindowsPowerShellExePath(),
-        expect.arrayContaining(["-EncodedCommand"]),
-        expect.objectContaining({
-          env: expect.objectContaining({ OPENCLAW_TASK_SCRIPT: scriptPath }),
-          stdio: "ignore",
-          windowsHide: true,
+  it.each(["cmd", "bat"])("launches an installed .%s wrapper through cmd.exe", async (ext) => {
+    await withWindowsEnv("openclaw-win-wrapper-", async ({ env, tmpDir }) => {
+      const wrapper = path.join(tmpDir, `openclaw wrapper.${ext}`);
+      spawn.mockImplementation((command: string) => {
+        if (/\.(?:cmd|bat)$/iu.test(command)) {
+          throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+        }
+        return createSpawnChild(childUnref);
+      });
+      await expect(
+        launchFallbackTaskScript(env, {
+          programArguments: [wrapper, "node", "run", "--display-name", "Headless node"],
+          environment: { OPENCLAW_SERVICE_KIND: "node" },
         }),
-      );
-      expect(spawn).not.toHaveBeenCalled();
-      expect(childUnref).not.toHaveBeenCalled();
-    });
-  });
-
-  it("detaches the direct executable only after it starts", async () => {
-    vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      await writeGatewayScript(env);
-
-      await expect(launchFallbackTaskScript(env)).resolves.toBeUndefined();
+      ).resolves.toBeUndefined();
       expect(spawn).toHaveBeenCalledWith(
-        "C:\\Program Files\\nodejs\\node.exe",
-        expect.arrayContaining(["gateway", "--port", "18789"]),
+        getWindowsCmdExePath(),
+        ["/d", "/s", "/c", `""${wrapper}" "node" "run" "--display-name" "Headless node""`],
         expect.objectContaining({
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true,
-          env: expect.objectContaining({
-            BOUNDARY_PARENT_ONLY: "synthetic",
-            OPENCLAW_GATEWAY_PORT: "18789",
-          }),
+          windowsVerbatimArguments: true,
+          shell: false,
+          env: expect.objectContaining({ BOUNDARY_PARENT_ONLY: "synthetic" }),
         }),
       );
       expect(childUnref).toHaveBeenCalledOnce();
     });
   });
 
-  it("keeps Gateway fallback execution inside the task supervisor", async () => {
-    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+  it.each(["spawn", "access"])("rejects %s failure without detaching", async (failure) => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
+      env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state & %USERPROFILE%");
+      const scriptPath = await writeCmdScript(env);
+      const error = Object.assign(new Error("spawn cmd ENOENT"), { code: "ENOENT" });
+      if (failure === "access") {
+        spawnSync.mockReturnValueOnce(makeSpawnSyncResult({ status: 1 }));
+      } else {
+        spawn.mockImplementationOnce(() => createSpawnChild(childUnref, error));
+      }
       await expect(
-        launchFallbackTaskScript(env, {
-          programArguments: ["C:\\Program Files\\nodejs\\node.exe", "gateway.js"],
-          environment: { OPENCLAW_SERVICE_KIND: "gateway" },
-        }),
-      ).resolves.toBeUndefined();
-
-      expect(spawn).toHaveBeenCalledWith(
-        "C:\\Program Files\\nodejs\\node.exe",
-        ["gateway.js", "--task-supervisor"],
-        expect.objectContaining({ detached: true, stdio: "ignore", windowsHide: true }),
+        launchFallbackTaskScript(env, failure === "access" ? null : undefined),
+      ).rejects.toMatchObject(
+        failure === "access" ? { code: "EACCES" } : { code: "ENOENT", message: "spawn cmd ENOENT" },
       );
+      expect(childUnref).not.toHaveBeenCalled();
+      if (failure === "access") {
+        expect(spawnSync.mock.calls[0]?.[2]?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
+        expect(spawn).not.toHaveBeenCalled();
+        expect(spawnSync).toHaveBeenCalledWith(
+          getWindowsPowerShellExePath(),
+          expect.arrayContaining(["-EncodedCommand"]),
+          expect.objectContaining({
+            env: expect.objectContaining({ OPENCLAW_TASK_SCRIPT: scriptPath }),
+            stdio: "ignore",
+            windowsHide: true,
+          }),
+        );
+      }
     });
   });
 
-  it("detaches the cmd fallback only after it starts", async () => {
-    vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
+  it.each(["supervisor", "cmd"])("detaches the %s launcher only after admission", async (kind) => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env, tmpDir }) => {
       env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state & %USERPROFILE% !");
       const scriptPath = resolveTaskScriptPath(env);
-      await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-      await fs.writeFile(scriptPath, "@echo off\r\nrem no parsed command\r\n", "utf8");
-
-      await expect(launchFallbackTaskScript(env)).resolves.toBeUndefined();
-      const [command, args, options] = spawn.mock.calls.at(-1) as [
-        string,
-        string[],
-        {
-          detached: boolean;
-          env: NodeJS.ProcessEnv;
-          stdio: string;
-          windowsHide: boolean;
-          windowsVerbatimArguments: boolean;
-        },
-      ];
-      expect(command).toBe(getWindowsCmdExePath());
-      expect(args).toEqual(["/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""']);
-      expect(options.env.OPENCLAW_TASK_SCRIPT).toBe(scriptPath);
-      expect(options.env.BOUNDARY_PARENT_ONLY).toBe("synthetic");
-      expect(spawnSync).toHaveBeenCalledOnce();
-      expect(spawnSync.mock.calls[0]?.[2]?.env).toMatchObject({ OPENCLAW_TASK_SCRIPT: scriptPath });
-      expect(spawnSync.mock.calls[0]?.[2]?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
-      expect(options.detached).toBe(true);
-      expect(options.stdio).toBe("ignore");
-      expect(options.windowsHide).toBe(true);
-      expect(options.windowsVerbatimArguments).toBe(true);
+      if (kind === "cmd") {
+        await writeCmdScript(env);
+      }
+      await expect(
+        launchFallbackTaskScript(
+          env,
+          kind === "supervisor"
+            ? {
+                programArguments: ["C:\\Program Files\\nodejs\\node.exe", "gateway.js"],
+                environment: { OPENCLAW_SERVICE_KIND: "gateway" },
+              }
+            : undefined,
+        ),
+      ).resolves.toBeUndefined();
+      expect(spawn.mock.calls.at(-1)).toEqual([
+        kind === "cmd" ? getWindowsCmdExePath() : "C:\\Program Files\\nodejs\\node.exe",
+        kind === "cmd"
+          ? ["/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""']
+          : ["gateway.js", "--task-supervisor"],
+        expect.objectContaining({
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+          ...(kind === "cmd" ? { windowsVerbatimArguments: true } : {}),
+          env: expect.objectContaining({
+            BOUNDARY_PARENT_ONLY: "synthetic",
+            ...(kind === "cmd" ? { OPENCLAW_TASK_SCRIPT: scriptPath } : {}),
+          }),
+        }),
+      ]);
+      if (kind === "cmd") {
+        expect(spawnSync).toHaveBeenCalledOnce();
+        expect(spawnSync.mock.calls[0]?.[2]?.env).toMatchObject({
+          OPENCLAW_TASK_SCRIPT: scriptPath,
+        });
+        expect(spawnSync.mock.calls[0]?.[2]?.env).not.toHaveProperty("BOUNDARY_PARENT_ONLY");
+      }
       expect(childUnref).toHaveBeenCalledOnce();
     });
   });

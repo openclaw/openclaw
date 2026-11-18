@@ -1,33 +1,22 @@
 import { createMockProviderMap } from "./mock-model-config.js";
 import type { QaProviderDefinition, QaProviderMode } from "./types.js";
 
-type MockQaProviderDefinitionParams = {
+export function createMockQaProviderDefinition(params: {
   mode: Extract<QaProviderMode, "aimock" | "mock-openai">;
-  commandName: string;
   commandDescription: string;
   serverLabel: string;
   mockAuthProviders: readonly string[];
-};
-
-function mockModelRef(providerId: string, alternate?: boolean) {
-  return `${providerId}/${alternate ? "gpt-5.6-luna-alt" : "gpt-5.6-luna"}`;
-}
-
-export function createMockQaProviderDefinition(
-  params: MockQaProviderDefinitionParams,
-): QaProviderDefinition {
+}): QaProviderDefinition {
   return {
     mode: params.mode,
     kind: "mock",
     standaloneCommand: {
-      name: params.commandName,
+      name: params.mode,
       description: params.commandDescription,
       serverLabel: params.serverLabel,
     },
-    defaultModel: (options) => mockModelRef(params.mode, options?.alternate),
-    defaultImageGenerationProviderIds: ["openai"],
-    defaultImageGenerationModel: ({ modelProviderIds }) =>
-      modelProviderIds.includes("openai") ? "openai/gpt-image-1" : null,
+    defaultModel: (options) =>
+      `${params.mode}/${options?.alternate ? "gpt-5.6-luna-alt" : "gpt-5.6-luna"}`,
     usesFastModeByDefault: () => false,
     resolveModelParams: () => ({
       transport: "sse",
@@ -42,8 +31,5 @@ export function createMockQaProviderDefinition(
       ]),
     }),
     mockAuthProviders: params.mockAuthProviders,
-    usesModelProviderPlugins: false,
-    scrubsLiveProviderEnv: true,
-    appliesLiveEnvAliases: false,
   };
 }

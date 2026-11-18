@@ -1,4 +1,3 @@
-/** Ensures or recreates a live ACP runtime handle for persisted session metadata. */
 import {
   createIdentityFromEnsure,
   identityEquals,
@@ -9,7 +8,6 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
   AcpRuntimeError,
@@ -19,10 +17,8 @@ import {
 import {
   matchesAcpSessionControlBinding,
   resolveAcpSessionControlOwner,
-  type AcpSessionControlBinding,
-  type AcpSessionRuntimeLocator,
 } from "../runtime/session-control-owner.js";
-import type { AcpSessionControlConstraint } from "../runtime/session-meta-control.types.js";
+import type { AcpSessionRuntimeLocator } from "../runtime/session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "../runtime/session-meta-entry.kernel.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
@@ -32,6 +28,7 @@ import {
 } from "./manager.runtime-owner.js";
 import type {
   AcpSessionManagerDeps,
+  EnsureManagerRuntimeHandle,
   SessionAcpMeta,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
@@ -43,28 +40,18 @@ import {
   resolveAcpAgentFromSessionKey,
 } from "./manager.utils.js";
 import {
-  normalizeRuntimeOptions,
   normalizeText,
   resolveRuntimeOptionsFromMeta,
   runtimeOptionsEqual,
 } from "./runtime-options.js";
 
-/** Returns a reusable cached handle or initializes a fresh runtime session for the metadata. */
-export async function ensureManagerRuntimeHandle(params: {
-  assertMetadataCommitAllowed?: (expectedLocator: AcpSessionRuntimeLocator) => void;
-  readAcpControl?: () => AcpSessionControlConstraint | undefined;
-  assertActive?: () => void;
-  expectedControlBinding?: AcpSessionControlBinding;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  meta: SessionAcpMeta;
-  selectedBackend?: string;
-  deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend" | "loadSessionEntryAsync">;
-  runtimeHandles: ManagerRuntimeHandleCache;
-  writeSessionMeta: WriteManagerSessionMeta;
-  isCurrentActor?: () => boolean;
-}): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
+export async function ensureManagerRuntimeHandle(
+  params: Parameters<EnsureManagerRuntimeHandle>[0] & {
+    deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend" | "loadSessionEntryAsync">;
+    runtimeHandles: ManagerRuntimeHandleCache;
+    writeSessionMeta: WriteManagerSessionMeta;
+  },
+): ReturnType<EnsureManagerRuntimeHandle> {
   const setupLocator: AcpSessionRuntimeLocator = {
     backend: params.meta.backend,
     runtimeSessionName: params.meta.runtimeSessionName,
@@ -109,12 +96,10 @@ export async function ensureManagerRuntimeHandle(params: {
   };
   assertCurrent();
   const agent =
-    normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
+    normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey);
   const mode = params.meta.mode;
   const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
-  const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
-  const model = normalizeText(runtimeOptions.model);
-  const thinking = normalizeText(runtimeOptions.thinking);
+  const { cwd, model, thinking } = runtimeOptions;
   const configuredBackend = (
     params.selectedBackend ||
     params.meta.backend ||
@@ -209,12 +194,9 @@ export async function ensureManagerRuntimeHandle(params: {
     });
     try {
       assertCurrent();
-      if (params.readAcpControl?.()) {
-        await assertControlBindingCurrent();
-      }
       return ensured;
     } catch (error) {
-      // A control read can yield to reset before the caller receives this handle.
+      // Ensure may finish after its actor was reset.
       if (!isCurrentActor()) {
         await closeSupersededRuntimeHandle({
           runtime,
@@ -227,7 +209,6 @@ export async function ensureManagerRuntimeHandle(params: {
   };
   let ensured: AcpRuntimeHandle;
   if (shouldPrepareFreshPersistentSession) {
-    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
     if (expectedControlBinding || params.readAcpControl?.()) {
       await assertControlBindingCurrent();
     }
@@ -283,10 +264,10 @@ export async function ensureManagerRuntimeHandle(params: {
 
   const now = Date.now();
   const effectiveCwd = normalizeText(ensured.cwd) ?? cwd;
-  const nextRuntimeOptions = normalizeRuntimeOptions({
+  const nextRuntimeOptions = {
     ...runtimeOptions,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-  });
+  };
   const ensuredIdentity = createIdentityFromEnsure({ handle: ensured, now });
   // A new physical record cannot inherit resolved IDs from the previous record.
   // In particular, a completed oneshot may be re-ensured for cleanup or status.
@@ -377,9 +358,6 @@ export async function ensureManagerRuntimeHandle(params: {
       if (publication.refusal) {
         throw publication.refusal.error;
       }
-    }
-    if (expectedControlBinding || params.readAcpControl?.()) {
-      await assertControlBindingCurrent();
     }
     assertCurrent();
     params.runtimeHandles.set(params, {

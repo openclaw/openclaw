@@ -3,6 +3,39 @@ import { Type } from "typebox";
 
 export const X_SEARCH_HANDLE_LIMIT = 20;
 
+const XSearchParameters = Type.Object({
+  query: Type.String({
+    description:
+      "Natural-language instruction sent to the Grok X-search agent. Must be meaningful and non-empty.",
+  }),
+  allowed_x_handles: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      description:
+        "Only include posts from these X handles (max 20). Cannot be combined with excluded_x_handles.",
+      maxItems: X_SEARCH_HANDLE_LIMIT,
+    }),
+  ),
+  excluded_x_handles: Type.Optional(
+    Type.Array(Type.String({ minLength: 1 }), {
+      description:
+        "Exclude posts from these X handles (max 20). Cannot be combined with allowed_x_handles.",
+      maxItems: X_SEARCH_HANDLE_LIMIT,
+    }),
+  ),
+  from_date: Type.Optional(
+    Type.String({ description: "Only include posts on or after this date (YYYY-MM-DD)." }),
+  ),
+  to_date: Type.Optional(
+    Type.String({ description: "Only include posts on or before this date (YYYY-MM-DD)." }),
+  ),
+  enable_image_understanding: Type.Optional(
+    Type.Boolean({ description: "Allow xAI to inspect images attached to matching posts." }),
+  ),
+  enable_video_understanding: Type.Optional(
+    Type.Boolean({ description: "Allow xAI to inspect videos attached to matching posts." }),
+  ),
+});
+
 export function buildMissingXSearchApiKeyPayload() {
   return {
     error: "missing_xai_api_key",
@@ -25,38 +58,7 @@ export function createXSearchToolDefinition(
     resultContentSource: "network" as const,
     description:
       "Search X (formerly Twitter) using xAI, including targeted post or thread lookups. For per-post stats like reposts, replies, bookmarks, or views, prefer the exact post URL or status ID.",
-    parameters: Type.Object({
-      query: Type.String({
-        description:
-          "Natural-language instruction sent to the Grok X-search agent. Must be meaningful and non-empty.",
-      }),
-      allowed_x_handles: Type.Optional(
-        Type.Array(Type.String({ minLength: 1 }), {
-          description:
-            "Only include posts from these X handles (max 20). Cannot be combined with excluded_x_handles.",
-          maxItems: X_SEARCH_HANDLE_LIMIT,
-        }),
-      ),
-      excluded_x_handles: Type.Optional(
-        Type.Array(Type.String({ minLength: 1 }), {
-          description:
-            "Exclude posts from these X handles (max 20). Cannot be combined with allowed_x_handles.",
-          maxItems: X_SEARCH_HANDLE_LIMIT,
-        }),
-      ),
-      from_date: Type.Optional(
-        Type.String({ description: "Only include posts on or after this date (YYYY-MM-DD)." }),
-      ),
-      to_date: Type.Optional(
-        Type.String({ description: "Only include posts on or before this date (YYYY-MM-DD)." }),
-      ),
-      enable_image_understanding: Type.Optional(
-        Type.Boolean({ description: "Allow xAI to inspect images attached to matching posts." }),
-      ),
-      enable_video_understanding: Type.Optional(
-        Type.Boolean({ description: "Allow xAI to inspect videos attached to matching posts." }),
-      ),
-    }),
+    parameters: XSearchParameters,
     execute,
   };
 }

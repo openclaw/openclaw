@@ -24,7 +24,7 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
-  return { ...fs, lstatSync: vi.fn(fs.lstatSync) };
+  return { ...fs, lstatSync: vi.fn(fs.lstatSync), mkdirSync: vi.fn(fs.mkdirSync) };
 });
 
 vi.mock("../../scripts/crabbox-staging.mts", async (importOriginal) => {
@@ -138,6 +138,141 @@ function fileIdentity(path: string) {
 }
 
 describe.skipIf(process.platform === "win32")("persistent Crabbox source capsules", () => {
+  it.each([false, true])("observes cold source only while copying (mirror=%s)", (mirror) => {
+    const f = fixture({ ".gitignore": "*.secret\n*.ignored\n.crabboxignore\n" });
+    writeFileSync(join(f.repository, "new.txt"), "new source\n");
+    writeFileSync(join(f.repository, ".crabboxignore"), "private.secret\n");
+    writeFileSync(join(f.repository, "private.secret"), "synthetic private source\n");
+    vi.mocked(lstatSync).mockClear();
+    const capsule = f.prepare(mirror);
+    try {
+      for (const path of [
+        "stable.txt",
+        "new.txt",
+        ".crabboxignore",
+        ".crabbox.yaml",
+        "crabbox.yaml",
+      ]) {
+        expect(
+          vi.mocked(lstatSync).mock.calls.filter(([file]) => file === join(f.repository, path)),
+          path,
+        ).toHaveLength(1);
+      }
+      expect(
+        vi
+          .mocked(lstatSync)
+          .mock.calls.filter(([file]) => file === join(f.repository, "private.secret")),
+      ).toHaveLength(0);
+      expect(readFileSync(join(capsule.directory, "new.txt"), "utf8")).toBe("new source\n");
+      expect(f.paths(capsule)).not.toContain(".crabboxignore");
+      expect(f.paths(capsule)).not.toContain("private.secret");
+    } finally {
+      capsule.cleanup();
+    }
+  });
+
+  it("records fresh copied source after retention and skips newly ineligible paths", async () => {
+    const f = fixture();
+    writeFileSync(join(f.repository, "future.txt"), "initially eligible source\n");
+    const first = f.prepare();
+    first.cleanup();
+    writeFileSync(join(f.repository, ".gitignore"), "*.secret\n*.ignored\nfuture.txt\n");
+    writeFileSync(join(f.repository, "change.txt"), "retention observation\n");
+    writeFileSync(join(f.repository, "new.txt"), "arriving source\n");
+    const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let replaced = false;
+    vi.mocked(lstatSync).mockClear();
+    vi.mocked(lstatSync).mockImplementation(((...args: Parameters<typeof lstatSync>) => {
+      const result = fs.lstatSync(...args);
+      if (args[0] === join(f.repository, "change.txt") && !replaced) {
+        replaced = true;
+        writeFileSync(join(f.repository, "change.txt"), "copy-consumed source\n");
+      }
+      return result;
+    }) as typeof lstatSync);
+    try {
+      const warm = f.prepare();
+      try {
+        expect(replaced).toBe(true);
+        for (const [path, calls] of [
+          ["stable.txt", 1],
+          ["change.txt", 2],
+          ["new.txt", 1],
+          ["future.txt", 0],
+        ] as const) {
+          expect(
+            vi.mocked(lstatSync).mock.calls.filter(([file]) => file === join(f.repository, path)),
+            path,
+          ).toHaveLength(calls);
+        }
+        expect(readFileSync(join(warm.directory, "change.txt"), "utf8")).toBe(
+          "copy-consumed source\n",
+        );
+        expect(f.paths(warm)).not.toContain("future.txt");
+        f.expectColdEquivalent(warm);
+      } finally {
+        warm.cleanup();
+      }
+      const copied = fileIdentity(join(warm.directory, "change.txt"));
+      vi.mocked(lstatSync).mockClear();
+      const retained = f.prepare();
+      try {
+        expect(
+          vi
+            .mocked(lstatSync)
+            .mock.calls.filter(([file]) => file === join(f.repository, "change.txt")),
+        ).toHaveLength(1);
+        expect(fileIdentity(join(retained.directory, "change.txt"))).toEqual(copied);
+      } finally {
+        retained.cleanup();
+      }
+    } finally {
+      vi.mocked(lstatSync).mockReset();
+    }
+  });
+
+  it("creates each freeze parent once for regular, sparse, and symlink copies", () => {
+    const f = fixture({
+      "nested/a.txt": "a\n",
+      "nested/b.txt": "b\n",
+      "nested/sparse.txt": "sparse\n",
+    });
+    symlinkSync("a.txt", join(f.repository, "nested/link"));
+    f.git(f.repository, "add", "nested/link");
+    f.git(f.repository, "update-index", "--skip-worktree", "nested/sparse.txt");
+    rmSync(join(f.repository, "nested/sparse.txt"));
+    vi.mocked(mkdirSync).mockClear();
+    const first = f.prepare();
+    try {
+      expect(
+        vi
+          .mocked(mkdirSync)
+          .mock.calls.filter(([directory]) => directory === join(first.directory, "nested")),
+      ).toHaveLength(1);
+      expect(readlinkSync(join(first.directory, "nested/link"))).toBe("a.txt");
+      expect(readFileSync(join(first.directory, "nested/sparse.txt"), "utf8")).toBe("sparse\n");
+      f.expectColdEquivalent(first);
+    } finally {
+      first.cleanup();
+    }
+    writeFileSync(join(f.repository, "nested/a.txt"), "changed a\n");
+    writeFileSync(join(f.repository, "nested/b.txt"), "changed b\n");
+    vi.mocked(mkdirSync).mockClear();
+    const warm = f.prepare();
+    try {
+      // The existing parent makes recursive mkdir return undefined; it still
+      // admits the later sibling without another filesystem operation.
+      expect(
+        vi
+          .mocked(mkdirSync)
+          .mock.calls.filter(([directory]) => directory === join(warm.directory, "nested")),
+      ).toHaveLength(1);
+      f.expectColdEquivalent(warm);
+    } finally {
+      warm.cleanup();
+    }
+  });
+
   it.each(["initial allocation", "cold rebuild"])(
     "rejects an unrecorded mirror before freezing during %s",
     async (allocation) => {
@@ -247,132 +382,53 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
-  it.each(["empty", "changed source"])(
-    "reuses unchanged mirror files after a same-ref %s commit and seals the new witness",
-    (change) => {
+  it.each(["commit", "ref", "Git directory"] as const)(
+    "updates the retained source %s with the required mirror identity",
+    (identity) => {
       const f = fixture();
       const first = f.prepare();
       const stable = fileIdentity(join(first.directory, "stable.txt"));
       first.cleanup();
-      if (change === "changed source") {
+      if (identity === "commit") {
         writeFileSync(join(f.repository, "change.txt"), "committed newer bytes\r\n");
         f.git(f.repository, "add", "change.txt");
-      }
-      f.git(
-        f.repository,
-        "-c",
-        "commit.gpgsign=false",
-        "commit",
-        "--quiet",
-        "--allow-empty",
-        "-m",
-        "next head",
-      );
-      const head = f.git(f.repository, "rev-parse", "HEAD");
-      expect(head).not.toBe(first.sourceSha);
-      const next = f.prepare();
-      try {
-        expect(next.directory).toBe(first.directory);
-        expect(fileIdentity(join(next.directory, "stable.txt"))).toEqual(stable);
-        expect(next.sourceSha).toBe(head);
-        expect(readFileSync(join(next.directory, "change.txt"), "utf8")).toBe(
-          change === "changed source" ? "committed newer bytes\r\n" : "original bytes\n",
-        );
-        const receipt: unknown = JSON.parse(
-          readFileSync(join(next.staging.root, "staging.json"), "utf8"),
-        );
-        expect(receipt).toHaveProperty("witness", {
-          gitDir: f.git(f.repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
-          ref: "refs/heads/main",
-          commit: head,
-        });
-        f.expectColdEquivalent(next);
-      } finally {
-        next.cleanup();
-      }
-    },
-  );
-
-  it.each(["ref", "Git directory"])(
-    "rebuilds the mirror when its retained source %s changes",
-    (identity) => {
-      const f = fixture();
-      const first = f.prepare();
-      first.cleanup();
-      if (identity === "ref") {
+        f.git(f.repository, "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "next head");
+      } else if (identity === "ref") {
         f.git(f.repository, "branch", "-m", "another-ref");
       } else {
         const gitDir = join(f.root, "relocated-git");
         renameSync(join(f.repository, ".git"), gitDir);
         writeFileSync(join(f.repository, ".git"), `gitdir: ${gitDir}\n`);
       }
+      const head = f.git(f.repository, "rev-parse", "HEAD");
       const next = f.prepare();
       try {
-        expect(next.directory).not.toBe(first.directory);
-        expect(next.sourceSha).toBe(first.sourceSha);
+        if (identity === "commit") {
+          expect(head).not.toBe(first.sourceSha);
+          expect(next.directory).toBe(first.directory);
+          expect(fileIdentity(join(next.directory, "stable.txt"))).toEqual(stable);
+          expect(next.sourceSha).toBe(head);
+          expect(readFileSync(join(next.directory, "change.txt"), "utf8")).toBe(
+            "committed newer bytes\r\n",
+          );
+          const receipt: unknown = JSON.parse(
+            readFileSync(join(next.staging.root, "staging.json"), "utf8"),
+          );
+          expect(receipt).toHaveProperty("witness", {
+            gitDir: f.git(f.repository, "rev-parse", "--path-format=absolute", "--git-common-dir"),
+            ref: "refs/heads/main",
+            commit: head,
+          });
+        } else {
+          expect(next.directory).not.toBe(first.directory);
+          expect(next.sourceSha).toBe(first.sourceSha);
+        }
         f.expectColdEquivalent(next);
       } finally {
         next.cleanup();
       }
     },
   );
-
-  it("rejects a source commit that changes during warm freezing", () => {
-    const f = fixture();
-    const first = f.prepare();
-    first.cleanup();
-    const commit = [
-      "-C",
-      f.repository,
-      "-c",
-      "user.name=Fixture",
-      "-c",
-      "user.email=fixture@example.invalid",
-      "-c",
-      "commit.gpgsign=false",
-      "commit",
-      "--quiet",
-      "--allow-empty",
-      "-m",
-      "changed during freeze",
-    ];
-    expect(() =>
-      f.prepare(
-        true,
-        `require("node:child_process").execFileSync("git", ${JSON.stringify(commit)}, {stdio:"ignore"});`,
-      ),
-    ).toThrow("source revision, index, or eligibility changed while freezing");
-  });
-
-  it("retains original tracking when an ignored staged source is deleted and later restored", () => {
-    const f = fixture();
-    const path = "staged.ignored";
-    const source = join(f.repository, path);
-    writeFileSync(source, "initial ignored source\n");
-    f.git(f.repository, "add", "--force", path);
-    const first = f.prepare();
-    first.cleanup();
-    rmSync(source);
-    const deleted = f.prepare();
-    try {
-      expect(deleted.directory).toBe(first.directory);
-      expect(f.paths(deleted)).not.toContain(path);
-    } finally {
-      deleted.cleanup();
-    }
-    writeFileSync(source, "restored ignored source\r\n");
-    const restored = f.prepare();
-    try {
-      expect(restored.directory).toBe(first.directory);
-      expect(f.paths(restored)).toContain(path);
-      expect(readFileSync(join(restored.directory, path), "utf8")).toBe(
-        "restored ignored source\r\n",
-      );
-      f.expectColdEquivalent(restored);
-    } finally {
-      restored.cleanup();
-    }
-  });
 
   it.skipIf(process.platform === "win32")(
     "preserves symlink bytes, executable mode, and missing sparse entries across reuse",
@@ -404,39 +460,49 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["file", "symlink"])(
-    "replaces a deleted source directory with a %s on the next warm run",
+  it.each(["ignored file", "file", "symlink"] as const)(
+    "restores deleted source as a %s while retaining its original tracking",
     (kind) => {
-      const f = fixture({ "ancestor/file.txt": "nested source\n" });
+      const ignored = kind === "ignored file";
+      const f = fixture(ignored ? {} : { "ancestor/file.txt": "nested source\n" });
+      const path = ignored ? "staged.ignored" : "ancestor";
+      const removedPath = ignored ? path : "ancestor/file.txt";
+      const source = join(f.repository, path);
+      const bytes = ignored ? "restored ignored source\r\n" : "replacement source\n";
+      if (ignored) {
+        writeFileSync(source, "initial ignored source\n");
+        f.git(f.repository, "add", "--force", path);
+      }
       const first = f.prepare();
       first.cleanup();
-      const ancestor = join(f.repository, "ancestor");
-      rmSync(ancestor, { recursive: true });
+      rmSync(source, { recursive: true });
       const deleted = f.prepare();
       try {
         expect(deleted.directory).toBe(first.directory);
-        expect(f.paths(deleted)).not.toContain("ancestor/file.txt");
+        expect(f.paths(deleted)).not.toContain(removedPath);
       } finally {
         deleted.cleanup();
       }
-      if (kind === "file") {
-        writeFileSync(ancestor, "replacement source\n");
+      if (kind !== "symlink") {
+        writeFileSync(source, bytes);
       } else {
-        symlinkSync("stable.txt", ancestor);
+        symlinkSync("stable.txt", source);
       }
       const replacement = f.prepare();
       try {
         expect(replacement.directory).toBe(first.directory);
-        const mirrored = join(replacement.directory, "ancestor");
-        if (kind === "file") {
-          expect(readFileSync(mirrored, "utf8")).toBe("replacement source\n");
+        const mirrored = join(replacement.directory, path);
+        if (kind !== "symlink") {
+          expect(readFileSync(mirrored, "utf8")).toBe(bytes);
           expect(lstatSync(mirrored).isFile()).toBe(true);
         } else {
           expect(readlinkSync(mirrored)).toBe("stable.txt");
         }
         const paths = f.paths(replacement);
-        expect(paths).toContain("ancestor");
-        expect(paths).not.toContain("ancestor/file.txt");
+        expect(paths).toContain(path);
+        if (!ignored) {
+          expect(paths).not.toContain(removedPath);
+        }
         f.expectColdEquivalent(replacement);
       } finally {
         replacement.cleanup();
@@ -563,33 +629,21 @@ describe.skipIf(process.platform === "win32")("persistent Crabbox source capsule
     }
   });
 
-  it.each(["stable.txt", "new.txt", "frozen mirror"])(
-    "rejects source or frozen bytes changed during warm freezing: %s",
-    (path) => {
-      const f = fixture();
-      const first = f.prepare();
-      first.cleanup();
-      const source = path === "frozen mirror" ? "stable.txt" : join(f.repository, path);
-      expect(() =>
-        f.prepare(
-          true,
-          `require("node:fs").writeFileSync(${JSON.stringify(source)},"raced edit\\n");`,
-        ),
-      ).toThrow(/changed while freezing/u);
-      const next = f.prepare();
-      try {
-        expect(
-          readFileSync(
-            join(next.directory, path === "frozen mirror" ? "stable.txt" : path),
-            "utf8",
-          ),
-        ).toBe(path === "frozen mirror" ? "untouched bytes\n" : "raced edit\n");
-        f.expectColdEquivalent(next);
-      } finally {
-        next.cleanup();
-      }
-    },
-  );
+  it("rejects frozen mirror bytes changed outside their owner", () => {
+    const f = fixture();
+    const first = f.prepare();
+    first.cleanup();
+    expect(() =>
+      f.prepare(true, 'require("node:fs").writeFileSync("stable.txt","raced edit\\n");'),
+    ).toThrow(/changed while freezing/u);
+    const next = f.prepare();
+    try {
+      expect(readFileSync(join(next.directory, "stable.txt"), "utf8")).toBe("untouched bytes\n");
+      f.expectColdEquivalent(next);
+    } finally {
+      next.cleanup();
+    }
+  });
 
   it.skipIf(process.platform === "win32")(
     "suppresses configured Git callbacks while preserving a reusable mirror",

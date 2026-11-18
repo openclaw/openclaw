@@ -4,19 +4,21 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ios-release-upload.sh [--version 2026.7.2] [--revision 1] [--build-number 3]
+  scripts/ios-release-upload.sh [--destination app-store|testflight] [--version 2026.7.2] [--revision 1] [--build-number 3]
   scripts/ios-release-upload.sh --stage-only --version 2026.7.2 --revision 1 --build-number 3
 
 Generates App Store screenshots, updates release metadata, archives, and uploads
 an App Store distribution build to App Store Connect. This does not submit the
-build for App Review.
---stage-only recovers saved notes and build selection without rebuilding or uploading.
+build for App Review. The testflight destination skips App Store staging and
+distributes to the configured external group, submitting for beta review as needed.
+--stage-only recovers the saved destination without rebuilding or uploading.
 EOF
 }
 
 BUILD_NUMBER=""
 APP_STORE_REVISION=""
 RELEASE_VERSION=""
+RELEASE_DESTINATION=""
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${ROOT_DIR}/scripts/lib/ios-fastlane.sh"
 
@@ -30,6 +32,9 @@ parse_ios_release_args upload "$@"
 FASTLANE_ARGS=(ios release_upload)
 if [[ "${STAGE_ONLY}" == 1 ]]; then
   FASTLANE_ARGS=(ios release_stage)
+fi
+if [[ -n "${RELEASE_DESTINATION}" ]]; then
+  FASTLANE_ARGS+=("destination:${RELEASE_DESTINATION}")
 fi
 if [[ -n "${RELEASE_VERSION}" ]]; then
   FASTLANE_ARGS+=("release_version:${RELEASE_VERSION}")

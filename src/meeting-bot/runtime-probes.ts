@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { sleep } from "../utils/sleep.js";
 import type { MeetingPluginJoinRequest, MeetingPluginProbeHealth } from "./session-types.js";
 
@@ -90,6 +91,16 @@ export function createMeetingRuntimeProbes<
 ) {
   type Context = MeetingProbeContext<Config, Mode, Transport, Health, Session, Request>;
 
+  const resolveJoin = (context: Context, request: Request, mode: Mode) => ({
+    url: options.normalizeUrl?.(request.url) ?? request.url,
+    transport:
+      request.transport ??
+      options.defaultTransport?.(context.config) ??
+      (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
+    mode,
+    agentId: context.resolveAgentId(request),
+  });
+
   const testSpeech = async (context: Context, request: Request) => {
     const requestMode =
       options.resolveRequestMode?.(request.mode, context.config) ??
@@ -101,15 +112,7 @@ export function createMeetingRuntimeProbes<
     }
     const requestedMode = requestMode ?? context.config.defaultMode;
     const mode = options.talkBackMode(requestedMode) ? requestedMode : ("agent" as Mode);
-    const resolved = {
-      url: options.normalizeUrl?.(request.url) ?? request.url,
-      transport:
-        request.transport ??
-        options.defaultTransport?.(context.config) ??
-        (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
-      mode,
-      agentId: context.resolveAgentId(request),
-    };
+    const resolved = resolveJoin(context, request, mode);
     const beforeSessions = context.list();
     const before = new Set(beforeSessions.map((session) => session.id));
     const existing = beforeSessions.find((session) => context.isReusable(session, resolved));
@@ -179,15 +182,7 @@ export function createMeetingRuntimeProbes<
         options.listeningModeError ?? "test_listen requires mode: transcribe",
       );
     }
-    const resolved = {
-      url: options.normalizeUrl?.(request.url) ?? request.url,
-      transport:
-        request.transport ??
-        options.defaultTransport?.(context.config) ??
-        (context.config.chromeNode.node ? ("chrome-node" as Transport) : ("chrome" as Transport)),
-      mode: "transcribe" as Mode,
-      agentId: context.resolveAgentId(request),
-    };
+    const resolved = resolveJoin(context, request, "transcribe" as Mode);
     options.validateListeningTransport?.(resolved.transport);
     const beforeSessions = context.list();
     const before = new Set(beforeSessions.map((session) => session.id));
@@ -215,21 +210,15 @@ export function createMeetingRuntimeProbes<
         if (remainingMs <= 0) {
           break;
         }
-        let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-        const deadlineReached = new Promise<boolean>((resolve) => {
-          deadlineTimer = setTimeout(() => resolve(false), remainingMs);
-        });
-        const refreshed = await Promise.race([
-          (
-            options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
-            context.refreshCaptionHealth(result.session, remainingMs)
-          ).then(() => true),
-          deadlineReached,
-        ]).finally(() => {
-          if (deadlineTimer !== undefined) {
-            clearTimeout(deadlineTimer);
-          }
-        });
+        const refreshed = await raceWithTimeout(
+          () =>
+            (
+              options.refreshCaptionHealth?.(context, result.session, remainingMs) ??
+              context.refreshCaptionHealth(result.session, remainingMs)
+            ).then(() => true),
+          remainingMs,
+          () => false,
+        );
         if (!refreshed) {
           break;
         }

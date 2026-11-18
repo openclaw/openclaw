@@ -13,6 +13,7 @@ const targets = [
   "extensions",
   "examples",
   "scripts",
+  "tools",
   "packages",
   "ui",
   "apps",
@@ -22,20 +23,30 @@ const targets = [
   "test",
   "skills",
   "config",
+  "crates/openclaw-iroh-node",
+  "cli-invocation.mjs",
+  "cli-parent-lifetime.mjs",
   "cli-root-options.mjs",
   "docker-entrypoint.mjs",
+  "gateway-prewarm.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
   "node-compile-cache.mjs",
   "node-host-launcher.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "node-runtime-env.mjs",
   "node-sqlite.mjs",
+  "node-sqlite-capabilities.mjs",
+  "runtime-process-bootstrap.generated.mjs",
+  "runtime-process-scripts.generated.mjs",
   "node-version.mjs",
   "openclaw.mjs",
+  "standalone-runtime-profile.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
+  "worker-heap-flag.mjs",
 ];
 
 const sourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
@@ -53,6 +64,9 @@ const generatedIgnores = [
   "**/.build/**",
   "**/.artifacts/**",
   "vendor/**",
+  // napi-rs generates the iroh binding loader and its type declarations.
+  "crates/openclaw-iroh-node/index.js",
+  "crates/openclaw-iroh-node/index.d.ts",
 ];
 
 const testIgnores = ["test", "e2e.test", "live.test"].flatMap((suffix) =>

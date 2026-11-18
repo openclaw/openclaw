@@ -1,6 +1,4 @@
-/**
- * Signals mid-turn prechecks that require preemptive compaction routing.
- */
+import type { ContextPressure } from "../../context-pressure.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -9,6 +7,8 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
  * stop the attempt before another model call.
  */
 export type MidTurnPrecheckRequest = {
+  /** Only "overflow" may fail the turn; "maintenance" always continues it. */
+  pressure: ContextPressure;
   route: Exclude<PreemptiveCompactionRoute, "fits">;
   estimatedPromptTokens: number;
   promptBudgetBeforeReserve: number;
@@ -17,9 +17,10 @@ export type MidTurnPrecheckRequest = {
   effectiveReserveTokens: number;
 };
 
-/** Stable message used to identify synthetic mid-turn overflow errors in session cleanup. */
+/** Stable messages used to identify synthetic mid-turn signals in session cleanup. */
 const MID_TURN_PRECHECK_ERROR_MESSAGE =
   "Context overflow: prompt too large for the model (mid-turn precheck).";
+const MID_TURN_MAINTENANCE_MESSAGE = "Context maintenance scheduled at a settled tool boundary.";
 
 /**
  * Internal control-flow signal thrown after a tool result makes the next prompt
@@ -30,13 +31,16 @@ export class MidTurnPrecheckSignal extends Error {
   readonly request: MidTurnPrecheckRequest;
 
   constructor(request: MidTurnPrecheckRequest) {
-    super(MID_TURN_PRECHECK_ERROR_MESSAGE);
+    super(
+      request.pressure === "overflow"
+        ? MID_TURN_PRECHECK_ERROR_MESSAGE
+        : MID_TURN_MAINTENANCE_MESSAGE,
+    );
     this.name = "MidTurnPrecheckSignal";
     this.request = request;
   }
 }
 
-/** Narrows unknown errors to the mid-turn overflow signal used by attempt cleanup. */
 export function isMidTurnPrecheckSignal(error: unknown): error is MidTurnPrecheckSignal {
   return error instanceof MidTurnPrecheckSignal;
 }
@@ -46,6 +50,16 @@ export function isMidTurnPrecheckAssistantError(message: AgentMessage | undefine
   return (
     message?.role === "assistant" &&
     message.stopReason === "error" &&
-    message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE
+    (message.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE ||
+      message.errorMessage === MID_TURN_MAINTENANCE_MESSAGE)
+  );
+}
+
+/** Maintenance is not a failure; lifecycle observers must not report it as one. */
+export function isMidTurnMaintenanceAssistantSignal(message: AgentMessage | undefined): boolean {
+  return (
+    message?.role === "assistant" &&
+    message.stopReason === "error" &&
+    message.errorMessage === MID_TURN_MAINTENANCE_MESSAGE
   );
 }

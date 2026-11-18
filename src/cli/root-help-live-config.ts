@@ -1,4 +1,3 @@
-// Root-help config probe for plugin-sensitive help rendering.
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
 function hasEntries(value: object | undefined): boolean {
@@ -6,7 +5,7 @@ function hasEntries(value: object | undefined): boolean {
 }
 
 function hasListEntries(value: string[] | undefined): boolean {
-  return Array.isArray(value) && value.length > 0;
+  return (value?.length ?? 0) > 0;
 }
 
 /** Load render options only when config/env can affect plugin help output. */
@@ -16,7 +15,7 @@ export async function loadRootHelpRenderOptionsForConfigSensitivePlugins(
   const configModule = await import("../config/config.js");
   const snapshot = await configModule.readConfigFileSnapshot({
     observe: false,
-    skipPluginValidation: true,
+    pluginValidation: "core-only",
   });
   if (!snapshot.valid) {
     return null;

@@ -18,6 +18,13 @@ describe("observeAgentRunApprovalWait", () => {
         data: { phase, approvalId },
       });
     try {
+      emitAgentEvent({
+        runId: "other-run",
+        sessionId: "session-1",
+        stream: "lifecycle",
+        data: { phase: "waiting-approval", approvalId: "other-run-approval" },
+      });
+      expect(wait.pending).toBe(false);
       event("waiting-approval", "foreign", "session-2");
       expect(wait.pending).toBe(false);
       event("waiting-approval", "first");

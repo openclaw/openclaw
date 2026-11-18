@@ -1,4 +1,5 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
+import { emptyOutboundDeliveryQueueAdmission } from "../delivery-queue-cache.js";
 import {
   deliveryQueueEntriesQuery,
   inflateDeliveryQueueRow,
@@ -8,6 +9,11 @@ import {
 import { transitionOwnedDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite-claim.kernel.js";
 import { upsertDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import { executeSqliteQuerySync } from "../kysely-sync.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  readSqliteDatabaseWriteRevision,
+} from "../sqlite-database-admission.js";
 import {
   OUTBOUND_EXECUTABLE_QUEUE_NAMES,
   outboundDeliveryQueueName,
@@ -69,10 +75,7 @@ export function loadOutboundDeliveryInDatabase(
 ): QueuedDelivery | null {
   const queueName = resolveOutboundDeliveryQueueNameInDatabase(database, id);
   const entry = loadDeliveryQueueEntryInDatabase(database, queueName, id, mode);
-  if (!entry) {
-    return null;
-  }
-  return projectOutboundDelivery(queueName, entry);
+  return entry ? projectOutboundDelivery(queueName, entry) : null;
 }
 
 /** One read snapshot orders all executable formats without pruning or mutating custody. */
@@ -80,6 +83,11 @@ export function readOutboundDeliveriesInDatabase(
   database: Pick<OpenClawStateDatabase, "db">,
   input: { id?: string; mode: "pending" | "unfinished" },
 ): OutboundDeliveryStorageEntry[] {
+  const idle = input.id === undefined && input.mode === "unfinished";
+  if (idle && getSqliteDatabaseAdmission(database.db, emptyOutboundDeliveryQueueAdmission)) {
+    return [];
+  }
+  const revision = idle && readSqliteDatabaseWriteRevision(database.db);
   let query = deliveryQueueEntriesQuery(database, OUTBOUND_EXECUTABLE_QUEUE_NAMES, input.mode)
     .select("queue_name")
     .orderBy("enqueued_at", "asc")
@@ -88,7 +96,7 @@ export function readOutboundDeliveriesInDatabase(
     query = query.where("id", "=", input.id);
   }
   const seen = new Set<string>();
-  return executeSqliteQuerySync(database.db, query).rows.flatMap((row) => {
+  const entries = executeSqliteQuerySync(database.db, query).rows.flatMap((row) => {
     const entry = inflateDeliveryQueueRow(row);
     if (!entry) {
       return [];
@@ -99,4 +107,17 @@ export function readOutboundDeliveriesInDatabase(
     seen.add(entry.id);
     return [{ queueName: row.queue_name, entry: projectOutboundDelivery(row.queue_name, entry) }];
   });
+  if (
+    idle &&
+    !database.db.isTransaction &&
+    revision !== undefined &&
+    revision === readSqliteDatabaseWriteRevision(database.db)
+  ) {
+    publishSqliteDatabaseAdmission(
+      database.db,
+      emptyOutboundDeliveryQueueAdmission,
+      entries.length === 0 ? true : undefined,
+    );
+  }
+  return entries;
 }

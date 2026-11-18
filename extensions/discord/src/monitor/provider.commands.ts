@@ -1,6 +1,6 @@
 import {
   listNativeCommandSpecsForConfig,
-  listSkillCommandsForAgents,
+  prepareSkillCommandsForAgents,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -13,7 +13,7 @@ import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DISCORD_VOICE_COMMAND_SPEC } from "../voice/command.js";
 
-export type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
+type DiscordProviderCommandSpec = NativeCommandSpec | PluginCommandNativeCandidate;
 
 const loadPluginCommandRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/plugin-command-runtime"),
@@ -25,22 +25,25 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   voiceEnabled: boolean;
-  maxDiscordCommands?: number;
-  listSkillCommandsForAgents?: typeof listSkillCommandsForAgents;
-  listNativeCommandSpecsForConfig?: typeof listNativeCommandSpecsForConfig;
-}): Promise<{
-  skillCommands: ReturnType<typeof listSkillCommandsForAgents>;
-  commandSpecs: DiscordProviderCommandSpec[];
-}> {
-  const listSkillCommands = params.listSkillCommandsForAgents ?? listSkillCommandsForAgents;
-  const listNativeCommandSpecs =
-    params.listNativeCommandSpecsForConfig ?? listNativeCommandSpecsForConfig;
-  const maxDiscordCommands = params.maxDiscordCommands ?? 100;
-  const pluginCommandSpecs = params.nativeEnabled
-    ? (await loadPluginCommandRuntime())
-        .createPluginCommandRuntime()
-        .listNativeCandidates("discord")
-    : [];
+}) {
+  const maxDiscordCommands = 100;
+  const pluginCommandSpecs: PluginCommandNativeCandidate[] = [];
+  if (params.nativeEnabled) {
+    const candidates = (await loadPluginCommandRuntime())
+      .createPluginCommandRuntime()
+      .listNativeCandidates("discord");
+    for (const command of candidates) {
+      if (command.name.length > 32) {
+        params.runtime.error?.(
+          danger(
+            `discord: plugin command "/${command.name.slice(0, 32)}…" exceeds the 32-character name limit. Set a shorter Discord native alias. Skipping.`,
+          ),
+        );
+        continue;
+      }
+      pluginCommandSpecs.push({ ...command, name: command.name.toLowerCase() });
+    }
+  }
   const onCollision = (normalizedName: string) => {
     params.runtime.error?.(
       danger(
@@ -58,9 +61,9 @@ export async function resolveDiscordProviderCommandSpecs(params: {
       onCollision: collisionHandler,
     });
   const listPrimaryCommandSpecs = (
-    skillCommands: ReturnType<typeof listSkillCommandsForAgents>,
+    skillCommands: Awaited<ReturnType<typeof prepareSkillCommandsForAgents>>,
   ): NativeCommandSpec[] => {
-    const standardSpecs = listNativeCommandSpecs(params.cfg, {
+    const standardSpecs = listNativeCommandSpecsForConfig(params.cfg, {
       skillCommands,
       provider: "discord",
     });
@@ -78,9 +81,9 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   // Defer first-pass diagnostics until the skill-limit decision. A collision can disappear
   // when fallback removes skills, so only the final retained command set should report it.
   const provisionalCollisions: string[] = [];
-  let skillCommands =
+  const skillCommands =
     params.nativeEnabled && params.nativeSkillsEnabled
-      ? listSkillCommands({ cfg: params.cfg })
+      ? await prepareSkillCommandsForAgents({ cfg: params.cfg })
       : [];
   let commandSpecs: DiscordProviderCommandSpec[] = params.nativeEnabled
     ? mergePluginCommandSpecs(listPrimaryCommandSpecs(skillCommands), (normalizedName) =>
@@ -93,7 +96,6 @@ export async function resolveDiscordProviderCommandSpecs(params: {
     params.nativeSkillsEnabled &&
     commandSpecs.length > maxDiscordCommands
   ) {
-    skillCommands = [];
     commandSpecs = mergePluginCommandSpecs(listPrimaryCommandSpecs([]), onCollision);
     params.runtime.log?.(
       warn(
@@ -112,5 +114,5 @@ export async function resolveDiscordProviderCommandSpecs(params: {
       ),
     );
   }
-  return { skillCommands, commandSpecs };
+  return { commandSpecs };
 }

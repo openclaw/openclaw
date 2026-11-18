@@ -1,4 +1,3 @@
-/** Baseten onboarding config helpers. */
 import {
   createModelCatalogPresetAppliers,
   type ModelDefinitionConfig,
@@ -13,11 +12,11 @@ const { applyConfig } = createModelCatalogPresetAppliers<[ModelDefinitionConfig[
     api: "openai-completions",
     baseUrl: BASETEN_BASE_URL,
     catalogModels,
-    aliases: [{ modelRef: BASETEN_DEFAULT_MODEL_REF, alias: "Inkling" }],
+    aliases: [{ modelRef: BASETEN_DEFAULT_MODEL_REF, alias: "DeepSeek V4.1 Flash" }],
   }),
 });
 
-/** Applies Baseten's provider catalog, Inkling alias, and default model. */
+/** Applies Baseten's provider catalog and starter model without replacing an explicit primary. */
 export const applyBasetenConfig = (cfg: OpenClawConfig) =>
   applyConfig(cfg, buildStaticBasetenModels());
 

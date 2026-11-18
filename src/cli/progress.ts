@@ -2,7 +2,7 @@ import { log, spinner, symbol } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { truncateToVisibleWidth, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
-  createOscProgressController,
+  formatOscProgress,
   supportsOscProgress,
 } from "../../packages/terminal-core/src/osc-progress.js";
 import {
@@ -11,6 +11,7 @@ import {
   unregisterActiveProgressLine,
 } from "../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { startSignalObserver } from "./signal-exit-barrier.js";
 
 /** Keep animated labels inside Clack's captured erase width. */
 export function createProgressSpinner(
@@ -23,6 +24,7 @@ export function createProgressSpinner(
   let columns = readColumns();
   let label = "";
   let finished = false;
+  let releaseSignalObserver: (() => void) | undefined;
   const spin = spinner(options);
   const render = (message: string) => {
     label = message;
@@ -54,7 +56,12 @@ export function createProgressSpinner(
         if (columns !== undefined) {
           output.on("resize", resize);
         }
-        spin.start(render(message));
+        const cookedInput = process.stdin.isTTY && !process.stdin.isRaw;
+        releaseSignalObserver = startSignalObserver(() => spin.start(render(message)));
+        // Clack's spinner puts stdin in raw mode and exits 0 on Ctrl+C; keep the terminal's SIGINT.
+        if (cookedInput && process.stdin.isRaw) {
+          process.stdin.setRawMode(false);
+        }
       }
     },
     message: (message: string) => spin.message(render(message)),
@@ -65,6 +72,7 @@ export function createProgressSpinner(
       finished = true;
       output.off("resize", resize);
       spin.clear();
+      releaseSignalObserver?.();
       if (message !== undefined) {
         log.message([`${symbol("submit")}  ${message}`], { output, spacing: 0, withGuide: false });
       }
@@ -119,7 +127,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   }
 
   const delayMs = resolveTimerTimeoutMs(options.delayMs, 0, 0);
-  const canOsc = isTty && supportsOscProgress(process.env, isTty);
+  const canOsc = isTty && supportsOscProgress(process.env);
   const stdinIsRaw = process.stdin.isRaw;
   const wantsSpinner = fallback === undefined || fallback === "spinner";
   const allowSpinner = wantsSpinner && isTty && !stdinIsRaw;
@@ -143,20 +151,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     registerActiveProgressLine(stream);
   }
 
-  const controller = canOsc
-    ? createOscProgressController({
-        env: process.env,
-        isTty: stream.isTTY,
-        write: (chunk: string) => stream.write(chunk),
-      })
-    : null;
-
   const spin = allowSpinner ? createProgressSpinner({ output: stream }, 7) : null;
   const renderLine = allowLine
     ? () => {
-        if (!started) {
-          return;
-        }
         const suffix = indeterminate ? "" : ` ${percent}%`;
         clearActiveProgressLine();
         stream.write(`${theme.accent(label)}${suffix}`);
@@ -168,9 +165,6 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
         let lastAt = 0;
         const throttleMs = 250;
         return () => {
-          if (!started) {
-            return;
-          }
           const suffix = indeterminate ? "" : ` ${percent}%`;
           const nextLine = `${label}${suffix}`;
           const now = Date.now();
@@ -189,12 +183,8 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     if (!started || finished) {
       return;
     }
-    if (controller) {
-      if (indeterminate) {
-        controller.setIndeterminate(label);
-      } else {
-        controller.setPercent(label, percent);
-      }
+    if (canOsc) {
+      stream.write(formatOscProgress(indeterminate ? 3 : 1, indeterminate ? 0 : percent));
     }
     spin?.message(label);
     renderLine?.();
@@ -202,9 +192,6 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   };
 
   const start = () => {
-    if (started) {
-      return;
-    }
     started = true;
     spin?.start(label);
     applyState();
@@ -247,7 +234,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       timer = null;
     }
     if (started) {
-      controller?.clear();
+      if (canOsc) {
+        stream.write(formatOscProgress(0, 0));
+      }
       spin?.stop("");
       clearActiveProgressLine();
     }

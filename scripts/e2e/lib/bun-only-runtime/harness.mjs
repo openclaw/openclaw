@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
@@ -35,8 +36,6 @@ let entry;
 let bunVersion;
 /** @type {string | undefined} */
 let bunRevision;
-/** @type {string | undefined} */
-let installFallback;
 /** @type {string | undefined} */
 let fatalError;
 const runtimeDeadline = Date.now() + 7 * 60_000;
@@ -99,7 +98,8 @@ function start(label, args, childEnv = env) {
   const err = fs.openSync(stderrPath, "w");
   let child;
   try {
-    child = spawn(bun, args, {
+    const throughLauncher = entry !== undefined && args[0] === entry;
+    child = spawn(throughLauncher ? "openclaw" : bun, throughLauncher ? args.slice(1) : args, {
       env: childEnv,
       cwd: env.HOME,
       detached: true,
@@ -295,41 +295,23 @@ try {
   });
   await step("install", 150000, async () => {
     const installBasePath = installPath();
-    let install = prepareInstall("bun-install-pure");
+    const install = prepareInstall("bun-install-pure");
     const result = await run(
       "install-pure",
       ["install", "-g", "--trust", tarball, "--no-progress"],
-      { ...env, PATH: `${installSentinelBin}:${installBasePath}`, BUN_INSTALL: install },
+      {
+        ...env,
+        PATH: `${installSentinelBin}:${installBasePath}`,
+        BUN_INSTALL: install,
+        OPENCLAW_PACKAGE_BUN_LAUNCHER: bun,
+      },
     );
-    if (result.exitCode !== 0) {
-      const blocker = blockers.find(
-        (item) => item.step === "install" && item.failure && result.output.includes(item.failure),
-      );
-      assert(blocker, `Unexpected Node-less installation failure: ${result.output.slice(-6000)}`);
-      installFallback = `install used the install-time Node fallback because of ${blocker.id}`;
-      console.log(installFallback);
-      const temporaryBin = fs.mkdtempSync(path.join(artifactDir, "install-node-"));
-      try {
-        fs.symlinkSync(
-          process.env.OPENCLAW_BUN_ONLY_SMOKE_INSTALL_NODE,
-          path.join(temporaryBin, "node"),
-        );
-        install = prepareInstall("bun-install-fallback");
-        const fallback = await run(
-          "install-fallback",
-          ["install", "-g", "--trust", tarball, "--no-progress"],
-          {
-            ...env,
-            PATH: `${installSentinelBin}:${temporaryBin}:${installBasePath}`,
-            BUN_INSTALL: install,
-          },
-        );
-        assert.equal(fallback.exitCode, 0, fallback.output.slice(-6000));
-      } finally {
-        fs.rmSync(temporaryBin, { recursive: true, force: true });
-      }
-    }
-    entry = fs.realpathSync(path.join(install, "bin/openclaw"));
+    assert.equal(result.exitCode, 0, result.output.slice(-6000));
+    entry = path.join(install, "install/global/node_modules/openclaw/openclaw.mjs");
+    const launcher = path.join(install, "bin/openclaw");
+    assert(!fs.lstatSync(launcher).isSymbolicLink(), "Bun-only install must publish a launcher");
+    assert(read(launcher).startsWith("#!/bin/sh\n# OpenClaw Bun launcher\n"));
+    env.PATH = `${path.dirname(launcher)}:${env.PATH}`;
     env.BUN_INSTALL = install;
     assert(
       !fs.existsSync(path.join(path.dirname(entry), ".openclaw-lifecycle-pending")),
@@ -397,12 +379,7 @@ try {
     const home = path.join(artifactDir, "node-home");
     const state = path.join(home, ".openclaw");
     fs.mkdirSync(state, { recursive: true });
-    const nodeEnv = {
-      ...env,
-      HOME: home,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
-    };
+    const nodeEnv = createBuildSmokeEnv(home, env);
     fs.writeFileSync(
       nodeEnv.OPENCLAW_CONFIG_PATH,
       JSON.stringify({
@@ -531,15 +508,11 @@ try {
     bunVersion,
     bunRevision,
     entry,
-    installFallback,
     fatalError,
     attempts,
   };
   result.ok &&= !fatalError;
-  const markdown =
-    renderMarkdownReport(result) +
-    (installFallback ? `\n${installFallback}\n` : "") +
-    (fatalError ? `\nFailure: ${fatalError}\n` : "");
+  const markdown = renderMarkdownReport(result) + (fatalError ? `\nFailure: ${fatalError}\n` : "");
   fs.writeFileSync(path.join(artifactDir, "report.json"), JSON.stringify(result, null, 2) + "\n");
   fs.writeFileSync(path.join(artifactDir, "report.md"), markdown);
   if (process.env.GITHUB_STEP_SUMMARY) {

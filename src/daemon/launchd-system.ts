@@ -1,8 +1,6 @@
 /** Detects system-domain launchd ownership before mutating a user LaunchAgent. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isMissingPathError } from "../infra/errors.js";
@@ -18,6 +16,7 @@ import {
   ServiceOwnershipRefusalError,
   type ServiceInspectionReason,
 } from "./service-inspection-error.js";
+import { formatServiceInspectionDetail } from "./service-runtime.js";
 
 const SYSTEM_LAUNCH_DAEMON_DIR = "/Library/LaunchDaemons";
 
@@ -34,11 +33,6 @@ type SystemLaunchDaemonOwnership =
     };
 
 type SystemLaunchDaemonConflict = Exclude<SystemLaunchDaemonOwnership, { status: "absent" }>;
-
-function formatUnknownError(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  return truncateUtf16Safe(sanitizeForLog(raw), 500);
-}
 
 /**
  * Renders the package-independent ownership probe used by detached restart helpers.
@@ -78,7 +72,7 @@ if [ -z "$openclaw_system_launchd_conflict" ]; then
       if /usr/bin/find "$openclaw_system_launchd_dir" -mindepth 1 -maxdepth 1 -name '*.plist' -print0 >"$openclaw_system_launchd_entries"; then
         while IFS= read -r -d '' openclaw_system_launchd_plist; do
           # Unreadable plists are treated as foreign: loaded same-label daemons are caught by the
-          # bracketing launchctl probes; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
+          # bracketing launchctl checks; an unloaded unreadable same-label plist is an accepted operator-created edge (#120481).
           if [ ! -r "$openclaw_system_launchd_plist" ]; then
             continue
           fi
@@ -166,57 +160,7 @@ close(STDOUT) or exit 74;
     fi
   fi
 fi
-if [ -z "$openclaw_system_launchd_conflict" ]; then
-  openclaw_query_system_launchd
-fi
 `;
-}
-
-type InstalledSystemLaunchDaemonScan =
-  | { status: "absent" }
-  | { status: "installed"; plistPath: string }
-  | { status: "unverifiable"; detail: string };
-
-async function findInstalledSystemLaunchDaemon(
-  label: string,
-): Promise<InstalledSystemLaunchDaemonScan> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(SYSTEM_LAUNCH_DAEMON_DIR);
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return { status: "absent" };
-    }
-    return { status: "unverifiable", detail: formatUnknownError(error) };
-  }
-
-  for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
-    const plistPath = path.posix.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
-    try {
-      const contents = await fs.readFile(plistPath).catch((error: unknown) => {
-        // Unreadable plists are foreign: bracketing queries catch loaded same-label daemons;
-        // an unloaded unreadable same-label plist is an accepted edge (#120481).
-        if (
-          isMissingPathError(error) ||
-          hasErrnoCode(error, "EACCES") ||
-          hasErrnoCode(error, "EPERM")
-        ) {
-          return null;
-        }
-        throw error;
-      });
-      if (contents === null) {
-        continue;
-      }
-      const plist = await decodeLaunchdPlistMetadata(contents);
-      if (plist?.Label === label) {
-        return { status: "installed", plistPath };
-      }
-    } catch (error) {
-      return { status: "unverifiable", detail: `${plistPath}: ${formatUnknownError(error)}` };
-    }
-  }
-  return { status: "absent" };
 }
 
 function classifySystemLaunchDaemonQuery(
@@ -257,25 +201,54 @@ export async function inspectSystemLaunchDaemonOwnership(
     return { status: "absent", serviceTarget };
   }
 
-  const installed = await findInstalledSystemLaunchDaemon(label);
-  if (installed.status === "installed") {
-    return { status: "installed", serviceTarget, plistPath: installed.plistPath };
-  }
-  if (installed.status === "unverifiable") {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(SYSTEM_LAUNCH_DAEMON_DIR);
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return { status: "absent", serviceTarget };
+    }
     return {
       status: "unverifiable",
       serviceTarget,
       operation: "filesystem",
-      detail: installed.detail,
+      detail: formatServiceInspectionDetail(error),
     };
   }
-  // Close the query-to-directory-snapshot race at the last responsible moment.
-  // Arbitrary root installers cannot share a lock with this unprivileged process;
-  // activation paths therefore repeat this complete probe immediately before use.
-  return classifySystemLaunchDaemonQuery(
-    serviceTarget,
-    await execLaunchctl(["print", serviceTarget], options.timeoutMs),
-  );
+
+  for (const entry of entries.filter((candidate) => candidate.endsWith(".plist")).toSorted()) {
+    const plistPath = path.posix.join(SYSTEM_LAUNCH_DAEMON_DIR, entry);
+    try {
+      const contents = await fs.readFile(plistPath).catch((error: unknown) => {
+        // Unreadable plists are foreign: the initial query catches loaded same-label daemons;
+        // an unloaded unreadable same-label plist is an accepted edge (#120481).
+        if (
+          isMissingPathError(error) ||
+          hasErrnoCode(error, "EACCES") ||
+          hasErrnoCode(error, "EPERM")
+        ) {
+          return null;
+        }
+        throw error;
+      });
+      if (contents === null) {
+        continue;
+      }
+      const plist = await decodeLaunchdPlistMetadata(contents);
+      if (plist?.Label === label) {
+        return { status: "installed", serviceTarget, plistPath };
+      }
+    } catch (error) {
+      return {
+        status: "unverifiable",
+        serviceTarget,
+        operation: "filesystem",
+        detail: `${plistPath}: ${formatServiceInspectionDetail(error)}`,
+      };
+    }
+  }
+  // Concurrent root installers are best effort; activation performs its own check.
+  return { status: "absent", serviceTarget };
 }
 
 export function formatSystemLaunchDaemonOwnershipSummary(

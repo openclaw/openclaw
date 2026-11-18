@@ -16,7 +16,6 @@ function resolveSdkBinDir(): string | null {
     if (fs.existsSync(archBin)) {
       return archBin;
     }
-    // Fallback to flat bin/ if no arch subdirectory
     const flatBin = path.join(sdkRoot, "bin");
     if (fs.existsSync(flatBin)) {
       return flatBin;

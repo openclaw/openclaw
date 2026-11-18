@@ -1,5 +1,11 @@
 import { chromium } from "playwright-core";
 
+export class UnresponsiveCdpTargetError extends Error {
+  constructor(targetIds: string[]) {
+    super(targetIds.join(", "));
+  }
+}
+
 /** Test transport that preserves the existing Playwright connection spies. */
 export function connectOverCdpTransport(
   connectionUrl: string,

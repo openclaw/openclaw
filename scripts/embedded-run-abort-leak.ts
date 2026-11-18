@@ -18,9 +18,10 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { setImmediate, setTimeout } from "node:timers/promises";
 import * as v8 from "node:v8";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
+import { coerceErrorMessage, toErrorObject as toLintErrorObject } from "./lib/error-format.mts";
 import { parseNonNegativeInt, parsePositiveInt } from "./lib/numeric-options.mjs";
 
 type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
@@ -156,13 +157,6 @@ const finalizer = new FinalizationRegistry<number>(() => {
 });
 let productionAbortable: Abortable | null = null;
 
-async function loadProductionAbortable(): Promise<void> {
-  const module = (await import("../src/agents/embedded-agent-runner/run/abortable.js")) as {
-    abortable: Abortable;
-  };
-  productionAbortable = module.abortable;
-}
-
 function abortableExtracted<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(new Error("aborted"));
@@ -242,19 +236,14 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
 
 async function settleAndGc(): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
-    await new Promise<void>((r) => {
-      setImmediate(r);
-    });
+    await setImmediate();
     globalThis.gc?.();
   }
-  await new Promise<void>((r) => {
-    setTimeout(r, 100);
-  });
+  await setTimeout(100);
   globalThis.gc?.();
 }
 
 type SampleRow = {
-  label: string;
   rssBytes: number;
   heapUsedBytes: number;
   totalIters: number;
@@ -262,11 +251,17 @@ type SampleRow = {
   snapshotPath: string;
 };
 
-function takeSnapshot(snapDir: string, label: string): string {
+function takeSnapshot(snapDir: string, label: string, totalIters: number): SampleRow {
   fs.mkdirSync(snapDir, { recursive: true });
-  const filename = path.join(snapDir, `${label}-${process.pid}-${Date.now()}.heapsnapshot`);
-  v8.writeHeapSnapshot(filename);
-  return filename;
+  const snapshotPath = path.join(snapDir, `${label}-${process.pid}-${Date.now()}.heapsnapshot`);
+  v8.writeHeapSnapshot(snapshotPath);
+  return {
+    rssBytes: process.memoryUsage().rss,
+    heapUsedBytes: process.memoryUsage().heapUsed,
+    totalIters,
+    trackedFinalized: FINALIZED.count,
+    snapshotPath,
+  };
 }
 
 function fmtBytes(bytes: number): string {
@@ -278,10 +273,11 @@ async function main(): Promise<void> {
   try {
     opts = parseArgs(process.argv.slice(2));
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    fail(coerceErrorMessage(error));
   }
   if (opts.mode === "production") {
-    await loadProductionAbortable();
+    productionAbortable = (await import("../src/agents/embedded-agent-runner/run/abortable.js"))
+      .abortable;
   }
   if (typeof globalThis.gc !== "function") {
     fail("--expose-gc is required (run with: node --expose-gc ...)");
@@ -297,15 +293,7 @@ async function main(): Promise<void> {
   }
 
   await settleAndGc();
-  const baselinePath = takeSnapshot(opts.snapDir, "baseline");
-  const baseline: SampleRow = {
-    label: "baseline",
-    rssBytes: process.memoryUsage().rss,
-    heapUsedBytes: process.memoryUsage().heapUsed,
-    totalIters: 0,
-    trackedFinalized: FINALIZED.count,
-    snapshotPath: baselinePath,
-  };
+  const baseline = takeSnapshot(opts.snapDir, "baseline", 0);
   let final = baseline;
   if (!opts.quiet) {
     process.stdout.write(
@@ -320,15 +308,7 @@ async function main(): Promise<void> {
       totalIters += 1;
     }
     await settleAndGc();
-    const snapshotPath = takeSnapshot(opts.snapDir, `batch-${b}`);
-    const row: SampleRow = {
-      label: `batch-${b}`,
-      rssBytes: process.memoryUsage().rss,
-      heapUsedBytes: process.memoryUsage().heapUsed,
-      totalIters,
-      trackedFinalized: FINALIZED.count,
-      snapshotPath,
-    };
+    const row = takeSnapshot(opts.snapDir, `batch-${b}`, totalIters);
     final = row;
     if (!opts.quiet) {
       process.stdout.write(
@@ -340,8 +320,6 @@ async function main(): Promise<void> {
   }
 
   const rssGrowthMb = (final.rssBytes - baseline.rssBytes) / 1024 / 1024;
-  // Tracked retention: how many iter-allocated transcripts are STILL alive
-  // (have not been finalized). Lower is better.
   const trackedRetention = final.totalIters - final.trackedFinalized;
 
   const durationSec = ((Date.now() - startedAt) / 1000).toFixed(1);

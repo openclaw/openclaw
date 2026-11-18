@@ -156,7 +156,6 @@ for (const login of prRaw.split("\n")) {
   prsByLogin.set(trimmed, (prsByLogin.get(trimmed) ?? 0) + 1);
 }
 
-// Repo epoch for tenure calculation (root commit date)
 const rootCommit = run("git rev-list --max-parents=0 HEAD").split("\n")[0];
 const repoEpochStr = run(`git log --format=%aI -1 ${rootCommit}`);
 const repoEpoch = new Date(repoEpochStr.slice(0, 10)).getTime();
@@ -164,10 +163,6 @@ const nowDate = new Date().toISOString().slice(0, 10);
 const now = new Date(nowDate).getTime();
 const repoAgeDays = Math.max(1, (now - repoEpoch) / 86_400_000);
 
-// Composite score:
-//   base  = commits*2 + merged_PRs*10 + sqrt(code_LOC)
-//   tenure = 1.0 + (days_since_first_commit / repo_age)^2 * 0.5
-//   score  = base * tenure
 // Squared curve: only true early contributors get meaningful boost.
 // Day-1 = 1.5x, halfway through repo life = 1.125x, recent = ~1.0x.
 function computeTenure(firstDate: string): number {
@@ -275,14 +270,14 @@ for (const item of contributors) {
       login: user.login,
       display: pickDisplay(baseName, user.login),
       html_url: user.html_url,
-      avatar_url: normalizeAvatar(user.avatar_url),
+      avatar_url: user.avatar_url,
       ...contributionStats(key),
     });
   } else {
     existing.login = user.login;
     existing.display = pickDisplay(baseName, user.login, existing.display);
     existing.html_url = user.html_url;
-    existing.avatar_url = normalizeAvatar(user.avatar_url);
+    existing.avatar_url = user.avatar_url;
     const stats = contributionStats(key, existing.firstCommitDate);
     existing.lines = Math.max(existing.lines, stats.lines);
     existing.commits = Math.max(existing.commits, stats.commits);
@@ -296,17 +291,14 @@ for (const login of linesByLogin.keys()) {
   if (entriesByKey.has(login)) {
     continue;
   }
-  let user = apiByLogin.get(login);
-  if (!user) {
-    user = fetchUser(login) || undefined;
-  }
+  const user = apiByLogin.get(login) ?? fetchUser(login);
   if (user) {
     entriesByKey.set(login, {
       key: login,
       login: user.login,
       display: displayName[user.login.toLowerCase()] ?? user.login,
       html_url: user.html_url,
-      avatar_url: normalizeAvatar(user.avatar_url),
+      avatar_url: user.avatar_url,
       ...contributionStats(login),
     });
   }
@@ -393,19 +385,13 @@ function runGh(args: string[]): string {
 }
 
 function parsePaginatedJson(rawLocal: string): unknown[] {
-  const items: unknown[] = [];
-  for (const line of rawLocal.split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    const parsed = JSON.parse(line);
-    if (Array.isArray(parsed)) {
-      items.push(...parsed);
-    } else {
-      items.push(parsed);
-    }
-  }
-  return items;
+  return rawLocal
+    .split("\n")
+    .filter((line) => line.trim())
+    .flatMap((line): unknown[] => {
+      const parsed: unknown = JSON.parse(line);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    });
 }
 
 function normalizeMap(map: Record<string, string>): Record<string, string> {
@@ -424,21 +410,17 @@ function parseCount(value: string): number {
   return /^\d+$/.test(value) ? Number(value) : 0;
 }
 
-function isValidLogin(login: string): boolean {
-  return (
-    /^[A-Za-z0-9-]{1,39}$/.test(login) &&
-    !login.startsWith("-") &&
-    !login.endsWith("-") &&
-    !login.includes("--")
-  );
-}
-
 function normalizeLogin(login: string | null): string | null {
   if (!login) {
     return null;
   }
   const trimmed = login.trim();
-  return isValidLogin(trimmed) ? trimmed : null;
+  return /^[A-Za-z0-9-]{1,39}$/.test(trimmed) &&
+    !trimmed.startsWith("-") &&
+    !trimmed.endsWith("-") &&
+    !trimmed.includes("--")
+    ? trimmed
+    : null;
 }
 
 function normalizeAvatar(url: string): string {
@@ -815,7 +797,7 @@ function parseHiddenReadmeLogins(content: string): string[] {
   const blockLocal = content.slice(rangeLocal.start, rangeLocal.end);
   return blockLocal
     .split("\n")
-    .map((line) => normalizeLogin(line.trim())?.toLowerCase() ?? null)
+    .map((line) => normalizeLogin(line)?.toLowerCase() ?? null)
     .filter((login): login is string => Boolean(login));
 }
 

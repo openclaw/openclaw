@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMediaUnderstandingBody } from "./format.js";
+import { formatAudioTranscripts, formatMediaUnderstandingBody } from "./format.js";
 import type { MediaUnderstandingOutput } from "./types.js";
 
 function output(
@@ -10,6 +10,18 @@ function output(
 ): MediaUnderstandingOutput {
   return { kind, text, attachmentIndex, provider };
 }
+
+describe("formatAudioTranscripts", () => {
+  it.each([
+    { texts: [], expected: "" },
+    { texts: [" raw transcript\n"], expected: " raw transcript\n" },
+    { texts: ["first", "second"], expected: "Audio 1:\nfirst\n\nAudio 2:\nsecond" },
+  ])("formats $texts without changing transcript whitespace", ({ texts, expected }) => {
+    expect(formatAudioTranscripts(texts.map((text) => output("audio.transcription", text)))).toBe(
+      expected,
+    );
+  });
+});
 
 describe("formatMediaUnderstandingBody", () => {
   it("includes user text when body is meaningful", () => {

@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NodeHostStats } from "../shared/node-host-stats.js";
+import type { NodePairingPendingSnapshot } from "./device-pairing-admission.types.js";
 import type { NodePairingGeneration } from "./device-pairing-identity.js";
 import {
   projectNodePairing,
@@ -14,13 +15,14 @@ import {
   type NodePairingCleanupClaim,
   type NodePairingList,
   type NodePairingListWithGeneration,
-  type NodePairingPendingSnapshot,
   type NodePairingRequestInput,
   type NodePairingSupersededRequest,
   type PairedDeviceNode,
   type RecordPairedNodeConnectionResult,
   type RequestNodePairingResult,
 } from "./device-pairing-node.records.js";
+import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
+import { readCurrentPairedDevice } from "./device-pairing-store-readonly.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
@@ -28,7 +30,6 @@ import {
 } from "./device-pairing-worker.js";
 import type { PairedDevice, PairedDevicePendingNodeSurface } from "./device-pairing.types.js";
 
-export { projectNodePairing } from "./device-pairing-node.records.js";
 export type {
   NodePairingCleanupClaim,
   NodePairingPendingRequest,
@@ -106,31 +107,29 @@ export async function listNodePairing(
   );
 }
 
-/** Claim pending revisions in the same owner interval that acquires their current snapshot. */
+/** Claim the committed pending revision without waiting for unrelated pairing writes. */
 export async function beginNodePairingConnect(
   nodeId: string,
   baseDir?: string,
 ): Promise<{ pairedNode: PairedDeviceNode | null; cleanupClaim?: NodePairingCleanupClaim }> {
-  return expectDefined(
-    await withCurrentDevicePairingSnapshot(baseDir, (paired) => ({
-      start: () => {
-        const device = paired.find((entry) => entry.deviceId === nodeId.trim());
-        const pairedNode = device ? toPairedNode(device) : null;
-        const pending = device?.pendingNodeSurface;
-        if (!device || !pairedNode || !pending) {
-          return { pairedNode };
-        }
-        const claim: NodePairingCleanupClaim = {
-          baseDir,
-          generation: ++nextCleanupClaimGeneration,
-          nodeId: device.deviceId,
-          observed: toPendingSnapshot(device, pending),
-        };
-        addCleanupClaim(claim);
-        return { pairedNode, cleanupClaim: claim };
-      },
-    })),
-    "node reconnect snapshot",
+  return readCurrentPairedDevice(
+    nodeId,
+    (device) => {
+      const pairedNode = device ? toPairedNode(device) : null;
+      const pending = device?.pendingNodeSurface;
+      if (!device || !pairedNode || !pending) {
+        return { pairedNode };
+      }
+      const claim: NodePairingCleanupClaim = {
+        baseDir,
+        generation: ++nextCleanupClaimGeneration,
+        nodeId: device.deviceId,
+        observed: toPendingSnapshot(device, pending),
+      };
+      addCleanupClaim(claim);
+      return { pairedNode, cleanupClaim: claim };
+    },
+    baseDir,
   );
 }
 
@@ -154,6 +153,7 @@ export async function finalizeNodePairingCleanupClaim(
       },
       {
         baseDir: claim.baseDir,
+        onAuthorityRefused: () => [],
         assertCurrent: () => {
           if (!cleanupClaimIsActive(claim)) {
             throw new DevicePairingAuthorityRefusedError("node reconnect cleanup claim changed");
@@ -161,11 +161,6 @@ export async function finalizeNodePairingCleanupClaim(
         },
       },
     );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return [];
-    }
-    throw error;
   } finally {
     removeCleanupClaim(claim);
   }
@@ -187,10 +182,10 @@ export async function reusePendingNodePairingForReconnect(
   cleanupClaim: NodePairingCleanupClaim | undefined,
   baseDir?: string,
 ): Promise<RequestNodePairingResult | null> {
-  const result = await withCurrentDevicePairingSnapshot(baseDir, (paired) => ({
-    start: () => {
+  return readCurrentPairedDevice(
+    req.nodeId,
+    (device) => {
       const nodeId = req.nodeId.trim();
-      const device = paired.find((entry) => entry.deviceId === nodeId);
       const pending = device?.pendingNodeSurface;
       if (
         !device ||
@@ -209,50 +204,61 @@ export async function reusePendingNodePairingForReconnect(
         created: false,
       };
     },
-  }));
-  return result ?? null;
+    baseDir,
+  );
 }
 
 export async function approveNodePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[] },
+  options: {
+    callerScopes?: readonly string[];
+    initialOnly?: boolean;
+    isApprovalCurrent?: () => boolean;
+    onApproved?: (approval: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
+  },
   baseDir?: string,
 ): Promise<ApproveNodePairingResult> {
-  try {
-    return await executeDevicePairingMutation(
-      {
-        type: "node.approve",
-        input: { requestId, callerScopes: options.callerScopes, nowMs: Date.now() },
+  return await executeDevicePairingMutation(
+    {
+      type: "node.approve",
+      input: {
+        requestId,
+        callerScopes: options.callerScopes,
+        initialOnly: options.initialOnly,
+        nowMs: Date.now(),
       },
-      {
-        baseDir,
-        admit: (facts) => {
-          if (
-            !isRecord(facts) ||
-            facts.kind !== "node-pending" ||
-            typeof facts.nodeId !== "string" ||
-            typeof facts.requestId !== "string" ||
-            (facts.revision !== undefined && typeof facts.revision !== "string")
-          ) {
-            throw new Error("invalid node pending admission facts");
-          }
-          const key = buildCleanupRevisionClaimKey(baseDir, {
-            nodeId: facts.nodeId,
-            requestId: facts.requestId,
-            revision: facts.revision,
-          });
-          if ((activeCleanupRevisionClaims.get(key)?.size ?? 0) > 0) {
-            throw new DevicePairingAuthorityRefusedError("node reconnect owns pending revision");
-          }
-        },
+    },
+    {
+      baseDir,
+      onAuthorityRefused: () => null,
+      onNodeApproved: options.onApproved,
+      // Automatic grants must retain their policy authority through lock and worker waits.
+      assertCurrent: () => {
+        if (options.isApprovalCurrent?.() === false) {
+          throw new DevicePairingAuthorityRefusedError("node approval policy changed");
+        }
       },
-    );
-  } catch (error) {
-    if (error instanceof DevicePairingAuthorityRefusedError) {
-      return null;
-    }
-    throw error;
-  }
+      admit: (facts) => {
+        if (
+          !isRecord(facts) ||
+          facts.kind !== "node-pending" ||
+          typeof facts.nodeId !== "string" ||
+          typeof facts.requestId !== "string" ||
+          (facts.revision !== undefined && typeof facts.revision !== "string")
+        ) {
+          throw new Error("invalid node pending admission facts");
+        }
+        const key = buildCleanupRevisionClaimKey(baseDir, {
+          nodeId: facts.nodeId,
+          requestId: facts.requestId,
+          revision: facts.revision,
+        });
+        if ((activeCleanupRevisionClaims.get(key)?.size ?? 0) > 0) {
+          throw new DevicePairingAuthorityRefusedError("node reconnect owns pending revision");
+        }
+      },
+    },
+  );
 }
 
 export function rejectNodePairing(
@@ -301,6 +307,7 @@ export async function recordPairedNodeDisconnection(params: {
   nodeId: string;
   connectedAtMs: number;
   disconnectedAtMs: number;
+  hostStats?: NodeHostStats;
   expectedPairingGeneration: NodePairingGeneration;
   baseDir?: string;
 }): Promise<{ recorded: boolean }> {

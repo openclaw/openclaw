@@ -1,25 +1,28 @@
 import { isDeepStrictEqual } from "node:util";
+import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
   getRuntimeAuthProfileStoreCredentialMutationToken,
   type RuntimeAuthProfileStoreMutationOwner,
   type RuntimeAuthProfileStoreMutationToken,
 } from "../agents/auth-profiles/mutation-lineage.js";
+import { buildPersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   withSetupCredentialAccess,
   type SetupRuntimeCredential,
 } from "../agents/auth-profiles/setup-access.js";
 import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  saveAuthProfileStoreIfPersistenceSnapshotMatches,
+  loadAuthProfileStoreWithoutExternalProfilesAsync,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
 } from "../agents/auth-profiles/store-runtime.js";
-import {
-  captureAuthProfileStorePersistenceSnapshot,
-  resolvePersistedAuthProfileOwnerAgentDir,
-  restoreAuthProfileStorePersistenceSnapshot,
-} from "../agents/auth-profiles/store.js";
-import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { publishAuthProfileStoreUpdate } from "../agents/auth-profiles/store-update-publication.js";
+import { runAuthProfileStoreUpdate } from "../agents/auth-profiles/store-update.js";
+import { getScopedAuthProfileEnv } from "../agents/auth-profiles/store.js";
+import type {
+  AuthProfileCredential,
+  PreparedAuthProfileStoreOwner,
+} from "../agents/auth-profiles/types.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { isMissingSecretRefResolutionError } from "../secrets/resolve-errors.js";
 import {
   SetupInferenceOwnerDriftError,
@@ -28,7 +31,10 @@ import {
   type StageContext,
   type StagedCandidate,
 } from "./setup-inference-core.js";
-export type SetupCredentialActivationReceipt = { rollback: () => void; assertCurrent: () => void };
+export type SetupCredentialActivationReceipt = {
+  rollback: () => Promise<void>;
+  assertCurrent: () => void;
+};
 
 /** Prepares one selected account without publishing a candidate runtime. */
 export async function withPreparedSetupCredentialAccess(
@@ -44,7 +50,7 @@ export async function withPreparedSetupCredentialAccess(
   const access = { profileId, agentDir: ctx.agentDir, signal: params.signal };
   return await withSetupCredentialAccess(access, async () => {
     const credentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-    const store = loadAuthProfileStoreWithoutExternalProfiles(ctx.agentDir);
+    const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir);
     const credential = store.profiles[profileId];
     const refInput =
       credential?.type === "api_key"
@@ -52,7 +58,7 @@ export async function withPreparedSetupCredentialAccess(
         : credential?.type === "token"
           ? (credential.tokenRef ?? credential.token)
           : undefined;
-    const ref = coerceSecretRef(refInput, staged.config.secrets?.defaults);
+    const ref = parseSecretRef(refInput, staged.config.secrets?.defaults);
     if (!credential || !ref) {
       return await verify();
     }
@@ -60,14 +66,14 @@ export async function withPreparedSetupCredentialAccess(
     // publish a candidate config or replace the live Gateway's auth snapshot.
     const source = structuredClone(credential);
     const { prepareSecretsRuntimeSnapshot } = await import("../secrets/runtime.js");
-    const assertOriginalGeneration = () => {
-      if (credentialsRevision !== getRuntimeAuthProfileStoreCredentialsRevision()) {
+    const assertOriginalGeneration = (revision: number) => {
+      if (credentialsRevision !== revision) {
         throw new SetupInferenceOwnerDriftError(
           "The saved credential changed during preparation. Retry this sign-in in Model Setup.",
         );
       }
     };
-    assertOriginalGeneration();
+    assertOriginalGeneration(getRuntimeAuthProfileStoreCredentialsRevision());
     let prepared: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>;
     try {
       prepared = await prepareSecretsRuntimeSnapshot({
@@ -81,7 +87,7 @@ export async function withPreparedSetupCredentialAccess(
         throw error;
       }
       throwIfSetupInferenceCancelled(params);
-      assertOriginalGeneration();
+      assertOriginalGeneration(getRuntimeAuthProfileStoreCredentialsRevision());
       return failure({
         ok: false,
         status: "unknown",
@@ -90,12 +96,8 @@ export async function withPreparedSetupCredentialAccess(
       });
     }
     throwIfSetupInferenceCancelled(params);
-    assertOriginalGeneration();
-    if (prepared.authStoreCredentialsRevision !== credentialsRevision) {
-      throw new SetupInferenceOwnerDriftError(
-        "The saved credential changed during preparation. Retry this sign-in in Model Setup.",
-      );
-    }
+    assertOriginalGeneration(getRuntimeAuthProfileStoreCredentialsRevision());
+    assertOriginalGeneration(prepared.authStoreCredentialsRevision);
     const materialized = prepared.authStores[0]?.store.profiles[profileId];
     if (!materialized) {
       return failure({
@@ -121,68 +123,102 @@ export async function activateSavedSetupCredential(params: {
   if (!params.credential.setup) {
     return undefined;
   }
+  const original = buildPersistedAuthProfileSecretsStore({
+    version: AUTH_STORE_VERSION,
+    profiles: { [params.profileId]: structuredClone(params.credential) },
+  }).profiles[params.profileId];
+  if (!original) {
+    throw new Error("The saved sign-in cannot be activated through a shared auth profile.");
+  }
+  const activated = structuredClone(original);
+  delete activated.setup;
   const agentDir = params.stateDir
     ? params.agentDir
-    : resolvePersistedAuthProfileOwnerAgentDir(params);
-  const before = captureAuthProfileStorePersistenceSnapshot(agentDir, {
-    stateDir: params.stateDir,
-  });
-  const store = structuredClone(loadAuthProfileStoreWithoutExternalProfiles(agentDir));
-  const current = store.profiles[params.profileId];
-  if (!current || !isDeepStrictEqual(current, params.credential)) {
-    throw new Error("The saved sign-in changed before activation. Test it again in Model Setup.");
-  }
-  delete current.setup;
-  params.beforeWrite?.();
-  const committed = saveAuthProfileStoreIfPersistenceSnapshotMatches({
-    store,
-    snapshot: before,
-    agentDir,
-    stateDir: params.stateDir,
-  });
-  const credentialOwner: RuntimeAuthProfileStoreMutationOwner = {
-    kind: "resolved",
-    databasePath: committed.owned.owner.databasePath,
-    sharedDatabasePath: committed.owned.owner.sharedDatabasePath,
-  };
-  let mutationToken: RuntimeAuthProfileStoreMutationToken;
-  const rollback = () => {
-    restoreAuthProfileStorePersistenceSnapshot(before, committed.owned, agentDir, {
-      stateDir: params.stateDir,
+    : await resolvePersistedAuthProfileOwnerAgentDirAsync(params);
+  let owner: PreparedAuthProfileStoreOwner | undefined;
+  const replaceCredential = async (
+    expected: AuthProfileCredential,
+    next: AuthProfileCredential,
+    rollback = false,
+  ) => {
+    await runAuthProfileStoreUpdate({
+      agentDir,
+      envOnly: false,
+      options: owner
+        ? { env: owner.env }
+        : {
+            stateDir: params.stateDir,
+            env: params.stateDir ? undefined : getScopedAuthProfileEnv(),
+          },
+      assertCurrent: rollback ? undefined : params.beforeWrite,
+      update(prepared, currentOwner) {
+        if (
+          (owner &&
+            (currentOwner.databasePath !== owner.databasePath ||
+              currentOwner.sharedDatabasePath !== owner.sharedDatabasePath)) ||
+          !isDeepStrictEqual(prepared.store.profiles[params.profileId], expected)
+        ) {
+          throw new SetupInferenceOwnerDriftError(
+            rollback
+              ? "A newer credential update superseded this activation. Review Model Setup."
+              : "The saved sign-in changed before activation. Test it again in Model Setup.",
+          );
+        }
+        prepared.store.profiles[params.profileId] = structuredClone(next);
+        return {
+          save: true,
+          store: prepared.store,
+          externalProfiles: [],
+          options: { filterExternalAuthProfiles: false, syncExternalCli: false },
+        };
+      },
+      async publish(committed, currentOwner, assertCurrent, nativeCommits, committedIsCurrent) {
+        if (!committed) {
+          throw new Error("The saved sign-in update did not commit. Retry it in Model Setup.");
+        }
+        owner = currentOwner;
+        await publishAuthProfileStoreUpdate(
+          currentOwner,
+          committed,
+          assertCurrent,
+          nativeCommits,
+          committedIsCurrent,
+        );
+      },
     });
-    if (
-      !isDeepStrictEqual(
-        loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[params.profileId],
-        params.credential,
-      )
-    ) {
-      throw new SetupInferenceOwnerDriftError(
-        "A newer credential update superseded this activation. Review Model Setup.",
-      );
+  };
+  const readMutationToken = () => {
+    if (!owner) {
+      throw new Error("The saved sign-in update has no committed owner.");
     }
-    mutationToken = getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, params.profileId, {
+    const credentialOwner: RuntimeAuthProfileStoreMutationOwner = {
+      kind: "resolved",
+      databasePath: owner.databasePath,
+      sharedDatabasePath: owner.sharedDatabasePath,
+    };
+    return getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, params.profileId, {
       owner: credentialOwner,
     });
   };
+  let mutationToken: RuntimeAuthProfileStoreMutationToken;
+  const rollback = async () => {
+    // Restore this credential only; unrelated profile and usage writes remain current.
+    await replaceCredential(activated, original, true);
+    mutationToken = readMutationToken();
+  };
   try {
-    if (!committed.publishRuntimeSnapshots()) {
-      throw new Error("The saved sign-in could not be published. Retry it in Model Setup.");
-    }
+    await replaceCredential(original, activated);
   } catch (error) {
-    rollback();
+    if (owner) {
+      await rollback();
+    }
     throw error;
   }
-  mutationToken = getRuntimeAuthProfileStoreCredentialMutationToken(agentDir, params.profileId, {
-    owner: credentialOwner,
-  });
+  mutationToken = readMutationToken();
   return {
     rollback,
     assertCurrent: () => {
-      const currentToken = getRuntimeAuthProfileStoreCredentialMutationToken(
-        agentDir,
-        params.profileId,
-        { owner: credentialOwner },
-      );
+      const currentToken = readMutationToken();
       if (
         !mutationToken.known ||
         !currentToken.known ||

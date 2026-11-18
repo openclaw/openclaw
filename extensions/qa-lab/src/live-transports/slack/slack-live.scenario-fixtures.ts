@@ -12,24 +12,24 @@ import {
   type SlackQaMessageScenarioRun,
 } from "./slack-live.contracts.js";
 
-export function buildSlackChartMessageToolArgs(summaryText: string) {
+function buildSlackPresentationMessageToolArgs<T>(summaryText: string, block: T) {
   return {
     action: "send",
     message: summaryText,
-    presentation: {
-      blocks: [
-        {
-          type: "chart",
-          chartType: "line",
-          title: SLACK_QA_CHART_TITLE,
-          categories: [...SLACK_QA_CHART_CATEGORIES],
-          series: [{ name: SLACK_QA_CHART_SERIES_NAME, values: [...SLACK_QA_CHART_VALUES] }],
-          xLabel: SLACK_QA_CHART_X_LABEL,
-          yLabel: SLACK_QA_CHART_Y_LABEL,
-        },
-      ],
-    },
+    presentation: { blocks: [block] },
   };
+}
+
+export function buildSlackChartMessageToolArgs(summaryText: string) {
+  return buildSlackPresentationMessageToolArgs(summaryText, {
+    type: "chart",
+    chartType: "line",
+    title: SLACK_QA_CHART_TITLE,
+    categories: [...SLACK_QA_CHART_CATEGORIES],
+    series: [{ name: SLACK_QA_CHART_SERIES_NAME, values: [...SLACK_QA_CHART_VALUES] }],
+    xLabel: SLACK_QA_CHART_X_LABEL,
+    yLabel: SLACK_QA_CHART_Y_LABEL,
+  });
 }
 
 export function renderSlackChartAccessibleText(summaryText: string) {
@@ -44,21 +44,13 @@ export function renderSlackChartAccessibleText(summaryText: string) {
 }
 
 export function buildSlackTableMessageToolArgs(summaryText: string) {
-  return {
-    action: "send",
-    message: summaryText,
-    presentation: {
-      blocks: [
-        {
-          type: "table",
-          caption: SLACK_QA_TABLE_CAPTION,
-          headers: [...SLACK_QA_TABLE_HEADERS],
-          rows: SLACK_QA_TABLE_ROWS.map((row) => [...row]),
-          rowHeaderColumnIndex: 0,
-        },
-      ],
-    },
-  };
+  return buildSlackPresentationMessageToolArgs(summaryText, {
+    type: "table",
+    caption: SLACK_QA_TABLE_CAPTION,
+    headers: [...SLACK_QA_TABLE_HEADERS],
+    rows: SLACK_QA_TABLE_ROWS.map((row) => [...row]),
+    rowHeaderColumnIndex: 0,
+  });
 }
 
 export function renderSlackTableAccessibleText(summaryText: string) {
@@ -101,22 +93,18 @@ function hasSlackCommentaryLaneMarker(
 }
 
 function isSlackSafeExecSummary(message: { text: string }) {
-  // Slack history converts Unicode emoji to colon names; captured writes retain Unicode.
-  return /^(?:🛠️|:hammer_and_wrench:) Exec$/u.test(message.text.trim());
+  return message.text.trim() === "Exec";
 }
 
 function hasSlackExecHeader(message: { blockText?: string[]; text: string }) {
-  // Full output includes the runtime's command-derived label after the Exec glyph.
-  if (/^(?:🛠️|:hammer_and_wrench:) \S.*$/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "")) {
+  if (/^Exec(?:$|[:\s])/u.test(message.text.split(/\r?\n/u)[0]?.trim() ?? "")) {
     return true;
   }
   // Compact progress cards keep the native tool row in Block Kit while their
   // fallback text remains a generic status headline. Command-derived suffixes
   // can be truncated, so identify the row by its stable native label.
   return (message.blockText ?? []).some((text) =>
-    text
-      .split(/\r?\n/u)
-      .some((line) => /^(?:(?:•|🛠️|:hammer_and_wrench:) \*Exec\*|Exec) — \S/u.test(line.trim())),
+    text.split(/\r?\n/u).some((line) => /^(?:• \*Exec\*|Exec) — \S/u.test(line.trim())),
   );
 }
 
@@ -271,7 +259,8 @@ export function buildSlackProgressCommentaryRun(
                 observedSlackText(message).includes(marker),
               ) ||
               hasSlackExecHeader(message) ||
-              /\bsleep\s+5\b/u.test(observedSlackText(message)),
+              /\bsleep\s+5\b/u.test(observedSlackText(message)) ||
+              message.ts !== commentaryTs,
           )
           .map((message) => message.ts),
       );
@@ -283,6 +272,9 @@ export function buildSlackProgressCommentaryRun(
                 observedSlackText(message).includes(marker),
               ) ||
               (hasSlackExecHeader(message) && !isSlackSafeExecSummary(message)),
+          ) ||
+          progressMessages.some(
+            (message) => message.ts !== commentaryTs && !isSlackSafeExecSummary(message),
           )
         ) {
           fail("command details and output must stay hidden in verbose-on progress");
@@ -305,12 +297,14 @@ export function buildSlackProgressCommentaryRun(
           fail("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
-        const toolMessages = progressMessages.filter(hasSlackExecHeader);
+        // Compact command summaries have no universal prefix. This scenario owns
+        // the turn: every standalone message outside commentary/final is tool work.
+        const toolMessages = progressMessages.filter((message) => message.ts !== commentaryTs);
         const hasOutputLine = (message: (typeof toolMessages)[number]) =>
           observedSlackText(message)
             .split(/\r?\n/u)
             .some((line) => line.trim() === outputMarker);
-        // Slack's delivery transform can strip command headers while retaining output.
+        // Exact output evidence does not depend on a compact command header.
         const outputTimestamps = new Set(
           progressMessages.filter(hasOutputLine).map((message) => message.ts),
         );

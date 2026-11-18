@@ -1,4 +1,4 @@
-import type { AuthenticateResult } from "mailauth";
+import type { AuthenticateResult, DMARCResult } from "mailauth";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -76,18 +76,24 @@ export function createImapTestRuntime() {
   };
 }
 
-type AuthenticationStatus = Exclude<AuthenticateResult["dmarc"], false>["status"]["result"];
+type ImapAuthResult = AuthenticateResult & {
+  dmarc: DMARCResult & { alignment: NonNullable<DMARCResult["alignment"]> };
+};
 
-export function createImapAuthResult(
-  dmarc: AuthenticationStatus,
-  spf: AuthenticationStatus = "none",
-): AuthenticateResult {
+export function createImapAuthResult(dmarc: DMARCResult["status"]["result"]): ImapAuthResult {
   return {
-    dkim: { headerFrom: ["example.com"], envelopeFrom: false, results: [] },
+    dkim: {
+      headerFrom: ["trusted@example.com"],
+      fromFields: 1,
+      fromSyntax: "valid",
+      envelopeFrom: false,
+      results: [],
+    },
+    dkim2: false,
     spf: {
       domain: "example.com",
       "client-ip": "127.0.0.1",
-      status: { result: spf },
+      status: { result: "none" },
       header: "",
       info: "",
     },
@@ -96,6 +102,7 @@ export function createImapAuthResult(
       policy: "none",
       p: "none",
       sp: "none",
+      testMode: false,
       status: { result: dmarc },
       alignment: { spf: { strict: false }, dkim: { strict: false } },
       info: "",

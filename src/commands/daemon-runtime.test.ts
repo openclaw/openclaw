@@ -12,6 +12,7 @@ describe("gateway daemon runtime", () => {
     expect(GATEWAY_DAEMON_RUNTIME_OPTIONS.map((option) => option.value)).toEqual(["node", "bun"]);
     expect(isGatewayDaemonRuntime("node")).toBe(true);
     expect(isGatewayDaemonRuntime("bun")).toBe(true);
+    expect(isGatewayDaemonRuntime("standalone")).toBe(true);
     expect(isGatewayDaemonRuntime(undefined)).toBe(false);
   });
 

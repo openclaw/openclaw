@@ -4,24 +4,76 @@ import SwiftUI
 
 struct ChatSystemNoticeRow: View {
     let notice: ChatTranscriptRow.SystemNotice
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
+    @State private var isExpanded = false
 
     var body: some View {
-        VStack(spacing: 8) {
-            ChatSystemLine(
-                systemImage: self.notice.systemImage,
-                label: self.notice.label,
-                metric: nil)
-            Text(self.notice.body)
-                .font(OpenClawChatTypography.footnote)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+        if self.notice.collapsesBody {
+            DisclosureGroup(isExpanded: self.$isExpanded) {
+                Text(self.notice.body)
+                    .font(OpenClawChatTypography.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+            } label: {
+                ChatSystemLine(
+                    systemImage: self.notice.systemImage,
+                    label: self.notice.label,
+                    metric: nil)
+            }
+            .foregroundStyle(.secondary)
+            .tint(.secondary)
+            #if os(iOS)
+            // Inside the iOS List a default DisclosureGroup turns into an outline row that the
+            // label tap does not toggle; keep the inline label + chevron behaviour.
+            .disclosureGroupStyle(ChatInlineDisclosureStyle())
+            #endif
+            .padding(.vertical, 4)
+        } else {
+            VStack(spacing: 8) {
+                ChatSystemLine(
+                    systemImage: self.notice.systemImage,
+                    label: self.notice.label,
+                    metric: nil)
+                Text(self.notice.body)
+                    .font(OpenClawChatTypography.footnote)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: "\(self.notice.label), \(self.notice.body)"))
         }
-        .foregroundStyle(.secondary)
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: "\(self.notice.label), \(self.notice.body)"))
     }
 }
+
+#if os(iOS)
+/// Inline label + chevron disclosure for transcript rows inside the iOS List.
+struct ChatInlineDisclosureStyle: DisclosureGroupStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                configuration.isExpanded.toggle()
+            } label: {
+                HStack {
+                    configuration.label
+                    Spacer(minLength: 8)
+                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
+            if configuration.isExpanded {
+                configuration.content
+            }
+        }
+    }
+}
+#endif
 
 struct ChatHistoryDividerRow: View {
     let divider: ChatTranscriptRow.HistoryDivider
@@ -80,6 +132,8 @@ private struct ChatSystemLine: View {
             }
             .lineLimit(1)
             .minimumScaleFactor(0.75)
+            // The rules take what the label leaves; equal thirds truncated any label longer than a third of the row.
+            .layoutPriority(1)
             Rectangle()
                 .fill(OpenClawChatTheme.divider)
                 .frame(height: 1)
@@ -155,6 +209,8 @@ private struct ChatBubbleShape: InsettableShape {
     let cornerRadius: CGFloat
     let tail: Tail
     var insetAmount: CGFloat = 0
+    /// The messaging-app tail at the bottom corner, in place of the small side notch.
+    var cornerTail = false
 
     private let tailWidth: CGFloat = 7
     private let tailBaseHeight: CGFloat = 9
@@ -168,126 +224,110 @@ private struct ChatBubbleShape: InsettableShape {
     func path(in rect: CGRect) -> Path {
         let rect = rect.insetBy(dx: self.insetAmount, dy: self.insetAmount)
         switch self.tail {
-        case .left:
-            return self.leftTailPath(in: rect, radius: self.cornerRadius)
-        case .right:
-            return self.rightTailPath(in: rect, radius: self.cornerRadius)
+        case .left, .right:
+            return self.cornerTail
+                ? self.cornerTailPath(in: rect, radius: self.cornerRadius)
+                : self.tailPath(in: rect, radius: self.cornerRadius)
         case .none:
             return Path(roundedRect: rect, cornerRadius: self.cornerRadius)
         }
     }
 
-    private func rightTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
+    static let cornerTailWidth: CGFloat = 7
+
+    /// The side of the bubble sweeps out to a point at the bottom corner on the sender's side; the underside of
+    /// that point curves up to a notch and back down to the bottom edge. Drawn for the left, mirrored for the right.
+    private func cornerTailPath(in rect: CGRect, radius: CGFloat) -> Path {
+        let bodyMinX = rect.minX + Self.cornerTailWidth
+        // A very small bubble gets smaller corners and a shorter tail, so the outline never crosses itself.
+        let r = max(0, min(radius, (rect.maxX - bodyMinX) / 2, rect.height / 2))
+        let rise = min(15, max(0, rect.height - r))
+        let flatX = min(bodyMinX + 21, rect.maxX - r)
+        let notch = CGPoint(x: min(bodyMinX + 9, flatX), y: rect.maxY - min(4, rect.height / 2))
         var path = Path()
-        let bubbleMinX = rect.minX
-        let bubbleMaxX = rect.maxX - self.tailWidth
+        path.move(to: CGPoint(x: bodyMinX + r, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - r, y: rect.minY))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.minY + r), control: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - r))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX - r, y: rect.maxY), control: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: flatX, y: rect.maxY))
+        path.addQuadCurve(to: notch, control: CGPoint(x: notch.x + (flatX - notch.x) * 0.45, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.minX, y: rect.maxY),
+            control: CGPoint(x: bodyMinX + (notch.x - bodyMinX) * 0.45, y: rect.maxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bodyMinX, y: rect.maxY - rise),
+            control: CGPoint(x: bodyMinX, y: rect.maxY - rise * 0.22))
+        path.addLine(to: CGPoint(x: bodyMinX, y: rect.minY + r))
+        path.addQuadCurve(to: CGPoint(x: bodyMinX + r, y: rect.minY), control: CGPoint(x: bodyMinX, y: rect.minY))
+        path.closeSubpath()
+        guard self.tail == .right else { return path }
+        return path.applying(CGAffineTransform(translationX: rect.minX + rect.maxX, y: 0).scaledBy(x: -1, y: 1))
+    }
+
+    private func tailPath(in rect: CGRect, radius r: CGFloat) -> Path {
+        let isRight = self.tail == .right
+        let bubbleMinX = rect.minX + (isRight ? 0 : self.tailWidth)
+        let bubbleMaxX = rect.maxX - (isRight ? self.tailWidth : 0)
         let bubbleMinY = rect.minY
         let bubbleMaxY = rect.maxY
-
         let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
-        let baseH = min(tailBaseHeight, available)
+        let baseH = min(self.tailBaseHeight, available)
         let baseBottomY = bubbleMaxY - max(r * 0.45, 6)
         let baseTopY = baseBottomY - baseH
         let midY = (baseTopY + baseBottomY) / 2
 
-        let baseTop = CGPoint(x: bubbleMaxX, y: baseTopY)
-        let baseBottom = CGPoint(x: bubbleMaxX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMaxX + self.tailWidth, y: midY)
+        func addTail(to path: inout Path) {
+            let edgeX = isRight ? bubbleMaxX : bubbleMinX
+            let direction: CGFloat = isRight ? 1 : -1
+            let startY = isRight ? baseTopY : baseBottomY
+            let endY = isRight ? baseBottomY : baseTopY
+            path.addLine(to: CGPoint(x: edgeX, y: startY))
+            path.addCurve(
+                to: CGPoint(x: edgeX + direction * self.tailWidth, y: midY),
+                control1: CGPoint(x: edgeX + direction * self.tailWidth * 0.2, y: startY + direction * baseH * 0.05),
+                control2: CGPoint(x: edgeX + direction * self.tailWidth * 0.95, y: midY - direction * baseH * 0.15))
+            path.addCurve(
+                to: CGPoint(x: edgeX, y: endY),
+                control1: CGPoint(x: edgeX + direction * self.tailWidth * 0.95, y: midY + direction * baseH * 0.15),
+                control2: CGPoint(x: edgeX + direction * self.tailWidth * 0.2, y: endY - direction * baseH * 0.05))
+        }
 
+        var path = Path()
         path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
             control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
-        path.addLine(to: baseTop)
-        path.addCurve(
-            to: tip,
-            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseTopY + baseH * 0.05),
-            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY - baseH * 0.15))
-        path.addCurve(
-            to: baseBottom,
-            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY + baseH * 0.15),
-            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
-        self.addBottomEdge(
-            path: &path,
-            bubbleMinX: bubbleMinX,
-            bubbleMaxX: bubbleMaxX,
-            bubbleMaxY: bubbleMaxY,
-            radius: r)
-        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        if isRight {
+            addTail(to: &path)
+        } else {
+            path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
+        }
         path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
-            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
-
-        return path
-    }
-
-    private func leftTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
-        var path = Path()
-        let bubbleMinX = rect.minX + self.tailWidth
-        let bubbleMaxX = rect.maxX
-        let bubbleMinY = rect.minY
-        let bubbleMaxY = rect.maxY
-
-        let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
-        let baseH = min(tailBaseHeight, available)
-        let baseBottomY = bubbleMaxY - max(r * 0.45, 6)
-        let baseTopY = baseBottomY - baseH
-        let midY = (baseTopY + baseBottomY) / 2
-
-        let baseTop = CGPoint(x: bubbleMinX, y: baseTopY)
-        let baseBottom = CGPoint(x: bubbleMinX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMinX - self.tailWidth, y: midY)
-
-        path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
-        path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
-            control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
-        path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
-        self.addBottomEdge(
-            path: &path,
-            bubbleMinX: bubbleMinX,
-            bubbleMaxX: bubbleMaxX,
-            bubbleMaxY: bubbleMaxY,
-            radius: r)
-        path.addLine(to: baseBottom)
-        path.addCurve(
-            to: tip,
-            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05),
-            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY + baseH * 0.15))
-        path.addCurve(
-            to: baseTop,
-            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY - baseH * 0.15),
-            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseTopY + baseH * 0.05))
-        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
-            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
-
-        return path
-    }
-
-    private func addBottomEdge(
-        path: inout Path,
-        bubbleMinX: CGFloat,
-        bubbleMaxX: CGFloat,
-        bubbleMaxY: CGFloat,
-        radius: CGFloat)
-    {
-        path.addQuadCurve(
-            to: CGPoint(x: bubbleMaxX - radius, y: bubbleMaxY),
+            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
             control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
-        path.addLine(to: CGPoint(x: bubbleMinX + radius, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
         path.addQuadCurve(
-            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - radius),
+            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
             control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        if !isRight {
+            addTail(to: &path)
+        }
+        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
+            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
+        return path
     }
 }
 
 @MainActor
-struct ChatMessageBubble: View {
+struct ChatMessageBubble: View, @MainActor Equatable {
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
+    #if os(iOS)
+    @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var assistantBubblesInClean
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
@@ -312,6 +352,7 @@ struct ChatMessageBubble: View {
     let contextWindowTokens: Int?
     let userMessageExpanded: Bool
     let onToggleUserMessageExpanded: @MainActor () -> Void
+    let inlineWidgetScope: ChatInlineWidgetScope
     let inlineWidgetResolverReady: Bool
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
@@ -323,7 +364,50 @@ struct ChatMessageBubble: View {
         OpenClawChatMediaKind,
         OpenClawChatPlaybackMode?) async throws -> OpenClawChatLoadedMedia?
 
+    var canUseIOSRenderGate: Bool {
+        guard self.message.role.lowercased() == "assistant" else { return false }
+        return !self.message.content.contains { content in
+            content.isInlineAttachment || (content.type ?? "").lowercased() == "canvas"
+        }
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        // The iOS gate excludes media/widgets, so resolver closures cannot affect its subtree.
+        // Comparing closure identity would defeat the gate because ChatView rebuilds them each pass.
+        // The favicon loader is covered by sourceContextRevision, which rotates on context changes.
+        guard self.styleValue(lhs.style) == self.styleValue(rhs.style) else { return false }
+        return lhs.message == rhs.message &&
+            lhs.liveToolCalls == rhs.liveToolCalls &&
+            lhs.metadata == rhs.metadata &&
+            lhs.sourcePreviews == rhs.sourcePreviews &&
+            lhs.sourceContextRevision == rhs.sourceContextRevision &&
+            lhs.sourceFaviconsEnabled == rhs.sourceFaviconsEnabled &&
+            lhs.markdownVariant.rawValue == rhs.markdownVariant.rawValue &&
+            lhs.userAccent == rhs.userAccent &&
+            lhs.displayOptions.rawValue == rhs.displayOptions.rawValue &&
+            lhs.assistantName == rhs.assistantName &&
+            lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
+            lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
+            lhs.isClean == rhs.isClean &&
+            lhs.contextWindowTokens == rhs.contextWindowTokens &&
+            lhs.userMessageExpanded == rhs.userMessageExpanded &&
+            lhs.inlineWidgetScope == rhs.inlineWidgetScope &&
+            lhs.inlineWidgetResolverReady == rhs.inlineWidgetResolverReady &&
+            lhs.mediaArtifactResolverReady == rhs.mediaArtifactResolverReady
+    }
+
+    private static func styleValue(_ style: OpenClawChatView.Style) -> UInt8 {
+        switch style {
+        case .standard: 0
+        case .onboarding: 1
+        }
+    }
+
     var body: some View {
+        // View builders reject `_ = …`; `let _` is the only statement form they accept.
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("bubble")
         if self.isUser {
             self.messageBody
                 .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .trailing)
@@ -346,6 +430,9 @@ struct ChatMessageBubble: View {
                     .contentShape(.accessibility, Rectangle())
                     .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("chat-assistant-message-body")
+                    .assistantSpeakerLabel(
+                        self.assistantName,
+                        avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 2)
@@ -396,6 +483,7 @@ extension ChatMessageBubble {
         let textColor = self.textColor
         let shouldRenderBubble = self.shouldRenderBubble
         let toolActivityItems = self.toolActivityItems
+        let hasOnboardingShadow = self.style == .onboarding && !self.isUser
 
         VStack(alignment: .leading, spacing: 6) {
             if shouldRenderBubble {
@@ -403,13 +491,19 @@ extension ChatMessageBubble {
                     self.messageContent(text: text, textColor: textColor)
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
+                        .padding(self.isUser ? .trailing : .leading, self.tailInset)
                         .background(AnyShapeStyle(self.bubbleFillColor))
                         .clipShape(self.bubbleShape)
-                        .overlay(self.bubbleBorder)
+                        // A round join keeps the outline of the tail's point inside the bubble's bounds.
+                        .overlay(self.bubbleShape.strokeBorder(
+                            self.bubbleBorderColor,
+                            style: StrokeStyle(
+                                lineWidth: self.bubbleBorderWidth,
+                                lineJoin: self.style == .onboarding ? .miter : .round)))
                         .shadow(
-                            color: self.bubbleShadowColor,
-                            radius: self.bubbleShadowRadius,
-                            y: self.bubbleShadowYOffset)
+                            color: hasOnboardingShadow ? Color.black.opacity(0.28) : .clear,
+                            radius: hasOnboardingShadow ? 6 : 0,
+                            y: hasOnboardingShadow ? 2 : 0)
                         .padding(.leading, self.tailPaddingLeading)
                         .padding(.trailing, self.tailPaddingTrailing)
                 } else {
@@ -450,6 +544,9 @@ extension ChatMessageBubble {
                     markdownVariant: self.markdownVariant,
                     includesThinking: self.displayOptions.contains(.reasoning),
                     textColor: textColor)
+                    #if os(iOS)
+                        .chatReaderAnchor(self.readerAnchor)
+                    #endif
             }
 
             if !self.sourcePreviews.isEmpty {
@@ -489,6 +586,8 @@ extension ChatMessageBubble {
                     preview: self.inlineWidgets[idx],
                     resolverReady: self.inlineWidgetResolverReady,
                     resolveResource: self.inlineWidgetResourceResolver)
+                    // A retained row must not lend its browser or callbacks to another chat owner.
+                        .id(self.inlineWidgetScope)
             }
 
             self.footer
@@ -582,28 +681,7 @@ extension ChatMessageBubble {
 
     private var toolActivityItems: [ChatToolActivityItem] {
         guard self.displayOptions.contains(.toolActivity) else { return [] }
-        // Results normally reach us merged into the calling assistant message
-        // (ChatTranscriptRow.mergeToolResults); this branch is the orphan
-        // fallback for results whose call is not in the preceding message.
-        if self.message.isToolResult {
-            return [ChatToolActivityItem(
-                id: self.message.content.first?.id ?? "result-0",
-                name: self.message.toolName,
-                arguments: nil,
-                details: self.message.details,
-                resultText: self.primaryText,
-                state: ChatToolActivity
-                    .resultIsError(self.message.isError, text: self.primaryText) ? .failed : .finished,
-                liveDiffStat: nil,
-                activity: self.message.activity?.first,
-                activityPrepared: self.message.activity != nil)]
-        }
-        guard self.message.role.lowercased() == "assistant" else { return [] }
-        return ChatToolActivity.items(
-            calls: self.toolCalls,
-            results: self.inlineToolResults,
-            activity: self.message.activity,
-            liveTools: self.liveToolCalls)
+        return ChatToolActivity.items(message: self.message, liveTools: self.liveToolCalls)
     }
 
     private var linkPreviewURL: URL? {
@@ -647,14 +725,6 @@ extension ChatMessageBubble {
             else { return nil }
             return content.preview
         }
-    }
-
-    private var toolCalls: [OpenClawChatMessageContent] {
-        self.message.content.filter(\.isToolCall)
-    }
-
-    private var inlineToolResults: [OpenClawChatMessageContent] {
-        self.message.content.filter(\.isToolResult)
     }
 
     private var usagePresentation: ChatMessageUsagePresentation? {
@@ -703,17 +773,26 @@ extension ChatMessageBubble {
         return 1
     }
 
-    private var bubbleBorder: some View {
-        self.bubbleShape.strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
-    }
-
     private var bubbleShape: ChatBubbleShape {
-        ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner, tail: self.bubbleTail)
+        // SwiftUI already mirrors Shape paths in RTL on the supported OS versions.
+        ChatBubbleShape(
+            cornerRadius: ChatUIConstants.bubbleCorner,
+            tail: self.usesTail ? (self.isUser ? .right : .left) : .none,
+            cornerTail: self.style != .onboarding)
     }
 
-    private var bubbleTail: ChatBubbleShape.Tail {
-        guard self.style == .onboarding else { return .none }
-        return self.isUser ? .right : .left
+    /// Without an avatar beside it, the tail is what says whose bubble it is.
+    private var usesTail: Bool {
+        #if os(iOS)
+        self.style == .onboarding || !self.showsAssistantAvatar
+        #else
+        self.style == .onboarding
+        #endif
+    }
+
+    /// The tail is drawn inside the bubble's frame; keep the text clear of it.
+    private var tailInset: CGFloat {
+        self.usesTail && self.style != .onboarding ? ChatBubbleShape.cornerTailWidth : 0
     }
 
     private var tailPaddingLeading: CGFloat {
@@ -722,18 +801,6 @@ extension ChatMessageBubble {
 
     private var tailPaddingTrailing: CGFloat {
         self.style == .onboarding && self.isUser ? 8 : 0
-    }
-
-    private var bubbleShadowColor: Color {
-        self.style == .onboarding && !self.isUser ? Color.black.opacity(0.28) : .clear
-    }
-
-    private var bubbleShadowRadius: CGFloat {
-        self.style == .onboarding && !self.isUser ? 6 : 0
-    }
-
-    private var bubbleShadowYOffset: CGFloat {
-        self.style == .onboarding && !self.isUser ? 2 : 0
     }
 }
 
@@ -767,13 +834,15 @@ private struct AttachmentRow: View {
                     resolverReady: self.resolverReady,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
+                // A busy Gateway inspector can omit playback metadata. Let its
+                // playback route inspect on demand rather than assume native support.
                 ChatMediaAudioAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
                     durationSeconds: self.att.durationSeconds,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .audio, self.att.playback) })
+                    load: { try await self.loadMedia($0, .audio, self.att.playback ?? .transcode) })
             case .video:
                 ChatMediaVideoAttachment(
                     artifactId: artifactId,
@@ -782,7 +851,7 @@ private struct AttachmentRow: View {
                     height: self.att.height,
                     resolverReady: self.resolverReady,
                     playbackAllowed: self.playbackAllowed,
-                    load: { try await self.loadMedia($0, .video, self.att.playback) })
+                    load: { try await self.loadMedia($0, .video, self.att.playback ?? .transcode) })
             }
         } else {
             self.fallbackRow
@@ -850,6 +919,7 @@ struct ChatTypingIndicatorBubble: View {
     let isClean: Bool
     let runIdentity: String
     let outputTokens: Int?
+    var status: String?
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -864,7 +934,8 @@ struct ChatTypingIndicatorBubble: View {
             HStack(spacing: 9) {
                 ChatWorkingIndicatorContent(
                     runIdentity: self.runIdentity,
-                    outputTokens: self.outputTokens)
+                    outputTokens: self.outputTokens,
+                    status: self.status)
                     .id(self.runIdentity)
             }
             .padding(.vertical, self.isClean ? 5 : (self.style == .standard ? 10 : 9))
@@ -876,7 +947,7 @@ struct ChatTypingIndicatorBubble: View {
         .focusable(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            Text("Writing")
+            Text(verbatim: self.status ?? String(localized: "Writing"))
                 .font(OpenClawChatTypography.caption))
     }
 }
@@ -886,10 +957,13 @@ private struct ChatWorkingIndicatorContent: View {
     let seed: String
     let outputTokens: Int?
 
-    init(runIdentity: String, outputTokens: Int?) {
+    let status: String?
+
+    init(runIdentity: String, outputTokens: Int?, status: String? = nil) {
         _startedAt = State(initialValue: Date())
         self.seed = runIdentity
         self.outputTokens = outputTokens
+        self.status = status
     }
 
     var body: some View {
@@ -898,7 +972,8 @@ private struct ChatWorkingIndicatorContent: View {
             ChatWorkingStatusText(
                 startedAt: self.startedAt,
                 seed: self.seed,
-                outputTokens: self.outputTokens)
+                outputTokens: self.outputTokens,
+                status: self.status)
         }
     }
 }
@@ -931,67 +1006,59 @@ struct ChatSpeechStatusChip: View {
     }
 }
 
-/// Status footer for a user bubble backed by the durable offline outbox.
+/// Status footer for a user bubble awaiting durable delivery or confirmation.
 @MainActor
 struct ChatOutboxStatusLabel: View {
     let state: OpenClawChatOutboxMessageState
+    var queueMode: OpenClawChatQueueMode?
 
     var body: some View {
+        let presentation = self.presentation
         HStack(spacing: 4) {
-            Image(systemName: self.iconName)
+            Image(systemName: presentation.iconName)
                 .font(.system(size: 10, weight: .semibold))
-            Text(self.title)
+            if let modeTitle {
+                Text(modeTitle)
+                    .font(OpenClawChatTypography.caption)
+                Text("·")
+                    .font(OpenClawChatTypography.caption)
+                    .accessibilityHidden(true)
+            }
+            Text(presentation.title)
                 .font(OpenClawChatTypography.caption)
         }
         .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
-            Text(self.accessibilityText)
+            Text(presentation.accessibilityText)
                 .font(OpenClawChatTypography.caption))
+        .accessibilityValue(Text(self.modeTitle ?? LocalizedStringResource("")))
     }
 
-    private var title: LocalizedStringResource {
-        switch self.state {
-        case .queued:
-            "Queued"
-        case .sending:
-            "Sending…"
-        case .confirming:
-            "Confirming…"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unknown"
-        case .failed:
-            "Not sent"
+    private var modeTitle: LocalizedStringResource? {
+        switch self.queueMode {
+        case .steer: "Steer"
+        case .followup: "Queue next"
+        case nil: nil
         }
     }
 
-    private var iconName: String {
+    private var presentation: (
+        title: LocalizedStringResource,
+        iconName: String,
+        accessibilityText: LocalizedStringResource)
+    {
         switch self.state {
         case .queued:
-            "clock"
+            ("Queued", "clock", "Queued, waiting to send")
         case .sending:
-            "arrow.up.circle"
+            ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:
-            "checkmark.circle"
+            ("Confirming…", "checkmark.circle", "Sent, waiting for chat history confirmation")
         case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "questionmark.circle"
+            ("Delivery unknown", "questionmark.circle", "Delivery unconfirmed, touch and hold to retry or delete")
         case .failed:
-            "exclamationmark.circle"
-        }
-    }
-
-    private var accessibilityText: LocalizedStringResource {
-        switch self.state {
-        case .queued:
-            "Queued, sends when reconnected"
-        case .sending:
-            "Sending"
-        case .confirming:
-            "Sent, waiting for chat history confirmation"
-        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
-            "Delivery unconfirmed, touch and hold to retry or delete"
-        case .failed:
-            "Not sent, touch and hold to retry or delete"
+            ("Not sent", "exclamationmark.circle", "Not sent, touch and hold to retry or delete")
         }
     }
 }
@@ -1001,10 +1068,12 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
         lhs.style == rhs.style &&
             lhs.assistantName == rhs.assistantName &&
             lhs.assistantAvatarText == rhs.assistantAvatarText &&
+            lhs.assistantAvatarTint == rhs.assistantAvatarTint &&
             lhs.showsAssistantAvatar == rhs.showsAssistantAvatar &&
             lhs.isClean == rhs.isClean &&
             lhs.runIdentity == rhs.runIdentity &&
-            lhs.outputTokens == rhs.outputTokens
+            lhs.outputTokens == rhs.outputTokens &&
+            lhs.status == rhs.status
     }
 }
 
@@ -1039,11 +1108,44 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
     let isClean: Bool
     let cornerRadius: CGFloat
+    let joinsAbove: Bool
+    let joinsBelow: Bool
 
     @Environment(\.openClawAssistantBubblesInCleanChrome) private var bubblesInClean
     @Environment(\.openClawAssistantUsesReadingColumn) private var usesReadingColumn
 
+    private var bubbleShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: self.joinsAbove ? 0 : self.cornerRadius,
+            bottomLeadingRadius: self.joinsBelow ? 0 : self.cornerRadius,
+            bottomTrailingRadius: self.joinsBelow ? 0 : self.cornerRadius,
+            topTrailingRadius: self.joinsAbove ? 0 : self.cornerRadius,
+            style: .continuous)
+    }
+
     func body(content: Content) -> some View {
+        #if os(iOS)
+        Group {
+            if self.isRunContent || (self.isClean && !self.bubblesInClean) {
+                content
+            } else {
+                content
+                    // Clean call sites pre-pad only ~4pt; bubbles need room to breathe.
+                        .padding(.horizontal, self.isClean ? 8 : 0)
+                        .padding(.top, self.isClean && !self.joinsAbove ? 8 : 0)
+                        .padding(.bottom, self.isClean && !self.joinsBelow ? 8 : 0)
+                        .background(self.bubbleShape.fill(OpenClawChatTheme.assistantBubble))
+                        .overlay(
+                            self.bubbleShape
+                                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                                // Joined cells draw only the outside edge, never a seam.
+                                .padding(.top, self.joinsAbove ? -1 : 0)
+                                .padding(.bottom, self.joinsBelow ? -1 : 0)
+                                .clipped())
+            }
+        }
+        .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        #else
         Group {
             if self.isRunContent || (self.isClean && !self.bubblesInClean) {
                 content
@@ -1060,13 +1162,33 @@ private struct AssistantBubbleContainerStyle: ViewModifier {
             }
         }
         .frame(maxWidth: self.usesReadingColumn ? .infinity : ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+        #endif
     }
 }
 
 extension View {
-    func assistantBubbleContainerStyle(isClean: Bool, cornerRadius: CGFloat = 16) -> some View {
-        modifier(AssistantBubbleContainerStyle(isClean: isClean, cornerRadius: cornerRadius))
+    func assistantBubbleContainerStyle(
+        isClean: Bool,
+        cornerRadius: CGFloat = 16,
+        joinsAbove: Bool = false,
+        joinsBelow: Bool = false) -> some View
+    {
+        modifier(AssistantBubbleContainerStyle(
+            isClean: isClean,
+            cornerRadius: cornerRadius,
+            joinsAbove: joinsAbove,
+            joinsBelow: joinsBelow))
             .focusable(false)
+    }
+}
+
+/// Defers action construction until SwiftUI evaluates this body, instead of eagerly assembling actions
+/// in every parent-row update. SwiftUI owns when menu content is evaluated.
+struct ChatDeferredContent<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
     }
 }
 
@@ -1080,11 +1202,22 @@ struct ChatStreamingAssistantText {
         self.includesThinking = includesThinking
         self.segments = AssistantTextParser.segments(from: sourceText, includeThinking: includesThinking)
     }
+
+    /// Item source is already inside a parsed assistant segment; do not interpret
+    /// assistant tags again or discard its inherited reasoning typography.
+    init(markdown: String, kind: AssistantTextSegment.Kind) {
+        self.sourceText = markdown
+        self.includesThinking = kind == .thinking
+        self.segments = [AssistantTextSegment(id: 0, kind: kind, text: markdown)]
+    }
 }
 
 @MainActor
 struct ChatStreamingAssistantBubble: View {
     @Environment(\.openClawAssistantRunContent) private var isRunContent
+    #if os(iOS)
+    @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var colorSchemeContrast
@@ -1097,6 +1230,8 @@ struct ChatStreamingAssistantBubble: View {
     let isClean: Bool
 
     var body: some View {
+        // swiftlint:disable:next redundant_discardable_let
+        let _ = ChatBehaviorProbe.countBody("live")
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar, !self.isRunContent {
                 ChatAgentAvatar(
@@ -1113,12 +1248,18 @@ struct ChatStreamingAssistantBubble: View {
                     textColor: self.isDesktopLayout
                         ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
                         : OpenClawChatTheme.assistantText)
+                    #if os(iOS)
+                        .chatReaderAnchor(self.readerAnchor)
+                    #endif
             }
             .padding(self.isClean ? 4 : 12)
             .assistantBubbleContainerStyle(isClean: self.isClean)
             .contentShape(.accessibility, Rectangle())
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("chat-streaming-assistant-body")
+            .assistantSpeakerLabel(
+                self.assistantName,
+                avatarHidden: !self.showsAssistantAvatar && !self.isRunContent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1169,7 +1310,7 @@ private struct ChatAssistantTextBody: View {
 }
 
 @MainActor
-private struct ChatStreamingAssistantTextBody: View {
+struct ChatStreamingAssistantTextBody: View {
     private let inputSnapshot: Snapshot
     let markdownVariant: ChatMarkdownVariant
     let textColor: Color
@@ -1269,17 +1410,12 @@ private struct ChatStreamingAssistantTextBody: View {
         let now = Date.timeIntervalSinceReferenceDate
         let nextSnapshot = self.inputSnapshot
         let nextLocation = nextSnapshot.lastProseLocation
-        let nextRevealState: ChatStreamingRevealState
-        if let nextLocation {
-            let nextText = nextSnapshot.prose(at: nextLocation).plainText
-            if nextLocation == self.revealLocation {
-                nextRevealState = step(state: self.revealState, newText: nextText, now: now)
-            } else {
-                nextRevealState = step(state: ChatStreamingRevealState(), newText: nextText, now: now)
-            }
-        } else {
-            nextRevealState = ChatStreamingRevealState()
-        }
+        let nextRevealState = nextLocation.map { location in
+            step(
+                state: location == self.revealLocation ? self.revealState : ChatStreamingRevealState(),
+                newText: nextSnapshot.prose(at: location).plainText,
+                now: now)
+        } ?? ChatStreamingRevealState()
 
         self.snapshot = nextSnapshot
         self.revealLocation = nextLocation
@@ -1341,5 +1477,13 @@ private struct ChatStreamingAssistantTextBody: View {
             }
             return prose
         }
+    }
+}
+
+extension View {
+    /// Without an avatar beside it, the reply's own container names the assistant for VoiceOver.
+    /// The label is empty where the avatar is shown, so a size-class change keeps the view's identity.
+    func assistantSpeakerLabel(_ name: String?, avatarHidden: Bool) -> some View {
+        self.accessibilityLabel(Text(verbatim: avatarHidden ? name ?? "" : ""))
     }
 }

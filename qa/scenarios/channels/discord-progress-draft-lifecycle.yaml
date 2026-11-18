@@ -25,7 +25,6 @@ scenario:
   codeRefs:
     - extensions/discord/src/monitor/message-handler.process.ts
     - extensions/discord/src/monitor/message-handler.draft-preview.ts
-    - extensions/discord/src/monitor/message-handler.process-progress.ts
     - extensions/qa-lab/src/live-transports/discord/scenario-runtime.ts
   execution:
     kind: flow

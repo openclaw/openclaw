@@ -29,12 +29,10 @@ struct ControlAgentEvent: Codable, Identifiable {
 }
 
 enum ControlChannelError: Error, LocalizedError {
-    case disconnected
     case badResponse(String)
 
     var errorDescription: String? {
         switch self {
-        case .disconnected: "Control channel disconnected"
         case let .badResponse(msg): msg
         }
     }
@@ -183,6 +181,7 @@ final class ControlChannel {
     private var eventServerLease: GatewayConnection.ServerLease?
     private var heartbeat: (event: ControlHeartbeatEvent, lease: GatewayConnection.ServerLease)?
     private var heartbeatReadTask: Task<Void, Never>?
+    private(set) var gatewayAccentReadTask: Task<Void, Never>?
 
     private func synchronizeRouteGeneration() -> UInt64 {
         // Endpoint stream delivery can lag source adoption; fence UI publication directly.
@@ -224,7 +223,7 @@ final class ControlChannel {
         {
             self.pendingStateTask?.cancel()
             self.pendingStateTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: Self.nanoseconds(for: delay))
+                try? await Task.sleep(nanoseconds: UInt64(max(0, delay) * 1_000_000_000))
                 guard let self, !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
                 self.pendingStateTask = nil
                 self.stateDebouncer.recordDeferredApply(at: Date())
@@ -240,10 +239,6 @@ final class ControlChannel {
     private func cancelPendingStateTask() {
         self.pendingStateTask?.cancel()
         self.pendingStateTask = nil
-    }
-
-    private static func nanoseconds(for interval: TimeInterval) -> UInt64 {
-        UInt64(max(0, interval) * 1_000_000_000)
     }
 
     init(
@@ -287,7 +282,13 @@ final class ControlChannel {
         if self.eventTask == nil { self.startEventStream() }
         self.setStateThrottled(.connecting)
         do {
-            try await self.establishGatewayConnection()
+            try await self.gateway.refresh()
+            guard try await self.gateway.healthOK(timeoutMs: 5000) else {
+                throw NSError(
+                    domain: "Gateway",
+                    code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "gateway health not ok"])
+            }
             guard !Task.isCancelled, self.reconcileCurrentConnection(generation: generation) else { return }
             guard let lease = await self.gateway.captureServerLease(),
                   generation == self.synchronizeRouteGeneration(),
@@ -319,10 +320,7 @@ final class ControlChannel {
     {
         let generation = self.synchronizeRouteGeneration()
         let start = Date()
-        var params: [String: AnyHashable]?
-        if let timeout {
-            params = ["timeout": AnyHashable(Int(timeout * 1000))]
-        }
+        let params = timeout.map { ["timeout": AnyHashable(Int($0 * 1000))] }
         let timeoutMs = (timeout ?? 15) * 1000
         let payload = try await self.request(
             method: "health", params: params, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
@@ -355,9 +353,7 @@ final class ControlChannel {
         ifCurrentServerLease lease: GatewayConnection.ServerLease? = nil) async throws -> Data
     {
         try await self.performRequest(ifCurrentServerLease: lease) {
-            let rawParams = params?.reduce(into: [String: OpenClawKit.AnyCodable]()) {
-                $0[$1.key] = OpenClawKit.AnyCodable($1.value.base)
-            }
+            let rawParams = params?.mapValues { OpenClawKit.AnyCodable($0.base) }
             if let lease {
                 return try await self.gateway.request(
                     method: method, params: rawParams, timeoutMs: timeoutMs, ifCurrentServerLease: lease)
@@ -429,15 +425,14 @@ final class ControlChannel {
                 alert.messageText = issue.problem.title
                 alert.informativeText = issue.message
                 alert.addButton(withTitle: String(localized: "OK"))
-                NSApp.activate(ignoringOtherApps: true)
-                alert.runModal()
+                AppActivation.shared.activate()
+                AppActivation.shared.presentAlert(alert)
             }
         }
         return message
     }
 
     static func friendlyGatewayMessage(_ error: Error, configRoot: [String: Any]) -> String {
-        // Map URLSession/WS errors into user-facing, actionable text.
         if let ctrlErr = error as? ControlChannelError, let desc = ctrlErr.errorDescription {
             return desc
         }
@@ -476,11 +471,6 @@ final class ControlChannel {
                 "Gateway rejected token; set \(tokenKey) or clear it on the gateway. Reason: \(reason)"
         }
 
-        // Common misfire: we connected to the configured localhost port but it is occupied
-        // by some other process (e.g. a local dev gateway or a stuck SSH forward).
-        // The gateway handshake returns something we can't parse, which currently
-        // surfaces as "hello failed (unexpected response)". Give the user a pointer
-        // to free the port instead of a vague message.
         let nsError = error as NSError
         if nsError.domain == "Gateway",
            nsError.localizedDescription.contains("hello failed (unexpected response)")
@@ -509,7 +499,7 @@ final class ControlChannel {
                     Remote mode uses an SSH tunnel—check the SSH target and that the tunnel is running.
                     """
                 }
-                return "Cannot reach gateway at \(endpoint); ensure the gateway is running."
+                return "Cannot reach gateway at \(endpoint); check that the gateway is running."
             case .networkConnectionLost:
                 return "Gateway connection dropped; gateway likely restarted—retry."
             case .timedOut:
@@ -608,17 +598,6 @@ final class ControlChannel {
         }
     }
 
-    private func establishGatewayConnection(timeoutMs: Int = 5000) async throws {
-        try await self.gateway.refresh()
-        let ok = try await self.gateway.healthOK(timeoutMs: timeoutMs)
-        if ok == false {
-            throw NSError(
-                domain: "Gateway",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "gateway health not ok"])
-        }
-    }
-
     private static func formatAuthSource(_ source: GatewayAuthSource?, isRemote: Bool) -> String? {
         guard let source else { return nil }
         switch source {
@@ -650,6 +629,7 @@ final class ControlChannel {
     private func retireEventState() {
         self.eventServerLease = nil
         self.heartbeatReadTask?.cancel()
+        self.gatewayAccentReadTask?.cancel()
         // Keep the last known main key until a current hello replaces it.
         // Retired deliveries cannot use that metadata to recreate old work.
         WorkActivityStore.shared.reset()
@@ -696,9 +676,12 @@ final class ControlChannel {
             // caller's own profile; receipt means our profile appearance
             // changed on another device.
             self.refreshProfileAccent(delivery: delivery)
+        case let .event(evt) where evt.event == "config.changed":
+            self.refreshGatewayAccent(delivery: delivery)
         case .snapshot:
             self.reconcileCurrentConnection(generation: self.synchronizeRouteGeneration())
             self.refreshProfileAccent(delivery: delivery)
+            self.refreshGatewayAccent(delivery: delivery)
         default:
             break
         }
@@ -725,36 +708,57 @@ final class ControlChannel {
     private func refreshProfileAccent(delivery: GatewayConnection.PushDelivery) {
         Task {
             guard delivery.isCurrent else { return }
-            let accent = await self.fetchProfileAccentHex(serverLease: delivery.serverLease)
+            let accent = await self.fetchProfileAccent(serverLease: delivery.serverLease)
             // A replaced request can fail as well as succeed; neither outcome
             // may repaint the newly selected Gateway's profile appearance.
             guard delivery.isCurrent else { return }
-            AppStateStore.shared.profileAccentHex = accent
+            AppStateStore.shared.profileAccent = accent
         }
     }
 
-    /// Caller's per-profile accent (users.prefs.get). nil covers profile-less
-    /// connections (no_durable_identity), older gateways without the method,
-    /// and malformed stored values, so the gateway seam color stays the
-    /// fallback. Goes straight through GatewayConnection: routing this through
-    /// ControlChannel.request would mark the channel degraded on the expected
-    /// older-gateway failure.
-    private func fetchProfileAccentHex(serverLease: GatewayConnection.ServerLease) async -> String? {
+    private func refreshGatewayAccent(delivery: GatewayConnection.PushDelivery) {
+        self.gatewayAccentReadTask?.cancel()
+        self.gatewayAccentReadTask = Task { [weak self] in
+            guard let self, delivery.isCurrent else { return }
+            do {
+                let data = try await self.gateway.request(
+                    method: "config.get",
+                    params: nil,
+                    timeoutMs: 8000,
+                    ifCurrentServerLease: delivery.serverLease)
+                let snapshot = try JSONDecoder().decode(ConfigSnapshot.self, from: data)
+                let ui = snapshot.config?["ui"]?.dictionaryValue
+                let preference = ui?["prefs"]?.dictionaryValue?["accent"]?.stringValue
+                let seamColor = ui?["seamColor"]?.stringValue
+                guard !Task.isCancelled, delivery.isCurrent else { return }
+                AppStateStore.shared.seamColorHex = GatewayUserPreferences.gatewayAccentHex(
+                    preference: preference, seamColor: seamColor)
+            } catch {
+                // Keep the last known accent when this Gateway cannot provide a current config.
+            }
+        }
+    }
+
+    /// Caller's per-profile accent (users.prefs.get). Inherited covers profile-less
+    /// connections, older gateways, and malformed values; explicit theme suppresses
+    /// the Gateway fallback. Request directly so an older Gateway does not degrade
+    /// the control channel when this optional method is unavailable.
+    private func fetchProfileAccent(
+        serverLease: GatewayConnection.ServerLease) async -> GatewayUserPreferences.ProfileAccent
+    {
         do {
             let data = try await self.gateway.request(
                 method: "users.prefs.get",
                 params: ["keys": OpenClawKit.AnyCodable(["ui.accent"])],
                 timeoutMs: 8000,
                 ifCurrentServerLease: serverLease)
-            return try GatewayUserPreferences.decodeProfileAccentHex(data)
+            return try GatewayUserPreferences.decodeProfileAccent(data)
         } catch {
-            return nil
+            return .inherited
         }
     }
 
     private func routeWorkActivity(from event: ControlAgentEvent) {
-        // We currently treat VoiceWake as the "main" session for UI purposes.
-        // In the future, the gateway can include a sessionKey to distinguish runs.
         let sessionKey = (event.data["sessionKey"]?.value as? String) ?? "main"
 
         switch event.stream.lowercased() {

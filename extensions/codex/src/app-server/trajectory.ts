@@ -35,10 +35,7 @@ export function recordCodexTrajectoryContext(
     tools?: CodexDynamicToolSpec[];
   },
 ): void {
-  if (!recorder) {
-    return;
-  }
-  recorder.recordEvent("context.compiled", {
+  recorder?.recordEvent("context.compiled", {
     systemPrompt: params.developerInstructions,
     prompt: params.prompt ?? params.attempt.prompt,
     imagesCount: params.attempt.images?.length ?? 0,
@@ -83,16 +80,7 @@ function toTrajectoryToolDefinitions(
   return flattenCodexDynamicToolFunctions(tools)
     .flatMap((tool) => {
       const name = tool.name?.trim();
-      if (!name) {
-        return [];
-      }
-      return [
-        {
-          name,
-          description: tool.description,
-          parameters: tool.inputSchema,
-        },
-      ];
+      return name ? [{ name, description: tool.description, parameters: tool.inputSchema }] : [];
     })
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }

@@ -1,8 +1,4 @@
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type DoctorWorkspaceSuggestionScope = {
@@ -11,12 +7,11 @@ type DoctorWorkspaceSuggestionScope = {
   labelAgent: boolean;
 };
 
-/** Resolves every configured agent workspace while preserving invalid empty-roster failures. */
+/** An explicitly empty roster owns no workspaces to inspect. */
 export function resolveDoctorWorkspaceSuggestionScopes(
   cfg: OpenClawConfig,
 ): DoctorWorkspaceSuggestionScope[] {
-  const listedAgentIds = listAgentIds(cfg);
-  const agentIds = listedAgentIds.length > 0 ? listedAgentIds : [resolveDefaultAgentId(cfg)];
+  const agentIds = listAgentIds(cfg);
   const labelAgent = agentIds.length > 1;
   return agentIds.map((agentId) => ({
     agentId,

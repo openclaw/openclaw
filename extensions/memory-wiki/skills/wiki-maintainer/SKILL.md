@@ -1,6 +1,6 @@
 ---
 name: wiki-maintainer
-description: Maintain the OpenClaw memory wiki vault with deterministic pages, managed blocks, and source-backed updates.
+description: Maintain the OpenClaw memory wiki vault with repeatable pages, managed blocks, and source-backed updates.
 ---
 
 Use this skill when working inside a memory-wiki vault.

@@ -38,8 +38,6 @@ export {
   expectDashscopeVideoTaskPoll,
   expectSuccessfulDashscopeVideoResult,
   mockSuccessfulDashscopeVideoTask,
-  resetDashscopeVideoProviderMocks,
-  type DashscopeVideoProviderMocks,
 } from "./test-helpers/dashscope-video-provider.js";
 export {
   expectExplicitMusicGenerationCapabilities,
@@ -62,7 +60,6 @@ export {
   describeGoogleProviderRuntimeContract,
   describeOpenAIProviderRuntimeContract,
   describeOpenRouterProviderRuntimeContract,
-  describeVeniceProviderRuntimeContract,
   describeZAIProviderRuntimeContract,
   type ProviderRuntimeContractPluginLoader,
 } from "./test-helpers/provider-runtime-contract.js";

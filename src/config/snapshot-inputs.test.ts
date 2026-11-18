@@ -47,48 +47,34 @@ describe("config snapshot input identity", () => {
     [{ raw: "{}", hash: "changed" }, "authored config file contents changed"],
     [{ hash: "changed-include" }, "included config contents or targets changed"],
     [{ sourceConfig: { gateway: { port: 18790 } } }, "resolved config values changed"],
-  ] satisfies [Partial<ConfigFileSnapshot>, string][])("detects %j", (change, reason) => {
-    expect(describeConfigSnapshotInputChange(snapshot, { ...snapshot, ...change })).toBe(reason);
-  });
+    [{ valid: false, runtimeConfig: {}, config: {} }, undefined],
+  ] satisfies [Partial<ConfigFileSnapshot>, string | undefined][])(
+    "compares %j",
+    (change, reason) => {
+      expect(describeConfigSnapshotInputChange(snapshot, { ...snapshot, ...change })).toBe(reason);
+    },
+  );
 
-  it("allows validation and runtime projections to differ for unchanged inputs", () => {
-    expect(
-      describeConfigSnapshotInputChange(snapshot, {
-        ...snapshot,
-        valid: false,
-        runtimeConfig: {},
-        config: {},
-      }),
-    ).toBeUndefined();
-  });
-
-  it("detects pending references becoming same-text resolved literals", () => {
+  it.each([undefined, "${TOKEN}"])("compares same-text resolution with TOKEN=%s", (TOKEN) => {
     const before = resolveTokenSnapshot({});
-    const after = resolveTokenSnapshot({ TOKEN: "${TOKEN}" });
+    const after = resolveTokenSnapshot({ TOKEN });
     expect(after.sourceConfig).toEqual(before.sourceConfig);
+    expect(getConfigResolutionFacts(after.sourceConfig)).not.toBe(
+      getConfigResolutionFacts(before.sourceConfig),
+    );
     expect(getAuthoredConfigSecretRef(before.sourceConfig, "gateway.auth.token")).toEqual({
       source: "env",
       provider: "default",
       id: "TOKEN",
     });
-    expect(getAuthoredConfigSecretRef(after.sourceConfig, "gateway.auth.token")).toBeNull();
+    expect(getAuthoredConfigSecretRef(after.sourceConfig, "gateway.auth.token")).toEqual(
+      TOKEN === undefined ? { source: "env", provider: "default", id: "TOKEN" } : null,
+    );
     expect(describeConfigSnapshotInputChange(before, after)).toBe(
-      "resolved config provenance changed",
+      TOKEN === undefined ? undefined : "resolved config provenance changed",
     );
     expect(
       describeConfigSnapshotInputChange(before, after, { compareResolvedConfig: false }),
     ).toBeUndefined();
   });
-
-  it.each([{}, { TOKEN: "${TOKEN}" }])(
-    "accepts independently resolved equivalent facts: %j",
-    (env) => {
-      const before = resolveTokenSnapshot(env);
-      const after = resolveTokenSnapshot(env);
-      expect(getConfigResolutionFacts(after.sourceConfig)).not.toBe(
-        getConfigResolutionFacts(before.sourceConfig),
-      );
-      expect(describeConfigSnapshotInputChange(before, after)).toBeUndefined();
-    },
-  );
 });

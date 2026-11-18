@@ -1,9 +1,10 @@
+import { assertProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 import {
   attachModelProviderRequestTransport,
   getModelProviderRequestTransport,
-  type ModelProviderRequestTransportOverrides,
 } from "./provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 
 export function unwrapSecretSentinelsForProviderEgress(value: string, boundary: string): string {
   const swapped = swapSecretSentinelsInText(value);
@@ -88,6 +89,7 @@ function unwrapRequestTransportSentinelsForProviderEgress(
 export function unwrapModelHeaderSentinelsForProviderEgress<
   T extends { headers?: Record<string, unknown> },
 >(model: T, boundary: string): T {
+  assertProviderAuthAuthority(model);
   // Plugin transports read both visible headers and the symbol-attached request
   // overrides; both can carry sentinels minted by protectPreparedProviderRuntimeAuth.
   const headers = model.headers

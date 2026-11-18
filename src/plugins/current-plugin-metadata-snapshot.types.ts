@@ -7,7 +7,6 @@ export type PluginMetadataSnapshotCandidate = {
   configFingerprint: string | undefined;
   envFingerprint?: string;
   defaultDiscoveryCompatible?: boolean;
-  compatiblePolicyHashes?: readonly string[];
   compatibleConfigFingerprints?: readonly string[];
   hasConfigIdentity?: (config: OpenClawConfig) => boolean;
   immutableRuntimeGeneration?: boolean;

@@ -1,6 +1,3 @@
-/**
- * Meta onboarding config helpers.
- */
 import { readManifestProviderDefaultModelRef } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   createModelCatalogPresetAppliers,
@@ -9,10 +6,8 @@ import {
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildMetaCatalogModels, META_BASE_URL } from "./provider-catalog.js";
 
-/** Default Meta model reference used after onboarding. */
 export const META_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(manifest, "meta")!;
 
-/** Applies Meta provider/catalog config and default model aliases. */
 const metaPreset = {
   primaryModelRef: META_DEFAULT_MODEL_REF,
   resolveParams: () => ({
@@ -20,7 +15,10 @@ const metaPreset = {
     api: "openai-responses",
     baseUrl: META_BASE_URL,
     catalogModels: buildMetaCatalogModels,
-    aliases: [{ modelRef: META_DEFAULT_MODEL_REF, alias: "Muse Spark 1.3" }],
+    aliases: [
+      { modelRef: META_DEFAULT_MODEL_REF, alias: "Muse Spark 1.3" },
+      { modelRef: "meta/muse-wonder-1.0", alias: "Muse Wonder" },
+    ],
   }),
 } satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];
 

@@ -4,11 +4,15 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
   recordUpdateRunStep,
+  recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../infra/update-run-record.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
+import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
@@ -52,9 +56,23 @@ function recordRun(params: {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;
   steps?: UpdateRunStep[];
+  target?: UpdateRunRecord["target"];
+  before?: UpdateRunRecord["before"];
+  after?: UpdateRunRecord["after"];
+  verification?: UpdateRunRecord["verification"];
 }) {
   now += 1000;
-  const run = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+  const run = createUpdateRun({
+    trigger: "cli",
+    target: params.target ?? { kind: "git" },
+    before: params.before,
+  });
+  if (params.after) {
+    recordUpdateRunPhase(run.runId, "verifying", { after: params.after });
+  }
+  if (params.verification) {
+    recordUpdateRunVerification(run.runId, params.verification);
+  }
   for (const step of params.steps ?? []) {
     recordUpdateRunStep(run.runId, { endedAtMs: now, ...step });
   }
@@ -63,7 +81,178 @@ function recordRun(params: {
 const readStatus = (fetchGit = false) =>
   getUpdateCheckResult({ timeoutMs: 5000, fetchGit, includeRegistry: false });
 
+const target = { version: "2026.9.7" };
+const previous = { ...target, buildId: "previous" };
+const oldPrevious = { version: "2026.9.6", buildId: "previous" };
+const candidate = { ...target, buildId: "candidate" };
+const rejected = { ...target, buildId: "rejected" };
+const failedRollback = { status: "failed", reason: "Candidate remains active" } as const;
+const observed = (identity: { version: string; buildId?: string }, versionMatch: boolean) => ({
+  serviceRunning: true,
+  runningVersion: identity.version,
+  runningBuildId: identity.buildId,
+  versionMatch,
+});
+const recovered = (identity: {
+  version: string;
+  buildId: string;
+}): UpdateRunRecord["verification"] => ({
+  ...observed(identity, true),
+  recovery: {
+    serviceRestartSafe: true,
+    packageRollbackVerified: true,
+    ...identity,
+    service: "healthy" as const,
+  },
+});
+
 describe("status update ledger evidence", () => {
+  it.each`
+    name                                                                 | params                                                                                                                                                                                   | server                                       | historical | detail                                                                                                                          | healthy
+    ${"old healthy version after a failed swap"}                         | ${{ after: { version: "2026.9.6" }, verification: observed({ version: "2026.9.6" }, false) }}                                                                                            | ${{ version: "2026.9.6" }}                   | ${false}   | ${"Gateway is still serving 2026.9.6; the update to 2026.9.7 did not complete — run `openclaw update`."}                        | ${true}
+    ${"unknown serving version"}                                         | ${{}}                                                                                                                                                                                    | ${{ version: null }}                         | ${false}   | ${"Gateway serving version is unknown; the update to 2026.9.7 is unverified — run `openclaw update`."}                          | ${true}
+    ${"after identity without an explicit target"}                       | ${{ target: {}, after: target, verification: observed({ version: "2026.9.6" }, false) }}                                                                                                 | ${undefined}                                 | ${true}    | ${undefined}                                                                                                                    | ${true}
+    ${"rejected after identity without an independent target"}           | ${{ target: {}, after: { version: "2026.9.6" }, verification: observed({ version: "2026.9.6" }, false) }}                                                                                | ${{ version: "2026.9.6" }}                   | ${false}   | ${"Gateway is serving 2026.9.6; the update target is unknown — run `openclaw update`."}                                         | ${true}
+    ${"after identity with a different build from the rejected process"} | ${{ target: {}, after: candidate, verification: observed(previous, false) }}                                                                                                             | ${candidate}                                 | ${true}    | ${undefined}                                                                                                                    | ${true}
+    ${"matching recovery observation without a selected target"}         | ${{ target: {}, verification: observed(candidate, true) }}                                                                                                                               | ${candidate}                                 | ${false}   | ${"Gateway is serving 2026.9.7; the update target is unknown — run `openclaw update`."}                                         | ${true}
+    ${"rejected build despite an explicit matching target version"}      | ${{ after: previous, verification: observed(previous, false) }}                                                                                                                          | ${previous}                                  | ${false}   | ${"Gateway is still serving 2026.9.7 (build previous); the intended build for 2026.9.7 is unverified — run `openclaw update`."} | ${true}
+    ${"same-version rollback with successful recovery verification"}     | ${{ before: previous, after: previous, verification: recovered(previous) }}                                                                                                              | ${previous}                                  | ${false}   | ${"the intended build for 2026.9.7 is unverified"}                                                                              | ${true}
+    ${"same-version rollback with a file restoration receipt"}           | ${{ before: previous, after: previous, verification: { ...observed(previous, true), rollbackOutcome: { status: "succeeded", reason: "Previous package and configuration restored" } } }} | ${previous}                                  | ${false}   | ${"the intended build for 2026.9.7 is unverified"}                                                                              | ${true}
+    ${"distinct target version after package rollback"}                  | ${{ before: oldPrevious, after: oldPrevious, verification: recovered(oldPrevious) }}                                                                                                     | ${candidate}                                 | ${true}    | ${undefined}                                                                                                                    | ${true}
+    ${"retained candidate build mismatch after failed rollback"}         | ${{ before: oldPrevious, after: candidate, verification: { ...observed(oldPrevious, false), rollbackOutcome: failedRollback } }}                                                         | ${{ version: "2026.9.7", buildId: "other" }} | ${true}    | ${undefined}                                                                                                                    | ${true}
+    ${"matching retained candidate build after failed rollback"}         | ${{ before: oldPrevious, after: candidate, verification: { ...observed(oldPrevious, false), rollbackOutcome: failedRollback } }}                                                         | ${candidate}                                 | ${true}    | ${undefined}                                                                                                                    | ${true}
+    ${"rejected candidate identity after failed rollback"}               | ${{ before: oldPrevious, after: rejected, verification: { ...observed(rejected, false), rollbackOutcome: failedRollback } }}                                                             | ${rejected}                                  | ${false}   | ${"the intended build for 2026.9.7 is unverified"}                                                                              | ${true}
+    ${"rollback observation without an independent target"}              | ${{ target: {}, before: previous, after: previous, verification: recovered(previous) }}                                                                                                  | ${previous}                                  | ${false}   | ${"the update target is unknown"}                                                                                               | ${true}
+    ${"matching version and build"}                                      | ${{ after: candidate }}                                                                                                                                                                  | ${candidate}                                 | ${false}   | ${undefined}                                                                                                                    | ${true}
+    ${"matching version with no exposed serving build"}                  | ${{ after: candidate }}                                                                                                                                                                  | ${undefined}                                 | ${false}   | ${undefined}                                                                                                                    | ${true}
+    ${"unhealthy target version"}                                        | ${{}}                                                                                                                                                                                    | ${undefined}                                 | ${false}   | ${undefined}                                                                                                                    | ${false}
+  `(
+    "preserves the update verdict for $name",
+    async ({
+      params,
+      server = target,
+      historical,
+      detail,
+      healthy,
+    }: {
+      params: Pick<Parameters<typeof recordRun>[0], "target" | "before" | "after" | "verification">;
+      server?: { version: string | null; buildId?: string };
+      historical: boolean;
+      detail?: string;
+      healthy: boolean;
+    }) => {
+      const run = recordRun({
+        status: "failed",
+        reason: "post-update-failed",
+        target,
+        ...params,
+        steps: [
+          {
+            step: "gateway verification",
+            status: "failed",
+            failureFacts: [
+              {
+                check: "gateway",
+                code: "post-update-failed",
+                message: "Gateway did not settle; startup phase: waiting for managed service",
+              },
+            ],
+          },
+        ],
+      });
+      const saved = getUpdateRun(run.runId);
+      const rows = await buildStatusUpdateRows(null, {
+        localGatewayHealthy: healthy ?? undefined,
+        gatewayServer: server,
+      });
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.Item).toBe("Update run");
+      if (historical) {
+        expect(rows[0]?.Value).toContain("Last update run failed (post-update-failed)");
+        expect(rows[0]?.Value).not.toContain("openclaw update");
+      } else {
+        expect(rows[0]?.Value).toContain(
+          "⚠️ OpenClaw update failed: post-update-failed. Gateway did not settle; startup phase: waiting for managed service",
+        );
+        if (detail) {
+          expect(rows[0]?.Value).toContain(detail);
+        }
+      }
+      expect(getUpdateRun(run.runId)).toEqual(saved);
+    },
+  );
+
+  it.each([
+    ["different version", { version: "2026.10.1" }, undefined, undefined, true, true],
+    [
+      "different build",
+      { version: "2026.9.4", buildId: "rebuilt" },
+      undefined,
+      undefined,
+      true,
+      true,
+    ],
+    [
+      "starting build",
+      { version: "2026.9.4", buildId: "original" },
+      undefined,
+      undefined,
+      true,
+      false,
+    ],
+    [
+      "Gateway already behind installed package",
+      { version: "2026.9.4" },
+      "2026.10.1",
+      undefined,
+      true,
+      false,
+    ],
+    ["installed ahead without observation", { version: "2026.9.4" }, "2026.10.1", {}, true, false],
+    ["newer Gateway without observation", { version: "2026.10.1" }, undefined, {}, true, false],
+    ["unknown identity", { version: null }, undefined, undefined, true, false],
+    ["unhealthy Gateway", { version: "2026.10.1" }, undefined, undefined, false, false],
+    [
+      "stopped Gateway",
+      { version: "2026.10.1" },
+      undefined,
+      { serviceRunning: false, runningVersion: "2026.9.4" },
+      true,
+      false,
+    ],
+  ] as const)(
+    "reports a preflight failure with %s",
+    async (_name, server, installed, verification, healthy, historical) => {
+      const run = recordRun({
+        status: "failed",
+        reason: "preflight-no-good-commit",
+        target: { kind: "git", channel: "dev" },
+        before: { version: installed ?? "2026.9.4", sha: "37ea9f110bad", buildId: "installed" },
+        verification: verification ?? {
+          serviceRunning: true,
+          runningVersion: "2026.9.4",
+          runningBuildId: "original",
+        },
+      });
+      const saved = getUpdateRun(run.runId);
+      const rows = await buildStatusUpdateRows(null, {
+        localGatewayHealthy: healthy,
+        gatewayServer: server,
+      });
+      expect(rows).toHaveLength(1);
+      if (historical) {
+        expect(rows[0]?.Value).toContain("Last update run failed (preflight-no-good-commit)");
+        expect(rows[0]?.Value).not.toContain("openclaw update");
+      } else {
+        expect(rows[0]?.Value).toContain("⚠️ OpenClaw update failed: preflight-no-good-commit.");
+        if (healthy) {
+          expect(rows[0]?.Value).toContain("run `openclaw update`");
+        }
+      }
+      expect(getUpdateRun(run.runId)).toEqual(saved);
+    },
+  );
+
   it("reports a newer fetch failure using cached counts", async () => {
     recordRun({ status: "succeeded", steps: [{ step: "git fetch", status: "completed" }] });
     const run = recordRun({
@@ -115,56 +304,45 @@ describe("status update ledger evidence", () => {
     expect((await readStatus()).git?.stale?.detail).toBe("tag conflict");
   });
 
-  it("uses fetch outcome time across overlapping runs", async () => {
-    const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-    now += 1000;
-    const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-    now += 1000;
-    recordUpdateRunStep(newer.runId, {
-      step: "git fetch",
-      status: "completed",
-      endedAtMs: now,
-    });
-    now += 1000;
-    const failedAtMs = now;
-    recordUpdateRunStep(older.runId, {
-      step: "git fetch",
-      status: "failed",
-      endedAtMs: now,
-      detail: "network unavailable",
-    });
-    // Finishing an unrelated build does not make its earlier fetch more recent.
-    now += 1000;
-    recordUpdateRunStep(newer.runId, { step: "build", status: "completed", endedAtMs: now });
-    finishUpdateRun(newer.runId, { status: "succeeded" });
-    expect((await readStatus()).git?.stale).toMatchObject({ runId: older.runId, failedAtMs });
-    expect(formatUpdateOneLiner(await readStatus())).not.toContain("up to date");
-  });
-
-  it("clears failure when an older-created run fetches later despite its failed result", async () => {
-    const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-    now += 1000;
-    const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
-    now += 1000;
-    recordUpdateRunStep(newer.runId, {
-      step: "git fetch",
-      status: "failed",
-      endedAtMs: now,
-    });
-    now += 1000;
-    recordUpdateRunStep(older.runId, {
-      step: "git target inspection fetch",
-      status: "completed",
-      endedAtMs: now,
-    });
-    finishUpdateRun(older.runId, { status: "failed" });
-    // Later run finalization must not re-date the earlier failed fetch.
-    now += 1000;
-    finishUpdateRun(newer.runId, { status: "failed", reason: "fetch-failed" });
-    const update = await readStatus();
-    expect(update.git).not.toHaveProperty("stale");
-    expect(formatUpdateOneLiner(update)).toContain("up to date");
-  });
+  it.each([false, true])(
+    "orders overlapping runs by fetch outcome (later completion: %s)",
+    async (laterCompletion) => {
+      const older = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      const newer = createUpdateRun({ trigger: "cli", target: { kind: "git" } });
+      now += 1000;
+      recordUpdateRunStep(newer.runId, {
+        step: "git fetch",
+        status: laterCompletion ? "failed" : "completed",
+        endedAtMs: now,
+      });
+      now += 1000;
+      const failedAtMs = now;
+      recordUpdateRunStep(older.runId, {
+        step: laterCompletion ? "git target inspection fetch" : "git fetch",
+        status: laterCompletion ? "completed" : "failed",
+        endedAtMs: now,
+        ...(laterCompletion ? {} : { detail: "network unavailable" }),
+      });
+      if (laterCompletion) {
+        finishUpdateRun(older.runId, { status: "failed" });
+        now += 1000;
+        finishUpdateRun(newer.runId, { status: "failed", reason: "fetch-failed" });
+      } else {
+        now += 1000;
+        recordUpdateRunStep(newer.runId, { step: "build", status: "completed", endedAtMs: now });
+        finishUpdateRun(newer.runId, { status: "succeeded" });
+      }
+      const update = await readStatus();
+      if (laterCompletion) {
+        expect(update.git).not.toHaveProperty("stale");
+        expect(formatUpdateOneLiner(update)).toContain("up to date");
+      } else {
+        expect(update.git?.stale).toMatchObject({ runId: older.runId, failedAtMs });
+        expect(formatUpdateOneLiner(update)).not.toContain("up to date");
+      }
+    },
+  );
 
   it.each([true, false])(
     "requires a strictly later completion to clear equal-time failure (failure created first: %s)",
@@ -227,115 +405,118 @@ const cleanGit: NonNullable<UpdateCheckResult["git"]> = {
   fetchOk: true,
 };
 
-describe("formatUpdateOneLiner", () => {
-  it.each(["def987654321", "abc123456789"])("compares built commit %s with HEAD", (builtSha) => {
-    const update = buildUpdate({
-      installKind: "git",
-      git: { ...cleanGit, sha: "abc123456789", builtSha },
-    });
-    if (builtSha === "def987654321") {
-      expect(formatUpdateOneLiner(update)).toContain(
-        "stale build (running def98765, run pnpm build)",
-      );
-    } else {
-      expect(formatUpdateOneLiner(update)).not.toContain("stale build");
+describe("update formatting", () => {
+  it.each<{
+    name: string;
+    update: Partial<UpdateCheckResult>;
+    expected?: string;
+    contains?: string;
+    excludes?: string;
+  }>([
+    {
+      name: "stale built commit",
+      update: {
+        installKind: "git",
+        git: { ...cleanGit, sha: "abc123456789", builtSha: "def987654321" },
+      },
+      contains: "stale build (running def98765, run pnpm build)",
+    },
+    {
+      name: "current built commit",
+      update: {
+        installKind: "git",
+        git: { ...cleanGit, sha: "abc123456789", builtSha: "abc123456789" },
+      },
+      excludes: "stale build",
+    },
+    {
+      name: "git status with registry summary",
+      update: {
+        installKind: "git",
+        git: { ...cleanGit, sha: "abc123456789", dirty: true, behind: 2 },
+        registry: { latestVersion: VERSION },
+        deps: {
+          manager: "pnpm",
+          status: "ok",
+          lockfilePath: "pnpm-lock.yaml",
+          markerPath: "node_modules/.modules.yaml",
+        },
+      },
+      expected: `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
+    },
+    {
+      name: "beta registry tag",
+      update: {
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: VERSION, tag: "beta" },
+      },
+      expected: `Update: npm · up to date · npm beta ${VERSION}`,
+    },
+    {
+      name: "installed version ahead of extended-stable",
+      update: {
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: "1.0.0", tag: "extended-stable" },
+      },
+      expected: "Update: npm · ahead of extended-stable (1.0.0)",
+    },
+    {
+      name: "structured extended-stable resolver failure",
+      update: {
+        installKind: "git",
+        packageManager: "pnpm",
+        registry: {
+          latestVersion: null,
+          tag: "extended-stable",
+          error: "unsupported_git_channel",
+          reason: "unsupported_git_channel",
+        },
+      },
+      contains: "extended-stable requires a package install",
+    },
+    {
+      name: "package-manager registry error",
+      update: {
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: null, error: "offline" },
+        deps: {
+          manager: "npm",
+          status: "missing",
+          lockfilePath: "package-lock.json",
+          markerPath: "node_modules",
+        },
+      },
+      expected: "Update: npm · npm latest unknown · deps missing",
+    },
+  ])("renders $name", ({ update, expected, contains, excludes }) => {
+    const line = formatUpdateOneLiner(buildUpdate(update));
+    if (expected !== undefined) {
+      expect(line).toBe(expected);
+    }
+    if (contains !== undefined) {
+      expect(line).toContain(contains);
+    }
+    if (excludes !== undefined) {
+      expect(line).not.toContain(excludes);
     }
   });
 
-  it("renders git status and registry summary without duplicating up to date", () => {
-    const update = buildUpdate({
-      installKind: "git",
-      git: {
-        ...cleanGit,
-        sha: "abc123456789",
-        dirty: true,
-        behind: 2,
-      },
-      registry: { latestVersion: VERSION },
-      deps: {
-        manager: "pnpm",
-        status: "ok",
-        lockfilePath: "pnpm-lock.yaml",
-        markerPath: "node_modules/.modules.yaml",
-      },
-    });
-
-    expect(formatUpdateOneLiner(update)).toBe(
-      `Update: git main · ↔ origin/main · dirty · behind 2 · npm latest ${VERSION} · deps ok`,
-    );
-  });
-
-  it("renders beta registry tags instead of calling them npm latest", () => {
-    const update = buildUpdate({
-      installKind: "package",
-      packageManager: "npm",
-      registry: { latestVersion: VERSION, tag: "beta" },
-    });
-
-    expect(formatUpdateOneLiner(update)).toBe(`Update: npm · up to date · npm beta ${VERSION}`);
-  });
-
-  it("renders an installed version newer than extended-stable as ahead", () => {
-    const update = buildUpdate({
-      installKind: "package",
-      packageManager: "npm",
-      registry: { latestVersion: "1.0.0", tag: "extended-stable" },
-    });
-
-    expect(formatUpdateOneLiner(update)).toBe("Update: npm · ahead of extended-stable (1.0.0)");
-  });
-
-  it("renders structured extended-stable resolver failures", () => {
-    const update = buildUpdate({
-      installKind: "git",
-      packageManager: "pnpm",
-      registry: {
-        latestVersion: null,
-        tag: "extended-stable",
-        error: "unsupported_git_channel",
-        reason: "unsupported_git_channel",
-      },
-    });
-
-    expect(formatUpdateOneLiner(update)).toContain("extended-stable requires a package install");
-  });
-
-  it("renders package-manager mode with registry error", () => {
-    const update = buildUpdate({
-      installKind: "package",
-      packageManager: "npm",
-      registry: { latestVersion: null, error: "offline" },
-      deps: {
-        manager: "npm",
-        status: "missing",
-        lockfilePath: "package-lock.json",
-        markerPath: "node_modules",
-      },
-    });
-
-    expect(formatUpdateOneLiner(update)).toBe("Update: npm · npm latest unknown · deps missing");
-  });
-
-  it("returns null when no update is available", () => {
-    const update = buildUpdate({
-      installKind: "package",
-      packageManager: "pnpm",
-      registry: { latestVersion: VERSION },
-    });
-
-    expect(formatUpdateAvailableHint(update)).toBeNull();
-  });
-
-  it.each([false, true])("renders registry updates with cached git=%s", (cached) => {
-    const latestVersion = `${Number(VERSION.split(".")[0]) + 1}.0.0`;
+  it.each(["none", "registry", "cached-git"])("renders the %s update hint", (mode) => {
+    const cached = mode === "cached-git";
+    const latestVersion = mode === "none" ? VERSION : `${Number(VERSION.split(".")[0]) + 1}.0.0`;
     const update = buildUpdate({
       installKind: cached ? "git" : "package",
+      packageManager: mode === "none" ? "pnpm" : "unknown",
       git: cached ? { ...cleanGit, behind: 2, fetchOk: null, countsCached: true } : undefined,
       registry: { latestVersion },
     });
-
     expect(formatUpdateAvailableHint(update)).toBe(
-      `Update available (${cached ? "git behind 2 (cached) · " : ""}npm ${latestVersion}). Run: openclaw update`,
+      mode === "none"
+        ? null
+        : `Update available (${cached ? "git behind 2 (cached) · " : ""}npm ${latestVersion}). Run: openclaw update`,
     );
   });
 });

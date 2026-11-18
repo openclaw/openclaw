@@ -35,6 +35,7 @@ describe("update config snapshot isolation", () => {
           TMP: root,
           TEMP: root,
           TSX_DISABLE_CACHE: "1",
+          BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
           ESBUILD_WORKER_THREADS: "0",
         },
       });

@@ -24,7 +24,6 @@ export type RegistryState = {
     registerMemoryCapability?: MemoryCapabilityRegistrar;
   };
   commandRegistryClearTail?: Promise<void>;
-  commandRegistryClearRegistries?: Map<PluginRegistry, number>;
   retiredRegistryCleanups?: Map<
     Promise<void>,
     { registry: PluginRegistry; work: import("../shared/async-work-scope.js").AsyncWorkScope }
@@ -42,6 +41,13 @@ export function getPluginRegistryState(): RegistryState | undefined {
 /** Publication provenance follows the selected registry, including retained request snapshots. */
 export function getPluginRegistryVersion(registry: PluginRegistry | null): number | undefined {
   return registry ? getPluginRegistryState()?.registryVersions?.get(registry) : undefined;
+}
+
+/** Pending predecessors remain in the retirement owner's inventory through cleanup. */
+export function getRetiringPluginRegistries(): readonly PluginRegistry[] {
+  return [...(getPluginRegistryState()?.retiredRegistryCleanups?.values() ?? [])].map(
+    ({ registry }) => registry,
+  );
 }
 
 /** Policy reads the process-active registry, independently of request or registration scopes. */

@@ -1,8 +1,10 @@
-/**
- * Upload an image from a URL to Tlon storage.
- */
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
-import { MAX_IMAGE_BYTES, readRemoteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  MAX_IMAGE_BYTES,
+  readRemoteMediaBuffer,
+  type OutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
 import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 import { type ClientConfig, uploadFile } from "../tlon-api.js";
 
@@ -14,6 +16,7 @@ export async function uploadImageFromUrl(
   imageUrl: string,
   clientConfig: ClientConfig,
   maxBytes?: number,
+  mediaAccess?: OutboundMediaAccess,
 ): Promise<string> {
   let sourceSizeVerified = false;
   const assertCurrent = clientConfig.assertDirectAdapterHandoff;
@@ -29,7 +32,6 @@ export async function uploadImageFromUrl(
       }
     : undefined;
   try {
-    // Validate URL is http/https before fetching
     const url = new URL(imageUrl);
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error("Tlon image URL must use HTTP or HTTPS");
@@ -39,7 +41,7 @@ export async function uploadImageFromUrl(
       url: imageUrl,
       maxBytes: Math.min(maxBytes ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
       ...TLON_MEDIA_FETCH_TIMEOUTS,
-      ssrfPolicy: undefined,
+      ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess }).ssrfPolicy,
       beforeRequest,
       requestInit: { method: "GET" },
     });
@@ -48,11 +50,12 @@ export async function uploadImageFromUrl(
     const contentType = fetched.contentType || "image/png";
     const blob = new Blob([bufferToBlobPart(fetched.buffer)], { type: contentType });
 
-    // Extract filename from URL or use a default
-    const urlPath = new URL(imageUrl).pathname;
-    const fileName = urlPath.split("/").pop() || `upload-${Date.now()}.png`;
+    // Prefer the fetch helper's Content-Disposition name; URL path is fallback.
+    const fileName =
+      fetched.fileName?.trim() ||
+      url.pathname.split("/").pop()?.trim() ||
+      `upload-${Date.now()}.png`;
 
-    // Upload to Tlon storage
     const result = await uploadFile(
       { blob, fileName, contentType },
       { ...clientConfig, assertDirectAdapterHandoff: beforeRequest },

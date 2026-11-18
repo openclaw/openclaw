@@ -10,34 +10,34 @@ import {
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
+  replyDispatcher,
+  withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
 import { setFeishuRuntime } from "./runtime.js";
 
-const { mockGetMessageFeishu, mockDispatchReply, mockResolveAgentRoute } = vi.hoisted(() => ({
-  mockGetMessageFeishu: vi.fn<typeof import("./send.js").getMessageFeishu>(),
-  mockDispatchReply: vi
+const { getMessage, dispatch, resolveRoute } = vi.hoisted(() => ({
+  getMessage: vi.fn<typeof import("./send.js").getMessageFeishu>(),
+  dispatch: vi
     .fn<PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]>()
     .mockResolvedValue({ queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } }),
-  mockResolveAgentRoute: vi.fn<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>(() =>
+  resolveRoute: vi.fn<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>(() =>
     createFeishuTestRoute(),
   ),
 }));
 
+// mock-isolation: thread admission inspects synthetic messages without Feishu network I/O.
 vi.mock("./send.js", () => ({
-  getMessageFeishu: mockGetMessageFeishu,
+  getMessageFeishu: getMessage,
   listFeishuThreadMessages: vi.fn().mockResolvedValue([]),
   sendMessageFeishu: vi.fn(),
 }));
+// mock-isolation: thread admission uses a controlled dispatcher without sending real replies.
 vi.mock("./reply-dispatcher.js", () => ({
-  createFeishuReplyDispatcher: vi.fn(() => ({
-    dispatcherOptions: {},
-    delivery: { deliver: vi.fn(async () => undefined) },
-    replyOptions: {},
-    ensureNoVisibleReplyFallback: vi.fn(),
-  })),
+  createFeishuReplyDispatcher: vi.fn(() => replyDispatcher()),
 }));
+// mock-isolation: thread admission keeps previews disabled without reading persisted session reasoning settings.
 vi.mock("./reasoning-preview.js", () => ({
-  resolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  resolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
 }));
 vi.mock("./bot-group-name.js", () => ({ resolveGroupName: vi.fn(async () => undefined) }));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
@@ -63,189 +63,141 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 
 afterAll(() => vi.doUnmock("./bot-group-name.js"));
 
-let currentRuntimeConfig = {} as ClawdbotConfig;
+let runtimeConfig = {} as ClawdbotConfig;
 
 async function dispatchMessage(params: {
   cfg: ClawdbotConfig;
   event: FeishuMessageEvent;
   botOpenId?: string;
 }) {
-  currentRuntimeConfig = params.cfg;
+  runtimeConfig = withFeishuRuntimeDefaults(params.cfg);
   await handleFeishuMessage({ ...params, runtime: createRuntimeEnv() });
 }
 
 describe("Feishu bot-owned thread mentions", () => {
+  const root = {
+    messageId: "om_bot_root",
+    chatId: "oc-group",
+    senderId: "cli_test",
+    senderType: "app",
+    content: "topic starter",
+    contentType: "text",
+  };
+  const config = (overrides: Parameters<typeof createFeishuTestConfig>[0]) =>
+    createFeishuTestConfig({
+      appId: "cli_test",
+      appSecret: "test-secret",
+      requireMention: true,
+      requireMentionInBotThreads: false,
+      resolveSenderNames: false,
+      ...overrides,
+    });
+  const event = (
+    messageId: string,
+    message: Partial<FeishuMessageEvent["message"]>,
+    chatType: FeishuMessageEvent["message"]["chat_type"] = "group",
+  ) => createFeishuTestEvent({ messageId, chatId: "oc-group", chatType, message });
+
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetMessageFeishu.mockReset().mockResolvedValue(null);
+    getMessage.mockReset().mockResolvedValue(null);
     setFeishuRuntime(
       createPluginRuntimeMock({
-        config: { current: () => currentRuntimeConfig },
+        config: { current: () => runtimeConfig },
         channel: {
           inbound: { buildContext: buildChannelInboundEventContext },
-          reply: { dispatchReplyWithBufferedBlockDispatcher: mockDispatchReply },
-          routing: { resolveAgentRoute: mockResolveAgentRoute },
+          reply: { dispatchReplyWithBufferedBlockDispatcher: dispatch },
+          routing: { resolveAgentRoute: resolveRoute },
         },
       }),
     );
   });
 
   it.each([
-    { name: "this app", senderId: "cli_test", senderType: "app", expected: true },
     {
       name: "this bot's typed open ID",
-      senderId: "ou-bot",
-      senderOpenId: "ou-bot",
-      senderType: "app",
+      root: { senderId: "ou-bot", senderOpenId: "ou-bot" },
       expected: true,
     },
-    { name: "another app", senderId: "cli_other", senderType: "app", expected: false },
-    { name: "a user", senderId: "cli_test", senderType: "user", expected: false },
-    { name: "untyped open ID", senderId: "ou-bot", senderType: "app", expected: false },
-    { name: "missing root", missingRoot: true, expected: false },
+    { name: "another app", root: { senderId: "cli_other" }, expected: false },
+    { name: "a user", root: { senderType: "user" }, expected: false },
+    { name: "untyped open ID", root: { senderId: "ou-bot" }, expected: false },
     { name: "unreadable root", lookupFailed: true, expected: false },
-    {
-      name: "another chat",
-      senderId: "cli_test",
-      senderType: "app",
-      wrongChat: true,
-      expected: false,
-    },
-    {
-      name: "another message",
-      senderId: "cli_test",
-      senderType: "app",
-      wrongRoot: true,
-      expected: false,
-    },
-    {
-      name: "inline quote",
-      senderId: "cli_test",
-      senderType: "app",
-      inlineQuote: true,
-      expected: false,
-    },
-    {
-      name: "omitted setting",
-      senderId: "cli_test",
-      senderType: "app",
-      omitted: true,
-      expected: false,
-    },
+    { name: "another chat", root: { chatId: "oc-other" }, expected: false },
+    { name: "another message", root: { messageId: "om_other" }, expected: false },
+    { name: "inline quote", inlineQuote: true, expected: false },
+    { name: "omitted setting", omitted: true, expected: false },
   ])("admits unmentioned topic replies only for a verified bot root: $name", async (testCase) => {
-    const root = {
-      messageId: testCase.wrongRoot ? "om_other" : "om_bot_root",
-      chatId: testCase.wrongChat ? "oc-other" : "oc-group",
-      senderId: testCase.senderId,
-      senderOpenId: testCase.senderOpenId,
-      senderType: testCase.senderType,
-      content: "topic starter",
-      contentType: "text",
-      threadId: "omt_bot_topic",
-    };
     if (testCase.lookupFailed) {
-      mockGetMessageFeishu.mockRejectedValueOnce(new Error("root unavailable"));
+      getMessage.mockRejectedValueOnce(new Error("root unavailable"));
     } else {
-      mockGetMessageFeishu.mockResolvedValue(testCase.missingRoot ? null : root);
+      getMessage.mockResolvedValue({
+        ...root,
+        ...testCase.root,
+        threadId: "omt_bot_topic",
+      });
     }
     await dispatchMessage({
-      cfg: createFeishuTestConfig({
-        appId: "cli_test",
-        appSecret: "test-secret",
-        requireMention: true,
+      cfg: config({
         requireMentionInBotThreads: testCase.omitted ? undefined : false,
-        resolveSenderNames: false,
         groups: { "oc-group": { groupSessionScope: "group_topic" } },
       }),
       botOpenId: "ou-bot",
-      event: createFeishuTestEvent({
-        messageId: `msg-owned-thread-${testCase.name}`,
-        chatId: "oc-group",
-        chatType: "group",
-        message: {
-          root_id: "om_bot_root",
-          parent_id: "om_bot_root",
-          ...(testCase.inlineQuote ? {} : { thread_id: "omt_bot_topic" }),
-        },
+      event: event(`msg-owned-thread-${testCase.name}`, {
+        root_id: "om_bot_root",
+        parent_id: "om_bot_root",
+        ...(testCase.inlineQuote ? {} : { thread_id: "omt_bot_topic" }),
       }),
     });
 
-    expect(mockDispatchReply).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
-    expect(mockGetMessageFeishu).toHaveBeenCalledTimes(
-      testCase.omitted || testCase.inlineQuote ? 0 : 1,
-    );
+    expect(dispatch).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
+    expect(getMessage).toHaveBeenCalledTimes(testCase.omitted || testCase.inlineQuote ? 0 : 1);
     if (testCase.expected) {
-      expect(mockDispatchReply.mock.calls[0]?.[0].ctx).toEqual(
-        expect.objectContaining({
-          GroupRequireMention: false,
-          ReplyToId: "om_bot_root",
-          ReplyToBody: "topic starter",
-          ThreadStarterBody: "topic starter",
-          ThreadLabel: "Feishu thread in oc-group",
-        }),
-      );
+      expect(dispatch.mock.calls[0]?.[0].ctx).toMatchObject({
+        GroupRequireMention: false,
+        ReplyToId: "om_bot_root",
+        ReplyToBody: "topic starter",
+        ThreadStarterBody: "topic starter",
+        ThreadLabel: "Feishu thread in oc-group",
+      });
     }
   });
 
   it.each([
-    { name: "account disables inherited requirement", accountSetting: false, expected: true },
-    {
-      name: "group disables account requirement",
-      accountSetting: true,
-      groupSetting: false,
-      expected: true,
-    },
-    {
-      name: "group requires mention despite parent allowing all messages",
-      accountSetting: false,
-      groupSetting: true,
-      expected: false,
-    },
-    {
-      name: "explicit mention satisfies strict group setting",
-      accountSetting: false,
-      groupSetting: true,
-      mentioned: true,
-      expected: true,
-    },
-  ])("uses account and group bot-thread mention precedence: $name", async (testCase) => {
-    mockGetMessageFeishu.mockResolvedValue({
-      messageId: "om_bot_root",
-      chatId: "oc-group",
-      senderId: "cli_test",
-      senderType: "app",
-      content: "topic starter",
-      contentType: "text",
-    });
-    await dispatchMessage({
-      cfg: createFeishuTestConfig({
-        appId: "cli_test",
-        appSecret: "test-secret",
-        requireMention: testCase.groupSetting !== true,
-        requireMentionInBotThreads: true,
-        resolveSenderNames: false,
-        accounts: {
-          default: {
-            requireMentionInBotThreads: testCase.accountSetting,
-            groups: { "oc-group": { requireMentionInBotThreads: testCase.groupSetting } },
+    ["account disables inherited requirement", false, undefined, false, true],
+    ["group disables account requirement", true, false, false, true],
+    ["group requires mention despite parent allowing all messages", false, true, false, false],
+    ["explicit mention satisfies strict group setting", false, true, true, true],
+  ] as const)(
+    "uses account and group bot-thread mention precedence: %s",
+    async (name, accountSetting, groupSetting, mentioned, expected) => {
+      getMessage.mockResolvedValue(root);
+      await dispatchMessage({
+        cfg: config({
+          requireMention: !groupSetting,
+          requireMentionInBotThreads: true,
+          accounts: {
+            default: {
+              requireMentionInBotThreads: accountSetting,
+              groups: { "oc-group": { requireMentionInBotThreads: groupSetting } },
+            },
           },
-        },
-      }),
-      botOpenId: "ou-bot",
-      event: createFeishuTestEvent({
-        messageId: `msg-owned-scope-${testCase.name}`,
-        chatId: "oc-group",
-        chatType: "topic_group",
-        message: {
-          root_id: "om_bot_root",
-          ...(testCase.mentioned
-            ? { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] }
-            : {}),
-        },
-      }),
-    });
-    expect(mockDispatchReply).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
-  });
+        }),
+        botOpenId: "ou-bot",
+        event: event(
+          `msg-owned-scope-${name}`,
+          {
+            root_id: "om_bot_root",
+            ...(mentioned
+              ? { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] }
+              : {}),
+          },
+          "topic_group",
+        ),
+      });
+      expect(dispatch).toHaveBeenCalledTimes(expected ? 1 : 0);
+    },
+  );
 
   it.each([
     { name: "group admission", update: { groupPolicy: "disabled" as const }, expected: false },
@@ -258,43 +210,27 @@ describe("Feishu bot-owned thread mentions", () => {
     async ({ name, update, expected }) => {
       const lookupStarted = createDeferred<void>();
       const releaseLookup = createDeferred<void>();
-      mockGetMessageFeishu.mockImplementationOnce(async () => {
+      getMessage.mockImplementationOnce(async () => {
         lookupStarted.resolve();
         await releaseLookup.promise;
-        return {
-          messageId: "om_bot_root",
-          chatId: "oc-group",
-          senderId: "cli_test",
-          senderType: "app",
-          content: "topic starter",
-          contentType: "text",
-        };
+        return root;
       });
-      const cfg = createFeishuTestConfig({
-        appId: "cli_test",
-        appSecret: "test-secret",
-        groupPolicy: "open",
-        requireMention: true,
-        requireMentionInBotThreads: false,
-        resolveSenderNames: false,
-      });
+      const cfg = config({ groupPolicy: "open" });
       const pending = dispatchMessage({
         cfg,
-        event: createFeishuTestEvent({
-          messageId: `msg-owned-current-${name}`,
-          chatId: "oc-group",
-          chatType: "group",
-          message: { root_id: "om_bot_root", thread_id: "omt_bot_topic" },
+        event: event(`msg-owned-current-${name}`, {
+          root_id: "om_bot_root",
+          thread_id: "omt_bot_topic",
         }),
       });
       await lookupStarted.promise;
-      currentRuntimeConfig = createFeishuTestConfig({ ...cfg.channels?.feishu, ...update });
+      runtimeConfig = createFeishuTestConfig({ ...cfg.channels?.feishu, ...update });
       releaseLookup.resolve();
       await pending;
 
-      expect(mockDispatchReply).toHaveBeenCalledTimes(expected ? 1 : 0);
+      expect(dispatch).toHaveBeenCalledTimes(expected ? 1 : 0);
       if (!expected) {
-        expect(mockResolveAgentRoute).not.toHaveBeenCalled();
+        expect(resolveRoute).not.toHaveBeenCalled();
       }
     },
   );

@@ -1,16 +1,21 @@
 // Runs grouped batches through the repository's installed Vitest entrypoint.
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { assertTestHomeSelection, type TestHomeSelection } from "../../test/test-home-policy.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { signalExitCode } from "./managed-child-process.mts";
 import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
 import { resolveExplicitVitestMode } from "./vitest-cli-mode.mts";
 import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
-import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "./vitest-node-args.mts";
+import {
+  VITEST_INFRASTRUCTURE_EXIT_CODE,
+  vitestInfrastructureExitCode,
+} from "./vitest-outcome.mts";
 import { exitVitestBySignal, spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
 import { resolveVitestTestCommand } from "./vitest-test-runtime.mts";
-import { createVitestWorkerRun } from "./vitest-worker-run.mts";
+import { createVitestWorkerRun, type VitestWorkerRun } from "./vitest-worker-run.mts";
 
 export type VitestBatchRunParams = {
   args: string[];
@@ -19,6 +24,7 @@ export type VitestBatchRunParams = {
   // Owner-generated report configs retain their validated original selection.
   homeMode?: TestHomeSelection;
   targets: string[];
+  workerRun?: VitestWorkerRun;
   onComplete?: (outcome: VitestReportOutcome) => void;
 };
 
@@ -53,7 +59,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
   const workers =
     resolveExplicitVitestMode(["run", ...params.args]) === "watch"
       ? undefined
-      : createVitestWorkerRun(env);
+      : (params.workerRun ?? createVitestWorkerRun(env));
   if (workers) {
     const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
     testCommand.args.splice(
@@ -61,6 +67,9 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       0,
       path.join(repoRoot, "scripts/lib/vitest-worker-bootstrap.mts"),
       workers.descriptor.directory,
+      ...(workers.descriptor.preset && workers.descriptor.preset !== "full"
+        ? [`--worker-preset=${workers.descriptor.preset}`]
+        : []),
     );
   }
   let interrupted: NodeJS.Signals | undefined;
@@ -70,7 +79,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
   // Artifact verification can outlive the child's signal handlers.
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  let outcome: VitestReportOutcome;
+  let outcome: VitestReportOutcome = { code: VITEST_INFRASTRUCTURE_EXIT_CODE, signal: null };
   try {
     // Match project runs: native workers borrow this invocation's prepared source,
     // rather than compiling the application independently inside every worker.
@@ -79,7 +88,7 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
       ...testCommand,
       options: {
         cwd: repoRoot,
-        env,
+        env: testCommand.envOverrides ? { ...env, ...testCommand.envOverrides } : env,
         stdio: workers ? ["inherit", "inherit", "inherit", "ipc"] : "inherit",
       },
     });
@@ -91,13 +100,24 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
     try {
       const { code, signal } = await (workers ? workers.borrow(child, completion) : completion);
       interrupted ??= cleanup.getForwardedSignal() ?? signal ?? undefined;
-      outcome = { code: code ?? 1, signal: interrupted ?? null };
+      outcome = {
+        code: interrupted ? signalExitCode(interrupted) : (code ?? VITEST_INFRASTRUCTURE_EXIT_CODE),
+        signal: interrupted ?? null,
+      };
     } finally {
       cleanup.teardown();
     }
+  } catch (error) {
+    console.error(error);
+    outcome.code = vitestInfrastructureExitCode(outcome.code);
   } finally {
     try {
-      await workers?.dispose();
+      await (params.workerRun ? undefined : workers)
+        ?.dispose({ interrupted: Boolean(interrupted) })
+        .catch((error: unknown) => {
+          console.error(error);
+          outcome.code = vitestInfrastructureExitCode(outcome.code);
+        });
     } finally {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
@@ -109,12 +129,4 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
   outcome.signal = interrupted ?? outcome.signal;
   params.onComplete?.(outcome);
   return outcome.code;
-}
-
-/**
- * Checks whether a module URL is the current direct script entrypoint.
- */
-export function isDirectScriptRun(metaUrl: string): boolean {
-  const entryHref = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
-  return metaUrl === entryHref;
 }

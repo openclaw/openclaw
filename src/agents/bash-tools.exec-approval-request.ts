@@ -1,5 +1,4 @@
 /**
- * Exec approval request client.
  * Registers two-phase approval requests with the gateway, waits for decisions,
  * and builds host/node payloads with optional command highlighting.
  */
@@ -9,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as parseString } from "@openclaw/normalization-core/string-coerce";
 import { isApprovalNotFoundError } from "../infra/approval-errors.js";
+import { isUnsupportedShellWrapperArgv } from "../infra/command-explainer/format.js";
 import type {
   ExecApprovalCommandSpan,
   ExecApprovalUnavailableDecision,
@@ -16,21 +16,18 @@ import type {
   ExecSecurity,
   SystemRunApprovalPlan,
 } from "../infra/exec-approvals.js";
-import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
-import {
-  isShellWrapperExecutable,
-  POSIX_PARSEABLE_SHELL_WRAPPERS,
-  resolveShellWrapperTransportArgv,
-} from "../infra/shell-wrapper-resolution.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
+import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";
+import {
+  getGatewayToolCallerIdentity,
+  captureGatewayToolCallerAssertion,
+} from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
-
-const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 
 const loadExecApprovalCommandSpansRuntime = createLazyPromise(
   () => import("./bash-tools.exec-approval-request.runtime.js"),
@@ -92,13 +89,6 @@ function resolveDefaultExecApprovalExpiresAtMs(): number {
   return resolveExpiresAtMsFromDurationMs(DEFAULT_APPROVAL_TIMEOUT_MS) ?? 0;
 }
 
-/** Registration result returned before an approval decision is available. */
-export type ExecApprovalRegistration = {
-  id: string;
-  expiresAtMs: number;
-  finalDecision?: string | null;
-};
-
 class ExecApprovalRunAbortedError extends Error {
   constructor() {
     super("Exec approval cancelled because its run was aborted");
@@ -113,9 +103,15 @@ export function isExecApprovalRunAbortedError(error: unknown): boolean {
 /** Registers a two-phase exec approval request with the gateway. */
 async function registerExecApprovalRequest(
   params: ExecApprovalRequestToolParams,
+  transport?: ExecApprovalTransport,
 ): Promise<ExecApprovalRegistration> {
   // Two-phase registration is critical: the ID must be registered server-side
   // before exec returns `approval-pending`, otherwise `/approve` can race and orphan.
+  if (transport) {
+    const registration = await transport.request(params);
+    markToolDecisionRecorded();
+    return registration;
+  }
   const registrationResult = await callGatewayTool(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
@@ -135,18 +131,34 @@ async function registerExecApprovalRequest(
 
 /** Uses a pre-resolved decision or waits for the registered approval id. */
 export async function resolveRegisteredExecApprovalDecision(params: {
+  approvalTransport?: ExecApprovalTransport;
   approvalId: string;
+  expiresAtMs?: number;
   preResolvedDecision: string | null | undefined;
 }): Promise<string | null> {
   if (params.preResolvedDecision !== undefined) {
     return params.preResolvedDecision ?? null;
   }
+  const assertCurrent = captureGatewayToolCallerAssertion();
+  const wait =
+    params.expiresAtMs === undefined
+      ? undefined
+      : getGatewayToolCallerIdentity()?.watchdogAttempt?.beginWait({
+          kind: "approval",
+          deadlineAtMs: params.expiresAtMs,
+          isCurrent: () => {
+            assertCurrent?.();
+            return true;
+          },
+        });
   try {
-    const decisionResult = await callGatewayTool<{ decision: string }>(
-      "exec.approval.waitDecision",
-      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: params.approvalId },
-    );
+    const decisionResult = params.approvalTransport
+      ? await params.approvalTransport.waitDecision({ id: params.approvalId })
+      : await callGatewayTool<{ decision: string }>(
+          "exec.approval.waitDecision",
+          { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+          { id: params.approvalId },
+        );
     if (
       decisionResult &&
       typeof decisionResult === "object" &&
@@ -161,6 +173,8 @@ export async function resolveRegisteredExecApprovalDecision(params: {
       return null;
     }
     throw err;
+  } finally {
+    wait?.close();
   }
 }
 
@@ -168,6 +182,7 @@ type HostExecApprovalParams = Omit<
   RequestExecApprovalDecisionParams,
   "id" | "cwd" | "deliverToApprovalClientsOnly"
 > & {
+  approvalTransport?: ExecApprovalTransport;
   approvalId: string;
   workdir: string | undefined;
   commandHighlighting?: boolean;
@@ -207,28 +222,12 @@ async function resolveCommandSpans(
   }
 }
 
-function hasUnsupportedShellArgv(argv: readonly string[] | undefined): boolean {
-  if (!argv?.length) {
-    return false;
-  }
-  const shellWrapperArgv = resolveShellWrapperTransportArgv([...argv]) ?? argv;
-  const executable = shellWrapperArgv[0];
-  if (!executable) {
-    return false;
-  }
-  const normalizedExecutable = normalizeExecutableToken(executable);
-  return (
-    isShellWrapperExecutable(normalizedExecutable) &&
-    !POSIX_COMMAND_HIGHLIGHT_SHELLS.has(normalizedExecutable)
-  );
-}
-
 function shouldSkipGeneratedCommandSpans(params: HostExecApprovalParams): boolean {
   if (params.host === "gateway" && process.platform === "win32") {
     return true;
   }
   const argv = params.commandArgv?.length ? params.commandArgv : params.systemRunPlan?.argv;
-  return hasUnsupportedShellArgv(argv);
+  return argv?.length ? isUnsupportedShellWrapperArgv(argv) : false;
 }
 
 async function buildHostApprovalDecisionParams(
@@ -290,7 +289,10 @@ export async function registerExecApprovalRequestForHostOrThrow(
   params: HostExecApprovalParams,
 ): Promise<ExecApprovalRegistration> {
   try {
-    return await registerExecApprovalRequest(await buildHostApprovalDecisionParams(params));
+    return await registerExecApprovalRequest(
+      await buildHostApprovalDecisionParams(params),
+      params.approvalTransport,
+    );
   } catch (err) {
     throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
   }

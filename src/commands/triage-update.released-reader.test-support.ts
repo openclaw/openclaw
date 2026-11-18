@@ -9,7 +9,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 const UPDATE_FAILURE_MAX_BYTES = 8 * 1024;

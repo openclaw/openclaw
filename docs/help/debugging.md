@@ -63,10 +63,10 @@ Profile watched Gateway CPU time when debugging startup/runtime hotspots:
 pnpm gateway:watch --benchmark
 ```
 
-The watch wrapper consumes `--benchmark` before invoking the Gateway and writes one V8 `.cpuprofile` per Gateway child exit under `.artifacts/gateway-watch-profiles/`. Stop or restart the watched gateway to flush the current profile, then open it with Chrome DevTools or Speedscope:
+The watch wrapper consumes `--benchmark` before invoking the Gateway and writes V8 `.cpuprofile` files for the Gateway and workers that inherit profiling flags under `.artifacts/gateway-watch-profiles/openclaw-gateway/`. Stop or restart the watched gateway to flush the current profile, then open it with Chrome DevTools or Speedscope:
 
 ```bash
-npx speedscope .artifacts/gateway-watch-profiles/*.cpuprofile
+npx speedscope .artifacts/gateway-watch-profiles/openclaw-gateway/*.cpuprofile
 ```
 
 - `--benchmark-dir <path>`: write profiles somewhere else.
@@ -87,7 +87,8 @@ changes keep their existing recovery and rebuild behavior. Windows retains its
 existing termination and restart behavior because its signal emulation does not
 make the same distinction.
 
-The UI dev wrapper acknowledges a requested stop only after its child returns
+The UI dev wrapper allows up to five seconds for its child tree to settle after
+forwarding a requested stop. It acknowledges the stop only after its child returns
 normally and the captured child tree has stopped. A signaled child or forced
 cleanup retains a signal outcome instead of reporting an acknowledged stop.
 
@@ -223,7 +224,9 @@ For one-off profiling through the normal source runner, set `OPENCLAW_RUN_NODE_C
 OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/cli-cpu pnpm openclaw status
 ```
 
-The source runner adds Node CPU profile flags and writes a `.cpuprofile` for the command. Use this before adding temporary instrumentation to command code.
+The source runner adds Node CPU profile flags and writes profiles under a command-specific subdirectory, such as `.artifacts/cli-cpu/openclaw-status/`. Node names each `.cpuprofile` with its process ID and thread ID, so normal CLI respawns keep separate profiles. Workers that inherit the profiling flags also get distinct filenames. Profiles flush when their process or worker exits. Use this before adding temporary instrumentation to command code.
+
+`OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES` keeps best-effort, per-command rotation before each launch. One launch can produce multiple profiles, so the limit can be exceeded until the next launch. Older flat `openclaw-*.cpuprofile` files remain untouched.
 
 Some startup stalls look like synchronous filesystem or module-loader work. For those stalls, add Node's sync I/O trace flag through the source runner:
 
@@ -232,6 +235,16 @@ OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
 ```
 
 `pnpm gateway:watch` leaves this flag disabled by default for the watched Gateway child. Set `OPENCLAW_TRACE_SYNC_IO=1` when you want sync I/O trace output in watch mode too.
+
+For Gateway startup phase timings, set `OPENCLAW_GATEWAY_STARTUP_TRACE=1`.
+Per-plugin `plugins.gateway-load.plugin.<id>` details separate config validation
+(`configValidationMs`), artifact selection and entry-path checks
+(`artifactPreparationMs`), source capture and module evaluation (`loadMs`), and
+registration (`registerMs`). `loadAndRegisterMs` covers loading and registration;
+it excludes config validation and artifact preparation. These details are emitted
+for attempted module loads, including load or registration failures.
+`plugins.gateway-bootstrap-import` reports the lazy host-module import before
+individual plugin loading begins.
 
 ## Plugin lifecycle trace
 

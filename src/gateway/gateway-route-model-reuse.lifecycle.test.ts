@@ -5,7 +5,7 @@ import { createServer, type RequestListener, type Server } from "node:http";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { expect, test, vi, type TestContext } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClientRequestOptions } from "./client.js";
@@ -32,7 +32,7 @@ test("cancellation during agent.wait joins the registered route body before tear
       const releaseInstance = createDeferred();
       void pendingRpc.promise.catch(() => {});
       const sourceHooks: Array<Parameters<TestContext["onTestFinished"]>[0]> = [];
-      // Capture the old registration only so a before-fix failure can release its resources.
+      // Capture the old registration so a before-fix failure can release its resources.
       const rescueHooks: Array<() => Promise<void>> = [];
       const routeContext: TestContext = {
         ...context,
@@ -49,7 +49,6 @@ test("cancellation during agent.wait joins the registered route body before tear
       let bodySettled = false;
       let teardownSettled = false;
       let complete = false;
-      let importing: Promise<unknown> | undefined;
       let outcome: Promise<unknown> | undefined;
       let teardown: Promise<void> | undefined;
       const stop = vi.fn(() => {
@@ -104,10 +103,18 @@ test("cancellation during agent.wait joins the registered route body before tear
           }
         },
       );
-      const drain = async () => {
-        for (const hook of sourceHooks.toReversed()) {
+      const drain = async (hooks = sourceHooks) => {
+        for (const hook of hooks.toReversed()) {
           await hook(routeContext);
         }
+      };
+      const expectHeld = async () => {
+        // One event-loop checkpoint exposes an untracked body without a timeout.
+        await setImmediate();
+        expect({ bodySettled, teardownSettled }).toEqual({
+          bodySettled: false,
+          teardownSettled: false,
+        });
       };
 
       const vitest = await vi.importActual<typeof import("vitest")>("vitest");
@@ -176,30 +183,20 @@ test("cancellation during agent.wait joins the registered route body before tear
 
       try {
         // Collect the actual runtime test; its callback and lifetime wiring remain real.
-        importing = import("./gateway-route-model-reuse.test.js");
-        await importing;
+        await import("./gateway-route-model-reuse.test.js");
         signal.throwIfAborted();
         const route = bodies.get(
           "bounds stable resolution reuse and refreshes generation facts without suppressing dynamic preparation",
         );
         expect(route).toBeTypeOf("function");
-        outcome = route!(routeContext).then(
-          () => {
-            bodySettled = true;
-          },
-          (error: unknown) => {
-            bodySettled = true;
-            return error;
-          },
-        );
-        const endedEarly = outcome.then((error) => {
-          if (error instanceof Error) {
-            throw error;
-          }
-          throw new Error("Route body ended before the controlled gate", { cause: error });
+        const running = route!(routeContext).finally(() => {
+          bodySettled = true;
         });
-        void endedEarly.catch(() => {});
-        await Promise.race([rpcEntered.promise, endedEarly]);
+        outcome = running;
+        void running.catch(() => {});
+        const reached = (gate: Promise<void>) =>
+          awaitGateBeforeSettlement(gate, running, "Route body ended before the controlled gate");
+        await reached(rpcEntered.promise);
 
         const callsBeforeCancellation = request.mock.calls.length;
         cancel.abort(cancellation);
@@ -210,23 +207,18 @@ test("cancellation during agent.wait joins the registered route body before tear
           teardownSettled = true;
         });
         void teardown.catch(() => {});
-        await Promise.race([clientClosing.promise, endedEarly]);
-        // One event-loop checkpoint exposes an incorrectly untracked body without a timeout.
-        await setImmediate();
-        expect(bodySettled).toBe(false);
-        expect(teardownSettled).toBe(false);
+        await reached(clientClosing.promise);
+        await expectHeld();
         expect(cleanupInstance).not.toHaveBeenCalled();
         expect(existsSync(stateDir)).toBe(true);
 
         releaseClient.resolve();
-        await Promise.race([instanceClosing.promise, endedEarly]);
-        await setImmediate();
-        expect(bodySettled).toBe(false);
-        expect(teardownSettled).toBe(false);
+        await reached(instanceClosing.promise);
+        await expectHeld();
         expect(provider?.listening).toBe(true);
         releaseInstance.resolve();
 
-        expect(await outcome).toBe(rpcFailure);
+        await expect(outcome).rejects.toBe(rpcFailure);
         await teardown;
         expect(signal.reason).toBe(cancellation);
         expect(stopAndWait).toHaveBeenCalledOnce();
@@ -239,22 +231,15 @@ test("cancellation during agent.wait joins the registered route body before tear
         expect(getEventListeners(signal, "abort")).toEqual([]);
         complete = true;
       } finally {
-        // Pre-fix rescue follows the failed oracle; it never supplies a passing cancellation.
+        // Rescue follows the failed oracle; it never supplies a passing cancellation.
         if (!complete) {
           cancel.abort(cancellation);
           stop();
           releaseClient.resolve();
           releaseInstance.resolve();
         }
-        await Promise.allSettled([importing]);
         teardown ??= verifyCleanup(drain);
-        const rescue = !complete
-          ? (async () => {
-              for (const hook of rescueHooks.toReversed()) {
-                await hook();
-              }
-            })()
-          : undefined;
+        const rescue = !complete ? drain(rescueHooks) : undefined;
         await Promise.allSettled([outcome, teardown, rescue]);
         const server = provider;
         if (!complete && server?.listening) {

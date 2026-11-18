@@ -14,6 +14,7 @@ struct ConnectionSettingsView: View {
     @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showConnectionEditor = false
+    @State private var openClawID: OpenClawIDSettingsModel
     private let isPreview = ProcessInfo.processInfo.isPreview
     private var isNixMode: Bool {
         ProcessInfo.processInfo.isNixMode
@@ -23,14 +24,18 @@ struct ConnectionSettingsView: View {
         self.gatewayManager.environmentStatus
     }
 
-    init(state: AppState, isActive: Bool = true) {
+    init(state: AppState, isActive: Bool = true, openClawID: OpenClawIDSettingsModel = OpenClawIDSettingsModel()) {
         self.state = state
         self.isActive = isActive
+        _openClawID = State(initialValue: openClawID)
     }
 
     var body: some View {
         Form {
             self.statusSection
+            if let presentation = self.openClawID.presentation(state: self.state) {
+                OpenClawIDSettingsSection(presentation: presentation, model: self.openClawID)
+            }
             self.gatewayModeSection
 
             // The Remote section owns this banner in remote mode; Local and Not configured
@@ -261,8 +266,7 @@ struct ConnectionSettingsView: View {
             isInstalling: CLIInstallPrompter.shared.isPrompting,
             installStatus: CLIInstallPrompter.shared.installStatus,
             onInstall: {
-                CLIInstallPrompter.shared.checkAndPromptIfNeeded(
-                    reason: "connection-settings", userInitiated: true)
+                CLIInstallPrompter.shared.checkAndPromptIfNeeded(userInitiated: true)
             },
             onRecheck: self.refreshGatewayStatus)
     }
@@ -370,8 +374,9 @@ struct ConnectionSettingsView: View {
                 currentTarget: self.state.remoteTarget,
                 currentUrl: self.state.remoteUrl,
                 transport: self.state.remoteTransport)
-            { gateway in
-                self.applyDiscoveredGateway(gateway)
+            { _ in
+                // Discovery is only a setup hint. The editor requires independent trusted input.
+                self.showConnectionEditor = true
             }
         } header: {
             Text("Nearby Gateways")
@@ -385,11 +390,11 @@ struct ConnectionSettingsView: View {
     private var dashboardSettingsSection: some View {
         Section {
             LabeledContent {
-                Button("Open Dashboard Settings…") { AppNavigationActions.openSettings() }
+                Button("Open OpenClaw Settings…") { AppNavigationActions.openSettings() }
             } label: {
                 Text("App settings")
                 Text("""
-                Permissions, Quick Chat, voice, and updates live in Dashboard → Settings → This Mac \
+                Permissions, Quick Chat, voice, and updates live in Settings → This Mac in the main window \
                 and need a Gateway release that includes those pages.
                 """)
             }
@@ -460,12 +465,7 @@ extension ConnectionSettingsView {
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    private func applyDiscoveredGateway(_: GatewayDiscoveryModel.DiscoveredGateway) {
-        // Discovery is only a setup hint. The editor requires independent trusted input.
-        self.showConnectionEditor = true
+        AppActivation.shared.presentAlert(alert)
     }
 }
 

@@ -25,35 +25,30 @@ const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
     import("./startup-verification.js"),
   ]).then(([configUpdateModule, deviceHealthModule, profileModule, startupVerificationModule]) => ({
     updateMatrixAccountConfig: configUpdateModule.updateMatrixAccountConfig,
-    summarizeMatrixDeviceHealth: deviceHealthModule.summarizeMatrixDeviceHealth,
+    listStaleOpenClawMatrixDevices: deviceHealthModule.listStaleOpenClawMatrixDevices,
     syncMatrixOwnProfile: profileModule.syncMatrixOwnProfile,
     ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
   })),
 );
 
-type MatrixStartupMaintenanceDeps = Awaited<ReturnType<typeof loadMatrixStartupMaintenanceDeps>>;
-
-export async function runMatrixStartupMaintenance(
-  params: {
-    client: MatrixStartupClient;
-    auth: MatrixAuth;
-    accountId: string;
-    effectiveAccountId: string;
-    accountConfig: MatrixConfig;
-    logger: RuntimeLogger;
-    logVerboseMessage: (message: string) => void;
-    getRuntimeConfig: () => CoreConfig;
-    replaceConfigFile: (cfg: CoreConfig) => Promise<void>;
-    loadWebMedia: (
-      url: string,
-      maxBytes: number,
-    ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
-    env?: NodeJS.ProcessEnv;
-    abortSignal?: AbortSignal;
-  },
-  deps?: MatrixStartupMaintenanceDeps,
-): Promise<void> {
-  const runtimeDeps = deps ?? (await loadMatrixStartupMaintenanceDeps());
+export async function runMatrixStartupMaintenance(params: {
+  client: MatrixStartupClient;
+  auth: MatrixAuth;
+  accountId: string;
+  effectiveAccountId: string;
+  accountConfig: MatrixConfig;
+  logger: RuntimeLogger;
+  logVerboseMessage: (message: string) => void;
+  getRuntimeConfig: () => CoreConfig;
+  replaceConfigFile: (cfg: CoreConfig) => Promise<void>;
+  loadWebMedia: (
+    url: string,
+    maxBytes: number,
+  ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
+  env?: NodeJS.ProcessEnv;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  const runtimeDeps = await loadMatrixStartupMaintenanceDeps();
   throwIfMatrixStartupAborted(params.abortSignal);
   try {
     const profileSync = await runtimeDeps.syncMatrixOwnProfile({
@@ -98,12 +93,12 @@ export async function runMatrixStartupMaintenance(
 
   try {
     throwIfMatrixStartupAborted(params.abortSignal);
-    const deviceHealth = runtimeDeps.summarizeMatrixDeviceHealth(
+    const staleOpenClawDevices = runtimeDeps.listStaleOpenClawMatrixDevices(
       await params.client.listOwnDevices(),
     );
-    if (deviceHealth.staleOpenClawDevices.length > 0) {
+    if (staleOpenClawDevices.length > 0) {
       params.logger.warn(
-        `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${deviceHealth.staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
+        `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
       );
     }
   } catch (err) {

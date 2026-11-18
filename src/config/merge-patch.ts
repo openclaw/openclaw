@@ -1,4 +1,3 @@
-// Creates and applies JSON merge-patch updates to config-like objects.
 import { isDeepStrictEqual } from "node:util";
 import { isPlainObject } from "../infra/plain-object.js";
 import { isRecord } from "../utils.js";

@@ -24,6 +24,7 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   isCurrent: () => boolean;
   /** Configured turn facts; full inventory discovery stays outside startup publication. */
   modelCatalog: ModelCatalogSnapshot;
+  accountCatalog?: import("./prepared-model-runtime-auth.js").PreparedAccountCatalogAccess;
 }>;
 
 export type ResolvedPublishedModelCatalogOwner = Readonly<

@@ -1,9 +1,7 @@
+import type { ErrorShape, SessionsMessagesSubscribeParams } from "@openclaw/gateway-protocol";
 import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import { generateUUID } from "@openclaw/normalization-core/uuid";
-import {
-  GatewayProtocolRequestTimeoutError,
-  type GatewayProtocolRequestOptions,
-} from "./protocol-request.js";
+import type { GatewayProtocolRequestOptions } from "./protocol-request.js";
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "./timeouts.js";
 
 export type GatewaySessionMessageRequestClient = {
@@ -19,18 +17,28 @@ export type GatewaySessionMessageSubscription = {
   agentId?: string | null;
   mode?: "narration";
   includeApprovals?: true;
+  includeLiveToolOutput?: true;
   approvalReplay?: unknown;
+  /** One-shot snapshot owned by the acquisition that requested it. */
+  initialHistory?: GatewaySessionInitialHistoryResult;
 };
+
+export type GatewaySessionInitialHistoryResult =
+  | { ok: true; payload: unknown }
+  | { ok: false; error: ErrorShape };
 
 export type GatewaySessionMessageSubscriptionOptions = {
   agentId?: string | null;
   mode?: "narration";
   includeApprovals?: boolean;
+  includeLiveToolOutput?: boolean;
+  initialHistory?: SessionsMessagesSubscribeParams["initialHistory"];
 };
 
 type SessionMessageSubscriptionResponse = {
   key: string;
   approvalReplay?: unknown;
+  initialHistory?: GatewaySessionInitialHistoryResult;
 };
 
 type SessionMessageSubscriptionEntry = {
@@ -46,11 +54,12 @@ type SessionMessageSubscriptionEntry = {
   wireRequest: Promise<SessionMessageSubscriptionResponse> | null;
   mode?: "narration";
   includeApprovals: boolean;
+  includeLiveToolOutput: boolean;
   canonicalSettled: boolean;
-  refreshRequired: boolean;
   handles: Set<GatewaySessionMessageSubscription>;
   pendingOwners: number;
   pendingFullOwners: number;
+  pendingLiveToolOutputOwners: number;
   release: Promise<void> | null;
   releasing?: GatewaySessionMessageSubscription;
 };
@@ -115,6 +124,7 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     const scopeAgentId = normalizedAgentScope(agentId);
     const narration = options.mode === "narration";
     const includeApprovals = options.includeApprovals === true;
+    const includeLiveToolOutput = options.includeLiveToolOutput === true;
 
     let entry: SessionMessageSubscriptionEntry;
     let created = false;
@@ -142,7 +152,27 @@ export class GatewaySessionMessageSubscriptionCoordinator {
           await (provisional.plainFallback ?? provisional.ready).catch(() => undefined);
           continue;
         }
-        entry = this.#createEntry(normalizedKey, agentId);
+        entry = {
+          subscriptionId: generateUUID(),
+          key: normalizedKey,
+          requestedKeys: new Set([normalizedKey]),
+          agentId,
+          scopeAgentId: normalizedAgentScope(agentId),
+          ownerAgentId: null,
+          ready: Promise.resolve({ key: normalizedKey }),
+          approvalRequest: null,
+          plainFallback: null,
+          wireRequest: null,
+          includeApprovals: false,
+          includeLiveToolOutput: false,
+          canonicalSettled: false,
+          handles: new Set(),
+          pendingOwners: 0,
+          pendingFullOwners: 0,
+          pendingLiveToolOutputOwners: 0,
+          release: null,
+        };
+        this.#entries.add(entry);
         created = true;
         break;
       }
@@ -160,30 +190,30 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     if (!narration) {
       entry.pendingFullOwners += 1;
     }
+    if (includeLiveToolOutput) {
+      entry.pendingLiveToolOutputOwners += 1;
+    }
     try {
       if (created) {
-        entry.ready = this.#requestSubscribe(entry, includeApprovals);
+        entry.ready = this.#requestSubscribe(entry, includeApprovals, options.initialHistory);
         if (includeApprovals) {
           entry.ready = this.#trackApprovalRequest(entry, entry.ready);
         }
         // Concurrent owners share this request without an unhandled side branch.
         void entry.ready.catch(() => undefined);
       }
-      if (entry.refreshRequired) {
-        entry.refreshRequired = false;
-        entry.plainFallback = null;
-        entry.approvalRequest = null;
-        const retainedApprovals = [...entry.handles].some((handle) => handle.includeApprovals);
-        // Refresh retained capabilities before applying a new owner's request;
-        // plain fallback must not downgrade an existing approval observer.
-        entry.ready = this.#requestSubscribe(entry, retainedApprovals).catch((error: unknown) => {
-          entry.refreshRequired = true;
-          throw error;
-        });
-      }
       const result = await this.#acquireCapability(entry, includeApprovals);
-      if (!narration && entry.mode === "narration") {
-        await this.#requestSubscribe(entry, false, "full");
+      if (created && result.initialHistory) {
+        // The observer outlives this snapshot; later acquisitions must read current history.
+        const { initialHistory: _initialHistory, ...subscriptionResult } = result;
+        entry.ready = Promise.resolve(subscriptionResult);
+        entry.plainFallback = null;
+      }
+      if (
+        (!narration && entry.mode === "narration") ||
+        (includeLiveToolOutput && !entry.includeLiveToolOutput)
+      ) {
+        await this.#requestSubscribe(entry, false);
       }
       if (this.#retired) {
         throw new Error("Session message subscription completed on a replaced Gateway connection");
@@ -192,7 +222,9 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       const subscription: GatewaySessionMessageSubscription = {
         key: result.key,
         agentId,
+        ...(created && result.initialHistory ? { initialHistory: result.initialHistory } : {}),
         ...(narration ? { mode: "narration" as const } : {}),
+        ...(includeLiveToolOutput ? { includeLiveToolOutput: true as const } : {}),
         ...(includeApprovals
           ? {
               includeApprovals: true as const,
@@ -213,6 +245,9 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       if (!narration) {
         entry.pendingFullOwners -= 1;
       }
+      if (includeLiveToolOutput) {
+        entry.pendingLiveToolOutputOwners -= 1;
+      }
       if (entry.pendingOwners === 0 && entry.handles.size === 0 && !entry.release) {
         this.#entries.delete(entry);
       }
@@ -230,10 +265,25 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         ? entry.release
         : entry.release.catch(() => undefined).then(() => this.release(subscription));
     }
-    const releasesLastFullOwner =
-      subscription.mode !== "narration" &&
-      [...entry.handles].every((handle) => handle === subscription || handle.mode === "narration");
-    if (this.#retired || (entry.handles.size > 1 && !releasesLastFullOwner)) {
+    let releasesLastFullOwner = subscription.mode !== "narration";
+    let releasesLastLiveToolOutputOwner = subscription.includeLiveToolOutput === true;
+    for (const handle of entry.handles) {
+      if (handle !== subscription) {
+        if (handle.mode !== "narration") {
+          releasesLastFullOwner = false;
+        }
+        if (handle.includeLiveToolOutput) {
+          releasesLastLiveToolOutputOwner = false;
+        }
+      }
+      if (!releasesLastFullOwner && !releasesLastLiveToolOutputOwner) {
+        break;
+      }
+    }
+    if (
+      this.#retired ||
+      (entry.handles.size > 1 && !releasesLastFullOwner && !releasesLastLiveToolOutputOwner)
+    ) {
       this.#finishRelease(subscription, owner);
       return Promise.resolve();
     }
@@ -259,14 +309,8 @@ export class GatewaySessionMessageSubscriptionCoordinator {
     // rejected releases remain retryable on their original owner.
     const removeEntry = entry.handles.size === 1;
     const request = removeEntry
-      ? this.#requestMessages(entry).catch((error: unknown) => {
-          if (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent) {
-            // The unsubscribe may have committed despite its missing acknowledgment.
-            entry.refreshRequired = true;
-          }
-          throw error;
-        })
-      : this.#requestSubscribe(entry, false, "narration");
+      ? this.#requestMessages(entry)
+      : this.#requestSubscribe(entry, false, undefined, subscription);
     const tracked = request
       .then(() => this.#finishRelease(subscription, owner, removeEntry))
       .finally(() => {
@@ -291,30 +335,6 @@ export class GatewaySessionMessageSubscriptionCoordinator {
       }
     }
     this.#entries.clear();
-  }
-
-  #createEntry(key: string, agentId: string | null): SessionMessageSubscriptionEntry {
-    const entry: SessionMessageSubscriptionEntry = {
-      subscriptionId: generateUUID(),
-      key,
-      requestedKeys: new Set([key]),
-      agentId,
-      scopeAgentId: normalizedAgentScope(agentId),
-      ownerAgentId: null,
-      ready: Promise.resolve({ key }),
-      approvalRequest: null,
-      plainFallback: null,
-      wireRequest: null,
-      includeApprovals: false,
-      canonicalSettled: false,
-      refreshRequired: false,
-      handles: new Set(),
-      pendingOwners: 0,
-      pendingFullOwners: 0,
-      release: null,
-    };
-    this.#entries.add(entry);
-    return entry;
   }
 
   #acquireCapability(
@@ -371,10 +391,67 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
   #requestSubscribe(
     entry: SessionMessageSubscriptionEntry,
-    includeApprovals: boolean,
-    mode?: "full" | "narration",
+    requestedApprovals: boolean,
+    initialHistory?: GatewaySessionMessageSubscriptionOptions["initialHistory"],
+    releasing?: GatewaySessionMessageSubscription,
   ): Promise<SessionMessageSubscriptionResponse> {
-    const send = () => this.#sendSubscribe(entry, includeApprovals, mode);
+    const send = async (): Promise<SessionMessageSubscriptionResponse> => {
+      if (this.#retired) {
+        throw new Error("Session message subscription belongs to a replaced Gateway connection");
+      }
+      const includeApprovals = requestedApprovals || entry.includeApprovals;
+      let includeLiveToolOutput = entry.pendingLiveToolOutputOwners > 0;
+      let hasFullOwner = entry.pendingFullOwners > 0;
+      for (const handle of entry.handles) {
+        if (handle !== releasing) {
+          includeLiveToolOutput ||= handle.includeLiveToolOutput === true;
+          hasFullOwner ||= handle.mode !== "narration";
+        }
+        if (includeLiveToolOutput && hasFullOwner) {
+          break;
+        }
+      }
+      const mode = hasFullOwner ? undefined : "narration";
+      // Queued capability changes sample current demand at dispatch, so one
+      // pending inline observer cannot downgrade another committed observer.
+      if (
+        !requestedApprovals &&
+        !initialHistory &&
+        entry.canonicalSettled &&
+        entry.mode === mode &&
+        entry.includeLiveToolOutput === includeLiveToolOutput
+      ) {
+        return { key: entry.key };
+      }
+      // A lost acknowledgment can leave stale observation until a fresh subscribe or reconnect.
+      const result = await this.#requestMessages(entry, {
+        mode,
+        includeApprovals,
+        includeLiveToolOutput,
+        initialHistory,
+      });
+      const response = result ?? null;
+      const responseKey = response && "key" in response ? response.key : undefined;
+      entry.key =
+        typeof responseKey === "string" && responseKey.trim() ? responseKey.trim() : entry.key;
+      entry.canonicalSettled = true;
+      const responseAgentId = response && "agentId" in response ? response.agentId : undefined;
+      entry.ownerAgentId = normalizedAgentScope(
+        (typeof responseAgentId === "string" ? responseAgentId : null) ??
+          entry.ownerAgentId ??
+          entry.scopeAgentId,
+      );
+      entry.mode = mode;
+      entry.includeApprovals = includeApprovals;
+      entry.includeLiveToolOutput = includeLiveToolOutput;
+      return {
+        key: entry.key,
+        ...(response && "approvalReplay" in response
+          ? { approvalReplay: response.approvalReplay }
+          : {}),
+        ...(response?.initialHistory ? { initialHistory: response.initialHistory } : {}),
+      };
+    };
     // Approval replay and stream-mode changes replace the same wire observer.
     // Serializing them prevents a slow narration replay from undoing a full upgrade.
     const request = entry.wireRequest ? entry.wireRequest.then(send, send) : send();
@@ -389,101 +466,27 @@ export class GatewaySessionMessageSubscriptionCoordinator {
 
   #requestMessages(
     entry: SessionMessageSubscriptionEntry,
-    subscription?: { mode?: "narration"; includeApprovals: boolean },
+    subscription?: {
+      mode?: "narration";
+      includeApprovals: boolean;
+      includeLiveToolOutput: boolean;
+      initialHistory?: GatewaySessionMessageSubscriptionOptions["initialHistory"];
+    },
   ) {
     const agentId = entry.key === "global" ? (entry.ownerAgentId ?? entry.agentId) : entry.agentId;
-    return this.#client.request(
+    return this.#client.request<SessionMessageSubscriptionResponse & { agentId?: string | null }>(
       subscription ? "sessions.messages.subscribe" : "sessions.messages.unsubscribe",
       {
         subscriptionId: entry.subscriptionId,
         key: entry.key,
-        ...(agentId ? { agentId } : {}),
-        ...(subscription?.mode ? { mode: subscription.mode } : {}),
-        ...(subscription?.includeApprovals ? { includeApprovals: true } : {}),
+        agentId: agentId || undefined,
+        mode: subscription?.mode,
+        includeApprovals: subscription?.includeApprovals || undefined,
+        includeLiveToolOutput: subscription?.includeLiveToolOutput || undefined,
+        initialHistory: subscription?.initialHistory,
       },
       { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
     );
-  }
-
-  async #sendSubscribe(
-    entry: SessionMessageSubscriptionEntry,
-    requestedApprovals: boolean,
-    requestedMode?: "full" | "narration",
-  ): Promise<SessionMessageSubscriptionResponse> {
-    if (this.#retired) {
-      throw new Error("Session message subscription belongs to a replaced Gateway connection");
-    }
-    // A preceding queued request may already have upgraded every full owner.
-    if (requestedMode === "full" && entry.mode !== "narration") {
-      return { key: entry.key };
-    }
-    const includeApprovals =
-      requestedApprovals || (requestedMode !== undefined && entry.includeApprovals);
-    const mode =
-      requestedMode === "narration" ||
-      (requestedMode !== "full" &&
-        entry.pendingFullOwners === 0 &&
-        [...entry.handles].every((handle) => handle.mode === "narration"))
-        ? "narration"
-        : undefined;
-    const result = await this.#requestMessages(entry, { mode, includeApprovals }).catch(
-      async (error: unknown) => {
-        if (
-          !(error instanceof GatewayProtocolRequestTimeoutError) ||
-          !error.requestSent ||
-          this.#retired
-        ) {
-          throw error;
-        }
-        try {
-          // A sent request can commit before its acknowledgment. Restore only
-          // capabilities still owned by acquired leases, including older approval panes.
-          const retainedApprovals = [...entry.handles].some((handle) => handle.includeApprovals);
-          const retainedMode =
-            entry.handles.size > 0 &&
-            [...entry.handles].every((handle) => handle.mode === "narration")
-              ? "narration"
-              : undefined;
-          await this.#requestMessages(
-            entry,
-            entry.handles.size > 0
-              ? { mode: retainedMode, includeApprovals: retainedApprovals }
-              : undefined,
-          );
-          entry.mode = retainedMode;
-          entry.includeApprovals = retainedApprovals;
-        } catch (recoveryError) {
-          if (!this.#retired) {
-            const subscriptionRecoveryFailure = new AggregateError(
-              [error, recoveryError],
-              "session message subscription recovery failed",
-              { cause: recoveryError },
-            );
-            throw subscriptionRecoveryFailure;
-          }
-        }
-        throw error;
-      },
-    );
-    const response = result && typeof result === "object" ? result : null;
-    const responseKey = response && "key" in response ? response.key : undefined;
-    entry.key =
-      typeof responseKey === "string" && responseKey.trim() ? responseKey.trim() : entry.key;
-    entry.canonicalSettled = true;
-    const responseAgentId = response && "agentId" in response ? response.agentId : undefined;
-    entry.ownerAgentId = normalizedAgentScope(
-      (typeof responseAgentId === "string" ? responseAgentId : null) ??
-        entry.ownerAgentId ??
-        entry.scopeAgentId,
-    );
-    entry.mode = mode;
-    entry.includeApprovals = includeApprovals;
-    return {
-      key: entry.key,
-      ...(response && "approvalReplay" in response
-        ? { approvalReplay: response.approvalReplay }
-        : {}),
-    };
   }
 
   #finishRelease(

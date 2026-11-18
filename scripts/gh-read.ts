@@ -1,18 +1,19 @@
-// Gh Read script supports OpenClaw repository automation.
 import { spawnSync } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { readSecretFileSync } from "@openclaw/fs-safe/secret";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { truncateUtf16Safe } from "../packages/normalization-core/src/utf16-slice.js";
-import { cancelResponseReaderSoon, readBoundedResponseText } from "./lib/bounded-response.mjs";
+import {
+  cancelResponseReaderSoon,
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "./lib/bounded-response.mjs";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
   normalizeGitHubRepo as normalizeRepo,
   resolveGitHubRepoFromOrigin,
 } from "./lib/github-repo.ts";
-
-export { normalizeRepo };
 
 const APP_ID_ENV = "OPENCLAW_GH_READ_APP_ID";
 const KEY_FILE_ENV = "OPENCLAW_GH_READ_PRIVATE_KEY_FILE";
@@ -106,11 +107,6 @@ export function resolveGitHubFetchTimeoutMs(raw = process.env.OPENCLAW_GH_READ_F
     min: 1,
     raw,
   });
-}
-
-function isMainModule() {
-  const entry = process.argv[1];
-  return entry ? import.meta.url === pathToFileURL(entry).href : false;
 }
 
 function fail(message: string): never {
@@ -249,10 +245,7 @@ export async function readBoundedGitHubJson<T>(
   options: GitHubBodyReadOptions = {},
 ): Promise<T> {
   const text = await readBoundedResponseText(response, "GitHub API", maxBytes, {
-    createTooLargeError: (message: string) =>
-      Object.assign(new Error(message), {
-        code: "ETOOBIG",
-      }),
+    createTooLargeError: createBoundedResponseTooLargeError,
     signal: options.signal,
     timeoutPromise: options.timeoutPromise,
   });
@@ -379,6 +372,7 @@ async function main() {
   process.exit(child.status ?? 1);
 }
 
-if (isMainModule()) {
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(entry).href) {
   await main();
 }

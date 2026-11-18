@@ -9,7 +9,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { shellEscapeBackslash as shellQuote } from "../src/shared/shell-quote.ts";
 import { readDockerE2eJsonArtifact } from "./lib/docker-e2e-json-artifacts.mts";
+import { groupBy } from "./lib/group-by.mts";
 
 const DEFAULT_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 
@@ -85,10 +87,6 @@ function run(
 function readJson(file: string) {
   const value = readDockerE2eJsonArtifact(file);
   return isRecord(value) ? value : {};
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function laneNeedsReleasePath(lane: string): boolean {
@@ -190,24 +188,6 @@ function discardMismatchedPreparedImages(entry: FailedEntry, explicitRef: string
     ),
   );
   return { ...entry, reuseInputs };
-}
-
-function reuseInputsKey(inputs: ReuseInputs | undefined): string {
-  return JSON.stringify(REUSE_INPUT_KEYS.map((key) => inputs?.[key] || ""));
-}
-
-function groupByReuseInputs(entries: FailedEntry[]): FailedEntry[][] {
-  const groups = new Map<string, FailedEntry[]>();
-  for (const entry of entries) {
-    const key = reuseInputsKey(entry.reuseInputs);
-    const group = groups.get(key);
-    if (group) {
-      group.push(entry);
-    } else {
-      groups.set(key, [entry]);
-    }
-  }
-  return [...groups.values()];
 }
 
 function ghWorkflowCommand(
@@ -479,7 +459,11 @@ function printEntries(
   console.log(`Failed Docker E2E entries: ${entries.map((entry) => entry.lane).join(", ")}`);
   if (workflowEntries.length > 0) {
     console.log("");
-    const workflowGroups = groupByReuseInputs(workflowEntries);
+    const workflowGroups = [
+      ...groupBy(workflowEntries, (entry) =>
+        JSON.stringify(REUSE_INPUT_KEYS.map((key) => entry.reuseInputs[key] || "")),
+      ).values(),
+    ];
     if (workflowGroups.length === 1) {
       console.log("Combined GitHub rerun:");
       console.log(

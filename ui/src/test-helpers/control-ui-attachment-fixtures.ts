@@ -23,3 +23,11 @@ export function createControlUiAttachmentFacts(attachments: unknown) {
         : fact;
     });
 }
+
+export function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
+  return {
+    available: true,
+    mediaTicket,
+    mediaTicketExpiresAt: new Date(Date.now() + ttlMs).toISOString(),
+  };
+}

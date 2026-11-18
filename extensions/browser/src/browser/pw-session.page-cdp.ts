@@ -99,14 +99,6 @@ export async function withCdpSnapshotRoot<T>(opts: {
   }
 }
 
-/** Read the browser-owned loader identity for a Playwright page's main frame. */
-export async function readMainFrameDocumentIdentityForPage(
-  page: Page,
-  timeoutMs?: number,
-): Promise<string | undefined> {
-  return (await readDocumentIdentitiesForPage(page, timeoutMs)).mainFrame;
-}
-
 /** Read committed document identities through one bounded page session. */
 export async function readDocumentIdentitiesForPage(
   page: Page,

@@ -1,29 +1,7 @@
-// Verifies conversation id derivation from explicit thread ids, target prefixes,
-// Discord mentions, and numeric destinations.
 import { describe, expect, it } from "vitest";
 import { resolveConversationIdFromTargets } from "./conversation-id.js";
 
 describe("resolveConversationIdFromTargets", () => {
-  it.each([
-    {
-      name: "prefers explicit thread id strings",
-      params: { threadId: "123456789", targets: ["channel:987654321"] },
-      expected: "123456789",
-    },
-    {
-      name: "truncates decimal numeric thread ids",
-      params: { threadId: 42.9, targets: ["channel:987654321"] },
-      expected: "42",
-    },
-    {
-      name: "falls back when the thread id is blank",
-      params: { threadId: "   ", targets: ["channel:987654321"] },
-      expected: "987654321",
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(resolveConversationIdFromTargets(params)).toBe(expected);
-  });
-
   it.each([
     {
       name: "trims channel target ids",
@@ -71,6 +49,6 @@ describe("resolveConversationIdFromTargets", () => {
       expected: undefined,
     },
   ])("$name", ({ targets, expected }) => {
-    expect(resolveConversationIdFromTargets({ targets })).toBe(expected);
+    expect(resolveConversationIdFromTargets(targets)).toBe(expected);
   });
 });

@@ -1,5 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   buildBrowserAnnotationContent,
   type BrowserAnnotationDispatchResult,
@@ -48,10 +49,16 @@ export type BrowserPanelView = {
 export function loadBrowserPanelImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.addEventListener("load", () => resolve(image));
-    image.addEventListener("error", () =>
-      reject(new Error(t("browser.errors.screenshotDecodeFailed"))),
-    );
+    const stopLoad = listen(image, "load", () => {
+      stopLoad();
+      stopError();
+      resolve(image);
+    });
+    const stopError = listen(image, "error", () => {
+      stopLoad();
+      stopError();
+      reject(new Error(t("browser.errors.screenshotDecodeFailed")));
+    });
     image.src = dataUrl;
   });
 }

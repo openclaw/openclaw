@@ -1,10 +1,25 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import path from "node:path";
+import { MessageChannel } from "node:worker_threads";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as identity from "../../infra/sqlite-worker-identity.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { toErrorObject } from "../../infra/errors.js";
+import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as resources from "../../state/openclaw-agent-db-resources.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
+import { openTrackedStateDatabase } from "../../state/openclaw-state-db-handle.js";
 import * as rootContext from "../../state/openclaw-state-worker-context.js";
-import { prepareAgentAuthProfileRowsRead } from "./sqlite-read.js";
-import type { AuthProfileRowRead } from "./types.js";
+import * as sharedWorker from "../../state/openclaw-state-worker-store.js";
+import { authProfileFileChanges } from "./file-state.js";
+import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
+import { noteRuntimeAuthProfileStorePersistedMutation } from "./runtime-snapshots.js";
+import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
+import { prepareAgentAuthProfileRowsRead, readSharedAuthProfileRows } from "./sqlite-read.js";
+import { sendAuthProfileUpdateValue } from "./store-update-transfer.js";
+import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
 const child = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("../../infra/sqlite-readonly-worker.js", async (importOriginal) => ({
@@ -17,65 +32,233 @@ const rows: AuthProfileRowRead = {
   state: { status: "missing", reason: "row" },
   cacheable: true,
 };
-const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
-function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
-  const reader = prepareAgentAuthProfileRowsRead({
-    databasePath: "/fixture/auth.sqlite",
-    agentId: "main",
-    env,
-  });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let databasePath: string;
+let rootCurrent: boolean;
+const readers = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
+const publishFileChange = authProfileFileChanges.onChange;
+async function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
+  const reader = await prepareAgentAuthProfileRowsRead({ databasePath, agentId: "main", env });
   readers.add(reader);
   return reader;
 }
 
-beforeEach(() => {
-  vi.spyOn(identity, "inspectDatabasePathIdentitySync").mockReturnValue({
-    key: "file:original",
-    canonicalPath: "/fixture/auth.sqlite",
+async function changeDatabase(write: () => void) {
+  const changed = new Promise<void>((resolve) => {
+    authProfileFileChanges.onChange = async (change) => {
+      await publishFileChange?.(change);
+      if (change.directory === path.dirname(databasePath)) {
+        authProfileFileChanges.onChange = publishFileChange;
+        resolve();
+      }
+    };
   });
+  write();
+  await vi.advanceTimersByTimeAsync(30_000);
+  await changed;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  rootCurrent = true;
+  databasePath = path.join(tempDirs.make("auth-row-identity-"), "auth.sqlite");
+  fs.writeFileSync(databasePath, "synthetic auth database");
   vi.spyOn(rootContext, "captureOpenClawStateWorkerContext").mockReturnValue({
     environment: { OPENCLAW_STATE_DIR: "/fixture" },
     admission: {
       coordinationKey: "file:root",
       databasePath: "/fixture/state.sqlite",
       identity: { key: "file:root", canonicalPath: "/fixture/state.sqlite" },
-      assertCurrent: () => {},
+      assertCurrent: () => {
+        if (!rootCurrent) {
+          throw new Error("Shared auth owner was revoked");
+        }
+      },
     },
   });
   child.read.mockReset().mockResolvedValue(rows);
 });
 
 afterEach(async () => {
+  authProfileFileChanges.onChange = publishFileChange;
   await Promise.all([...readers].map((reader) => reader.dispose()));
   readers.clear();
+  await closeOpenClawStateDatabaseAsync();
+  runtimeAuthProfileRowsCache.clear();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
+  vi.useRealTimers();
 });
 
 describe("prepared auth profile row reads", () => {
+  it.each(["agent", "shared"] as const)(
+    "reuses %s rows and installs an owner write without another worker request",
+    async (source) => {
+      const isAgent = source === "agent";
+      const kind = isAgent ? "agent" : "shared-state";
+      fs.unlinkSync(databasePath);
+      using database = openTrackedStateDatabase(databasePath);
+      database.exec(
+        "CREATE TABLE auth_profile_store (store_key TEXT PRIMARY KEY, store_json TEXT, updated_at INTEGER);" +
+          "CREATE TABLE config_machine_state (state_key TEXT PRIMARY KEY, value_json TEXT, updated_at_ms INTEGER)",
+      );
+      const identity = expectDefined(inspectDatabasePathIdentitySync(databasePath), "identity");
+      const context = rootContext.captureOpenClawStateWorkerContext();
+      context.admission = { ...context.admission, databasePath, identity };
+      const sharedRead = vi
+        .spyOn(sharedWorker, "runOpenClawStateWorkerOperation")
+        .mockImplementation(async (_context, operation, options) => {
+          const { admission } = expectDefined(
+            options?.createAdmission?.({ settled: Promise.resolve({ kind: "completed" }) }),
+            "shared auth read admission",
+          );
+          const { port1: sender, port2: receiver } = new MessageChannel();
+          try {
+            return await operation({
+              execute: async () => {
+                sendAuthProfileUpdateValue(sender, { [databasePath]: rows });
+                admission.port.postMessage(
+                  {
+                    stage: "prepare",
+                    facts: { kind: "auth-sources-read", port: receiver },
+                    decision: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+                  },
+                  [receiver],
+                );
+                admission.service();
+                if (admission.failure) {
+                  throw toErrorObject(admission.failure, "Auth read admission failed");
+                }
+              },
+            });
+          } finally {
+            await admission.finish();
+            sender.close();
+            receiver.close();
+          }
+        });
+      const agentReader = isAgent ? await prepare() : undefined;
+      const read = () => (agentReader ? agentReader.read() : readSharedAuthProfileRows(context));
+      const workerRead = isAgent ? child.read : sharedRead;
+      await expect(read()).resolves.toEqual(rows);
+      await expect(read()).resolves.toEqual(rows);
+      expect(workerRead).toHaveBeenCalledOnce();
+
+      const committed: AuthProfileStore = {
+        version: 1,
+        profiles: { fixture: { type: "api_key", provider: "fixture", key: "updated-fixture" } },
+      };
+      writeAuthProfileJsonCell(database, "store", kind, committed);
+      noteRuntimeAuthProfileStorePersistedMutation(
+        isAgent ? path.dirname(databasePath) : undefined,
+        {
+          credentialsChanged: true,
+          profileSetChanged: true,
+          stateChanged: false,
+          profileIds: ["fixture"],
+        },
+        {
+          databasePath,
+          sharedDatabasePath: databasePath,
+          location: isAgent ? "legacy-main" : "state-db",
+        },
+        undefined,
+        { store: committed, env: context.environment },
+      );
+      await expect(read()).resolves.toMatchObject({
+        store: { status: "readable", raw: committed },
+      });
+      expect(workerRead).toHaveBeenCalledOnce();
+      rootCurrent = false;
+      await expect(read()).rejects.toThrow("Shared auth owner was revoked");
+      expect(workerRead).toHaveBeenCalledOnce();
+    },
+  );
+
   it("retains revocable read authority even when persisted rows come from a cache", async () => {
-    const reader = prepare();
+    const reader = await prepare();
     reader.assertCurrent();
     expect(resources.hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
-    await Promise.all(resources.revokeAgentDatabaseResources({ path: "/fixture/auth.sqlite" }));
+    await Promise.all(resources.revokeAgentDatabaseResources({ path: databasePath }));
     expect(() => reader.assertCurrent()).toThrow("Auth profile read owner was revoked");
     expect(child.read).not.toHaveBeenCalled();
   });
+  it("retains revocation while cold identity admission is pending", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const stat = fs.promises.stat;
+    vi.spyOn(fs.promises, "stat").mockImplementation(async (...args) => {
+      if (String(args[0]) === databasePath) {
+        entered.resolve();
+        await release.promise;
+      }
+      return Reflect.apply(stat, fs.promises, args);
+    });
+    syncBuiltinESMExports();
+    const preparing = prepare();
+    try {
+      await Promise.race([
+        entered.promise,
+        preparing.then(() => {
+          throw new Error("Cold identity admission did not enter the filesystem gate");
+        }),
+      ]);
+      const closing = Promise.all(resources.revokeAgentDatabaseResources({ path: databasePath }));
+      release.resolve();
+      await closing;
+      const reader = await preparing;
+      await expect(reader.read()).rejects.toThrow(/closed|revoked/);
+      expect(child.read).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await preparing;
+    }
+  });
   it("rejects rows whose source identity changed before the child settled", async () => {
-    const reader = prepare();
+    const reader = await prepare();
     child.read.mockImplementation(async () => {
-      vi.mocked(identity.inspectDatabasePathIdentitySync).mockReturnValue({
-        key: "file:replacement",
-        canonicalPath: "/fixture/auth.sqlite",
+      await changeDatabase(() => {
+        const replacement = `${databasePath}.replacement`;
+        fs.writeFileSync(replacement, "replacement auth database");
+        fs.renameSync(replacement, databasePath);
       });
       return rows;
     });
-    await expect(reader.read()).rejects.toThrow("Auth profile database file identity changed");
+    await expect(reader.read()).rejects.toThrow("database file identity changed");
+  });
+
+  it("rejects rows when shared owner authority changes while the child reads", async () => {
+    const reader = await prepare();
+    child.read.mockImplementation(async () => {
+      rootCurrent = false;
+      return rows;
+    });
+    await expect(reader.read()).rejects.toThrow("Shared auth owner was revoked");
+  });
+
+  it("retains captured absence when the first session creates its database", async () => {
+    fs.unlinkSync(databasePath);
+    const reader = await prepare();
+    await changeDatabase(() => fs.writeFileSync(databasePath, "created auth database"));
+    await expect(reader.read()).resolves.toEqual({
+      store: { status: "missing", reason: "database" },
+      state: { status: "missing", reason: "database" },
+      cacheable: false,
+    });
+    await reader.dispose();
+    expect(() => reader.assertCurrent()).not.toThrow();
+    expect(child.read).not.toHaveBeenCalled();
+    await expect((await prepare()).read()).resolves.toEqual(rows);
+    expect(child.read).toHaveBeenCalledWith(
+      databasePath,
+      expect.objectContaining({ expectedIdentity: expect.stringMatching(/^file:/) }),
+    );
   });
 
   it("captures environment and retains the agent owner through child settlement", async () => {
     const registration = vi.spyOn(resources, "registerOpenClawAgentDatabaseAsyncResource");
     const env = { OPENCLAW_STATE_DIR: "/fixture/original" };
-    const reader = prepare(env);
+    const reader = await prepare(env);
     env.OPENCLAW_STATE_DIR = "/fixture/replaced";
     const entered = createDeferredCore();
     const release = createDeferredCore<AuthProfileRowRead>();
@@ -94,14 +277,14 @@ describe("prepared auth profile row reads", () => {
         }),
       ]);
       expect(registration).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: "main", path: "/fixture/auth.sqlite" }),
+        expect.objectContaining({ agentId: "main", path: databasePath }),
       );
       expect(child.read).toHaveBeenCalledWith(
-        "/fixture/auth.sqlite",
+        databasePath,
         expect.objectContaining({
           mode: "auth-profile-rows",
           source: "canonical",
-          expectedIdentity: "file:original",
+          expectedIdentity: expect.stringMatching(/^file:/),
           env: { OPENCLAW_STATE_DIR: "/fixture/original" },
         }),
       );
@@ -121,7 +304,7 @@ describe("prepared auth profile row reads", () => {
   });
 
   it("keeps captured authority checkable after ordinary disposal but rejects new reads", async () => {
-    const reader = prepare();
+    const reader = await prepare();
     await expect(reader.read()).resolves.toEqual(rows);
     await reader.dispose();
     expect(() => reader.assertCurrent()).not.toThrow();

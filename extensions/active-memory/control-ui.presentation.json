@@ -1,0 +1,8 @@
+{
+  "pluginId": "active-memory",
+  "memoryAddon": {
+    "order": 10,
+    "label": "Active memory",
+    "labelKey": "memoryPage.addons.activeMemory.title"
+  }
+}

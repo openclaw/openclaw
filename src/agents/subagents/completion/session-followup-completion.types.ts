@@ -9,6 +9,7 @@ type FollowupCustody = {
   release(): void;
 };
 export type FollowupRequesterAuthority = {
+  bind(params: { entry: SubagentRunRecord; runs: ReadonlyMap<string, SubagentRunRecord> }): void;
   release(): void;
   run<T>(runId: string, run: () => Promise<T>): Promise<T>;
 };
@@ -56,6 +57,6 @@ export interface FollowupCompletionOwner {
     assertCurrent?: () => void,
   ): Promise<FollowupSettlement>;
   take(timeoutMs?: number): Promise<FollowupReply | undefined>;
-  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): () => void;
+  replaceCohortEntry(previous: SubagentRunRecord, next: SubagentRunRecord): void;
   close(error?: unknown): void;
 }

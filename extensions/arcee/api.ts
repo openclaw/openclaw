@@ -1,7 +1,3 @@
-/**
- * Public Arcee API barrel. It exposes model catalogs, provider config builders,
- * and setup helpers without importing the plugin entry.
- */
 export { buildArceeModelDefinition, ARCEE_BASE_URL, ARCEE_MODEL_CATALOG } from "./models.js";
 export { buildArceeProvider, buildArceeOpenRouterProvider } from "./provider-catalog.js";
 export {

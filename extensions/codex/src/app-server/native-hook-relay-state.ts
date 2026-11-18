@@ -28,17 +28,11 @@ export const nativeHookRelayUnregisterQueue = {
     );
   },
   async flush(): Promise<void> {
-    while (pending.size > 0) {
-      const entry = pending.values().next().value;
-      if (!entry) {
-        break;
-      }
+    for (const entry of pending) {
       clearTimeout(entry.timeout);
       entry.unregister();
     }
-    while (closing.size > 0) {
-      await Promise.allSettled(closing);
-    }
+    await nativeHookRelayUnregisterQueue.clear();
   },
   async clear(): Promise<void> {
     for (const entry of pending) {

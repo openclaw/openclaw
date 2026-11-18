@@ -1,4 +1,5 @@
-import { lazyCompile } from "./protocol-validator.js";
+import * as Checks from "./compiled/protocol.generated/approval-result-validators.js";
+import { createProtocolValidator } from "./protocol-validator.js";
 import {
   type ApprovalDecision,
   type ApprovalGetResult,
@@ -21,7 +22,19 @@ export type {
   ApprovalSnapshot,
 };
 
-export const validateApprovalGetResult = lazyCompile(ApprovalGetResultSchema);
-export const validateApprovalHistoryResult = lazyCompile(ApprovalHistoryResultSchema);
-export const validateApprovalResolveResult = lazyCompile(ApprovalResolveResultSchema);
-export const validateApprovalPresentation = lazyCompile(ApprovalPresentationSchema);
+export const validateApprovalGetResult = createProtocolValidator(
+  ApprovalGetResultSchema,
+  Checks.isApprovalGetResult,
+);
+export const validateApprovalHistoryResult = createProtocolValidator(
+  ApprovalHistoryResultSchema,
+  Checks.isApprovalHistoryResult,
+);
+export const validateApprovalResolveResult = createProtocolValidator(
+  ApprovalResolveResultSchema,
+  Checks.isApprovalResolveResult,
+);
+export const validateApprovalPresentation = createProtocolValidator(
+  ApprovalPresentationSchema,
+  Checks.isApprovalPresentation,
+);

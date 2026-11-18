@@ -1,16 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { readlinkSync } from "node:fs";
 import path from "node:path";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 
 const MAX_CHILD_PROCESSES = 8;
 const MAX_COMMAND_LENGTH = 64;
 
 /** Inspect names, never argv or environment, only when finalization is already stalled. */
-export function inspectUpdateFinalizationChildren(): {
-  childProcesses: { pid: number; parentPid: number; command: string | null }[];
-  childProcessInspection: "complete" | "unavailable";
-  childProcessesTruncated: boolean;
-} {
+export function inspectUpdateFinalizationChildren() {
   const windows = process.platform === "win32";
   const inspector = windows
     ? path.win32.join(
@@ -41,7 +38,7 @@ export function inspectUpdateFinalizationChildren(): {
   if (result.error || result.status !== 0 || !result.stdout) {
     return {
       childProcesses: [],
-      childProcessInspection: "unavailable",
+      childProcessInspection: "unavailable" as const,
       childProcessesTruncated: false,
     };
   }
@@ -56,23 +53,16 @@ export function inspectUpdateFinalizationChildren(): {
     }
     return [{ pid: Number(pid), parentPid: Number(parentPid), command }];
   });
-  const childrenByParent = new Map<number, typeof processes>();
-  for (const child of processes) {
-    const children = childrenByParent.get(child.parentPid) ?? [];
-    children.push(child);
-    childrenByParent.set(child.parentPid, children);
-  }
+  const childrenByParent = groupRecords(processes, (child) => child.parentPid);
   const parents = new Set([process.pid]);
-  const pending = [process.pid];
-  const childProcesses: { pid: number; parentPid: number; command: string }[] = [];
+  const childProcesses: typeof processes = [];
   // Follow ancestry, including native grandchildren that are outside the command runner.
-  for (const parentPid of pending) {
+  for (const parentPid of parents) {
     for (const child of childrenByParent.get(parentPid) ?? []) {
       if (parents.has(child.pid) || child.pid === result.pid) {
         continue;
       }
       parents.add(child.pid);
-      pending.push(child.pid);
       childProcesses.push(child);
     }
   }
@@ -98,7 +88,7 @@ export function inspectUpdateFinalizationChildren(): {
             .slice(0, MAX_COMMAND_LENGTH),
         };
       }),
-    childProcessInspection: "complete",
+    childProcessInspection: "complete" as const,
     childProcessesTruncated: childProcesses.length > MAX_CHILD_PROCESSES,
   };
 }

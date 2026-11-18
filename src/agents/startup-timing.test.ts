@@ -1,15 +1,17 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs } from "../../test/helpers/temp-dir.js";
 import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { measureAgentStartup } from "./startup-timing.js";
 
 const tempDirs: string[] = [];
 
-afterEach(async () => {
+afterEach(() => {
   flushDiagnosticsTimeline();
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  vi.unstubAllEnvs();
+  cleanupTempDirs(tempDirs);
 });
 
 describe("measureAgentStartup", () => {
@@ -17,14 +19,10 @@ describe("measureAgentStartup", () => {
     const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-startup-"));
     tempDirs.push(dir);
     const path = join(dir, "timeline.jsonl");
-    const env = {
-      OPENCLAW_DIAGNOSTICS: "timeline",
-      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: path,
-    } as NodeJS.ProcessEnv;
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS", "timeline");
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", path);
 
-    await expect(measureAgentStartup("command-import", async () => "ready", { env })).resolves.toBe(
-      "ready",
-    );
+    await expect(measureAgentStartup("command-import", async () => "ready")).resolves.toBe("ready");
 
     flushDiagnosticsTimeline();
     const events = (await readFile(path, "utf8"))

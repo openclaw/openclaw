@@ -17,7 +17,9 @@ describe("collectChannelRouteTargets", () => {
         telegram: {},
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "commander" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, commander: {} },
       },
       bindings: [
         {
@@ -44,7 +46,7 @@ describe("collectChannelRouteTargets", () => {
         },
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "personal-agent" }, { id: "work-agent" }],
+        entries: { main: {}, "personal-agent": {}, "work-agent": {} },
       },
       bindings: [
         {
@@ -75,7 +77,9 @@ describe("collectChannelRouteTargets", () => {
         imessage: {},
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "ios-agent" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, "ios-agent": {} },
       },
       bindings: [
         {

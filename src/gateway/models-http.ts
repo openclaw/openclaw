@@ -1,4 +1,3 @@
-// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, tryResolveLegacyCompatibilityAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -15,21 +14,12 @@ import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
   authorizeGatewayHttpRequestOrReply,
-  isOpenClawAgentModelId,
-  resolveAgentIdFromModel,
+  canonicalizeOpenClawAgentModelId,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
-type OpenAiModelObject = {
-  id: string;
-  object: "model";
-  created: number;
-  owned_by: string;
-  permission: [];
-};
-
-function toOpenAiModel(id: string): OpenAiModelObject {
+function toOpenAiModel(id: string) {
   return {
     id,
     object: "model",
@@ -107,20 +97,13 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  if (!isOpenClawAgentModelId(decodedId)) {
+  const modelId = canonicalizeOpenClawAgentModelId(decodedId);
+  if (!modelId) {
     sendInvalidRequest(res, "Invalid model id.");
     return true;
   }
 
-  const normalizedModelId = decodedId.trim().toLowerCase();
-  let configured = true;
-  if (normalizedModelId !== OPENCLAW_MODEL_ID && normalizedModelId !== OPENCLAW_DEFAULT_MODEL_ID) {
-    const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromModel(decodedId, cfg);
-    configured = Boolean(agentId && listAgentIds(cfg).includes(agentId));
-  }
-
-  if (!configured || !ids.includes(decodedId)) {
+  if (!ids.includes(modelId)) {
     sendJson(res, 404, {
       error: {
         message: `Model '${decodedId}' not found.`,
@@ -130,6 +113,6 @@ export async function handleOpenAiModelsHttpRequest(
     return true;
   }
 
-  sendJson(res, 200, toOpenAiModel(decodedId));
+  sendJson(res, 200, toOpenAiModel(modelId));
   return true;
 }

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { applySessionEntryLifecycleMutation, replaceSessionEntrySync } from "./session-accessor.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 /** Creates and cleans a temporary session store fixture around each test. */
 export function useTempSessionsFixture(prefix: string) {

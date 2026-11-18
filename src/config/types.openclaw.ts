@@ -1,19 +1,13 @@
-// Defines the top-level OpenClaw configuration type.
 import type { z } from "zod";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { ConfigIncludeOwnership } from "./includes.js";
-import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
-import type { ApprovalsConfig } from "./types.approvals.js";
-import type { AuthConfig } from "./types.auth.js";
-import type { AuditConfig, DiagnosticsConfig, LoggingConfig, SessionConfig } from "./types.base.js";
+import type { AuditConfig } from "./types.base.js";
 import type { BrowserConfig } from "./types.browser.js";
 import type { ChannelsConfig } from "./types.channels.js";
-import type { CloudWorkersConfig } from "./types.cloud-workers.js";
 import type { CronConfig } from "./types.cron.js";
-import type { DesktopConfig } from "./types.desktop.js";
-import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
+import type { GatewayConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
@@ -21,16 +15,13 @@ import type { BroadcastConfig, CommandsConfig, MessagesConfig } from "./types.me
 import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
-import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
-import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 import type { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 import type { SecuritySchema } from "./zod-schema.root-support.js";
 
-/** One persisted suppression for a known security audit finding. */
 export type SecurityConfig = NonNullable<z.input<typeof SecuritySchema>>;
 export type SecurityAuditSuppression = NonNullable<
   NonNullable<SecurityConfig["audit"]>["suppressions"]
@@ -38,24 +29,13 @@ export type SecurityAuditSuppression = NonNullable<
 
 export type SurfaceConfigEntry = NonNullable<z.input<typeof OpenClawSchemaShape.surfaces>>[string];
 
-type RootMetaConfig = NonNullable<z.input<typeof OpenClawSchemaShape.meta>>;
-type RootWizardConfig = NonNullable<z.input<typeof OpenClawSchemaShape.wizard>>;
-type RootUpdateConfig = NonNullable<z.input<typeof OpenClawSchemaShape.update>>;
-type RootUiConfig = NonNullable<z.input<typeof OpenClawSchemaShape.ui>>;
-type RootAttachmentsConfig = NonNullable<z.input<typeof OpenClawSchemaShape.attachments>>;
+type SchemaConfig = {
+  [K in keyof typeof OpenClawSchemaShape]?: NonNullable<z.input<(typeof OpenClawSchemaShape)[K]>>;
+};
 
-/** Top-level OpenClaw config as read from user/project config files. */
-export type OpenClawConfig = {
+type ConfigAuthoringOverrides = {
   /** @deprecated Doctor-only legacy input. */
   audit?: AuditConfig;
-  /** JSON schema URL used by editors and generated config files. */
-  $schema?: string;
-  meta?: RootMetaConfig;
-  /** Authentication provider/profile configuration. */
-  auth?: AuthConfig;
-  /** Named access groups used by channel/provider policy allowlists. */
-  accessGroups?: AccessGroupsConfig;
-  /** ACP integration settings. */
   acp?: AcpConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (interactive for Bash). */
@@ -73,79 +53,35 @@ export type OpenClawConfig = {
       | { enabled?: boolean; timeoutMs?: number }
       | undefined;
   };
-  wizard?: RootWizardConfig;
-  /** Diagnostics, tracing, and stability debugging settings. */
-  diagnostics?: DiagnosticsConfig;
-  /** Log sink, level, rotation, and redaction settings. */
-  logging?: LoggingConfig;
-  /** Security audit suppressions and security policy settings. */
-  security?: SecurityConfig;
-  update?: RootUpdateConfig;
-  /** Explicit operator consent for anonymous feature statistics in the daily update check. */
-  telemetry?: TelemetryConfig;
-  /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
-  ui?: RootUiConfig;
-  /** Secret providers, defaults, and ref-resolution settings. */
-  secrets?: SecretsConfig;
-  /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
-  /** Plugin registry/install/runtime configuration. */
   plugins?: PluginsConfig;
-  /** Per-surface policy keyed by channel/UI/runtime surface id. */
-  surfaces?: Record<string, SurfaceConfigEntry>;
-  /** Model providers, model catalog, pricing, and catalog merge policy. */
   models?: ModelsConfig;
-  /** Node-host pairing and remote command node settings. */
   nodeHost?: NodeHostConfig;
-  /** Agent definitions, defaults, bindings, and runtime policy. */
   agents?: AgentsConfig;
-  /** Global root for new managed worktrees. Defaults to <state-dir>/worktrees; accepts ~. */
-  worktreeRoot?: string;
-  /** Use filesystem acceleration for new worktrees when supported (default: true). */
-  worktreeAcceleration?: boolean;
-  /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */
   bindings?: AgentBinding[];
-  /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  attachments?: RootAttachmentsConfig;
-  /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
   /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */
   tts?: TtsConfig;
-  /** Chat command settings. */
   commands?: CommandsConfig;
-  /** Human approval workflow settings. */
-  approvals?: ApprovalsConfig;
-  /** Session keying, reset, maintenance, send-policy, and thread-binding settings. */
-  session?: SessionConfig;
   /** Channel defaults, built-in channel sections, and plugin-owned channel config. */
   channels?: ChannelsConfig;
-  /** Cron schedule and retention settings. */
   cron?: CronConfig;
-  /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
-  /** Runtime hook registration and queue behavior. */
   hooks?: HooksConfig;
-  /** Network discovery and service advertisement settings. */
-  discovery?: DiscoveryConfig;
-  /** Voice/talk mode configuration. */
-  talk?: TalkConfig;
-  /** Gateway server, auth, UI, node-pairing, and dispatch settings. */
   gateway?: GatewayConfig;
-  /** Opt-in cloud-worker provider profiles. */
-  cloudWorkers?: CloudWorkersConfig;
-  /** Experimental desktop sources owned by the gateway host. */
-  desktop?: DesktopConfig;
-  /** Memory indexing/search configuration. */
   memory?: MemoryConfig;
-  /** MCP client/server and Codex MCP approval configuration. */
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */
   proxy?: ProxyConfig;
 };
+
+/** Top-level OpenClaw config, retaining authoring contracts outside the current schema. */
+export type OpenClawConfig = Omit<SchemaConfig, keyof ConfigAuthoringOverrides> &
+  ConfigAuthoringOverrides;
 
 /** Config input shape accepted before model provider defaults are fully materialized. */
 export type OpenClawConfigInput = Omit<OpenClawConfig, "models"> & {
@@ -158,8 +94,6 @@ type BrandedConfigState<TState extends string> = OpenClawConfig & {
   readonly [openClawConfigStateBrand]?: TState;
 };
 
-/** Authored config before include/env resolution and runtime defaults. */
-export type SourceConfig = BrandedConfigState<"source">;
 /** Source config after includes/env substitution, before runtime defaults. */
 export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
 /** Runtime-materialized config with defaults/normalization applied. */
@@ -174,7 +108,6 @@ export type ConfigValidationIssue = {
   path: string;
   /** Structured validator path used internally for lossless source diagnostics. */
   pathSegments?: Array<string | number>;
-  /** Human-readable validation message. */
   message: string;
   /** Optional allowed values shown to the operator. */
   allowedValues?: string[];
@@ -182,15 +115,10 @@ export type ConfigValidationIssue = {
   allowedValuesHiddenCount?: number;
 };
 
-export type LegacyConfigIssue = {
-  /** Dot-path to the legacy config value. */
-  path: string;
-  /** Human-readable migration or rejection message. */
-  message: string;
-};
+/** Dot-path and migration or rejection message for a legacy config value. */
+export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
 
 export type ConfigFileSnapshot = {
-  /** Config file path that was read. */
   path: string;
   /** Lexical and canonical file paths reached while resolving $include directives. */
   includedPaths?: string[];
@@ -199,7 +127,6 @@ export type ConfigFileSnapshot = {
   /** Temporary roster-only projection retained until write preparation uses generic ownership. */
   agentRosterIncludeOwned?: boolean;
   bindingsIncludeOwned?: boolean;
-  /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */
   raw: string | null;

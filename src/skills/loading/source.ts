@@ -3,7 +3,7 @@ import type { SkillTelemetrySource } from "../types.js";
 import type { Skill } from "./skill-contract.js";
 
 /** Returns the stable source label attached to a loaded skill. */
-export function resolveSkillSource(skill: Skill): string {
+export function resolveSkillSource(skill: Partial<Pick<Skill, "source" | "sourceInfo">>): string {
   return (
     normalizeOptionalString(skill.source) ??
     normalizeOptionalString(skill.sourceInfo?.source) ??
@@ -30,6 +30,8 @@ export function resolveSkillTelemetrySourceValue(value: unknown): SkillTelemetry
   return "unknown";
 }
 
-export function resolveSkillTelemetrySource(skill: Skill): SkillTelemetrySource {
+export function resolveSkillTelemetrySource(
+  skill: Partial<Pick<Skill, "source" | "sourceInfo">>,
+): SkillTelemetrySource {
   return resolveSkillTelemetrySourceValue(resolveSkillSource(skill));
 }

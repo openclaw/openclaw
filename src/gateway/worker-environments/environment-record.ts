@@ -2,8 +2,14 @@ import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protoco
 import type {
   WorkerDesktopEndpoint,
   WorkerProfile,
+  WorkerResourceReceipt,
   WorkerSshEndpoint,
 } from "../../plugins/capability-provider.types.js";
+import type {
+  WorkerEnvironmentRetention,
+  WorkerRetentionPolicy,
+} from "../../plugins/worker-retention.types.js";
+import type { QueuedOperatorRecoverySource } from "../operator-run-recovery-source.codec.js";
 import type { WorkerSessionPlacementDispatchIdentity } from "./placement-record.js";
 import type { WorkerEnvironmentLeasedState, WorkerEnvironmentUnleasedState } from "./state.js";
 
@@ -35,13 +41,17 @@ export type PreparedEnvironmentSelection = WorkerSessionPlacementDispatchIdentit
   nodeDeviceId: string;
   leaseId: string;
   bundleHash: string;
-  assertCurrent: () => void;
+  assertCurrent: import("./placement-authorization.js").WorkerPlacementAuthorization;
 };
 type RecordIdentity = { environmentId: string; providerId: string; profileId: string };
 type RecordBase = RecordIdentity & {
   profileSnapshot: WorkerProfile;
   preparation: WorkerEnvironmentPreparation | null;
   provisionOperationId: string;
+  /** Original caller evidence; absent only for independently owned internal acquisition. */
+  provisionSource?: QueuedOperatorRecoverySource;
+  resourceReceipt: WorkerResourceReceipt | null;
+  retention: WorkerEnvironmentRetention | null;
   nodeSetupId: string | null;
   nodeDeviceId: string | null;
   sharedHost: boolean | null;
@@ -51,7 +61,9 @@ type RecordBase = RecordIdentity & {
   teardownTerminalState: WorkerEnvironmentTeardownTerminalState | null;
   attachedSessionIds: string[];
   lastError: string | null;
-} & { createdAtMs: number; updatedAtMs: number; stateChangedAtMs: number } & {
+  createdAtMs: number;
+  updatedAtMs: number;
+  stateChangedAtMs: number;
   lastActivatedAtMs: number | null;
   idleSinceAtMs: number | null;
   destroyRequestedAtMs: number | null;
@@ -69,6 +81,8 @@ type LeasedRecord = {
 export type WorkerEnvironmentRecord = RecordBase & (UnleasedRecord | LeasedRecord);
 export type WorkerEnvironmentIntentInput = RecordIdentity & {
   preparation?: WorkerEnvironmentPreparationIntent;
+  retention?: WorkerRetentionPolicy;
   profileSnapshot: WorkerProfile;
   provisionOperationId: string;
+  provisionSource?: QueuedOperatorRecoverySource;
 };

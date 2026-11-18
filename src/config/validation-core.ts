@@ -4,21 +4,23 @@ import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   listAgentEntries,
   listAgentEntriesWithSource,
-  listAgentIds,
   resolveAgentWorkspaceDir,
   resolveConfiguredAgentId,
   resolveAmbientOwnerAgentId,
-  tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope.js";
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
+import { LEGACY_AGENT_ROSTER_RULES } from "../commands/doctor/shared/legacy-config-migrations.runtime.entries.js";
+import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { LINEAR_MATCHER_SOURCES } from "../logging/redact-linear-matchers.js";
+import { parseRedactPatternSource } from "../logging/redact-pattern-runtime.js";
+import { PEM_REDACT_PATTERN_SOURCE } from "../logging/redact-pem.js";
+import { compileConfigRegex } from "../security/config-regex.js";
 import {
-  hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
-  isPathWithinRoot,
-  isWindowsAbsolutePath,
+  isAvatarWorkspacePath,
 } from "../shared/avatar-policy.js";
 import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
@@ -27,16 +29,10 @@ import {
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { attachAgentListProjection } from "./agent-list-projection.js";
-import {
-  inheritLegacyDefaultAgentId,
-  tryGetLegacyDefaultAgentId,
-} from "./legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
+import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
+import { findLegacyConfigRuleIssues } from "./legacy.shared.js";
 import { materializeRuntimeConfig } from "./materialize.js";
-import {
-  createModelPolicyRefValidator,
-  parseOperatorModelPolicyWildcardRef,
-} from "./model-policy-ref.js";
+import { createModelPolicyRefValidator } from "./model-policy-ref.js";
 import { isBuiltInModelProviderOverlayId } from "./model-provider-overlay-ids.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { collectRawBundledChannelConfigIssues } from "./validation-channel-rules.js";
@@ -49,23 +45,32 @@ import {
 import { OpenClawSchema } from "./zod-schema.js";
 import { McpServerNameSchema, NodeHostMcpServerNameSchema } from "./zod-schema.root-support.js";
 
-export function collectHeartbeatOwnerWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
-  const agentEntries = listAgentEntries(config);
-  // Match heartbeat enrollment so validation never warns for an owner the runner can use.
-  const unresolved =
-    listAgentIds(config).length > 1 &&
-    !agentEntries.some((entry) => Boolean(entry.heartbeat)) &&
-    !config.agents?.defaults?.heartbeat &&
-    tryResolveAmbientOwnerAgentId(config) === undefined;
-  return unresolved
-    ? [
-        {
-          path: "agents.defaults.heartbeat.agentId",
-          message:
-            "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-        },
-      ]
-    : [];
+// The schema accepts any string, but log redaction drops entries the safe-regex compiler
+// rejects; warn so operators do not rely on a mask that never applies.
+export function collectRedactPatternWarnings(config: OpenClawConfig): ConfigValidationIssue[] {
+  const patterns = config.logging?.redactPatterns;
+  if (!Array.isArray(patterns)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  patterns.forEach((raw, index) => {
+    // Built-in sources resolve to their own matchers before regex compilation.
+    if (raw === PEM_REDACT_PATTERN_SOURCE || LINEAR_MATCHER_SOURCES.has(raw)) {
+      return;
+    }
+    const compiled = compileConfigRegex(...parseRedactPatternSource(raw));
+    if (compiled?.reason) {
+      const repair =
+        compiled.reason === "invalid-regex"
+          ? "Fix the regex syntax"
+          : "Rewrite the nested repetition, for example (a+)+ as a+";
+      warnings.push({
+        path: `logging.redactPatterns.${index}`,
+        message: `Redaction pattern is ignored (${compiled.reason}); values it should mask stay visible in logs and diagnostics. ${repair}, then run openclaw config validate again.`,
+      });
+    }
+  });
+  return warnings;
 }
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
@@ -150,7 +155,7 @@ function collectMcpServerNameIssues(raw: unknown): ConfigValidationIssue[] {
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
-  return isPathWithinRoot(workspaceRoot, resolved);
+  return isPathInside(workspaceRoot, resolved);
 }
 
 function createIdentityAvatarIssue(
@@ -169,9 +174,6 @@ function validateIdentityAvatar(
   env?: NodeJS.ProcessEnv,
 ): ConfigValidationIssue[] {
   const agents = listAgentEntriesWithSource(config);
-  if (agents.length === 0) {
-    return [];
-  }
   const issues: ConfigValidationIssue[] = [];
   for (const { entry, source } of agents) {
     const avatarRaw = entry.identity?.avatar;
@@ -182,7 +184,7 @@ function validateIdentityAvatar(
     if (!avatar || isAvatarDataUrl(avatar) || isAvatarHttpUrl(avatar)) {
       continue;
     }
-    if (avatar.startsWith("~") || (hasAvatarUriScheme(avatar) && !isWindowsAbsolutePath(avatar))) {
+    if (!isAvatarWorkspacePath(avatar)) {
       issues.push(
         createIdentityAvatarIssue(
           source,
@@ -252,24 +254,20 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     refs: readonly string[] | undefined,
     configPath: string,
     agentModels?: typeof defaultModels,
-    allowModelPrefix = false,
   ) => {
     if (!refs?.length) {
       return;
     }
     const isValidRef = createModelPolicyRefValidator(defaultModels, agentModels);
     for (const [index, raw] of refs.entries()) {
-      if (isValidRef(raw) || (allowModelPrefix && parseOperatorModelPolicyWildcardRef(raw))) {
+      if (isValidRef(raw)) {
         continue;
       }
       issues.push({
         path: `${configPath}.${index}`,
         message:
           `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
-          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".' +
-          (allowModelPrefix
-            ? ' Role policies also accept a model-name prefix such as "provider/family-*".'
-            : ""),
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*", "provider/namespace/*" or "provider/family-*".',
       });
     }
   };
@@ -300,8 +298,8 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
       continue;
     }
     const models = listAgentEntries(config).find((agent) => agent.id === sourceAgent)?.models;
-    validateRefs(policy.allow, `${pathPrefix}.allow`, models, true);
-    validateRefs(policy.deny, `${pathPrefix}.deny`, models, true);
+    validateRefs(policy.allow, `${pathPrefix}.allow`, models);
+    validateRefs(policy.deny, `${pathPrefix}.deny`, models);
   }
   return issues;
 }
@@ -394,24 +392,13 @@ export function validateConfigObjectRaw(
     homedir?: () => string;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyDefaultAgentId = isRecord(raw)
-    ? tryGetLegacyDefaultAgentId(raw as OpenClawConfig)
-    : undefined;
-  let normalizedRaw = stripPreservedLegacyRootKeysForValidation(raw, opts?.preservedLegacyRootKeys);
-  let syntheticLegacyOwnership = false;
-  if (legacyDefaultAgentId && isRecord(normalizedRaw) && isRecord(normalizedRaw.agents)) {
-    const entries = normalizedRaw.agents.entries;
-    if (
-      isRecord(entries) &&
-      Object.keys(entries).length > 1 &&
-      normalizedRaw.agents.ownership === undefined
-    ) {
-      normalizedRaw = {
-        ...normalizedRaw,
-        agents: { ...normalizedRaw.agents, ownership: "explicit" },
-      };
-      syntheticLegacyOwnership = true;
-    }
+  const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
+    raw,
+    opts?.preservedLegacyRootKeys,
+  );
+  const rosterIssues = findLegacyConfigRuleIssues(normalizedRaw, LEGACY_AGENT_ROSTER_RULES);
+  if (rosterIssues.length > 0) {
+    return { ok: false, issues: rosterIssues };
   }
   // Generic config transforms can rebuild records before schema validation, so
   // validate authored MCP names from the parsed source when it is available.
@@ -423,6 +410,10 @@ export function validateConfigObjectRaw(
   const mcpServerNameIssues = collectMcpServerNameIssues(opts?.sourceRaw).filter(
     (issue) => !normalizedMcpServerNameIssueKeys.has(JSON.stringify([issue.path, issue.message])),
   );
+  const senderPolicyIssues = collectLegacyToolsBySenderIssues(normalizedRaw);
+  if (senderPolicyIssues.length > 0) {
+    return { ok: false, issues: senderPolicyIssues };
+  }
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success || mcpServerNameIssues.length > 0) {
@@ -434,15 +425,9 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
-  let parsedConfig = validated.data as OpenClawConfig;
-  if (syntheticLegacyOwnership && parsedConfig.agents) {
-    const agents = { ...parsedConfig.agents };
-    delete agents.ownership;
-    parsedConfig = { ...parsedConfig, agents };
-  }
-  const validatedConfig = inheritLegacyDefaultAgentId(
-    raw as OpenClawConfig,
-    attachAgentListProjection(materializeBundledModelProviderOverlays(parsedConfig)),
+  const parsedConfig = validated.data as OpenClawConfig;
+  const validatedConfig = attachAgentListProjection(
+    materializeBundledModelProviderOverlays(parsedConfig),
   );
   const channelIssues =
     policyIssues.length > 0 || opts?.validateBundledChannels
@@ -488,20 +473,15 @@ export function validateConfigObjectRaw(
 export function validateConfigObject(
   raw: unknown,
   opts?: {
-    manifestRegistry?: Pick<PluginMetadataSnapshot, "manifestRegistry">["manifestRegistry"];
     sourceRaw?: unknown;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(migratePersistedImplicitMainRoster(raw).config, opts);
+  const result = validateConfigObjectRaw(applyImplicitAgentRosterDefaults(raw), opts);
   if (!result.ok) {
     return result;
   }
   return {
     ok: true,
-    config: attachAgentListProjection(
-      materializeRuntimeConfig(result.config, {
-        manifestRegistry: opts?.manifestRegistry,
-      }),
-    ),
+    config: attachAgentListProjection(materializeRuntimeConfig(result.config)),
   };
 }

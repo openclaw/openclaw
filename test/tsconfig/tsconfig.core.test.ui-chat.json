@@ -1,10 +1,15 @@
 {
   "extends": "./tsconfig.core.test.shard.json",
   "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "@solidjs/web",
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-ui-chat.tsbuildinfo"
   },
   "include": [
     "../../ui/src/main.ts",
+    "../../ui/src/main.tsx",
+    "../../ui/src/api/**/*.test.ts",
+    "../../ui/src/api/**/*.test.tsx",
     "../../ui/src/pages/chat/**/*.test.ts",
     "../../ui/src/pages/chat/**/*.test.tsx"
   ]

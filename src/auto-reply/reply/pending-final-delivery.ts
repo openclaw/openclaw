@@ -1,4 +1,4 @@
-import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-completion.js";
+import type { DurableDeliveryCompletion } from "../../infra/outbound/delivery-queue-types.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
@@ -15,10 +15,9 @@ export function normalizePendingFinalDeliveryPayloads(
 export function normalizePendingFinalRecoveryPayloads(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
-  return payloads.flatMap((payload) => {
-    const normalized = normalizeReplyPayload(payload, { applyChannelTransforms: false });
-    return normalized ? [normalized] : [];
-  });
+  return payloads.flatMap(
+    (payload) => normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? [],
+  );
 }
 
 /** Build durable recovery text only for payload shapes this marker can replay without loss. */
@@ -48,23 +47,20 @@ export function buildRecoverablePendingFinalDeliveryText(
   }
   if (
     sendablePayloads.length > 1 &&
-    sendablePayloads.some((payload) => hasDurableMedia(payload) || hasMediaDirectiveText(payload))
+    sendablePayloads.some(
+      (payload) => hasDurableMedia(payload) || /^\s*MEDIA:/imu.test(payload.text ?? ""),
+    )
   ) {
     return undefined;
   }
 
-  const recoveryText: string[] = [];
-  for (const payload of sendablePayloads) {
-    const textAndMedia = [
-      payload.text,
-      ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`),
-    ]
-      .filter((value): value is string => Boolean(value?.trim()))
-      .join("\n");
-    if (textAndMedia) {
-      recoveryText.push(textAndMedia);
-    }
-  }
+  const recoveryText = sendablePayloads
+    .map((payload) =>
+      [payload.text, ...(payload.mediaUrls ?? []).map((mediaUrl) => `MEDIA:${mediaUrl}`)]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .join("\n"),
+    )
+    .filter(Boolean);
   return sanitizePendingFinalDeliveryText(recoveryText.join("\n\n")) || undefined;
 }
 
@@ -72,7 +68,7 @@ export function resolvePendingFinalDeliveryCompletion(
   payloads: readonly ReplyPayload[] | undefined,
 ): Extract<DurableDeliveryCompletion, { kind: "pending-final" }> | undefined {
   const metadata = payloads
-    ?.map((payload) => getReplyPayloadMetadata(payload))
+    ?.map(getReplyPayloadMetadata)
     .find((candidate) => candidate?.pendingFinalDeliveryCompletion);
   const completion = metadata?.pendingFinalDeliveryCompletion;
   return completion
@@ -106,10 +102,6 @@ function hasUnsupportedDurableRecoveryShape(payload: ReplyPayload): boolean {
 
 function hasDurableMedia(payload: ReplyPayload): boolean {
   return Boolean(payload.mediaUrl?.trim() || payload.mediaUrls?.some((url) => url.trim()));
-}
-
-function hasMediaDirectiveText(payload: ReplyPayload): boolean {
-  return /^\s*MEDIA:/imu.test(payload.text ?? "");
 }
 
 function hasUnrecoverableNormalizedDeliveryShape(payload: ReplyPayload): boolean {

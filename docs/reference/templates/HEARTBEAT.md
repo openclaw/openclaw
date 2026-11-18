@@ -7,7 +7,7 @@ read_when:
 
 # HEARTBEAT.md is retired
 
-OpenClaw no longer creates `HEARTBEAT.md` in new workspaces or reads it at runtime. Heartbeat instructions now live in the system-owned monitor scratch in the shared state database.
+OpenClaw no longer creates `HEARTBEAT.md` in new workspaces or reads it at runtime. Monitoring instructions now live in ordinary automation job scratch in the shared state database.
 
 Manage the current monitor scratch with the monitor job id from `openclaw automations list --all`:
 
@@ -22,7 +22,7 @@ If an older workspace still contains `HEARTBEAT.md`, run `openclaw doctor --fix`
 
 ## Related
 
-- [Heartbeat](/gateway/heartbeat)
+- [Heartbeat migration](/gateway/heartbeat)
 - [Cron CLI](/cli/cron)
 - [Doctor](/cli/doctor)
-- [Heartbeat config](/gateway/config-agents)
+- [Automation policies](/automation/cron-jobs/schedules#monitoring-policies)

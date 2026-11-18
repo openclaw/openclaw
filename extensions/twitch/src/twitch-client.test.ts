@@ -1,26 +1,39 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { StaticAuthProvider, type AuthProvider } from "@twurple/auth";
+import { LogLevel, type ChatClientOptions } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getClientManager,
+  getOrCreateClientManager,
+  removeClientManager,
+} from "./client-manager-registry.js";
+import { twitchOutbound } from "./outbound.js";
+import { twitchPlugin } from "./plugin.js";
+import { makeTwitchChannelTestConfig, makeTwitchTestConfig } from "./test-fixtures.js";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelLogSink,
-  TwitchAccountConfig,
-  TwitchChatMessage,
-} from "./types.js";
+import type { ChannelAccountSnapshot, TwitchAccountConfig } from "./types.js";
 
-// Mock @twurple dependencies
-const mockConnect = vi.fn(() => {
-  for (const handler of authSuccessHandlers) {
+function probeTwitch(probeAccount: TwitchAccountConfig, timeoutMs: number) {
+  return twitchPlugin.status!.probeAccount!({
+    account: { ...probeAccount, accountId: "default" },
+    timeoutMs,
+    cfg: {},
+  });
+}
+
+const connect = vi.fn(() => {
+  for (const handler of readyHandlers) {
     handler();
   }
 });
-const mockJoin = vi.fn().mockResolvedValue(undefined);
-const mockSay = vi.fn().mockResolvedValue(undefined);
-const mockQuit = vi.fn();
-const mockUnbind = vi.fn();
+const say = vi.fn().mockResolvedValue(undefined);
+const quit = vi.fn();
+const unbind = vi.fn();
+const clientOptions = vi.fn<(options: ChatClientOptions) => void>();
 
 const defaultUserInfo = {
   userName: "testuser",
@@ -36,772 +49,469 @@ function ircMessage(id: string, userInfo: Partial<typeof defaultUserInfo> = {}) 
   return { id, userInfo: { ...defaultUserInfo, ...userInfo } };
 }
 
-const messageHandlers: Array<
+const messages: Array<
   (channel: string, user: string, message: string, msg: ReturnType<typeof ircMessage>) => void
 > = [];
-const authSuccessHandlers: Array<() => void> = [];
-const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
-const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
+const readyHandlers: Array<() => void> = [];
+const failureHandlers: Array<(text: string, retryCount: number) => void> = [];
+const disconnects: Array<(manual: boolean, reason?: Error) => void> = [];
 
-type TwitchClientManagerState = {
-  clients: Map<string, unknown>;
-  messageHandlers: Map<string, unknown>;
-};
-
-function managerState(manager: TwitchClientManager): TwitchClientManagerState {
-  return manager as unknown as TwitchClientManagerState;
+function registerHandler<T>(handlers: T[]) {
+  return vi.fn((handler: T) => {
+    handlers.push(handler);
+    return { unbind };
+  });
 }
 
-// Mock functions that track handlers and return unbind objects
-const mockOnMessage = vi.fn((handler: (typeof messageHandlers)[number]) => {
-  messageHandlers.push(handler);
-  return { unbind: mockUnbind };
-});
-const mockOnAuthenticationSuccess = vi.fn((handler: () => void) => {
-  authSuccessHandlers.push(handler);
-  return { unbind: mockUnbind };
-});
-const mockOnAuthenticationFailure = vi.fn((handler: (text: string, retryCount: number) => void) => {
-  authFailureHandlers.push(handler);
-  return { unbind: mockUnbind };
-});
-const mockOnDisconnect = vi.fn((handler: (manual: boolean, reason?: Error) => void) => {
-  disconnectHandlers.push(handler);
-  return { unbind: mockUnbind };
-});
+const managedAuth = vi.fn<(...args: unknown[]) => Promise<AuthProvider>>(
+  async () => new StaticAuthProvider("cid", "synthetic-managed"),
+);
 
-const mockAddUserForToken = vi.fn().mockResolvedValue("123456");
-const mockOnRefresh = vi.fn();
-const mockOnRefreshFailure = vi.fn();
+vi.mock("./oauth-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./oauth-owner.js")>()),
+  createManagedTwitchAuthProvider: (...args: unknown[]) => managedAuth(...args),
+}));
 
-vi.mock("@twurple/chat", () => ({
+vi.mock("@twurple/chat", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@twurple/chat")>()),
   ChatClient: class {
-    onMessage = mockOnMessage;
-    onAuthenticationSuccess = mockOnAuthenticationSuccess;
-    onAuthenticationFailure = mockOnAuthenticationFailure;
-    onDisconnect = mockOnDisconnect;
-    connect = mockConnect;
-    join = mockJoin;
-    say = mockSay;
-    quit = mockQuit;
-  },
-  LogLevel: {
-    CRITICAL: "CRITICAL",
-    ERROR: "ERROR",
-    WARNING: "WARNING",
-    INFO: "INFO",
-    DEBUG: "DEBUG",
-    TRACE: "TRACE",
+    constructor(options: ChatClientOptions) {
+      clientOptions(options);
+    }
+    onMessage = registerHandler(messages);
+    onAuthenticationSuccess = registerHandler(readyHandlers);
+    onAuthenticationFailure = registerHandler(failureHandlers);
+    onDisconnect = registerHandler(disconnects);
+    connect = connect;
+    say = say;
+    quit = quit;
   },
 }));
 
-const mockAuthProvider = {
-  constructor: vi.fn(),
-};
+const staticAuth = { constructor: vi.fn() };
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: function StaticAuthProvider(...args: unknown[]) {
-    mockAuthProvider.constructor(...args);
-  },
-  RefreshingAuthProvider: class {
-    addUserForToken = mockAddUserForToken;
-    onRefresh = mockOnRefresh;
-    onRefreshFailure = mockOnRefreshFailure;
+  StaticAuthProvider: function MockStaticAuthProvider(...args: unknown[]) {
+    staticAuth.constructor(...args);
   },
 }));
 
-// Mock token resolution - must be after @twurple/auth mock
-vi.mock("./token.js", () => ({
-  resolveTwitchToken: vi.fn(() => ({
-    token: "oauth:mock-token-from-tests",
-    source: "config" as const,
-  })),
-  DEFAULT_ACCOUNT_ID: "default",
+vi.mock("./token.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./token.js")>()),
+  resolveTwitchToken: vi.fn(() => ({ token: "oauth:mock-token-from-tests" })),
 }));
 
 describe("TwitchClientManager", () => {
   let manager: TwitchClientManager;
-  let mockLogger: ChannelLogSink;
-  let statusSink: ReturnType<
-    typeof vi.fn<(patch: Omit<ChannelAccountSnapshot, "accountId">) => void>
-  >;
-  const resolveTwitchTokenMock = vi.mocked(resolveTwitchToken);
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  const statusSink = vi.fn<(patch: Omit<ChannelAccountSnapshot, "accountId">) => void>();
+  const token = vi.mocked(resolveTwitchToken);
 
-  const testAccount: TwitchAccountConfig = {
-    username: "testbot",
+  const account: TwitchAccountConfig = {
+    username: "bot",
     accessToken: "test123456",
-    clientId: "test-client-id",
-    channel: "testchannel",
+    clientId: "cid",
+    channel: "room",
     enabled: true,
   };
 
-  const testAccount2: TwitchAccountConfig = {
-    username: "testbot2",
-    accessToken: "test789",
-    clientId: "test-client-id-2",
-    channel: "testchannel2",
-    enabled: true,
+  const otherAccount = { ...account, username: "bot2", clientId: "client2", channel: "channel2" };
+  const authAccount: TwitchAccountConfig = {
+    ...account,
+    clientSecret: "secret",
+    refreshToken: "refresh",
   };
 
-  const refreshingAccount: TwitchAccountConfig = {
-    ...testAccount,
-    clientSecret: "test-client-secret",
-    refreshToken: "test-refresh-token",
-    expiresIn: 3600,
-    obtainmentTimestamp: 1_700_000_000_000,
-  };
+  function send(text = "Test message") {
+    return manager.sendMessage(account, "room", text);
+  }
+  function emit(
+    index: number,
+    text: string,
+    id = text,
+    userInfo: Partial<typeof defaultUserInfo> = {},
+  ) {
+    expectDefined(messages[index], "message handler")(
+      "#room",
+      "testuser",
+      text,
+      ircMessage(id, userInfo),
+    );
+  }
+  function expectStatus(patch: Partial<ChannelAccountSnapshot>) {
+    expect(statusSink).toHaveBeenLastCalledWith(expect.objectContaining(patch));
+  }
+
+  function authenticating() {
+    const authentication = createDeferred<AuthProvider>();
+    managedAuth.mockImplementationOnce(() => authentication.promise);
+    return { authentication, connection: manager.getClient(authAccount) };
+  }
+
+  async function connecting() {
+    connect.mockImplementationOnce(() => {});
+    const connection = manager.getClient(account);
+    await Promise.resolve();
+    return { connection };
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
-
-    messageHandlers.length = 0;
-    authSuccessHandlers.length = 0;
-    authFailureHandlers.length = 0;
-    disconnectHandlers.length = 0;
-
-    resolveTwitchTokenMock.mockReturnValue({
-      token: "oauth:mock-token-from-tests",
-      source: "config" as const,
-    });
-
-    mockLogger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
-
-    statusSink = vi.fn<(patch: Omit<ChannelAccountSnapshot, "accountId">) => void>();
-    manager = new TwitchClientManager(mockLogger, statusSink);
+    messages.length = 0;
+    readyHandlers.length = 0;
+    failureHandlers.length = 0;
+    disconnects.length = 0;
+    token.mockReturnValue({ token: "oauth:mock-token-from-tests" });
+    manager = new TwitchClientManager(logger, statusSink);
   });
-
-  describe("getClient", () => {
-    it("publishes ready and recovering from authentication and disconnect events", async () => {
-      await manager.getClient(testAccount);
-      expect(statusSink).toHaveBeenCalledWith(
-        expect.objectContaining({ lifecycle: "ready", connected: true }),
-      );
-
-      authFailureHandlers.at(-1)?.("retrying auth", 1);
-      expect(statusSink).toHaveBeenLastCalledWith(
-        expect.objectContaining({ lifecycle: "recovering", lastError: "retrying auth" }),
-      );
-
-      disconnectHandlers.at(-1)?.(false, new Error("connection lost"));
-      expect(statusSink).toHaveBeenLastCalledWith(
-        expect.objectContaining({ lifecycle: "recovering", lastError: "connection lost" }),
-      );
-
-      authSuccessHandlers.at(-1)?.();
-      expect(statusSink).toHaveBeenLastCalledWith(
-        expect.objectContaining({ lifecycle: "ready", terminalDisconnect: undefined }),
-      );
-    });
-
-    it("should reuse existing client for same account", async () => {
-      const client1 = await manager.getClient(testAccount);
-      const client2 = await manager.getClient(testAccount);
-
-      expect(client1).toBe(client2);
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-    });
-
-    it("deduplicates concurrent client creation for the same account", async () => {
-      mockConnect.mockImplementationOnce(() => {});
-
-      const first = manager.getClient(testAccount);
-      const second = manager.getClient(testAccount);
-      await Promise.resolve();
-
-      expect(mockConnect).toHaveBeenCalledTimes(1);
-      expect(authSuccessHandlers).toHaveLength(1);
-      authSuccessHandlers[0]?.();
-
-      const [client1, client2] = await Promise.all([first, second]);
-      expect(client1).toBe(client2);
-    });
-
-    it("waits through authentication failure retry disconnects", async () => {
-      mockConnect.mockImplementationOnce(() => {});
-
-      const connection = manager.getClient(testAccount);
-      await Promise.resolve();
-      authFailureHandlers[0]?.("bad token", 1);
-
-      let settled = false;
-      void connection.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
-      await Promise.resolve();
-      expect(settled).toBe(false);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        "Twitch authentication failed for testbot; waiting for retry, disconnect, or timeout: bad token",
-      );
-
-      disconnectHandlers[0]?.(false, new Error("disconnected"));
-      await Promise.resolve();
-      expect(settled).toBe(false);
-
-      authSuccessHandlers[0]?.();
-      await expect(connection).resolves.toBeTruthy();
-    });
-
-    it("rejects pending auth retry connections on manual disconnect", async () => {
-      mockConnect.mockImplementationOnce(() => {});
-
-      const connection = manager.getClient(testAccount);
-      await Promise.resolve();
-      authFailureHandlers[0]?.("bad token", 1);
-      disconnectHandlers[0]?.(true);
-
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+  it("routes diagnostics without exposing private IRC parse content", async () => {
+    await manager.getClient(account);
+    const options = clientOptions.mock.calls[0]?.[0];
+    const custom = expectDefined(options?.logger?.custom, "Twurple logger bridge");
+    const log = typeof custom === "function" ? custom : custom.log;
+    vi.clearAllMocks();
+    for (const [level, sink] of [
+      [LogLevel.CRITICAL, "error"],
+      [LogLevel.ERROR, "error"],
+      [LogLevel.WARNING, "warn"],
+      [LogLevel.INFO, "info"],
+      [LogLevel.DEBUG, "debug"],
+      [LogLevel.TRACE, "debug"],
+    ] as const) {
+      log(level, "diagnostic");
+      expect(logger[sink]).toHaveBeenLastCalledWith("diagnostic");
+    }
+    log(LogLevel.ERROR, "Error parsing message: synthetic-private-line");
+    expect(logger.error).toHaveBeenLastCalledWith("Twitch IRC message parsing failed");
+    expect(
+      Object.values(logger)
+        .flatMap((sink) => sink.mock.calls)
+        .flat(),
+    ).not.toContain("Error parsing message: synthetic-private-line");
+  });
+  it("publishes ready and recovering from authentication and disconnect events", async () => {
+    await manager.getClient(account);
+    expectStatus({ lifecycle: "ready", connected: true });
+    failureHandlers.at(-1)?.("retrying auth", 1);
+    expectStatus({ lifecycle: "recovering", lastError: "retrying auth" });
+    disconnects.at(-1)?.(false, new Error("connection lost"));
+    expectStatus({ lifecycle: "recovering", lastError: "connection lost" });
+    readyHandlers.at(-1)?.();
+    expectStatus({ lifecycle: "ready", terminalDisconnect: undefined });
+  });
+  it("deduplicates concurrent client creation for the same account", async () => {
+    const { connection: first } = await connecting();
+    const second = manager.getClient(account);
+    expect(connect).toHaveBeenCalledTimes(1);
+    readyHandlers[0]?.();
+    const [client1, client2] = await Promise.all([first, second]);
+    expect(client1).toBe(client2);
+  });
+  it("waits through authentication failure retry disconnects", async () => {
+    const { connection } = await connecting();
+    failureHandlers[0]?.("bad token", 1);
+    const settled = vi.fn();
+    void connection.then(settled, settled);
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    disconnects[0]?.(false, new Error("disconnected"));
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+    readyHandlers[0]?.();
+    await expect(connection).resolves.toBeTruthy();
+  });
+  it.each(["manual", "all"] as const)(
+    "cancels pending connections on %s disconnect",
+    async (mode) => {
+      const { connection } = await connecting();
+      if (mode === "manual") {
+        failureHandlers[0]?.("bad token", 1);
+        disconnects[0]?.(true);
+      } else {
+        await manager.disconnectAll();
+        readyHandlers[0]?.();
+      }
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
-    });
-
-    it("does not cache pending connections after disconnectAll", async () => {
-      mockConnect.mockImplementationOnce(() => {});
-
-      const connection = manager.getClient(testAccount);
-      await Promise.resolve();
-
-      await manager.disconnectAll();
-      authSuccessHandlers[0]?.();
-
-      await expect(connection).rejects.toThrow("Twitch connection cancelled");
-      expect(mockQuit).toHaveBeenCalledTimes(2);
-    });
-
-    it.each(["account", "all"] as const)(
-      "does not create a client when %s disconnect completes during authentication setup",
-      async (scope) => {
-        const authentication = createDeferred<string>();
-        mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
-        const account = {
-          ...testAccount,
-          clientSecret: "test-client-secret",
-          refreshToken: "test-refresh-token",
-        };
-        manager.onMessage(account, vi.fn());
-        const connection = manager.getClient(account);
-
-        expect(mockAddUserForToken).toHaveBeenCalledOnce();
-        if (scope === "account") {
-          await manager.disconnect(account);
-        } else {
+    },
+  );
+  it.each(["same", "other"] as const)(
+    "keeps the %s account connected when stale authentication resolves",
+    async (accountScope) => {
+      const { authentication, connection: staleConnection } = authenticating();
+      const staleOutcome = staleConnection.then(
+        () => "connected",
+        () => "cancelled",
+      );
+      const same = accountScope === "same";
+      const activeManager = same ? manager : new TwitchClientManager(logger);
+      const activeAccount = same ? authAccount : otherAccount;
+      if (same) {
+        await manager.disconnectAll();
+      }
+      const currentConnection = activeManager.getClient(activeAccount);
+      try {
+        const activeClient = await currentConnection;
+        if (!same) {
           await manager.disconnectAll();
         }
-        authentication.resolve("123456");
-
-        await expect(connection).rejects.toThrow("Twitch connection cancelled");
-        expect(mockConnect).not.toHaveBeenCalled();
-        expect(managerState(manager).clients.size).toBe(0);
-        expect(managerState(manager).messageHandlers.has(manager.getAccountKey(account))).toBe(
-          false,
-        );
-      },
-    );
-
-    it("keeps a restarted account connection when stale authentication resolves afterward", async () => {
-      const authentication = createDeferred<string>();
-      mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
-      const account = {
-        ...testAccount,
-        clientSecret: "test-client-secret",
-        refreshToken: "test-refresh-token",
-      };
-      const staleConnection = manager.getClient(account);
-      const staleOutcome = staleConnection.then(
-        () => "connected" as const,
-        () => "cancelled" as const,
-      );
-
-      await manager.disconnect(account);
-      const currentConnection = manager.getClient(account);
-
-      try {
-        expect(mockAddUserForToken).toHaveBeenCalledTimes(2);
-        const activeClient = await currentConnection;
-        authentication.resolve("123456");
-
+        authentication.resolve(new StaticAuthProvider("cid", "synthetic-managed"));
         expect(await staleOutcome).toBe("cancelled");
-        expect(managerState(manager).clients.get(manager.getAccountKey(account))).toBe(
-          activeClient,
-        );
-        expect(mockConnect).toHaveBeenCalledOnce();
+        expect(await activeManager.getClient(activeAccount)).toBe(activeClient);
+        expect(connect).toHaveBeenCalledOnce();
       } finally {
-        authentication.resolve("123456");
+        authentication.resolve(new StaticAuthProvider("cid", "synthetic-managed"));
         await Promise.allSettled([staleConnection, currentConnection]);
       }
-    });
-
-    it("keeps another account connected when cancelling an authentication-pending account", async () => {
-      const authentication = createDeferred<string>();
-      mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
-      const account = {
-        ...testAccount,
-        clientSecret: "test-client-secret",
-        refreshToken: "test-refresh-token",
-      };
-      const staleConnection = manager.getClient(account);
-      const staleOutcome = staleConnection.then(
-        () => "connected" as const,
-        () => "cancelled" as const,
-      );
-      const activeClient = await manager.getClient(testAccount2);
-
-      await manager.disconnect(account);
-      authentication.resolve("123456");
-
-      expect(await staleOutcome).toBe("cancelled");
-      expect(managerState(manager).clients.get(manager.getAccountKey(testAccount2))).toBe(
-        activeClient,
-      );
-      expect(mockConnect).toHaveBeenCalledOnce();
-    });
-
-    it("should normalize token by removing oauth: prefix", async () => {
-      const accountWithPrefix: TwitchAccountConfig = {
-        ...testAccount,
-        accessToken: "oauth:actualtoken123",
-      };
-
-      resolveTwitchTokenMock.mockReturnValue({
-        token: "oauth:actualtoken123",
-        source: "config" as const,
-      });
-
-      await manager.getClient(accountWithPrefix);
-
-      expect(mockAuthProvider.constructor).toHaveBeenCalledOnce();
-      expect(mockAuthProvider.constructor).toHaveBeenCalledWith("test-client-id", "actualtoken123");
-    });
-
-    it("should use token directly when no oauth: prefix", async () => {
-      // Override the mock to return a token without oauth: prefix
-      resolveTwitchTokenMock.mockReturnValue({
-        token: "raw-token-from-tests",
-        source: "config" as const,
-      });
-
-      await manager.getClient(testAccount);
-
-      expect(mockAuthProvider.constructor).toHaveBeenCalledOnce();
-      expect(mockAuthProvider.constructor).toHaveBeenCalledWith(
-        "test-client-id",
-        "raw-token-from-tests",
-      );
-    });
-
-    it("should register refreshing tokens for Twurple chat intent", async () => {
-      await manager.getClient(refreshingAccount);
-
-      expect(mockAddUserForToken).toHaveBeenCalledTimes(1);
-      expect(mockAddUserForToken).toHaveBeenCalledWith(
-        {
-          accessToken: "mock-token-from-tests",
-          refreshToken: "test-refresh-token",
-          expiresIn: 3600,
-          obtainmentTimestamp: 1_700_000_000_000,
-        },
-        ["chat"],
-      );
-      expect(mockAuthProvider.constructor).not.toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        "Using RefreshingAuthProvider for testbot (automatic token refresh enabled)",
-      );
-    });
-
-    it("retries client creation after an earlier addUserForToken failure (83853)", async () => {
-      mockAddUserForToken.mockRejectedValueOnce(new Error("token bind failed"));
-
-      await expect(manager.getClient(refreshingAccount)).rejects.toThrow("token bind failed");
-      // No broken client was cached, so a second call re-attempts the bind.
-      await manager.getClient(refreshingAccount);
-
-      expect(mockAddUserForToken).toHaveBeenCalledTimes(2);
-    });
-
-    it("should throw error when clientId is missing", async () => {
-      const accountWithoutClientId: TwitchAccountConfig = {
-        ...testAccount,
-        clientId: "" as unknown as string,
-      } as unknown as TwitchAccountConfig;
-
-      await expect(manager.getClient(accountWithoutClientId)).rejects.toThrow(
-        "Missing Twitch client ID",
-      );
-
-      expect(mockLogger.error).toHaveBeenCalledWith("Missing Twitch client ID for account testbot");
-    });
-
-    it.each([
-      {
-        name: "simplified default account",
-        cfg: { channels: { twitch: { ...testAccount, accessToken: "" } } },
-        accountId: undefined,
-        expected:
-          "Missing Twitch token for account default (set channels.twitch.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
-      },
-      {
-        name: "multi-account default",
-        cfg: {
-          channels: {
-            twitch: { accounts: { default: { ...testAccount, accessToken: "" } } },
-          },
-        },
-        accountId: "default",
-        expected:
-          "Missing Twitch token for account default (set channels.twitch.accounts.default.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
-      },
-      {
-        name: "named account",
-        cfg: {
-          channels: {
-            twitch: { accounts: { "stream-team": { ...testAccount, accessToken: "" } } },
-          },
-        },
-        accountId: "stream-team",
-        expected:
-          "Missing Twitch token for account stream-team (set channels.twitch.accounts.stream-team.accessToken or OPENCLAW_TWITCH_ACCESS_TOKEN for default)",
-      },
-    ] satisfies Array<{
-      name: string;
-      cfg: OpenClawConfig;
-      accountId: string | undefined;
-      expected: string;
-    }>)(
-      "throws actionable missing-token guidance for $name",
-      async ({ cfg, accountId, expected }) => {
-        resolveTwitchTokenMock.mockReturnValue({
-          token: "",
-          source: "none" as const,
-        });
-
-        await expect(manager.getClient(testAccount, cfg, accountId)).rejects.toThrow(expected);
-      },
-    );
-
-    it("should create separate clients for same account with different channels", async () => {
-      const account1: TwitchAccountConfig = {
-        ...testAccount,
-        channel: "channel1",
-      };
-      const account2: TwitchAccountConfig = {
-        ...testAccount,
-        channel: "channel2",
-      };
-
-      await manager.getClient(account1);
-      await manager.getClient(account2);
-
-      expect(mockConnect).toHaveBeenCalledTimes(2);
-    });
+    },
+  );
+  it("retries client creation after an earlier auth setup failure (83853)", async () => {
+    const refreshingAccount = {
+      ...authAccount,
+      expiresIn: 3600,
+      obtainmentTimestamp: 1_700_000_000_000,
+    };
+    managedAuth.mockRejectedValueOnce(new Error("token bind failed"));
+    await expect(manager.getClient(refreshingAccount)).rejects.toThrow("token bind failed");
+    await manager.getClient(refreshingAccount);
+    expect(managedAuth).toHaveBeenCalledTimes(2);
   });
-
-  describe("onMessage", () => {
-    it.each([false, true])(
-      "keeps the current registration after stale cleanup (same handler: %s)",
-      async (sameHandler) => {
-        await manager.getClient(testAccount);
-        const previous = vi.fn();
-        const current = sameHandler ? previous : vi.fn();
-        const cleanup = manager.onMessage(testAccount, previous);
-        manager.onMessage(testAccount, current);
-
-        cleanup();
-        messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-current"));
-
-        expect(current).toHaveBeenCalledOnce();
-        expect(current).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-current" }));
-        if (!sameHandler) {
-          expect(previous).not.toHaveBeenCalled();
-        }
-      },
+  it("should throw error when clientId is missing", async () => {
+    await expect(manager.getClient({ ...account, clientId: "" })).rejects.toThrow(
+      "Missing Twitch client ID for account bot",
     );
-
-    it("cleanup of the current handler stops delivery", async () => {
-      await manager.getClient(testAccount);
-      const handler = vi.fn();
-      const cleanup = manager.onMessage(testAccount, handler);
+  });
+  it.each([
+    [undefined, "channels.twitch.accessToken"],
+    ["stream-team", "channels.twitch.accounts.stream-team.accessToken"],
+  ] as const)("reports missing-token config path for %s", async (accountId, path) => {
+    const emptyAccount = { ...account, accessToken: "" };
+    const cfg: OpenClawConfig = makeTwitchChannelTestConfig(
+      accountId ? { accounts: { [accountId]: emptyAccount } } : emptyAccount,
+    );
+    token.mockReturnValue({ token: "" });
+    await expect(manager.getClient(account, cfg, accountId)).rejects.toThrow(
+      `Missing Twitch token for account ${accountId ?? "default"} (set ${path} or OPENCLAW_TWITCH_ACCESS_TOKEN for default)`,
+    );
+  });
+  it.each(["handler", "disconnect"] as const)("%s cleanup stops delivery", async (cleanupKind) => {
+    await manager.getClient(account);
+    const handler = vi.fn();
+    const cleanup = manager.onMessage(handler);
+    if (cleanupKind === "handler") {
       cleanup();
-      messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-removed"));
-
-      expect(handler).not.toHaveBeenCalled();
-    });
-  });
-
-  describe("disconnect", () => {
-    it("should clear client and message handler", async () => {
-      const handler = vi.fn();
-      await manager.getClient(testAccount);
-      manager.onMessage(testAccount, handler);
-
-      await manager.disconnect(testAccount);
-
-      const key = manager.getAccountKey(testAccount);
-      expect(managerState(manager).clients.has(key)).toBe(false);
-      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
-    });
-
-    it("clears pending client message handlers when disconnect cancels connection", async () => {
-      mockConnect.mockImplementationOnce(() => {});
-      const handler = vi.fn();
-      manager.onMessage(testAccount, handler);
-
-      const connection = manager.getClient(testAccount);
-      await Promise.resolve();
-      await manager.disconnect(testAccount);
-
-      const key = manager.getAccountKey(testAccount);
-      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
-      authSuccessHandlers[0]?.();
-      await expect(connection).rejects.toThrow("Twitch connection cancelled");
-
-      messageHandlers[0]?.("#testchannel", "testuser", "stale", ircMessage("msg-stale"));
-
-      expect(handler).not.toHaveBeenCalled();
-    });
-
-    it("should handle disconnecting non-existent client gracefully", async () => {
-      // Missing clients are ignored.
-      await manager.disconnect(testAccount);
-      expect(mockQuit).not.toHaveBeenCalled();
-    });
-
-    it("should only disconnect specified account when multiple accounts exist", async () => {
-      await manager.getClient(testAccount);
-      await manager.getClient(testAccount2);
-
-      await manager.disconnect(testAccount);
-
-      expect(mockQuit).toHaveBeenCalledTimes(1);
-
-      const key2 = manager.getAccountKey(testAccount2);
-      expect(managerState(manager).clients.has(key2)).toBe(true);
-    });
-  });
-
-  describe("disconnectAll", () => {
-    it("should disconnect all connected clients", async () => {
-      await manager.getClient(testAccount);
-      await manager.getClient(testAccount2);
-
+    } else {
       await manager.disconnectAll();
-
-      expect(mockQuit).toHaveBeenCalledTimes(2);
-      expect(managerState(manager).clients.size).toBe(0);
-      expect(managerState(manager).messageHandlers.size).toBe(0);
-    });
-
-    it("should handle empty client list gracefully", async () => {
-      // Empty client sets are ignored.
-      await manager.disconnectAll();
-      expect(mockQuit).not.toHaveBeenCalled();
-    });
+      expect(quit).toHaveBeenCalledOnce();
+    }
+    emit(0, "stale", "msg-removed");
+    expect(handler).not.toHaveBeenCalled();
   });
-
-  describe("sendMessage", () => {
-    beforeEach(async () => {
-      await manager.getClient(testAccount);
+  it("admits every chunk before handing the complete batch to Twurple", async () => {
+    const preparing = createDeferred<void>();
+    const prepared = createDeferred<void>();
+    const handedOff = createDeferred<void>();
+    const acknowledgment = createDeferred<void>();
+    const authority = fetchRuntime.captureEffectAuthority();
+    vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+      ...authority,
+      async initiate(effect) {
+        preparing.resolve();
+        await prepared.promise;
+        const result = authority.initiate(effect);
+        handedOff.resolve();
+        return result;
+      },
     });
-
-    it("should send message successfully", async () => {
-      const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
-
-      expect(result).toEqual({
-        ok: true,
-        messageId: expect.stringMatching(
-          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-        ),
-      });
-      expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
-    });
-
-    it("should keep surrogate pairs intact when pre-chunking long messages", async () => {
-      const prefix = "a".repeat(499);
-
-      await manager.sendMessage(testAccount, "testchannel", `${prefix}😀b`);
-
-      expect(mockSay.mock.calls).toEqual([
-        ["testchannel", prefix],
-        ["testchannel", "😀b"],
+    say.mockReturnValue(acknowledgment.promise);
+    const sending = send("a".repeat(501));
+    try {
+      await preparing.promise;
+      expect(say).not.toHaveBeenCalled();
+      prepared.resolve();
+      await handedOff.promise;
+      expect(say.mock.calls).toEqual([
+        ["room", "a".repeat(500)],
+        ["room", "a"],
       ]);
+      acknowledgment.resolve();
+      await expect(sending).resolves.toMatchObject({ ok: true });
+    } finally {
+      prepared.resolve();
+      acknowledgment.resolve();
+      await sending.catch(() => {});
+    }
+  });
+  it("preserves preparation refusal without sending any chunk", async () => {
+    const authority = fetchRuntime.captureEffectAuthority();
+    const refusal = new Error("Twitch message authority ended");
+    vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+      ...authority,
+      initiate: async () => {
+        throw refusal;
+      },
     });
-
-    it("should generate unique message ID for each message", async () => {
-      const result1 = await manager.sendMessage(testAccount, "testchannel", "First message");
-      const result2 = await manager.sendMessage(testAccount, "testchannel", "Second message");
-
-      expect(result1.ok).toBe(true);
-      expect(result2.ok).toBe(true);
-      expect(result1).not.toEqual(result2);
+    await expect(send("a".repeat(501))).rejects.toBe(refusal);
+    expect(say).not.toHaveBeenCalled();
+  });
+  it("reports accepted chunks when a later transport send fails", async () => {
+    const failure = new Error("connection lost");
+    say.mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+    await expect(send("a".repeat(501))).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: failure,
+      deliveryResult: { visibleReplySent: true, messageIds: [expect.any(String)] },
     });
-
-    it("should log and return a formatted send failure", async () => {
-      mockSay.mockRejectedValueOnce(new Error("Rate limited"));
-
-      await expect(
-        manager.sendMessage(testAccount, "testchannel", "Test message"),
-      ).resolves.toEqual({
-        ok: false,
-        error: "Rate limited",
-      });
-      expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: Rate limited");
+    expect(say).toHaveBeenCalledTimes(2);
+  });
+  it("should keep surrogate pairs intact when pre-chunking long messages", async () => {
+    const prefix = "a".repeat(499);
+    await send(`${prefix}😀b`);
+    expect(say.mock.calls).toEqual([
+      ["room", prefix],
+      ["room", "😀b"],
+    ]);
+  });
+  it("should return a formatted send failure", async () => {
+    await manager.disconnectAll();
+    say.mockRejectedValueOnce(new Error("Rate limited"));
+    await expect(send()).resolves.toEqual({ ok: false, error: "Rate limited" });
+  });
+  it("delivers the current registration with role flags without logging content", async () => {
+    const onMessage = vi.fn();
+    const oldCleanup = manager.onMessage(onMessage);
+    manager.onMessage(onMessage);
+    oldCleanup();
+    await manager.getClient(account);
+    const messageText = "private-twitch-message\n🦞";
+    emit(0, messageText, "msg2", {
+      isMod: true,
+      isVip: true,
+      isSubscriber: true,
+      isBroadcaster: true,
     });
-
-    it("should handle unknown error types", async () => {
-      mockSay.mockRejectedValueOnce("String error");
-
-      await expect(
-        manager.sendMessage(testAccount, "testchannel", "Test message"),
-      ).resolves.toEqual({
-        ok: false,
-        error: "String error",
-      });
-      expect(mockLogger.error).toHaveBeenCalledWith("Failed to send message: String error");
-    });
-
-    it("should create client if not already connected", async () => {
-      // Clear the existing client
-      managerState(manager).clients.clear();
-
-      // Reset connect call count for this specific test
-      const connectCallCountBefore = mockConnect.mock.calls.length;
-
-      await manager.sendMessage(testAccount, "testchannel", "Test message");
-
-      expect(mockConnect.mock.calls.length).toBeGreaterThan(connectCallCountBefore);
-    });
+    expect(onMessage).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        id: "msg2",
+        isMod: true,
+        isVip: true,
+        isSub: true,
+        isOwner: true,
+        message: messageText,
+        channel: "#room",
+      }),
+    );
+    expect(logger.debug.mock.calls.flat().join("\n")).not.toContain("private-twitch-message");
+  });
+  it("should handle multiple message handlers for different accounts", async () => {
+    const messages1 = vi.fn();
+    const messages2 = vi.fn();
+    const otherManager = new TwitchClientManager(logger);
+    manager.onMessage(messages1);
+    otherManager.onMessage(messages2);
+    await manager.getClient(account);
+    await otherManager.getClient(otherAccount);
+    emit(0, "msg1");
+    emit(1, "msg2");
+    expect(messages1).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "msg1", isOwner: false }),
+    );
+    expect(messages2).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ message: "msg2" }));
+  });
+  it.each([
+    ["missing", expect.stringContaining("missing credentials")],
+    ["timeout", "timeout after 100ms"],
+    ["authentication", "Authentication failed"],
+    ["disconnect", "String error"],
+    ["success", undefined],
+  ] as const)("probe reports %s and cleans up its connection", async (kind, error) => {
+    if (kind === "timeout") {
+      vi.useFakeTimers();
+      connect.mockImplementationOnce(() => {});
+    } else if (kind === "authentication" || kind === "disconnect") {
+      connect.mockImplementationOnce(() =>
+        kind === "authentication"
+          ? failureHandlers[0]?.("", 0)
+          : disconnects[0]?.(false, "String error" as unknown as Error),
+      );
+    }
+    const probeAccount = { ...account, accessToken: "  oauth:test123456789  " };
+    if (kind === "missing") {
+      probeAccount.username = "";
+    }
+    const result = probeTwitch(probeAccount, 100);
+    if (kind === "timeout") {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(await result).toMatchObject(
+      error === undefined
+        ? { ok: true, connected: true, username: "bot", channel: "room" }
+        : { ok: false, error },
+    );
+    if (kind !== "missing") {
+      expect(quit).toHaveBeenCalledOnce();
+    }
+    if (kind === "success") {
+      expect(staticAuth.constructor).toHaveBeenCalledExactlyOnceWith("cid", "test123456789");
+    }
   });
 
-  describe("message handling integration", () => {
-    let capturedMessage: TwitchChatMessage | null = null;
-
-    beforeEach(() => {
-      capturedMessage = null;
-
-      manager.onMessage(testAccount, (message) => {
-        capturedMessage = message;
+  describe("client manager registry", () => {
+    const cfg = makeTwitchTestConfig(account);
+    async function retireManager() {
+      const owner = getOrCreateClientManager("default", logger);
+      await owner.getClient(account, cfg, "default");
+      owner.onMessage(vi.fn());
+      const cleanup = createDeferred<void>();
+      const disconnect = owner.disconnectAll.bind(owner);
+      vi.spyOn(owner, "disconnectAll").mockImplementation(async () => {
+        await disconnect();
+        await cleanup.promise;
       });
+      return { owner, cleanup, removal: removeClientManager("default") };
+    }
+    let retired: Awaited<ReturnType<typeof retireManager>>;
+    beforeEach(async () => {
+      retired = await retireManager();
     });
-
-    it("should handle incoming chat messages", async () => {
-      await manager.getClient(testAccount);
-
-      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
-
-      onMessageCallback(
-        "#testchannel",
-        "testuser",
-        "Hello bot!",
-        ircMessage("msg123", { userId: "12345" }),
-      );
-
-      expect(capturedMessage?.username).toBe("testuser");
-      expect(capturedMessage?.displayName).toBe("TestUser");
-      expect(capturedMessage?.userId).toBe("12345");
-      expect(capturedMessage?.message).toBe("Hello bot!");
-      expect(capturedMessage?.channel).toBe("#testchannel");
-      expect(capturedMessage?.chatType).toBe("group");
+    afterEach(async () => {
+      retired.cleanup.resolve();
+      await retired.removal.catch(() => undefined);
+      await removeClientManager("default");
     });
-
-    it("should preserve channel names without a # prefix", async () => {
-      await manager.getClient(testAccount);
-
-      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
-
-      onMessageCallback("testchannel", "testuser", "Test", ircMessage("msg1"));
-
-      expect(capturedMessage?.channel).toBe("testchannel");
+    it("retires immediately and preserves replacements when cleanup rejects", async () => {
+      const { owner, cleanup, removal } = retired;
+      expect(quit).toHaveBeenCalledOnce();
+      expect(getClientManager("default")).toBeUndefined();
+      const replacement = getOrCreateClientManager("default", logger);
+      expect(replacement).not.toBe(owner);
+      const error = new Error("disconnect failed");
+      const rejected = expect(removal).rejects.toBe(error);
+      cleanup.reject(error);
+      await rejected;
+      expect(getClientManager("default")).toBe(replacement);
     });
-
-    it("should include user role flags in message", async () => {
-      await manager.getClient(testAccount);
-
-      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
-
-      onMessageCallback(
-        "#testchannel",
-        "moduser",
-        "Test",
-        ircMessage("msg2", {
-          userName: "moduser",
-          displayName: "ModUser",
-          userId: "456",
-          isMod: true,
-          isVip: true,
-          isSubscriber: true,
-        }),
+    it("keeps outbound delivery off a retired manager and sends through its replacement", async () => {
+      const { owner, cleanup, removal } = retired;
+      const reconnect = vi.spyOn(owner, "getClient");
+      const sendText = (text: string) =>
+        twitchOutbound.sendText!({ to: "#room", text, cfg, accountId: "default" });
+      await expect(sendText("while retiring")).rejects.toThrow(
+        "Client manager not found for account: default. Please start the Twitch gateway first.",
       );
-
-      expect(capturedMessage?.isMod).toBe(true);
-      expect(capturedMessage?.isVip).toBe(true);
-      expect(capturedMessage?.isSub).toBe(true);
-      expect(capturedMessage?.isOwner).toBe(false);
-    });
-
-    it("should handle broadcaster messages", async () => {
-      await manager.getClient(testAccount);
-
-      const onMessageCallback = expectDefined(messageHandlers[0], "Twitch message handler");
-
-      onMessageCallback(
-        "#testchannel",
-        "broadcaster",
-        "Test",
-        ircMessage("msg3", {
-          userName: "broadcaster",
-          displayName: "Broadcaster",
-          userId: "789",
-          isBroadcaster: true,
-        }),
-      );
-
-      expect(capturedMessage?.isOwner).toBe(true);
-    });
-  });
-
-  describe("edge cases", () => {
-    it("should handle multiple message handlers for different accounts", async () => {
-      const messages1: TwitchChatMessage[] = [];
-      const messages2: TwitchChatMessage[] = [];
-
-      manager.onMessage(testAccount, (msg) => messages1.push(msg));
-      manager.onMessage(testAccount2, (msg) => messages2.push(msg));
-
-      await manager.getClient(testAccount);
-      await manager.getClient(testAccount2);
-
-      const onMessage1 = messageHandlers[0];
-      if (!onMessage1) {
-        throw new Error("onMessage1 not found");
-      }
-      onMessage1(
-        "#testchannel",
-        "user1",
-        "msg1",
-        ircMessage("1", { userName: "user1", displayName: "User1", userId: "1" }),
-      );
-
-      const onMessage2 = messageHandlers[1];
-      if (!onMessage2) {
-        throw new Error("onMessage2 not found");
-      }
-      onMessage2(
-        "#testchannel2",
-        "user2",
-        "msg2",
-        ircMessage("2", { userName: "user2", displayName: "User2", userId: "2" }),
-      );
-
-      expect(messages1).toHaveLength(1);
-      expect(messages2).toHaveLength(1);
-      expect(messages1[0]?.message).toBe("msg1");
-      expect(messages2[0]?.message).toBe("msg2");
+      expect(reconnect).not.toHaveBeenCalled();
+      expect(say).not.toHaveBeenCalled();
+      const replacement = getOrCreateClientManager("default", logger);
+      await replacement.getClient(account, cfg, "default");
+      replacement.onMessage(vi.fn());
+      await sendText("after restart");
+      expect(say).toHaveBeenCalledWith("room", "after restart");
+      cleanup.resolve();
+      await expect(removal).resolves.toBeUndefined();
+      expect(getClientManager("default")).toBe(replacement);
     });
   });
 });

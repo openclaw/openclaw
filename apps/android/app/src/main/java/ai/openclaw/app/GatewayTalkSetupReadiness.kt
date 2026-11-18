@@ -7,16 +7,41 @@ import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.voice.TalkModeGatewayConfigParser
+import ai.openclaw.app.voice.TalkModeRoute
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
+/** Talk-button admission. Native covers device speech; it does not require a realtime provider. */
+enum class TalkLaunchRoute {
+  Realtime,
+  Native,
+}
+
 data class GatewayTalkSetupReadiness(
   val realtimeTalk: GatewayTalkSetupState,
   val dictation: GatewayTalkSetupState,
+  /**
+   * Null until a talk.config read resolves the route. Once known, native routes
+   * (including a failed config read) do not inherit the realtime provider gate.
+   */
+  val talkLaunchRoute: TalkLaunchRoute? = null,
+  val talkRouteKnown: Boolean = false,
 ) {
+  /**
+   * Admission for the Talk button. An unresolved route keeps the realtime gate so
+   * existing callers do not change; a resolved native or missing route does not.
+   */
+  val launch: GatewayTalkSetupState
+    get() =
+      when {
+        !talkRouteKnown || talkLaunchRoute == TalkLaunchRoute.Realtime -> realtimeTalk
+        else -> realtimeTalk.admittedWithoutSetup()
+      }
+
   companion object {
     fun unverified(
       issue: GatewayTalkSetupIssue = GatewayTalkSetupIssue.CatalogNotLoaded,
@@ -51,38 +76,30 @@ enum class GatewayTalkSetupTarget(
   DICTATION(nativeText("Dictation")),
 }
 
+enum class GatewayTalkSetupTargetIssue(
+  val description: NativeText.Resource,
+) {
+  GroupMissing(nativeText("Gateway did not return \${issue.target.title} setup")),
+  NoProvider(nativeText("No \${issue.target.title} provider is configured on the Gateway")),
+  MissingReadiness(nativeText("Gateway did not return \${issue.target.title} readiness")),
+  ConfigureProvider(nativeText("Configure a \${issue.target.title} provider on the Gateway")),
+  MissingActiveProvider(nativeText("Gateway did not identify the active \${issue.target.title} provider")),
+  UnsupportedProvider(nativeText("Choose a supported \${issue.target.title} provider on the Gateway")),
+}
+
 sealed interface GatewayTalkSetupIssue {
+  data class Targeted(
+    val reason: GatewayTalkSetupTargetIssue,
+    val target: GatewayTalkSetupTarget,
+  ) : GatewayTalkSetupIssue
+
   data object CatalogNotLoaded : GatewayTalkSetupIssue
 
   data object CatalogLoadFailed : GatewayTalkSetupIssue
 
-  data class GroupMissing(
-    val target: GatewayTalkSetupTarget,
-  ) : GatewayTalkSetupIssue
-
-  data class NoProvider(
-    val target: GatewayTalkSetupTarget,
-  ) : GatewayTalkSetupIssue
-
   data class UnknownProvider(
     val target: GatewayTalkSetupTarget,
     val providerId: String,
-  ) : GatewayTalkSetupIssue
-
-  data class MissingReadiness(
-    val target: GatewayTalkSetupTarget,
-  ) : GatewayTalkSetupIssue
-
-  data class ConfigureProvider(
-    val target: GatewayTalkSetupTarget,
-  ) : GatewayTalkSetupIssue
-
-  data class MissingActiveProvider(
-    val target: GatewayTalkSetupTarget,
-  ) : GatewayTalkSetupIssue
-
-  data class UnsupportedProvider(
-    val target: GatewayTalkSetupTarget,
   ) : GatewayTalkSetupIssue
 
   data class ConfigureSelectedProvider(
@@ -100,6 +117,37 @@ val GatewayTalkSetupState.isReady: Boolean
 
 val GatewayTalkSetupState.requiresSetup: Boolean
   get() = this is GatewayTalkSetupState.NeedsSetup
+
+/** Native Talk captures speech on the device, so a realtime provider gap is not setup. */
+private fun GatewayTalkSetupState.admittedWithoutSetup(): GatewayTalkSetupState =
+  when (this) {
+    is GatewayTalkSetupState.NeedsSetup -> GatewayTalkSetupState.Unverified(issue)
+    else -> this
+  }
+
+/**
+ * Combines talk.catalog with the talk.config object Talk Mode already parses.
+ * A missing config still resolves the route as unknown-but-read, so system/stt-tts
+ * is not blocked when the catalog's realtime group is unconfigured.
+ */
+internal fun talkSetupReadinessFromGateway(
+  catalog: JsonObject?,
+  talkConfig: JsonObject?,
+): GatewayTalkSetupReadiness =
+  parseGatewayTalkSetupReadiness(catalog).copy(
+    talkLaunchRoute = talkConfig?.let { TalkModeGatewayConfigParser.parse(it).route.toLaunchRoute() },
+    talkRouteKnown = true,
+  )
+
+private fun TalkModeRoute.toLaunchRoute(): TalkLaunchRoute =
+  when (this) {
+    TalkModeRoute.RealtimeRelay -> TalkLaunchRoute.Realtime
+
+    TalkModeRoute.NativeConfigured,
+    TalkModeRoute.NativeAndroidFallback,
+    TalkModeRoute.NativeGatewayFallback,
+    -> TalkLaunchRoute.Native
+  }
 
 internal fun isAndroidRealtimeRelayModelSupported(model: String?): Boolean {
   val normalized = model?.trim()?.lowercase() ?: return true
@@ -119,60 +167,18 @@ fun gatewayTalkSetupDescription(state: GatewayTalkSetupState): String = gatewayT
 
 internal fun gatewayTalkSetupDescriptionText(state: GatewayTalkSetupState): NativeText =
   when (state) {
-    is GatewayTalkSetupState.Ready -> {
-      nativeText("\${state.provider.label} via Gateway relay", verbatimText(state.provider.label))
-    }
-
-    is GatewayTalkSetupState.NeedsSetup -> {
-      gatewayTalkSetupIssueDescriptionText(state.issue)
-    }
-
-    is GatewayTalkSetupState.Unverified -> {
-      gatewayTalkSetupIssueDescriptionText(state.issue)
-    }
+    is GatewayTalkSetupState.Ready -> nativeText("\${state.provider.label} via Gateway relay", verbatimText(state.provider.label))
+    is GatewayTalkSetupState.NeedsSetup -> gatewayTalkSetupIssueDescriptionText(state.issue)
+    is GatewayTalkSetupState.Unverified -> gatewayTalkSetupIssueDescriptionText(state.issue)
   }
 
 internal fun gatewayTalkSetupIssueDescriptionText(issue: GatewayTalkSetupIssue): NativeText =
   when (issue) {
-    GatewayTalkSetupIssue.CatalogNotLoaded -> {
-      nativeText("Gateway talk catalog not loaded")
-    }
-
-    GatewayTalkSetupIssue.CatalogLoadFailed -> {
-      nativeText("Could not load Gateway talk catalog")
-    }
-
-    is GatewayTalkSetupIssue.GroupMissing -> {
-      nativeText("Gateway did not return \${issue.target.title} setup", issue.target.title)
-    }
-
-    is GatewayTalkSetupIssue.NoProvider -> {
-      nativeText("No \${issue.target.title} provider is configured on the Gateway", issue.target.title)
-    }
-
-    is GatewayTalkSetupIssue.UnknownProvider -> {
-      nativeText("Gateway selected unknown provider \${issue.providerId}", verbatimText(issue.providerId))
-    }
-
-    is GatewayTalkSetupIssue.MissingReadiness -> {
-      nativeText("Gateway did not return \${issue.target.title} readiness", issue.target.title)
-    }
-
-    is GatewayTalkSetupIssue.ConfigureProvider -> {
-      nativeText("Configure a \${issue.target.title} provider on the Gateway", issue.target.title)
-    }
-
-    is GatewayTalkSetupIssue.MissingActiveProvider -> {
-      nativeText("Gateway did not identify the active \${issue.target.title} provider", issue.target.title)
-    }
-
-    is GatewayTalkSetupIssue.UnsupportedProvider -> {
-      nativeText("Choose a supported \${issue.target.title} provider on the Gateway", issue.target.title)
-    }
-
-    is GatewayTalkSetupIssue.ConfigureSelectedProvider -> {
-      nativeText("Configure \${issue.providerLabel} on the Gateway", verbatimText(issue.providerLabel))
-    }
+    is GatewayTalkSetupIssue.Targeted -> issue.reason.description.copy(formatArgs = listOf(issue.target.title))
+    GatewayTalkSetupIssue.CatalogNotLoaded -> nativeText("Gateway talk catalog not loaded")
+    GatewayTalkSetupIssue.CatalogLoadFailed -> nativeText("Could not load Gateway talk catalog")
+    is GatewayTalkSetupIssue.UnknownProvider -> nativeText("Gateway selected unknown provider \${issue.providerId}", verbatimText(issue.providerId))
+    is GatewayTalkSetupIssue.ConfigureSelectedProvider -> nativeText("Configure \${issue.providerLabel} on the Gateway", verbatimText(issue.providerLabel))
   }
 
 internal fun parseGatewayTalkSetupReadiness(catalog: JsonObject?): GatewayTalkSetupReadiness {
@@ -192,7 +198,7 @@ private fun parseTalkCatalogGroup(
 ): GatewayTalkSetupState {
   val group =
     catalog[key].asObjectOrNull()
-      ?: return GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.GroupMissing(target))
+      ?: return GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.GroupMissing, target))
   val providers =
     (group["providers"] as? JsonArray)
       ?.mapNotNull(::parseTalkCatalogProvider)
@@ -201,34 +207,26 @@ private fun parseTalkCatalogGroup(
   val activeProviderId = group.nonBlankString("activeProvider")
   if (providers.isEmpty()) {
     return when {
-      ready == false -> {
-        GatewayTalkSetupState.NeedsSetup(GatewayTalkSetupIssue.NoProvider(target))
-      }
-
-      activeProviderId != null -> {
-        GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.UnknownProvider(target, activeProviderId))
-      }
-
-      else -> {
-        GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.MissingReadiness(target))
-      }
+      ready == false -> GatewayTalkSetupState.NeedsSetup(GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.NoProvider, target))
+      activeProviderId != null -> GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.UnknownProvider(target, activeProviderId))
+      else -> GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingReadiness, target))
     }
   }
 
   if (activeProviderId == null) {
     if (ready == false) {
-      return GatewayTalkSetupState.NeedsSetup(GatewayTalkSetupIssue.ConfigureProvider(target))
+      return GatewayTalkSetupState.NeedsSetup(GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, target))
     }
     // Older Gateways can omit the selected provider and report alias-backed rows as unconfigured
     // even though session startup resolves them. Only an explicit readiness result is authoritative.
-    return GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.MissingActiveProvider(target))
+    return GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingActiveProvider, target))
   }
   val selected =
     // Match Gateway registry precedence: canonical ids win before alias fallback.
     providers.firstOrNull { it.id.equals(activeProviderId, ignoreCase = true) }
       ?: providers.firstOrNull { provider -> provider.aliases.any { it.equals(activeProviderId, ignoreCase = true) } }
       ?: return if (ready == false) {
-        GatewayTalkSetupState.NeedsSetup(GatewayTalkSetupIssue.UnsupportedProvider(target))
+        GatewayTalkSetupState.NeedsSetup(GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.UnsupportedProvider, target))
       } else {
         GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.UnknownProvider(target, activeProviderId))
       }
@@ -246,7 +244,7 @@ private fun parseTalkCatalogGroup(
     }
 
     null -> {
-      GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.MissingReadiness(target))
+      GatewayTalkSetupState.Unverified(GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.MissingReadiness, target))
     }
   }
 }

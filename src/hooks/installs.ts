@@ -1,11 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// Hook install record helpers read and write installed hook metadata.
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import { updateConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 
-/** Install record plus its canonical hook pack id. */
 export type HookInstallUpdate = HookInstallRecord & { hookId: string };
 
 export type HookInstallWriteReceipt = {
@@ -15,7 +14,6 @@ export type HookInstallWriteReceipt = {
   bucketExisted: boolean;
 };
 
-/** Read canonical hook install records from machine state. */
 export function readHookInstalls(
   options: OpenClawStateDatabaseOptions = {},
 ): Record<string, HookInstallRecord> {
@@ -25,7 +23,19 @@ export function readHookInstalls(
   );
 }
 
-/** Persist one hook install record in machine state. */
+export async function readHookInstallsAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<Record<string, HookInstallRecord>> {
+  const result = await executeExistingOpenClawStateRead(options, {
+    type: "hooks.internal.installs",
+  });
+  if (!result) {
+    return {};
+  }
+  // SAFETY: The hook-install owner writes this key as Record<string, HookInstallRecord>.
+  return result.row ? (JSON.parse(result.row.value_json) as Record<string, HookInstallRecord>) : {};
+}
+
 export function recordHookInstall(
   update: HookInstallUpdate,
   options: OpenClawStateDatabaseOptions = {},
