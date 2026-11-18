@@ -590,6 +590,11 @@ reload neither cancels their active model requests nor changes their allowed
 models. The next run uses the updated policy. Explicit user model selections
 still apply, within the admitted run's captured ceiling. Queued, retried, and
 replayed work checks current authority when it starts.
+Queued operator input reauthorizes once when its turn is adopted. A refusal does
+not cancel an already-running turn or change its captured authority. If the role's
+configured model policy changed while the input waited, even by widening it, that
+queued input is refused instead of changing its frozen ceiling. Re-send the
+message to start a fresh request with the current model policy.
 
 Direct model requests, title previews, and user-invoked model completion or
 decision tools apply their source's model policy.
