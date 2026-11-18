@@ -177,42 +177,62 @@ describe("ModelRegistry", () => {
     });
   });
 
-  it("forks a catalog with request-isolated auth and provider mutations", async () => {
-    const template = createRegistry(exampleCatalog("test-token-placeholder"));
-    template.registerProvider("template-only", oauthProviderConfig("Template only", "template"));
-    const firstAuth = AuthStorage.inMemory();
-    const secondAuth = AuthStorage.inMemory();
-    const first = template.fork(firstAuth);
-    const second = template.fork(secondAuth);
+  it.each([false, true])(
+    "forks request-isolated auth and models (selected row: %s)",
+    async (narrow) => {
+      const template = createRegistry(
+        writeRoot({
+          custom: providerConfig([{ id: "example-model" }, { id: "sibling-model" }], {
+            api: "openai-responses",
+            apiKey: "test-token-placeholder",
+          }),
+        }),
+      );
+      template.registerProvider("template-only", oauthProviderConfig("Template only", "template"));
+      const firstAuth = AuthStorage.inMemory();
+      const secondAuth = AuthStorage.inMemory();
+      const selected = narrow ? { provider: "custom", modelId: "example-model" } : undefined;
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const first = template.fork(firstAuth, undefined, selected);
+      const second = template.fork(secondAuth, undefined, selected);
+      expect(
+        clone.mock.calls.flatMap(([value]) => (Array.isArray(value) ? [value.length] : [])),
+      ).toEqual([narrow ? 1 : 2, narrow ? 1 : 2]);
+      clone.mockRestore();
 
-    await expect(first.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
-    await expect(
-      first.getApiKeyAndHeaders(first.find("custom", "example-model")!),
-    ).resolves.toEqual(authResult("test-token-placeholder"));
-    firstAuth.setRuntimeApiKey("custom", "first-runtime-key");
-    secondAuth.setRuntimeApiKey("custom", "second-runtime-key");
-    first.registerProvider("first-only", oauthProviderConfig("First only", "first"));
+      await expect(first.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
+      await expect(
+        first.getApiKeyAndHeaders(first.find("custom", "example-model")!),
+      ).resolves.toEqual(authResult("test-token-placeholder"));
+      firstAuth.setRuntimeApiKey("custom", "first-runtime-key");
+      secondAuth.setRuntimeApiKey("custom", "second-runtime-key");
+      first.registerProvider("first-only", oauthProviderConfig("First only", "first"));
 
-    await expect(first.getApiKeyForProvider("custom")).resolves.toBe("first-runtime-key");
-    await expect(second.getApiKeyForProvider("custom")).resolves.toBe("second-runtime-key");
-    expect(oauthIds(secondAuth)).not.toContain("first-only");
-    expect(oauthIds(template.authStorage)).not.toContain("first-only");
+      await expect(first.getApiKeyForProvider("custom")).resolves.toBe("first-runtime-key");
+      await expect(second.getApiKeyForProvider("custom")).resolves.toBe("second-runtime-key");
+      expect(oauthIds(secondAuth)).not.toContain("first-only");
+      expect(oauthIds(template.authStorage)).not.toContain("first-only");
 
-    const firstModel = first.find("custom", "example-model");
-    const secondModel = second.find("custom", "example-model");
-    firstModel!.input.push("image");
-    firstModel!.cost.input = 42;
-    for (const model of [secondModel, template.find("custom", "example-model")]) {
-      expect(model).toMatchObject({ input: ["text"], cost: { input: 0 } });
-    }
+      const firstModel = first.find("custom", "example-model");
+      const secondModel = second.find("custom", "example-model");
+      firstModel!.input.push("image");
+      firstModel!.cost.input = 42;
+      for (const model of [secondModel, template.find("custom", "example-model")]) {
+        expect(model).toMatchObject({ input: ["text"], cost: { input: 0 } });
+      }
+      expect(first.find("custom", "sibling-model")?.id).toBe("sibling-model");
+      expect(first.getAll()).toHaveLength(2);
+      expect(first.find("custom", "example-model")).toBe(firstModel);
+      expect(firstModel?.cost.input).toBe(42);
 
-    first.unregisterProvider("first-only");
-    expect(first.find("custom", "example-model")).toBeDefined();
-    expect(oauthIds(firstAuth)).toContain("template-only");
-    first.unregisterProvider("template-only");
-    expect(oauthIds(firstAuth)).not.toContain("template-only");
-    expect(oauthIds(secondAuth)).toContain("template-only");
-  });
+      first.unregisterProvider("first-only");
+      expect(first.find("custom", "example-model")).toBeDefined();
+      expect(oauthIds(firstAuth)).toContain("template-only");
+      first.unregisterProvider("template-only");
+      expect(oauthIds(firstAuth)).not.toContain("template-only");
+      expect(oauthIds(secondAuth)).toContain("template-only");
+    },
+  );
 
   it("skips native presence while resolving configured HTTP credentials", async () => {
     const auth = AuthStorage.inMemory({
