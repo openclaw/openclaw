@@ -552,6 +552,27 @@ In the built-in runtime, admitted human input or peer mail wakes the wait with
 `reason: "input"`, so the agent can respond without waiting for the child.
 Waiting does not cancel execution or consume completion delivery.
 
+For content-free correlation, use `action: "wait", metadataOnly: true`.
+The `runs` array then omits labels, task/result text, errors, and payloads. It
+reports recorded requester and controller identities, the original requester
+turn, ownership generation, frozen wake batch and rearm generation, and separate
+delivery/custody/visible-final facts. Absent fields remain unknown. A consumed
+private input or `yieldedFinalDeliverable` admission flag does not prove a visible
+final was owed or delivered; only the recorded `requesterVisibleFinal` identifies
+a confirmed final for its exact requester turn and batch.
+
+Optionally narrow the read with
+`expectedGenerations: [{ runId: "selected-run", generation: 2, rearmGeneration: 1 }]`.
+Entries must uniquely select requested run IDs; ownership generation is required
+for each predicate, while rearm generation is optional. A mismatch is
+`unavailable`, not a successful empty settlement. During one metadata wait, a
+replacement owner or rearmed cohort is never silently substituted. Start a new
+explicit read to observe the new identity.
+
+These options only narrow the existing host-bound requester/controller scope;
+a run ID, recorded controller, or generation is not a grant. They do not create
+a plugin background-reader capability, schedule follow-up, or consume completion.
+
 List entries include the native `runId`, child `sessionKey`, status, outcome,
 and delivery status. A yielded child remains `waiting` until its continuation.
 For an external wait, its controlling parent can send a continuation with

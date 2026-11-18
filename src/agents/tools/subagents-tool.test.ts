@@ -76,6 +76,160 @@ function wait(timeoutSeconds?: number, signal?: AbortSignal) {
 }
 const publish = () => owner.listeners.forEach((emit) => emit());
 describe("subagents native run contract", () => {
+  const metadata = (extra: Record<string, unknown> = {}) =>
+    tool.execute("correlation", {
+      action: "wait",
+      runIds: [entry.runId],
+      timeoutSeconds: 0,
+      metadataOnly: true,
+      ...extra,
+    });
+
+  it("separates parent turns and final cohorts without reading private fields", async () => {
+    entry.requesterTurnRunId = "parent-one";
+    entry.controllerSessionKey = mainSession;
+    entry.requesterSettleWake = {
+      status: "pending",
+      attemptCount: 1,
+      requesterRunId: "parent-one",
+      batchRunIds: [entry.runId],
+      rearmGeneration: 2,
+      yieldedFinalDeliverable: true,
+    };
+    entry.delivery = {
+      status: "pending",
+      generation: 3,
+      disposition: "ambiguous",
+      requesterDelivery: { state: "consumed", runId: "processor-one" },
+    };
+    for (const field of ["task", "label", "completion"]) {
+      Object.defineProperty(entry, field, {
+        get() {
+          throw new Error("PRIVATE_FIELD_READ");
+        },
+      });
+    }
+    Object.defineProperty(entry.requesterSettleWake, "privateInput", {
+      get() {
+        throw new Error("PRIVATE_INPUT_READ");
+      },
+    });
+    Object.defineProperty(entry.delivery, "payload", {
+      get() {
+        throw new Error("PRIVATE_PAYLOAD_READ");
+      },
+    });
+    const first = await metadata();
+    expect(first.details).toMatchObject({
+      runs: [
+        {
+          requesterTurnRunId: "parent-one",
+          controllerSessionKey: mainSession,
+          generation: 1,
+          wake: { rearmGeneration: 2, batchRunIds: [entry.runId] },
+          delivery: {
+            status: "pending",
+            disposition: "ambiguous",
+            requesterDelivery: { state: "consumed" },
+          },
+        },
+      ],
+    });
+    expect((first.details as { runs: unknown[] }).runs[0]).not.toHaveProperty("label");
+    expect(
+      (first.details as { runs: Array<{ delivery: { requesterVisibleFinal?: unknown } }> }).runs[0]
+        ?.delivery.requesterVisibleFinal,
+    ).toBeUndefined();
+    entry.requesterTurnRunId = "parent-two";
+    entry.requesterSettleWake.batchRunIds = [entry.runId, "sibling-two"];
+    entry.delivery.requesterVisibleFinal = {
+      requesterTurnRunId: "parent-two",
+      batchRunIds: [entry.runId, "sibling-two"],
+    };
+    const second = await metadata();
+    expect(second.details).toMatchObject({
+      runs: [
+        {
+          requesterTurnRunId: "parent-two",
+          wake: { batchRunIds: [entry.runId, "sibling-two"] },
+          delivery: {
+            requesterVisibleFinal: {
+              requesterTurnRunId: "parent-two",
+              batchRunIds: [entry.runId, "sibling-two"],
+            },
+          },
+        },
+      ],
+    });
+    expect(second.details).not.toEqual(first.details);
+  });
+
+  it("keeps absent correlation facts unknown instead of manufacturing defaults", async () => {
+    entry.generation = undefined;
+    const result = JSON.parse(JSON.stringify((await metadata()).details));
+    expect(result.runs[0]).not.toHaveProperty("generation");
+    expect(result.runs[0]).not.toHaveProperty("controllerSessionKey");
+    expect(result.runs[0]).not.toHaveProperty("requesterTurnRunId");
+    expect(result.runs[0]).not.toHaveProperty("wake");
+  });
+
+  it.each([
+    { runId: "native-one", generation: 2 },
+    { runId: "native-one", generation: 1, rearmGeneration: 9 },
+  ])("rejects an expected identity mismatch without disclosing metadata: %j", async (expected) => {
+    expect((await metadata({ expectedGenerations: [expected] })).details).toMatchObject({
+      reason: "unavailable",
+      unavailable: [entry.runId],
+      runs: [],
+    });
+  });
+
+  it("does not turn a known run id or generation into another controller grant", async () => {
+    entry.requesterSessionKey = "agent:other:main";
+    expect(
+      (await metadata({ expectedGenerations: [{ runId: entry.runId, generation: 1 }] })).details,
+    ).toMatchObject({ reason: "unavailable", runs: [] });
+  });
+
+  it.each(["generation", "cohort", "requester-turn", "batch"] as const)(
+    "does not replace a selected %s while waiting",
+    async (change) => {
+      entry.requesterSettleWake = { status: "pending", attemptCount: 0, rearmGeneration: 1 };
+      const waiting = metadata({ timeoutSeconds: 60 });
+      // Let the existing snapshot owner finish its initial read.
+      await setImmediate();
+      if (change === "generation") {
+        entry.generation = 2;
+      } else if (change === "cohort") {
+        entry.requesterSettleWake.rearmGeneration = 2;
+      } else if (change === "requester-turn") {
+        entry.requesterTurnRunId = "replacement-turn";
+      } else {
+        entry.requesterSettleWake.batchRunIds = [entry.runId, "new-sibling"];
+      }
+      publish();
+      expect((await waiting).details).toMatchObject({ reason: "unavailable", runs: [] });
+      expect(owner.cancel).not.toHaveBeenCalled();
+    },
+  );
+
+  it("leaves legacy wait output unchanged", async () => {
+    entry.label = "existing-label";
+    expect((await wait(0)).details).toMatchObject({ runs: [{ label: "existing-label" }] });
+  });
+
+  it("rejects correlation options outside the content-free wait", async () => {
+    await expect(tool.execute("list", { action: "list", metadataOnly: true })).rejects.toThrow(
+      "only supported by wait",
+    );
+    await expect(
+      tool.execute("wait", {
+        action: "wait",
+        runIds: [entry.runId],
+        expectedGenerations: [{ runId: entry.runId, generation: 1 }],
+      }),
+    ).rejects.toThrow("requires metadataOnly");
+  });
   it.for(["external_user", "inter_session"] as const)(
     "wakes the real runtime wait for admitted %s input without cancelling the child",
     async (kind, { signal }) => {
