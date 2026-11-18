@@ -760,7 +760,7 @@ describe("requester settle dispatch deadline", () => {
     }
   });
 
-  it.each(["unavailable", "admitted", "accepted replay", "ambiguous"] as const)(
+  it.each(["unavailable", "admitted", "accepted replay", "ambiguous", "removed worktree"] as const)(
     "keeps a result no turn committed owed unless its refusal is permanent: %s",
     async (failure) => {
       const context = createContext();
@@ -775,7 +775,11 @@ describe("requester settle dispatch deadline", () => {
           acceptTurn({ controllerInput, preflight, io }, true);
         }
         throw Object.assign(
-          new Error("requester dispatch unavailable"),
+          new Error(
+            failure === "removed worktree"
+              ? "managed worktree was removed: /synthetic/removed-worktree"
+              : "requester dispatch unavailable",
+          ),
           failure === "ambiguous" ? { sentBeforeError: true } : {},
         );
       });
@@ -786,8 +790,12 @@ describe("requester settle dispatch deadline", () => {
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
       await expect(run()).resolves.toBe(false);
       expect(startTurn).toHaveBeenCalledTimes(failure === "unavailable" ? 0 : 1);
-      if (failure === "admitted" || failure === "accepted replay") {
-        // A refusal after admission is permanent: withheld once, never dispatched again.
+      if (
+        failure === "admitted" ||
+        failure === "accepted replay" ||
+        failure === "removed worktree"
+      ) {
+        // Permanent refusals settle once instead of re-entering the sweep.
         expect(completeBatch).toHaveBeenCalledOnce();
         expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({
           disposition: "permanent_failure",
