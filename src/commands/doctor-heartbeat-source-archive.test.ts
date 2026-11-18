@@ -204,3 +204,23 @@ it.each(["before", "after"])(
     }
   },
 );
+
+it("retries the migration after a failed archive write", async () => {
+  const f = await fixture();
+  const checklist = "Checklist written before the disk filled";
+  await fs.writeFile(f.sourcePath, checklist);
+  const writeFile = fs.writeFile.bind(fs);
+  const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+    if (data === checklist) {
+      await writeFile(file, checklist.slice(0, 8), options);
+      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+    }
+    return writeFile(file, data, options);
+  });
+  expect((await f.migrate()).warnings.join("\n")).toContain("disk full");
+  fault.mockRestore();
+  expect(await f.archivedContents()).toEqual([]);
+  expect((await f.migrate()).warnings).toEqual([]);
+  expect(await f.archivedContents()).toContain(checklist);
+  await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
+});

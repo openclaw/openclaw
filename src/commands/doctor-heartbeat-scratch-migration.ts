@@ -400,6 +400,8 @@ async function archiveSource(params: {
     await fs.writeFile(archivePath, params.source.content, { flag: "wx", mode: 0o600 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+      // Only this exclusive create can have made the file; a partial archive blocks every retry.
+      await fs.rm(archivePath, { force: true });
       throw error;
     }
     const existing = await fs.readFile(archivePath, "utf8");
