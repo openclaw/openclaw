@@ -1,11 +1,11 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { create as createRow } from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { prepareSessionRowPublicationView } from "./session-row-publication.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 
-it("retires only affected row vectors, preserves witnesses, and invalidates selections at read", () => {
+it("retires only affected row vectors, preserves witnesses, and releases selections once", () => {
   const revisions = createSessionRowProjectionRevisions(new Map(), new Map());
   const projection = {
     state: { cfg: {}, revision: {}, rowContext: {} },
@@ -64,11 +64,13 @@ it("retires only affected row vectors, preserves witnesses, and invalidates sele
     }
     expect(unrelatedReads).toBe(0);
     revisions.publishSelection(changed);
-    expect(views.map((view) => lists.get(view.key).selection)).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
+    expect(views.map((view) => view.selection)).toEqual([undefined, undefined, undefined]);
+    const update = vi.spyOn(lists, "update");
+    for (let index = 0; index < 100; index++) {
+      revisions.publishSelection(changed);
+    }
+    expect(update).not.toHaveBeenCalled();
+    update.mockRestore();
     expect(views[2]!.rows).toBe(vectors[2]);
     // Replacing membership must remove the old key, including duplicate aliases.
     lists.setRows(views[0]!, [row("other"), row("other")], true);
@@ -82,6 +84,7 @@ it("retires only affected row vectors, preserves witnesses, and invalidates sele
     read();
     // Revision-only invalidation also runs before a retained selection can be read.
     lists.get("2").selection = selection;
+    lists.update(views[2]!);
     projection.state.revision = {};
     read();
     expect(lists.get("2").selection).toBeUndefined();

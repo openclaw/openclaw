@@ -126,7 +126,6 @@ export type SessionListView = {
   rowHistory?: SessionRowGeneration[];
   conditional?: boolean;
   selection?: SessionEntrySelection;
-  selectionRevision?: number;
   rowKeys?: Set<string>;
   selectedAt?: number;
   activityExpiresAt?: number;
@@ -140,7 +139,7 @@ function hasRowBaseline(view: SessionListView): boolean {
 /** The publication owns admission, recency, accounting and retirement of every list view. */
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
-  private selectionRevision = 0;
+  private readonly selections = new Set<SessionListView>();
   private rowEncodings = new WeakMap<
     GatewaySessionRow,
     { refs: number; bytes: number; extraBytes: number; factBytes: number }
@@ -153,7 +152,11 @@ export class SessionListViewCache {
   }
 
   invalidateSelections() {
-    this.selectionRevision++;
+    // Release obsolete entries even without another read; each populated view retires once.
+    for (const view of this.selections) {
+      view.selection = undefined;
+      this.update(view);
+    }
   }
 
   invalidateRows(key?: string) {
@@ -176,16 +179,11 @@ export class SessionListViewCache {
   get(key: string): SessionListView {
     let view = this.lists.get(key);
     if (view) {
-      if (view.selectionRevision !== this.selectionRevision) {
-        view.selection = undefined;
-        view.selectionRevision = this.selectionRevision;
-        this.update(view);
-      }
       this.lists.delete(key);
       this.lists.set(key, view);
       return view;
     }
-    view = { key, refs: 0, bytes: 0, historyRefs: 0, selectionRevision: this.selectionRevision };
+    view = { key, refs: 0, bytes: 0, historyRefs: 0 };
     this.lists.set(key, view);
     retainedViews++;
     this.update(view);
@@ -306,6 +304,11 @@ export class SessionListViewCache {
     if (this.lists.get(view.key) !== view) {
       return;
     }
+    if (view.selection) {
+      this.selections.add(view);
+    } else {
+      this.selections.delete(view);
+    }
     const rowRefs = (view.rows?.length ?? 0) + view.historyRefs;
     const entryRefs =
       (view.selection ? selectionRefs(view.selection) : 0) + (view.partitions?.refs ?? 0);
@@ -389,6 +392,7 @@ export class SessionListViewCache {
       });
     }
     this.lists.delete(view.key);
+    this.selections.delete(view);
     this.bytes -= view.bytes;
     retainedBytes -= view.bytes;
     retainedRefs -= view.refs;
@@ -404,6 +408,7 @@ export class SessionListViewCache {
     this.bytes = 0;
     this.refs = 0;
     this.lists.clear();
+    this.selections.clear();
     this.rowEncodings = new WeakMap();
     scheduleRetentionReport();
   }
