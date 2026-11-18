@@ -54,7 +54,6 @@ export function registerGatewayCronCompletionTests<
           enabled: true,
           schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload:
             kind === "command"
               ? {

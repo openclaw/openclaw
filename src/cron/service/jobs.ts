@@ -250,7 +250,6 @@ export function createJob(
       ? { cyberAccessProgram: input.cyberAccessProgram }
       : {}),
     sessionTarget: input.sessionTarget,
-    wakeMode: input.wakeMode,
     payload:
       input.payload.kind === "script"
         ? normalizeCronScriptPayload(structuredClone(input.payload))
@@ -387,9 +386,6 @@ export function applyJobPatch(
     } else {
       job.idleOnly = patch.idleOnly;
     }
-  }
-  if (patch.wakeMode) {
-    job.wakeMode = patch.wakeMode;
   }
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);

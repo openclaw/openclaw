@@ -256,14 +256,6 @@ export function normalizeStoredCronJobs(
       setField(raw, "enabled", true);
     }
 
-    setField(
-      raw,
-      "wakeMode",
-      normalizeOptionalLowercaseString(raw.wakeMode) === "next-heartbeat"
-        ? "next-heartbeat"
-        : "now",
-    );
-
     if (!isRecord(raw.payload) && inferPayloadIfMissing(raw)) {
       trackChange("legacyTopLevelPayloadFields");
     }

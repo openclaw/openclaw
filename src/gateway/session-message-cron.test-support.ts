@@ -71,7 +71,6 @@ export function registerCronSessionCompletionEventTests({
               }
             : {}),
           delivery: { mode: "announce", channel: "last" },
-          wakeMode: "now",
           enabled: true,
           state: {},
           createdAtMs: 1,

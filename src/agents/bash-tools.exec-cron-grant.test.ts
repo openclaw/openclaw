@@ -181,7 +181,6 @@ function seedCronJobRow() {
     agentId: "main",
     name: "Nightly backup",
     schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "run the backup" },
   });
   upsertCronJobRow(database.db, CRON_STORE_KEY, job, 0);

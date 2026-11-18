@@ -218,7 +218,6 @@ describe("CronService failure alerts", () => {
           delivery: undefined,
           agentId: "work",
           sessionKey,
-          wakeMode: "now",
         });
 
         await cron.run(job.id, "force");

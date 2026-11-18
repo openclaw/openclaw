@@ -12,7 +12,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -61,7 +60,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -110,7 +108,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -181,7 +178,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "session:agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -252,7 +248,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -318,7 +313,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -380,7 +374,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -429,7 +422,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -500,7 +492,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -557,7 +548,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "session:agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -607,7 +597,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "session:agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -656,7 +645,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "session:agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -705,7 +693,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "session:agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -762,7 +749,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "session:agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -841,7 +827,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "isolated",
-      "wakeMode": "now",
       "payload": {
         "kind": "command",
         "argv": [
@@ -885,7 +870,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -934,7 +918,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1004,7 +987,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1075,7 +1057,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1152,7 +1133,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1229,7 +1209,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1305,7 +1284,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1374,7 +1352,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1464,7 +1441,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "session:agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1554,7 +1530,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1643,7 +1618,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1732,7 +1706,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1821,7 +1794,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1882,7 +1854,6 @@
         "everyMs": 60000
       },
       "sessionTarget": "current",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture",
@@ -1967,7 +1938,6 @@
       },
       "sessionTarget": "current",
       "sessionKey": "agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture"
@@ -2022,7 +1992,6 @@
       },
       "sessionTarget": "current",
       "sessionKey": "agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture"
@@ -2078,7 +2047,6 @@
       },
       "sessionTarget": "current",
       "sessionKey": "agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture"
@@ -2134,7 +2102,6 @@
       },
       "sessionTarget": "current",
       "sessionKey": "agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture"
@@ -2194,7 +2161,6 @@
       },
       "sessionTarget": "current",
       "sessionKey": "agent:main:dashboard:session-1",
-      "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
         "message": "fixture"

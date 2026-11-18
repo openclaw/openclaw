@@ -22,7 +22,6 @@ Manage automations with the `openclaw automations` CLI; `openclaw cron` remains 
       --name "Reminder" \
       --session main \
       --system-event "Reminder: check the automations docs draft" \
-      --wake now \
       --delete-after-run
     ```
   </Step>

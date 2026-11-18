@@ -87,7 +87,6 @@ it.each([
           updatedAtMs: 1,
           schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 0 },
           sessionTarget: "main",
-          wakeMode: "now",
           payload: { kind: "systemEvent", text: "Legacy monitor" },
           state: {},
         };

@@ -106,7 +106,6 @@ export function ciAutomationJobSpec(target: CiAutomationTarget, option: CiAutoma
     enabled: true,
     schedule: { kind: "every", everyMs: 300_000 },
     sessionTarget: executionTarget(target, option),
-    wakeMode: "now",
     ...(option === "autoFix" ? { trigger: { script: SESSION_PR_AUTO_FIX_TRIGGER } } : {}),
     payload: { kind: "agentTurn", message: automationMessage(target, option) },
     delivery: { mode: "none" },

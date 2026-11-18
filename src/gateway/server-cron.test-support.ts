@@ -205,7 +205,6 @@ function addCronJob(
     enabled: true,
     schedule: { kind: "at", at: new Date(1).toISOString() },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload,
     ...overrides,
   });

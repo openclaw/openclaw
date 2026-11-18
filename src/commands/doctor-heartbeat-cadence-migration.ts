@@ -161,7 +161,6 @@ function convertMonitor(
   };
   job.sessionKey = session.sessionKey;
   job.sessionTarget = heartbeat?.isolatedSession ? "isolated" : `session:${session.sessionKey}`;
-  job.wakeMode = "now";
   job.idleOnly = true;
   job.activeHours = migrateActiveHours(heartbeat);
   job.delivery = {

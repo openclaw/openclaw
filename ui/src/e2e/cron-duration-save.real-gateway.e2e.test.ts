@@ -558,7 +558,6 @@ async function seedPausedAgentJob(
       enabled: false,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload,
       delivery: { mode: "none" },
       ...overrides,
@@ -862,7 +861,6 @@ suite.define(() => {
             agentId: "main",
             enabled: false,
             sessionTarget: "isolated",
-            wakeMode: "now",
             delivery: { mode: "none" },
           });
           expect

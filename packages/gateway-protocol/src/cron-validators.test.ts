@@ -17,7 +17,6 @@ const minimalAddParams = {
   name: "daily-summary",
   schedule: { kind: "every", everyMs: 60_000 },
   sessionTarget: "main",
-  wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "tick" },
 } as const;
 const add = (overrides: Record<string, unknown> = {}) => ({ ...minimalAddParams, ...overrides });
@@ -224,9 +223,10 @@ describe("cron protocol validators", () => {
     checkUpdate(patch).toBe(accepted);
   });
 
-  it("requires scheduling fields on add", () => {
-    const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
-    expect(isAdd(withoutWakeMode)).toBe(false);
+  it("accepts jobs without the retired wake setting and rejects it on add and update", () => {
+    expect(isAdd(minimalAddParams)).toBe(true);
+    expect(isAdd({ ...minimalAddParams, wakeMode: "now" })).toBe(false);
+    expect(isUpdate(update({ wakeMode: "next-heartbeat" }))).toBe(false);
   });
 
   it.each([

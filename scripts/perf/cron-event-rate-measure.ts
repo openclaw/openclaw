@@ -298,7 +298,6 @@ try {
                 }
               : { kind: "at", at: new Date(Date.now() + 86_400_000).toISOString() },
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: {
         kind: "command",
         argv: [process.execPath, "-e", "process.stdout.write('synthetic cron')"],

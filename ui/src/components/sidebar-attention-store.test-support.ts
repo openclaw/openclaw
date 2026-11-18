@@ -103,7 +103,6 @@ export function eventJob(overrides: Partial<CronJob> = {}): CronJob {
     configRevision: "fixture-config",
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "Synthetic scheduled task" },
     state: { lastRunStatus: "error" },
     ...overrides,

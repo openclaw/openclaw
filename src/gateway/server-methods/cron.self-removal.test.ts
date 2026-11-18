@@ -161,7 +161,6 @@ describe("cron self-removal", () => {
             deleteAfterRun: false,
             schedule: { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() },
             sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
             payload:
               payloadKind === "script"
                 ? { kind: "script", script: "return {}", timeoutSeconds }

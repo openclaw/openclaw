@@ -24,7 +24,7 @@ import {
   upsertCronJobRow,
 } from "../../../cron/store/row-codec.js";
 import { getCronStoreKysely } from "../../../cron/store/schema.js";
-import { migrateCronInferenceStandingGrantReferences } from "../../../gateway/operator-approval-standing-grants.worker.js";
+import { migrateCronStandingGrantReferencesForDoctor } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import { engineGreatest } from "../../../infra/database-engine/scalar.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
@@ -40,6 +40,7 @@ import {
   capturePostgresBackup,
   fingerprintPostgresBackup,
 } from "../../../snapshot/database-backup.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import {
   readCronDefaultStoreKeyInDatabase,
   readCronStorePartitionInventoryInDatabase,
@@ -197,6 +198,100 @@ function definitionEvidence(jobs: readonly PluginDoctorCronJob[]) {
   }));
 }
 
+/** Drop inert automation metadata without changing runtime rows or authorization. */
+export async function dropCronWakeModesForDoctor(scope: DoctorCronScope): Promise<string[]> {
+  const inventory = await inspectCronJobsForDoctor(scope);
+  const changes = inventory.jobs.filter(
+    (row) => row.definition && Object.hasOwn(row.definition, "wakeMode"),
+  );
+  if (changes.length === 0) {
+    return [];
+  }
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (!maintenance?.ownsSchemaMaintenance) {
+    throw new Error(
+      "Removing the retired automation wake setting requires offline Doctor maintenance.",
+    );
+  }
+  const assertCurrent = () =>
+    maintenance.assertDatabaseAccess(resolveOpenClawStateSqlitePath(scope.env));
+  const expected = definitionEvidence(inventory.jobs);
+  const backup = await commitCronDoctorRepair(
+    scope,
+    { assertCurrent, assertOwnedInTransaction: assertCurrent },
+    {
+      plan: ["drop-wake-mode", expected],
+      assertRowsUnchanged(db) {
+        if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
+          throw new Error(
+            "Cron definitions changed during Doctor repair; inspect again before retrying.",
+          );
+        }
+      },
+      write(db) {
+        for (const { storeKey, id, definition } of changes) {
+          const nextDefinition = { ...definition };
+          delete nextDefinition.wakeMode;
+          const row = loadCronRows(db, storeKey, new Set([id]), {
+            includeGrantDefinitionProjection: true,
+          })[0];
+          const previous = row && definition && rowToCronJob(row, definition);
+          const next = row && rowToCronJob(row, nextDefinition);
+          if (
+            previous &&
+            next &&
+            previous.operatorSource?.executionRevision ===
+              resolveCronOperatorExecutionRevision(previous)
+          ) {
+            next.operatorSource = {
+              ...previous.operatorSource,
+              executionRevision: resolveCronOperatorExecutionRevision(next),
+            };
+            nextDefinition.operatorSource = next.operatorSource;
+          }
+          const validProjection =
+            previous &&
+            next &&
+            row.grant_definition_revision === resolveCronJobGrantDefinitionRevision(previous) &&
+            row.grant_definition_updated_at === row.updated_at;
+          if (
+            previous &&
+            next &&
+            validProjection &&
+            typeof row.grant_definition_generation === "number" &&
+            inventory.jobs.filter((job) => job.id === id).length === 1
+          ) {
+            migrateCronStandingGrantReferencesForDoctor(
+              db,
+              previous,
+              next,
+              row.grant_definition_generation,
+              "drop-wake-mode",
+            );
+          }
+          executeSqliteQuerySync(
+            db,
+            getCronStoreKysely(db)
+              .updateTable("cron_jobs")
+              .set({
+                job_json: JSON.stringify(nextDefinition),
+                ...(validProjection
+                  ? { grant_definition_revision: resolveCronJobGrantDefinitionRevision(next) }
+                  : {}),
+              })
+              .where("store_key", "=", storeKey)
+              .where("job_id", "=", id),
+          );
+        }
+        for (const storeKey of new Set(changes.map((job) => job.storeKey))) {
+          deferSqlitePostCommitPublication(db, () => noteCronJobsStoreCommit(storeKey));
+        }
+      },
+    },
+  );
+  return backup.warnings;
+}
+
 /** Only adds an inference restriction; retains authored fields, runtime state and approval terms. */
 export async function repairCronInferenceBindingsForDoctor(
   scope: DoctorCronScope,
@@ -258,11 +353,12 @@ export async function repairCronInferenceBindingsForDoctor(
           typeof row.grant_definition_generation === "number" &&
           inventory.jobs.filter((entry) => entry.id === job.id).length === 1
         ) {
-          migrateCronInferenceStandingGrantReferences(
+          migrateCronStandingGrantReferencesForDoctor(
             db,
             previous,
             next,
             row.grant_definition_generation,
+            "add-inference-binding",
           );
         }
         executeSqliteQuerySync(

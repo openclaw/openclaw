@@ -129,11 +129,6 @@ export function registerCronAddCommand(cron: Command) {
             const positionalSchedule = hasScheduleFlag ? undefined : nameArg;
             const schedule = resolveCronCreateScheduleFromArgs({ ...opts, positionalSchedule });
 
-            const wakeMode = normalizeOptionalString(opts.wake) ?? "now";
-            if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
-              throw new CronCliError("--wake must be now or next-heartbeat");
-            }
-
             const rawAgentId = normalizeOptionalString(opts.agent);
             const agentId = rawAgentId ? sanitizeAgentId(rawAgentId) : undefined;
 
@@ -390,7 +385,6 @@ export function registerCronAddCommand(cron: Command) {
                 : {}),
               trigger,
               sessionTarget,
-              wakeMode,
               payload: resolvedPayload,
               delivery: deliveryMode
                 ? {

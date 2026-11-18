@@ -531,6 +531,7 @@ export async function migrateRetiredCronState(params: {
             return false;
           }
           ids.add(id);
+          delete job.wakeMode;
           return true;
         });
         if (imported.length) {

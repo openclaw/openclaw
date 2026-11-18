@@ -71,7 +71,6 @@ export function buildCronMocks(
     updatedAtMs: baseTime - 4 * minute,
     schedule: { kind: "cron", expr: "0 */6 * * *", tz: "America/New_York" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: {
       kind: "agentTurn",
       message: "Sync the team calendar and summarize schedule conflicts.",
@@ -109,7 +108,6 @@ export function buildCronMocks(
           updatedAtMs: baseTime - 7 * minute,
           schedule: { kind: "every", everyMs: 20 * minute, anchorMs: baseTime - 24 * day },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: {
             kind: "agentTurn",
             message:
@@ -138,7 +136,6 @@ export function buildCronMocks(
           updatedAtMs: baseTime - 11 * minute,
           schedule: { kind: "cron", expr: "15 * * * *", tz: "UTC" },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: {
             kind: "agentTurn",
             message:
@@ -168,7 +165,6 @@ export function buildCronMocks(
     updatedAtMs: baseTime - 35 * minute,
     schedule: { kind: "every", everyMs: 15 * minute, anchorMs: baseTime - 18 * day },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Triage the support inbox." },
     delivery: { mode: "none" },
     state: {
@@ -191,7 +187,6 @@ export function buildCronMocks(
           updatedAtMs: baseTime - 50 * minute,
           schedule: { kind: "every", everyMs: hour, anchorMs: baseTime - 31 * day },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "Prepare the daily security digest." },
           delivery: { mode: "none" },
           state: {
@@ -214,7 +209,6 @@ export function buildCronMocks(
     updatedAtMs: baseTime - 30 * minute,
     schedule: { kind: "cron", expr: "30 9 * * 1-5", tz: "America/New_York" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Draft and publish the release digest." },
     delivery: { mode: "announce", channel: "slack", to: "#engineering" },
     state: {
@@ -252,7 +246,6 @@ export function buildCronMocks(
         updatedAtMs: baseTime - (40 + index * 7) * minute,
         schedule: { kind: "every", everyMs: hour, anchorMs: baseTime - 12 * day },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: `${task} the ${target}.` },
         delivery: { mode: "none" },
         state: {

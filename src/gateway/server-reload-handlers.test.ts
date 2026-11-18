@@ -1741,7 +1741,6 @@ describe("gateway hot reload model state", () => {
           enabled: true,
           schedule: { kind: "on-exit", command },
           sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "watched child finished" },
         });
         await initialCronState.reconcileExitWatchers();

@@ -63,7 +63,6 @@ function cronJob(
     updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
     schedule,
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: `${name} fired` },
     state,
   };
@@ -419,7 +418,6 @@ suite.define(() => {
         everyMs: 60_000,
       }),
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: agentPayload("Continue until the existing task finishes"),
     } satisfies CronJob;
     await suite.withPage(contextOptions, async ({ page }) => {

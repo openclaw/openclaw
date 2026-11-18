@@ -503,7 +503,6 @@ describe("stored session model selections in scheduled session turns", () => {
         id: "session-turn-model",
         agentId: "main",
         sessionTarget: params.target === "main" ? "main" : `session:${sessionKey}`,
-        wakeMode: "now",
         delivery: { mode: "none" },
         payload:
           params.payloadKind === "systemEvent"

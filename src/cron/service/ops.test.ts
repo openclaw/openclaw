@@ -67,7 +67,6 @@ function createFutureEveryJob(now: number, id: string, overrides: Partial<CronJo
     updatedAtMs: now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: id },
     state: {},
     ...overrides,
@@ -126,7 +125,6 @@ describe("cron service operations", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "*/3 * * * *" },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "dream" },
     });
     const legacy = createFutureEveryJob(now, "75e182e6-8728-43ae-832b-01f50702feed", {
@@ -136,7 +134,6 @@ describe("cron service operations", () => {
       updatedAtMs: now - 10_000,
       schedule: { kind: "cron", expr: "0 3 * * *" },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "dream" },
     });
     insertCronJobRow(staleStorePath, legacy);
@@ -512,7 +509,6 @@ describe("cron service operations", () => {
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
     expect(events.map((event) => event.action)).toEqual(["added"]);
@@ -545,7 +541,6 @@ describe("cron service operations", () => {
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "added" },
     });
 

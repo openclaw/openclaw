@@ -313,7 +313,6 @@ export function createGatewayHookDispatcher(params: {
       updatedAtMs: nowMs,
       schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
       sessionTarget: value.sessionMode === "persistent" ? `session:${sessionKey}` : "isolated",
-      wakeMode: "now",
       payload: {
         kind: "agentTurn",
         message: value.message,

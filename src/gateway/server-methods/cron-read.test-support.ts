@@ -25,7 +25,6 @@ export function createHistoryJob(
     enabled: false,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "fixture" },
     delivery: { mode: "none" },
   };

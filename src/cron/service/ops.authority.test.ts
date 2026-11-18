@@ -19,7 +19,6 @@ const jobInput = {
   enabled: true,
   schedule: { kind: "every" as const, everyMs: 60_000 },
   sessionTarget: "isolated" as const,
-  wakeMode: "now" as const,
   payload: { kind: "agentTurn" as const, message: "run" },
 };
 

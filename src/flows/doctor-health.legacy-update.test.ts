@@ -230,7 +230,6 @@ it.each([
               updatedAtMs: runningAtMs,
               schedule: { kind: "every", everyMs: 900_000, anchorMs: runningAtMs },
               sessionTarget: "main",
-              wakeMode: "next-heartbeat",
               payload: { kind: "systemEvent", text: "legacy placeholder" },
               state: { runningAtMs, ...(startupNotification ? { consecutiveErrors: 9 } : {}) },
             },

@@ -64,7 +64,6 @@ describe("cron failure alert outcome write-back", () => {
     async ({ initialOwner }) => {
       const store = fixtures.makeStorePath();
       const job = createAlertJob({ id: "alert-delayed-fallback-routing", dueAt });
-      job.wakeMode = "now";
       await saveCronStore(store.storePath, { version: 1, jobs: [job] });
       const delivery = createDeferred();
       const send = vi.fn<SendCronFailureAlert>(async (params) => {
@@ -120,7 +119,6 @@ describe("cron failure alert outcome write-back", () => {
     async (owner) => {
       const store = fixtures.makeStorePath();
       const job = createAlertJob({ id: "alert-owned-without-default", dueAt });
-      job.wakeMode = "now";
       if (owner === "explicit transport owner") {
         job.agentId = "alpha";
       } else {

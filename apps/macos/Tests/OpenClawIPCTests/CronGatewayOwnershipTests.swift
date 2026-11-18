@@ -113,7 +113,7 @@ final class CronSourceFixture: @unchecked Sendable {
                 return #"""
                 {"id":"\#(id)","name":"Gateway \#(request.gateway)","enabled":true,
                 "createdAtMs":0,"updatedAtMs":0,"schedule":{"kind":"every","everyMs":1000},
-                "sessionTarget":"main","wakeMode":"now","payload":{"kind":"systemEvent","text":"fixture"},"state":{}}
+                "sessionTarget":"main","payload":{"kind":"systemEvent","text":"fixture"},"state":{}}
                 """#
             }.joined(separator: ",")
             let nextOffset = count < request.total ? String(count) : "null"

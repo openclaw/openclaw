@@ -240,7 +240,6 @@ const suite = createControlUiE2eSuite({
             updatedAtMs: 1,
             schedule: { kind: "every", everyMs: 3_600_000 },
             sessionTarget: `session:${legacyRunKey}`,
-            wakeMode: "now",
             payload: {
               kind: "agentTurn",
               message: "Write the execution witness.",
@@ -308,7 +307,6 @@ suite.define(() => {
       enabled: false,
       schedule: { kind: "every", everyMs: 3_600_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "Send the hourly test ping." },
       delivery: { mode: "none" },
     });

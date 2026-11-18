@@ -90,7 +90,6 @@ const jobs = Array.from(
     updatedAtMs: 1_800_000_000_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "Synthetic owner benchmark message. ".repeat(16) },
     delivery: { mode: "none" },
     state: { nextRunAtMs: 1_800_000_060_000 + index, lastStatus: "ok", lastDurationMs: 12 },

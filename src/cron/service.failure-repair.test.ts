@@ -65,7 +65,6 @@ function applyError(
     name: "owned job",
     createdAtMs: runningAtMs,
     updatedAtMs: runningAtMs,
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "sync" },
     owner: owned.owner,
     delivery: createTelegramDelivery(),

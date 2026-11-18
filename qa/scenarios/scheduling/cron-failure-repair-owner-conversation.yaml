@@ -103,7 +103,6 @@ flow:
                 at:
                   expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: agentTurn
                 message:
@@ -201,7 +200,6 @@ flow:
                 at:
                   expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: agentTurn
                 message:

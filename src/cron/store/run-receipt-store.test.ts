@@ -543,7 +543,6 @@ it("keeps the pending terminal receipt within 64 rows until reconciliation relea
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: now + 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "command", argv: ["true"] },
   });
   const history: string[] = [];

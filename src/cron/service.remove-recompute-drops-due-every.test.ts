@@ -18,7 +18,6 @@ function createJob(id: string, schedule: CronJob["schedule"], nextRunAtMs?: numb
     updatedAtMs: base - 10_000,
     schedule,
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "tick" },
     delivery: { mode: "none" },
     state: nextRunAtMs === undefined ? {} : { nextRunAtMs },

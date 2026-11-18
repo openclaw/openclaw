@@ -322,7 +322,6 @@ async function measureLoads(runs: number) {
         sessionTarget: "main",
         agentId: cronSession!.agentId,
         sessionKey: values["activity-session"],
-        wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic activity measurement" },
       });
       if (typeof job?.id !== "string") {
@@ -1354,7 +1353,6 @@ try {
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic activity measurement" },
       });
       if (typeof job?.id !== "string") {

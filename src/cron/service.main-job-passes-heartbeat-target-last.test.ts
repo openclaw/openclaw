@@ -28,7 +28,6 @@ describe("cron main job session delivery", () => {
           updatedAtMs: now - 10_000,
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "main",
-          wakeMode: "now",
           payload: { kind: "systemEvent", text: "Check in" },
           state: { nextRunAtMs: now - 1 },
         },

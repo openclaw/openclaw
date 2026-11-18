@@ -157,7 +157,6 @@ class CronDeletionIdentityTest {
           "createdAtMs": 1000,
           "updatedAtMs": 2000,
           "sessionTarget": "isolated",
-          "wakeMode": "now",
           "schedule": { "kind": "every", "everyMs": 60000 },
           "payload": { "kind": "agentTurn", "message": "Write a synthetic report." },
           "state": {}

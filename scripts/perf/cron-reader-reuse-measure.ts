@@ -79,7 +79,6 @@ const jobs = Array.from({ length: 40 }, (_, index) => ({
   updatedAtMs: 1,
   schedule: { kind: "every" as const, everyMs: 60_000 },
   sessionTarget: "main" as const,
-  wakeMode: "now" as const,
   payload: { kind: "systemEvent" as const, text: "Synthetic recurring event" },
   state: { nextRunAtMs: 60_001 },
 }));

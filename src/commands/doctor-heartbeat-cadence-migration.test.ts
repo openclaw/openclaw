@@ -150,7 +150,6 @@ function seedLegacyMonitor(f: Fixture, overrides: Partial<Omit<DoctorCronJob, "p
     updatedAtMs: NOW - 60_000,
     schedule: { kind: "every", everyMs: 900_000, anchorMs: 37 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     state: {
       nextRunAtMs: NOW + 123,
       queuedAtMs: NOW + 123,
@@ -905,7 +904,6 @@ describe("heartbeat cadence Doctor cutover", () => {
       updatedAtMs: NOW - 500,
       schedule: { kind: "at", at: "2026-07-15T12:00:00Z" },
       sessionTarget: "main",
-      wakeMode: "now",
       payload: { kind: "systemEvent", text: "Reminder" },
       state: {
         lastRunAtMs: NOW - 100,

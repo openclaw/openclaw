@@ -217,7 +217,6 @@ async function createStoredJob(
       schedule: { kind: "every", everyMs: 1_800_000 },
       sessionTarget: "isolated",
       agentId: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "Check service health" },
       delivery: { mode: "none" },
       owner: { agentId: "main", sessionKey: "agent:main:telegram:dm:42", accountId: "telegram" },
@@ -292,7 +291,6 @@ describe("requester continuation persisted automation management", () => {
           sessionTarget: "current",
           sessionKey,
           agentId: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "agentTurn", message: name, toolsAllow: [] },
           delivery: { mode: "none" },
           owner: { agentId: "main", sessionKey, accountId: "default" },
@@ -642,7 +640,6 @@ describe("automation stream exec policy at persistence", () => {
           command: [process.execPath, "-e", `process.stdout.write(${JSON.stringify(name)})`],
         },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic stream policy test" },
       });
       await setPolicy("full", "off");

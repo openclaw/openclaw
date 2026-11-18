@@ -20,7 +20,6 @@ function listState(...jobs: Partial<CronJob>[]) {
         enabled: true,
         schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "systemEvent", text: "tick" },
         state: { nextRunAtMs: Date.parse("2030-02-27T15:30:00.000Z") },
         createdAtMs: Date.parse("2026-02-27T15:00:00.000Z"),

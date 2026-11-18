@@ -49,7 +49,6 @@ test.each(["current", "revoked"] as const)(
       enabled: false,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "synthetic cleanup fixture" },
       delivery: { mode: "none" },
     });

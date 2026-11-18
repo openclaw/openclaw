@@ -49,7 +49,6 @@ const jobs: CronStoredJob[] = Array.from({ length: 1000 }, (_, index) => ({
   createdAtMs: 1_800_000_000_000,
   updatedAtMs: 1_800_000_000_000,
   schedule: { kind: "every", everyMs: 60_000 },
-  wakeMode: "next-heartbeat",
   payload: { kind: "agentTurn", message: "synthetic" },
   state: {},
 }));

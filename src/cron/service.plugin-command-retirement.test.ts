@@ -51,7 +51,6 @@ async function runSchedule(
     updatedAtMs: nowMs,
     schedule: { kind: "every", everyMs, anchorMs: nowMs },
     sessionTarget: "session:agent:main:parent",
-    wakeMode: "next-heartbeat",
     payload: {
       kind: "agentTurn",
       message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,

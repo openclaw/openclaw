@@ -216,7 +216,6 @@ const schedule = {
   agentId,
   schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
   sessionTarget: "isolated",
-  wakeMode: "now",
   payload: { kind: "agentTurn", message: "Summarize new work" },
   delivery: { mode: "none" },
 } satisfies Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state">;

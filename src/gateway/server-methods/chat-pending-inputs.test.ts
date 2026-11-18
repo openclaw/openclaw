@@ -231,7 +231,6 @@ describe("pending input read boundary", () => {
         updatedAtMs: 1,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "Check the queue." },
         state: {},
       };

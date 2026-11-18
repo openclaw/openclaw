@@ -55,7 +55,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
               updatedAtMs: 1,
               schedule: { kind: "at", at: new Date(1_000).toISOString() },
               sessionTarget: "isolated",
-              wakeMode: "now",
               payload: { kind: "agentTurn", message: "synthetic completion" },
               delivery: { mode: "none" },
               state: { nextRunAtMs: 1_000, runningAtMs: 1_000 },

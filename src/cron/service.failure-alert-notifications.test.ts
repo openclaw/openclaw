@@ -34,13 +34,12 @@ const otherConversation = "agent:ops:discord:channel:other";
 const deliveryContext: DeliveryContext = { channel: "telegram", to: "-10042", threadId: 77 };
 
 it.for([
-  ["persistent target", `session:${target}`, otherConversation, "now", true],
-  ["targeted next-heartbeat", "isolated", target, "next-heartbeat", true],
-  ["default owner", "isolated", undefined, "now", false],
-  ["deferred default owner", "isolated", undefined, "next-heartbeat", false],
+  ["persistent target", `session:${target}`, otherConversation, true],
+  ["isolated with origin", "isolated", target, true],
+  ["default owner", "isolated", undefined, false],
 ] as const)(
   "routes a rejected failure alert to %s with scheduling disabled",
-  async ([_name, sessionTarget, creationSessionKey, wakeMode, carriesOrigin], { signal }) => {
+  async ([_name, sessionTarget, creationSessionKey, carriesOrigin], { signal }) => {
     await withOpenClawTestState(
       { label: "cron-failure-notification", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
@@ -108,7 +107,6 @@ it.for([
             name: "Important report",
             sessionTarget,
             sessionKey: creationSessionKey,
-            wakeMode,
           });
 
           await cron.run(job.id, "force");

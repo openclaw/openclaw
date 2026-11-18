@@ -36,7 +36,6 @@ it("settles a migrated task through ordinary session execution without a heartbe
       schedule: { kind: "every", everyMs: 60_000 },
       payload: { kind: "systemEvent", text: "Check urgent inbox items" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
     };
     const added = await cron.add(input);
     const job = "job" in added ? added.job : added;

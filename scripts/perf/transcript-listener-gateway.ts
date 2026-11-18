@@ -878,7 +878,6 @@ try {
         enabled: false,
         schedule: { kind: "every", everyMs: 86400000 },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "Synthetic cron retention probe." },
         delivery: { mode: "none" },
       });

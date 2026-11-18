@@ -44,7 +44,6 @@ it("retains an admitted owner's automation management through CLI construction, 
     schedule: { kind: "every", everyMs: 1_800_000 },
     sessionTarget: "isolated",
     agentId: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "Check status" },
     delivery: { mode: "none" },
   });

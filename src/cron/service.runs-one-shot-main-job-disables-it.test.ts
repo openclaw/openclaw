@@ -23,7 +23,6 @@ const mainJob = (overrides: Partial<CronJobCreate> = {}) =>
     name: "one-shot",
     schedule: { kind: "at", at: new Date(atMs).toISOString() },
     sessionTarget: "main",
-    wakeMode: "now",
     payload: { kind: "systemEvent", text: "hello" },
     ...overrides,
   });

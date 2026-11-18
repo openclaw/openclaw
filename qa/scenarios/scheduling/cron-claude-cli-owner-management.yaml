@@ -58,7 +58,7 @@ flow:
         - call: reset
         - set: job
           value:
-            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cli-owner-${randomUUID().slice(0, 8)}`, enabled: true, deleteAfterRun: false, owner: { agentId: 'qa', sessionKey: 'agent:qa:main', accountId: 'qa-other-account' }, schedule: { kind: 'at', at: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, sessionTarget: 'main', wakeMode: 'next-heartbeat', payload: { kind: 'systemEvent', text: 'Operator check-in.' } }, { timeoutMs: 30000 })"
+            expr: "await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cli-owner-${randomUUID().slice(0, 8)}`, enabled: true, deleteAfterRun: false, owner: { agentId: 'qa', sessionKey: 'agent:qa:main', accountId: 'qa-other-account' }, schedule: { kind: 'at', at: new Date(Date.now() + 60 * 60 * 1000).toISOString() }, sessionTarget: 'main', payload: { kind: 'systemEvent', text: 'Operator check-in.' } }, { timeoutMs: 30000 })"
         - assert:
             expr: "Boolean(job.id) && job.owner?.accountId === 'qa-other-account'"
             message:

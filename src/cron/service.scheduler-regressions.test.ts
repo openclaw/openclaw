@@ -25,7 +25,6 @@ describe("Cron issue regressions", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
     const offsetMs = topOfHourOffsetMs(created.id);
@@ -42,7 +41,6 @@ describe("Cron issue regressions", () => {
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "hi" },
     });
 
@@ -69,7 +67,6 @@ describe("Cron issue regressions", () => {
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "due-preserved" },
     });
     const otherJob = await cron.add({
@@ -77,7 +74,6 @@ describe("Cron issue regressions", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "other" },
     });
 
@@ -105,7 +101,6 @@ describe("Cron issue regressions", () => {
       enabled: false,
       schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
 
@@ -139,7 +134,6 @@ describe("Cron issue regressions", () => {
       updatedAtMs: pastAt,
       schedule: { kind: "at", at: new Date(pastAt).toISOString() },
       sessionTarget: "main",
-      wakeMode: "now",
       payload: { kind: "systemEvent", text: "⏰ Reminder" },
     } as const;
     const terminalStates: Array<{ id: string; state: CronJobState }> = [

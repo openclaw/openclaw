@@ -374,7 +374,6 @@ try {
     agentId: "main",
     schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
     sessionTarget: "isolated",
-    wakeMode: "now",
     deleteAfterRun: false,
     payload: {
       kind: "agentTurn",

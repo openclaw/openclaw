@@ -85,6 +85,18 @@ export async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext):
 }
 
 export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  if (ctx.prompter.shouldRepair) {
+    const { dropCronWakeModesForDoctor } = await import("../commands/doctor/cron/store-repair.js");
+    try {
+      const warnings = await dropCronWakeModesForDoctor({ env: ctx.env ?? process.env });
+      recordDoctorHealthWarnings(ctx, [], warnings);
+    } catch (error) {
+      noteDoctorRepairResult({
+        changes: [],
+        warnings: [`Could not remove the retired automation wake setting: ${String(error)}`],
+      });
+    }
+  }
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
     await import("../commands/doctor/cron/index.js");
   await measureGatewayBootstrapStep("doctor.legacy-cron.crontab", () =>

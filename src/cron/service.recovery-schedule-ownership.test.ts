@@ -66,7 +66,6 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
     schedule: HOURLY,
     trigger: { script: "json({ fire: true })" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Check the scheduled condition." },
     delivery: { mode: "none" },
     ...input,

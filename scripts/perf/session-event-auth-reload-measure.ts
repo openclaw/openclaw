@@ -143,7 +143,6 @@ const prepareConsumer = (sessionKey: string, index: number) => {
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: `session:${sessionKey}`,
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Synthetic scheduled work" },
     state: {},
   };

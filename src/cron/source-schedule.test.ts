@@ -22,7 +22,6 @@ describe("external automation source generations", () => {
         },
       },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "Report changes." },
       state: {},
     };
@@ -61,7 +60,6 @@ describe("external automation source generations", () => {
       updatedAtMs: 1,
       schedule,
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "Report changes." },
       state: {
         ...(schedule.kind === "stream"

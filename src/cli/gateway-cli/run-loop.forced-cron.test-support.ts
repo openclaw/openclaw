@@ -66,7 +66,6 @@ const code = await runGatewayLoop({
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() + 600_000).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "Synthetic pending work" },
         delivery: { mode: "none" },
       });

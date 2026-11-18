@@ -227,7 +227,6 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     triggerScript: job.trigger?.script ?? "",
     triggerOnce: job.trigger?.once === true,
     sessionTarget: job.sessionTarget,
-    wakeMode: job.wakeMode,
     payloadKind: payload.kind,
     payloadLocked,
     payloadText:

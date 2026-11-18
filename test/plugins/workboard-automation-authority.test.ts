@@ -86,7 +86,6 @@ it.each(["run_settled", "subagent_ended"] as const)(
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "main",
-      wakeMode: "now",
       payload: { kind: "systemEvent", text: "categorize board" },
     });
     const settled = finished.waitForOk(job.id);

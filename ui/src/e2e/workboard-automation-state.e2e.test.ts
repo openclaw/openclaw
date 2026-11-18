@@ -17,7 +17,6 @@ suite.define(() => {
           updatedAtMs: 1794600000000,
           schedule: { kind: "every", everyMs: 86400000 },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "Categorize incoming tasks." },
           state: {},
         };

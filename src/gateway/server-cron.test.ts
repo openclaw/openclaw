@@ -287,7 +287,6 @@ function cronJob(
     enabled: true,
     schedule: { kind: "at", at: new Date(1).toISOString() },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload,
     ...overrides,
   };
@@ -665,7 +664,6 @@ describe("buildGatewayCronService", () => {
           schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
           trigger: { script: "json({ fire: false })" },
           sessionTarget: "main",
-          wakeMode: "now",
         },
       );
       vi.setSystemTime(job.state.nextRunAtMs ?? 0);
@@ -750,7 +748,6 @@ describe("buildGatewayCronService", () => {
           addSystemEventJob(previous, name, "done", {
             schedule: { kind: "on-exit", command: "true" },
             sessionTarget: "main",
-            wakeMode: "now",
           });
         await addJob("first");
         const secondJob = await addJob("second");
@@ -847,7 +844,6 @@ describe("buildGatewayCronService", () => {
         const job = await addSystemEventJob(previous, "watch before restart", "done", {
           schedule: { kind: "on-exit", command: "true" },
           sessionTarget: "main",
-          wakeMode: "now",
         });
         await previous.reconcileExitWatchers();
         await waitingForExit.promise;
@@ -982,7 +978,6 @@ describe("buildGatewayCronService", () => {
         const job = await addSystemEventJob(state, "watch and rearm", "done", {
           schedule: { kind: "on-exit", command: "true" },
           sessionTarget: "main",
-          wakeMode: "now",
         });
         await state.reconcileExitWatchers();
         firstExit.resolve(runExit({ reason: "exit", exitCode: 0 }));
@@ -1070,7 +1065,6 @@ describe("buildGatewayCronService", () => {
       const job = await addSystemEventJob(state, "watch and drain naturally", "done", {
         schedule: { kind: "on-exit", command: "true" },
         sessionTarget: "main",
-        wakeMode: "now",
       });
       await state.reconcileExitWatchers();
       await vi.waitFor(() => {
@@ -1142,7 +1136,6 @@ describe("buildGatewayCronService", () => {
           {
             schedule: { kind: "on-exit", command: "true" },
             sessionTarget,
-            wakeMode: "now",
             deleteAfterRun: false,
           },
         );
@@ -1211,7 +1204,6 @@ describe("buildGatewayCronService", () => {
           schedule: { kind: "on-exit" as const, command: "true" },
           payload: { kind: "systemEvent" as const, text: "must not fire" },
           sessionTarget: "main" as const,
-          wakeMode: "now" as const,
         };
         const job = await state.cron.add(input);
         await state.reconcileExitWatchers();
@@ -2263,7 +2255,6 @@ describe("buildGatewayCronService", () => {
           enabled: true,
           schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: { kind: "agentTurn", message: "keep too" },
         }),
       ).resolves.toBeDefined();

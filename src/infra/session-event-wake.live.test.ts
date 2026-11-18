@@ -318,7 +318,6 @@ describeLive("session event wake through a live Gateway", () => {
             name: "Live main-session schedule",
             schedule: { kind: "every", everyMs: 86_400_000 },
             sessionTarget: "main",
-            wakeMode: "now",
             payload: { kind: "systemEvent", text: monitorPrompt },
             delivery: { mode: "none" },
           });

@@ -107,7 +107,6 @@ export function buildBackupScheduleJob(spec: BackupScheduleSpec): CronJobCreate 
     enabled: true,
     schedule: { kind: "every", everyMs: spec.everyMs },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "command", argv, timeoutSeconds: 24 * 60 * 60 },
     delivery: { mode: "none" },
   };

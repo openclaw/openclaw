@@ -134,7 +134,6 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
           schedule: { kind: "every", everyMs: AUTOMATION_INTERVAL_MS },
           activeHours: activeHours(false),
           sessionTarget: "main",
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "Perform the scheduled check" },
           delivery: { mode: "none" },
         });

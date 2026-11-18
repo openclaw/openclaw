@@ -140,31 +140,27 @@ export function registerGatewayCronContextTests({
     };
     return caller;
   }
-  it.each(["next-heartbeat", "now"] as const)(
-    "routes global-scope main Cron jobs through ordinary sessions (%s)",
-    async (wakeMode) => {
-      const cfg = createCronConfig("server-cron-global", {
-        session: { mainKey: "main", scope: "global" },
+  it("routes global-scope main Cron jobs through ordinary sessions", async () => {
+    const cfg = createCronConfig("server-cron-global", {
+      session: { mainKey: "main", scope: "global" },
+    });
+    await withCronService(cfg, async (state) => {
+      const job = await addSystemEventJob(state, "global", "hello global", {
+        sessionTarget: "main",
       });
-      await withCronService(cfg, async (state) => {
-        const job = await addSystemEventJob(state, "global", "hello global", {
-          sessionTarget: "main",
-          wakeMode,
-        });
-        await state.cron.run(job.id, "force");
-        expect(runCronSessionTurnMock).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            agentId: "main",
-            sessionKey: "global",
-            text: "hello global",
-            job: expect.objectContaining({ id: job.id }),
-          }),
-        );
-        expect(finishedEvent(job.id)).toMatchObject({ status: "ok" });
-        expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
-      });
-    },
-  );
+      await state.cron.run(job.id, "force");
+      expect(runCronSessionTurnMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey: "global",
+          text: "hello global",
+          job: expect.objectContaining({ id: job.id }),
+        }),
+      );
+      expect(finishedEvent(job.id)).toMatchObject({ status: "ok" });
+      expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
+    });
+  });
 
   it("threads cron wake sessionKey through the ordinary session admission adapter", async () => {
     const cfg = createMultiAgentConfig("server-cron-wake-service");
@@ -367,7 +363,7 @@ export function registerGatewayCronContextTests({
       const addJob = mode === "session" ? addSystemEventJob : addAgentTurnJob;
       const job = await addJob(state, name, "run it", {
         ...(clock ? scheduledJob() : { deleteAfterRun: false }),
-        ...(mode === "session" ? { sessionTarget: "main", wakeMode: "now" } : {}),
+        ...(mode === "session" ? { sessionTarget: "main" } : {}),
       });
       if (clock) {
         await clock.advanceBy(60_000);

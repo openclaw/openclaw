@@ -155,7 +155,6 @@ export async function reportChannelRoomJoin(
         updatedAtMs: nowMs,
         schedule: { kind: "at", at: new Date(nowMs).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: {
           kind: "agentTurn",
           message,

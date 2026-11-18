@@ -42,7 +42,6 @@ function proposal(nowMs: number, operatorSource = source, command = ["node", "wa
         enabled: true,
         schedule: { kind: "stream", command },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "Handle events", toolsAllow: ["*"] },
         owner: { agentId: "main", sessionKey, accountId: "default" },
       },

@@ -43,7 +43,6 @@ function makeJob(id: string, fields: Fields = {}, row: Row = {}): PluginDoctorCr
     updatedAtMs: 20,
     schedule: { kind: "cron", expr: "17 8 * * 1", tz: "Europe/Vienna" },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: DREAMING_TOKEN },
     ...fields,
   };

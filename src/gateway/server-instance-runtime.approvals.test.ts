@@ -386,7 +386,6 @@ it("mints a cron standing grant with the internal approval verdict in the worker
     id: "internal-grant-job",
     agentId: "main",
     name: "Synthetic grant job",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: command },
   });
   const database = openOpenClawStateDatabase({ env: state.env });

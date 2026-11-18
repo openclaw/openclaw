@@ -112,7 +112,6 @@ const makeAccountJob = (id: string, model?: string) =>
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Synthetic work", ...(model ? { model } : {}) },
     delivery: { mode: "none" },
     state: {},
@@ -299,8 +298,9 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       model: "openai/gpt-5.5@openai:default",
     });
     expect(binding).toBeDefined();
-    const pinned: CronStoredJob = {
+    const pinned: CronStoredJob & { wakeMode: string } = {
       ...legacyJob("pinned", "openai/gpt-5.5"),
+      wakeMode: "next-heartbeat",
       sessionKey: "agent:main:upgrade",
       sessionTarget: "session:agent:main:upgrade",
       owner: { agentId: "main", sessionKey: "agent:main:upgrade", accountId: "default" },
@@ -344,7 +344,7 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       id: "stale-source",
       operatorSource: { ...pinned.operatorSource, executionRevision: "stale-revision" },
     };
-    const jobs = [
+    const jobs: Array<CronStoredJob & { wakeMode?: string }> = [
       pinned,
       stale,
       legacyJob("inherited"),
@@ -354,7 +354,8 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
     const inactivePath = state.statePath("inactive-cron", "jobs.json");
     const inactive = { ...legacyJob("disabled", "openai/gpt-5.5"), enabled: false };
     await saveJobs(storePath, ...jobs);
-    await saveJobs(inactivePath, inactive);
+    const inactiveWithWakeMode = { ...inactive, wakeMode: "now" };
+    await saveJobs(inactivePath, inactiveWithWakeMode);
     const query = (sql: string) => stateDb.openOpenClawStateDatabase().db.prepare(sql).get();
     const backupsOnDisk = async () =>
       (await fs.readdir(state.statePath("state"))).filter(
@@ -392,10 +393,10 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       authRequirement: "subscription",
     });
     expect(repaired).toEqual(
-      jobs.map((job) =>
+      jobs.map(({ wakeMode: _wakeMode, ...job }) =>
         Object.assign({}, job, {
           inferenceBinding: job.inferenceBinding ?? adopted,
-          ...(job === pinned
+          ...(job.id === pinned.id
             ? {
                 operatorSource: {
                   source: pinned.operatorSource!.source,
@@ -420,8 +421,9 @@ it("adopts canonical SQLite jobs during update Doctor without pinning inherited 
       ...inactive,
       inferenceBinding: { profileId: "openai:default" },
     });
+    expect((await readJobs(inactivePath))[0]).not.toHaveProperty("wakeMode");
     const backups = await backupsOnDisk();
-    expect(backups).toHaveLength(1);
+    expect(backups).toHaveLength(2);
     await repair(state.configPath);
     expect(await readJobs(storePath)).toEqual(repaired);
     expect(await backupsOnDisk()).toEqual(backups);

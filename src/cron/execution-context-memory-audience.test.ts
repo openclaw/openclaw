@@ -65,7 +65,7 @@ beforeEach(() => {
 
 function storedJob(overrides: Partial<CronStoredJob> = {}): CronStoredJob {
   return {
-    ...cronTestJob({ id: "job-1", name: "Knowledge ingest", wakeMode: "now" }),
+    ...cronTestJob({ id: "job-1", name: "Knowledge ingest" }),
     agentId: "main",
     delivery: { mode: "none" },
     owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },

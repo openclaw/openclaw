@@ -40,7 +40,6 @@ function projectionJob(id: string, nowMs: number): CronStoredJob & { agentId: st
     updatedAtMs: nowMs,
     schedule: { kind: "every", everyMs: 3_600_000, anchorMs: nowMs },
     sessionTarget: "session:agent:main:main",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: id },
     delivery: { mode: "none" },
     state: { nextRunAtMs: nowMs + 3_600_000 },

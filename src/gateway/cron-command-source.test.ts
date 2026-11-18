@@ -53,7 +53,6 @@ it("runs a stored command only while its original OCID device stays admitted", a
           enabled: true,
           schedule: { kind: "every", everyMs: 3_600_000 },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: { kind: "command", argv: [process.execPath, "-e", source], timeoutSeconds: 60 },
         },
         {

@@ -160,7 +160,6 @@ async function runCronCleanupScenario(params: {
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: {
       kind: "agentTurn",
       message: "Use available context and then stop.",

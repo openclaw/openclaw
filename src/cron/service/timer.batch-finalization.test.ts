@@ -291,7 +291,6 @@ describe("cron batch outcome finalization", () => {
         deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(replacementAt).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "run only the replacement occurrence" },
         delivery: { mode: "none" },
       });

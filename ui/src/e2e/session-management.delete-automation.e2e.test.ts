@@ -34,7 +34,6 @@ suite.define(() => {
                   updatedAtMs: 1,
                   schedule: { kind: "every", everyMs: 86_400_000 },
                   sessionTarget: "isolated",
-                  wakeMode: "now",
                   payload: { kind: "command", argv: ["echo", "synthetic backup"] },
                   state: {},
                 },

@@ -277,7 +277,6 @@ try {
         sessionTarget: "isolated",
         sessionKey: route.sessionKey,
         agentId: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "Synthetic fixture" },
         delivery: { mode: "announce", channel: "last" },
       },

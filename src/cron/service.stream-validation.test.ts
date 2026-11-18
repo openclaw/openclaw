@@ -16,7 +16,6 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
     enabled: true,
     schedule: { kind: "stream", command: [process.execPath, "-e", "setInterval(() => {}, 1000)"] },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "handle events" },
     ...overrides,
   };
@@ -433,7 +432,6 @@ it("skips invalid main jobs with command payloads loaded from disk", async () =>
         updatedAtMs: Date.now(),
         schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "command", argv: ["echo", "invalid main payload"] },
         state: {},
       },

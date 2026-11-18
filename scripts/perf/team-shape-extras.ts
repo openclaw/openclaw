@@ -456,7 +456,6 @@ export async function seedTeamShapeExtras(options: TeamShapeExtrasOptions) {
       index % 2 === 0
         ? { kind: "every", everyMs: 3_600_000, anchorMs: options.now }
         : { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-    wakeMode: "next-heartbeat",
     ...(options.cronAnnounceLast
       ? {
           sessionTarget: "isolated" as const,
