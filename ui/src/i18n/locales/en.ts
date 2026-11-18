@@ -1926,7 +1926,6 @@ const startupEnglish = {
       loadMoreSessions: "Show more",
       loadMoreRosterSessions: "Load more sessions",
       model: "Chat model",
-      modelSection: "Model",
       modelLocked: "Locked",
       modelLockedLabel: "Model selection controlled for this session",
       lockedSessionModel: "Session model",
