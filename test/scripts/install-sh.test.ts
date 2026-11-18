@@ -3337,6 +3337,49 @@ EOF
     expect(result.stdout).toContain("main=main");
   });
 
+  it("applies --beta to the git install ref when no explicit version is given", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      npm() {
+        if [[ "$1" == "view" && "$2" == "openclaw" ]]; then
+          case "$3" in
+            dist-tags.beta) printf '2026.5.12-beta.3\\n' ;;
+            dist-tags.latest) printf '2026.5.12\\n' ;;
+          esac
+          return 0
+        fi
+        return 1
+      }
+      USE_BETA=1 OPENCLAW_VERSION=latest
+      printf 'beta-latest=%s\\n' "$(resolve_git_openclaw_ref)"
+      USE_BETA=1
+      printf 'beta-empty=%s\\n' "$(resolve_git_openclaw_ref)"
+      USE_BETA=1 OPENCLAW_VERSION=v2026.5.12-beta.3
+      printf 'beta-explicit=%s\\n' "$(resolve_git_openclaw_ref)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("beta-latest=v2026.5.12-beta.3");
+    expect(result.stdout).toContain("beta-empty=v2026.5.12-beta.3");
+    // An explicit version is never overridden by --beta.
+    expect(result.stdout).toContain("beta-explicit=v2026.5.12-beta.3");
+  });
+
+  it("warns when the latest release tag cannot be resolved instead of silently choosing main", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      npm() { return 1; }
+      OPENCLAW_VERSION=latest
+      printf 'latest=%s\\n' "$(resolve_git_openclaw_ref)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("latest=main");
+    expect(result.stderr).toContain("could not resolve the latest release tag");
+  });
+
   it.each(["bundle", "remote"] as const)("pins a full commit from a %s", (source) => {
     const result = runInstallShell(createInstallGitCommitFixtureScript(source), {
       OPENCLAW_INSTALLER_SCRIPT: SCRIPT_PATH,
