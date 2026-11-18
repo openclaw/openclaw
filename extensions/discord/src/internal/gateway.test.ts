@@ -184,7 +184,9 @@ describe("GatewayPlugin", () => {
 
   it("reconnects when the socket closes while waiting for identify concurrency", async () => {
     const gateway = timedGateway();
-    await sharedGatewayIdentifyLimiter.wait();
+    const seeded = new TestGatewayPlugin();
+    seeded.openSocket().hello();
+    await vi.advanceTimersByTimeAsync(0);
     const errorSpy = vi.fn();
     gateway.emitter.on("error", errorSpy);
 
@@ -199,9 +201,11 @@ describe("GatewayPlugin", () => {
     expectConnections(gateway, [false, false]);
   });
 
-  it("does not identify a replacement socket from a stale HELLO", async () => {
+  it("does not identify from a stale HELLO or let it delay the replacement socket", async () => {
     const gateway = timedGateway();
-    await sharedGatewayIdentifyLimiter.wait();
+    const seeded = new TestGatewayPlugin();
+    seeded.openSocket().hello();
+    await vi.advanceTimersByTimeAsync(0);
 
     const originalSocket = gateway.openSocket();
     originalSocket.hello();
@@ -219,7 +223,8 @@ describe("GatewayPlugin", () => {
 
     replacementSocket?.hello();
 
-    await vi.advanceTimersByTimeAsync(5_000);
+    // The stale HELLO's wait must not reserve an identify window for a dead socket.
+    await vi.advanceTimersByTimeAsync(0);
     expect(replacementSocket?.send).toHaveBeenCalledWith(
       expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
     );
