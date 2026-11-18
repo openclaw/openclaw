@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasRuntimeContextMarker } from "../../llm/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
@@ -44,21 +45,16 @@ export function shouldMergeConsecutiveTurns(
   return !(policy.appendOnlyRuntimeContext && modelApi === "anthropic-messages");
 }
 
-type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolCall" | "functionCall" | "toolResult" | "tool";
-  text?: string;
-  id?: string;
-  name?: string;
-  toolUseId?: string;
-  toolCallId?: string;
-};
+type AssistantContent = Extract<AgentMessage, { role: "assistant" }>["content"];
 type UserContentBlock = Extract<
   Extract<AgentMessage, { role: "user" }>["content"],
   readonly unknown[]
 >[number];
+type ReplayContentBlock = AssistantContent[number] | UserContentBlock;
 
-function isToolCallBlock(block: AnthropicContentBlock): boolean {
-  return block.type === "toolUse" || block.type === "toolCall" || block.type === "functionCall";
+function isToolCallBlock(block: ReplayContentBlock): boolean {
+  const type = asOptionalObjectRecord(block)?.type;
+  return type === "toolUse" || type === "toolCall" || type === "functionCall";
 }
 
 function extractToolResultMatchIds(record: object): Set<string> {
@@ -376,9 +372,11 @@ function mergeConsecutiveUserTurns(
   };
 }
 
-function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
+function normalizeUserContentForMerge(
+  content: PersistedUserTurnMessage["content"],
+): UserContentBlock[] {
   if (Array.isArray(content)) {
-    return content as UserContentBlock[];
+    return content;
   }
   if (typeof content === "string") {
     return [{ type: "text", text: content }];
@@ -386,51 +384,56 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
-const agentMessageReplayTurnAdapter: ReplayTurnAdapter<AgentMessage, AnthropicContentBlock> = {
+const agentMessageReplayTurnAdapter: ReplayTurnAdapter<AgentMessage, ReplayContentBlock> = {
   messageKind: (message) =>
     !message ? "empty" : typeof message === "object" ? "record" : "opaque",
   role: (message) => message.role,
   content: (message) =>
-    "content" in message && Array.isArray(message.content)
-      ? (message.content as AnthropicContentBlock[])
-      : undefined,
+    "content" in message && Array.isArray(message.content) ? message.content : undefined,
   isPresentBlock: (block) => Boolean(block),
   isThinking: isThinkingLikeBlock,
   isCall: isToolCallBlock,
-  callId: (block) => normalizeOptionalString(block.id),
-  callName: (block) => normalizeOptionalString(block.name),
+  callId: (block) => normalizeOptionalString(asOptionalObjectRecord(block)?.id),
+  callName: (block) => normalizeOptionalString(asOptionalObjectRecord(block)?.name),
   extractToolCalls: (message) =>
-    extractToolCallsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>),
-  isResultBlock: (block) =>
-    Boolean(block) &&
-    typeof block === "object" &&
-    (block.type === "toolResult" || block.type === "tool"),
+    message.role === "assistant" ? extractToolCallsFromAssistant(message) : [],
+  isResultBlock: (block) => {
+    const type = asOptionalObjectRecord(block)?.type;
+    return type === "toolResult" || type === "tool";
+  },
   resultMatchIds: extractToolResultMatchIds,
   resultCanonicalId: (message) =>
-    extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>),
+    message.role === "toolResult" ? extractToolResultId(message) : null,
   toolName: (message) =>
     normalizeOptionalString(Reflect.get(message, "toolName")) ??
     normalizeOptionalString(Reflect.get(message, "name")),
-  stopReason: (message) => (message as Extract<AgentMessage, { role: "assistant" }>).stopReason,
-  replaceContent: (message, content) =>
-    ({
-      ...message,
-      content: content === "omitted" ? [{ type: "text", text: "[tool calls omitted]" }] : content,
-    }) as AgentMessage,
+  stopReason: (message) => (message.role === "assistant" ? message.stopReason : undefined),
+  replaceContent: (message, content) => {
+    if (message.role !== "assistant") {
+      return message;
+    }
+    if (content === "omitted") {
+      return { ...message, content: [{ type: "text", text: "[tool calls omitted]" }] };
+    }
+    // SAFETY: dangling-call repair only filters this assistant's existing content blocks.
+    return { ...message, content: content as AssistantContent };
+  },
   mergeAssistant: (previous, current) =>
-    mergeConsecutiveAssistantTurns(
-      previous as Extract<AgentMessage, { role: "assistant" }>,
-      current as Extract<AgentMessage, { role: "assistant" }>,
-    ),
+    previous.role === "assistant" && current.role === "assistant"
+      ? mergeConsecutiveAssistantTurns(previous, current)
+      : current,
   mergeUser: (previous, current) =>
-    mergeConsecutiveUserTurns(
-      previous as PersistedUserTurnMessage,
-      current as PersistedUserTurnMessage,
-    ),
+    previous.role === "user" && current.role === "user"
+      ? mergeConsecutiveUserTurns(previous, current)
+      : current,
   // Carriers, operator updates and synthetic context own their authority, cache and media facts.
   canMergeUser: (message) => {
-    const user = message as PersistedUserTurnMessage;
-    return !hasRuntimeContextMarker(user) && !user.operatorMessage && !user.synthetic;
+    return (
+      message.role === "user" &&
+      !hasRuntimeContextMarker(message) &&
+      !message.operatorMessage &&
+      !message.synthetic
+    );
   },
 };
 

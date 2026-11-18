@@ -516,6 +516,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     onSummaryReady: () => {
                       summaryReady = true;
                     },
+                    onCommitted: recordCompaction,
                   });
                   if (outcome.status === "completed") {
                     viewResult = outcome;
@@ -602,14 +603,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               return await completeSkippedCompaction(outcome.reason);
             }
             clientResult = outcome.result;
-            if (viewResult) {
-              recordCompaction({
-                tokensBefore: outcome.result.tokensBefore,
-                tokensAfter: viewResult.tokensAfter,
-                compactionKind: "context-engine",
-                details: outcome.result.details,
-              });
-            }
           } finally {
             resetCompactionTimeout = undefined;
           }

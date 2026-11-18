@@ -10,7 +10,7 @@ import {
   prepareExactCompactionReplay,
   type ExactReplayContext,
 } from "./exact-compaction-replay.js";
-import { prepareCompactionReplay } from "./prepared-compaction-replay.js";
+import { prepareCompactionReplay } from "./prepared-compaction-replay.test-support.js";
 import type { PreparedCompactionReplayOptions } from "./replay-history.types.js";
 import * as textFacts from "./replay-text-facts.js";
 

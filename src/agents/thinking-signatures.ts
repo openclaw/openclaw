@@ -1,12 +1,7 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentMessage } from "./runtime/index.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
-
-type ContentBlockWithSignature = {
-  thought_signature?: unknown;
-  thoughtSignature?: unknown;
-  [key: string]: unknown;
-};
 
 type ThoughtSignatureSanitizeOptions = {
   allowBase64Only?: boolean;
@@ -58,11 +53,11 @@ export function stripThoughtSignatures<T>(
     }
     return typeof value !== "string" || !isBase64Signature(value);
   };
-  return content.map((block) => {
+  const sanitized = content.map((block) => {
     if (!block || typeof block !== "object") {
       return block;
     }
-    const rec = block as ContentBlockWithSignature;
+    const rec = asOptionalObjectRecord(block)!;
     const strippedKeys = signatureKeys.filter((key) => shouldStripSignature(rec[key]));
     if (strippedKeys.length === 0) {
       return block;
@@ -72,7 +67,9 @@ export function stripThoughtSignatures<T>(
       delete next[key];
     }
     return next;
-  }) as T;
+  });
+  // SAFETY: sanitization preserves the array and block shapes except for the targeted signature fields.
+  return sanitized as T;
 }
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;

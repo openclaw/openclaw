@@ -26,7 +26,7 @@ import {
   stripInvalidThinkingSignatures,
 } from "./thinking-replay.js";
 
-/** Existing array replay is confined to selected retained payloads, never summarized history. */
+/** Canonical array replay oracle for differential tests of payload-free compaction. */
 export async function prepareCompactionReplay(
   entries: SessionEntry[],
   options: PreparedCompactionReplayOptions,

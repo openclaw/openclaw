@@ -5,7 +5,6 @@ import { isThinkingLikeBlock } from "../thinking-block.js";
 import { isAssistantMessageWithContent } from "../thinking-signatures.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
@@ -83,10 +82,12 @@ const thinkingArrayAdapter: ThinkingReplayAdapter<AgentMessage, AssistantContent
   signature: hasReplayableThinkingSignature,
   toolCall: isToolCallBlock,
   replace: (message, content, placeholder) =>
-    ({
-      ...message,
-      content: content.length > 0 ? content : [{ type: "text", text: placeholder }],
-    }) as AssistantMessage,
+    message.role === "assistant"
+      ? {
+          ...message,
+          content: content.length > 0 ? content : [{ type: "text", text: placeholder }],
+        }
+      : message,
 };
 
 export function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {

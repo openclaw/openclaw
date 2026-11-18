@@ -399,7 +399,7 @@ describe("direct compactor through the context-engine delegate", () => {
       const preparation = preflight?.status === "preflight" ? preflight : undefined;
       const persistBoundary = vi.fn(
         async (
-          append: import("../sessions/session-compaction-persistence.js").PreparedCompactionAppend,
+          append: import("../../config/sessions/session-compaction-persistence.types.js").PreparedCompactionAppend,
         ) =>
           persistCompactionBoundaryWithSessionEntryAsync(append.scope, {
             prepared: append,

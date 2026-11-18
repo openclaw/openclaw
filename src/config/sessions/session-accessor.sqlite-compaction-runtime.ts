@@ -1,4 +1,3 @@
-import type { CommittedCompactionBoundary } from "../../agents/sessions/session-compaction-persistence.js";
 import {
   captureSessionManagerIncognitoBinding,
   withSessionManagerMemoryActor,
@@ -20,6 +19,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import type { CommittedCompactionBoundary } from "./session-compaction-persistence.types.js";
 import type { SessionManagerIncognitoDatabase } from "./session-manager-write-contract.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";

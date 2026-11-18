@@ -408,13 +408,12 @@ src/agents/session-maintenance/run.ts	6
 src/agents/session-model-auto-revert.ts	5
 src/agents/session-placement-admission.ts	4
 src/agents/session-placement-computer.ts	4
-src/agents/sessions/agent-session-compaction.ts	2
+src/agents/sessions/agent-session-compaction.ts	1
 src/agents/sessions/agent-session-inspection.ts	5
 src/agents/sessions/auth-storage-oauth-refresh.ts	1
 src/agents/sessions/background-result-placement.ts	2
 src/agents/sessions/extensions/metadata-actions.ts	1
 src/agents/sessions/sdk.ts	1
-src/agents/sessions/session-compaction-persistence.ts	1
 src/agents/sessions/session-manager-append-codec.ts	2
 src/agents/sessions/session-manager-append.ts	3
 src/agents/sessions/session-manager-branching.ts	4

@@ -59,7 +59,10 @@ import { resolveEmbeddedCompactionSafeguard } from "./extensions.js";
 import { getHistoryLimitFromSessionKey } from "./history.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
 import { isSameModelSnapshot, MODEL_SNAPSHOT_CUSTOM_TYPE } from "./replay-model-snapshot.js";
-import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
+import {
+  readCompactionAccountingRecorder,
+  type CompactionAccountingReceipt,
+} from "./run/compaction-accounting-bridge.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 
 /** Select only genuine full-array contracts, never a size or preparation-failure fallback. */
@@ -263,6 +266,7 @@ export async function prepareEmbeddedCompactionSession(
       thinkingLevel: ThinkingLevel;
       summaryOutputPolicy: CompactionSummaryOutputPolicy;
       onSummaryReady: () => void;
+      onCommitted: (receipt: CompactionAccountingReceipt) => void;
     }) {
       if (preparedSummaryOutputPolicy !== options.summaryOutputPolicy) {
         options.signal.throwIfAborted();
@@ -428,7 +432,6 @@ export async function prepareEmbeddedCompactionSession(
           reportingBudget: accounting?.requestBudget,
           version,
           retainedSequences: plan.retainedSequences,
-          preparation,
           summary: completed,
           work: {
             itemId: work.itemId,
@@ -436,7 +439,6 @@ export async function prepareEmbeddedCompactionSession(
             requestTokenLimit: plan.requestTokenLimit,
             pendingEntryId: plan.pendingEntryId,
           },
-          replay,
         },
         options.signal,
       );
@@ -465,6 +467,13 @@ export async function prepareEmbeddedCompactionSession(
       await withSessionTranscriptWriteAssertion(target, assertCurrent, () =>
         persist ? persist(prepared) : appendSessionMetadataInWorker(prepared, assertCurrent),
       );
+      // Accepted persistence still counts when cancellation wins the caller's result race.
+      options.onCommitted({
+        tokensBefore: completed.tokensBefore,
+        tokensAfter: finalized.tokensAfter,
+        compactionKind: "context-engine",
+        details: completed.details,
+      });
       return {
         status: "completed" as const,
         result: completed,

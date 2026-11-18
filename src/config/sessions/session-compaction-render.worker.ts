@@ -17,18 +17,12 @@ import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { SessionPreparedCompactionInput } from "./session-compaction-prepared.types.js";
+import type { CompactionReadCounts } from "./session-compaction-read-counts.types.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import { SessionTranscriptStorageUnavailableError } from "./session-transcript-projection-error.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { readTranscriptPayload } from "./transcript-payload.js";
-
-export type CompactionReadCounts = {
-  extractedRows: number;
-  extractedBytes: number;
-  selectedRows: number;
-  selectedBytes: number;
-};
 
 /** One admitted short snapshot for extraction or selected rereads; never held across inference. */
 export async function withCompactionSourceRows<T>(

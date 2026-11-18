@@ -137,21 +137,20 @@ export function sanitizeToolCallInputsWithAdapter<Message, Block>(
       out.push(message);
       continue;
     }
-    if (
-      options?.allowProviderOwnedThinkingReplay === true &&
-      content.some((block) => adapter.block(message, block).thinking) &&
-      content.some((block) => adapter.block(message, block).toolCall)
-    ) {
+    const blockFacts =
+      options?.allowProviderOwnedThinkingReplay === true
+        ? content.map((block) => adapter.block(message, block))
+        : undefined;
+    if (blockFacts?.some((facts) => facts.thinking) && blockFacts.some((facts) => facts.toolCall)) {
       const pairing = adapter.pairing(message);
       const toolCalls = pairing?.role === "assistant" ? pairing.calls : [];
       const following = collectFollowingToolResultsWithAdapter(messages, index, adapter, toolCalls);
-      const hasSpawnAttachments = content.some((block) => {
-        const facts = adapter.block(message, block);
-        return facts.toolCall && facts.name === "sessions_spawn" && facts.hasInputAttachments;
-      });
+      const hasSpawnAttachments = blockFacts.some(
+        (facts) => facts.toolCall && facts.name === "sessions_spawn" && facts.hasInputAttachments,
+      );
       const seen = new Set<string>();
-      const replaySafe = content.every((block) => {
-        const facts = adapter.block(message, block);
+      const replaySafe = content.every((block, blockIndex) => {
+        const facts = blockFacts[blockIndex]!;
         if (!facts.toolCall) {
           return true;
         }
@@ -193,8 +192,8 @@ export function sanitizeToolCallInputsWithAdapter<Message, Block>(
 
     const nextContent: Block[] = [];
     let messageChanged = false;
-    for (const block of content) {
-      const facts = adapter.block(message, block);
+    for (const [blockIndex, block] of content.entries()) {
+      const facts = blockFacts?.[blockIndex] ?? adapter.block(message, block);
       if (!facts.toolCall) {
         nextContent.push(block);
         continue;

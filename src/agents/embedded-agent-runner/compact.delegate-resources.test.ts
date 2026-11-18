@@ -75,13 +75,15 @@ type Connection = { file: string; database: DatabaseSync; disposals: number };
 type Fixture = ReturnType<typeof createFixture> & {
   source?: Connection;
   session?: AgentSession;
+  effects?: object;
   context?: ExtensionContext;
   admittedMetadata?: ReturnType<typeof resolvePluginMetadataSnapshot>;
 };
-function createFixture(mode: Mode, root: string) {
+function createFixture(mode: Mode, root: string, adapter: boolean) {
   return {
     mode,
     root,
+    adapter,
     registrations: new Array<Connection>(),
     tools: new Array<Connection>(),
     entered: createDeferredCore(),
@@ -201,6 +203,35 @@ async function hold(current: Fixture, readTools = true) {
   current.lateReads++;
 }
 
+// Hold the real bounded execution after its durable commit, just as the SDK
+// fixture below holds session_compact after its context-replacement receipt.
+vi.mock("./prepared-compaction-session.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./prepared-compaction-session.js")>();
+  return {
+    ...actual,
+    prepareEmbeddedCompactionSession: async (
+      ...args: Parameters<typeof actual.prepareEmbeddedCompactionSession>
+    ) => {
+      const prepared = await actual.prepareEmbeddedCompactionSession(...args);
+      const current = fixture();
+      current.effects = prepared.effects;
+      return {
+        ...prepared,
+        get value() {
+          return prepared.value;
+        },
+        execute: async (...options: Parameters<typeof prepared.execute>) => {
+          const outcome = await prepared.execute(...options);
+          if (current.mode === "abort-after-commit" && outcome.status === "completed") {
+            await remember(current, hold(current));
+          }
+          return outcome;
+        },
+      };
+    },
+  };
+});
+
 vi.mock("../sessions/sdk.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/sdk.js")>();
   return {
@@ -291,8 +322,19 @@ vi.mock("./stream-resolution.js", async (importOriginal) => {
           )(pending);
         }
         const result = createAssistantMessageEventStream();
-        result.push({ type: "done", reason: "stop", message: assistant(model, summary) });
-        result.end();
+        const complete = () => {
+          result.push({ type: "done", reason: "stop", message: assistant(model, summary) });
+          result.end();
+        };
+        if (current.mode === "reload-abort-before-commit" && !current.adapter) {
+          const pending = remember(current, hold(current).then(complete));
+          expectDefined(
+            getAiTransportHost().observePendingProviderWork,
+            "provider work observer",
+          )(pending);
+        } else {
+          complete();
+        }
         return result;
       };
       return { ...resolved, streamFn };
@@ -441,10 +483,14 @@ describe("delegate compaction resource retirement", () => {
     await state.cleanup();
   });
 
-  it.for(modes)(
-    "keeps actual work owned through %s",
+  it.for([
+    ...modes.map((mode) => ({ mode, adapter: false })),
+    { mode: "abort-after-commit" as const, adapter: true },
+    { mode: "reload-abort-before-commit" as const, adapter: true },
+  ])(
+    "keeps actual work owned through $mode (adapter=$adapter)",
     { timeout: 30_000 },
-    async (mode, { signal }) => {
+    async ({ mode, adapter }, { signal }) => {
       const listeners = readGlobalSingleton(
         Symbol.for("openclaw.internalSessionTranscriptListeners"),
       );
@@ -457,9 +503,10 @@ describe("delegate compaction resource retirement", () => {
       const pendingPreparation = lspCancelled || mcpCancelled;
       const preparationFailed = mode === "preparation-failure" || lspCancelled || mcpCancelled;
       runningCase = (async () => {
-        const root = state.path(mode);
+        const caseName = `${mode}${adapter ? "-adapter" : ""}`;
+        const root = state.path(caseName);
         fs.mkdirSync(root);
-        const current: Fixture = createFixture(mode, root);
+        const current: Fixture = createFixture(mode, root, adapter);
         active.fixture = current;
         const controller = new AbortController();
         const cancel = () => {
@@ -519,7 +566,10 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
     connection.disposals++;
     database.close();
   } });
-  api.registerProvider({ id: ${JSON.stringify(providerId)}, label: "Fixture provider", auth: [] });
+  api.registerProvider({
+    id: ${JSON.stringify(providerId)}, label: "Fixture provider", auth: [],
+    ${adapter ? "sanitizeReplayHistoryAsync: ({ messages }) => messages," : ""}
+  });
   ${
     mode === "before_compaction" || mode === "after_compaction"
       ? `api.on(${JSON.stringify(mode)}, async () => {
@@ -538,8 +588,8 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
         ).toBe(true);
         const target = {
           agentId: "main",
-          sessionId: `delegate-${mode}`,
-          sessionKey: `agent:main:delegate-${mode}`,
+          sessionId: `delegate-${caseName}`,
+          sessionKey: `agent:main:delegate-${caseName}`,
           storePath: state.path("transcripts", "openclaw-agent.sqlite"),
         };
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -720,7 +770,11 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                 ).toEqual(originalMessages);
               }
               expect(current.envRestored).toBe(true);
-              expect(current.disposals).toBe(preparationFailed ? 0 : 1);
+              expect(current.disposals).toBe(adapter ? 1 : 0);
+              if (!adapter) {
+                expect(current.session).toBeUndefined();
+                expect(Boolean(current.effects)).toBe(!preparationFailed);
+              }
               expect(listeners.size).toBe(listenersBefore);
               if (lspCancelled || mcpCancelled) {
                 expect(current.session).toBeUndefined();
@@ -731,7 +785,7 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               }
               const usageCount = recordUsage.mock.calls.length;
               recordSessionModelUsage(
-                current.session?.sessionManager,
+                current.effects ?? current.session?.sessionManager,
                 assistant(model, summary).usage,
               );
               expect(recordUsage.mock.calls.length).toBe(usageCount);
@@ -781,6 +835,11 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
               expect(recordCompaction.mock.calls.length).toBe(
                 committed && mode !== "reload-queued" ? 1 : 0,
               );
+              expect(
+                SessionManager.open(target, state.workspaceDir)
+                  .getBranch()
+                  .filter((entry) => entry.type === "compaction"),
+              ).toHaveLength(committed ? 1 : 0);
               if (mode !== "raw") {
                 const reopened = new DatabaseSync(source.file);
                 try {

@@ -10,7 +10,7 @@ import type { PreparedCompactionReplayOptions } from "../../agents/embedded-agen
 import type { ModelSnapshotEntry } from "../../agents/embedded-agent-runner/replay-model-snapshot.js";
 import type { SessionHeader } from "../../agents/sessions/session-manager-types.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { CompactionReadCounts } from "./session-compaction-render.worker.js";
+import type { CompactionReadCounts } from "./session-compaction-read-counts.types.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { SessionTranscriptHydrationWorkerInput } from "./session-transcript-hydration.types.js";
@@ -58,13 +58,11 @@ export type SessionPreparedCompactionInput = Omit<
         reportingBudget?: PreparedCompactionPlan["requestBudget"];
         version: SessionTranscriptContextVersion;
         retainedSequences: number[];
-        preparation: PreparedCompactionPlan["preparation"];
         summary: CompactionResult;
         work: Pick<
           PreparedCompactionPlan,
           "requestBudget" | "requestTokenLimit" | "pendingEntryId"
         > & { itemId: string };
-        replay: PreparedCompactionReplayOptions;
       };
 };
 
@@ -82,7 +80,6 @@ export type SessionPreparedCompactionBody =
       tokensAfter: number;
       reportingTokensAfter: number | undefined;
       messageCountAfter: number;
-      retainedReplayMetrics: BeforeCompactionHookMetrics;
     }
   | ({
       status: "preflight";

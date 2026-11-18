@@ -27,6 +27,7 @@ vi.mock("../logging/subsystem.js", () => {
   return { createSubsystemLogger: () => makeLogger() };
 });
 
+// mock-isolation: deterministic encoder sizes isolate logging from native image processing.
 vi.mock("../media/image-ops.js", () => ({
   buildImageResizeSideGrid: () => [2000],
   getImageMetadata: vi.fn(),

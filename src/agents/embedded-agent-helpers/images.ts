@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
@@ -8,7 +9,8 @@ import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 
-type ContentBlock = AgentToolResult<unknown>["content"][number];
+type AssistantContent = Extract<AgentMessage, { role: "assistant" }>["content"];
+type ContentBlock = AssistantContent[number] | AgentToolResult<unknown>["content"][number];
 export const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";
 // Weak content roots survive rebuilt tool-result envelopes without retaining sessions.
 // Image outcomes remain owned by tool-images: backend failures must stay retryable.
@@ -16,11 +18,11 @@ const imageFreeReplayContent: WeakMap<ContentBlock[], ContentBlock[]>[] = [];
 
 function dropEmptyTextBlocks<T>(content: T[], preserveSignedText = false): T[] {
   return content.filter((block) => {
-    const rec = block as { type?: unknown; text?: unknown; textSignature?: unknown };
+    const rec = asOptionalObjectRecord(block);
     return (
       !block ||
       typeof block !== "object" ||
-      rec.type !== "text" ||
+      rec?.type !== "text" ||
       typeof rec.text !== "string" ||
       rec.text.trim().length > 0 ||
       (preserveSignedText && typeof rec.textSignature === "string" && rec.textSignature.length > 0)
@@ -72,7 +74,7 @@ export function prepareReplayImageContent(
   ) {
     return undefined;
   }
-  const content = (Array.isArray(message.content) ? message.content : []) as ContentBlock[];
+  const content: ContentBlock[] = Array.isArray(message.content) ? message.content : [];
   return message.role === "assistant"
     ? prepareAssistantReplayImageContent(
         content,
@@ -125,14 +127,18 @@ export function finishReplayImageContent(
         content.length === row.content.length &&
         content.every((block, index) => block === row.content[index])
       ) {
-        content = row.content as ContentBlock[];
+        content = row.content;
       }
       if (row.role === "assistant") {
-        return content === row.content && !row.providerReplay
-          ? row
-          : replaceCompactionReplayOwnerContent(row, content as typeof row.content);
+        if (content === row.content && !row.providerReplay) {
+          return row;
+        }
+        // SAFETY: assistant sanitation only filters its blocks or removes signatures; image omissions are text.
+        return replaceCompactionReplayOwnerContent(row, content as AssistantContent);
       }
-      return content === row.content ? row : { ...row, content };
+      // SAFETY: user/tool-result sanitation preserves text/image blocks or substitutes an omission text block.
+      const userOrResultContent = content as AgentToolResult<unknown>["content"];
+      return content === row.content ? row : { ...row, content: userOrResultContent };
     },
   });
 }
@@ -157,8 +163,11 @@ export async function sanitizeSessionMessagesImages(
     // Replay does not rewrite stored images, even after a successful reply.
     verifyDecodability: true,
   };
-  const sanitizeImages = (content: ContentBlock[]) =>
-    sanitizeContentBlocksImages(content, label, imageSanitization);
+  const sanitizeImages = (content: ContentBlock[]) => {
+    // SAFETY: the media owner transforms only images and passes all other blocks through unchanged.
+    const mediaContent = content as AgentToolResult<unknown>["content"];
+    return sanitizeContentBlocksImages(mediaContent, label, imageSanitization);
+  };
   const sanitizedIds =
     options?.sanitizeToolCallIds === true
       ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
@@ -186,7 +195,7 @@ export async function sanitizeSessionMessagesImages(
       out.push(msg);
       continue;
     }
-    const content = (Array.isArray(msg.content) ? msg.content : []) as ContentBlock[];
+    const content = Array.isArray(msg.content) ? msg.content : [];
     // User and tool results can share frozen content, but only user text gets a placeholder.
     const policy =
       msg.role === "assistant"
@@ -202,7 +211,7 @@ export async function sanitizeSessionMessagesImages(
       const finished = finishReplayImageContent(msg, sanitized);
       nextContent =
         finished && "content" in finished && Array.isArray(finished.content)
-          ? (finished.content as ContentBlock[])
+          ? finished.content
           : [];
       if (
         nextContent.length === content.length &&

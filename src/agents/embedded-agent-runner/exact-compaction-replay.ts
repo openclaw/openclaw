@@ -427,10 +427,8 @@ export async function prepareExactCompactionReplay<S>(
   );
   let step = normalized.next();
   while (!step.done) {
-    const [left, right] = step.value.map((handle) => handle.value!) as [
-      ReplayMessageFact<S>,
-      ReplayMessageFact<S>,
-    ];
+    const left = step.value[0].value!;
+    const right = step.value[1].value!;
     const leftKey = left.content!.map((block) => block.equality).join(":");
     const rightKey = right.content!.map((block) => block.equality).join(":");
     step = normalized.next(

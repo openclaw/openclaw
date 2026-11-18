@@ -23,7 +23,6 @@ import type {
   PreparedCompactionEntryFact,
   PreparedCompactionMessageSource,
 } from "../../agents/embedded-agent-runner/prepared-compaction-plan.types.js";
-import { prepareCompactionReplay } from "../../agents/embedded-agent-runner/prepared-compaction-replay.js";
 import {
   isSameModelSnapshot,
   readModelSnapshotStateFromEntries,
@@ -112,7 +111,6 @@ export async function readPreparedSessionCompaction(
     const tokensAfter = budget
       ? estimateCompactedRequestTokens(messages, { ...budget, pendingTokens: 0 })
       : estimateContextTokens(messages).tokens;
-    const replay = await prepareCompactionReplay(retained, operation.replay, messages);
     control.throwIfCancelled();
     return {
       kind: "compaction-preparation",
@@ -126,7 +124,6 @@ export async function readPreparedSessionCompaction(
           })
         : estimateCompactionMessageTokens(messages, estimateTokens),
       messageCountAfter: messages.length,
-      retainedReplayMetrics: replay.beforeHookMetrics,
       reads,
     };
   }

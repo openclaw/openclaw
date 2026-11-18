@@ -1,6 +1,7 @@
 /** Shared replay decisions; adapters retain payloads or payload-free metadata, never both. */
 import type { AgentMessage } from "@openclaw/agent-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   classifyToolPairingFacts,
@@ -125,8 +126,7 @@ export function collectReplayToolBlockFacts(
   message: { role?: unknown; stopReason?: unknown },
   block: unknown,
 ): ReplayToolBlockFacts {
-  const record =
-    block && typeof block === "object" ? (block as Record<string, unknown>) : undefined;
+  const record = asOptionalObjectRecord(block);
   const toolCall = isContractToolCallBlock(block);
   const id = typeof record?.id === "string" ? record.id : undefined;
   const name = typeof record?.name === "string" ? record.name : undefined;
@@ -134,10 +134,7 @@ export function collectReplayToolBlockFacts(
   const hasPartialJson = typeof partialJson === "string";
   const input = record?.input;
   const args = record?.arguments;
-  const attachments =
-    input && typeof input === "object"
-      ? (input as { attachments?: unknown }).attachments
-      : undefined;
+  const attachments = asOptionalObjectRecord(input)?.attachments;
   const separator = id?.indexOf("|") ?? -1;
   return {
     toolCall,
@@ -169,7 +166,7 @@ export function collectReplayToolBlockFacts(
 }
 
 export function collectReplayToolResultFacts(message: object): ReplayToolResultFacts {
-  const record = message as Record<string, unknown>;
+  const record = asOptionalObjectRecord(message)!;
   const ids: ReplayToolResultFacts["ids"] = {};
   for (const field of TOOL_RESULT_ID_FIELDS) {
     if (typeof record[field] === "string") {
@@ -204,10 +201,7 @@ export function createCompletedToolCallPredicateWithAdapter<Message, Block>(
     for (const occurrence of frame.occurrences) {
       if (occurrence.result && !occurrence.result.synthetic && content) {
         const block = content[occurrence.contentIndex];
-        if (
-          block !== undefined &&
-          isAllowedToolCallName(adapter.block(message, block).name, null)
-        ) {
+        if (block !== undefined && isAllowedToolCallName(occurrence.name, null)) {
           completed.add(block);
         }
       }
@@ -227,6 +221,7 @@ export const agentMessageToolReplayAdapter: ToolReplayAdapter<AgentMessage, unkn
     if (message.role !== "assistant") {
       return message;
     }
+    // SAFETY: repair kernels only filter this assistant's blocks or rewrite their call IDs/names.
     const nextContent = content as typeof message.content;
     return repair === "inputs"
       ? replaceCompactionReplayOwnerContent(message, nextContent)
@@ -234,12 +229,12 @@ export const agentMessageToolReplayAdapter: ToolReplayAdapter<AgentMessage, unkn
   },
   withBlock(block, update) {
     const next = {
-      ...(block as object),
+      ...asOptionalObjectRecord(block),
       ...("id" in update ? { id: update.id } : {}),
       ...("name" in update ? { name: update.name } : {}),
     };
     if (update.removePartialJson) {
-      delete (next as { partialJson?: unknown }).partialJson;
+      Reflect.deleteProperty(next, "partialJson");
     }
     return next;
   },

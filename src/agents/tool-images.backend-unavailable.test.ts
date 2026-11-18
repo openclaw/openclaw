@@ -18,6 +18,7 @@ const PNG_BASE64 = "iVBORw0KGgo=";
 
 async function importSanitizer() {
   vi.resetModules();
+  // mock-isolation: emulate an unavailable native backend and count lazy loads without initializing it.
   vi.doMock("../media/image-ops.js", () => {
     imageOpsLoads();
     return {

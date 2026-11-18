@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../agents/runtime/index.js";
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 
 export const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
 

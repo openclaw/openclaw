@@ -45,7 +45,7 @@ import {
   prepareCompactionSafeguardSummary,
 } from "../agent-hooks/compaction-safeguard-preparation.js";
 import { sanitizeCompactionMessages } from "../compaction-planning.js";
-import { prepareCompactionReplay } from "../embedded-agent-runner/prepared-compaction-replay.js";
+import { prepareCompactionReplay } from "../embedded-agent-runner/prepared-compaction-replay.test-support.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
@@ -221,10 +221,8 @@ it("prepares and rerenders captured rows without hydrating summarized history on
         kind: "finalize",
         version: prepared.version,
         retainedSequences: prepared.plan.retainedSequences,
-        preparation: prepared.plan.preparation,
         summary: finalizedSummary,
         work: { itemId: work.itemId },
-        replay: replayOptions,
       };
       const originalReplacement = createCompactionReplacementProjector(branch, work.itemId)(
         finalizedSummary,

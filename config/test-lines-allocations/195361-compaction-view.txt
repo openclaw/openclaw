@@ -1,4 +1,4 @@
-# #195361 compaction view: 2608 net test/helper lines against 4dbd70ff;
+# #195361 / #201304 compaction view: 3243 net test/helper lines against e25ad96f;
 # the ordinary allowance covers 400. The user lifted diff-size limits to require
 # an actual measured fix rather than a partial refactor.
 # Existing suites cover shared metadata/array policy parity, exact native projections,
@@ -6,5 +6,9 @@
 # cancellation and commit accounting, sent-tool budgets, and summary-origin semantics.
 # The release-only real-Gateway residency fixture proves held-payload removal at
 # 8/40 MiB with a blocked local model; helper tests cannot establish this boundary.
+# CI repairs additionally cover the native persistence/cancellation receipt and
+# SDK-adapter lifetime cases, plus storage-error propagation at the prepared reader.
+# The exact array replay oracle is test-support only (95 lines moved from production).
+# Existing attachment scan and sibling-completion assertions remain unchanged.
 # No timeout, isolation, heap-limit, baseline, or assertion exception is introduced.
-2208
+2843

@@ -58,6 +58,10 @@ import { hasReplayableThinkingSignature } from "./thinking-replay.js";
 
 export const SESSION_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 
+type ReplayContentBlock = Extract<
+  Extract<AgentMessage, { content: unknown }>["content"],
+  readonly unknown[]
+>[number];
 type BlockLocator<S> = { source: S; index: number; projection?: true };
 export type ReplayBlockFact<S> = {
   locator?: BlockLocator<S>;
@@ -148,7 +152,7 @@ export type ExactReplayContext = {
 };
 
 function collectBlock<S>(
-  value: unknown,
+  value: ReplayContentBlock,
   message: AgentMessage,
   locator?: BlockLocator<S>,
   rawIndex = -1,
@@ -164,29 +168,28 @@ function collectBlock<S>(
     if (value == null) {
       throw new Error("invalid content block");
     }
-    if (type === "text") {
-      assistantChars = estimateStringChars(record?.text as string);
-    } else if (type === "thinking") {
-      assistantChars = estimateStringChars(record?.thinking as string);
-    } else if (type === "toolCall") {
+    if (value.type === "text") {
+      assistantChars = estimateStringChars(value.text);
+    } else if (value.type === "thinking") {
+      assistantChars = estimateStringChars(value.thinking);
+    } else if (value.type === "toolCall") {
       assistantChars =
-        estimateStringChars(record?.name as string) +
-        estimateStringChars(stringifyCompactionValue(record?.arguments));
+        estimateStringChars(value.name) +
+        estimateStringChars(stringifyCompactionValue(value.arguments));
     }
   } catch {
     assistantChars = undefined;
   }
   try {
-    const projection = projectCompactionContentBlock(
-      value as { type: string; content?: unknown; text?: string },
-    );
+    const projection = projectCompactionContentBlock(value);
     hasContentText = Boolean(projection.text);
     contentChars = estimateStringChars(hasContentText ? [projection.text].join("") : "");
     omission = projection.omission;
   } catch {
     contentChars = undefined;
   }
-  const signature = (block: unknown) =>
+  const signature = (block: ReplayContentBlock | undefined) =>
+    // SAFETY: the signature reader checks object/string fields, never assuming an assistant block discriminant.
     hasReplayableThinkingSignature(block as Parameters<typeof hasReplayableThinkingSignature>[0]);
   const prepareImage = (policy: number) =>
     prepareAssistantReplayImageContent([value], policy === 4, {
@@ -294,18 +297,12 @@ function collectMessage<S>(
   options?: PreparedCompactionReplayOptions,
 ): ReplayMessageFact<S> {
   const record = asOptionalRecord(message)!;
-  const originalContent =
+  const originalContent: readonly ReplayContentBlock[] =
     "content" in original && Array.isArray(original.content) ? original.content : [];
   const content =
     "content" in message && Array.isArray(message.content)
       ? message.content.map((block, index) =>
-          collectBlock(
-            block,
-            message,
-            { source, index },
-            originalContent.indexOf(block as never),
-            options,
-          ),
+          collectBlock(block, message, { source, index }, originalContent.indexOf(block), options),
         )
       : undefined;
   const rawString = typeof record.content === "string" ? record.content : undefined;
@@ -339,12 +336,13 @@ function collectMessage<S>(
       /* Matches undefined token metrics. */
     }
   }
+  const senderId = asOptionalRecord(record["__openclaw"])?.senderId;
   return {
     source,
     role: message.role,
     content,
     stringContent,
-    sourceContentWasString: typeof (original as { content?: unknown }).content === "string",
+    sourceContentWasString: "content" in original && typeof original.content === "string",
     stopReason: typeof record.stopReason === "string" ? record.stopReason : undefined,
     timestamp: typeof record.timestamp === "number" ? record.timestamp : undefined,
     timestampMissing: record.timestamp == null,
@@ -353,10 +351,7 @@ function collectMessage<S>(
     persistedMedia: hasPersistedMedia(message),
     userLabelChars:
       message.role === "user" ? estimateStringChars(formatCompactionUserLabel(message)) - 4 : 0,
-    senderId:
-      typeof asOptionalRecord(record["__openclaw"])?.senderId === "string"
-        ? (asOptionalRecord(record["__openclaw"])!.senderId as string)
-        : "",
+    senderId: typeof senderId === "string" ? senderId : "",
     silenceOverride: assistantSilenceOverride(message),
     phase: normalizeAssistantPhase(record.phase),
     fixedReal:

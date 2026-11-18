@@ -8,7 +8,10 @@ export function mockNonDurableCompactionRuntime(getModelRegistryRuntime: () => u
     )),
     needsCompactionSessionAdapter: () => true,
   }));
-  vi.doMock("../sessions/model-registry-runtime.js", () => ({
+  vi.doMock("../sessions/model-registry-runtime.js", async () => ({
+    ...(await vi.importActual<typeof import("../sessions/model-registry-runtime.js")>(
+      "../sessions/model-registry-runtime.js",
+    )),
     getModelRegistryRuntime,
   }));
 }
