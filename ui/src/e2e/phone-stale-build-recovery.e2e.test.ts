@@ -212,7 +212,7 @@ suite.define(() => {
         retryable: false,
       };
       const target = new URL("chat/main", proofServer.baseUrl);
-      const recovery = page.getByRole("button", { name: /Server updated/u });
+      const recovery = page.getByRole("button", { name: /OpenClaw was updated/u });
 
       await page.goto(target.href);
       const initialServiceWorker = await waitForPhoneProofServiceWorker(page, serviceWorker);

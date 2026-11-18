@@ -48,7 +48,7 @@ it.each([
   ["source-revocation", "source-invalidated"],
   ["gateway-current", "gateway-identity-retired"],
   ["before-sources", "closure-released"],
-] as const)("records the %s failure once through sandbox and lane wrappers", (check, reason) =>
+] as const)("keeps admitted work through %s but diagnoses explicit release", (check, reason) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const profile = ensureProfileForEmail("authority-diagnostic@example.test");
     using proof = fixture(profile.id);
@@ -65,6 +65,12 @@ it.each([
       gateway.mockReturnValue(createDirectChatContext());
     } else {
       captured.release();
+    }
+    if (check !== "before-sources") {
+      expect(captured.authority.signal?.aborted).toBe(false);
+      expect(captured.authority.assertCurrent).not.toThrow();
+      expect(log).not.toHaveBeenCalled();
+      return;
     }
     await expect(
       enqueueCommandInLane("authority-diagnostic", async () => {
@@ -265,14 +271,12 @@ it.each([
     invalidateGatewayDeviceRevocation(proof.context, "reconnect-device", "operator");
     expect(() => original.authority.assertCurrent()).toThrow();
     expect(() => reconnected.authority.assertCurrent()).toThrow();
-    expect(afterRelease.authority.signal?.reason).toMatchObject({
-      message: expect.stringContaining("Reconnect to the Gateway"),
-    });
-    expect(() => afterRelease.authority.assertCurrent()).toThrow("Reconnect to the Gateway");
+    expect(afterRelease.authority.signal?.aborted).toBe(false);
+    expect(() => afterRelease.authority.assertCurrent()).not.toThrow();
     for (let turn = 0; turn < 3; turn++) {
       const fresh = await proof.capture(proof.connect().client);
       fresh.authority.assertCurrent();
-      expect(() => afterRelease.authority.assertCurrent()).toThrow("Reconnect to the Gateway");
+      expect(() => afterRelease.authority.assertCurrent()).not.toThrow();
     }
   }),
 );

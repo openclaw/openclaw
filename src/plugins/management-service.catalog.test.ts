@@ -127,6 +127,34 @@ describe("managed plugin catalog", () => {
     },
   );
 
+  it("projects the bundled sidebar hint and external install time", async () => {
+    const bundled = metadataSnapshot({ enabled: true });
+    bundled.plugins[0]!.catalog = { sidebar: true };
+    mocks.metadata.mockReturnValue(bundled);
+    expect((await listLocalPlugins()).plugins[0]).toMatchObject({ id: "workboard", sidebar: true });
+    expect((await listLocalPlugins()).plugins[0]).not.toHaveProperty("installedAt");
+
+    clearManagedPluginCatalogCache();
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: true,
+        id: "calendar",
+        origin: "global",
+        installRecord: {
+          source: "path",
+          installPath: "/tmp/calendar",
+          installedAt: "2026-11-17T10:00:00.000Z",
+        },
+      }),
+    );
+    const [external] = (await listLocalPlugins()).plugins;
+    expect(external).toMatchObject({
+      id: "calendar",
+      installedAt: Date.parse("2026-11-17T10:00:00.000Z"),
+    });
+    expect(external).not.toHaveProperty("sidebar");
+  });
+
   describe("authored credential validation", () => {
     const secretRef = { source: "store", provider: "default", id: "TEST_PLUGIN_KEY" };
     const configured = (config?: Record<string, unknown>, enabled = true): OpenClawConfig => ({

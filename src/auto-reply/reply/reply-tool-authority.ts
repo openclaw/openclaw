@@ -4,10 +4,7 @@ import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import {
-  assertAdmittedRunOperatorAuthority,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityPolicy,
@@ -66,8 +63,10 @@ import {
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
 import {
+  assertCurrentOperatorAuthority,
   captureReplyToolAuthorityContinuation,
   projectReplyToolAuthorityInput,
+  reauthorizeReplyToolAuthorityInput,
 } from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
@@ -182,13 +181,6 @@ export function resolveReplyOperatorAuthorityKey(
     [...new Set(authority.scopes.map((scope) => scope.trim()).filter(Boolean))].toSorted(),
     ...identities,
   ]);
-}
-
-function assertCurrentOperatorAuthority(authority: AdmittedRunOperatorAuthority | undefined): void {
-  if (authority) {
-    assertAdmittedRunOperatorAuthority(authority);
-    authority.assertCurrent();
-  }
 }
 
 /** Fingerprints the complete model-facing tool authority owned by one queued turn. */
@@ -611,6 +603,7 @@ export function prepareReplyToolAuthority(
             assertCurrentOperatorAuthority(participant.operatorAuthority);
           }
         };
+        reauthorizeReplyToolAuthorityInput(snapshot, caller);
         if (readMemoryEntry) {
           const policy = await prepareSessionCapabilityRead(() => {
             assertCallerCurrent();
