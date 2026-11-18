@@ -3,6 +3,7 @@ import type {
   CompactionPreparation,
   compactWithoutSummary,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type { ConversationEntryDescriptor } from "../../../packages/agent-core/src/harness/compaction/conversation-serialization.js";
 import type { PreparedCompactionSafeguardFacts } from "../agent-hooks/compaction-safeguard-prepared.types.js";
 import type { AgentCompactionPreparationOptions } from "../sessions/compaction/preparation.types.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
@@ -23,7 +24,7 @@ export type PreparedCompactionPlan = {
   requestBudget?: AgentCompactionPreparationOptions["requestBudget"];
   requestTokenLimit?: number;
   summaryReplayTokenBudget?: number;
-  selections: { history: number[]; turnPrefix: number[] };
+  selections: { history: ConversationEntryDescriptor[]; turnPrefix: ConversationEntryDescriptor[] };
   /** Only the future retained suffix; never the history being summarized. */
   retained: SessionEntry[];
 };

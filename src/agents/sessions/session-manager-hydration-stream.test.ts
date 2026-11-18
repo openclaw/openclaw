@@ -2,7 +2,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { serializeConversationWithinBudget } from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import {
+  collectConversationMessageFact,
+  collectConversationRangeDescriptors,
+  renderConversationEntriesWithinBudget,
+  serializeConversationEntry,
+  serializeConversationWithinBudget,
+} from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -168,7 +174,7 @@ it("prepares and rerenders captured rows without hydrating summarized history on
       for (const maxChars of [4000, 8000, 16_000]) {
         const rendered = await readPreparedSessionCompactionInWorker(target, {
           kind: "render",
-          sequences: prepared.plan.selections.history,
+          entries: prepared.plan.selections.history,
           version: prepared.version,
           maxChars,
         });
@@ -212,7 +218,7 @@ it("prepares and rerenders captured rows without hydrating summarized history on
       await expect(
         readPreparedSessionCompactionInWorker(target, {
           kind: "render",
-          sequences: prepared.plan.selections.history,
+          entries: prepared.plan.selections.history,
           version: prepared.version,
           maxChars: 4000,
         }),
@@ -244,6 +250,11 @@ it("streams oversized compaction history without first materializing it in the r
       throw new Error("Expected indexed compaction fixture");
     }
     const sequences = before.residentRows.slice(1).map((row) => row.rawSeq);
+    const descriptors = collectConversationRangeDescriptors(
+      messages.map((entry, index) =>
+        collectConversationMessageFact(entry.message, sequences[index]!),
+      ),
+    );
     const last = sequences.at(-1)!;
     const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
     const writePayload = database.db.prepare(
@@ -292,13 +303,55 @@ it("streams oversized compaction history without first materializing it in the r
       await expect(
         readPreparedSessionCompactionInWorker(target, {
           kind: "render",
-          sequences,
+          entries: descriptors,
           version: before.snapshot.version,
           maxChars: 4000,
         }),
-      ).rejects.toThrow("materialized preparation byte limit");
+      ).rejects.toThrow(/JSON|Unexpected|property/i);
     } finally {
       writePayload.run(JSON.stringify(messages.at(-1)), target.sessionId, last);
+    }
+    const rendered = await readPreparedSessionCompactionInWorker(target, {
+      kind: "render",
+      entries: descriptors,
+      version: before.snapshot.version,
+      maxChars: 4000,
+    });
+    expect(rendered).toEqual({
+      kind: "compaction-preparation",
+      status: "rendered",
+      conversation: serializeConversationWithinBudget(
+        messages.map((entry) => entry.message),
+        4000,
+      ),
+    });
+    const candidates = new Set<number>();
+    renderConversationEntriesWithinBudget(descriptors, 4000, (entry, variant) => {
+      candidates.add(entry.source);
+      return serializeConversationEntry(
+        messages[sequences.indexOf(entry.source)]!.message,
+        entry,
+        variant,
+      );
+    });
+    const skipped = sequences.find((seq) => !candidates.has(seq))!;
+    expect(skipped).toBeDefined();
+    writePayload.run("{malformed", target.sessionId, skipped);
+    try {
+      expect(
+        await readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          entries: descriptors,
+          version: before.snapshot.version,
+          maxChars: 4000,
+        }),
+      ).toEqual(rendered);
+    } finally {
+      writePayload.run(
+        JSON.stringify(messages[sequences.indexOf(skipped)]),
+        target.sessionId,
+        skipped,
+      );
     }
     // Declining optimization must leave the complete existing streamed host path usable.
     const hydrated = await prepareSessionTranscriptHydration(target, { compaction: true }).read();

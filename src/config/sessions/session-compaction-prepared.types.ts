@@ -29,7 +29,7 @@ export type SessionPreparedCompactionInput = Omit<
       }
     | {
         kind: "render";
-        sequences: number[];
+        entries: PreparedCompactionPlan["selections"]["history"];
         version: SessionTranscriptContextVersion;
         maxChars: number;
       };

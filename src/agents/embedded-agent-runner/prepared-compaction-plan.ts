@@ -1,4 +1,3 @@
-import { getMessageFromEntryForCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { prepareCompactionFloor } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import {
   compactWithoutSummary,
@@ -6,8 +5,8 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   MAX_SUMMARY_INPUT_CHARS,
-  serializeConversationWithinBudget,
-  type BoundedConversation,
+  collectConversationMessageFact,
+  collectConversationRangeDescriptors,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
@@ -70,15 +69,17 @@ export function prepareCompactionPlan(
     qualityGuardEnabled: options.qualityGuardEnabled,
   });
   const select = (messages: AgentMessage[]) => {
-    const selected: number[] = [];
+    const selected = [];
     for (const message of messages) {
       const seq = sequences.get(message);
       if (seq === undefined) {
         return undefined;
       }
-      selected.push(seq);
+      for (const projected of convertToLlm(sanitizeCompactionMessages([message]))) {
+        selected.push(collectConversationMessageFact(projected, seq));
+      }
     }
-    return selected;
+    return collectConversationRangeDescriptors(selected);
   };
   const selectedHistory = select(summary.reconciliationMessages);
   const selectedTurnPrefix = select(summary.turnPrefixMessages);
@@ -153,7 +154,7 @@ export function prepareCompactionPlan(
   };
   // Derived facts retain the summary-input bound. The selected retained context
   // keeps its existing full-fidelity hydration channel; metadata is not summary
-  // input. Row-number vectors likewise describe source selection, not input text.
+  // input. Serialization descriptors likewise describe source selection, not input text.
   const replyChars = JSON.stringify(
     { ...plan, selections: undefined, retained: undefined },
     (_key, value: unknown) => (value instanceof Set ? [...value] : value),
@@ -162,23 +163,4 @@ export function prepareCompactionPlan(
     return { status: "unsupported", reason: "prepared compaction facts exceed the bounded reply" };
   }
   return { status: "prepared", plan };
-}
-
-/** Render each actual budget from captured full-fidelity rows, not a prior sample. */
-export function renderPreparedCompactionRows(
-  entries: readonly SessionEntry[],
-  maxChars: number,
-): BoundedConversation {
-  const messages: AgentMessage[] = [];
-  for (const entry of entries) {
-    const message = getMessageFromEntryForCompaction(entry);
-    if (!message) {
-      throw new Error("Prepared compaction rendering requires original visible message rows");
-    }
-    messages.push(message);
-  }
-  return serializeConversationWithinBudget(
-    convertToLlm(sanitizeCompactionMessages(messages)),
-    maxChars,
-  );
 }

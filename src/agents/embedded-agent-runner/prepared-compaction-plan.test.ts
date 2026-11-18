@@ -29,7 +29,7 @@ it("keeps long row-number selections separate from bounded textual facts", () =>
       "Long native rows lost their private preparation eligibility: " + result.reason,
     );
   }
-  expect(result.plan.selections.history).toEqual(
+  expect(result.plan.selections.history.map((entry) => entry.source)).toEqual(
     Array.from({ length: 19_999 }, (_, index) => 1_000_000_000 + index),
   );
   expect(result.plan.retained).toEqual([entries.at(-1)]);
@@ -74,7 +74,7 @@ it("records equal projected wrappers from their distinct source rows", () => {
   if (result.status !== "prepared") {
     throw new Error("Custom message lost its recorded projection source");
   }
-  expect(result.plan.selections.history).toEqual([40, 41]);
+  expect(result.plan.selections.history.map((entry) => entry.source)).toEqual([40, 41]);
 });
 
 it.each([false, true])(

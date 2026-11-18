@@ -1,0 +1,4 @@
+# Compaction view: extend existing real-worker fixtures for lazy payload selection,
+# plus end-to-end residency and final-artifact/persisted-context differential regressions.
+# These contracts require source/worker and execution boundaries, not helper-only assertions.
+350

@@ -12,7 +12,12 @@ import {
 } from "../compaction/shard-fixtures.test-support.js";
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry as Entry } from "../types.js";
-import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
+import {
+  buildSessionContext,
+  collectSessionContextEntryFact,
+  iterateSessionContextEntryFacts,
+  projectSessionEntryMessage,
+} from "./session.js";
 import { selectResetKeptMessageFacts } from "./tool-pairing-facts.js";
 import { collectToolPairingMessageFact, selectResetKeptEntries } from "./tool-result-pairing.js";
 
@@ -375,4 +380,53 @@ it("keeps tool ownership within the latest reset when resets repeat", () => {
   expect(keptAssistant).not.toHaveProperty("providerReplay");
   expect(Object.getOwnPropertyDescriptor(keptAssistant ?? {}, historyPrelude)?.value).toBe(true);
   expect(JSON.stringify(context.messages)).not.toContain("discarded conversation");
+});
+
+it("selects background reset context from detached facts without validating discarded placements", () => {
+  const entries: Entry[] = [
+    {
+      ...entryBase("invalid", null),
+      type: "custom",
+      customType: "openclaw.background-result-placement",
+      data: {},
+    },
+    user("kept", "invalid", "USER_PAYLOAD"),
+    messageEntry(
+      "pending",
+      "kept",
+      Object.assign(
+        assistantMessage("BACKGROUND_PAYLOAD", {
+          provider: "openclaw",
+          model: "automation-result",
+        }),
+        { excludeFromContext: true, openclawModelPlacement: "pending" },
+      ),
+    ),
+    {
+      ...entryBase("placement", "pending"),
+      type: "custom",
+      customType: "openclaw.background-result-placement",
+      data: { afterEntryId: "kept", resultEntryIds: ["pending"] },
+    },
+    reset("reset", "placement", "kept"),
+    user("new", "reset", "NEW_PAYLOAD"),
+  ];
+  const facts = structuredClone(entries.map(collectSessionContextEntryFact));
+  entries.length = 0;
+  expect(JSON.stringify(facts)).not.toContain("PAYLOAD");
+  expect(
+    [...iterateSessionContextEntryFacts(facts)].map(({ entry, placement, context }) => [
+      entry.id,
+      placement?.id,
+      context,
+    ]),
+  ).toEqual([
+    ["reset", undefined, "current"],
+    ["kept", undefined, "reset-retained"],
+    ["pending", "placement", "reset-retained"],
+    ["new", undefined, "current"],
+  ]);
+  expect(() => [
+    ...iterateSessionContextEntryFacts([...facts.slice(0, 1), ...facts.slice(-1)]),
+  ]).toThrow("Invalid background result placement marker");
 });

@@ -1,11 +1,7 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import {
-  prepareCompactionPlan,
-  renderPreparedCompactionRows,
-} from "../../agents/embedded-agent-runner/prepared-compaction-plan.js";
+import { prepareCompactionPlan } from "../../agents/embedded-agent-runner/prepared-compaction-plan.js";
 import { prepareCompactionReplay } from "../../agents/embedded-agent-runner/prepared-compaction-replay.js";
 import { SessionManagerNavigation } from "../../agents/sessions/session-manager-navigation.js";
-import type { SessionEntry } from "../../agents/sessions/session-manager-types.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { bindCacheTtlProjectionPrefixes } from "./session-cache-ttl-prefix.js";
 import type {
@@ -13,15 +9,13 @@ import type {
   SessionPreparedCompactionWireValue,
   SessionPreparedCompactionBody,
 } from "./session-compaction-prepared.types.js";
+import { renderPreparedSessionCompaction } from "./session-compaction-render.worker.js";
 import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
   isIndexedSessionEntry,
 } from "./session-entry-codec.js";
-import {
-  readCompactionRowsForRendering,
-  readCompactionTranscriptForPreparation,
-} from "./session-transcript-hydration-read.worker.js";
+import { readCompactionTranscriptForPreparation } from "./session-transcript-hydration-read.worker.js";
 import { createSessionTranscriptHydrationStream } from "./session-transcript-hydration-stream.js";
 import type { SessionTranscriptHydrationWorkerInput } from "./session-transcript-hydration.types.js";
 
@@ -66,22 +60,7 @@ async function readPreparedSessionCompactionBody(
     caller: "compaction",
   };
   if (operation.kind === "render") {
-    const rows = await readCompactionRowsForRendering(
-      hydration,
-      operation.sequences,
-      operation.version,
-      control,
-    );
-    control.throwIfCancelled();
-    const entries: SessionEntry[] = [];
-    for (const row of rows) {
-      if (!isIndexedSessionEntry(row)) {
-        throw new Error("Prepared summary source no longer contains its message row");
-      }
-      entries.push(row);
-    }
-    const conversation = renderPreparedCompactionRows(entries, operation.maxChars);
-    control.throwIfCancelled();
+    const conversation = await renderPreparedSessionCompaction({ ...request, operation }, control);
     return { status: "rendered", conversation };
   }
   const { prepared, sequences } = await readCompactionTranscriptForPreparation(hydration, control);

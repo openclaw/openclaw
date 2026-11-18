@@ -235,7 +235,7 @@ export async function prepareEmbeddedCompactionSession(
                     target,
                     {
                       kind: "render",
-                      sequences: plan.selections[source],
+                      entries: plan.selections[source],
                       version,
                       maxChars,
                     },

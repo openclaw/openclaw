@@ -221,7 +221,7 @@ function createToolPairCutResolver(messages: ToolPairingMessageFact[], entryInde
 
 /** Find the compaction cut point that keeps approximately the requested recent-token budget. */
 export function findCutPoint(
-  entries: SessionTreeEntry[],
+  entries: readonly SessionTreeEntry[],
   startIndex: number,
   endIndex: number,
   keepRecentTokens: number,

@@ -1,7 +1,6 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
-import { createSessionTranscriptHydrationDecoder } from "./session-transcript-hydration-decoder.js";
 import type {
   SessionTranscriptHydrationWorkerRequest,
   SessionTranscriptHydrationWorkerInput,
@@ -192,48 +191,4 @@ async function readTranscriptHydration(
     throw new Error("Full transcript hydration requires its host channel");
   }
   return streamSessionTranscriptHydration(request, consume, control);
-}
-
-/** @internal Reread only captured full-fidelity rows, once per render task. */
-export async function readCompactionRowsForRendering(
-  request: SessionTranscriptHydrationWorkerInput,
-  sequences: readonly number[],
-  version: import("./session-transcript-context-version.types.js").SessionTranscriptContextVersion,
-  control: WorkerTaskControl,
-) {
-  const { streamSessionTranscriptHydration } =
-    await import("./session-transcript-hydration.worker.js");
-  const { validateSessionTranscriptContextInDatabase } =
-    await import("./session-accessor.sqlite-model-context.js");
-  const decoder = createSessionTranscriptHydrationDecoder({ selected: true });
-  const selectedSequences = [...new Set(sequences)];
-  const value = await streamSessionTranscriptHydration(
-    request,
-    (chunk) => decoder.accept(chunk),
-    control,
-    (database) => {
-      validateSessionTranscriptContextInDatabase(
-        database,
-        request.resolvedScope,
-        { version, admission: request.admission },
-        "prefix",
-      );
-      return { sequences: selectedSequences };
-    },
-    MAX_COMPACTION_PREPARATION_BYTES,
-  );
-  let sourceSequences: readonly number[] | undefined;
-  const prepared = decoder.finish(value, (_events, rows) => {
-    sourceSequences = rows;
-  });
-  if (prepared.kind !== "full" || !sourceSequences) {
-    throw new Error("Compaction rendering requires captured source rows");
-  }
-  const rows = new Map(
-    sourceSequences.map((seq, index) => [seq, prepared.snapshot.events[index]!]),
-  );
-  if (rows.size !== selectedSequences.length || selectedSequences.some((seq) => !rows.has(seq))) {
-    throw new Error("Compaction source rows are no longer available");
-  }
-  return sequences.map((seq) => rows.get(seq)!);
 }
