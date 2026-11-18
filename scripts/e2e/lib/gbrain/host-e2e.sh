@@ -213,7 +213,12 @@ elif ! command -v bun >/dev/null 2>&1; then
   fi
   step bun-install bash -c 'curl -fsSL https://bun.sh/install | bash' || fail "bun install"
 fi
-step connect wait_connected 600 || fail "plugin did not connect"
+# Every later step needs the connection; stop here instead of logging their cascade.
+step connect wait_connected 600 || {
+  fail "plugin did not connect"
+  gateway_stop
+  exit 1
+}
 if [ -n "$RELEASE_ASSET" ]; then
   step release-binary bash -c "test -x '$HOME/.gbrain/bin/gbrain' && '$HOME/.gbrain/bin/gbrain' --version" ||
     fail "release binary not installed"
