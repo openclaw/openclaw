@@ -25,6 +25,8 @@
  * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
  * --reconcile-caller-stop leaves a staged projection receipt, stops the checkpoint
  * caller after patch preparation, then proves the next preparation writes no journal.
+ * --reconcile-base-refresh applies one staged base refresh to both targets, then
+ * measures the following preparation and all persisted rollback journals.
  * --reconcile-random-bytes 7420 writes deterministic incompressible changed files;
  * allocation mode reports main and matched worker allocation for each reconcile burst.
  * --reconcile-profile (Node 26+) adds all-worker allocation/CPU profiles and a
@@ -212,6 +214,7 @@ const { values } = parseArgs({
     "mutation-segments": { type: "boolean", default: false },
     "reconcile-traffic": { type: "boolean", default: false },
     "reconcile-caller-stop": { type: "boolean", default: false },
+    "reconcile-base-refresh": { type: "boolean", default: false },
     "reconcile-profile": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
@@ -465,6 +468,10 @@ assert(
 assert(!values.absent || values.mode !== "owner");
 const fileReads = values.mode === "file-read";
 const reconcile = values.mode === "reconcile";
+assert(
+  !values["reconcile-base-refresh"] ||
+    (reconcile && values["reconcile-traffic"] && !values["reconcile-caller-stop"]),
+);
 const turnLoop = values.mode === "turn-loop" || reconcile;
 const toolsPerTurn = Number(values["tools-per-turn"]);
 assert(Number.isSafeInteger(toolsPerTurn) && toolsPerTurn > 0 && toolsPerTurn % 10 === 0);
@@ -476,7 +483,7 @@ assert(
 );
 let checkpointCaller = new AbortController();
 let checkpointInterruption: "stage" | "stop" | undefined;
-const stoppedCheckpointPreparations: unknown[] = [];
+const followingPreparations: unknown[] = [];
 const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
 const reconcileRandomBytes = Number(values["reconcile-random-bytes"]);
 assert(Number.isSafeInteger(reconcileRandomBytes) && reconcileRandomBytes >= 0);
@@ -1822,7 +1829,14 @@ measurement: try {
         let commandCpu = process.cpuUsage();
         let commandAllocated = getHeapStatistics().total_allocated_bytes;
         const seed = `synthetic reconcile ${++edit}`;
-        const writeRoot = reconcileTarget === "canonical" ? workspace! : canonical;
+        const beforeTree = values["reconcile-base-refresh"]
+          ? git("rev-parse", "HEAD").trim()
+          : undefined;
+        const writeRoot = values["reconcile-base-refresh"]
+          ? repo
+          : reconcileTarget === "canonical"
+            ? workspace!
+            : canonical;
         const writeFiles = `
           const fs = require("node:fs");
           const [root, seed, count, bytes, randomBytes] = process.argv.slice(1);
@@ -1834,7 +1848,7 @@ measurement: try {
           }
         `;
         assert(pauseBegan === undefined, "Fixture mutation must begin with the guest running");
-        if (nativeTurns && reconcileTarget === "canonical") {
+        if (nativeTurns && reconcileTarget === "canonical" && !values["reconcile-base-refresh"]) {
           execFileSync("podman", [
             "exec",
             turnRuntime,
@@ -1870,10 +1884,60 @@ measurement: try {
           commandCpu = process.cpuUsage();
           commandAllocated = getHeapStatistics().total_allocated_bytes;
         }
+        let refreshedCommit: string | undefined;
+        if (values["reconcile-base-refresh"]) {
+          git("add", "--update");
+          git("commit", "--quiet", "--allow-empty", "-m", seed);
+          refreshedCommit = git("rev-parse", "HEAD").trim();
+          commandCpu = process.cpuUsage();
+          commandAllocated = getHeapStatistics().total_allocated_bytes;
+        }
         const began = performance.now();
         const beforePauses = pauseDurationsMs.length;
         const beforeTraffic = reconcileTraffic.length;
-        if (values["reconcile-caller-stop"]) {
+        if (refreshedCommit) {
+          const nextCommit = refreshedCommit;
+          const { prepareWorkspaceBaseRefresh } =
+            await import("../../src/gateway/worker-environments/workspace-manifest-worker.js");
+          const { localWorkspaceBaseRefreshRef } =
+            await import("../../src/gateway/worker-environments/workspace-result-inventory.js");
+          const { workerWorkspaceResultStaging } =
+            await import("../../src/gateway/worker-environments/workspace-result-staging.js");
+          const temporaryRoot = fs.mkdtempSync(path.join(output, "refresh-"));
+          try {
+            await projection.withLocalWorkspaceProjection(owner, async (operations) => {
+              const baseline = await operations.baselineDocument();
+              const refreshed = await prepareWorkspaceBaseRefresh({
+                root: canonical,
+                beforeTree: beforeTree!,
+                afterTree: nextCommit,
+                temporaryRoot,
+                baseCommit: nextCommit,
+                baseRaw: baseline.rawManifest,
+                baseRef: baseline.manifestRef,
+                buildCacheInputs: await operations.buildCacheInputs(),
+                action: "refresh_base",
+              });
+              const stagedResultRef = localWorkspaceBaseRefreshRef(
+                createHash("sha256").update(randomUUID()).digest("hex"),
+              );
+              await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+                root: canonical,
+                stagingRoot: path.join(temporaryRoot, "after"),
+                stagedResultRef,
+                baseManifestRef: baseline.manifestRef,
+                baseManifestRaw: baseline.rawManifest,
+                currentManifestRef: refreshed.manifestRef,
+                currentManifestRaw: refreshed.rawManifest,
+                buildCacheInputs: refreshed.buildCacheInputs,
+                assertCurrent: owner.assertCurrent,
+              });
+              await operations.applyBaseRefresh(stagedResultRef);
+            });
+          } finally {
+            fs.rmSync(temporaryRoot, { recursive: true, force: true });
+          }
+        } else if (values["reconcile-caller-stop"]) {
           await turnProjection!.checkpoint();
           assert(
             checkpointCaller.signal.aborted,
@@ -1897,7 +1961,7 @@ measurement: try {
           pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
           maxPauseDurationMs: Math.max(0, ...paused),
         });
-        if (values["reconcile-caller-stop"]) {
+        if (values["reconcile-caller-stop"] || values["reconcile-base-refresh"]) {
           const nextStarted = performance.now();
           const nextCpu = process.cpuUsage();
           const nextAllocated = getHeapStatistics().total_allocated_bytes;
@@ -1907,16 +1971,18 @@ measurement: try {
           const cpu = process.cpuUsage(nextCpu);
           const journals = (start: number, end: number) =>
             reconcileTraffic.slice(start, end).filter((request) => request.journalCounts).length;
-          assert.equal(journals(beforeTraffic, nextTraffic), 1);
+          if (values["reconcile-caller-stop"]) {
+            assert.equal(journals(beforeTraffic, nextTraffic), 1);
+          }
           assert.equal(journals(nextTraffic, reconcileTraffic.length), 0);
-          stoppedCheckpointPreparations.push({
+          followingPreparations.push({
             durationMs: performance.now() - nextStarted,
             processCpuMs: (cpu.user + cpu.system) / 1000,
             allocatedBytes: getHeapStatistics().total_allocated_bytes - nextAllocated,
             pausedDurationMs: pauseDurationsMs
               .slice(nextPauses)
               .reduce((sum, value) => sum + value, 0),
-            checkpointJournals: 1,
+            checkpointJournals: journals(beforeTraffic, nextTraffic),
             preparationJournals: 0,
           });
         }
@@ -2990,7 +3056,7 @@ measurement: try {
   custodyDurationsMs.length = 0;
   containerCommands.length = 0;
   finalizations.length = 0;
-  stoppedCheckpointPreparations.length = 0;
+  followingPreparations.length = 0;
   pauseDurationsMs.length = 0;
   checkpointPhases.length = 0;
   fingerprintMetrics.length = 0;
@@ -3331,7 +3397,7 @@ measurement: try {
           commandAccounting:
             "command execution plus awaited finalization; subsequent correctness read excluded; CPU and allocation exclude child processes",
           finalizations,
-          ...(values["reconcile-caller-stop"] ? { stoppedCheckpointPreparations } : {}),
+          ...(followingPreparations.length ? { followingPreparations } : {}),
         }
       : undefined,
     guest:
