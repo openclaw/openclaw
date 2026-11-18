@@ -28,8 +28,15 @@ const states: ChatRealtimeState[] = [];
 let speechStarted = createDeferred();
 const sessionKey = "agent:local:main";
 const transcript = "Tell me something local";
-const config = (provider?: string) => ({
-  config: { talk: { provider, realtime: { mode: "stt-tts" }, silenceTimeoutMs: 100 } },
+const config = (provider?: string, interruptOnSpeech?: boolean) => ({
+  config: {
+    talk: {
+      provider,
+      realtime: { mode: "stt-tts" },
+      silenceTimeoutMs: 100,
+      ...(interruptOnSpeech ? { interruptOnSpeech: true } : {}),
+    },
+  },
 });
 
 class FakeAudioContext {
@@ -106,7 +113,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function harness(provider?: string) {
+function harness(provider?: string, interruptOnSpeech?: boolean) {
   const listeners = new Set<(event: GatewayEventFrame) => void>();
   const sent = createDeferred();
   const speech = createDeferred();
@@ -121,7 +128,7 @@ function harness(provider?: string) {
   const request = createGatewayRequestMock(async (method, params) => {
     const payload = asOptionalRecord(params);
     if (method === "talk.config") {
-      return config(provider);
+      return config(provider, interruptOnSpeech);
     }
     if (method === "talk.session.create") {
       captureCount += 1;
@@ -580,4 +587,48 @@ it("keeps split Talk listening after a successfully completed empty utterance", 
   expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
   expect(tracks).toHaveLength(2);
   expect(h.called("chat.send")).toBe(false);
+});
+
+function feedMonitorSpeech(value: number, frames = 2) {
+  const processor = processors.at(-1)!;
+  for (let i = 0; i < frames; i += 1) {
+    processor.onaudioprocess?.({
+      inputBuffer: { getChannelData: () => new Float32Array(800).fill(value) },
+    });
+  }
+}
+
+it("barsges into reply playback when interruptOnSpeech is enabled", async () => {
+  const h = harness(undefined, true);
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A long reply the user talks over.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  // The barge-in monitor owns the newest script processor while the reply plays.
+  feedMonitorSpeech(0.3);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(expectDefined(audios[0], "reply playback").pause).toHaveBeenCalled();
+  await h.nextCapture.promise;
+  expect(h.state.realtimeTalk.snapshot.realtimeTalkStatus).toBe("listening");
+  await h.state.toggleRealtimeTalk();
+});
+
+it("ignores speech during playback when interruptOnSpeech is not enabled", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.answer("A reply that plays to the end.");
+  await h.speech.promise;
+  await speechStarted.promise;
+  // No barge-in monitor opens a microphone, so playback owns the only processor.
+  expect(tracks).toHaveLength(1);
+  expectDefined(audios[0], "reply playback").dispatchEvent(new Event("ended"));
+  await h.nextCapture.promise;
+  expect(expectDefined(audios[0], "reply playback").pause).toHaveBeenCalled();
+  await h.state.toggleRealtimeTalk();
 });

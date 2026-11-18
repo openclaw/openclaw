@@ -272,6 +272,7 @@ export function attachChatRealtimeActions(
           sendMessage,
           playback,
           maxTextLength,
+          interruptOnSpeech: talk.interruptOnSpeech === true,
         };
       }
     } catch (error) {

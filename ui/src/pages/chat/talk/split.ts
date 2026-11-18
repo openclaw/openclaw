@@ -10,6 +10,7 @@ import {
   type RealtimeTalkCallbacks,
   type RealtimeTalkTransport,
 } from "./shared.ts";
+import { PlaybackSpeechInterrupt } from "./speech-interrupt.ts";
 
 export type SplitTalkOptions = {
   silenceTimeoutMs: number;
@@ -17,6 +18,8 @@ export type SplitTalkOptions = {
   sendMessage: (message: string, runId: string) => Promise<ChatSendAck>;
   playback: GatewaySpeechPlayback;
   maxTextLength?: number;
+  /** Opt-in barge-in: cut reply playback when the user speaks over it. */
+  interruptOnSpeech?: boolean;
 };
 
 /** Split Talk uses the same capture, chat, and speech owners as the composer. */
@@ -97,18 +100,43 @@ export class SplitTalkTransport implements RealtimeTalkTransport {
           return;
         }
         if (answer) {
-          await this.options.playback.speak(
-            this.client,
-            answer,
-            this.options.speechMethod,
-            () => !this.closed,
-            this.options.maxTextLength,
-          );
+          await this.playReply(answer);
         }
       }
       await this.listen();
     } catch (error) {
       this.fail(error);
+    }
+  }
+
+  /** Plays the reply, listening for barge-in when interruptOnSpeech is enabled. */
+  private async playReply(answer: string): Promise<void> {
+    const playback = this.options.playback;
+    const speak = () =>
+      playback.speak(
+        this.client,
+        answer,
+        this.options.speechMethod,
+        () => !this.closed,
+        this.options.maxTextLength,
+      );
+    if (!this.options.interruptOnSpeech) {
+      await speak();
+      return;
+    }
+    // Split Talk awaits the full answer before speaking, so the run is already
+    // finished; barging in only needs to cut playback and listen again.
+    const monitor = new PlaybackSpeechInterrupt(() => playback.stop(), {
+      inputDeviceId: this.inputDeviceId,
+    });
+    try {
+      await monitor.start();
+      if (this.closed) {
+        return;
+      }
+      await speak();
+    } finally {
+      monitor.stop();
     }
   }
 
