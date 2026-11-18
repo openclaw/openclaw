@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { runExec } from "../process/exec.js";
 import {
   estimateControlUiBrowserSupport,
   type ControlUiBrowserFamily,
@@ -35,7 +36,11 @@ export type ControlUiBrowserChoice = {
 /** Select only for the Control UI; OAuth and other generic browser opens stay unchanged. */
 export async function resolveControlUiBrowser(): Promise<ControlUiBrowserChoice> {
   const wsl = process.platform === "linux" && (await isWSL());
-  if (isRemoteEnvironment({ wsl }) || process.env.SESSIONNAME?.toLowerCase() === "services") {
+  const remote = isRemoteEnvironment({ wsl });
+  if (
+    (remote && process.platform !== "darwin") ||
+    process.env.SESSIONNAME?.toLowerCase() === "services"
+  ) {
     return { canOpen: false };
   }
   // WSL's opener belongs to the Windows desktop, not the Linux browser inventory.
@@ -49,6 +54,25 @@ export async function resolveControlUiBrowser(): Promise<ControlUiBrowserChoice>
       const console = await fs.stat("/dev/console").catch(() => undefined);
       if (!console || console.uid === 0 || console.uid !== process.getuid?.()) {
         return { canOpen: false };
+      }
+      if (remote) {
+        if (process.env.REMOTE_CONTAINERS || process.env.CODESPACES) {
+          return { canOpen: false };
+        }
+        // #67088/#85340: local Mac terminals can inherit stale SSH_* variables.
+        // Require the current GUI bootstrap, not SSH env alone or console UID
+        // alone: an actual SSH session can belong to that same console user.
+        const localGuiSession = await runExec("/bin/launchctl", ["managername"], {
+          timeoutMs: 1_000,
+          maxBuffer: 256,
+          logOutput: false,
+        }).then(
+          ({ stdout }) => stdout.trim() === "Aqua",
+          () => false,
+        );
+        if (!localGuiSession) {
+          return { canOpen: false };
+        }
       }
       discovery = await discoverMacControlUiBrowsers();
     } else if (process.platform === "win32") {

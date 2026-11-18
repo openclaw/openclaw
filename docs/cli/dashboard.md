@@ -49,7 +49,10 @@ its required features before starting. Alternatives are considered in a fixed
 order: Chrome, Firefox, Edge, then Safari on macOS or Chromium on Linux.
 
 Remote and headless sessions retain manual connection guidance instead of opening
-a browser on another machine. If no compatible alternative is identified, use an
+a browser on another machine. A local macOS GUI terminal can still open the
+browser when it inherits stale SSH variables: OpenClaw checks the console owner
+and, when SSH markers are present, the current launchd GUI context rather than
+assuming those variables prove the session is remote. If no compatible alternative is identified, use an
 up-to-date browser or `openclaw tui`. After a failed launch or an expired or used
 pairing link, run `openclaw dashboard` again for a fresh link. Opening a browser is
 not proof of a Gateway connection; onboarding still waits for a newly connected

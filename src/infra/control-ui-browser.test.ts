@@ -41,6 +41,7 @@ const inventory = (value: unknown) =>
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  readOs.mockReset();
   for (const key of [
     "SSH_CLIENT",
     "SSH_TTY",
@@ -147,11 +148,53 @@ it("falls back conservatively when OS discovery fails", async () => {
   expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
 });
 
-it.each(["darwin", "win32", "linux"] as const)(
+it.each(["win32", "linux"] as const)(
   "does not open another machine's %s browser over SSH",
   async (platform) => {
     mockProcessPlatform(platform);
     vi.stubEnv("SSH_CONNECTION", "192.0.2.1 1234 192.0.2.2 22");
+    expect(await resolveControlUiBrowser()).toEqual({ canOpen: false });
+    expect(readOs).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"])(
+  "preserves local macOS browser opening with inherited SSH variable %s",
+  async (key) => {
+    vi.stubEnv(key, key === "SSH_TTY" ? "/dev/ttys002" : "192.0.2.1 1234 22");
+    inventory([{ ...safari, version: "26.2" }, chrome]);
+    readOs.mockResolvedValueOnce({ stdout: "Aqua\n", stderr: "" });
+    expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
+  },
+);
+
+it("still selects a compatible Mac alternative in a local GUI shell with inherited SSH variables", async () => {
+  vi.stubEnv("SSH_CONNECTION", "192.0.2.1 1234 192.0.2.2 22");
+  readOs.mockResolvedValueOnce({ stdout: "Aqua\n", stderr: "" });
+  expect((await resolveControlUiBrowser()).openOptions?.browserCommand).toEqual([
+    "/usr/bin/open",
+    "-a",
+    chrome.path,
+  ]);
+});
+
+it.each(["Background", "", "failed"])(
+  "does not open a Mac browser from a non-GUI or unverifiable SSH session (%s)",
+  async (manager) => {
+    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 1234 192.0.2.2 22");
+    if (manager === "failed") {
+      readOs.mockRejectedValueOnce(new Error("launch context unavailable"));
+    } else {
+      readOs.mockResolvedValueOnce({ stdout: manager, stderr: "" });
+    }
+    expect(await resolveControlUiBrowser()).toEqual({ canOpen: false });
+  },
+);
+
+it.each(["REMOTE_CONTAINERS", "CODESPACES"])(
+  "keeps macOS remote container environments blocked (%s)",
+  async (key) => {
+    vi.stubEnv(key, "1");
     expect(await resolveControlUiBrowser()).toEqual({ canOpen: false });
     expect(readOs).not.toHaveBeenCalled();
   },
