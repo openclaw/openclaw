@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=bc6f91a88abdf5f74825d115ccf9994f50f37b0bf105b5b66f6e4c9dd34d551f
-+++ discord-group-codex-message-tool.md	sha256=fcaef2c752089fa62cfa9728745e91d1b69dc8d7f1b9b33edef350683b7c0b9f
+--- telegram-direct-codex-message-tool.md	sha256=8963a54ca6f15295b017cfe0ff9155fe84b2f2c1fdafeaf194c777a3834bc4c2
++++ discord-group-codex-message-tool.md	sha256=3c4dde1476f6d88afa9ae814983cb215cefccc1ec4b1fbc3cb5e30cbf6ddaa5e
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -34,10 +34,10 @@
 +    "chars": 972,
 +    "roughTokens": 243
 @@ -250,2 +250,2 @@
--    "chars": 88222,
--    "roughTokens": 22056
-+    "chars": 88856,
-+    "roughTokens": 22214
+-    "chars": 102975,
+-    "roughTokens": 25744
++    "chars": 101545,
++    "roughTokens": 25387
 @@ -258,2 +258,2 @@
 -    "chars": 3683,
 -    "roughTokens": 921
@@ -49,10 +49,10 @@
 +    "chars": 16960,
 +    "roughTokens": 4240
 @@ -270,2 +270,2 @@
--    "chars": 103939,
--    "roughTokens": 25985
-+    "chars": 105818,
-+    "roughTokens": 26455
+-    "chars": 118692,
+-    "roughTokens": 29673
++    "chars": 118507,
++    "roughTokens": 29627
 @@ -274,2 +274,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
@@ -92,9 +92,104 @@
 @@ -500,1 +506,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
-@@ -530,1 +536,1 @@
--    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
-+    "description": "Send/manage channel messages. Supports actions: broadcast, react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
-@@ -538,1 +544,1 @@
--          "enum": ["react", "send"],
-+          "enum": ["broadcast", "react", "send"],
+@@ -545,4 +550,0 @@
+-        "asVideoNote": {
+-          "description": "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
+-          "type": "boolean"
+-        },
+@@ -585,5 +587,3 @@
+-        "contentType": {
+-          "type": "string"
+-        },
+-        "delivery": {
+-          "description": "Delivery prefs; pin when supported.",
++        "components": {
++          "additionalProperties": true,
++          "description": "Discord Components V2 payload for send actions. Accepts the same object consumed by the Discord components adapter.",
+@@ -591,21 +591,11 @@
+-            "pin": {
+-              "anyOf": [
+-                {
+-                  "type": "boolean"
+-                },
+-                {
+-                  "properties": {
+-                    "enabled": {
+-                      "type": "boolean"
+-                    },
+-                    "notify": {
+-                      "type": "boolean"
+-                    },
+-                    "required": {
+-                      "type": "boolean"
+-                    }
+-                  },
+-                  "required": ["enabled"],
+-                  "type": "object"
+-                }
+-              ]
++            "blocks": {
++              "description": "Discord Components V2 blocks such as text, buttons, selects, media, containers, and separators.",
++              "items": {},
++              "type": "array"
++            },
++            "modal": {
++              "additionalProperties": true,
++              "description": "Optional Discord modal triggered by generated components.",
++              "properties": {},
++              "required": [],
++              "type": "object"
+@@ -615,0 +606,3 @@
++        "contentType": {
++          "type": "string"
++        },
+@@ -628,1 +621,1 @@
+-          "description": "Telegram reaction emoji: use a supported Unicode reaction, or pass the numeric custom_emoji_id identifier returned by action:\"emoji-list\" directly as emoji. Use action:\"emoji-list\" to inspect reactions allowed in the current chat; arbitrary Unicode may be rejected by Telegram.",
++          "description": "Unicode emoji or custom name:id (also <:name:id> / <a:name:id>). Use action:\"emoji-list\" for server emojis.",
+@@ -654,33 +646,0 @@
+-        "location": {
+-          "description": "Standalone Telegram location. Coordinates send a pin; name plus address sends a venue. Do not combine with message or media.",
+-          "properties": {
+-            "accuracy": {
+-              "description": "Pin uncertainty radius in meters.",
+-              "maximum": 1500,
+-              "minimum": 0,
+-              "type": "number"
+-            },
+-            "address": {
+-              "description": "Venue address; requires name.",
+-              "minLength": 1,
+-              "type": "string"
+-            },
+-            "latitude": {
+-              "maximum": 90,
+-              "minimum": -90,
+-              "type": "number"
+-            },
+-            "longitude": {
+-              "maximum": 180,
+-              "minimum": -180,
+-              "type": "number"
+-            },
+-            "name": {
+-              "description": "Venue name; requires address.",
+-              "minLength": 1,
+-              "type": "string"
+-            }
+-          },
+-          "required": ["latitude", "longitude"],
+-          "type": "object"
+-        },
+@@ -706,12 +665,0 @@
+-        "pollAnonymous": {
+-          "description": "Send a display-only anonymous poll. Anonymous votes do not create agent turns. This is the default unless pollPublic is true.",
+-          "type": "boolean"
+-        },
+-        "pollDurationSeconds": {
+-          "minimum": 1,
+-          "type": "integer"
+-        },
+-        "pollPublic": {
+-          "description": "Send a public poll whose votes route into the originating agent conversation. Voter identities are visible.",
+-          "type": "boolean"
+-        },

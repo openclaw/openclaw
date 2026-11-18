@@ -14,6 +14,7 @@ import {
   type ConnectOutcome,
 } from "./src/connect.js";
 import { gbrainAcceptsToken, mintGbrainKey, readGbrainHealth } from "./src/gbrain-http.js";
+import { installGbrainRelease } from "./src/gbrain-release.js";
 
 const RECHECK_MS = 60_000;
 /** A failed install, init or `mcp expose` is retried at most this often. */
@@ -77,6 +78,8 @@ export default definePluginEntry({
       // In Docker, GBrain runs as the `gbrain` Compose service (deploy/gbrain/compose.yaml).
       hosts: inContainer ? ["127.0.0.1", "gbrain"] : ["127.0.0.1"],
       inContainer,
+      platform: process.platform,
+      arch: process.arch,
       readFile: (file) => {
         try {
           return readFileSync(file, "utf8");
@@ -90,6 +93,13 @@ export default definePluginEntry({
       health: readGbrainHealth,
       tokenAccepted: gbrainAcceptsToken,
       mintKey: mintGbrainKey,
+      installRelease: async (asset, destination) => {
+        const version = await installGbrainRelease(asset, destination);
+        api.logger.info(
+          `Installed GBrain ${version} at ${destination} (release binary, build provenance verified). To run gbrain in a terminal, add ${path.dirname(destination)} to your PATH.`,
+        );
+        return version;
+      },
       readServer: async () => {
         const { parsed, sourceConfig } = await readConfigFileSnapshot({
           observe: false,

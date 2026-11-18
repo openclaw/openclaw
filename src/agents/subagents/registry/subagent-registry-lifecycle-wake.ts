@@ -57,7 +57,7 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isEndedSubagentMessageWait } from "./subagent-run-liveness.js";
 
 const pendingRequesterTransitions = new WeakMap<
   object,
@@ -220,7 +220,7 @@ function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
 }
 
 /** One in-flight evaluation per owed continuation; members of one cohort share it. */
-export function requesterSettleWakeScope(entry: SubagentRunRecord): string {
+function requesterSettleWakeScope(entry: SubagentRunRecord): string {
   const wake = entry.requesterSettleWake;
   const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
   if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
@@ -335,14 +335,14 @@ export function scheduleRequesterSettleWake(
       return false;
     }
   };
-  const admittedBatch = (
-    entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
-      ? [runId]
-      : (admittedWake?.batchRunIds ?? [runId])
-  ).flatMap((id) => {
-    const member = params.runs.get(id);
-    return member ? [member] : [];
-  });
+  const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
+  // Failure settlement owns offered results, not a message wait's future completion.
+  const admittedBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
+    (id) => {
+      const member = params.runs.get(id);
+      return member && (pauseNotice || !isEndedSubagentMessageWait(member)) ? [member] : [];
+    },
+  );
   let settleObserved = pendingSettlement?.scope === scope ? pendingSettlement.settle : undefined;
   let publishDispatch = pendingTransition?.scope === scope ? pendingTransition.commit : undefined;
   const completeBatch = async (

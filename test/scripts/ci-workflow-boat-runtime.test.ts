@@ -129,10 +129,11 @@ it.each(["extensions-batch", "extension-file-shard"])(
     ];
     const step = requiredWorkflowStep(job.steps, "Run extension shard");
     for (const route of [
-      { eventName: "schedule", runner: "boat", boat: true },
-      { eventName: "schedule", runner: "boat-large", boat: true },
-      { eventName: "schedule", runner: "blacksmith-4vcpu-ubuntu-2404", boat: false },
-      { eventName: "workflow_dispatch", runner: "boat", boat: false },
+      { eventName: "schedule", runner: "boat", attempt: 1, boat: true },
+      { eventName: "schedule", runner: "boat", attempt: 2, boat: false },
+      { eventName: "schedule", runner: "boat-large", attempt: 1, boat: true },
+      { eventName: "schedule", runner: "blacksmith-4vcpu-ubuntu-2404", attempt: 1, boat: false },
+      { eventName: "workflow_dispatch", runner: "boat", attempt: 1, boat: false },
     ] as const) {
       const root = dirs.make("openclaw-hourly-boat-step-");
       const bin = path.join(root, "bin");
@@ -153,11 +154,13 @@ it.each(["extensions-batch", "extension-file-shard"])(
       const context = {
         eventName: route.eventName,
         repository: "openclaw/openclaw",
-        runAttempt: 1,
+        runAttempt: route.attempt,
         matrix: { runner: route.runner, runner_label: route.runner },
       };
       expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(
-        route.eventName === "workflow_dispatch" ? "ubuntu-24.04" : route.runner,
+        route.eventName === "workflow_dispatch" || route.attempt > 1
+          ? "ubuntu-24.04"
+          : route.runner,
       );
       const selected = evaluateWorkflowExpression(
         step.env.BOAT_TEST_RUNNER ?? "${{ false }}",

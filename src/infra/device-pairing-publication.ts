@@ -6,6 +6,8 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { PairedDeviceTokenIdentity } from "./device-pairing-core.types.js";
+import { isPairedDeviceTokenIdentityCurrent } from "./device-pairing-identity.js";
 import type {
   DevicePairingBinding,
   DevicePairingBindingFact,
@@ -227,10 +229,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
  * services below install a committed receipt before this read. Gateway revocations also
  * retire live clients directly.
  */
-export function getPublishedPairedDeviceBinding(
-  deviceId: string,
-  baseDir?: string,
-): DevicePairingBinding | null {
+function currentDevicePublication(deviceId: string, baseDir?: string): Publication {
   const path = resolveOpenClawStateSqlitePath(
     baseDir ? { ...process.env, OPENCLAW_STATE_DIR: baseDir } : process.env,
   );
@@ -245,6 +244,31 @@ export function getPublishedPairedDeviceBinding(
   ) {
     throw new Error("Device pairing authority requires a current worker publication");
   }
+  return publication;
+}
+
+export function getPublishedPairedDeviceBinding(
+  deviceId: string,
+  baseDir?: string,
+): DevicePairingBinding | null {
+  const publication = currentDevicePublication(deviceId, baseDir);
   const binding = publication.rows.get(deviceId);
   return binding ? { ...binding } : null;
+}
+
+/** Exact role-token admission checked against committed owner memory, with no file/SQL reads. */
+export function isPublishedPairedDeviceTokenExact(
+  identity: PairedDeviceTokenIdentity,
+  role: string,
+  scopes: readonly string[],
+): boolean {
+  const device = currentDevicePublication(identity.deviceId).devices[identity.deviceId];
+  const granted = device?.tokens?.[role]?.scopes;
+  return Boolean(
+    device &&
+    granted &&
+    granted.length === scopes.length &&
+    granted.every((scope) => scopes.includes(scope)) &&
+    isPairedDeviceTokenIdentityCurrent(device, role, identity, scopes),
+  );
 }

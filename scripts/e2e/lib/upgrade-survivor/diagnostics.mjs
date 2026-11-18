@@ -202,7 +202,26 @@ function installedRecoveryCurrent(value, sanitize) {
   }
   const names =
     value.cut === null
-      ? ["next-update", "next-update-status"]
+      ? [
+          "killed-update",
+          "next-update",
+          "next-update-status",
+          // The live-gateway cell's commands; its files live at the run root.
+          "baseline-probe",
+          "next-update-probe",
+          "killed-update-no-restart",
+          "refused-update",
+          "update-repair",
+          "update-repair-probe",
+          // The owed-plugin-retry cell's commands.
+          "owed-update",
+          "owed-update-probe",
+          "owed-enable-auto",
+          "owed-status-before",
+          "owed-status-after",
+          "owed-retry-probe",
+          "owed-next-check-probe",
+        ]
       : [
           "displacement",
           "missing-status",
@@ -2405,6 +2424,7 @@ export function publishInstalledRecoveryDiagnostics(
     installedRecovery: { availability: "unavailable" },
     completedCuts: [],
     commands: [],
+    killedUpdate: null,
     nextUpdate: null,
     omissions,
   };
@@ -2434,7 +2454,7 @@ export function publishInstalledRecoveryDiagnostics(
       throw new Error();
     }
     const commands = summary.commands ?? [];
-    if (!Array.isArray(commands) || commands.length > 11) {
+    if (!Array.isArray(commands) || commands.length > 12) {
       throw new Error();
     }
     report.commands = commands.map((value) => {
@@ -2516,11 +2536,31 @@ export function publishInstalledRecoveryDiagnostics(
         installedVersion: sanitize(next.installedVersion, "installed recovery"),
       };
     }
+    if (summary.killedUpdate !== undefined) {
+      const killed = summary.killedUpdate;
+      if (
+        killed.killedStatus !== "failed" ||
+        killed.killedReason !== "abandoned" ||
+        killed.stageStatus !== "succeeded" ||
+        killed.nextRunStatus !== "succeeded"
+      ) {
+        throw new Error();
+      }
+      report.killedUpdate = {
+        killedRunId: operationId(killed.killedRunId),
+        killedStatus: "failed",
+        killedReason: "abandoned",
+        stageRunId: operationId(killed.stageRunId),
+        stageStatus: "succeeded",
+        nextRunStatus: "succeeded",
+      };
+    }
     if (
       exitStatus === 0 &&
       (summary.status !== "passed" ||
         summary.artifactSha256 !== packageSha256 ||
         report.completedCuts.length !== 1 ||
+        !report.killedUpdate ||
         !report.nextUpdate ||
         report.installedRecovery.current?.name !== "next-update-status" ||
         report.installedRecovery.current.state !== "completed" ||
@@ -2539,6 +2579,7 @@ export function publishInstalledRecoveryDiagnostics(
         "completed-status",
         "archive-completed",
         "update-repair",
+        "killed-update",
         "next-update",
         "next-update-status",
       ];
@@ -2547,7 +2588,8 @@ export function publishInstalledRecoveryDiagnostics(
           JSON.stringify(expected) ||
         report.commands.some(
           (command) =>
-            (command.status === 0) !== !["displacement", "retirement"].includes(command.name),
+            (command.status === 0) !==
+            !["displacement", "retirement", "killed-update"].includes(command.name),
         )
       ) {
         throw new Error();
@@ -2560,6 +2602,7 @@ export function publishInstalledRecoveryDiagnostics(
     report.installedRecovery = { availability: "unavailable" };
     report.completedCuts = [];
     report.commands = [];
+    report.killedUpdate = null;
     report.nextUpdate = null;
     omissions["installed recovery"] = reasons[3];
   }

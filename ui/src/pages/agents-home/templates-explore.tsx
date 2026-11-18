@@ -30,6 +30,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
+import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -276,6 +277,7 @@ export function TemplatesExplore(
   return (
     <openclaw-templates-explore>
       <PluginsHubHeader
+        actions={<TemplateUpload />}
         active="templates"
         subtitle={t("templatesCatalog.exploreDescription")}
         wide

@@ -289,11 +289,16 @@ export class BrokerResourceClaims {
     claim.inContext(() => claim.callbacks.message(response));
   }
 
+  /** Reject new claims without settling retained native resources. */
+  closeAdmission(): void {
+    this.sealed = true;
+  }
+
   seal(): Promise<void> {
     if (this.sealPromise) {
       return this.sealPromise;
     }
-    this.sealed = true;
+    this.closeAdmission();
     this.sealPromise = this.host.transmit({ type: "resource-seal" }).then(
       () => {
         for (const claim of this.claims.values()) {

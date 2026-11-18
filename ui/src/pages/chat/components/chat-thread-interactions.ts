@@ -152,6 +152,8 @@ export type ChatThreadProps = Omit<
     announceTranscript?: boolean;
     loading: boolean;
     restoring?: boolean;
+    /** First-turn content was already shown by New Session; never replace it with history placeholders. */
+    initialSubmission?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
