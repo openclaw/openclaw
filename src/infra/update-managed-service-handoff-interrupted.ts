@@ -13,6 +13,7 @@ import { verifyPackageUpdateRecovery } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import type { ManagedUpdateLeaseDatabaseIdentity } from "./update-managed-service-handoff-identity.js";
 import type { UpdateRecovery } from "./update-recovery.js";
+import { findUnverifiedDataAtRisk } from "./update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "./update-run-gateway-stop.js";
 import { withUpdateRunRead } from "./update-run-read-admission.js";
 import { readUpdateRunRecord, readUpdateRuns } from "./update-run-read.kernel.js";
@@ -155,8 +156,14 @@ export async function recoverInterruptedManagedUpdate(params: {
 }
 
 function assertRestartSafe(run: UpdateRunRecord | undefined) {
-  const recovery = run?.verification.recovery;
-  if (recovery?.serviceRestartSafe === false && recovery.dataAtRisk) {
-    throw new Error(`keep the gateway stopped: data at risk (${recovery.dataAtRisk})`);
+  // Post-core repair records a receipt on its own run when it verified this mark.
+  const history = withUpdateRunRead(({ db }) => readUpdateRuns(db, { limit: 100 }), {
+    allowNativeRead: true,
+  });
+  const dataAtRisk = findUnverifiedDataAtRisk(run, history ?? []);
+  if (dataAtRisk) {
+    throw new Error(
+      `gateway left stopped: data at risk (${dataAtRisk}) recorded and not verified by repair`,
+    );
   }
 }

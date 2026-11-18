@@ -331,6 +331,16 @@ it.each([
     text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. The update was rolled back; OpenClaw 2026.11.5 is installed. Keep the recovery snapshots. Run `openclaw update repair`: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if it is consistent, or names what is wrong and changes nothing.",
   },
   {
+    observed: "failed rollback",
+    result: {
+      before: { version: "2026.11.5" },
+      after: { version: "2026.11.6" },
+      rollbackOutcome: { status: "failed", reason: "package restore failed" },
+    },
+    options: { serviceRunning: false },
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair`: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if it is consistent, or names what is wrong and changes nothing.",
+  },
+  {
     observed: "unobserved Gateway",
     result: {},
     options: {},

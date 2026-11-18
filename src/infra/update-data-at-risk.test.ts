@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -12,6 +12,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import * as snapshotSource from "./sqlite-snapshot-source.js";
 import { verifyUpdateStateConsistency } from "./update-data-at-risk.js";
 import { createRetainedCheckpointFixture } from "./update-retained-checkpoint.test-support.js";
 
@@ -20,6 +21,7 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ label: "update-data-at-risk" });
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   await state.cleanup();
 });
@@ -38,14 +40,21 @@ function setStateUserVersion(version: number) {
   }
 }
 
-it("finds current state consistent while this process holds the live writer", async () => {
-  const databasePath = resolveOpenClawStateSqlitePath(process.env);
+it("reads current state in place beside an open write transaction", async () => {
   openOpenClawStateDatabase();
-  const stagingBefore = await fs.readdir(path.dirname(databasePath));
+  const copies = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation");
+  const { DatabaseSync } = requireNodeSqlite();
+  const writer = new DatabaseSync(resolveOpenClawStateSqlitePath(process.env));
+  try {
+    writer.exec("BEGIN IMMEDIATE");
 
-  await expect(verify()).resolves.toMatchObject({ status: "consistent" });
-  // Read in place: no database copy is left beside the live state.
-  expect(await fs.readdir(path.dirname(databasePath))).toEqual(stagingBefore);
+    await expect(verify()).resolves.toMatchObject({ status: "consistent" });
+  } finally {
+    writer.exec("ROLLBACK");
+    writer.close();
+  }
+  // A live Gateway can hold a multi-gigabyte database; verification must not copy it.
+  expect(copies).not.toHaveBeenCalled();
 });
 
 it("refuses state written at a newer schema than this build supports", async () => {
@@ -85,6 +94,22 @@ it("refuses while an interrupted state restore is still on disk", async () => {
   expect(verdict.status !== "consistent" && verdict.nextAction).toContain(
     "repair-and-recovery#interrupted-state-restore",
   );
+});
+
+it("reports an unlistable state directory as unverifiable, not as an interrupted restore", async () => {
+  openOpenClawStateDatabase();
+  closeOpenClawStateDatabaseForTest();
+  const directory = path.dirname(resolveOpenClawStateSqlitePath(process.env));
+  // Files stay reachable by name; only listing for restore directories fails.
+  await fs.chmod(directory, 0o300);
+  try {
+    const verdict = await verify();
+
+    expect(verdict).toMatchObject({ status: "unverifiable" });
+    expect(verdict.detail).not.toContain("restore did not finish");
+  } finally {
+    await fs.chmod(directory, 0o700);
+  }
 });
 
 it("refuses while an earlier update's state recovery is unfinished", async () => {

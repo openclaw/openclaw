@@ -3,12 +3,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { verifyUpdateStateConsistency } from "../../infra/update-data-at-risk.js";
+import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   dataAtRiskVerifiedStep,
   findUnverifiedDataAtRisk,
-  verifyUpdateStateConsistency,
-} from "../../infra/update-data-at-risk.js";
-import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+} from "../../infra/update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   getUpdateRun,
@@ -44,6 +44,57 @@ function stoppedGatewayGuidance(reason: string, env: NodeJS.ProcessEnv): string 
   return `Gateway service remains stopped: ${reason}. After resolving this, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
 }
 
+/**
+ * Check a recorded data-at-risk mark against the state on disk. Consistent: record the
+ * receipt on the repair run and return undefined. Otherwise return the refusal to report;
+ * nothing is changed.
+ */
+export async function verifyRecordedDataAtRisk(params: {
+  markedRunId: string;
+  mark: string;
+  repairRunId: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  json: boolean;
+  phase: UpdateFinalizationPhase;
+  timeoutMs: number;
+}): Promise<string | undefined> {
+  const { env, phase, markedRunId, mark } = params;
+  const verification = await verifyUpdateStateConsistency({
+    env,
+    formatCommand: (command) => formatCliCommand(command, env),
+    signal: phase.signal,
+  });
+  phase.assertCurrent();
+  if (verification.status !== "consistent") {
+    return formatDataAtRiskRefusal({
+      runId: markedRunId,
+      mark,
+      verification,
+      gateway: await observeGatewayForGuidance({
+        service: resolveGatewayService(),
+        env,
+        config: params.config,
+        timeoutMs: params.timeoutMs,
+      }),
+      unchanged: "Repair left the Gateway and state as they were.",
+    });
+  }
+  const resolved = formatDataAtRiskResolved({ runId: markedRunId, mark, verification });
+  recordUpdateRunStep(
+    params.repairRunId,
+    {
+      step: dataAtRiskVerifiedStep(markedRunId),
+      status: "completed",
+      endedAtMs: Date.now(),
+      detail: resolved,
+    },
+    { env },
+  );
+  defaultRuntime[params.json ? "error" : "log"](resolved);
+  return undefined;
+}
+
 export async function restoreRepairGateway(params: {
   originalRunId: string;
   repairRunId: string;
@@ -68,41 +119,10 @@ export async function restoreRepairGateway(params: {
   const service = resolveGatewayService();
   const mark = risk();
   if (mark) {
-    const verification = await verifyUpdateStateConsistency({
-      env,
-      formatCommand: (command) => formatCliCommand(command, env),
-      signal: phase.signal,
-    });
-    phase.assertCurrent();
-    if (verification.status !== "consistent") {
-      return {
-        restart: false,
-        warning: formatDataAtRiskRefusal({
-          runId: originalRunId,
-          mark,
-          verification,
-          gateway: await observeGatewayForGuidance({
-            service,
-            env,
-            config: params.config,
-            timeoutMs: params.timeoutMs,
-          }),
-          unchanged: "Repair left the Gateway and state as they were.",
-        }),
-      };
+    const refusal = await verifyRecordedDataAtRisk({ ...params, markedRunId: originalRunId, mark });
+    if (refusal) {
+      return { restart: false, warning: refusal };
     }
-    const resolved = formatDataAtRiskResolved({ runId: originalRunId, mark, verification });
-    recordUpdateRunStep(
-      params.repairRunId,
-      {
-        step: dataAtRiskVerifiedStep(originalRunId),
-        status: "completed",
-        endedAtMs: Date.now(),
-        detail: resolved,
-      },
-      { env },
-    );
-    defaultRuntime[params.json ? "error" : "log"](resolved);
   }
   return await withGatewayServiceOperationLock(env, async (assertNative) => {
     const readPendingStop = () => {

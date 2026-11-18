@@ -25,6 +25,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import * as probeApi from "../daemon-cli/restart-health-probe.js";
 import * as healthApi from "../daemon-cli/restart-health.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -345,6 +346,44 @@ it.each(["stopped", "running"] as const)(
   },
 );
 
+it("verifies a mark on an update that never stopped the Gateway without starting it", async () => {
+  // A Git release update or a refusal before mutation leaves the Gateway serving.
+  const original = seed(false, markedRisk);
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
+  // Repair's healthy-Gateway shortcut must not reach a real local Gateway.
+  vi.spyOn(probeApi, "confirmGatewayReachable").mockResolvedValue({
+    reachable: false,
+    gatewayVersion: null,
+    gatewayBuildId: undefined,
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
+
+  await repair(false);
+
+  expect(service.start).not.toHaveBeenCalled();
+  const repairRun = listUpdateRuns()[0]!;
+  expect(repairRun.status).toBe("succeeded");
+  expect(repairRun.steps).toContainEqual(
+    expect.objectContaining({
+      step: `finalize:data-at-risk-verified:${original}`,
+      status: "completed",
+    }),
+  );
+  expect(defaultRuntime.log).toHaveBeenCalledWith(
+    expect.stringContaining(
+      `Update ${original} recorded data at risk (rollback-state-unverified); verification found`,
+    ),
+  );
+  // The receipt resolves the mark: a later repair has nothing left to verify.
+  vi.mocked(defaultRuntime.log).mockClear();
+  await repair(false);
+  expect(defaultRuntime.log).not.toHaveBeenCalledWith(
+    expect.stringContaining("recorded data at risk"),
+  );
+});
+
 it.each([
   {
     status: "inconsistent",
@@ -393,6 +432,42 @@ it.each([
     );
   },
 );
+
+it("reports a serving Gateway as running when a recorded mark is inconsistent", async () => {
+  const original = seed(false, markedRisk);
+  vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
+  // The guidance probe must not reach a real local Gateway.
+  vi.spyOn(probeApi, "confirmGatewayReachable").mockResolvedValue({
+    reachable: true,
+    gatewayVersion: "1.0.0",
+    gatewayBuildId: undefined,
+    activatedPluginErrors: [],
+    unavailablePlugins: [],
+    channelProbeErrors: [],
+  });
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
+    status: "inconsistent",
+    detail: "the state database is at schema 99",
+    nextAction: "Run `openclaw update` to install a version that supports this state.",
+  });
+
+  await repair();
+
+  expect(service.start).not.toHaveBeenCalled();
+  expect(service.stop).not.toHaveBeenCalled();
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "warning",
+      postUpdate: expect.objectContaining({
+        doctor: expect.objectContaining({
+          warnings: [
+            `Update ${original} recorded data at risk (rollback-state-unverified). Verification against installed OpenClaw ${VERSION} found that the state database is at schema 99. The Gateway is running and serving OpenClaw 1.0.0. Repair left the Gateway and state as they were. Run \`openclaw update\` to install a version that supports this state.`,
+          ],
+        }),
+      }),
+    }),
+  );
+});
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -92,7 +92,7 @@ phase. An unavailable manager does not mean the Gateway was started manually.
 Repair reports any verified Gateway owner and known service definition, leaves
 that definition unchanged, and keeps Doctor and plugin maintenance pending when
 the Gateway still owns the state. Stop the managed Gateway with
-`openclaw gateway stop` (or `systemctl --user stop openclaw-gateway` for the default
+`openclaw gateway stop --force` (or `systemctl --user stop openclaw-gateway` for the default
 systemd user service), then run `openclaw update repair` again. Keep the same
 profile and state-directory overrides for both commands.
 
@@ -489,10 +489,12 @@ The update's report says the mark has not been verified, states whether the
 Gateway was running or stopped and which version is installed, and names
 `openclaw update repair`.
 
-When the update that stopped the Gateway carries a mark, repair finishes Doctor
-and plugin maintenance, then checks the state on disk against the installed
-version before it touches the Gateway. The check is read-only and runs beside a
-live Gateway without copying a database:
+When recent update history carries a mark that no repair has verified, repair
+finishes Doctor and plugin maintenance, then checks the state on disk against the
+installed version before it touches the Gateway. This covers the update that
+stopped the Gateway and a marked update that never stopped it, such as a refusal
+before any change. The check is read-only and runs beside a live Gateway without
+copying a database:
 
 - the shared and agent database schemas are not newer than the installed version
   supports
@@ -502,8 +504,10 @@ live Gateway without copying a database:
 If the state is consistent, repair prints
 `Update <run> recorded data at risk (<mark>); verification found ... so that mark is resolved.`,
 records the step `finalize:data-at-risk-verified:<run>` on its own run, and then
-starts and verifies a stopped Gateway or verifies one that is already running. The
-original run keeps its recorded mark; the repair step is what resolves it.
+starts and verifies a Gateway the marked update stopped, or verifies one that is
+already running. The original run keeps its recorded mark; the repair step is what
+resolves it, and later repairs do not check it again. The managed update helper
+reads the same step before it restarts a Gateway after an interrupted update.
 
 If the state is inconsistent or cannot be read, repair leaves the Gateway and
 state as they were and reports the finding, the Gateway's current state, and one
@@ -513,7 +517,7 @@ next step:
 | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | A database is newer than the installed version supports | `openclaw update` to a version that supports it, or restore the pre-update backup |
 | A database is behind the installed version              | `openclaw doctor --fix` to finish the migration                                   |
-| An earlier update's state recovery is unfinished        | `openclaw update repair` to settle it                                             |
+| An earlier update's state recovery is unfinished        | `openclaw update status` for that recovery's next step                            |
 | An interrupted state restore directory exists           | Keep it and follow [Interrupted state restore](#interrupted-state-restore)        |
 | A database could not be read                            | Retry `openclaw update repair` once the named reason is cleared                   |
 
@@ -1273,7 +1277,7 @@ manual verification. If cleanup reports `Recovery destination
 database changed; preview cleanup again.`, stop those readers, preview again,
 and retry. Manual cleanup requires exclusive offline state ownership and never stops
 or restarts a service itself. On owner or maintenance-lock contention, cleanup
-reports `Stop the Gateway first (openclaw gateway stop)` before any removal.
+reports `Stop the Gateway first (openclaw gateway stop --force)` before any removal.
 
 <Warning>
 Cleanup permanently removes the selected rollback originals, including branches

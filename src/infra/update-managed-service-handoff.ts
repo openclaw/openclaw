@@ -808,7 +808,7 @@ async function collectUpdateFailureTriage() {
         [recoveryRun.before, recoveryRun.after, result.before, result.after].every((version) => version.buildId === recovery.buildId)) && recoveryRun.steps.some((step) =>
         step.step === "previous generation restoration" && step.status === "completed");
     if (exit.code === ${MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE} && !previousGeneration) {
-      appendLog((recovery?.dataAtRisk ? "keep the gateway stopped: data at risk (" + recovery.dataAtRisk + ")" : "managed update recovery failed (" + (recovery?.reason || result?.reason || "unverified recovery") + ")") + "; run openclaw update repair and openclaw gateway status --deep");
+      appendLog(recovery?.dataAtRisk ? "gateway left stopped: data at risk (" + recovery.dataAtRisk + ") recorded and not yet verified; run openclaw update repair to verify the state and restart the gateway" : "managed update recovery failed (" + (recovery?.reason || result?.reason || "unverified recovery") + "); run openclaw update repair and openclaw gateway status --deep");
       await recordManagedUpdateOutcome("managed-service-handoff-unsafe-recovery");
       finalExitCode = exit.code;
     } else if (!resultRoot || result?.status !== "ok" ||

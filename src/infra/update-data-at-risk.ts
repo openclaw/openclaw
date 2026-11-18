@@ -7,10 +7,10 @@ import type {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
 import {
   assertUpdateRecoveryAdmission,
   assertUpdateRecoveryDirectoryAdmission,
+  InterruptedStateRestoreError,
 } from "./update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
 
@@ -18,11 +18,9 @@ const UPDATE_INTERRUPTED_RESTORE_DOCS_URL =
   "https://docs.openclaw.ai/cli/update/repair-and-recovery#interrupted-state-restore";
 
 /**
- * A recorded data-at-risk mark is a claim made when an update step failed, often by a
- * catch-all. This module owns checking that claim against the state on disk and the
- * receipt that records a mark as verified. The mark itself stays as recorded.
+ * Owns the answer to "is the state on disk consistent with the installed version?" for
+ * a recorded data-at-risk mark. `update-run-data-at-risk.ts` owns the mark and receipt.
  */
-
 export type UpdateStateVerification =
   | { status: "consistent"; detail: string }
   | {
@@ -31,38 +29,6 @@ export type UpdateStateVerification =
       /** One sentence naming the command that makes progress from this state. */
       nextAction: string;
     };
-
-const VERIFIED_STEP_PREFIX = "finalize:data-at-risk-verified:";
-
-/** The named risk an update recorded; published updaters persist it as the same field. */
-export function readRecordedDataAtRisk(run: UpdateRunRecord | undefined): string | undefined {
-  const recovery = run?.verification.recovery;
-  return recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined;
-}
-
-/** Receipt step a later run records once verification found the marked run's state consistent. */
-export function dataAtRiskVerifiedStep(markedRunId: string): string {
-  return `${VERIFIED_STEP_PREFIX}${markedRunId}`;
-}
-
-export function hasVerifiedDataAtRisk(
-  runs: readonly (UpdateRunRecord | undefined)[],
-  markedRunId: string,
-): boolean {
-  const step = dataAtRiskVerifiedStep(markedRunId);
-  return runs.some((run) =>
-    run?.steps.some((entry) => entry.step === step && entry.status === "completed"),
-  );
-}
-
-/** The mark that still needs verification, or undefined when none was recorded or it was verified. */
-export function findUnverifiedDataAtRisk(
-  marked: UpdateRunRecord | undefined,
-  history: readonly (UpdateRunRecord | undefined)[],
-): string | undefined {
-  const mark = readRecordedDataAtRisk(marked);
-  return mark && marked && !hasVerifiedDataAtRisk(history, marked.runId) ? mark : undefined;
-}
 
 function retryRepair(formatCommand: (command: string) => string): string {
   return `Retry \`${formatCommand("openclaw update repair")}\` once the reason above is cleared.`;
@@ -133,6 +99,14 @@ export async function verifyUpdateStateConsistency(params: {
   try {
     await assertUpdateRecoveryDirectoryAdmission(databasePath);
   } catch (error) {
+    params.signal?.throwIfAborted();
+    if (!(error instanceof InterruptedStateRestoreError)) {
+      return {
+        status: "unverifiable",
+        detail: `the state directory could not be inspected: ${formatErrorMessage(error)}`,
+        nextAction: retryRepair(params.formatCommand),
+      };
+    }
     // Its message names the retained directory and the recovery page.
     return {
       status: "inconsistent",
@@ -142,11 +116,17 @@ export async function verifyUpdateStateConsistency(params: {
   }
   let schemas: OpenClawDatabaseSchemaPreflight;
   try {
-    schemas = await preflightOpenClawDatabaseSchemas({
-      env: params.env,
-      verifyCurrentSchemaShape: true,
-      signal: params.signal,
-    });
+    // Runtime purpose with source reads: one native read transaction in a child,
+    // never a copy of a database a live Gateway may be writing.
+    schemas = await preflightOpenClawDatabaseSchemas(
+      {
+        env: params.env,
+        verifyCurrentSchemaShape: true,
+        preserveSourceArtifacts: false,
+        signal: params.signal,
+      },
+      "runtime",
+    );
   } catch (error) {
     params.signal?.throwIfAborted();
     return {
@@ -167,7 +147,7 @@ export async function verifyUpdateStateConsistency(params: {
       return {
         status: "inconsistent",
         detail: `update ${error.record.runId} has unfinished state recovery`,
-        nextAction: `Run \`${params.formatCommand("openclaw update repair")}\` to settle that recovery first.`,
+        nextAction: `Run \`${params.formatCommand("openclaw update status")}\` for that recovery's next step.`,
       };
     }
     params.signal?.throwIfAborted();

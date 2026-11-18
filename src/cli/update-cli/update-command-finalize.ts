@@ -18,6 +18,7 @@ import {
 import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { readUpdateResultPolicy } from "../../infra/update-result-telemetry.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
+import { findLatestUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
   acknowledgeAbandonedUpdateRun,
@@ -83,7 +84,7 @@ import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-comm
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
 import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
-import { restoreRepairGateway } from "./update-repair-service.js";
+import { restoreRepairGateway, verifyRecordedDataAtRisk } from "./update-repair-service.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -546,9 +547,37 @@ async function updateFinalizeCommandInternal(
       defaultRuntime.error(`Warning: ${formatUpdateOwedStep(step)}`);
     }
 
+    const restoresGateway = interruptedGateway && pluginUpdate.status !== "error" && !retained;
+    // Restoration verifies the stopping run's own mark. A mark on a run that left no
+    // Gateway stop (Git release, refusals before mutation) is verified here too, so
+    // guidance that names repair for it stays true.
+    const latestMark =
+      ownsMaintenance && pluginUpdate.status !== "error" && !retained
+        ? findLatestUnverifiedDataAtRisk(
+            listUpdateRuns({ limit: 100 }).filter((run) => run.runId !== interruptedGateway?.runId),
+          )
+        : undefined;
     const gateway =
-      interruptedGateway && pluginUpdate.status !== "error" && !retained
+      restoresGateway || latestMark
         ? await lifecycle.run("gatewayRestoration", async (phase) => {
+            const markRefusal =
+              latestMark &&
+              (await verifyRecordedDataAtRisk({
+                markedRunId: latestMark.run.runId,
+                mark: latestMark.mark,
+                repairRunId: invokingRunId,
+                config: configSnapshot.config,
+                env: resolveServiceRefreshEnv(process.env, tryProcessCwd()),
+                json: Boolean(opts.json),
+                phase,
+                timeoutMs: lifecycle.budget("gatewayRestoration"),
+              }));
+            if (markRefusal) {
+              onDoctorWarnings([markRefusal]);
+            }
+            if (!restoresGateway) {
+              return undefined;
+            }
             const restore = (assertCurrent: () => void) =>
               restoreRepairGateway({
                 originalRunId: interruptedGateway.runId,
