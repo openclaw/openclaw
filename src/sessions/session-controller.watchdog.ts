@@ -16,71 +16,25 @@ import {
   type SessionWatchdogPhase,
   type SessionWatchdogSnapshot,
 } from "./session-controller.watchdog-state.js";
+import type {
+  SessionControllerWatchdog,
+  SessionControllerWatchdogAttempt,
+  SessionWatchdogEffect,
+  SessionWatchdogEffectResult,
+  SessionWatchdogProgress,
+  SessionWatchdogWait,
+} from "./session-controller.watchdog.types.js";
 
-type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
+export type {
+  SessionControllerWatchdog,
+  SessionControllerWatchdogAttempt,
+  SessionWatchdogEffect,
+  SessionWatchdogEffectResult,
+  SessionWatchdogWait,
+} from "./session-controller.watchdog.types.js";
+
 const executionDeadline = (execution: OwnedExecution) =>
   execution.getDeadlineAtMs ? execution.getDeadlineAtMs() : execution.deadlineAtMs;
-export type SessionWatchdogWait = {
-  close: () => void;
-  updateDeadline(deadlineAtMs: number): void;
-};
-export type SessionControllerWatchdogAttempt = {
-  isCurrent(): boolean;
-  progress(kind: SessionWatchdogProgress, reason?: string): boolean;
-  progressModel(reason?: string): boolean;
-  observeStagnation(params: { active: boolean; existingOnly?: boolean }): void;
-  progressTool(toolCallId: string, allowedNames: readonly string[]): boolean;
-  beginWait(wait: OwnedWait): SessionWatchdogWait;
-  beginTool(tool: {
-    toolCallId: string;
-    toolName: string;
-    deadlineAtMs?: number;
-  }): (completed?: boolean) => void;
-  toolEvent(event: {
-    phase: "start" | "end";
-    toolCallId: string;
-    toolName: string;
-    deadlineAtMs?: number;
-  }): void;
-  beginRequest(params: {
-    deadlineAtMs?: number;
-    requestTimeoutMs?: number;
-  }): (recoveryDeadlineAtMs?: number) => void;
-  requestEvent(event: { phase: "start" | "end"; callId: string; requestTimeoutMs?: number }): void;
-  setExecutionDeadline(deadlineAtMs: number | undefined): void;
-  close(): void;
-};
-export type SessionWatchdogEffect = {
-  cause: "run_stalled";
-  reason: string;
-  attempt?: SessionControllerWatchdogAttempt;
-  /** Revalidate at each actual asynchronous stop/cleanup side effect. */
-  isCurrent(): boolean;
-  recoverExecutionDeadline?: () => Promise<boolean>;
-};
-export type SessionWatchdogEffectResult = "settled" | "blocked" | "resumed" | "model_recovery";
-export type SessionControllerWatchdog = {
-  start(): void;
-  close(): void;
-  snapshot(now?: number): SessionWatchdogSnapshot;
-  decide(now?: number): SessionWatchdogDecision;
-  tick(now?: number): Promise<SessionWatchdogDecision>;
-  progress(kind: SessionWatchdogProgress, reason?: string): boolean;
-  beginWait(wait: OwnedWait): SessionWatchdogWait;
-  attachAttempt(params: { assertCurrent: () => void }): SessionControllerWatchdogAttempt;
-  describeStop(): { staleReason: "no_activity" | "rate_limited"; error: Error };
-  beginFinalization(): void;
-  beginTerminal(deadlineAtMs?: number): void;
-  beginExecution(
-    getDeadlineAtMs?: () => number | undefined,
-    recoverDeadline?: () => Promise<boolean>,
-  ): {
-    setDeadline(deadlineAtMs: number | undefined): void;
-    close(): void;
-  };
-  beginFinalizationWork(timeoutMs: number): () => void;
-};
-
 const inertWait: SessionWatchdogWait = { close() {}, updateDeadline() {} };
 const noop = () => {};
 function live(assertion: () => boolean): boolean {
@@ -133,6 +87,7 @@ export function createSessionControllerWatchdog(params: {
   let cleanupAt: number | undefined;
   let executionAt: number | undefined;
   let attempt: SessionControllerWatchdogAttempt | undefined;
+  let attemptReleases: Set<() => void> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let started = false;
   let warningAt: number | undefined;
@@ -482,6 +437,7 @@ export function createSessionControllerWatchdog(params: {
       finalizationWork.clear();
       executions.clear();
       attempt = undefined;
+      attemptReleases = undefined;
     },
     snapshot,
     decide,
@@ -549,7 +505,7 @@ export function createSessionControllerWatchdog(params: {
         finalizationWork.delete(work);
       };
     },
-    attachAttempt({ assertCurrent }) {
+    attachAttempt({ assertCurrent, nested }) {
       if (!current() || recovery) {
         throw new Error("Cannot attach attempt to retired or recovering operation");
       }
@@ -558,7 +514,20 @@ export function createSessionControllerWatchdog(params: {
       if (!current() || recovery || attempt !== previousAttempt) {
         throw new Error("Operation retired while attaching attempt");
       }
-      previousAttempt?.close();
+      const parent = nested ? previousAttempt : undefined;
+      const parentReleases = parent ? attemptReleases : undefined;
+      if (parent) {
+        if (!parent.isCurrent()) {
+          throw new Error("Cannot attach maintenance to a retired attempt");
+        }
+      } else {
+        previousAttempt?.close();
+      }
+      // Maintenance owns its deadline and resources, not the enclosing run's binding.
+      const maintenanceExecution: OwnedExecution | undefined = parent ? {} : undefined;
+      if (maintenanceExecution) {
+        executions.add(maintenanceExecution);
+      }
       let attemptClosed = false;
       const ownedReleases = new Set<() => void>();
       const emittedTools = new Map<string, (completed?: boolean) => void>();
@@ -566,14 +535,32 @@ export function createSessionControllerWatchdog(params: {
       const valid = () =>
         current() &&
         !attemptClosed &&
-        attempt === next &&
+        (parent ? parent.isCurrent() : attempt === next) &&
         live(() => {
           assertCurrent();
           return true;
         }) &&
         current() &&
         !attemptClosed &&
-        attempt === next;
+        (parent ? parent.isCurrent() : attempt === next);
+      const closeAttempt = () => {
+        attemptClosed = true;
+        parentReleases?.delete(closeAttempt);
+        if (maintenanceExecution) {
+          executions.delete(maintenanceExecution);
+        }
+        for (const release of ownedReleases) {
+          release();
+        }
+        emittedTools.clear();
+        emittedRequests.clear();
+        if (attempt === next) {
+          assessment.clear();
+          attempt = undefined;
+          attemptReleases = undefined;
+          executionAt = undefined;
+        }
+      };
       const next: SessionControllerWatchdogAttempt = {
         isCurrent: valid,
         progress: (kind, nextReason) => valid() && progress(kind, nextReason),
@@ -696,24 +683,21 @@ export function createSessionControllerWatchdog(params: {
         },
         setExecutionDeadline(deadlineAtMs) {
           if (valid()) {
-            executionAt = deadlineAtMs;
+            if (maintenanceExecution) {
+              maintenanceExecution.deadlineAtMs = deadlineAtMs;
+            } else {
+              executionAt = deadlineAtMs;
+            }
           }
         },
-        close() {
-          attemptClosed = true;
-          for (const release of ownedReleases) {
-            release();
-          }
-          emittedTools.clear();
-          emittedRequests.clear();
-          if (attempt === next) {
-            assessment.clear();
-            attempt = undefined;
-            executionAt = undefined;
-          }
-        },
+        close: closeAttempt,
       };
-      attempt = next;
+      if (parent) {
+        parentReleases?.add(closeAttempt);
+      } else {
+        attempt = next;
+        attemptReleases = ownedReleases;
+      }
       return next;
     },
   };
