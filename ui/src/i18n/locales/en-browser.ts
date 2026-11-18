@@ -35,6 +35,8 @@ const enBrowser = {
     dockRight: "Dock to right",
     annotate: "Annotate page",
     inspect: "Inspect element",
+    annotateWidget: "Annotate widget",
+    widgetCaptureFailed: "Couldn’t capture this widget. Try again after it finishes rendering.",
     annotateSend: "Add to message",
     annotateUndo: "Undo",
     annotateClear: "Clear",

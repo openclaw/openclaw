@@ -3,6 +3,7 @@ import { createMemo, createSignal, For, lazy, Show } from "solid-js";
 import type { WidgetPreviewControl } from "../../../../../src/shared/widget-preview-controls.ts";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { SettingsSegmented } from "../../../components/solid/settings-ui.tsx";
+import { registerBrowserEnglish } from "../../../i18n/locales/en-browser.ts";
 import { registerChatToolWidgetsEnglish } from "../../../i18n/locales/en-chat-tool-widgets.ts";
 import {
   canvasWidgetNameForDocument,
@@ -21,6 +22,7 @@ import { WidgetPinButton, type WidgetPinTarget } from "./widget-pin-button.tsx";
 import { isManagedCanvasDocumentPreview } from "./widget-preview-layout.ts";
 
 registerEnglishCatalog(registerChatToolWidgetsEnglish);
+registerEnglishCatalog(registerBrowserEnglish);
 
 const WidgetAnnotation = lazy(() => import("./widget-annotation.tsx"), {
   export: "WidgetAnnotation",
@@ -95,7 +97,7 @@ export function WidgetCardFrame(props: {
         setAnnotation(capture);
       }
     } catch {
-      showToast({ severity: "error", message: t("chat.toolCards.widgetCaptureFailed") });
+      showToast({ severity: "error", message: t("browser.widgetCaptureFailed") });
     } finally {
       setCapturing(false);
     }
@@ -140,7 +142,7 @@ export function WidgetCardFrame(props: {
           <Show when={canAnnotate()}>
             <IconButton
               icon="penLine"
-              label={t("chat.toolCards.annotateWidget")}
+              label={t("browser.annotateWidget")}
               pressed={Boolean(annotation())}
               busy={capturing()}
               disabled={capturing() || !props.source}
