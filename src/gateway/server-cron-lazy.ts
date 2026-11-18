@@ -14,6 +14,7 @@ import type {
   GatewayCronState,
 } from "./server-cron-contract.js";
 import type { buildGatewayCronService } from "./server-cron.js";
+import { expectSessionAutomationSource } from "./session-automation-index.js";
 
 /** Creates a cron state proxy that imports the real cron service on first use. */
 export function createLazyGatewayCronState(
@@ -26,6 +27,10 @@ export function createLazyGatewayCronState(
   const storePath = params.storePath;
   const cronEnabled =
     env.OPENCLAW_SKIP_CRON !== "1" && (params.cfg.cron?.enabled ?? DEFAULT_CRON_ENABLED);
+  if (cronEnabled) {
+    // Session maintenance defers archiving until these jobs can protect their parents.
+    expectSessionAutomationSource();
+  }
   let loaded: GatewayCronState | null = null;
   let stopped = false;
   let closed = false;
