@@ -8,6 +8,7 @@ import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
+import { buildPluginToolGroups, expandPolicyWithPluginGroups } from "../agents/tool-policy.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -28,6 +29,7 @@ import {
   withPluginRuntimeGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -60,6 +62,7 @@ import {
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
 } from "./mcp-http.request.js";
+import type { McpLoopbackTool } from "./mcp-http.schema.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 
 // Loopback MCP server exposes gateway-scoped tools to local MCP clients over a
@@ -292,6 +295,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
           const createCallerIdentity = (
             agentId: string | undefined,
             phase: "construction" | "execution",
+            tools?: readonly McpLoopbackTool[],
           ) => {
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
@@ -322,8 +326,16 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
             // Loopback callers carry the same conversation tool policy that already
             // filtered the served catalog; bind it so tools re-asserting caller policy
             // (for example the GitHub reader) can verify the invocation's policy.
+            // Plugin groups expand with the served catalog's plugin ownership, matching
+            // the catalog pipeline instead of introducing different policy semantics.
             if (callerIdentity) {
-              const policy = pickSandboxToolPolicy(requestContext.conversationToolPolicy);
+              const rawPolicy = requestContext.conversationToolPolicy;
+              const policy = tools?.length
+                ? expandPolicyWithPluginGroups(
+                    pickSandboxToolPolicy(rawPolicy),
+                    buildPluginToolGroups({ tools, toolMeta: getPluginToolMeta }),
+                  )
+                : pickSandboxToolPolicy(rawPolicy);
               const isToolAllowed = createToolPolicyMatcher(policy);
               callerIdentity.assertToolAllowed = (toolName: string) => {
                 if (!isToolAllowed(toolName)) {
@@ -499,7 +511,11 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                       }
                     : undefined,
                 });
-              const callerIdentity = createCallerIdentity(scopedTools.agentId, "execution");
+              const callerIdentity = createCallerIdentity(
+                scopedTools.agentId,
+                "execution",
+                scopedTools.tools,
+              );
               // The grant's caller supplies the permission ceiling and live connection check.
               const runRequestScope = boundClientGrant?.requestScope;
               const handleAsCaller = () =>
