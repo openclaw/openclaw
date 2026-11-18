@@ -6,6 +6,7 @@ import {
   truncateSessionRunError,
 } from "../sessions/session-run-error-format.js";
 import { recordGatewaySessionRunFailure } from "../sessions/session-run-error.js";
+import type { OperatorRecoveryUnavailableReason } from "./operator-run-recovery-source.codec.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 /** A recorded wait with no surviving source ends through its exact lifecycle owner. */
@@ -47,6 +48,7 @@ export async function recordRestartResumeFailure(params: {
   entry: InternalSessionEntry;
   runId?: string;
   admissionStage: string;
+  operatorRecoveryUnavailableReason?: OperatorRecoveryUnavailableReason;
   error: unknown;
   signal: AbortSignal;
   log: { warn: (message: string) => void };
@@ -61,7 +63,7 @@ export async function recordRestartResumeFailure(params: {
   log.warn(
     truncateSessionRunError(
       sanitizeSessionRunError(
-        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage })}`,
+        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage, operatorRecoveryUnavailableReason: params.operatorRecoveryUnavailableReason })}`,
       ),
       2048,
     ),

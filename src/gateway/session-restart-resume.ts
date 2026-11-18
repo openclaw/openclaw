@@ -671,6 +671,10 @@ async function resumeRestartStore(
               entry,
               runId: snapshotEntry.lifecycleRunId ?? entry.lastRunId,
               admissionStage,
+              operatorRecoveryUnavailableReason:
+                marker.operatorSource?.kind === "unavailable"
+                  ? marker.operatorSource.reason
+                  : undefined,
               error,
               signal,
               log,
