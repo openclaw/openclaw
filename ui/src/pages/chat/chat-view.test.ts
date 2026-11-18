@@ -2437,11 +2437,11 @@ describe("chat model controls", () => {
             renderChatModelAccountControl({
               owner: state,
               client,
+              ownsScope: () => true,
               selection,
               model,
               modelAuthStatusResult: status,
               disabled: false,
-              ownsSelection: () => true,
               onSelect: vi.fn(),
             }),
         },

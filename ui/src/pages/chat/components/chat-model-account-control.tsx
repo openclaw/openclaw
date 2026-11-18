@@ -11,16 +11,20 @@ export function ChatModelAccountSectionView(
   props: ReturnType<ChatModelAccountSection["viewProps"]>,
 ) {
   const id = createUniqueId();
+  const pending = () => !props.disabled && !props.open && props.loading === "initial";
   return (
     <span class="chat-controls__account-section" data-chat-account-selection={props.selectionKind}>
       <Popover
         id={id}
         label={t("chat.modelAccounts.section")}
-        triggerClass="chat-controls__account-trigger"
+        triggerClass={[
+          "chat-controls__account-trigger",
+          { "chat-controls__account-trigger--pending": pending() },
+        ]}
         class="chat-controls__settings-popover chat-controls__account-popover"
         placement="bottom-start"
         sameRoot
-        disabled={props.disabled}
+        disabled={props.disabled || pending()}
         open={props.open}
         onOpenChange={(open) => {
           if (open !== props.open) {
@@ -36,13 +40,18 @@ export function ChatModelAccountSectionView(
                   props.selectedIdentity)}
             </span>
             <Show when={!props.disabled}>
-              <Icon name="chevronDown" />
+              <Show when={pending()} fallback={<Icon name="chevronDown" />}>
+                <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
+              </Show>
             </Show>
           </>
         }
       >
         <ChatModelAccountOptions {...props} />
       </Popover>
+      <span class="sr-only" role="status">
+        {pending() ? t("common.loading") : ""}
+      </span>
     </span>
   );
 }
@@ -164,9 +173,18 @@ export function ChatModelAccountOptions(
       </Show>
       <Show when={props.error}>
         {row("error:accounts", () => (
-          <span class="chat-controls__account-error" role="alert">
-            {props.error}
-          </span>
+          <div class="chat-controls__account-error">
+            <span role="alert">{props.error}</span>{" "}
+            <Show when={!props.loading && !props.disabled}>
+              <button
+                type="button"
+                class="btn btn--sm"
+                onClick={(event) => props.onSelect("retry", event)}
+              >
+                {t("common.retry")}
+              </button>
+            </Show>
+          </div>
         ))}
       </Show>
     </>

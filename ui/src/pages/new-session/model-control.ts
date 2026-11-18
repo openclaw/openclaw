@@ -20,7 +20,10 @@ import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
 import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
-import { renderChatModelAccountControl } from "../chat/components/chat-model-account-control.ts";
+import {
+  prefetchChatModelAccounts,
+  renderChatModelAccountControl,
+} from "../chat/components/chat-model-account-control.ts";
 import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.types.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
@@ -654,19 +657,16 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     const client = snapshot?.client;
     const scope = this.metadataScope;
     const accountSelection = this.metadataState.accountSelection;
+    const ownsAccountScope = () => Boolean(client && scope && this.ownsMetadata(client, scope));
     const ownsSelection = () =>
-      Boolean(
-        client &&
-        scope &&
-        this.ownsMetadata(client, scope) &&
-        this.metadataState.accountSelection === accountSelection,
-      );
+      ownsAccountScope() && this.metadataState.accountSelection === accountSelection;
     return {
       ...modelControls,
       renderAccountSection: (model) =>
         renderChatModelAccountControl({
           owner: this,
           client,
+          ownsScope: ownsAccountScope,
           selection: ownsSelection() && snapshot?.selfUser ? accountSelection : undefined,
           model,
           disabled:
@@ -731,9 +731,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       onProviderSettings: (provider) =>
         navigateToModelProvider(options.context, options.agentId, provider),
       onModelPickerOpen: () => {
-        const metadataClient = this.metadataClient;
-        const metadataScope = this.metadataScope;
-        if (!this.metadataReader.pending && metadataClient && metadataScope) {
+        if (snapshot?.selfUser && hasOperatorWriteAccess(snapshot.hello?.auth ?? null)) {
+          prefetchChatModelAccounts({ owner: this, client, ownsScope: ownsAccountScope });
+        }
+        if (!this.metadataReader.pending && this.ownsMetadata()) {
           void this.metadataReader.read();
         }
         this.catalogTargets.retry(options.context?.gateway.snapshot, this.agentId);
