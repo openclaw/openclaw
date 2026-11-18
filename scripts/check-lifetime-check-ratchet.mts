@@ -29,7 +29,6 @@ export const LIFETIME_CHECK_CALLS = [
   "bindHttpResponseAuthority",
   "retainExecApprovalsCurrentRead",
   "createPluginRuntimeCapabilityLease",
-  "hasCurrentPluginInstanceAuthority",
   "captureAdmittedRunActiveAssertion",
   "captureGatewayToolCallerAssertion",
   "captureGatewayToolReceiptAssertion",
