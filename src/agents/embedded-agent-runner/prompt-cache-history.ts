@@ -7,7 +7,12 @@ import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
 // Persistence-only metadata is absent from provider messages; content is hashed separately.
-const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw", "display"]);
+// timestamp is omitted because it is metadata that does not appear in the prompt sent to
+// the LLM. For user messages, the timestamp prefix is already captured in the content hash.
+// For toolResult messages, the timestamp is purely persistence metadata. Including it in
+// the envelope digest caused false-positive cache drops when messages were reloaded from
+// the transcript database with slightly different timestamps (persistence time vs original).
+const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw", "display", "timestamp"]);
 
 export type PromptHistoryFingerprint = {
   role: string;

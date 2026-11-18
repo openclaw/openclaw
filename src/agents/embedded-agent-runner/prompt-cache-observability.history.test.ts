@@ -711,7 +711,7 @@ describe("prompt cache history fingerprints", () => {
           ? "message removed"
           : kind === "edit"
             ? "changed fields: content[0].text"
-            : "changed fields: content.type, content, envelope.role, envelope.timestamp, envelope.api, envelope.provider, envelope.model, envelope.usage, …";
+            : "changed fields: content.type, content, envelope.role, envelope.api, envelope.provider, envelope.model, envelope.usage, …";
       const detail = `message ${index} (assistant) differs from the previous request; history must be append-only; ${fields}`;
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
       const sessionId = scopedKey(kind);
@@ -733,7 +733,6 @@ describe("prompt cache history fingerprints", () => {
   );
 
   it.each([
-    { field: "timestamp", value: 2, label: "timestamp" },
     { field: "idempotencyKey", value: "private-value", label: "idempotencyKey" },
     { field: "usage", value: { input: 42 }, label: "usage" },
     { field: "extensionField", value: "private-value", label: 'other["extensionField"]' },
@@ -770,6 +769,27 @@ describe("prompt cache history fingerprints", () => {
         detail: `message 0 (user) differs from the previous request; history must be append-only; changed fields: envelope.${label}`,
       },
     ]);
+  });
+
+  it("does not detect timestamp-only changes as cache-affecting rewrites", () => {
+    // timestamp is omitted from the envelope fingerprint because it is persistence
+    // metadata that does not appear in the prompt sent to the LLM. For user messages,
+    // the timestamp prefix is already captured in the content hash. For toolResult
+    // messages, the timestamp is purely persistence metadata. This test verifies
+    // that changing only the timestamp does NOT trigger a history rewrite detection.
+    const sessionId = scopedKey("timestamp-stability");
+    const message: Message = {
+      role: "toolResult",
+      toolCallId: "exec-1",
+      toolName: "exec",
+      content: [{ type: "text", text: "fixture result" }],
+      isError: false,
+      timestamp: 1,
+    } as Message;
+    observe(sessionId, [message]);
+    completePromptCacheObservation({ sessionId, usage: { cacheRead: 8_000 } });
+    message.timestamp = 2;
+    expect(observe(sessionId, [message]).changes).toBeNull();
   });
 
   it("bounds diagnostics while detecting changes beyond the retained block prefix", () => {
