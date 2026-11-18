@@ -2,11 +2,12 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { adoptReleasedProcess } from "./released-processes.js";
 
 const groups: number[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const pgid of groups.splice(0)) {
     try {
       process.kill(-pgid, "SIGKILL");
@@ -40,6 +41,31 @@ it.runIf(process.platform !== "win32")(
 
     expect(fs.readFileSync(marker, "utf8").trim()).toBe("flushed");
     expect(() => process.kill(-pid, 0)).toThrow();
+  },
+  20_000,
+);
+
+it.runIf(process.platform !== "win32")(
+  "a group stop is uncertain while a member it cannot signal remains",
+  async () => {
+    // The survivor exits on SIGTERM; its child keeps running, as one under another user would.
+    const survivor = spawn("sh", ["-c", "sleep 60 & exec sleep 60"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = survivor.pid!;
+    groups.push(pid);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const adopted = adoptReleasedProcess("group-denied", { pid, pgid: pid }, () => {});
+    const realKill = process.kill.bind(process);
+    vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+      if (target === -pid && signal !== "SIGTERM") {
+        throw Object.assign(new Error("denied"), { code: "EPERM" });
+      }
+      return realKill(target, signal);
+    });
+
+    expect(await adopted!.stop({ group: true })).toMatchObject({ status: "uncertain" });
   },
   20_000,
 );
