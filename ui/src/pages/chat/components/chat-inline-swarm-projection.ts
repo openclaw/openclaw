@@ -34,7 +34,7 @@ export function projectInlineSwarms(
     }
   }
   // Explicit shared group IDs are not turn identities. Never infer ownership by time.
-  const swarmsByFrame = new Map<string, { view: InlineSwarm; signature: string }>();
+  const swarmsByFrame = new Map<string, { views: InlineSwarm[]; signature: string }>();
   if (parent && swarms.size) {
     for (const row of rows) {
       if (row.kind !== "item") {
@@ -44,14 +44,24 @@ export function projectInlineSwarms(
       if (item.kind !== "agent-run-frame" || (item.fragment && !item.fragment.first)) {
         continue;
       }
-      const id = `swarm:${parent.key}:${item.runId}`;
-      const swarm = swarms.get(id);
-      if (swarm) {
-        swarmsByFrame.set(item.key, swarm);
-        swarms.delete(id);
-        if (!swarms.size) {
-          break;
+      const runIds = item.handoffRunIds ? [...item.handoffRunIds, item.runId] : [item.runId];
+      const matches = runIds.flatMap((runId) => {
+        const id = `swarm:${parent.key}:${runId}`;
+        const swarm = swarms.get(id);
+        if (!swarm) {
+          return [];
         }
+        swarms.delete(id);
+        return [swarm];
+      });
+      if (matches.length) {
+        swarmsByFrame.set(item.key, {
+          views: matches.map((swarm) => swarm.view),
+          signature: JSON.stringify(matches.map((swarm) => swarm.signature)),
+        });
+      }
+      if (!swarms.size) {
+        break;
       }
     }
   }

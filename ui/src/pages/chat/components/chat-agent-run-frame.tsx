@@ -57,7 +57,7 @@ const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
 type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
-  swarm?: InlineSwarm;
+  swarms?: readonly InlineSwarm[];
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
@@ -318,13 +318,21 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   };
 }
 
+function FrameSwarms(props: { swarms: readonly InlineSwarm[] | undefined }) {
+  return (
+    <For each={props.swarms} keyed={(swarm) => swarm.group.groupId}>
+      {(swarm) => <ChatInlineSwarm swarm={swarm()} />}
+    </For>
+  );
+}
+
 export function AgentRunFrame(props: FrameProps) {
   const statusParts = createMemo(() => agentRunFrameActiveStatusParts(props.frame));
   return (
     <Show when={statusParts()} fallback={<RunFrame frame={props.frame} options={props.options} />}>
       {(parts) => (
         <>
-          <Show when={props.options.swarm}>{(swarm) => <ChatInlineSwarm swarm={swarm()} />}</Show>
+          <FrameSwarms swarms={props.options.swarms} />
           <StreamGroup parts={parts()} options={props.options.streamOptions} />
         </>
       )}
@@ -340,7 +348,7 @@ function RunFrame(props: FrameProps) {
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const frameContent = [
-    <Show when={props.options.swarm}>{(swarm) => <ChatInlineSwarm swarm={swarm()} />}</Show>,
+    <FrameSwarms swarms={props.options.swarms} />,
     <FrameBody
       parts={state().bodyParts}
       options={props.options}
