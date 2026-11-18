@@ -479,7 +479,8 @@ async function executeAgentRun(
                 requesterOrigin: prepared.userTurn.requesterOrigin,
                 senderIsOwner: prepared.userTurn.senderIsOwner,
                 sessionEffects: params.sessionEffects,
-                skipInitialSessionTouch: params.skipAgentInitialSessionTouch,
+                skipInitialSessionTouch:
+                  params.skipAgentInitialSessionTouch || params.preserveUserFacingSessionModelState,
                 preserveUserFacingSessionModelState: params.preserveUserFacingSessionModelState,
                 sourceReplyDeliveryMode: params.request.sourceReplyDeliveryMode,
                 disableMessageTool: params.request.disableMessageTool,

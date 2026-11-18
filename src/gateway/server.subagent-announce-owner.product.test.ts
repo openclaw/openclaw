@@ -6,6 +6,7 @@ import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-respo
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
@@ -165,6 +166,13 @@ it("delivers an idle requester's child completion to that requester while a peer
     const child = await childAccepted.promise;
     childSessionKey = child.childSessionKey;
     await parentTerminal.promise;
+    const parentScope = { sessionKey: "global", agentId: "research" };
+    const parentEntry = loadSessionEntry(parentScope);
+    if (!parentEntry) {
+      throw new Error("Expected the completed parent session");
+    }
+    const lastInteractionAt = Date.now() - 1_000;
+    await upsertSessionEntryCore(parentScope, { ...parentEntry, lastInteractionAt });
 
     // Keep a different agent's identical bare key active while the child completes.
     const opsAccepted = await send("ops", opsPrompt, "announce-owner-ops");
@@ -177,6 +185,7 @@ it("delivers an idle requester's child completion to that requester while a peer
     // The deletion event fences completion delivery before either destination is inspected.
     const researchRequests = requests.filter((body) => body.includes(parentPrompt));
     expect(researchRequests.some((body) => body.includes(childResult))).toBe(true);
+    expect(loadSessionEntry(parentScope)?.lastInteractionAt).toBe(lastInteractionAt);
     releaseOps.resolve();
     await wait(opsAccepted.runId);
     const completedOpsRequests = requests.filter((body) => body.includes(opsPrompt));
