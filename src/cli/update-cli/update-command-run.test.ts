@@ -229,17 +229,17 @@ it.each([
   vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
     status: "inconsistent",
     detail: "the state database is at schema 7",
-    nextAction: "Run `openclaw doctor --fix` to finish the migration.",
+    nextAction: "run `openclaw doctor --fix` to finish the migration.",
     ...(refuses ? {} : { newerState: true as const }),
   });
   const admission = admitUpdateCommandRun({ env: process.env, opts: {}, root });
 
   if (refuses) {
     await expect(admission).rejects.toThrow(
-      `Update ${marked.runId} recorded data at risk (rollback-state-unverified). Verification against installed OpenClaw`,
+      `Update ${marked.runId} recorded data at risk (rollback-state-unverified). Verification found that`,
     );
     await expect(admission).rejects.toThrow(
-      "The update changed nothing. Run `openclaw triage` to have a coding agent inspect it with the facts recorded on this run. By hand: Run `openclaw doctor --fix` to finish the migration.",
+      "The update changed nothing. Run `openclaw triage` for an agent that reads the facts recorded on this run, or by hand: run `openclaw doctor --fix` to finish the migration.",
     );
     // The refusing run keeps the finding for the agent that triage opens.
     const [refusing] = updateRunLedger.listUpdateRuns({ limit: 1 });

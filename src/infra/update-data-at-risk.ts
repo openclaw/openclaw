@@ -33,7 +33,7 @@ export type UpdateStateVerification =
     };
 
 function retryRepair(formatCommand: (command: string) => string): string {
-  return `Retry \`${formatCommand("openclaw update repair")}\` once the reason above is cleared.`;
+  return `retry \`${formatCommand("openclaw update repair")}\` once that reason is cleared.`;
 }
 
 function describeAhead(database: IncompatibleOpenClawDatabase): string {
@@ -41,7 +41,7 @@ function describeAhead(database: IncompatibleOpenClawDatabase): string {
   const writer = database.writerAppVersion
     ? ` (written by OpenClaw ${database.writerAppVersion})`
     : "";
-  return `the ${database.kind} database${agent} ${database.path} is at schema ${database.foundVersion}${writer}, newer than the ${database.supportedVersion} that installed OpenClaw ${VERSION} supports`;
+  return `the ${database.kind} database${agent} ${database.path} is at schema ${database.foundVersion}${writer}, newer than ${database.supportedVersion} supported by installed OpenClaw ${VERSION}`;
 }
 
 function classify(
@@ -54,7 +54,7 @@ function classify(
       newerState: true,
       detail: schemas.incompatible.map(describeAhead).join("; "),
       // The installed build cannot open newer state; a build that supports it can.
-      nextAction: `Run \`${formatCommand("openclaw update")}\` to install a version that supports this state, or restore the pre-update backup.`,
+      nextAction: `run \`${formatCommand("openclaw update")}\` to a version that supports it, or restore the pre-update backup.`,
     };
   }
   const pending = schemas.pendingMigrations ?? [];
@@ -67,7 +67,7 @@ function classify(
             `the ${database.kind} database${database.agentId ? ` for agent ${database.agentId}` : ""} ${database.path} is at schema ${database.foundVersion}; installed OpenClaw ${VERSION} needs ${database.supportedVersion}, so its migration did not finish`,
         )
         .join("; "),
-      nextAction: `Run \`${formatCommand("openclaw doctor --fix")}\` to finish the migration.`,
+      nextAction: `run \`${formatCommand("openclaw doctor --fix")}\` to finish the migration.`,
     };
   }
   if (schemas.indeterminate.length > 0) {
@@ -114,7 +114,7 @@ export async function verifyUpdateStateConsistency(params: {
     return {
       status: "inconsistent",
       detail: `a state restore did not finish: ${formatErrorMessage(error)}`,
-      nextAction: `No command can finish it safely; keep that directory and follow ${UPDATE_INTERRUPTED_RESTORE_DOCS_URL}.`,
+      nextAction: `keep that directory and follow ${UPDATE_INTERRUPTED_RESTORE_DOCS_URL}; no command finishes it safely.`,
     };
   }
   let schemas: OpenClawDatabaseSchemaPreflight;
@@ -150,7 +150,7 @@ export async function verifyUpdateStateConsistency(params: {
       return {
         status: "inconsistent",
         detail: `update ${error.record.runId} has unfinished state recovery`,
-        nextAction: `Run \`${params.formatCommand("openclaw update status")}\` for that recovery's next step.`,
+        nextAction: `run \`${params.formatCommand("openclaw update status")}\` for that recovery's next step.`,
       };
     }
     params.signal?.throwIfAborted();

@@ -77,7 +77,7 @@ export function formatDataAtRiskNextSteps(
   verification: Exclude<UpdateStateVerification, { status: "consistent" }>,
   env: NodeJS.ProcessEnv,
 ): string {
-  return `Run \`${formatCliCommand("openclaw triage", env)}\` to have a coding agent inspect it with the facts recorded on this run. By hand: ${verification.nextAction}`;
+  return `Run \`${formatCliCommand("openclaw triage", env)}\` for an agent that reads the facts recorded on this run, or by hand: ${verification.nextAction}`;
 }
 
 export function formatDataAtRiskRefusal(params: {
@@ -91,8 +91,8 @@ export function formatDataAtRiskRefusal(params: {
   const { verification } = params;
   const finding =
     verification.status === "unverifiable"
-      ? `Verification against installed OpenClaw ${VERSION} could not complete: ${verification.detail}.`
-      : `Verification against installed OpenClaw ${VERSION} found that ${verification.detail}.`;
+      ? `Verification could not complete: ${verification.detail}.`
+      : `Verification found that ${verification.detail}.`;
   return `Update ${params.runId} recorded data at risk (${params.mark}). ${finding} ${describeGateway(params.gateway)} ${params.outcome}`;
 }
 
