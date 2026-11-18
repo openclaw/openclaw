@@ -2,6 +2,7 @@ import {
   clearGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   getRpcSourceForGateway,
@@ -10,15 +11,24 @@ import {
   type RpcSourceRef,
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { sessionTargetOwnersMatch } from "../../../sessions/session-controller.target.js";
-import { captureExecRequestCancellation } from "../../bash-process-control.js";
+import {
+  captureExecRequestCancellation,
+  stopSessionExecProcesses,
+} from "../../bash-process-control.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
 import { retireRequesterFollowupAuthority } from "../requester-cron-authority.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
+import {
+  getCurrentSubagentRunOwner,
+  getSubagentRunsForChildSession,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
+import { hasSubagentRunEnded, isYieldedSubagentRun } from "./subagent-run-liveness.js";
 
 // A retired row retains only its exact source reference; the controller owns cleanup.
 // Empty weak slots prevent that runtime incarnation from adopting a replacement.
@@ -141,6 +151,64 @@ function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {
   }
   const resolver = getGatewayContextResolver(current);
   return resolver ? getRpcSourceForGateway(current.runId, resolver) !== undefined : false;
+}
+
+/** Scope keys of a hidden subagent chat whose task ended; undefined while it can still take a turn. */
+function endedSubagentTaskScopes(childSessionKey: string, childAgentId?: string) {
+  const runs = [...getSubagentRunsForChildSession(childSessionKey, childAgentId)];
+  if (
+    runs.length === 0 ||
+    runs.some(
+      (run) =>
+        !hasSubagentRunEnded(run) ||
+        isYieldedSubagentRun(run) ||
+        run.suppressAnnounceReason === "steer-restart" ||
+        // A visible spawned session is a chat: reset, delete and archive end it.
+        run.spawnMode === "session",
+    )
+  ) {
+    return undefined;
+  }
+  // The row counts processes under the same keys, so whatever it counts is stopped.
+  return new Set(
+    runs.flatMap((run) => [
+      run.childSessionKey,
+      ...(run.childSessionIdentity?.sessionId ? [run.childSessionIdentity.sessionId] : []),
+    ]),
+  );
+}
+
+/**
+ * A hidden subagent whose task ended (done, failed, killed, timed out) holds no process:
+ * nothing would manage it. Derived from the stored rows on every registry publication, so
+ * no end path can skip it. A yielded subagent keeps the command it waits on. Accepted edge:
+ * a command spawned in the instant after a kill is stopped by the next publication for it.
+ */
+export function stopEndedSubagentProcesses(event: { runIds: readonly string[] | undefined }) {
+  const children = new Map<string, string | undefined>();
+  for (const runId of event.runIds ?? []) {
+    const run = subagentRuns.get(runId);
+    if (run) {
+      children.set(run.childSessionKey, run.childAgentId);
+    }
+  }
+  for (const [childSessionKey, childAgentId] of children) {
+    const scopes = endedSubagentTaskScopes(childSessionKey, childAgentId);
+    if (!scopes) {
+      continue;
+    }
+    void runWithGatewayDetachedWorkContinuation(
+      () =>
+        stopSessionExecProcesses(scopes, () => {
+          if (!endedSubagentTaskScopes(childSessionKey, childAgentId)) {
+            throw new Error("Subagent task resumed before its processes were stopped");
+          }
+        }),
+      "subagents:task-end-processes",
+    ).catch((error: unknown) => {
+      log.warn("failed to stop an ended subagent's processes", { childSessionKey, error });
+    });
+  }
 }
 
 /** Capture controller topology once for a synchronous cancellation selection. */
