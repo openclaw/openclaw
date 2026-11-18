@@ -61,7 +61,7 @@ export type AgentDatabaseFileExecutionOwner = {
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
   readonly stateDatabasePath: string;
-  getCleanupFailure(): { reason: string; retryable: boolean } | undefined;
+  getCleanupFailure(): { error: unknown; retryable: boolean } | undefined;
   readonly creationIdentity?: DatabasePathIdentity;
   readonly fileIdentity?: AgentDatabaseExecutionFileIdentity;
   getPendingPreparation(): Promise<void> | undefined;

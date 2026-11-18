@@ -3,9 +3,13 @@ import fs from "node:fs";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { AUTH_NONE, sendRequest, withGatewayServer } from "../gateway/server-http.test-harness.js";
+import { createReadinessChecker } from "../gateway/server/readiness.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { readLoggingConfig } from "../logging/config.js";
+import { applyLoggingConfig } from "../logging/logger.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
@@ -35,7 +39,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
               const selected = prepare.call(this, "SELECT path FROM agent_database_leases WHERE lease_id = ?");
               if (args.some((value) => typeof value === "string" && selected.get(value)?.path === workerData.cleanupFaultPath)) {
                 throw new AggregateError([
-                  Object.assign(new Error("controlled idle worker lease failure; Authorization: Bearer synthetic-cleanup-secret"), { code: "SQLITE_BUSY", errcode: 5 }),
+                  Object.assign(new Error("controlled idle worker lease failure; cleanup-canary-private; Authorization: Bearer synthetic-cleanup-secret"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
                   new Error("controlled lease release refused"),
                 ], "Agent database cleanup failed");
               }
@@ -93,6 +97,7 @@ const source: AgentDatabaseRequestExecutionSource = {
 };
 
 it("keeps healthy agents usable while real worker lease cleanup fails, then recovers its exact owner", async () => {
+  const previousLogging = readLoggingConfig();
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-cleanup-isolation-")) };
   const shared = openOpenClawStateDatabase({ env });
   const first = captureOpenClawAgentDatabaseExecution({ agentId: "first", env });
@@ -129,10 +134,41 @@ it("keeps healthy agents usable while real worker lease cleanup fails, then reco
     const reported = getOpenClawAgentDatabaseCleanupFailures(shared.path)[0];
     assert(reported);
     const diagnostic = reported.reason;
-    expect(diagnostic).toContain("SQLITE_BUSY");
+    expect(diagnostic).toContain("ERR_SQLITE_ERROR");
+    expect.soft(diagnostic).toContain("errcode=5");
     expect(diagnostic).toContain("controlled idle worker lease failure");
     expect(diagnostic).toContain("controlled lease release refused");
     expect(diagnostic).not.toContain("synthetic-cleanup-secret");
+
+    const getReadiness = createReadinessChecker({
+      channelManager: {
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getAutostartSuppression: () => null,
+        isAmbientAutostartSuppressed: () => false,
+      },
+      startedAt: Date.now(),
+      getAgentDatabaseCleanupFailures: () => getOpenClawAgentDatabaseCleanupFailures(shared.path),
+    });
+    await withGatewayServer({
+      prefix: "cleanup-readiness-",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const before = await sendRequest(server, { path: "/readyz" });
+        expect(before.res.statusCode).toBe(200);
+        expect(before.getBody()).toContain("cleanup-canary-private");
+        applyLoggingConfig({
+          ...previousLogging,
+          redactPatterns: [...(previousLogging?.redactPatterns ?? []), "cleanup-canary-private"],
+        });
+        const after = await sendRequest(server, { path: "/readyz" });
+        expect(after.res.statusCode).toBe(200);
+        expect.soft(after.getBody()).not.toContain("cleanup-canary-private");
+        expect.soft(after.getBody()).toContain("errcode=5");
+        expect(after.getBody()).not.toContain("synthetic-cleanup-secret");
+      },
+    });
+    applyLoggingConfig(previousLogging);
 
     healthy = captureOpenClawAgentDatabaseExecution({ agentId: "fifth", env });
     await healthy.prepare(source);
@@ -150,7 +186,7 @@ it("keeps healthy agents usable while real worker lease cleanup fails, then reco
     const failure: unknown = await retry.prepare(source).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expect(collectNestedErrorCandidates(failure)).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "SQLITE_BUSY", errcode: 5 })]),
+      expect.arrayContaining([expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 5 })]),
     );
     expect(formatErrorMessageWithCode(failure)).toContain("controlled idle worker lease failure");
     expect(formatErrorMessageWithCode(failure)).not.toContain("synthetic-cleanup-secret");
@@ -172,6 +208,7 @@ it("keeps healthy agents usable while real worker lease cleanup fails, then reco
     expect(replacementLease.lease_id).not.toBe(retainedLease.lease_id);
     expect(getOpenClawAgentDatabaseCleanupFailures(shared.path)).toEqual([]);
   } finally {
+    applyLoggingConfig(previousLogging);
     Atomics.store(new Int32Array(fault.enabled), 0, 0);
     await Promise.all([
       ...initial.map((execution) => execution.release()),

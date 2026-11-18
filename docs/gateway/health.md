@@ -300,6 +300,8 @@ Detailed readiness can include `agentCleanup`: the affected agent ID, a redacted
 native failure reason (including available SQLite codes and nested causes), and
 a repair hint. These owner-held facts stay fresh independently of the channel
 readiness cache, including when another subsystem makes the Gateway unready.
+The active diagnostic redaction policy is applied when details are published,
+including operator rules added after the cleanup failure.
 
 An idle cleanup failure does not itself make `/readyz` return `503`, even for the
 default or system agent. The failed owner retains its original generation and

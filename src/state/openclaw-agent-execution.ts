@@ -1,9 +1,15 @@
+import {
+  collectNestedErrorCandidates,
+  formatErrorMessage,
+} from "@openclaw/normalization-core/error-coercion";
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
+import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import {
   readDatabasePathIdentity,
   readDatabasePathIdentitySync,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -64,17 +70,27 @@ export function getOpenClawAgentDatabaseCleanupFailures(
       return [];
     }
     const failure = owner.getCleanupFailure();
-    return failure
-      ? [
-          {
-            agentId: owner.agentId,
-            reason: failure.reason,
-            repairHint: failure.retryable
-              ? "Idle cleanup retries on this agent's next request. If cleanup remains blocked, restart the Gateway; do not delete its database or lease."
-              : "Cleanup failed after this agent was explicitly revoked and cannot retry on a request. Restart the Gateway; do not delete its database or lease.",
-          },
-        ]
-      : [];
+    if (!failure) {
+      return [];
+    }
+    let reason = "Agent database cleanup failed";
+    try {
+      const codes = new Set(
+        collectNestedErrorCandidates(failure.error).map(formatSqliteErrorCodeSuffix),
+      );
+      reason = redactToolPayloadText(`${formatErrorMessage(failure.error)}${[...codes].join("")}`);
+    } catch {
+      // Optional diagnostics must not change readiness or cleanup custody.
+    }
+    return [
+      {
+        agentId: owner.agentId,
+        reason,
+        repairHint: failure.retryable
+          ? "Idle cleanup retries on this agent's next request. If cleanup remains blocked, restart the Gateway; do not delete its database or lease."
+          : "Cleanup failed after this agent was explicitly revoked and cannot retry on a request. Restart the Gateway; do not delete its database or lease.",
+      },
+    ];
   });
 }
 

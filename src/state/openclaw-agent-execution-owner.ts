@@ -2,7 +2,7 @@ import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { materializeErrorStack } from "../infra/error-graph-internal.js";
-import { formatErrorMessageWithCode } from "../infra/errors.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { captureGatewayStateOwnerAsync } from "../infra/gateway-state-owner.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
@@ -89,7 +89,7 @@ export function createAgentDatabaseExecution(
   let generation: AgentDatabaseNativeGeneration | undefined;
   let fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   let nativeClosing: Promise<void> | undefined;
-  let cleanupFailure: { error: unknown; reason: string } | undefined;
+  let cleanupFailure: { error: unknown } | undefined;
   let closing: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -154,23 +154,20 @@ export function createAgentDatabaseExecution(
         },
         (error: unknown) => {
           materializeErrorStack(error);
-          const firstFailure = !cleanupFailure;
-          cleanupFailure = { error, reason: "Agent database cleanup failed" };
+          cleanupFailure = { error };
           executionState.idle.delete(owner);
           try {
-            const reason = formatErrorMessageWithCode(error);
-            cleanupFailure.reason = reason;
-            if (firstFailure) {
-              log.warn(`Agent database cleanup failed (agent ${agentId}): ${reason}`);
-            }
+            log.warn(`Agent ${agentId} database cleanup failed: ${formatErrorMessage(error)}`);
           } catch {
-            // Retain cleanup custody even when formatting or diagnostic delivery fails.
+            // Diagnostic delivery cannot release the failed owner's cleanup custody.
           }
           throw error;
         },
       )
       .finally(() => {
-        nativeClosing = undefined;
+        if (nativeClosing === result) {
+          nativeClosing = undefined;
+        }
       });
     nativeClosing = result;
     return result;
@@ -348,7 +345,7 @@ export function createAgentDatabaseExecution(
     agentId,
     stateDatabasePath: context.admission.databasePath,
     getCleanupFailure: () =>
-      cleanupFailure ? { reason: cleanupFailure.reason, retryable: lifetime.open } : undefined,
+      cleanupFailure ? { error: cleanupFailure.error, retryable: lifetime.open } : undefined,
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
@@ -569,8 +566,10 @@ export function createAgentDatabaseExecution(
               !nativeClosing &&
               !cleanupFailure
             ) {
-              // Source refusal can leave an unaccepted generation allocated before native open.
-              await closeNative().catch(() => undefined);
+              if (generation) {
+                // Source refusal can leave an unaccepted generation allocated before native open.
+                await closeNative(generation).catch(() => undefined);
+              }
               if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
                 creationIdentity = undefined;
               }

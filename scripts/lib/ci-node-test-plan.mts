@@ -4684,6 +4684,18 @@ export function createSelectedNodeTestShardBundles(
           Math.min(2, readPositiveEnvInt("OPENCLAW_VITEST_MAX_WORKERS", job.env ?? {}, 2)),
         ),
       };
+      // Repack each child's serial work through the existing wall-budget owner.
+      return groups.map((group, index) =>
+        Object.assign({}, job, {
+          checkName: `${job.checkName}-serial-${index + 1}`,
+          shardName: `${job.shardName}-serial-${index + 1}`,
+          groups: [group],
+          predictedSeconds: Math.ceil(
+            groupSeconds.get(group)! +
+              compactPreparationSeconds(shard.pretestBuildMode, options.runnerBackend),
+          ),
+        }),
+      );
     }
     return [job];
   });

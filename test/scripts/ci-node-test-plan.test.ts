@@ -3354,8 +3354,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(sumSeconds(selected)).toBe(500);
       expectPlanFiles(selected, targets, requiredPatterns);
 
+      const overlappingTargets = files.slice(2, 4);
+      const parallel = only(required(createSelected(overlappingTargets, { runnerBackend })));
+      expect(parallel.planConcurrency).toBe(2);
+      expect(parallel.groups).toHaveLength(2);
       const isolated = required(
-        createSelected(targets, { runnerBackend, isolateSystemRuntime: true }),
+        createSelected(overlappingTargets, { runnerBackend, isolateSystemRuntime: true }),
       );
       const runtime = isolated.filter((job) =>
         job.groups.some((group) => group.shard_name === "core-runtime-infra-system-runtime"),
@@ -3365,7 +3369,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(Number(runtime[0]?.env?.OPENCLAW_VITEST_MAX_WORKERS)).toBeLessThanOrEqual(2);
       expect(runtime[0]?.predictedTestSeconds).toBe(160);
       expect(runtime[0]?.predictedSeconds).toBe(160);
-      expectPlanFiles(isolated, targets, requiredPatterns);
+      expect(isolated).toHaveLength(2);
+      expect(new Set(isolated.map((job) => job.checkName)).size).toBe(isolated.length);
+      expect(new Set(isolated.map((job) => job.shardName)).size).toBe(isolated.length);
+      expectEvery(isolated, (job) => job.predictedSeconds! <= 210);
+      expect(sumSeconds(isolated)).toBe(320);
+      expectPlanFiles(isolated, overlappingTargets, requiredPatterns);
     },
   );
 
