@@ -107,6 +107,12 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
         attempts: retry.attempts,
         retryAt: retry.retryAt,
       };
+      record.cleanup = {
+        state: retry.retryAt === null ? "preserved" : "retrying",
+        reason: protection.reason,
+        attempts: retry.attempts,
+        nextAttemptAt: retry.retryAt,
+      };
     }
   }
   return record;

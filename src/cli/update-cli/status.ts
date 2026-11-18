@@ -40,21 +40,15 @@ import {
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
-import {
-  formatUpdateOwedStep,
-  listUpdateOwedSteps,
-  selectUpdateOwedSteps,
-  UPDATE_OWED_STEP_HISTORY,
-  type UpdateOwedStep,
-} from "../../infra/update-run-owed-step.js";
-import { listUpdateRunsAsync, type getUpdateRunAsync } from "../../infra/update-run-reader.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
+import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
-import { readUpdateRunStatus } from "../../infra/update-run-status.js";
+import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { withArtifactPreservingStateSnapshot } from "../../state/openclaw-state-inspection-snapshot.js";
 import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
@@ -115,22 +109,6 @@ async function readChannelStatusIssues(
   }
 }
 
-/** An earlier run can still owe a step after a later one replaced it as the last run. */
-async function readUpdateRunStatusWithOwedSteps(): Promise<
-  Awaited<ReturnType<typeof readUpdateRunStatus>> & { owedSteps?: UpdateOwedStep[] }
-> {
-  const status = await readUpdateRunStatus();
-  if (!("lastRun" in status) || !status.lastRun) {
-    return status;
-  }
-  // The run report stays readable when this wider history read fails.
-  const owedSteps = await listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
-    selectUpdateOwedSteps,
-    () => [],
-  );
-  return owedSteps.length ? { ...status, owedSteps } : status;
-}
-
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
   const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
   // --timeout bounds update checks; a short network budget must not discard local history.
@@ -145,7 +123,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
       { deadlineAtMs: Date.now() + timeoutMs, assertActive: () => scope.signal.throwIfAborted() },
       () =>
         scope.run(() =>
-          withArtifactPreservingStateReads(() =>
+          withArtifactPreservingStateSnapshot(scope.signal, () =>
             inspectUpdateStatus(opts, scope.signal, timeoutMs, checkTimeoutMs),
           ),
         ),
@@ -163,6 +141,15 @@ async function inspectUpdateStatus(
   checkTimeoutMs: number | undefined,
 ): Promise<void> {
   const inspectionErrors: { section: string; message: string }[] = [];
+  type RunStatus = Awaited<ReturnType<typeof readUpdateRunStatusWithOwedSteps>>;
+  let retainedRunStatus: RunStatus | undefined;
+  const readRunStatus = async (): Promise<RunStatus> => {
+    // Keep completed history if optional enrichment outlives either enclosing deadline race.
+    retainedRunStatus = await readUpdateRunStatusWithOwedSteps((status) => {
+      retainedRunStatus = status;
+    });
+    return retainedRunStatus;
+  };
   const deadline = performance.now() + timeoutMs;
   const remainingMs = () => Math.max(1, deadline - performance.now());
   const inspect = async <T>(
@@ -198,11 +185,9 @@ async function inspectUpdateStatus(
     () =>
       withUpdateDatabaseEngine(process.env, () =>
         Promise.all([
-          inspect<Awaited<ReturnType<typeof readUpdateRunStatusWithOwedSteps>>>(
-            "update history",
-            readUpdateRunStatusWithOwedSteps,
-            { runStatusError: "Update history inspection unavailable" },
-          ),
+          inspect<RunStatus>("update history", readRunStatus, {
+            runStatusError: "Update history inspection unavailable",
+          }),
           inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
             "recovery sets",
             () => readUpdateRecoverySetStatus(),
@@ -335,7 +320,8 @@ async function inspectUpdateStatus(
     }
   }
 
-  const [runStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const [inspectedRunStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const runStatus = retainedRunStatus ?? inspectedRunStatus;
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
     !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;

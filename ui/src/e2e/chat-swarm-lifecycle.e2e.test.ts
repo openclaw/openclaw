@@ -186,13 +186,16 @@ suite.define(() => {
         // Launches share one lifecycle row; the hidden wait becomes a row per outcome.
         const tools = pane.locator(".chat-tool-msg-summary");
         await expect.poll(() => tools.count()).toBe(2);
-        await tools.first().click();
+        await tools
+          .first()
+          .locator(".chat-tool-row__toggle")
+          .click({ position: { x: 4, y: 4 } });
         if (viewport.count > 1) {
           // The shared row opens to one row per launch; each keeps its own receipt.
-          await pane
-            .locator(".chat-tool-msg-collapse--lifecycle button.chat-tool-msg-summary")
-            .first()
-            .click();
+          await tools
+            .nth(1)
+            .locator(".chat-tool-row__toggle")
+            .click({ position: { x: 4, y: 4 } });
         }
         const launchResult = pane.locator(".chat-tool-msg-body").first();
         await expect.poll(() => launchResult.textContent()).toContain("accepted");

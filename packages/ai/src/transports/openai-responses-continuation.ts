@@ -13,6 +13,8 @@ import {
 import { getResponsesCompactionInputIdentity } from "./openai-responses-compaction-window.js";
 import type { OpenAIResponsesRequestParams } from "./openai-responses-contracts.js";
 import {
+  hasSameResponsesInputPrefix,
+  jsonValuesEqual,
   projectedJsonEqual,
   projectJsonObject,
   projectJsonValue,
@@ -60,11 +62,6 @@ export type ResponsesContinuationStatus =
   | "history_shorter"
   | "no_previous_response"
   | "request_changed";
-
-function jsonValuesEqual(left: object, right: object): boolean {
-  // Finish the left side before evaluating any right-side hook values.
-  return projectedJsonEqual(projectJsonObject(left), projectJsonObject(right));
-}
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
   // Instructions and tools apply to the current response and remain on every wire request.
@@ -496,23 +493,7 @@ export function resolveResponsesContinuationRequest(
   if (!historyToolRoundUnchanged) {
     return { request, continuationStatus: "history_changed" };
   }
-  // Conversion already owns these immutable wire items. An identical sent prefix
-  // needs no replay-ID remapping; only the new response and delta need ownership checks.
-  const immutable = getAiTransportHost().immutableData;
-  let samePrefix = true;
-  for (let index = 0; index < previousInput.length; index++) {
-    const item = previousInput[index];
-    if (
-      item !== currentInput[index] ||
-      item === null ||
-      typeof item !== "object" ||
-      !(isSanitizedFrozenResponsesInput(item) || immutable?.isDeeplyFrozenPlainData(item))
-    ) {
-      samePrefix = false;
-      break;
-    }
-  }
-  if (!samePrefix) {
+  if (!hasSameResponsesInputPrefix(previousInput, currentInput)) {
     const historyCurrentInput = currentInput.slice(0, previousInput.length);
     for (const [index, previousItem] of previousInput.entries()) {
       const currentItem = historyCurrentInput[index];

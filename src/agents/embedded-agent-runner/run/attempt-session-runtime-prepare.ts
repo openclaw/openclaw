@@ -31,6 +31,7 @@ import {
   declarePromptToolPin,
 } from "../prompt-cache-observability.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
+import { listSessionForkTools } from "../session-fork-request.js";
 import {
   retainEmbeddedSessionPromptState,
   beginSessionSystemPrompt,
@@ -283,9 +284,20 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   let projectedSystemPrompt: string | undefined;
   // Assigned once the session exists; earlier prompt preparations keep their ranking.
   const sessionTools: { refresh?: () => void } = {};
+  // A session fork sends its source's pinned prompt and tool list unchanged.
+  const forkPin = attempt.sessionForkRequest?.pin;
   const prepareSystemPromptUpdate: SystemPromptUpdatePreparation | undefined =
     usesSystemPromptSeries
       ? async (nextPrompt: string, freshlyRendered = false) => {
+          if (forkPin) {
+            return {
+              systemPrompt: forkPin.prefix,
+              update: undefined,
+              restart: false,
+              seriesStatus: "pinned" as const,
+              commit: () => {},
+            };
+          }
           let preparedPrompt = nextPrompt;
           let wasFreshlyRendered = freshlyRendered;
           const previousRanking = usageRanking;
@@ -340,6 +352,9 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // policy change starts a new pin, so configured removals leave the provider request.
   const pinTools = usesSystemPromptSeries
     ? (tools: AnyAgentTool[]) => {
+        if (forkPin) {
+          return listSessionForkTools(forkPin, tools);
+        }
         const pending = sessionPromptState.pendingToolSurface;
         const pinned = prepareSessionToolSurface({
           state: sessionPromptState,

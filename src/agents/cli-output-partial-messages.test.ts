@@ -114,29 +114,26 @@ describe("Claude partial-message output budgets", () => {
     records.push([`${key} wrong type`, delta, { [key]: 7 }, null]);
   }
   it.each(records)(
-    "accounts for %s before applying the ordinary-line budget",
+    "accounts for %s within the character budget",
     (_name, delta, metadata, chars) => {
       const raw = JSON.stringify(frame(delta, metadata)),
         custom = chars === "custom";
       if (!custom) {
         expect(chargeClaudeStreamJsonLine(JSON.parse(raw), raw)).toEqual({
           chars: chars ?? raw.length,
-          partialMessage: chars !== null,
+          countsFrame: false,
         });
       }
       const parser = parserFor(custom);
       parser.push(`${raw}\n`.repeat(20_001));
       parser.finish();
-      if (chars === null || custom) {
-        expect(parser.getErrorText()).toContain("exceeded 20000 lines");
-      } else {
-        expect(parser.getErrorText()).toBeNull();
-        if (!metadata.parent_tool_use_id && delta.type !== "input_json_delta") {
-          expect(parser.getOutput()).not.toBeNull();
-          if (typeof delta.text === "string") {
-            expect(parser.getOutput()?.text).toBe(delta.text.repeat(20_001));
-          }
-        }
+      expect(parser.getErrorText()).toBeNull();
+      if (
+        typeof chars === "number" &&
+        !metadata.parent_tool_use_id &&
+        typeof delta.text === "string"
+      ) {
+        expect(parser.getOutput()?.text).toBe(delta.text.repeat(20_001));
       }
     },
   );

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createHostIoPressureProbe } from "../infra/host-io-pressure.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 import type { GatewayStartupTrace } from "./server-startup-trace.js";
@@ -172,9 +173,8 @@ export function scheduleGatewayHandlerPrewarm(params: {
 export function scheduleGatewayPrewarm(
   params: Parameters<typeof scheduleGatewayHandlerPrewarm>[0],
 ): GatewayIdleTaskHandle[] {
-  const memoryLimit = process.constrainedMemory();
   // Leave scarce cgroup memory to requests; every warmup has a request-time loader.
-  if (memoryLimit > 0 && process.availableMemory() <= memoryLimit * 0.2) {
+  if (isConstrainedProcessLowOnMemory()) {
     return [];
   }
   const hasIoPressure = createHostIoPressureProbe();

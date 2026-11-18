@@ -21,7 +21,7 @@ import { prepareSandboxStateOwnerPath } from "../sandbox/state-owner-path.js";
 import { validateWorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
-import { setWorktreePreparationTemplate } from "./preparation-timing.js";
+import { recordWorktreeNativeClone, setWorktreePreparationTemplate } from "./preparation-timing.js";
 
 type ReadRuntime = {
   pool?: WorkerTaskPool<FsSafeCopyRead, FsSafeCopyReply>;
@@ -134,6 +134,9 @@ async function write(command: FsSafeCopyWrite, options: WorktreeFilesystemOption
   checkReply(reply);
   if (reply.type !== "written") {
     throw new Error("Native worktree operation returned no completion receipt");
+  }
+  if (command.type === "copy") {
+    recordWorktreeNativeClone(reply.cloneWriteBytes);
   }
 }
 

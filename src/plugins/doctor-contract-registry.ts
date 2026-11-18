@@ -78,7 +78,11 @@ export function declaresPluginDoctorContractSurface(
   surface: PluginDoctorContractSurface,
 ): boolean {
   const value = declaration?.[surface];
-  return value === true || (surface === "stateMigrations" && Array.isArray(value));
+  return (
+    value === true ||
+    (surface === "stateMigrations" && Array.isArray(value)) ||
+    (surface === "recoveryCli" && Array.isArray(value) && value.length > 0)
+  );
 }
 
 export type {
@@ -195,6 +199,17 @@ function loadPluginDoctorContractEntry(
     );
     return error instanceof PluginDependencyLinkError ? error : null;
   }
+}
+
+/** The CLI owner supplies the exact enabled artifact withheld for a pending migration. */
+export function loadPluginDoctorRecoveryCliRegistrar(record: PluginManifestRegistryRecord) {
+  if (!declaresPluginDoctorContractSurface(record.doctorContract, "recoveryCli")) {
+    return undefined;
+  }
+  const entry = loadPluginDoctorContractEntry(record, "recoveryCli");
+  return entry && !(entry instanceof PluginDependencyLinkError)
+    ? entry.registerRecoveryCli
+    : undefined;
 }
 
 export function resolvePluginDoctorManifestRecords(

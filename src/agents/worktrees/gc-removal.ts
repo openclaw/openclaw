@@ -170,6 +170,9 @@ export async function removeWorktreeIfLossless(
       claimToken,
       inspectedHead,
     });
+    if (!result.removed) {
+      await abortWorktreeRemoval(env, id, claimToken);
+    }
     return result.removed;
   } catch (error) {
     if (hasSqliteWorkerOutcomeUnknown(error)) {

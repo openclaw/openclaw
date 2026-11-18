@@ -614,6 +614,11 @@ describe("worktree run lease", () => {
     await claim("remover-b");
 
     await abortWorktreeRemoval(env, created.id, "remover-a");
-    await expect(acquire()).rejects.toThrow(`managed worktree was removed: ${created.path}`);
+    await expect(acquire()).rejects.toThrow(
+      `managed worktree removal is in progress: ${created.path}`,
+    );
+    await abortWorktreeRemoval(env, created.id, "remover-b");
+    const lease = await acquire();
+    await lease.release();
   });
 });

@@ -2,7 +2,7 @@ import { setImmediate as yieldToScheduler } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { codeModeGcAttribution, logCodeModeFailure } from "../logging/code-mode-diagnostic.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
-import { raceWithAbortSignal, readToolTurnHandoff } from "./agent-tools.abort.js";
+import { readToolTurnHandoff } from "./agent-tools.abort.js";
 import {
   codeModeReplayIdForToolCall,
   isCodeModeSwarmAvailable,
@@ -12,6 +12,7 @@ import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
   usableResumeBudgetMs,
   waitForCodeModePending,
+  waitForRequiredCodeModePending,
   isCodeModePendingReady,
   type CodeModeCallBudget,
 } from "./code-mode-execution-budget.js";
@@ -20,7 +21,11 @@ import type {
   CodeModeExecutorInlineHost,
 } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
-import { captureCodeModeValue, CodeModeOutputState } from "./code-mode-json.js";
+import {
+  captureCodeModeValue,
+  CodeModeOutputState,
+  EMPTY_CODE_MODE_OUTPUT,
+} from "./code-mode-json.js";
 import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { getPreparedCodeModeCatalog } from "./code-mode-prepared-catalog.js";
@@ -42,6 +47,7 @@ import {
   codeModeAbortedResult,
   createCodeModeRunOwner,
   createPendingBridgeStates,
+  hasAvailableCodeModeRunSlot,
   pendingBridgeStatesForSettlement,
   removeExpiredRuns,
   reserveActiveRunSlot,
@@ -49,7 +55,6 @@ import {
   takeSettledBridgeRequests,
   storeSuspendedRun,
   telemetry,
-  waitForPendingBridgeSettlement,
   type PendingBridgeState,
   type CodeModeBridgeDispatchState,
   type CodeModeRunOwner,
@@ -336,6 +341,7 @@ function createInlineHost(
         params.budget,
         params.approvalWait,
         signal,
+        params.owner.registerAwaiting,
       );
       // The host timer owns exhaustion; do not open a second wait after checkpointing.
       if (!ready && !signal.aborted) {
@@ -405,22 +411,28 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
   // rounds; maxPendingToolCalls stays a per-batch concurrency cap enforced in
   // the worker.
   const abortedResult = () => takeToolTurnHandoffResult(params) ?? codeModeAbortedResult(params);
-  const parkSnapshot = (waiting: Extract<CodeModeWorkerResult, { status: "waiting" }>) =>
-    storeSuspendedRun({
-      owner: params.owner,
-      replayId: params.codeModeReplayId,
-      pending,
-      settlementMode: waiting.settlementMode,
-      continuation: waiting.continuation,
-      parentToolCallId: params.parentToolCallId,
-      ctx: params.ctx,
-      config: params.config,
-      runtime: params.runtime,
-      catalogProjection: params.catalogProjection,
-      namespaceRuntime: params.namespaceRuntime,
-      output,
-      bridgeDispatch: params.bridgeDispatch,
-    });
+  const parkSnapshot = (
+    waiting: Extract<CodeModeWorkerResult, { status: "waiting" }>,
+    remainingRequiredBudgetMs?: number,
+  ) =>
+    storeSuspendedRun(
+      {
+        owner: params.owner,
+        replayId: params.codeModeReplayId,
+        pending,
+        settlementMode: waiting.settlementMode,
+        continuation: waiting.continuation,
+        parentToolCallId: params.parentToolCallId,
+        ctx: params.ctx,
+        config: params.config,
+        runtime: params.runtime,
+        catalogProjection: params.catalogProjection,
+        namespaceRuntime: params.namespaceRuntime,
+        output,
+        bridgeDispatch: params.bridgeDispatch,
+      },
+      remainingRequiredBudgetMs,
+    );
   // Bridge tool calls (search/describe/call/namespace) run through the same
   // policy-checked executor whether the model awaits them one at a time or in a
   // batch, so resolve them inline within the exec deadline and resume the VM
@@ -463,10 +475,23 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
         if (remainingBudgetMs <= 0) {
           throw new Error("interrupted");
         }
-        await raceWithAbortSignal(
-          waitForPendingBridgeSettlement(pending, result.settlementMode, params.signal),
-          params.signal,
+        const yielded = await waitForRequiredCodeModePending(
+          pending,
+          result.settlementMode,
+          params,
+          () => {
+            if (!params.reservedActiveRunSlot && !releaseReservation) {
+              if (!hasAvailableCodeModeRunSlot()) {
+                return false;
+              }
+              releaseReservation = reserveActiveRunSlot();
+            }
+            return true;
+          },
         );
+        if (yielded) {
+          return parkSnapshot(result, remainingBudgetMs);
+        }
         params.budget.deadlineMs = performance.now() + remainingBudgetMs;
         ready = true;
       } else {
@@ -476,6 +501,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
           params.budget,
           params.approvalWait,
           params.signal,
+          params.owner.registerAwaiting,
         );
       }
       const resumeBudgetMs = ready
@@ -592,7 +618,9 @@ export async function runWait(params: {
   resumingRunIds.add(state.runId);
   // One wait call shares a single monotonic deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
-  const budget: CodeModeCallBudget = { deadlineMs: performance.now() + state.config.timeoutMs };
+  const budget: CodeModeCallBudget = {
+    deadlineMs: performance.now() + (state.remainingRequiredBudgetMs ?? state.config.timeoutMs),
+  };
   const { approvalWait } = state.owner;
   const signal = state.owner.bindCall(
     params.ctx.abortSignal && params.signal
@@ -620,12 +648,30 @@ export async function runWait(params: {
   try {
     // Active waits own their slot and call deadline; idle expiry applies only after parking.
     releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
+    // A required cell can be externally parked only for steering. Its original
+    // completion contract (and all dispatched bridge identities) survives wait.
+    if (state.owner.completionRequired) {
+      return await settleCodeModeResult({
+        ...context,
+        pending: state.pending,
+        reservedActiveRunSlot: true,
+        result: {
+          status: "waiting",
+          continuation: state.continuation,
+          settlementMode: state.settlementMode,
+          pendingRequests: [],
+          canceledRequestIds: [],
+          output: EMPTY_CODE_MODE_OUTPUT,
+        },
+      });
+    }
     const ready = await waitForCodeModePending(
       state.pending,
       state.settlementMode,
       budget,
       approvalWait,
       signal,
+      state.owner.registerAwaiting,
     );
     const resumeBudgetMs = ready
       ? usableResumeBudgetMs(budget.deadlineMs, state.config)
