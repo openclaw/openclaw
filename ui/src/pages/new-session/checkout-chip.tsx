@@ -15,6 +15,7 @@ const CheckoutPickerContent = lazy(() => import("./checkout-picker-content.tsx")
 export function CheckoutChip(props: {
   params: NewSessionPlaceControlsOptions;
   folderLabel: string;
+  labelPending?: boolean;
 }) {
   const label = createMemo(() => {
     const place = props.params.place;
@@ -43,11 +44,15 @@ export function CheckoutChip(props: {
     <SessionPicker
       lazy
       kind="checkout"
-      label={`${t("newSession.checkout")}: ${label()}`}
+      label={
+        props.labelPending ? t("newSession.checkout") : `${t("newSession.checkout")}: ${label()}`
+      }
+      labelPending={props.labelPending}
+      disabled={props.labelPending}
       value={label()}
       icon={<Icon name="gitBranch" />}
       triggerAttributes={{
-        title: `${t("newSession.checkout")}: ${label()}`,
+        title: props.labelPending ? undefined : `${t("newSession.checkout")}: ${label()}`,
         "data-worktree": String(props.params.place.worktree),
       }}
       params={props.params}

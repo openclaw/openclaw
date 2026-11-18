@@ -18,6 +18,7 @@ export function SessionPicker(props: {
   label: string;
   value: string;
   labelPending?: boolean;
+  disabled?: boolean;
   icon: JSX.Element;
   summary?: string;
   triggerAttributes?: Pick<JSX.HTMLAttributes<HTMLButtonElement>, "title" | "aria-description"> & {
@@ -61,6 +62,7 @@ export function SessionPicker(props: {
           aria-expanded={props.params.place.browser.popoverOpen(props.kind) ? "true" : "false"}
           aria-busy={props.labelPending ? "true" : undefined}
           disabled={
+            props.disabled ||
             props.params.submitting ||
             props.params.pendingPlacement ||
             (props.kind === "where" && props.params.place.suggestedCloudProfile.pending)

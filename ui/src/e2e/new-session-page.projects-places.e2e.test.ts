@@ -57,11 +57,24 @@ suite.define(() => {
       const editor = page.locator(".new-session-page__message");
       const where = page.locator("#new-session-where-trigger .new-session-page__trigger-label");
       const folder = page.locator("#new-session-project-trigger .new-session-page__trigger-label");
+      const checkout = page.locator("#new-session-checkout-trigger");
+      const placementRows = () =>
+        Promise.all(
+          ["where", "project", "checkout"].map(async (kind) => {
+            const trigger = page.locator(`#new-session-${kind}-trigger`);
+            return (await trigger.count()) ? (await trigger.boundingBox())?.y : undefined;
+          }),
+        );
       await editor.waitFor();
       await page.evaluate(() => document.fonts.ready);
       await captureUiProof(suite, page, `placement-${width}-loading.png`);
       const initial = await editor.boundingBox();
       const pendingLabels = await Promise.all([where.textContent(), folder.textContent()]);
+      const pendingRows = width === 400 ? await placementRows() : undefined;
+      if (pendingRows) {
+        await pollAttribute(checkout, "aria-busy").toBe("true");
+        await pollDisabled(checkout).toBe(true);
+      }
       const shifts = await observeLayoutShifts(page);
 
       await gateway.resolveDeferred("agents.list");
@@ -69,11 +82,18 @@ suite.define(() => {
       await gateway.resolveDeferred("system.info", systemInfo);
       await pollLocatorText(where).toBe("Atlas");
       await pollLocatorText(folder).toBe("openclaw");
+      await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
+        "Current checkout",
+      );
       await captureUiProof(suite, page, `placement-${width}-ready.png`);
       const report = await shifts.evaluate((probe) => probe.read());
       await shifts.evaluate((probe) => probe.stop());
       await shifts.dispose();
       expect(await editor.boundingBox()).toEqual(initial);
+      if (pendingRows) {
+        expect(await placementRows()).toEqual(pendingRows);
+        await pollDisabled(checkout).toBe(false);
+      }
       expect(
         report.entries
           .flatMap((entry) => entry.sources)
@@ -82,6 +102,29 @@ suite.define(() => {
       expect(pendingLabels).toEqual(["", ""]);
     },
   );
+
+  it("removes the loading checkout row for a plain workspace on mobile", async () => {
+    const page = await openPage({ viewport: { width: 400, height: 844 } });
+    const agents = LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"];
+    const gateway = await installMockGateway(page, {
+      heldMethods: ["agents.list"],
+      methodResponses: {
+        "agents.list": {
+          ...agents,
+          agents: agents.agents.map((agent) => ({ ...agent, workspaceGit: false })),
+        },
+      },
+    });
+    await page.goto(suite.server.baseUrl + "new");
+    await gateway.waitForRequest("agents.list");
+    const checkout = page.locator("#new-session-checkout-trigger");
+    await pollDisabled(checkout).toBe(true);
+    await gateway.resolveDeferred("agents.list");
+    await pollLocatorText(
+      page.locator("#new-session-project-trigger .new-session-page__trigger-label"),
+    ).toBe("openclaw");
+    await checkout.waitFor({ state: "detached" });
+  });
 
   it("registers a Git checkout from Browse and selects the refreshed project", async () => {
     const page = await openPage();

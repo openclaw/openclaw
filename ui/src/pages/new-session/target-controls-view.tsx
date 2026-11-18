@@ -164,6 +164,10 @@ export function NewSessionPlaceControls(props: {
       whereState,
       projectState,
       projectLabelPending,
+      // The mobile tray stacks above the composer. Reserve the possible
+      // checkout row while the default workspace's Git status is still unknown.
+      checkoutPending:
+        projectLabelPending && !nativeTerminal && !place.hostedEnvironment && place.canWrite(),
     };
   });
   return (
@@ -230,9 +234,13 @@ export function NewSessionPlaceControls(props: {
                 focus={view().browser.projectFocus}
               />
             )}
-            {props.params.place.checkoutVisible &&
+            {(view().checkoutPending || props.params.place.checkoutVisible) &&
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-              <CheckoutChip params={props.params} folderLabel={view().projectState.label} />
+              <CheckoutChip
+                params={props.params}
+                folderLabel={view().projectState.label}
+                labelPending={view().checkoutPending}
+              />
             ) : undefined}
           </div>
           {props.params.place.deviceFolder ? (
