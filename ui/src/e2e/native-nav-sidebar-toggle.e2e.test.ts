@@ -1,10 +1,12 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
-import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import {
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -374,6 +376,7 @@ suite.define(() => {
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
     await toggle.click();
+    await waitForControlUiRoute(page, { routeId: "activity" });
     const collapse = page
       .locator("openclaw-app-sidebar")
       .getByRole("button", { name: "Collapse sidebar", exact: true });
@@ -387,35 +390,7 @@ suite.define(() => {
     });
 
     await visible(sidebarPanel, false);
-    try {
-      await expectFocused(toggle);
-    } catch (error) {
-      const facts = await toggle
-        .evaluate((element) => {
-          const sidebar = document.querySelector<AppSidebarElement>("openclaw-app-sidebar");
-          const active = document.activeElement;
-          const currentRail = sidebar?.activeNavigationViewElement();
-          const view = (value: string | null | undefined) =>
-            value === "online" || value === "sessions" ? value : "other";
-          return {
-            activeKind: active instanceof HTMLButtonElement ? "button" : "other",
-            activeView: view(active?.getAttribute("data-navigation-view")),
-            activeConnected: active?.isConnected ?? false,
-            expectedFocused: active === element,
-            expectedConnected: element.isConnected,
-            expectedPressed: element.getAttribute("aria-pressed") === "true",
-            sidebarView: view(sidebar?.navigationView),
-            sidebarVisible: sidebar?.navigationVisible ?? false,
-            sidebarCollapsed: sidebar?.navigationCollapsed ?? false,
-            currentRailPresent: Boolean(currentRail),
-            currentRailMatchesExpected: currentRail === element,
-            currentRailFocused: currentRail === active,
-          };
-        })
-        .catch(() => ({ captureFailed: true }));
-      console.info("[sidebar-focus-after-collapse]", JSON.stringify(facts));
-      throw error;
-    }
+    await expectFocused(toggle);
     await count(openTooltip, 0);
 
     await page.keyboard.press("Enter");
