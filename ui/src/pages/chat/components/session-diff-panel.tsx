@@ -3,9 +3,7 @@ import {
   createSignal,
   createStore,
   Errored,
-  isPending,
   latest,
-  Loading,
   onCleanup,
   onSettled,
   Show,
@@ -16,7 +14,6 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import "../../../styles/chat/session-diff-mobile.css";
 import "../../../styles/session-panel-rail.css";
-import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import "../../../components/tooltip.ts";
 import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import {
@@ -134,20 +131,13 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     target: ReturnType<typeof requestTarget>;
     result?: SessionsDiffResult;
   } | null>(null);
-  const request = createMemo(() => ({
-    target: requestTarget(),
-    reload: reload(),
-    result: Promise.withResolvers<{ error: unknown } | null>(),
-    deferred: false,
-  }));
   const [computing, setComputing] = createSignal(false);
-  // The queued plain request can start even while its read parks a commit.
-  const readiness = createMemo(() => {
-    const initialRequest = request();
+  // The checkout can commit immediately; only this panel waits for its diff.
+  const request = createMemo(() => {
+    const initialRequest = { target: requestTarget(), reload: reload(), deferred: false };
     let active = true;
     onCleanup(() => {
       active = false;
-      initialRequest.result.resolve(null);
     });
     queueMicrotask(() => {
       void loadRequest(
@@ -156,8 +146,16 @@ export function SessionDiffPanel(props: SessionDiffProps) {
         initialRequest.reload?.target === initialRequest.target,
       );
     });
-    return initialRequest.result.promise;
+    return initialRequest;
   });
+  const [settledRead, setSettledRead] = createSignal<{
+    request: ReturnType<typeof request>;
+    error: { error: unknown } | null;
+  }>();
+  const readStatus = () => {
+    const settled = settledRead();
+    return settled?.request === request() ? settled.error : undefined;
+  };
   const presentationScope = createMemo(
     () => ({ owner: props.owner, scope: scope(), available: Boolean(props.loader) }),
     {
@@ -168,16 +166,13 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     },
   );
   const awaitingDestination = () => {
-    const destination = latest(presentationScope);
-    // Compare the destination and accepted result in the same transition frame.
-    const current = latest(value);
+    const destination = presentationScope();
+    const current = value();
     return (
       destination.available &&
       (current?.owner !== destination.owner || current.scope !== destination.scope)
     );
   };
-  // Observe the same receipt before first paint without suspending the controls.
-  const readStatus = createMemo(() => request().result.promise, { loadingValue: undefined });
   const syncData = createMemo(() => {
     const current = value();
     const { root, branch } = current?.owner === props.owner ? current.result : {};
@@ -227,19 +222,18 @@ export function SessionDiffPanel(props: SessionDiffProps) {
     if (!isCurrent()) {
       return;
     }
-    const { target, reload: requestedReload, result: completion } = initialRequest;
+    const { target, reload: requestedReload } = initialRequest;
     const { loader, owner, scope: requestedScope } = target;
     if (!loader) {
       setComputing(false);
       setValue(null);
-      completion.resolve(null);
+      setSettledRead({ request: initialRequest, error: null });
       return;
     }
     if (latest(() => props.active) === false || document.visibilityState === "hidden") {
       setComputing(true);
-      // Deferred background reads must not hold the visible sibling's transition.
       initialRequest.deferred = true;
-      completion.resolve(null);
+      setSettledRead({ request: initialRequest, error: null });
       return;
     }
     if (initialRequest.deferred) {
@@ -248,9 +242,8 @@ export function SessionDiffPanel(props: SessionDiffProps) {
       return;
     }
     setComputing(false);
-    let result: SessionsDiffResult | undefined;
     try {
-      result =
+      const result =
         (requestedReload?.target === target ? requestedReload.result : undefined) ??
         (await (refresh ? loader(target.scope, { refresh: true }) : loader(target.scope)));
       if (!isCurrent()) {
@@ -302,13 +295,10 @@ export function SessionDiffPanel(props: SessionDiffProps) {
       if (!currentPaths.has(selectedPath() ?? "")) {
         setSelectedPath(null);
       }
+      setSettledRead({ request: initialRequest, error: null });
     } catch (error) {
       if (isCurrent()) {
-        completion.resolve({ error });
-      }
-    } finally {
-      if (isCurrent() && !result?.computing) {
-        completion.resolve(null);
+        setSettledRead({ request: initialRequest, error: { error } });
       }
     }
   }
@@ -585,10 +575,8 @@ export function SessionDiffPanel(props: SessionDiffProps) {
   }
   const viewBindings: SessionDiffViewBindings = {
     loading: () =>
-      isPending(readStatus) ||
-      (latest(readStatus) === undefined
-        ? Boolean(props.loader)
-        : latest(readStatus) === null && awaitingDestination()),
+      Boolean(props.loader) &&
+      (readStatus() === undefined || (readStatus() === null && awaitingDestination())),
     props,
     desktop,
     mobile,
@@ -664,42 +652,33 @@ export function SessionDiffPanel(props: SessionDiffProps) {
         />
       </Show>
       <Panel>
-        <Loading
-          on={latest(presentationScope)}
-          fallback={
-            <Show when={props.loader}>
-              <PanelLoadingSkeleton variant="review" label={t("chat.sessionDiff.loading")} />
-            </Show>
-          }
-        >
-          <Show when={isPending(readiness) ? null : latest(readiness)} fallback={<Result />}>
-            {(failed) => (
-              <Errored
-                fallback={(error, reset) => (
-                  <InlineAlert tone="danger">
-                    {formatUiError(error())}
-                    <Show when={mobile()}>
-                      <button
-                        class="btn btn--ghost"
-                        type="button"
-                        disabled={!props.loader}
-                        onClick={() => {
-                          loadDiff();
-                          reset();
-                        }}
-                      >
-                        <Icon name="refresh" />
-                        {t("common.retry")}
-                      </button>
-                    </Show>
-                  </InlineAlert>
-                )}
-              >
-                {raiseReadFailure(failed().error)}
-              </Errored>
-            )}
-          </Show>
-        </Loading>
+        <Show when={readStatus()} fallback={<Result />}>
+          {(failed) => (
+            <Errored
+              fallback={(error, reset) => (
+                <InlineAlert tone="danger">
+                  {formatUiError(error())}
+                  <Show when={mobile()}>
+                    <button
+                      class="btn btn--ghost"
+                      type="button"
+                      disabled={!props.loader}
+                      onClick={() => {
+                        loadDiff();
+                        reset();
+                      }}
+                    >
+                      <Icon name="refresh" />
+                      {t("common.retry")}
+                    </button>
+                  </Show>
+                </InlineAlert>
+              )}
+            >
+              {raiseReadFailure(failed().error)}
+            </Errored>
+          )}
+        </Show>
       </Panel>
       <Show when={menu()} keyed>
         {(current) => (
