@@ -225,7 +225,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       ["execution denied", { toolExecutionAllow: [] }, "", false],
     ];
     let foregroundDescription: string | undefined;
-    let restrictedListResult: unknown;
+    let restrictedSkillResult: unknown;
     for (const [label, policy, expectedPrompt, available] of cases) {
       resetEmbeddedAttemptHarness();
       enableSkills();
@@ -235,10 +235,14 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       await run({
         sessionKey: `agent:main:${label.replace(" ", "-")}`,
         sessionPrompt: async () => {
-          if (label === "skill read denied") {
-            restrictedListResult = await sessionTool("exec").execute("denied-skills", {
+          if (label === "read denied") {
+            restrictedSkillResult = await sessionTool("exec").execute("denied-skills", {
               title: "Check installed skill access",
-              code: "return await skills.list();",
+              code: `return {
+                list: await skills.list(),
+                search: await skills.search("demo"),
+                read: await skills.read("demo"),
+              };`,
             });
           }
         },
@@ -262,10 +266,21 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         expect(description).toBe(foregroundDescription);
       }
     }
-    expect(restrictedListResult).toMatchObject({
+    const searchRefusal = {
+      gated: true,
+      message: formatToolExecutionGatedMessage("skills_search", ["skill_workshop"]),
+    };
+    expect(restrictedSkillResult).toMatchObject({
       details: {
-        status: "failed",
-        error: expect.stringContaining(formatToolExecutionGatedMessage("skills_search", ["read"])),
+        status: "completed",
+        value: {
+          list: searchRefusal,
+          search: searchRefusal,
+          read: {
+            gated: true,
+            message: formatToolExecutionGatedMessage("skills_read", ["skill_workshop"]),
+          },
+        },
       },
     });
   });

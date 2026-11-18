@@ -450,43 +450,40 @@ export async function runBridgeRequest(params: {
         value = await handlers[params.request.method](params);
         break;
       }
-      case "skillsList": {
-        if (
-          !catalogProjection.bindings.some(
-            (entry) => entry.source === "openclaw" && entry.name === "skills_search",
-          )
-        ) {
-          throw new ToolInputError("skills_search is not available in this run.");
-        }
-        if (
-          params.ctx.toolExecutionAllow &&
-          !isToolExecutionAllowed(params.ctx.toolExecutionAllow, "skills_search")
-        ) {
-          throw new ToolInputError(
-            formatToolExecutionGatedMessage("skills_search", params.ctx.toolExecutionAllow),
-          );
-        }
-        const offset = values[0] ?? 0;
-        if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
-          throw new ToolInputError("skills.list offset must be a non-negative integer.");
-        }
-        value = (params.ctx.codeModeSkills ?? [])
-          .slice(offset, offset + 20)
-          .map(({ name, description, location }) => ({
-            name,
-            description: truncateUtf16Safe(description, 512),
-            location,
-          }));
-        break;
-      }
+      case "skillsList":
       case "skillsSearch":
       case "skillsRead": {
         const toolName = params.request.method === "skillsRead" ? "skills_read" : "skills_search";
+        // A restricted run can retain the foreground surface without an installed-skill binding.
+        if (
+          params.ctx.toolExecutionAllow &&
+          !isToolExecutionAllowed(params.ctx.toolExecutionAllow, toolName)
+        ) {
+          value = {
+            gated: true,
+            message: formatToolExecutionGatedMessage(toolName, params.ctx.toolExecutionAllow),
+          };
+          break;
+        }
         const binding = catalogProjection.bindings.find(
           (entry) => entry.source === "openclaw" && entry.name === toolName,
         );
         if (!binding) {
           throw new ToolInputError(`${toolName} is not available in this run.`);
+        }
+        if (params.request.method === "skillsList") {
+          const offset = values[0] ?? 0;
+          if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+            throw new ToolInputError("skills.list offset must be a non-negative integer.");
+          }
+          value = (params.ctx.codeModeSkills ?? [])
+            .slice(offset, offset + 20)
+            .map(({ name, description, location }) => ({
+              name,
+              description: truncateUtf16Safe(description, 512),
+              location,
+            }));
+          break;
         }
         const called = await params.runtime.callExactId(
           binding.id,
