@@ -174,7 +174,6 @@ const enCron = {
       description: "Description",
       agentId: "Agent",
       defaultAgent: "Default",
-      defaultAgentNamed: "Default ({name})",
       agentNotFound: "Not found",
       namePlaceholder: "Morning brief",
       descriptionPlaceholder: "Optional context for this task",

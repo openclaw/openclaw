@@ -80,10 +80,25 @@ suite.define(() => {
       await expect
         .poll(() => trigger.getAttribute("aria-label"))
         .toBe("Agent: retired-bot, Not found");
-      await chooseAgent(page, "Default (Clawd)");
+      await chooseAgent(page, "Default");
       await page.locator('[data-test-id="cron-submit"]').click();
       expect((await gateway.waitForRequest("cron.update")).params).toMatchObject({
         id: retired.id,
+        patch: { agentId: null },
+      });
+    });
+  });
+
+  it("lets an editor clear an explicit agent when the roster has one selectable agent", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const pinned = { ...retired, id: "pinned-owner", agentId: "main" };
+      const gateway = await installGateway(page, roster.slice(0, 1), [pinned]);
+      await page.goto(`${suite.server.baseUrl}cron?job=${pinned.id}`);
+      await page.locator('[data-test-id="cron-edit"]').click();
+      await chooseAgent(page, "Default");
+      await page.locator('[data-test-id="cron-submit"]').click();
+      expect((await gateway.waitForRequest("cron.update")).params).toMatchObject({
+        id: pinned.id,
         patch: { agentId: null },
       });
     });

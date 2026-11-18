@@ -219,18 +219,12 @@ function AgentRow(props: CronProps & { disabled: boolean }) {
     const agents = listSelectableAgents(list?.agents ?? []);
     const byId = new Map(agents.map((agent) => [normalizeAgentId(agent.id), agent]));
     const value = stored() ? normalizeAgentId(stored()) : "";
-    const defaultAgent = list ? byId.get(normalizeAgentId(list.defaultId)) : undefined;
     const unlisted = Boolean(list && value && !byId.has(value));
     // System agents are not offered, but a job they own still names them.
     const system = list?.agents.find((agent) => normalizeAgentId(agent.id) === value);
     const options: AgentSelectOption[] = [
-      {
-        value: "",
-        label: defaultAgent
-          ? t("cron.form.defaultAgentNamed", { name: normalizeAgentLabel(defaultAgent) })
-          : t("cron.form.defaultAgent"),
-        agent: defaultAgent,
-      },
+      // Cron can inherit an owner from the session key or Gateway configuration.
+      { value: "", label: t("cron.form.defaultAgent") },
       ...[...byId].map(([id, agent]) => ({ value: id, label: normalizeAgentLabel(agent), agent })),
       ...(unlisted
         ? [
@@ -245,9 +239,13 @@ function AgentRow(props: CronProps & { disabled: boolean }) {
           ]
         : []),
     ];
-    // With one agent there is nothing to pick, unless the stored id needs attention. Most
-    // Gateways have one agent, so the row waits for the roster rather than flash away.
-    return { options, value, visible: Boolean(list) && (agents.length !== 1 || unlisted) };
+    // An existing override can be cleared even if there is only one selectable agent.
+    const hasOverride = Boolean(props.editingJob?.agentId?.trim());
+    return {
+      options,
+      value,
+      visible: Boolean(list) && (agents.length !== 1 || unlisted || hasOverride),
+    };
   });
   return (
     <Show when={choice().visible}>
