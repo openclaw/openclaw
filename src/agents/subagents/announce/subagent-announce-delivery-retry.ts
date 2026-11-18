@@ -168,6 +168,7 @@ export function classifyAnnounceDeliveryError(
                 candidate instanceof GatewayProtocolRequestError &&
                 (candidate.retryable ||
                   (facts.requesterSettle === true &&
+                    facts.replaySafe === true &&
                     candidate.gatewayCode === ErrorCodes.UNAVAILABLE)),
             ) ||
             (facts.requesterSettle === true && isSandboxProvisioningError(error)) ||
