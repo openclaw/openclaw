@@ -19,8 +19,6 @@ import {
   sessionChangeScopeAffectsStoredRows,
   sessionChanges,
 } from "../sessions/session-row-changes.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
@@ -45,6 +43,7 @@ import {
   type InboxState,
   type StoredMention,
 } from "./mention-inbox-projection.js";
+import { createMentionInboxQueue } from "./mention-inbox-queue.js";
 import {
   createMentionInputRecorder,
   prepareCommittedMentionInput,
@@ -67,7 +66,6 @@ const log = createSubsystemLogger("gateway/mentions");
 export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   const scheduler = params.scheduler.scope();
   const context = captureOpenClawStateWorkerContext();
-  const acceptedWork = new AsyncWorkScope();
   let state = createMentionProjection({ head: { revision: -1, nextSequence: 0 }, sources: [] });
   const { readTarget, prepareTarget, prepareTargets, invalidateTargets } = createMentionTargetCache(
     {
@@ -80,7 +78,11 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     readSessionTarget: (sessionKey, agentId) =>
       readTarget(mentionTargetKey(sessionKey, agentId))?.target ?? null,
   });
-  let tail: Promise<void> = Promise.resolve();
+  const work = createMentionInboxQueue({
+    assertActive,
+    assertCurrent: () => context.admission.assertCurrent(),
+  });
+  const { enqueue } = work;
   let closing = false;
   let needsSynchronization = true;
   let sessionRevision = 0;
@@ -112,26 +114,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       throw new Error("Mention Inbox is closed");
     }
     context.admission.assertCurrent();
-  }
-
-  async function enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    assertActive();
-    // Scheduler cancellation closes admission; accepted work retains its own settlement scope.
-    // Post-commit work must not borrow the completed input writer's custody.
-    const pending = runInDetachedAsyncContext(() =>
-      acceptedWork.track(() =>
-        tail.then(() => {
-          context.admission.assertCurrent();
-          return operation();
-        }),
-      ),
-    );
-    // Failed work must not poison later FIFO operations.
-    tail = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await pending;
   }
 
   async function synchronize(): Promise<boolean> {
@@ -524,8 +506,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   async function dispose(): Promise<void> {
     closing = true;
-    await tail;
-    await acceptedWork.drain();
+    await work.drain();
     scheduler.beginClose();
     stopProfiles();
     stopSessions();
@@ -655,18 +636,22 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     dismiss: () => err(deprecatedMentionInboxError("dismiss")),
     async listAsync(client, publish) {
       try {
-        await enqueue(async () => {
-          const changed = await maintain();
-          if (changed) {
-            await refreshConnectedViews();
-          } else {
+        await work.read(
+          async () => {
+            const changed = await maintain();
+            if (changed) {
+              await refreshConnectedViews();
+            }
+            scheduleExpiry();
+            return changed;
+          },
+          async () => {
             const viewer = policy.identify(client, params.getRuntimeConfig());
             if (viewer.ok) {
               await prepareTargets(state.itemsByProfile.get(viewer.value.profile.profileId) ?? []);
             }
-          }
-          scheduleExpiry();
-        });
+          },
+        );
       } catch {
         return publish(mentionInboxUnavailable(log));
       }
