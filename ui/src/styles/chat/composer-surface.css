@@ -1143,9 +1143,10 @@
 }
 
 .chat-send-btn--voice-live .agent-chat__voice-activity {
-  /* Talk's timeline grows with the composer (its size container) up to 160px;
-     phone-width composers keep the compact 56px so the message keeps its room. */
-  width: clamp(56px, 100cqi - 470px, 160px);
+  /* Keep the original seven-bar footprint and fade only the timeline edges. */
+  width: 39px;
+  min-width: 0;
+  --voice-meter-fade: 8px;
   transition: opacity var(--duration-fast) ease;
 }
 
@@ -1305,7 +1306,7 @@
     height: 44px;
   }
 
-  /* Keep the live voice pill wide enough for its 7-bar meter; the generic
+  /* Keep the live voice pill wide enough for its meter; the generic
      44px square above would crush it at phone widths. */
   .chat-send-btn.chat-send-btn--voice-live {
     width: auto;

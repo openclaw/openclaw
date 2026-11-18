@@ -631,8 +631,8 @@
   mask-image: linear-gradient(
     90deg,
     rgb(0 0 0 / 0.15),
-    black 40px,
-    black calc(100% - 40px),
+    black var(--voice-meter-fade, 40px),
+    black calc(100% - var(--voice-meter-fade, 40px)),
     rgb(0 0 0 / 0.15)
   );
 }
