@@ -44,6 +44,25 @@ export async function admitLocalWorkspaceSourcePaths(params: {
   return JSON.stringify([...new Set(decodeLocalWorkspaceGitPaths(listed))]);
 }
 
+/** Read guest ignore files with the host's index/config, never guest Git metadata. */
+export async function readLocalWorkspaceGitExclusions(
+  root: string,
+  projection: string,
+  retainedPaths: ReadonlySet<string>,
+) {
+  const listed = await requireGitBuffer(root, [
+    `--work-tree=${projection}`,
+    "ls-files",
+    "--full-name",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+  ]);
+  return { paths: new Set(decodeLocalWorkspaceGitPaths(listed)), retainedPaths };
+}
+
 /** Ignore changes are source edits, not authority to enroll canonical-only bytes. */
 export async function selectLocalWorkspaceCanonicalPaths(params: {
   root: string;

@@ -24,6 +24,7 @@ import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprint
 import {
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
+  readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
 import {
   createLocalWorkspaceManifestTree,
@@ -518,9 +519,7 @@ export async function executeLocalWorkspaceManifestRead(
     if (node.type === "directory") {
       preserveDirectories.add(entryPath);
     }
-    if (action.target === "projection") {
-      canonicalPaths.add(entryPath);
-    }
+    canonicalPaths.add(entryPath);
   }
   const fingerprintTarget = action.target === "canonical" ? "projection" : "canonical";
   const previousFingerprints =
@@ -541,6 +540,9 @@ export async function executeLocalWorkspaceManifestRead(
     root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
     baseCommit: row.base_commit,
     includePaths: action.target === "projection" ? canonicalPaths : undefined,
+    gitIgnore: action.target === "canonical"
+      ? await readLocalWorkspaceGitExclusions(action.canonicalRoot, row.projection_path, canonicalPaths)
+      : undefined,
     preserveDirectories,
     buildCacheInputs: new Set(retained),
     reuseFile: fingerprintScan.reuseFile,
