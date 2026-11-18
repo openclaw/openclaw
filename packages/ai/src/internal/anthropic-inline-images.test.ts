@@ -30,6 +30,7 @@ it("bounds normalized images across all messages in each request", async () => {
       params: { messages: expect.any(Array) },
     });
   }
+  expect(estimate).toHaveBeenCalledTimes(8);
   await expect(build(Array.from({ length: 5 }, () => message))).rejects.toThrow(
     "64 MB aggregate decoded safety limit",
   );

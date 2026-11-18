@@ -287,12 +287,6 @@ export function Advanced(
               }
             />
           ) : undefined}
-          <ToggleRow
-            {...props}
-            field="clearAgent"
-            label={t("cron.form.clearAgentOverride")}
-            help={t("cron.form.clearAgentHelp")}
-          />
           {props.isAgentTurn ? (
             <>
               <CronInput

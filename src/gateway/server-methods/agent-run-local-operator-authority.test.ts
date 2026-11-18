@@ -175,6 +175,25 @@ it.each([
   expect(isDirectGatewayChatUserTurn({ ...params, isDirectExternalUser: false })).toBe(false);
 });
 
+it.each([
+  ["channel origin", { hasExplicitOrigin: true }],
+  ["channel ingress", { isDirectExternalUser: false }],
+  ["non-WebChat client", { client: createClient() }],
+  ["supervised child", { isUncontrolledDashboardChild: false }],
+  ["internal input", { isSystemGenerated: true }],
+  ["resumed input", { isReconnectResume: true }],
+  ["incognito", { isIncognito: true }],
+] as const)("keeps %s outside the dashboard handoff exception", (_label, overrides) => {
+  const params = createChatParams({
+    spawnedBy: "agent:main:parent",
+    isUncontrolledDashboardChild: true,
+    client: createClient({ authenticatedControlUi: true }),
+    ...overrides,
+  });
+  expect(isDirectGatewayChatUserTurn(params)).toBe(false);
+  expect(resolveGatewayChatCronCreatorAuthorityAdmission(params)).toBeUndefined();
+});
+
 it.each([true, undefined] as const)(
   "retains host-attested Control UI admin authority with locality %s",
   (isLocalClient) => {

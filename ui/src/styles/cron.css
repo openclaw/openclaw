@@ -332,17 +332,19 @@
   gap: 2px;
   min-width: 0;
   margin-top: calc(-1 * var(--cron-prompt-radius));
-  padding: calc(var(--cron-prompt-radius) + 6px) 10px 8px 14px;
+  /* The clock lines up with the sheet's text; the row sits centered in the visible tray. */
+  padding: calc(var(--cron-prompt-radius) + 7px) 10px 7px 17px;
   border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
   corner-shape: var(--chat-composer-corner-shape);
   background: color-mix(in srgb, var(--text) 4.5%, var(--bg-content, var(--bg)));
 }
 
+/* Clock, schedule and run controls each center on the first 30px line. */
 .cron-prompt__controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 2px;
   min-width: 0;
   min-height: 30px;
 }
@@ -350,17 +352,29 @@
 .cron-prompt__clock {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin-inline-end: 4px;
+  align-items: center;
+  height: 30px;
+  margin-inline-end: 6px;
   color: var(--muted);
 }
 
 .cron-prompt__clock svg {
-  width: 100%;
-  height: 100%;
+  width: 14px;
+  height: 14px;
   stroke: currentColor;
   fill: none;
+}
+
+/* The schedule reads as one sentence: every word sits 18px from the next (8px padding,
+   2px gap, 8px padding). It fills the line and wraps within it, so the run controls keep
+   the end of the first line. */
+.cron-editor-schedule {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding-block: 1px;
 }
 
 .cron-prompt__facts {
@@ -380,6 +394,7 @@
   gap: 2px;
   margin-inline-start: auto;
   min-width: 0;
+  min-height: 30px;
 }
 
 .cron-prompt__saved-text {
@@ -514,6 +529,48 @@
   min-width: 0;
 }
 
+.cron-tray-pair {
+  gap: 2px;
+}
+
+/* The interval reads as a word: one or two digits keep one width, longer ones grow. */
+.cron-tray-pair > .cron-tray-input {
+  width: calc(4ch + 16px);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Schedule values hug their text, so the sentence keeps even word spacing. */
+@supports (field-sizing: content) {
+  .cron-editor-schedule .cron-tray-input {
+    width: auto;
+    max-width: 100%;
+    field-sizing: content;
+  }
+
+  .cron-tray-pair > .cron-tray-input {
+    min-width: calc(2ch + 16px);
+  }
+}
+
+.cron-tray-note__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cron-tray-note__text svg {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+}
+
 .cron-tray-picker > openclaw-select-picker {
   min-width: 0;
 }
@@ -528,6 +585,7 @@
 }
 
 .cron-prompt__tray .cron-tray-segmented {
+  padding: 0;
   border: 0;
   background: none;
   box-shadow: none;
@@ -535,6 +593,7 @@
 
 .cron-prompt__tray .cron-tray-segmented > .settings-segmented__btn {
   height: 28px;
+  padding: 0 8px;
   border-radius: calc(var(--radius-md) * 0.8);
   color: var(--muted-strong);
   font-size: 13px;
@@ -546,9 +605,9 @@
   color: var(--text-strong);
 }
 
-.cron-prompt__tray > .cron-error,
-.cron-prompt__tray > .cron-schedule-summary {
-  padding: 0 0 0 22px;
+/* Errors start where the sentence's words do: past the clock, its spacing and a part's padding. */
+.cron-editor-tray-errors > .cron-error {
+  padding-inline-start: 30px;
 }
 
 .cron-schedule-note {
@@ -658,6 +717,13 @@
 
 .cron-control--wide .cron-help {
   text-align: left;
+}
+
+/* Touch layouts enlarge the settings pickers' text; the Agent row's trigger matches "Runs in". */
+@media (pointer: coarse), (max-width: 640px) {
+  .cron-editor-placement .agent-select__trigger {
+    font-size: max(16px, var(--control-ui-touch-input-size, 1em));
+  }
 }
 
 /* Read-only script/command payload: a highlighted code block sized like the
@@ -1332,6 +1398,7 @@
 .cron-sentence__part:disabled {
   cursor: default;
   background: none;
+  opacity: 0.5;
 }
 
 .cron-sentence__text {
@@ -1442,7 +1509,6 @@
   border: 0;
 }
 
-.cron-editor-schedule,
 .cron-editor-tray-errors,
 .cron-sentence__row {
   display: contents;
@@ -1481,7 +1547,6 @@
   }
 
   .cron-prompt--editing .cron-prompt__clock,
-  .cron-schedule-summary--expression,
   .cron-editor-active .cron-detail-sub {
     display: none;
   }
@@ -1514,7 +1579,10 @@
 
   .cron-editor-schedule {
     display: flex;
+    flex: none;
     flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
     gap: 0;
     order: 2;
     margin-top: var(--space-4);
@@ -1535,8 +1603,23 @@
     display: none;
   }
 
-  .cron-prompt--editing .cron-schedule-summary {
-    order: 4;
+  .cron-editor-tray-errors > .cron-error {
+    padding-inline: 17px;
+  }
+
+  .cron-editor-schedule .cron-tray-pair > .cron-tray-input {
+    min-width: calc(4ch + 16px);
+  }
+
+  .cron-tray-note__text {
+    margin-inline-start: auto;
+    padding: 0;
+    font-size: inherit;
+    text-align: end;
+  }
+
+  .cron-tray-note__text svg {
+    display: none;
   }
 
   .cron-editor-schedule .cron-sentence__row,
@@ -1580,7 +1663,8 @@
 
   .cron-editor-schedule .cron-tray-input,
   .cron-editor-placement .settings-input,
-  .cron-editor-placement .picker-select__trigger {
+  .cron-editor-placement .picker-select__trigger,
+  .cron-editor-placement .agent-select__trigger {
     margin-inline-start: auto;
     border-radius: var(--radius-md);
     background: var(--cron-phone-control);
@@ -1611,7 +1695,8 @@
     text-align: end;
   }
 
-  .cron-editor-placement .picker-select__trigger {
+  .cron-editor-placement .picker-select__trigger,
+  .cron-editor-placement .agent-select__trigger {
     white-space: nowrap;
   }
 
