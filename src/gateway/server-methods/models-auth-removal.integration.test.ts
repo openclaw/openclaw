@@ -296,6 +296,7 @@ describe("models.authLogout with a concurrent registered config set", () => {
                 .find((provider) => provider.provider === "fixture")
                 ?.profiles.map((profile) => profile.profileId)
                 .toSorted(),
+              JSON.stringify(status),
             ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
             await expect(
               logoutProvider({ profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"] }),
