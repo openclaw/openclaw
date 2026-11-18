@@ -71,6 +71,13 @@ export function resolveCronRecoveryClassification(
     : classification;
 }
 
+/** Shared closed notification detail for returned and thrown watchdog failures. */
+export function resolveCronRecoveryFailureDetail(
+  classification?: string,
+): CronFailureNotificationDetail | undefined {
+  return classification?.trim() ? { kind: "agent-stall", classification } : undefined;
+}
+
 export async function finalizeCronRun(params: {
   runId: string;
   prepared: PreparedCronRunContext;
@@ -253,14 +260,7 @@ export async function finalizeCronRun(params: {
       error,
       // Project the closed recovery fact into the operator-facing notification
       // contract so the chat alert shows the cause instead of a generic line.
-      ...(recoveryClassification && recoveryClassification.trim().length > 0
-        ? {
-            failureNotificationDetail: {
-              kind: "agent-stall",
-              classification: recoveryClassification,
-            } satisfies CronFailureNotificationDetail,
-          }
-        : {}),
+      failureNotificationDetail: resolveCronRecoveryFailureDetail(recoveryClassification),
       replyDisposition,
       diagnostics: mergeCronRunDiagnostics(
         prepared.preflightDiagnostics,
