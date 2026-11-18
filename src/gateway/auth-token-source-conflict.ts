@@ -71,6 +71,8 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     title,
     detail,
     remediation,
-    diagnostic: `${title}: ${remediation}`,
+    // Prose, not a `key: value` assignment: `gateway.auth.token: Remove …` reads as
+    // a secret value to status redactors, which mask the word "Remove" as `***`.
+    diagnostic: `${title}. ${remediation}`,
   };
 }

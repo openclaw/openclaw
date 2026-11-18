@@ -26,8 +26,12 @@ export function buildStatusSecretDiagnostics(
   owners: NonNullable<StatusSummary["degradedSecretOwners"]>,
   diagnostics: string[],
 ): string[] {
-  const safeText = (value: string) =>
-    truncateUtf16Safe(redactStatusSecrets(sanitizeTerminalText(redactStatusSecrets(value))), 160);
+  const redactedText = (value: string) =>
+    redactStatusSecrets(sanitizeTerminalText(redactStatusSecrets(value)));
+  // Owner ids and paths are arbitrary user data and stay bounded. Command-local
+  // diagnostics are in-repo prose whose remediation matters, so a byte cut in the
+  // middle of the sentence only hides the fix the operator is being told to make.
+  const safeText = (value: string) => truncateUtf16Safe(redactedText(value), 160);
   const ownerPaths = new Set(owners.flatMap((owner) => owner.paths));
   const ownerDiagnostics = new Map(
     owners.map((owner) => [
@@ -41,7 +45,7 @@ export function buildStatusSecretDiagnostics(
       diagnostic.split(":", 1)[0];
     return ownerPath === undefined || !ownerPaths.has(ownerPath);
   });
-  return [...ownerDiagnostics.values(), ...new Set(localDiagnostics.map(safeText))];
+  return [...ownerDiagnostics.values(), ...new Set(localDiagnostics.map(redactedText))];
 }
 
 export function countActiveStatusAgents(params: {
