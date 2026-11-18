@@ -1,5 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { Value } from "typebox/value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+  type MockInstance,
+} from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -16,6 +26,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { createDiagnosticToolExecutionLiveness } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { drainSystemEvents, peekSystemEvents } from "../../infra/system-events.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -103,6 +114,174 @@ describe("sessions_send dispatch admission", () => {
     registerWatch.mockRestore();
     resetGatewayWorkAdmission();
     await state.cleanup();
+  });
+
+  it.each(["admission", "reply", "materialization"] as const)(
+    "bounds a stalled %s",
+    async (phase) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const liveness = createDiagnosticToolExecutionLiveness();
+      const admitting = createDeferredCore();
+      const admit = createDeferredCore();
+      const attempted = createDeferredCore();
+      const waiting = createDeferredCore();
+      const reply = createDeferredCore();
+      let started = false;
+      let result: unknown;
+      const callGateway: Mock = vi.fn(
+        async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+          switch (request.method) {
+            case "sessions.resolve":
+              return { key: targetSessionKey, agentId: "main" };
+            case "sessions.list":
+              return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
+            case "agent":
+              admitting.resolve();
+              await admit.promise;
+              try {
+                request.assertDispatchCurrent?.();
+                request.sessionMutationCommitGuard?.();
+                started = true;
+              } finally {
+                attempted.resolve();
+              }
+              return { runId, status: "accepted" };
+            case "agent.wait":
+              if (phase === "materialization") {
+                return {
+                  status: "ok",
+                  terminalReply: { disposition: "visible", text: "Task complete…" },
+                };
+              }
+              waiting.resolve();
+              await reply.promise;
+              return { status: "ok", terminalReply: { disposition: "empty" } };
+            case "chat.history":
+              waiting.resolve();
+              await reply.promise;
+              return { messages: [] };
+            default:
+              throw new Error("Unexpected Gateway method: " + request.method);
+          }
+        },
+      );
+      const timeoutSeconds = phase === "admission" ? 30 : 1;
+      const deadline = Date.now() + 30_000 + timeoutSeconds * 1000;
+      const tool = createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        config,
+        callGateway,
+        idempotencyKey: runId,
+      });
+      const pending = liveness
+        .run(() =>
+          tool.execute("stalled-send", {
+            sessionKey: targetSessionKey,
+            message: "Continue the task",
+            mode: "followup",
+            timeoutSeconds,
+          }),
+        )
+        .then((value) => {
+          result = value.details;
+          return value;
+        });
+      try {
+        await awaitGateBeforeSettlement(
+          admitting.promise,
+          pending.then(() => {}),
+          "Send never entered admission",
+        );
+        expect.soft(liveness.view.deadlineAtMs).toBe(deadline);
+        if (phase === "admission") {
+          await vi.advanceTimersByTimeAsync(30_000);
+          expect.soft(result).toMatchObject({
+            status: "error",
+            runId,
+            sessionKey: targetSessionKey,
+            error: expect.stringMatching(/timed out.*inspect the target before retrying/i),
+          });
+          expect.soft(Value.Check(tool.outputSchema!, result)).toBe(true);
+          admit.resolve();
+          await attempted.promise;
+          expect.soft(started).toBe(false);
+          expect.soft(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+        } else {
+          await vi.advanceTimersByTimeAsync(29_000);
+          admit.resolve();
+          await awaitGateBeforeSettlement(
+            waiting.promise,
+            pending.then(() => {}),
+            "Send never began waiting for a reply",
+          );
+          await vi.advanceTimersByTimeAsync(999);
+          expect(result).toBeUndefined();
+          expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          expect
+            .soft(result)
+            .toMatchObject({ status: "accepted", runId, delivery: { status: "pending" } });
+          expect.soft(runSessionsSendA2AFlow).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              runId,
+              targetSessionKey,
+              reply:
+                phase === "materialization"
+                  ? expect.objectContaining({ replyText: "Task complete…" })
+                  : undefined,
+            }),
+          );
+        }
+        expect.soft(liveness.view.deadlineAtMs).toBeUndefined();
+      } finally {
+        admit.resolve();
+        reply.resolve();
+        vi.useRealTimers();
+        await pending;
+        liveness.close();
+      }
+    },
+  );
+
+  it("preserves a receipt confirmed just as the caller is revoked", async () => {
+    const controller = new AbortController();
+    const callGateway: Mock = vi.fn(
+      async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+        switch (request.method) {
+          case "sessions.resolve":
+            return { key: targetSessionKey, agentId: "main" };
+          case "sessions.list":
+            return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
+          case "agent":
+            request.assertDispatchCurrent?.();
+            request.sessionMutationCommitGuard?.();
+            controller.abort(new Error("Caller revoked after acceptance"));
+            return { runId, status: "accepted" };
+          default:
+            throw new Error("Unexpected Gateway method: " + request.method);
+        }
+      },
+    );
+    const result = await createSessionsSendTool({
+      agentSessionKey: requesterSessionKey,
+      config,
+      callGateway,
+      idempotencyKey: runId,
+      signal: controller.signal,
+    }).execute("accept-before-revocation", {
+      sessionKey: targetSessionKey,
+      message: "Continue the task",
+      mode: "followup",
+      timeoutSeconds: 0,
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId,
+      sessionKey: targetSessionKey,
+    });
+    expect(callGateway.mock.calls.filter(([request]) => request.method === "agent")).toHaveLength(
+      1,
+    );
   });
 
   it("applies peer preferences to new notifications without revoking accepted events", async () => {

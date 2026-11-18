@@ -294,8 +294,10 @@ Retained tasks created without store provenance keep ordinary default messaging
 and their existing explicit resume and cancellation controls. Newly registered
 tasks record their store and can use automatic continuation.
 
-`timeoutSeconds` limits the sending tool's wait, not the receiver's execution
-budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.
+`timeoutSeconds` limits the reply wait after acceptance, not the receiver's execution
+budget. The default reply wait is 30 seconds; `timeoutSeconds: 0` skips it. Target
+lookup, preparation, and admission have a separate 30-second ceiling. An admission
+timeout can occur after the target accepted the input: inspect the target before retrying.
 When that wait expires, eligible pending reply delivery continues observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
 inter-session replies use the same completion observation.

@@ -20,8 +20,13 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
   requesterTurnRunId: string;
+  assertCurrent?: () => void;
 }): Promise<void> {
-  const assertCurrent = captureGatewayToolCallerAssertion();
+  const assertCallerCurrent = captureGatewayToolCallerAssertion();
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    assertCallerCurrent?.();
+  };
   const caller = getGatewayToolCallerIdentity();
   const instance = caller?.operationalRunInstance;
   if (

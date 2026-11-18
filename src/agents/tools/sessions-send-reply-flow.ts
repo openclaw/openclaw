@@ -1,6 +1,7 @@
 import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -269,7 +270,8 @@ export async function finishSessionsSendReply(params: {
   requesterAgentId: string;
   promptedAt: number;
   timeoutSeconds: number;
-  timeoutMs: number;
+  deadlineAtMs: number;
+  signal: AbortSignal;
   targetIsSubagent: boolean;
   isIsolatedCronRequester: boolean;
 }) {
@@ -284,7 +286,8 @@ export async function finishSessionsSendReply(params: {
     requesterAgentId,
     promptedAt,
     timeoutSeconds,
-    timeoutMs,
+    deadlineAtMs,
+    signal,
     targetIsSubagent,
     isIsolatedCronRequester,
   } = params;
@@ -338,30 +341,41 @@ export async function finishSessionsSendReply(params: {
       delivery: delayedDelivery,
       ...watchField,
     });
-  const startReplyFlow = (notifyRequesterOnWaitFailure: boolean) =>
+  const startReplyFlow = (
+    notifyRequesterOnWaitFailure: boolean,
+    reply?: Parameters<typeof startSessionsSendReplyFlow>[0]["reply"],
+  ) =>
     startSessionsSendReplyFlow({
       ...replyContext,
       runId,
       completion,
+      reply,
       skip: registryCompletion || delayedDelivery.status === "skipped",
       targetSessionKey: acceptedTargetSessionKey,
       displayKey: start.a2aSessionKey ?? replyContext.displayKey,
       notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
     });
+  const remainingBudget = () => (signal.aborted ? 0 : Math.max(0, deadlineAtMs - Date.now()));
+  const timeoutMs = remainingBudget();
   const result =
-    timeoutSeconds === 0
+    timeoutSeconds === 0 || timeoutMs === 0
       ? undefined
       : completion
         ? await completion.take(timeoutMs)
-        : await waitForAgentRunReply({ runId, timeoutMs, callGateway: replyContext.callGateway });
+        : await raceWithTimeout(
+            () => waitForAgentRunReply({ runId, timeoutMs, callGateway: replyContext.callGateway }),
+            timeoutMs,
+            () => undefined,
+            { signal, onAbort: () => undefined },
+          );
   if (!result || result.yielded === true || result.status === "pending") {
     await startReplyFlow(true);
     return accepted();
   }
-  completion?.close();
 
   if (result.status === "timeout") {
     if (result.pendingError === true && result.error?.trim()) {
+      completion?.close();
       await startReplyFlow(targetIsSubagent);
       return jsonResult({
         runId,
@@ -374,12 +388,38 @@ export async function finishSessionsSendReply(params: {
       });
     }
     if (!isTerminalAgentWaitTimeout(result)) {
+      completion?.close();
       await startReplyFlow(true);
       return accepted();
     }
   }
+  const materializeReply = async () => {
+    const materializationMs = remainingBudget();
+    return materializationMs === 0
+      ? undefined
+      : await raceWithTimeout(
+          () =>
+            resolveSessionsSendReply(result, {
+              runId,
+              sessionKey: acceptedTargetSessionKey,
+              agentId: replyContext.targetAgentId,
+              callGateway: replyContext.callGateway,
+            }),
+          materializationMs,
+          () => undefined,
+          { signal, onAbort: () => undefined },
+        );
+  };
+  const reply = result.status === "ok" ? await materializeReply() : undefined;
+  if (signal.aborted || (result.status === "ok" && !reply)) {
+    // A native terminal result may already have been taken; hand it to the
+    // same detached owner rather than closing custody or observing it again.
+    await startReplyFlow(true, reply ? { ...result, ...reply } : result);
+    return accepted();
+  }
   if (
     registryCompletion &&
+    !signal.aborted &&
     params.requesterTurnRunId &&
     (result.status === "ok" ||
       isTerminalAgentWaitTimeout(result) ||
@@ -395,9 +435,11 @@ export async function finishSessionsSendReply(params: {
       requesterSessionKey: replyContext.requesterSessionKey,
       requesterAgentId,
       requesterTurnRunId: params.requesterTurnRunId,
+      assertCurrent: () => signal.throwIfAborted(),
     });
   }
   if (result.status === "timeout" || result.status === "error") {
+    completion?.close();
     return jsonResult({
       runId,
       status: result.status,
@@ -407,12 +449,7 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  const reply = await resolveSessionsSendReply(result, {
-    runId,
-    sessionKey: acceptedTargetSessionKey,
-    agentId: replyContext.targetAgentId,
-    callGateway: replyContext.callGateway,
-  });
+  completion?.close();
   return sendReplyResult(
     { runId, sessionKey: replyContext.displayKey, ...watchField },
     { ...result, ...reply },

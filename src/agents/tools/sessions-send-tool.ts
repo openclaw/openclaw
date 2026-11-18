@@ -1,7 +1,4 @@
-import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
@@ -38,7 +35,6 @@ import {
 } from "../tool-description-presets.js";
 import { ToolInputError } from "../tool-input-error.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
-import { wrapGatewayPersonalToolExecution } from "./gateway-caller-context.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import {
   resolveSessionToolTargetAgentId,
@@ -59,6 +55,7 @@ import {
   PLACED_SESSIONS_SEND_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
+import { withSessionsSendDeadline } from "./sessions-send-deadline.js";
 import { dispatchSessionsSendFollowup } from "./sessions-send-followup.js";
 import { sendFailure } from "./sessions-send-helpers.js";
 import {
@@ -77,43 +74,35 @@ import {
   notifySessionsSendSession,
   resolveConfiguredAgentMainSessionKey,
 } from "./sessions-send-tool.delivery.js";
-import {
-  readSessionsSendLabelAgent,
-  readSessionsSendMessage,
-  readSessionsSendMode,
-  readSessionsSendTimeout,
-} from "./sessions-send-tool.input.js";
+import { readSessionsSendLabelAgent } from "./sessions-send-tool.input.js";
 import { SessionsSendToolSchema, SessionsSendOutputSchema } from "./sessions-send-tool.schema.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
-export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgentTool {
-  const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
-  const withRequesterAuthority = bindRequesterYieldCronAuthority(opts?.requesterTurnRunId);
+export function createSessionsSendTool(options?: SessionsSendToolOptions): AnyAgentTool {
+  const requesterOrigin = normalizeDeliveryContext(options?.requesterOrigin);
+  const withRequesterAuthority = bindRequesterYieldCronAuthority(options?.requesterTurnRunId);
   const tool: AnyAgentTool = {
     label: "Session Send",
     name: "sessions_send",
     displaySummary: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
-    description: opts?.workerPlacement
+    description: options?.workerPlacement
       ? PLACED_SESSIONS_SEND_DESCRIPTION
       : describeSessionsSendTool({
           allowThreadTargets:
-            (opts?.config ?? getRuntimeConfig()).tools?.sessions?.allowThreadTargets === true,
+            (options?.config ?? getRuntimeConfig()).tools?.sessions?.allowThreadTargets === true,
         }),
-    parameters: opts?.workerPlacement ? PlacedSessionsSendSchema : SessionsSendToolSchema,
+    parameters: options?.workerPlacement ? PlacedSessionsSendSchema : SessionsSendToolSchema,
     outputSchema: SessionsSendOutputSchema,
-    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
-      const params = isRecord(args) ? args : {};
+    execute: withSessionsSendDeadline(options, async (opts, params, input) => {
+      const { message, mode, timeoutSeconds, timeoutMs, onAdmissionComplete } = input;
       const promptedAt = Date.now();
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const sendGatewayCall = opts?.callGateway ?? callSessionsSendGateway;
-      const message = readSessionsSendMessage(params);
-      const mode = readSessionsSendMode(params);
       const resumeCaller =
         mode === undefined || mode === "resume" ? captureSessionsSendResumeCaller() : undefined;
       if (mode === "resume" && !resumeCaller) {
         return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
       }
-      const timeoutSeconds = readSessionsSendTimeout(params, mode);
       const {
         cfg,
         mainKey,
@@ -379,9 +368,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           entry: requesterSessionEntry,
         }),
       );
-      const timeoutMs = finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 0;
       const replyTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
-      const runId = opts?.idempotencyKey ?? crypto.randomUUID();
+      const runId = opts.idempotencyKey;
       const sameSession = requesterSessionKey === resolvedKey && targetAgentId === requesterAgentId;
       // Fire-and-forget self-send remains a channel-delivery path. A synchronous
       // self-send would wait behind its own active session lane until timeout.
@@ -682,7 +670,9 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
                 targetSession: targetSessionEntry,
                 withRequesterAuthority,
                 watch: params.watch === true,
+                signal: opts.signal,
               });
+            onAdmissionComplete();
             return await finishSessionsSendReply({
               start,
               completion,
@@ -695,7 +685,8 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
               requesterAgentId,
               promptedAt,
               timeoutSeconds,
-              timeoutMs,
+              deadlineAtMs: Date.now() + timeoutMs,
+              signal: opts.signal,
               targetIsSubagent,
               isIsolatedCronRequester,
             });
@@ -707,6 +698,6 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     }),
   };
   const execute = tool.execute;
-  tool.execute = (...args) => withSessionsSendRequesterSource(opts, () => execute(...args));
+  tool.execute = (...args) => withSessionsSendRequesterSource(options, () => execute(...args));
   return tool;
 }

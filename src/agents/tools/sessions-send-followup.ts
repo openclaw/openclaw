@@ -84,6 +84,7 @@ export async function dispatchSessionsSendFollowup(
     ownChild: boolean;
     nativeChild: boolean;
     watch: boolean;
+    signal?: AbortSignal;
     requesterSessionKey: string;
     requesterAgentId: string;
     requesterTurnRunId?: string;
@@ -297,6 +298,7 @@ export async function dispatchSessionsSendFollowup(
   if (
     start.ok &&
     options.watch &&
+    !options.signal?.aborted &&
     !params.expectedSessionId &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
@@ -308,7 +310,18 @@ export async function dispatchSessionsSendFollowup(
         targetSessionKey,
         targetAgentId: params.sendParams.agentId,
       },
-      { prepareCurrent: prepareGatewayToolCallerAssertion },
+      {
+        prepareCurrent: async () => {
+          const prepared = await prepareGatewayToolCallerAssertion();
+          return {
+            ...prepared,
+            assertCurrent: () => {
+              options.signal?.throwIfAborted();
+              prepared.assertCurrent?.();
+            },
+          };
+        },
+      },
     );
   }
   return {
