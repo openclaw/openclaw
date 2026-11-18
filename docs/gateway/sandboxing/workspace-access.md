@@ -55,6 +55,14 @@ project and admitted host checkouts retain their existing diff behavior.
 
 ## Managed project workspaces
 
+File tools serialize operations on the same physical file. Stopping a run cancels
+its queued file operations and signals active sandbox filesystem commands to stop.
+An operation waiting behind another file operation fails after three minutes with
+a busy-file error and the earlier operation's running time. Retry later or work on
+another file; if the file stays busy, ask the operator to restart the Gateway.
+The earlier operation retains its file reservation until it actually finishes,
+so a canceled or timed-out waiter cannot cause overlapping writes.
+
 A sandboxed session with a session-owned managed worktree uses a private Git
 checkout on Docker and Podman. A registered project may be outside the agent's
 configured workspace when it is selected with `worktree: true`. This authorizes
@@ -73,6 +81,12 @@ package lifecycle scripts still run.
 
 Visible child sessions keep their managed worktree as the sandbox workspace on
 later turns, including sessions created before an update.
+
+Sandbox tool calls and checkpoints for the same managed worktree take turns in
+arrival order within the Gateway. Waiting for workspace custody is limited to
+60 seconds; a timeout reports the workspace and asks you to retry after the
+current checkpoint or reconciliation finishes. An operation that already owns
+the workspace must release it before requesting another checkpoint.
 
 Rewind and branch switching keep that managed workspace and its accepted edits.
 OpenClaw settles pending sandbox edits and retires the old runtime before changing
@@ -198,6 +212,11 @@ disposable build/cache roots are excluded before hashing and result-size account
 their local bytes remain available to the sandbox. Source changes cannot remove a
 runtime-owned lock subtree by replacing its parent directory.
 
+Use `.openclaw/tmp/` for disposable output files that workspace file tools need
+to read or write later. Keep `TMPDIR`, `TMP`, and `TEMP` at their inherited system
+paths: native tools such as Chromium need short temporary paths for Unix sockets,
+and a deeply nested checkout can exceed that limit.
+
 pnpm can select `.openclaw/.pnpm-store/` when installing beneath a protected
 `.openclaw` mount and its home store cannot hard-link into that project.
 Managed binary installers use `.openclaw/tools/` for re-downloadable tools such as Crabbox.
@@ -265,7 +284,9 @@ file contents from the selected repository before offline merge and snapshot
 operations, including the ancestor versions needed to merge diverged branches.
 This also works when a partial clone already knows the base commit. A
 content-fetch failure leaves saved work available for retry. Refresh preserves
-saved guest files, ignored guest data, and empty directories. The operation returns the exact
+saved guest files, ignored guest data, and empty directories. Preparation reads the
+existing Git object store and reuses the accepted inventory for unchanged source
+files instead of creating two complete temporary checkouts. The operation returns the exact
 `baseCommit`, changed paths, and conflicting paths; it does not publish or change
 the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
 session, or pull-request selector.
@@ -309,21 +330,51 @@ fail with an explanation rather than falling back to host execution.
 
 The managed worktree remains the source of truth for files, snapshots, and
 publication. OpenClaw pauses the exact execution and browser runtimes that mount
-this checkout while capturing or applying changes. An existing session first
+this checkout when capture or application requires a stable live tree. An existing session first
 checks both workspaces against their accepted baseline without pausing. If both
 are unchanged and no recovery is pending, its runtimes keep running. Changed or
 interrupted checks return to paused reconciliation; file edits are never applied
 from the live check. Checkpoints after commands and file mutations use the same
 check for the guest workspace: commands that leave accepted files unchanged do
-not pause the sandbox. Changed checkpoints still pause through capture and
-publication, including writes from background processes and termination handlers.
+not pause the sandbox. Changed command checkpoints prepare file hashes and Git
+blobs while the guest runs, then pause to check the current file inventory and
+identities. Files changed again or too recent for safe reuse are hashed during
+that pause. The guest resumes once an immutable Git result owns the final capture,
+before canonical publication.
+They do not create disposable filesystem snapshots, avoiding snapshot creation
+and recursive retirement after each changed command. Pending recovery retains
+its consistency pause. A container pause does not flush application buffers;
+capture does not promise application-level transactions across background writes.
+Command completion still waits for
+canonical acceptance, so a read after a completed command sees its saved changes.
+Acceptance preserves each workspace's file fingerprints for unchanged paths when
+the shared baseline advances. The next check still walks file metadata, but only
+changed or unverifiable identities need content hashing. Imported files acquire
+fresh fingerprints on that check; source filesystem identities are never copied.
+Later background writes remain in the private checkout for the next checkpoint.
+When reconciliation uses a snapshot, the workspace lease transfers it after
+acceptance and runtime resume
+to a unique retired path for asynchronous cleanup. The next command can run while
+cleanup continues. Before another snapshot, capture admission waits for cleanup
+and retries any interrupted removal, keeping the cleanup backlog bounded.
+Snapshot creation may wait for dirty data to flush. Captures requiring a stable
+live tree have no fixed maximum pause duration.
 Concurrent preparations of the same workspace and session
 generation share queued reconciliation. Once filesystem observation begins,
 later preparations require a fresh check so intervening edits remain visible.
 Completed preparation results are not cached. Each caller retains its own
-cancellation and authority checks. OpenClaw records pending results and
-rollback journals in SQLite, and resumes
-only after settlement. New shell calls and command preparation wait for an active
+cancellation and authority checks. Reuse waits for reconciliation before returning
+the workspace, so the next command sees imported host edits and unresolved
+conflicts cannot be bypassed. The `managed worktree preparation` log records
+exclusive `reuse.*` entries in `phaseDurationsMs` and `reuseDominantPhase`, covering
+both unchanged probes, capture preparation, and reconciliation phases. Custody
+waits remain in the existing `workspaceWait` field. These timings include work
+performed while guests run;
+they are not pause durations. OpenClaw records pending results and
+rollback journals in SQLite. Imports into the private checkout keep runtimes paused
+through settlement. A conflict-free retry whose file edits are already applied
+accepts the remaining receipt without writing another recovery journal. Conflicted
+results retain their durable acceptance marker. New shell calls and command preparation wait for an active
 checkpoint to release the workspace before proceeding; background commands do not
 hold that preparation lease for their entire lifetime. Files and assistant-media
 reads select the current backing without acquiring checkpoint custody or pausing
@@ -335,10 +386,76 @@ the canonical file, and import the saved change into the private checkout under 
 same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
+GitHub publication resumes the guest after its changes settle into the canonical
+worktree. Git staging and snapshot verification then read that accepted host view
+under the same reconciliation lease. Background guest edits made during staging
+remain in the private checkout for the next checkpoint; they cannot mix into the
+snapshot being published. Source admission and Git safety checks remain unchanged.
+Ordinary reconciliation uses btrfs capture for guest exports from private
+checkouts provisioned as subvolumes. A snapshot that omits nested subvolumes is
+discarded and captured again under pause, preserving their contents. Once an
+immutable result owns the source bytes, staged-file materialization, Git patch
+preparation, and temporary-file cleanup run with the guest resumed. Imports pause
+again before confirming the target and applying changes; edits made during
+preparation cause a visible conflict and remain saved. Base refreshes also prepare
+canonical merge trees, temporary checkouts, and patches with the guest running.
+The target is checked again under pause before application; concurrent guest
+writes are preserved as conflicts. Successful two-sided transfers resume before
+temporary-tree and accepted-result cleanup. Recovery of interrupted guest mutations
+still keeps the guest paused until both workspaces accept the transfer.
+
+GitHub PR preparation and base refresh download commit history and missing objects
+with the guest running. After those downloads finish, OpenClaw checks the guest's
+current Git state and reacquires the pause for the workspace transfer. If another
+operation changed the host HEAD or pending integration in between, preparation
+fails with a retry message and preserves the workspace. Immutable object downloads
+do not hold the guest frozen; capture, file application, and pending-transfer
+recovery still require consistency pauses.
+
 Each successful container pause records a `sandbox/quiescence` info log with a
 bounded reason (`checkpoint`, `preparation`, `publication`, `retirement`, `restore`,
 or `reconcile`) and that reason's process-lifetime counter. Already-paused runtimes
 and stopped containers do not increment it; counters restart with the Gateway.
+Release records `Local workspace unpause` with the same `reason`, elapsed
+`durationMs`, `dominantPhase`, and `dominantPhaseMs`. The bounded JSON field
+`phaseDurationsMs` lists every cumulative phase lasting at least one second;
+shorter phases are omitted. Fixed `operation.*` sub-phases distinguish Git-state
+verification, pristine source checks, canonical snapshot preparation, and commit
+bookkeeping during base refresh. These use the same exclusive timing field and
+include awaited worker and Git work, not just Gateway CPU time.
+Publication also reports reconciliation phases (`scan`, `staging`, `materialization`,
+`preflight`, `patch`, `apply`, `acceptance`, and `cleanup`). Its fixed `operation.*`
+sub-phases separate source admission, Git policy preparation, snapshot safety checks,
+index copying, Git staging, admitted-path pruning, attribute verification, and
+temporary-index cleanup. The diagnostics timeline observes these same structural
+phases without file paths or content. Timings preserve the existing consistency pause;
+they do not establish that a long operation waited for a fixed timeout.
+Initial workspace-lease acquisition precedes the pause.
+Resume inspection, generation validation, and unpause
+are separated as `resumeInspect`, `resumeAuthority`, and `unpause`. Engine-command
+times include broker admission, transport, and command completion, not just engine
+execution. All runtime targets are inspected before the first runtime is paused;
+each runtime's live authority is still checked immediately before pausing.
+`durationScope=observed` means recovery found an already-paused
+runtime and cannot measure the earlier owner's interval; `durationScope=owner`
+covers this owner's pause. `outcome` distinguishes a resumed, already-running, or
+removed runtime. Failed resumes retain custody and do not log a successful release.
+Workspace mutations above 1 MiB use the existing compressed worker transport when
+it reduces their size; persisted checkpoint and rollback-journal bytes do not change.
+The `agents/worktrees` warning `Local workspace oversized mutation` samples at most
+once per minute per process. It reports serialized and wire bytes, top-level field
+bytes, fingerprint blob count and bytes, and journal entry/directory counts and tree
+reference bytes. Field string sizes are UTF-8 bytes; fingerprint bytes count the
+base64 strings. Journal samples include 16-hex SHA-256 prefixes of the exact pack
+and JSON bytes. Correlation fields contain hashed workspace and durable plan IDs,
+an attempt UUID, 12-hex base/target Git commit IDs, target side, and lifecycle reason.
+Each reconciliation apply attempt logs one start and finish with that correlation;
+outcomes are `applied`, `replayed` (no file mutations), `conflict`, or `aborted`
+(the attempt threw; this does not prove rollback or absence of committed effects).
+The plan stays the same across retries and both sides of a base refresh; the attempt
+changes. A missing finish indicates an interrupted process. These logs contain no
+paths, raw workspace identifiers, or document contents. Prepared
+mutations report their already-compressed wire size and available publication fields.
 Captured workspace authority is checked again after
 filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
@@ -368,8 +485,12 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
-Later conversation turns load retained images from that same staged copy.
-Missing copies and paths outside the active sandbox remain unavailable.
+Image facts that retain a staged path load that copy on later turns; missing
+copies and paths outside the active sandbox remain unavailable. Admitted native
+attachments recorded only as managed `media://inbound/` references load their
+originals from the Gateway media store, including after a restart or workspace
+template reuse. They do not require a guessed sandbox filename. This does not
+grant file tools or image paths written in prompt text access to the host store.
 If a previously included image becomes unavailable, replay keeps a resend notice
 and stops retrying that image for the retained session decision. Resend the image
 as a new attachment to make another attempt; other attachments remain available.
@@ -400,7 +521,8 @@ Generated skill copies carry their own Git ignore rule, so ordinary Git discover
 omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
-Unchanged skill snapshots reuse their mirrored copies. When supporting files
+Unchanged skill snapshots reuse their mirrored copies. Docker and Podman retain
+this reuse after large bursts of different sandbox preparations. When supporting files
 change, the Gateway reconciles regular skill trees incrementally: changed files
 are replaced, removed files are pruned, and unchanged copies are retained.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy

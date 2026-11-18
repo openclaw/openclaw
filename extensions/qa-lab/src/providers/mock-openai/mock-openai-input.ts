@@ -35,6 +35,12 @@ function isStreamingToolProgressContinuationText(text: string) {
   );
 }
 
+function isSystemPromptUpdateText(text: string) {
+  return text.startsWith(
+    "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n",
+  );
+}
+
 export function extractLatestScenarioFamilyPrompt(
   texts: string[],
   familyPattern = QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE,
@@ -99,7 +105,14 @@ export function splitMockConversationContext(text: string) {
     /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(
       text,
     );
-  return { current: projection?.[2] ?? text, history: projection?.[1] ?? "" };
+  const runtimeContext =
+    /OpenClaw runtime context for this turn:\n[\s\S]*\n\nCurrent user request:\n([\s\S]*)$/.exec(
+      text,
+    );
+  return {
+    current: projection?.[2] ?? runtimeContext?.[1] ?? text,
+    history: projection?.[1] ?? "",
+  };
 }
 
 function extractCurrentTaskEvent(text: string): string | undefined {
@@ -210,7 +223,7 @@ export function resolveMockSubagentTurn(input: ResponsesInputItem[]):
             ?.toLowerCase(),
       };
     }
-    if (isInternalRuntimeContextCarrierText(current)) {
+    if (isInternalRuntimeContextCarrierText(current) || isSystemPromptUpdateText(current)) {
       continue;
     }
     if (item.role !== "user") {
@@ -269,16 +282,18 @@ export function extractMockSubagentContext(input: ResponsesInputItem[]) {
 }
 
 function isUserTurn(item: ResponsesInputItem) {
-  // Empty user messages still fence old tool output; runtime carriers do not.
+  // Empty user messages still fence old tool output; appended context updates do not.
+  const text = extractInputText(item.content);
   return (
     item.role === "user" &&
     (typeof item.content === "string" || Array.isArray(item.content)) &&
-    !isInternalRuntimeContextCarrierText(extractInputText(item.content))
+    !isInternalRuntimeContextCarrierText(text) &&
+    !isSystemPromptUpdateText(text)
   );
 }
 
 function isContinuationUserText(text: string) {
-  const trimmed = text.trim();
+  const trimmed = splitMockConversationContext(text).current.trim();
   if (!trimmed) {
     return false;
   }
@@ -346,6 +361,19 @@ function findCurrentToolOutput(input: ResponsesInputItem[]): ResponsesInputItem 
 
 export function hasToolOutput(input: ResponsesInputItem[]) {
   return findCurrentToolOutput(input) !== undefined;
+}
+
+/** Tool results since the latest authored user turn: how far a scripted multi-step run has got. */
+export function countCurrentToolOutputs(input: ResponsesInputItem[]) {
+  let count = 0;
+  for (const item of input.toReversed()) {
+    if (isResponsesToolCallOutput(item)) {
+      count += 1;
+    } else if (isUserTurn(item) && !isContinuationUserText(extractInputText(item.content))) {
+      break;
+    }
+  }
+  return count;
 }
 
 export function extractToolOutput(input: ResponsesInputItem[]) {

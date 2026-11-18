@@ -11,6 +11,7 @@ import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { createGatewayRequestContext } from "./server-request-context.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
 type TestCronState = GatewayServerLiveState["cronState"];
@@ -36,7 +37,12 @@ export function makeContextParams(
     runtime: {
       scheduler: createTestGatewayScheduler(),
       getSessionRowProjection: () => undefined,
-      getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
+      getReadiness: createPreparedReadinessFixture(() => ({
+        ready: true,
+        coreReady: true,
+        failing: [],
+        uptimeMs: 0,
+      })),
       forgetConnectionAncestors: vi.fn(),
       connectionWork: { track: trackAsyncWork },
       deps: {} as never,

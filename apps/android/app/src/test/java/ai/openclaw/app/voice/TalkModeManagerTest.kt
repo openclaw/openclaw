@@ -290,6 +290,41 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun microphoneMuteDuringPushToTalkReleaseKeepsTheFinalTranscript() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val beginning = proof.scope.async { proof.manager.beginPushToTalk(allowNewCapture = true) }
+        awaitTalkWork(proof) { beginning.isCompleted }
+        val capture = beginning.await()
+        val ptt = currentRecognizer()
+        ptt.triggerOnPartialResults(recognitionResults("book"))
+        val ending = proof.scope.async { proof.manager.endPushToTalk() }
+        awaitTalkWork(proof) { !proof.manager.isListening.value }
+
+        proof.manager.setMicrophoneMuted(true)
+        ptt.triggerOnResults(recognitionResults("book tomorrow"))
+        awaitTalkWork(proof) { ending.isCompleted }
+
+        val ended = ending.await()
+        assertEquals(capture.captureId, ended.captureId)
+        assertEquals("queued", ended.status)
+        assertEquals("book tomorrow", ended.transcript)
+        awaitTalkWork(proof) { sends.isNotEmpty() }
+        assertEquals(1, sends.size)
+        assertEquals(
+          "book tomorrow",
+          sends
+            .single()
+            .getValue("message")
+            .jsonPrimitive.content,
+        )
+        assertTrue(proof.manager.isEnabled.value)
+        assertTrue(proof.manager.isMicrophoneMuted.value)
+        assertFalse(proof.manager.isListening.value)
+      }
+    }
+
+  @Test
   fun stopAllCaptureClearsPttWhenContinuousModeIsDisabled() {
     val manager = createManager()
     val finishingJob = Job()

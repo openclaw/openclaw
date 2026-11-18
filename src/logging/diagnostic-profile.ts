@@ -40,6 +40,7 @@ type FailureReason =
   | "cancelled"
   | "invalid-profile"
   | "profile-too-large"
+  | "insufficient-disk-space"
   | "capture-failed"
   | "cleanup-failed";
 

@@ -240,6 +240,8 @@ it.each([
   "native callback",
   "startup receipt",
   "child error",
+  "child exit",
+  "disconnect",
   "pipe setup",
   "pipe receipt callback",
   "pipe receipt throw",
@@ -290,6 +292,10 @@ it.each([
       });
     } else if (failure === "child error") {
       worker.emit("error", new Error("synthetic child IPC error"));
+    } else if (failure === "child exit") {
+      fixture.exit(null, "SIGKILL");
+    } else if (failure === "disconnect") {
+      fixture.disconnect();
     } else if (failure === "pipe setup") {
       worker.emit("message", { type: "pipe", id: child.requestId, fd: 1 });
     } else if (failure === "orphan launch refusal") {
@@ -308,12 +314,18 @@ it.each([
       });
     }
 
+    if (failure === "disconnect") {
+      expect(host.nativeResourceAdmissionClosed).toBe(true);
+      expect(() => fixture.capture()).toThrow();
+    }
     // Proxy rejection and failed write delivery are not native settlement receipts.
     await failed.promise;
     await child.waitForClose();
     expect(fixture.disconnect).toHaveBeenCalledOnce();
     expect(fixture.kill).not.toHaveBeenCalled();
-    expect(native.groupCleanup).not.toHaveBeenCalled();
+    expect(native.groupCleanup).toHaveBeenCalledTimes(
+      failure === "child exit" && process.platform !== "win32" ? 1 : 0,
+    );
     expect(native.childCleanup).not.toHaveBeenCalled();
     expect(launchSettled).not.toHaveBeenCalled();
     expect(() => lease.release()).toThrow("Native resource must close before release");

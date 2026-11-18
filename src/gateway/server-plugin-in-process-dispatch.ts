@@ -1,6 +1,9 @@
 import type { AgentWaitParams } from "../../packages/gateway-protocol/src/index.js";
 import { readQuestionDispatchCapability } from "../agents/harness/host-private-capabilities.js";
-import { captureGatewayToolCallerAssertion } from "../agents/tools/gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -144,7 +147,7 @@ export async function prepareInProcessAgentExecution(input: PrepareInProcessAgen
   };
 }
 
-async function withInProcessGatewayDispatch<T>(
+export async function withInProcessGatewayDispatch<T>(
   method: string,
   params: unknown,
   options: DispatchGatewayMethodInProcessOptions | undefined,
@@ -189,7 +192,9 @@ async function withInProcessGatewayDispatch<T>(
     return method === "agent"
       ? await runWithoutOwnedSessionTranscriptWrites(() =>
           runOutsideOperatorToolGatewayAuthority(() =>
-            runOutsideGuardedFetchRequestAuthority(() => run(resolved)),
+            runOutsideGuardedFetchRequestAuthority(() =>
+              withoutGatewayToolCallerIdentity(() => run(resolved)),
+            ),
           ),
         )
       : await run(resolved);
@@ -461,6 +466,7 @@ export async function dispatchGatewayMethodInProcess<T>(
             privateCompletion: options?.privateCompletion,
             replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,
+            subagentCompletions: options?.subagentCompletions,
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,
             onAccepted: options?.onAccepted,

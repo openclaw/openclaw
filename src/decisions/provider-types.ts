@@ -17,7 +17,7 @@ export interface DecisionProviderV1 {
       /** Explicit model selected by the host's decisionModel role. */
       readonly model: string;
       readonly agentId?: string;
-      /** Host-owned request admission. Check synchronously immediately before external I/O.
+      /** Host-owned request admission. Check synchronously when each external request starts.
        * False closes this evaluation; a thrown authority assertion remains terminal.
        * Omission preserves explicit evaluations and older hosts. */
       readonly isAdmissible?: () => boolean;

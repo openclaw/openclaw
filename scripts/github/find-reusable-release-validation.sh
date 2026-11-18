@@ -36,12 +36,12 @@ VALIDATOR="${OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:-${REPO_ROOT}/scripts/release
 usage() {
   cat >&2 <<'EOF'
 Usage: find-reusable-release-validation.sh --target-sha <sha> --workflow-sha <sha> \
-  --workflow-ref <main|release-ci/sha12-timestamp> \
+  --workflow-ref <release-ci/sha12-timestamp> \
   [--trusted-workflow-ref <main|release-publish/sha12-run>] \
   [--trusted-workflow-full-ref <refs/heads/main|refs/tags/release-publish/sha12-run>] \
   [--trusted-workflow-sha <sha>] \
   [--verifier-source-sha <sha>] \
-  [--qualification-admission-json <json> --qualification-inputs-json <json>] \
+  --qualification-admission-json <json> --qualification-inputs-json <json> \
   --release-profile <beta|stable|full> --inputs-json <json> \
   [--run-release-soak <true|false>] [--repo <owner/repo>] [--repo-dir <path>] \
   [--workflow <file>] [--max-candidates <n>] [--github-output <file>]
@@ -50,8 +50,8 @@ Scans recent successful Full Release Validation runs for an exact-target
 validation manifest whose recorded lane-selection inputs match --inputs-json
 and whose normalized strict-v4 phased evidence is accepted by the current trusted-main
 verifier identified by --verifier-source-sha (defaults to --workflow-sha).
-Candidate-owned qualification requires independently admitted exact code-parent C=Q/P and inputs.
-The historical producer workflow SHA
+Candidate qualification requires independently admitted exact C/Q/P and inputs.
+The admitted producer workflow SHA
 remains independent. A descendant target may reuse product validation only
 when GitHub proves the entire delta is the selected release changelog. Writes reuse=true plus
 evidence_* outputs when found; reuse=false otherwise.
@@ -176,29 +176,20 @@ fi
 if [[ "$TRUSTED_WORKFLOW_SHA" != "$VERIFIER_SOURCE_SHA" ]]; then
   no_reuse "trusted workflow SHA does not match verifier source SHA"
 fi
-qualification_args=()
-candidate_owned=false
-if [[ -n "$QUALIFICATION_ADMISSION_JSON" || -n "$QUALIFICATION_INPUTS_JSON" ]]; then
-  if ! jq -e 'type == "object"' <<< "$QUALIFICATION_ADMISSION_JSON" >/dev/null 2>&1 ||
-    ! jq -e 'type == "object"' <<< "$QUALIFICATION_INPUTS_JSON" >/dev/null 2>&1; then
-    no_reuse "candidate qualification reuse requires complete admission inputs"
-  fi
-  qualification_args=(--qualification-reuse-json "$(jq -nc \
-    --arg candidateSha "$VERIFIER_WORKFLOW_SHA" --arg qualificationSha "$VERIFIER_WORKFLOW_SHA" \
-    --arg workflowRef "$WORKFLOW_REF" \
-    --argjson descriptor "$QUALIFICATION_ADMISSION_JSON" \
-    --argjson inputs "$QUALIFICATION_INPUTS_JSON" \
-    '{candidateSha: $candidateSha, qualificationSha: $qualificationSha, workflowRef: $workflowRef, descriptor: $descriptor, inputs: $inputs}')")
-  candidate_owned=true
-elif [[ "$VERIFIER_SOURCE_SHA" != "$VERIFIER_WORKFLOW_SHA" ]]; then
-  no_reuse "separate qualification and verifier SHAs require authenticated candidate admission"
+if ! jq -e 'type == "object"' <<< "$QUALIFICATION_ADMISSION_JSON" >/dev/null 2>&1 ||
+  ! jq -e 'type == "object"' <<< "$QUALIFICATION_INPUTS_JSON" >/dev/null 2>&1; then
+  no_reuse "qualification reuse requires authenticated candidate admission and inputs"
 fi
-if [[ "$WORKFLOW_REF" != "main" ]]; then
-  expected_release_ref="release-ci/${VERIFIER_WORKFLOW_SHA:0:12}-"
-  if [[ ! "$WORKFLOW_REF" =~ ^release-ci/[0-9a-f]{12}-[1-9][0-9]*$ ]] ||
-    [[ "$WORKFLOW_REF" != "$expected_release_ref"* ]]; then
-    no_reuse "workflow ref is not a canonical SHA-pinned release ref"
-  fi
+qualification_json="$(jq -nc \
+  --arg candidateSha "$TARGET_SHA" --arg qualificationSha "$VERIFIER_WORKFLOW_SHA" \
+  --arg workflowRef "$WORKFLOW_REF" \
+  --argjson descriptor "$QUALIFICATION_ADMISSION_JSON" \
+  --argjson inputs "$QUALIFICATION_INPUTS_JSON" \
+  '{candidateSha: $candidateSha, qualificationSha: $qualificationSha, workflowRef: $workflowRef, descriptor: $descriptor, inputs: $inputs}')"
+expected_release_ref="release-ci/${VERIFIER_WORKFLOW_SHA:0:12}-"
+if [[ ! "$WORKFLOW_REF" =~ ^release-ci/[0-9a-f]{12}-[1-9][0-9]*$ ]] ||
+  [[ "$WORKFLOW_REF" != "$expected_release_ref"* ]]; then
+  no_reuse "workflow ref is not a canonical SHA-pinned release ref"
 fi
 if [[ -z "$REPO" ]]; then
   echo "Expected --repo <owner/repo> or GH_REPO." >&2
@@ -218,7 +209,6 @@ if ! expected_inputs="$(jq -Sc 'if type == "object" then . else error("expected 
   exit 2
 fi
 
-trusted_workflow_route=""
 if [[ "$TRUSTED_WORKFLOW_REF" == "main" ]]; then
   if [[ "$TRUSTED_WORKFLOW_FULL_REF" != "refs/heads/main" ]]; then
     no_reuse "trusted main workflow full ref is invalid"
@@ -236,7 +226,6 @@ if [[ "$TRUSTED_WORKFLOW_REF" == "main" ]]; then
     ' <<< "$workflow_lineage" >/dev/null; then
     no_reuse "workflow SHA is not on trusted main lineage"
   fi
-  trusted_workflow_route="main"
 elif [[ "$TRUSTED_WORKFLOW_REF" =~ ^release-publish/([0-9a-f]{12})-[1-9][0-9]*$ ]] &&
   [[ "$TRUSTED_WORKFLOW_FULL_REF" == "refs/tags/${TRUSTED_WORKFLOW_REF}" ]] &&
   [[ "$TRUSTED_WORKFLOW_REF" == "release-publish/${TRUSTED_WORKFLOW_SHA:0:12}-"* ]]; then
@@ -253,7 +242,6 @@ elif [[ "$TRUSTED_WORKFLOW_REF" =~ ^release-publish/([0-9a-f]{12})-[1-9][0-9]*$ 
     ' <<< "$trusted_tag_json" >/dev/null; then
     no_reuse "protected trusted workflow tag moved or is not lightweight"
   fi
-  trusted_workflow_route="protected-tag"
 else
   no_reuse "trusted workflow identity is not main or an exact protected tag"
 fi
@@ -298,7 +286,7 @@ for ((index = 0; index < run_count; index += 1)); do
       --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
       --verifier-source-sha "$VERIFIER_SOURCE_SHA" \
       --verifier-source-file "$VALIDATOR" \
-      ${qualification_args[@]+"${qualification_args[@]}"} \
+      --qualification-reuse-json "$qualification_json" \
       --json
   )"; then
     validator_error="$(
@@ -325,14 +313,12 @@ for ((index = 0; index < run_count; index += 1)); do
     --arg run_id "$run_id" \
     --arg trusted_workflow_full_ref "$TRUSTED_WORKFLOW_FULL_REF" \
     --arg trusted_workflow_ref "$TRUSTED_WORKFLOW_REF" \
-    --arg trusted_workflow_route "$trusted_workflow_route" \
-    --arg verifier_sha "$VERIFIER_SOURCE_SHA" \
-    --argjson candidate_owned "$candidate_owned" '
+    --arg verifier_sha "$VERIFIER_SOURCE_SHA" '
       . as $record
       | .schema == "openclaw.release-validation-evidence/v4"
       and .valid == true
       and .repository == $repo
-      and .producerOnTrustedMainLineage == ($trusted_workflow_route == "main" and ($candidate_owned | not))
+      and .producerOnTrustedMainLineage == false
       and .trustedWorkflowRef == $trusted_workflow_ref
       and .trustedWorkflowFullRef == $trusted_workflow_full_ref
       and .directRoot == true
@@ -348,7 +334,7 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.root.artifact.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
       and all($record.current, $record.root;
         . as $parent
-        | .producerOnTrustedMainLineage == ($trusted_workflow_route == "main" and ($candidate_owned | not))
+        | .producerOnTrustedMainLineage == false
         and .workflowRefType == "branch"
         and .workflowPath == ".github/workflows/full-release-validation.yml"
         and .workflowFullRef == ("refs/heads/" + .workflowRef)
@@ -358,55 +344,18 @@ for ((index = 0; index < run_count; index += 1)); do
           .workflowRunPath == ".github/workflows/full-release-validation.yml"
           or .workflowRunPath == .workflowQualifiedPath
         )
-        and if $candidate_owned then
-          .manifestVersion == 4
-          and .workflowRefProof == "candidate-owned-admission-v1"
-          and .targetSha == $record.qualificationAdmission.request.candidateSha
-          and .workflowSha == $record.qualificationAdmission.request.qualificationSha
-          and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
-          and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
-        elif $trusted_workflow_route == "main" then
-          (
-            (
-              .workflowRef == "main"
-              and .manifestVersion == 4
-              and .workflowRefProof == "manifest-v3-branch"
-            )
-            or (
-              .manifestVersion == 4
-              and .workflowRefProof == "manifest-v3-sha-pinned-main-ancestry"
-              and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
-              and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
-            )
-          )
-        else
-          .manifestVersion == 4
-          and (
-            .workflowRefProof == "manifest-v3-protected-tag-exact-sha"
-            or .workflowRefProof == "manifest-v3-protected-tag-tooling-lineage"
-          )
-          and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
-          and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
-        end
+        and .manifestVersion == 4
+        and .workflowRefProof == "candidate-owned-admission-v1"
+        and .targetSha == $record.qualificationAdmission.request.candidateSha
+        and .workflowSha == $record.qualificationAdmission.request.qualificationSha
+        and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
+        and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
       )
       and (.verifier.schemaVersion == 3)
       and (.verifier.sourceSha == $verifier_sha)
+      and .qualification.kind == "direct"
       and ([.children[].role] | sort) ==
-        (if $candidate_owned then
-          [.qualificationAdmission.coverage.children[].key] | sort
-        elif .validationInputs.coveragePolicy == "npm-beta-v1" then
-          ["normalCi", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "releaseChecksCandidate", "releaseChecksIndependent"]
-        elif (
-          .rerunGroup == "all"
-          and (
-            ((.validationInputs.npmTelegramPackageSpec // "") | length) > 0
-            or ((.validationInputs.releasePackageSpec // "") | length) > 0
-          )
-        ) then
-          ["normalCi", "npmTelegram", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "productPerformance", "releaseChecksCandidate", "releaseChecksIndependent"]
-        else
-          ["normalCi", "pluginPrereleaseCandidate", "pluginPrereleaseIndependent", "productPerformance", "releaseChecksCandidate", "releaseChecksIndependent"]
-        end)
+        ([.qualificationAdmission.coverage.children[].key] | sort)
       and ([.children[].runId] | length == (unique | length))
       and ([.children[]
         | select(.role == "productPerformance")

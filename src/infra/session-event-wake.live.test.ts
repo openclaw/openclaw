@@ -289,7 +289,7 @@ describeLive("session event wake through a live Gateway", () => {
           "user",
         );
         expect(completionUsers).toMatch(
-          new RegExp(`Exec completed \\([^)]*, code ${exitCode}\\) :: ${completionReply}`),
+          new RegExp(`Exec completed \\([^)]*, code ${exitCode}, [^)]+\\):\\s*${completionReply}`),
         );
         expect(completionUsers).not.toContain(monitorPrompt);
         expect(await fs.readFile(path.join(workspace, "completion-completed"), "utf8")).toBe(

@@ -1,0 +1,2 @@
+# Both readiness hooks retain missing/blank/padded/configured and fresh-environment outcomes; existing synthesis asserts config precedence with an environment key present.
+14

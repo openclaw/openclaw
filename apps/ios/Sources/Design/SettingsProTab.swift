@@ -25,7 +25,8 @@ struct SettingsProTab: View {
     @AppStorage("gateway.manual.port") var manualGatewayPort: Int = 18789
     @AppStorage("gateway.manual.tls") var manualGatewayTLS: Bool = true
     @AppStorage("gateway.discovery.debugLogs") var discoveryDebugLogsEnabled: Bool = false
-    @AppStorage("gateway.setupCode") var setupCode: String = ""
+    // A setup code carries Gateway credentials; keep it in memory only, as onboarding does.
+    @State var setupCode = ""
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
     @AppStorage("onboarding.requestID") var onboardingRequestID: Int = 0

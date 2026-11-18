@@ -455,13 +455,7 @@ export type DiagnosticToolLoopEvent = DiagnosticSessionEvent & {
   toolName: string;
   level: "warning" | "critical";
   action: "warn" | "block";
-  detector:
-    | "generic_repeat"
-    | "argument_churn"
-    | "unknown_tool_repeat"
-    | "known_poll_no_progress"
-    | "global_circuit_breaker"
-    | "ping_pong";
+  detector: "tool_repeat";
   count: number;
   message: string;
   pairedToolName?: string;

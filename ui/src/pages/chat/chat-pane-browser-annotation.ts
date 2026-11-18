@@ -2,6 +2,7 @@ import type {
   BrowserAnnotationDraft,
   BrowserAnnotationEvent,
 } from "../../components/browser/browser-annotation.ts";
+import { focusComposerInput } from "../../lib/composer-input.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
@@ -17,7 +18,7 @@ export function focusBrowserAnnotationComposerAfterUpdate(host: {
   updateComplete: Promise<unknown>;
 }): void {
   void host.updateComplete.then(() => {
-    host.composer()?.focus({
+    focusComposerInput(host.composer(), {
       preventScroll: true,
     });
   });

@@ -15,7 +15,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import {
   createPluginReloadCleanup,
-  PluginAdmittedWorkTimeoutError,
+  PluginAdmittedWorkDeferredError,
 } from "./server-plugin-reload-cleanup.js";
 
 const logPaths = createSuiteLogPathTracker("plugin-reload-retention-");
@@ -77,7 +77,10 @@ it.each(["release", "timeout"] as const)(
     expect(instance.disposing).toBe(false);
     if (outcome === "timeout") {
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(await observed).toBeInstanceOf(PluginAdmittedWorkTimeoutError);
+      expect(await observed).toBeInstanceOf(PluginAdmittedWorkDeferredError);
+      expect(await observed).toMatchObject({
+        message: expect.stringContaining("plugin fixture admitted work did not settle within 60s"),
+      });
       expect(instance.retainedWorkCount).toBe(1);
       expect(instance.acceptingCalls).toBe(true);
       expect(instance.retentionSnapshot().references[0]!.referenceId).toBe(referenceId);

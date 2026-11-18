@@ -22,6 +22,13 @@ const searchDefaults = {
   otherSecret: REDACTED_SENTINEL,
 };
 const configWithSearch = (overrides: Record<string, unknown> = {}) => ({
+  secrets: {
+    providers: {
+      team: { source: "file", path: "/synthetic/team.json" },
+      "team-backup": { source: "file", path: "/synthetic/backup.json" },
+      vault: { source: "exec", command: "/synthetic/read-vault" },
+    },
+  },
   plugins: {
     entries: {
       workboard: { enabled: true, config: { search: { ...searchDefaults, ...overrides } } },
@@ -185,7 +192,14 @@ suite.define(() => {
           const save = dialog.getByRole("button", { name: "Save", exact: true });
           const alert = dialog.getByRole("alert");
           expect(await dialog.getByLabel("Source", { exact: true }).inputValue()).toBe("file");
-          expect(await dialog.getByLabel("Provider", { exact: true }).inputValue()).toBe("team");
+          const provider = dialog.getByRole("button", { name: /^Provider:/ });
+          expect(await provider.textContent()).toContain("team");
+          await provider.click();
+          const backup = page.getByRole("option", { name: "team-backup", exact: true });
+          await backup.waitFor();
+          expect(await page.getByRole("option", { name: "vault", exact: true }).count()).toBe(0);
+          await backup.click();
+          expect(await gateway.getRequests("config.set")).toHaveLength(0);
           const identifier = dialog.getByLabel("Identifier", { exact: true });
           expect(await identifier.inputValue()).toBe("/search/apiKey");
           await identifier.fill("/search/updated");
@@ -193,7 +207,7 @@ suite.define(() => {
           await save.click();
           const request = await gateway.waitForRequest("config.set");
           expect(await dialog.isVisible()).toBe(true);
-          const changedRef = { ...originalRef, id: "/search/updated" };
+          const changedRef = { ...originalRef, provider: "team-backup", id: "/search/updated" };
           expect(JSON.parse(String(asRecord(request.params).raw))).toEqual(
             configWithSearch({ apiKey: changedRef }),
           );
@@ -209,6 +223,7 @@ suite.define(() => {
           await expect.poll(() => reference.isEnabled()).toBe(true);
           await reference.click();
           expect(await identifier.inputValue()).toBe("/search/updated");
+          expect(await provider.textContent()).toContain("team-backup");
           await identifier.fill("/search/failed");
           const writesBeforeFailure = (await gateway.getRequests("config.set")).length;
           await gateway.deferNext("config.set");
@@ -266,7 +281,7 @@ suite.define(() => {
             await gateway.setMethodResponse(
               "plugins.credentials.inspect",
               referenceInspection(
-                { ...originalRef, id: "/search/failed" },
+                { ...changedRef, id: "/search/failed" },
                 "confirmed-credential-write",
               ),
             );
@@ -282,7 +297,7 @@ suite.define(() => {
           });
           expect(JSON.parse(String(asRecord(siblingWrite.params).raw))).toEqual(
             configWithSearch({
-              apiKey: width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
+              apiKey: width === 1174 ? { ...changedRef, id: "/search/failed" } : changedRef,
               mode: "llm-context",
             }),
           );

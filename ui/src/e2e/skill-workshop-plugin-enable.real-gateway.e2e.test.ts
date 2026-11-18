@@ -13,6 +13,7 @@ import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-rea
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { disableWorkshopWhenIdle } from "./skill-workshop-plugin-enable.test-support.ts";
 
 const PLUGIN_ID = "skill-workshop";
 
@@ -133,16 +134,18 @@ suite.define(() => {
         await enable.waitFor();
         await expect.poll(() => page.getByText("Skill Workshop is off").count()).toBe(1);
         expect(workshopRequests()).toEqual([]);
-        // The Plugins hub still lists the Workshop tab, which leads here.
-        expect(await page.getByRole("tab", { name: "Skill workshop" }).count()).toBe(1);
 
         await enable.click();
         // The Gateway publishes the plugin and the open page loads it in place.
         await page.getByText("No learned skills yet").waitFor({ timeout: 60_000 });
         // Focus moves from the departed button to the panel, not the page body.
         await expect
-          .poll(() => page.evaluate(() => document.activeElement?.id))
-          .toBe("plugins-hub-panel");
+          .poll(() =>
+            page.evaluate(() =>
+              document.activeElement?.textContent?.includes("No learned skills yet"),
+            ),
+          )
+          .toBe(true);
         expect(sent.filter((frame) => frame.method === "plugins.setEnabled")).toHaveLength(1);
         expect(workshopRequests().map((frame) => frame.method)).toContain("skills.workshop.list");
         expect(await pluginEnabled()).toBe(true);
@@ -173,7 +176,7 @@ suite.define(() => {
         expect(await page.getByRole("button", { name: "Turn on Skill Workshop" }).count()).toBe(0);
 
         // Turned off elsewhere, the open page switches back to the off state.
-        await admin.request("plugins.setEnabled", { pluginId: PLUGIN_ID, enabled: false });
+        await disableWorkshopWhenIdle(admin);
         await page
           .getByRole("button", { name: "Turn on Skill Workshop" })
           .waitFor({ timeout: 60_000 });

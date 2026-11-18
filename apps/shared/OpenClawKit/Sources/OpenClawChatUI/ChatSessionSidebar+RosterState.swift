@@ -81,7 +81,7 @@ struct ChatSessionSidebarRosterState: View {
             // ui/src/components/command-palette-view.ts:264 shows archive exclusions alongside search state.
             if self.data.archivedTranscriptsExcluded > 0 {
                 let format = String(
-                    localized: "%lld archived transcripts excluded; open a session to restore its searchable history.")
+                    localized: "%lld archived chats excluded; open a session to restore its searchable history.")
                 Text(String(format: format, self.data.archivedTranscriptsExcluded)).foregroundStyle(.secondary)
             }
         }

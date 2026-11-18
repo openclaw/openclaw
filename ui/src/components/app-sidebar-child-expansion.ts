@@ -20,6 +20,7 @@ export class SidebarChildExpansion {
     input: SidebarExpansionScope & {
       selectedSessionKey: string | null;
       rows: readonly SidebarRecentSession[];
+      referencedRows?: readonly SidebarRecentSession[];
     },
     previous: SidebarExpansionScope | null,
   ): void {
@@ -48,7 +49,9 @@ export class SidebarChildExpansion {
       }
       return true;
     };
-    this.selectedRootKey = input.rows.find(reveal)?.key ?? null;
+    const selected = input.rows.find(reveal);
+    const referenced = input.referencedRows?.find(reveal);
+    this.selectedRootKey = selected?.key ?? referenced?.key ?? null;
   }
 
   revealOnce(key: string): boolean {

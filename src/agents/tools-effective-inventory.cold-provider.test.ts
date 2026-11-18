@@ -94,7 +94,7 @@ vi.mock("./agent-bundle-mcp-tools.js", async (importOriginal) => {
 });
 
 // mock-isolation: Keep tool assembly inert while provider normalization and lifetime stay real.
-vi.mock("./agent-tools.js", () => {
+vi.mock("./agent-tools.async.js", () => {
   const execute = async () => {
     throw new Error("Inventory must not execute tools");
   };

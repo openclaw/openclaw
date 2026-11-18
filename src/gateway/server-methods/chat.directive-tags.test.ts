@@ -18,7 +18,6 @@ import {
 import {
   bindActiveCronCreatorAuthorityResolver,
   runWithCronCreatorAuthorityCapabilityResolver,
-  type CronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
@@ -72,6 +71,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import { createChatRunState } from "../server-chat-state.js";
 import * as gatewaySessionWorker from "../session-utils-store-worker.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
@@ -100,6 +100,8 @@ import {
   createGlobalChatDirectiveConfig,
   createChatDirectiveSender,
   createChatDirectiveSuiteResources,
+  deniedChatCronAuthorityCases,
+  handedOffDashboardSession,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
   managedAudioBlocks,
@@ -162,6 +164,7 @@ const mockState = vi.hoisted(() => {
     lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
     lastDispatchImageOrder: undefined as string[] | undefined,
     lastDispatchThinkingLevelOverride: undefined as string | undefined,
+    lastDispatchNormalizeThinking: undefined as boolean | undefined,
     lastDispatchOriginatingLeafEntryId: undefined as string | null | undefined,
     lastTaskSuggestionDeliveryMode: undefined as "gateway" | undefined,
     lastMessageInjectionDisposition: undefined as GetReplyOptions["messageInjectionDisposition"],
@@ -332,6 +335,7 @@ dispatchInboundMessageMock.mockImplementation(
     mockState.lastDispatchImages = params.replyOptions?.images;
     mockState.lastDispatchImageOrder = params.replyOptions?.imageOrder;
     mockState.lastDispatchThinkingLevelOverride = params.replyOptions?.thinkingLevelOverride;
+    mockState.lastDispatchNormalizeThinking = params.replyOptions?.normalizeThinkingLevelOverride;
     mockState.lastDispatchOriginatingLeafEntryId =
       params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId;
     mockState.lastTaskSuggestionDeliveryMode = params.replyOptions?.taskSuggestionDeliveryMode;
@@ -1161,10 +1165,10 @@ afterAll(async () => {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   it.each([
     ["rejects an off-path leaf without a session id", "previous-leaf", undefined, false],
-    ["rejects a stale empty leaf without a session id", null, undefined, false],
+    ["accepts an active ancestor without a session id", "rendered-leaf", undefined, true],
+    ["accepts an empty starting leaf without a session id", null, undefined, true],
     ["accepts an empty starting leaf after a same-session append", null, "current", true],
     ["accepts a same-session active ancestor", "rendered-leaf", "current", true],
-    ["rejects an ancestor from a replaced session", "rendered-leaf", "replaced", false],
   ] as const)("%s", async (_name, expectedLeafEntryId, sessionId, accepted) => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-active-ancestor-",
@@ -1214,17 +1218,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "none",
     });
 
-    const response = expectDefined(
-      lastRespondCall(respond),
-      "active ancestor response test invariant",
-    );
+    const response = expectDefined(lastRespondCall(respond), "active ancestor response invariant");
     expect(response[0]).toBe(accepted);
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
       await captureSessionControllerSettlement({
         scope: mockState.storePath,
-        identities: [requestedSessionId],
+        identities: [requestedSessionId ?? mockState.sessionId],
       });
     } else {
       expect(response).toEqual([
@@ -1237,7 +1238,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it.each(["copied-leaf", null])(
+  // A branch switch keeps the transcript identity, so the session id no longer
+  // fences a stale pane. The active path does: a pane that still displays the
+  // pre-switch leaf is refused even though it names the session's current id.
+  it.each(["active-sibling"])(
     "rejects leaf %s from before a branch switch",
     async (expectedLeafEntryId) => {
       const { context, respond, send } = await createSqliteChatRequest(
@@ -1269,7 +1273,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         env: suiteFixtureEnv,
         path: suiteDatabasePath,
       });
-      const staleSessionId = mockState.sessionId;
+      const preSwitchSessionId = mockState.sessionId;
       const switched = await switchSessionBranch({
         agentId: "main",
         env: suiteFixtureEnv,
@@ -1281,7 +1285,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       if (switched.status !== "created") {
         throw new Error("expected branch switch test invariant");
       }
-      expect(switched.entry.sessionId).not.toBe(staleSessionId);
+      // The in-place switch keeps the id the stale pane is still holding.
+      expect(switched.entry.sessionId).toBe(preSwitchSessionId);
       mockState.sessionId = switched.entry.sessionId;
       const before = loadTranscriptEventsSync(transcriptScope());
       expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
@@ -1290,7 +1295,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-rotated-exact-leaf",
         requestParams: {
           expectedLeafEntryId,
-          sessionId: staleSessionId,
+          sessionId: preSwitchSessionId,
         },
         waitFor: "none",
       });
@@ -3964,6 +3969,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       | undefined;
     expect(userTurnInput?.content).toBe("hello from phone");
     expect(mockState.lastDispatchThinkingLevelOverride).toBe("low");
+    expect(mockState.lastDispatchNormalizeThinking).toBe(false);
   });
 
   it.each([
@@ -4309,10 +4315,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("leaves ACP bridge user persistence to the agent runtime", async () => {
+  it("persists ACP bridge photos as durable user-turn media", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-acp-images-");
     mockState.triggerAgentRunStart = true;
-    setSavedMediaResults(["/tmp/should-not-be-used.png", "image/png"]);
+    setSavedMediaResults(["/tmp/acp.png", "image/png", "acp.png"]);
     await createChatRequestFixture().send({
       idempotencyKey: "idem-user-transcript-acp-images",
       message: "bridge image",
@@ -4332,16 +4338,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
+    // The bridge defers its commit to the agent runtime, so the resolved user turn is
+    // the durable record the Control UI reloads. Only the managed claim survives there:
+    // the staged path and the uploaded bytes stay out, and the model still receives the
+    // photo exactly once, from the inline prompt image.
     await waitForAssertion(() => {
-      expect(mockState.savedMediaCalls).toStrictEqual([]);
-      expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual(
-        createExpectedAcpUserTurn({
-          content: "bridge image",
-          idempotencyKey: "idem-user-transcript-acp-images:user",
-          provenance: { kind: "external_user" },
-        }),
-      );
+      const userTurn = mockState.lastDispatchUserTurnInput as { content?: unknown } | undefined;
+      const claim = [expect.objectContaining({ url: "media://inbound/acp.png", kind: "image" })];
+      expect(mockState.savedMediaCalls).toHaveLength(1);
+      expect(mockState.lastDispatchImages).toHaveLength(1);
+      expect(userTurn?.content).toBe("bridge image");
+      expectClaimOnlyTranscriptMedia(userTurn, claim, ["/tmp/acp.png"]);
     });
   });
 
@@ -4814,6 +4821,48 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 });
 
 describe("chat.send local operator client sender context", () => {
+  it.each(["operator.write", "operator.admin"])(
+    "admits only scoped scheduling for fresh %s input in a previously spawned dashboard chat",
+    async (scope) => {
+      const sessionKey = "agent:main:dashboard:delegated-task";
+      const owner = { sessionKey, agentId: "main" };
+      await createSqliteTranscriptFixture("openclaw-child-chat-scheduling-", { owner });
+      mockState.sessionEntry = { ...handedOffDashboardSession };
+      await upsertSessionEntryCore(
+        { ...owner, storePath: mockState.storePath },
+        {
+          sessionId: mockState.sessionId,
+          ...mockState.sessionEntry,
+        },
+      );
+      const probe = vi.fn();
+      mockState.cronAuthorityProbe = async (_runId, capability) => {
+        probe(capability);
+      };
+      await createChatRequestFixture().send({
+        idempotencyKey: "child-chat-scheduling",
+        sessionKey,
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              platform: "web",
+              version: "test",
+            },
+            scopes: [scope],
+          },
+          internal: { authenticatedControlUi: true, controlUiAdmin: scope === "operator.admin" },
+        },
+        expectBroadcast: false,
+      });
+      expect(probe).toHaveBeenCalledWith(
+        expect.objectContaining({ callerScopedCreation: true, callerOrigin: { kind: "unknown" } }),
+      );
+      expect(probe.mock.calls[0]?.[0]?.managementEntitlement).toBeUndefined();
+    },
+  );
+
   it.each([
     [GATEWAY_CLIENT_NAMES.CONTROL_UI, GATEWAY_CLIENT_MODES.WEBCHAT, "web", "operator.admin", true],
     [GATEWAY_CLIENT_NAMES.CLI, GATEWAY_CLIENT_MODES.CLI, "darwin", "operator.admin", true],
@@ -4886,102 +4935,50 @@ describe("chat.send local operator client sender context", () => {
     },
   );
 
-  it.each([
-    {
-      name: "internal re-entry, including Talk consults",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      directExternal: false,
-      message: "Talk realtime agent consult prompt",
-    },
-    {
-      name: "incognito session",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: { incognito: true },
-    },
-    {
-      name: "synthetic client",
-      client: {
-        internal: { isLocalClient: true, syntheticClient: true },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "input provenance",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      requestParams: { systemInputProvenance: { kind: "external_user" } },
-    },
-    {
-      name: "explicit origin",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      requestParams: { originatingChannel: "slack", originatingTo: "D123" },
-    },
-    {
-      name: "delegated handoff",
-      client: {
-        internal: { isLocalClient: true, delegatedToolPolicyHandoffId: "handoff-1" },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "spawned lineage",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: { spawnedBy: "agent:main:parent" },
-    },
-    {
-      name: "synthetic cron continuation",
-      client: {
-        internal: { isLocalClient: true, cronRunContinuation: true },
-        scopes: ["operator.admin"],
-      },
-    },
-    {
-      name: "persisted cron continuation",
-      client: { internal: { isLocalClient: true }, scopes: ["operator.admin"] },
-      sessionEntry: {
-        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "running" },
-      },
-    },
-  ])("does not mint configured-MCP cron authority for $name", async (testCase) => {
-    await createSqliteTranscriptFixture("openclaw-chat-send-cron-authority-negative-");
-    mockState.sessionEntry = testCase.sessionEntry ?? {};
-    await seedSqliteSessionEntry(mockState.sessionEntry);
-    let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
-    mockState.cronAuthorityProbe = async (runId, capability) => {
-      runWithCronCreatorAuthorityCapabilityResolver({
-        capability,
-        runId,
-        resolve: async () => ({
-          tools: testCase.directExternal === false ? ["read", "configured__lookup"] : ["read"],
-          provenance: { version: 1, source: "final-executable-surface" },
-        }),
-        run: () => {
-          boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
-        },
-      });
-    };
-    await createChatRequestFixture().send({
-      idempotencyKey: `idem-cron-authority-negative-${testCase.name.replaceAll(" ", "-")}`,
-      ...(testCase.directExternal === false
-        ? { directExternal: false, message: testCase.message }
-        : {}),
-      client: {
-        connect: {
-          client: {
-            id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            version: "dev",
-            platform: "web",
+  it.each(deniedChatCronAuthorityCases)(
+    "does not mint configured-MCP cron authority for $name",
+    async (testCase) => {
+      await createSqliteTranscriptFixture("openclaw-chat-send-cron-authority-negative-");
+      mockState.sessionEntry = testCase.sessionEntry ?? {};
+      await seedSqliteSessionEntry(mockState.sessionEntry);
+      let boundResolver: ReturnType<typeof bindActiveCronCreatorAuthorityResolver>;
+      mockState.cronAuthorityProbe = async (runId, capability) => {
+        runWithCronCreatorAuthorityCapabilityResolver({
+          capability,
+          runId,
+          resolve: async () => ({
+            tools: testCase.directExternal === false ? ["read", "configured__lookup"] : ["read"],
+            provenance: { version: 1, source: "final-executable-surface" },
+          }),
+          run: () => {
+            boundResolver = bindActiveCronCreatorAuthorityResolver(runId);
           },
-          scopes: testCase.client.scopes,
+        });
+      };
+      await createChatRequestFixture().send({
+        idempotencyKey: `idem-cron-authority-negative-${testCase.name.replaceAll(" ", "-")}`,
+        ...(testCase.directExternal === false
+          ? { directExternal: false, message: testCase.message }
+          : {}),
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+              version: "dev",
+              platform: "web",
+            },
+            scopes: testCase.client.scopes,
+          },
+          internal: testCase.client.internal,
         },
-        internal: testCase.client.internal,
-      },
-      requestParams: testCase.requestParams,
-      expectBroadcast: false,
-    });
+        requestParams: testCase.requestParams,
+        expectBroadcast: false,
+      });
 
-    expect(boundResolver!).toBeUndefined();
-  });
+      expect(boundResolver!).toBeUndefined();
+    },
+  );
 
   it.each([
     {

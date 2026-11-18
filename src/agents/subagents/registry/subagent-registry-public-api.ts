@@ -174,12 +174,10 @@ export function createSubagentRegistryPublicApi(config: {
     );
   }
 
-  /** Read current direct-child custody with an exact parent incarnation fence. */
-  async function listCollectorRunsForRequesterIncarnation(params: {
+  /** Read current direct-child collectors of a requester chat. */
+  async function listCollectorRunsForRequester(params: {
     sessionKey: string;
     agentId: string;
-    sessionId: string;
-    lifecycleRevision?: string;
   }): Promise<SubagentRunRecord[]> {
     return withSubagentRunReadSnapshot(
       runs,
@@ -200,8 +198,6 @@ export function createSubagentRegistryPublicApi(config: {
       (_selection, selected) =>
         listRunsForRequesterFromRuns(new Map(selected), params.sessionKey, {
           requesterAgentId: params.agentId,
-          requesterSessionId: params.sessionId,
-          requesterLifecycleRevision: params.lifecycleRevision,
         }),
       "all",
     );
@@ -327,7 +323,7 @@ export function createSubagentRegistryPublicApi(config: {
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,
-    listCollectorRunsForRequesterIncarnation,
+    listCollectorRunsForRequester,
     countActiveRunsForSession: countActiveSubagentRunsForSession.bind(null, runs),
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,

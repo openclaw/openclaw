@@ -2,6 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   applyConfigEnvVars,
   collectConfigRuntimeEnvOwnership,
@@ -84,6 +85,20 @@ afterEach(() => {
   resetRuntimeConfigState();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+});
+
+it("replaces an equal mutable publication with an immutable owner snapshot", () => {
+  const initial = portConfig(18789);
+  setSnapshot(initial, initial);
+  const frozen = freezeJsonSnapshot(structuredClone(initial));
+  setSnapshot(frozen, frozen);
+  expect(getSnapshot()).toBe(frozen);
+  initial.gateway.port = 19001;
+  expect(getSnapshot()?.gateway?.port).toBe(18789);
+  const revision = getMetadata()?.revision;
+  setSnapshot(freezeJsonSnapshot(structuredClone(frozen)), frozen);
+  expect(getSnapshot()).toBe(frozen);
+  expect(getMetadata()?.revision).toBe(revision);
 });
 
 it("pins the first successful load in memory until the snapshot is cleared", () => {
@@ -199,11 +214,13 @@ it("selects and retains only matching runtime sources", () => {
   expect(select(foreignConfig)).toBe(foreignConfig);
   setSnapshot(runtimeConfig, sourceConfig);
   const readRuntime = createRuntimeConfigReader(cloneConfigWithResolutionFacts(sourceConfig));
+  const readRuntimeCopy = createRuntimeConfigReader(cloneConfigWithResolutionFacts(runtimeConfig));
   const readScoped = createRuntimeConfigReader(scopedResolvedConfig);
   const readForeign = createRuntimeConfigReader(foreignConfig);
   const nextConfig = { ...runtimeConfig, messages: { ackReactionScope: "all" as const } };
   setSnapshot(nextConfig, nextConfig);
   expect(readRuntime()).toBe(nextConfig);
+  expect(readRuntimeCopy()).toBe(nextConfig);
   expect(readScoped()).toBe(scopedResolvedConfig);
   expect(readForeign()).toBe(foreignConfig);
   expect(readUnbound()).toBe(scopedResolvedConfig);
@@ -266,17 +283,19 @@ it.each([
   ],
 ] as const)("selects runtime only for equivalent facts: %s", (kind, facts) => {
   const source = createProviderConfigFixture();
-  const input = structuredClone(source);
   setConfigResolutionFacts(source, createConfigResolutionFacts([], providerRefs()));
-  if (facts) {
-    setConfigResolutionFacts(input, facts());
-  }
   const runtime = createProviderConfigFixture("synthetic-runtime-key");
   setSnapshot(runtime, source);
-  if (kind === "equivalent") {
-    expect(getConfigResolutionFacts(input)).not.toBe(getConfigResolutionFacts(source));
+  for (const selected of [source, runtime]) {
+    const input = structuredClone(selected);
+    if (facts) {
+      setConfigResolutionFacts(input, facts());
+    }
+    if (kind === "equivalent") {
+      expect(getConfigResolutionFacts(input)).not.toBe(getConfigResolutionFacts(selected));
+    }
+    expect(createRuntimeConfigReader(input)()).toBe(kind === "equivalent" ? runtime : input);
   }
-  expect(createRuntimeConfigReader(input)()).toBe(kind === "equivalent" ? runtime : input);
 });
 
 it.each([true, false])(

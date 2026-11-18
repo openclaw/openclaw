@@ -32,7 +32,7 @@ const mocks = vi.hoisted(() => ({
 // mock-isolation: generation assertions use a synthetic completion without provider I/O.
 vi.mock("../llm/stream.js", () => ({ completeSimple: mocks.complete }));
 // mock-isolation: injected registries own the test; do not install process-wide transport hooks.
-vi.mock("./ai-transport-runtime-host.js", () => ({}));
+vi.mock("./ai-transport-runtime-host.js", () => ({ configureAiTransportRuntimeHost: () => {} }));
 
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: mocks.acquireRuntimeLease,

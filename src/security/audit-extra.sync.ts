@@ -338,7 +338,7 @@ export function collectSyncedFolderFindings(params: {
       checkId: "fs.synced_dir",
       severity: "warn",
       title: "State/config path looks like a synced folder",
-      detail: `stateDir=${params.stateDir}, configPath=${params.configPath}. Synced folders (iCloud/Dropbox/OneDrive/Google Drive) can leak tokens and transcripts onto other devices.`,
+      detail: `stateDir=${params.stateDir}, configPath=${params.configPath}. Synced folders (iCloud/Dropbox/OneDrive/Google Drive) can leak tokens and chat history onto other devices.`,
       remediation: `Keep OPENCLAW_STATE_DIR on a local-only volume and re-run "${formatCliCommand("openclaw security audit --fix")}".`,
     });
   }

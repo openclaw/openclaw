@@ -1,4 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
@@ -22,7 +23,6 @@ export function createSidebarSnapshot(host: {
   readonly sidebarAgentsMode: "chip" | "roster";
   readonly sessionDataContext?: {
     gateway: ApplicationGateway;
-    agentSelection: { readonly state: { readonly scopeId: string | null } };
     connectionBootstrap: { readonly foregroundReady: boolean };
   };
   expandedAgentId(): string;
@@ -84,6 +84,7 @@ export function createSidebarSnapshot(host: {
         const key = sidebarSnapshotScopeKey(scope);
         const deleted = sidebarSnapshotDeletedSessionKey(key, event);
         if (deleted) {
+          finishBootFrame();
           // Cancel accepted stale captures, retaining the rest of the display and cache.
           generation += 1;
           cancelCapture?.();
@@ -146,9 +147,13 @@ export function createSidebarSnapshot(host: {
               host.restoreSidebarSnapshot(model);
               captured = { model, serialized: JSON.stringify(model) };
               saved = true;
+            } else {
+              finishBootFrame();
             }
             notify();
           });
+        } else {
+          finishBootFrame();
         }
         // Connection receipts retire stale snapshot capture and restore the new scope.
         stopGateway = gateway.subscribe(() => {
@@ -170,6 +175,7 @@ export function createSidebarSnapshot(host: {
       clearDisplay();
     }
     if (pending && host.sidebarSnapshotSettled()) {
+      finishBootFrame();
       generation += 1;
       pending = false;
       notify();
@@ -321,9 +327,7 @@ export function createSidebarSnapshot(host: {
   function matchesAgent(model: SidebarSnapshotModel): boolean {
     return (
       model.mode === host.sidebarAgentsMode &&
-      (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId()) &&
-      (model.navigationView !== "pages" ||
-        model.pageScopeId === host.sessionDataContext?.agentSelection.state.scopeId)
+      (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId())
     );
   }
 
@@ -350,6 +354,9 @@ export function createSidebarSnapshot(host: {
   }
 
   function clearDisplay(): void {
+    if (pending || host.sidebarSnapshot) {
+      finishBootFrame();
+    }
     cancelHandoff();
     cancelCapture?.();
     cancelCapture = undefined;

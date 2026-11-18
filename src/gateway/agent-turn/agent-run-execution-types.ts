@@ -1,4 +1,3 @@
-import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -8,7 +7,6 @@ import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
-import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { PreparedAgentRunDispatch } from "./agent-run-admission-types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
@@ -49,12 +47,7 @@ export type StartAgentRunExecutionParams = {
   preserveUserFacingSessionModelState: boolean;
   sessionEffects?: "visible" | "internal";
   skipAgentInitialSessionTouch: boolean;
-  restoredCronContinuation?: RestoredCronContinuation;
   client: AgentTurnPrincipal | null;
   context: AgentTurnContext;
   io: AgentTurnIo;
-  releaseCronContinuationClaimWithRecovery: (
-    outcome?: { terminalOutcome: AgentRunTerminalOutcome },
-    onRecovered?: () => void,
-  ) => Promise<boolean>;
 };

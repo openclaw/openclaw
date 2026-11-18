@@ -6,15 +6,16 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { withinTest } from "../../test/helpers/promise.js";
-import { addSession } from "../agents/bash-process-registry.js";
-import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadExactSessionEntry,
+  loadTranscriptEvents,
+} from "../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -26,6 +27,7 @@ import {
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -74,15 +76,12 @@ it("requests original recorded custody only at the actual marked restart admissi
         data: { phase: "start", startedAt: Date.now() },
       },
     });
-    const background = createProcessSessionFixture({
-      id: "restart-source-background",
-      backgrounded: true,
+    const claim = claimAgentRunContext("restart-source-live", target, {
+      trackOwner: true,
+      ownsContext: true,
     });
-    background.agentId = target.agentId;
-    background.sessionKey = target.sessionKey;
-    addSession(background);
     await persistRunningSessionsForRestart({ cfg });
-    resetProcessRegistryForTests();
+    releaseAgentRunContext("restart-source-live", claim);
     expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
     const context = createContext([], () => cfg);
     const admission = vi
@@ -117,9 +116,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
       replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 110 });
       replaceSessionEntrySync(target, {
         ...loadExactSessionEntry(target)!.entry,
-        ...(crash
-          ? { lifecycleRunId: "predecessor", startedAt: 110 }
-          : { resumeAfterRestart: { queuedInputIds: [] } }),
+        ...(crash ? { lifecycleRunId: "predecessor", startedAt: 110 } : { resumeAfterRestart: {} }),
       });
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const open = createDeferredCore();
@@ -153,7 +150,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
             context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
           }
           const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
-          const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
+          const wait = admission.observation.waitForAgentPreparation;
           const preparationWait = vi
             .spyOn(admission.observation, "waitForAgentPreparation")
             .mockImplementation((id, options) => {
@@ -202,9 +199,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
           try {
             await withinTest(opened.promise, test.signal);
             expect(await readSessionEntryReadOnlyInWorker(target)).toMatchObject(
-              crash
-                ? { lifecycleRunId: "predecessor" }
-                : { resumeAfterRestart: { queuedInputIds: [] } },
+              crash ? { lifecycleRunId: "predecessor" } : { resumeAfterRestart: {} },
             );
             expect(admission.observation.isAgentInputRecoveryPending("main")).toBe(false);
             if (mode === "prepared") {
@@ -298,7 +293,7 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       };
       const cases: Array<[string, Partial<InternalSessionEntry>, boolean]> = [
         ["crash", {}, mode !== "clean-or-unknown"],
-        ["yielded", { endedAt: 120 }, mode !== "clean-or-unknown"],
+        ["yielded", { endedAt: 120 }, false],
         ["stale", { startedAt: 1, updatedAt: 999 }, false],
         ["missing-start", { startedAt: undefined }, false],
         ["new-incarnation", { startedAt: 200 }, false],
@@ -308,10 +303,11 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         ["external", { modelSelectionLocked: true }, false],
         ["cron:job", {}, false],
         ["subagent:child", {}, false],
+        ["dashboard:spawned", { createdVia: "spawn" }, false],
         ["live", {}, false],
         ...(mode === "markers"
           ? [
-              ["marked", { resumeAfterRestart: { queuedInputIds: [] } }, true] as [
+              ["marked", { resumeAfterRestart: {} }, true] as [
                 string,
                 Partial<InternalSessionEntry>,
                 boolean,
@@ -322,7 +318,8 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
       for (const [name, patch] of cases) {
         const target = sessionTarget(name);
         const { sessionKey } = target;
-        replaceSessionEntrySync(target, { sessionId: name, updatedAt: 110 });
+        const initial = { sessionId: name, updatedAt: 110, createdVia: patch.createdVia };
+        replaceSessionEntrySync(target, initial);
         await persistGatewaySessionLifecycleEvent({
           sessionKey,
           event: {
@@ -403,6 +400,13 @@ it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)
         expect(
           loadExactSessionEntry({ agentId: "main", sessionKey: "agent:main:live" })?.entry,
         ).toHaveProperty("lifecycleRunId", "live");
+        expect(loadExactSessionEntry(sessionTarget("yielded"))?.entry).toMatchObject({
+          status: "failed",
+          lastRunError: expect.stringContaining("child completion"),
+        });
+        expect(
+          loadExactSessionEntry(sessionTarget("yielded"))?.entry.lifecycleRunId,
+        ).toBeUndefined();
       } finally {
         resume.mockRestore();
         releaseAgentRunContext("live", claim);
@@ -474,16 +478,49 @@ it("marks the active execution when an older message wait remains in the same se
     const claim = claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true });
     try {
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
     } finally {
       releaseAgentRunContext(runId, claim);
       subagentRuns.delete(oldRunId);
     }
   }));
 
-it("marks completed reply settlement only when accepted inputs remain queued", () =>
+it.each(["restart", "user", "completed"] as const)(
+  "selects retained %s work at the restart marker snapshot",
+  (ending) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const target = {
+        agentId: "main",
+        sessionKey: `agent:main:before-markers-${ending}`,
+        sessionId: `before-markers-${ending}`,
+      };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const { operation, release } = await withSessionTurn(target, async (active) => {
+        assert(active);
+        if (ending === "completed") {
+          active.freezeAbort();
+        }
+        return { operation: active, release: active.retainExecution() };
+      });
+      try {
+        if (ending !== "completed") {
+          expect(ending === "restart" ? operation.abortForRestart() : operation.abortByUser()).toBe(
+            true,
+          );
+        }
+        await persistRunningSessionsForRestart({ cfg: {} });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          ending === "restart" ? {} : undefined,
+        );
+      } finally {
+        release();
+        await operation.ownerSettlement;
+      }
+    }),
+);
+
+it("keeps completed reply roots unmarked while accepted inputs remain durable", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const target = {
@@ -517,11 +554,11 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       });
       assert(queued, "Queued fixture input was not admitted");
       await persistRunningSessionsForRestart({ cfg: {} });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [queued.inputId],
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+      const captured = await captureSessionQueuedInputsForRestart(target);
+      expect(captured.queuedInputIds).toEqual([queued.inputId]);
     } finally {
-      queued?.finish("interrupted");
+      queued?.finish("interrupted", "failed");
       await queued?.settled?.();
       releaseExecution();
       await operation.ownerSettlement;
@@ -552,6 +589,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
       },
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
     ];
+    const claims: Array<[string, string | undefined]> = [];
     try {
       for (const { sessionKey, entry, resumable } of cases) {
         const agentId = resumable ? "other" : "main";
@@ -571,10 +609,15 @@ it("marks ordinary conversations without inheriting cron or external execution o
             }),
           );
         }
-        const process = createProcessSessionFixture({ id: sessionKey, backgrounded: true });
-        process.agentId = agentId;
-        process.sessionKey = sessionKey;
-        addSession(process);
+        const runId = `live:${sessionKey}`;
+        claims.push([
+          runId,
+          claimAgentRunContext(
+            runId,
+            { agentId, sessionKey, sessionId: sessionKey },
+            { trackOwner: true, ownsContext: true },
+          ),
+        ]);
       }
       await persistRunningSessionsForRestart({ cfg: {} });
       for (const { sessionKey, resumable } of cases) {
@@ -583,21 +626,21 @@ it("marks ordinary conversations without inheriting cron or external execution o
           sessionKey,
         })?.entry;
         expect(entry).toBeDefined();
-        expect(entry?.resumeAfterRestart, sessionKey).toEqual(
-          resumable ? { queuedInputIds: [], hadBackgroundExec: true } : undefined,
-        );
+        expect(entry?.resumeAfterRestart, sessionKey).toEqual(resumable ? {} : undefined);
       }
     } finally {
+      for (const [runId, claim] of claims) {
+        releaseAgentRunContext(runId, claim);
+      }
       for (const { sessionKey, resumable } of cases) {
         if (resumable) {
           subagentRuns.delete(sessionKey);
         }
       }
-      resetProcessRegistryForTests();
     }
   }));
 
-it("settles captured queued sends as failed when the recorded owner's authority is revoked", () =>
+it("records a visible refusal for consumed and queued inputs when their owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -634,14 +677,24 @@ it("settles captured queued sends as failed when the recorded owner's authority 
       assertCurrent() {},
     });
     assert(receipt, "Queued fixture input was not admitted");
-    const process = createProcessSessionFixture({ id: "revoked-owner-work", backgrounded: true });
-    process.agentId = target.agentId;
-    process.sessionKey = target.sessionKey;
-    addSession(process);
+    const consumed = await stageSessionPendingInput(target, {
+      runId: "consumed-before-revocation",
+      message: { ...receipt.message, idempotencyKey: "consumed-before-revocation:user" },
+      assertCurrent() {},
+    });
+    assert(consumed, "Consumed fixture input was not admitted");
+    const claim = claimAgentRunContext("revoked-owner-work", target, {
+      trackOwner: true,
+      ownsContext: true,
+    });
     try {
       await persistRunningSessionsForRestart({ cfg });
-      receipt.finish("interrupted");
+      await consumed.runAsync!(() =>
+        appendTranscriptMessage(target, { message: consumed.message }),
+      );
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
+      rotateAgentEventLifecycleGeneration();
       setUserProfileRole(profile.id, "reader");
       const warn = vi.fn();
       await resumeMarkedSessions({
@@ -653,12 +706,26 @@ it("settles captured queued sends as failed when the recorded owner's authority 
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
       expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
         state: "cancelled",
+        endCause: "restart-unrecoverable",
         message: { content: "Accepted before restart" },
       });
+      expect(await readSessionPendingInput(target, consumed.inputId)).toBeUndefined();
+      expect(await loadTranscriptEvents(target)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "custom_message",
+            customType: "run-failed-before-reply",
+            display: true,
+            content: expect.stringContaining("this run could not resume"),
+          }),
+        ]),
+      );
     } finally {
-      receipt?.finish("interrupted");
+      receipt?.finish("interrupted", "failed");
       await receipt?.settled?.();
-      resetProcessRegistryForTests();
+      consumed.finish("interrupted", "failed");
+      await consumed.settled?.();
+      releaseAgentRunContext("revoked-owner-work", claim);
     }
   }));
 
@@ -699,16 +766,16 @@ it("fails a captured browser-copilot send instead of running without its live bi
     try {
       const captured = await captureSessionQueuedInputsForRestart(target);
       captured.preserve();
-      receipt.finish("interrupted");
+      receipt.finish("interrupted", "failed");
       await receipt.settled?.();
       await continueSessionQueuedInputs(context, target, {
         signal: new AbortController().signal,
-        queuedInputIds: [receipt.inputId],
         assertCurrent() {},
       });
       expect(send.mock.calls.length).toBe(0);
       expect(await readSessionPendingInput(target, receipt.inputId)).toMatchObject({
         state: "cancelled",
+        endCause: "restart-unrecoverable",
         message: { content: "Inspect the selected tab" },
       });
       expect(context.logGateway.warn).toHaveBeenCalledWith(
@@ -716,7 +783,7 @@ it("fails a captured browser-copilot send instead of running without its live bi
       );
     } finally {
       send.mockRestore();
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
     }
   }));
@@ -769,7 +836,7 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
     const [crashed, live] = receipts;
     const dispatch = vi.spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess");
     try {
-      crashed!.finish("interrupted");
+      crashed!.finish("interrupted", "failed");
       await crashed!.settled?.();
       database.db
         .prepare(
@@ -785,7 +852,12 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
         });
         expect(discover).toHaveBeenCalledTimes(boot + 1);
         expect((await listSessionPendingInputs(target)).items).toMatchObject([
-          { runId: "crashed", state: "cancelled", message: { content: "crashed" } },
+          {
+            runId: "crashed",
+            state: "cancelled",
+            endCause: "restart-unrecoverable",
+            message: { content: "crashed" },
+          },
           { runId: "live", state: "queued" },
         ]);
       }
@@ -805,7 +877,120 @@ it("resumes recent interrupted legacy cycles once and settles crash inputs", () 
       resume.mockRestore();
       discover.mockRestore();
       dispatch.mockRestore();
-      live!.finish("cancelled");
+      live!.finish("cancelled", "failed");
       await live!.settled?.();
     }
   }));
+
+// A supervisor that ends work on purpose (for example an explicit operator stop
+// followed by a new deployment) starts the next Gateway with a new scope token. Work
+// interrupted under the old token must not run again, and the message queued
+// behind it ends instead of being replayed; a restart within the same scope still
+// resumes.
+it.for([
+  { live: "run", written: "token-a", startup: "token-a", resumes: true },
+  { live: "turn", written: "token-a", startup: "token-a", resumes: true },
+  { live: "run", written: "token-a", startup: "token-b", resumes: false },
+  { live: "turn", written: "token-a", startup: "token-b", resumes: false },
+  { live: "run", written: undefined, startup: "token-b", resumes: false },
+  { live: "run", written: "token-a", startup: undefined, resumes: false },
+  // Without a supervisor scope the behavior is unchanged.
+  { live: "run", written: undefined, startup: undefined, resumes: true },
+  { live: "turn", written: undefined, startup: undefined, resumes: true },
+] as const)(
+  "resumes a $live interrupted under scope $written only at startup scope $startup",
+  ({ live, written, startup, resumes }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const name = `scoped-${live}-${written ?? "none"}-${startup ?? "none"}`;
+      const target = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId: name };
+      replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: Date.now() });
+      const setScope = (scope: string | undefined) =>
+        vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", scope);
+      // The live work at shutdown: a claimed agent run, or a session turn.
+      const runId = `${name}-run`;
+      const claim =
+        live === "run"
+          ? claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true })
+          : undefined;
+      const turn =
+        live === "turn"
+          ? await withSessionTurn(target, async (active) => {
+              assert(active, "Expected a real session turn");
+              return { operation: active, release: active.retainExecution() };
+            })
+          : undefined;
+      const queued = await stageSessionPendingInput(target, {
+        runId: `${name}-queued`,
+        message: {
+          role: "user",
+          content: "Sent while the turn was running",
+          timestamp: Date.now(),
+          idempotencyKey: `${name}-queued:user`,
+        },
+        assertCurrent() {},
+      });
+      assert(queued, "Queued fixture input was not admitted");
+      // Resume admission starts with the session principal's authority. Stop there:
+      // reaching it is the resume decision under test.
+      const admission = vi
+        .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
+        .mockRejectedValue(new Error("Stop after observing restart admission"));
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost");
+      const dispatch = vi
+        .spyOn(gatewayDispatch, "dispatchGatewayRequestInProcess")
+        .mockResolvedValue({});
+      try {
+        setScope(written);
+        await persistRunningSessionsForRestart({ cfg });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          written ? { scope: written } : {},
+        );
+        // The process ends: its run, turn and queued sender are gone.
+        if (claim !== undefined) {
+          releaseAgentRunContext(runId, claim);
+        }
+        turn?.release();
+        await turn?.operation.ownerSettlement;
+        queued.finish("interrupted", "failed");
+        await queued.settled?.();
+        openOpenClawAgentDatabase({ agentId: "main" })
+          .db.prepare(
+            "UPDATE session_pending_inputs SET state = 'queued', lifecycle_generation = 'previous-process' WHERE input_id = ?",
+          )
+          .run(queued.inputId);
+
+        setScope(startup);
+        const context = createContext([], () => cfg);
+        await resumeMarkedSessions({
+          context,
+          signal: new AbortController().signal,
+          log: { warn: vi.fn() },
+        });
+        expect(admission.mock.calls.length > 0).toBe(resumes);
+        expect(resume).not.toHaveBeenCalled();
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+        expect(dispatch).not.toHaveBeenCalled();
+        // In scope, startup replays the queued input (which fails here without a sender);
+        // out of scope, it ends without a replay attempt.
+        expect(
+          vi
+            .mocked(context.logGateway.warn)
+            .mock.calls.some(([line]) => line.includes("was not sent after restart")),
+        ).toBe(resumes);
+        expect(await readSessionPendingInput(target, queued.inputId)).toMatchObject({
+          state: "cancelled",
+          endCause: "restart-unrecoverable",
+          message: { content: "Sent while the turn was running" },
+        });
+      } finally {
+        vi.unstubAllEnvs();
+        admission.mockRestore();
+        resume.mockRestore();
+        dispatch.mockRestore();
+        queued.finish("interrupted", "failed");
+        await queued.settled?.();
+      }
+    }),
+);

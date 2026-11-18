@@ -87,11 +87,15 @@ it.each(["realpath", "mkdir"] as const)(
       const admittedRunContext = await admission.admit("embedded");
       using scope = { close: admission.close, [Symbol.dispose]: admission.close };
       using mkdir = vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+      const resolveRealpath = fs.realpath.bind(fs);
       using realpath = vi.spyOn(fs, "realpath");
       if (boundary === "realpath") {
-        realpath.mockImplementationOnce(async () => {
-          scope.close();
-          return state.workspaceDir;
+        realpath.mockImplementation(async (path, options) => {
+          if (path === state.workspaceDir) {
+            scope.close();
+            return state.workspaceDir;
+          }
+          return resolveRealpath(path, options);
         });
       } else {
         mkdir.mockImplementationOnce(async () => {

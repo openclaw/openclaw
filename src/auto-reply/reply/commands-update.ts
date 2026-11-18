@@ -83,7 +83,7 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
     } catch (err) {
       logVerbose(`Update request failed: ${formatErrorMessage(err)}`);
       return commandReply(
-        "⚠️ Couldn't confirm the update. Open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+        "⚠️ Couldn't confirm the update. Open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
       );
     }
   },

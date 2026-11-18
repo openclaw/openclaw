@@ -1,10 +1,14 @@
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace-bootstrap-policy.js";
+import { readCanonicalWorkspaceStateSnapshot } from "../agents/workspace-state-read.js";
 import {
   mergeWorkspaceSetupState,
+  replaceWorkspaceAttestation,
   rollbackWorkspaceBootstrapSeed,
   type WorkspaceSetupState,
 } from "../agents/workspace-state-store.js";
 import { readTemplateInventory } from "./inventory-read.js";
-import { readTemplatePackageRefs } from "./provenance.js";
+import type { PersistedTemplatePackageRef } from "./package-extension-provenance.js";
+import type { TemplatePackageRefQuery } from "./provenance-read.worker.js";
 import {
   executeTemplateMutationStateCommand as execute,
   type TemplateMutationStateOptions,
@@ -13,15 +17,20 @@ import {
 export type TemplateAddStateOptions = TemplateMutationStateOptions;
 
 export async function readTemplatePackageRefsForAdd(
-  options: NonNullable<Parameters<typeof readTemplatePackageRefs>[0]> &
-    TemplateAddStateOptions = {},
-): Promise<ReturnType<typeof readTemplatePackageRefs>> {
-  if (options.stateMode !== "worker") {
-    options.assertCurrent?.();
-    return readTemplatePackageRefs(options);
+  options: TemplatePackageRefQuery & TemplateAddStateOptions = {},
+): Promise<PersistedTemplatePackageRef[]> {
+  if (options.database) {
+    throw new Error(
+      "Template rollback ownership reads cannot use caller-owned database handles; select path/env instead.",
+    );
   }
   options.assertCurrent?.();
-  const { packages: refs } = await readTemplateInventory(options);
+  // Rollback must see newly committed owners, not an inherited inspection snapshot.
+  // The shared-state worker owns SQL; caller admission still guards the awaited result.
+  const { packages: refs } = await readTemplateInventory(options, {
+    current: true,
+    context: options.leaseSet?.context,
+  });
   options.assertCurrent?.();
   return refs.filter(
     (ref) =>
@@ -38,16 +47,27 @@ export async function readTemplatePackageRefsForAdd(
 export async function mergeWorkspaceBootstrapSetupStateForAdd(
   workspaceDir: string,
   bootstrapSeededAt: string,
+  bootstrapSha256: string,
   nowMs: number,
   options: TemplateAddStateOptions = {},
 ): Promise<WorkspaceSetupState> {
   if (options.stateMode !== "worker") {
     options.assertCurrent?.();
+    const attestedAtMs = Date.now();
+    const snapshot = await readCanonicalWorkspaceStateSnapshot(workspaceDir, options);
+    const generatedHashes = new Map(snapshot.attestation?.generatedHashes);
+    generatedHashes.set(DEFAULT_BOOTSTRAP_FILENAME, bootstrapSha256);
+    await replaceWorkspaceAttestation({
+      ...options,
+      workspaceDir,
+      attestedAtMs,
+      generatedHashes,
+    });
     return mergeWorkspaceSetupState(workspaceDir, { bootstrapSeededAt }, nowMs, options);
   }
   return execute(options, {
     type: "templates.add.mergeBootstrapSetupState",
-    input: { workspaceDir, bootstrapSeededAt, nowMs },
+    input: { workspaceDir, bootstrapSeededAt, bootstrapSha256, nowMs },
   });
 }
 
