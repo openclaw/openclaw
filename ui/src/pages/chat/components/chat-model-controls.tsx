@@ -707,7 +707,7 @@ export function ChatModelControls(props: ModelControlsViewProps) {
   return (
     <div
       class="chat-controls__session chat-controls__model chat-controls__model-settings"
-      data-model-defaults-pending={controls().model.triggerLabelPending ? "true" : undefined}
+      data-model-pending={controls().model.triggerLabelPending ? "true" : undefined}
     >
       <ChatModelPicker {...controls().model} />
       {props.showEffort !== false && controls().showEffort ? (

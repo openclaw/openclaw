@@ -178,11 +178,7 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               ? "true"
               : "false"
           }
-          aria-label={
-            params.triggerLabelPending
-              ? t("chat.selectors.model")
-              : `${t("chat.selectors.model")}: ${triggerTitle()}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`
-          }
+          aria-label={`${t("chat.selectors.model")}${params.triggerLabelPending ? "" : `: ${triggerTitle()}`}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
           aria-busy="false"
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}

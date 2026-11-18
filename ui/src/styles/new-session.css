@@ -331,10 +331,6 @@ span.new-session-page__select {
   font-family: inherit;
 }
 
-.new-session-page__trigger::-webkit-details-marker {
-  display: none;
-}
-
 .new-session-page__trigger:hover:not(:disabled),
 .new-session-page__trigger[aria-expanded="true"],
 .new-session-page__browser-nav:hover:not(:disabled) {
@@ -1562,53 +1558,35 @@ span.new-session-page__select {
   }
 }
 
-/* Reserve a short label instead of flashing generic copy on cold start. */
-.new-session-page
-  [data-model-defaults-pending]
-  .chat-controls__model-trigger
-  .chat-controls__inline-select-label {
-  flex: 0 1 6ch;
-  width: 6ch;
-}
-
-.new-session-page
-  [data-model-defaults-pending]
-  .chat-controls__model-trigger
-  .chat-controls__inline-select-chevron {
+/* Keep the model and effort slots in place while their labels are unknown. */
+[data-model-pending] .chat-controls__inline-select-chevron,
+[data-model-pending] .chat-controls__effort-picker--reserved > summary {
   visibility: hidden;
 }
 
-/* Reuse the inert effort slot for first paint, not for background catalog reads. */
-.new-session-page [data-model-defaults-pending] .chat-controls__effort-picker--reserved {
+[data-model-pending] .chat-controls__effort-picker--reserved {
   position: relative;
   display: block;
   visibility: visible;
 }
 
-.new-session-page [data-model-defaults-pending] .chat-controls__effort-picker--reserved > summary {
-  visibility: hidden;
-}
-
-.new-session-page [data-model-defaults-pending] .chat-controls__effort-picker--reserved::after {
+[data-model-pending] .chat-controls__effort-picker--reserved::after {
   position: absolute;
-  inset-block-start: calc(50% - 4px);
-  inset-inline-start: 25%;
-  width: 50%;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 12%, transparent);
-  content: "";
+  inset: calc(50% - 4px) 25% auto;
 }
 
-.new-session-page
-  [data-model-defaults-pending]
-  .chat-controls__model-trigger
-  .chat-controls__inline-select-label::before {
+[data-model-pending] .chat-controls__inline-select-label:empty,
+[data-model-pending] .chat-controls__effort-picker--reserved::after,
+.new-session-page__trigger[aria-busy="true"] > .new-session-page__trigger-label::before {
   display: block;
   height: 8px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--text) 12%, transparent);
   content: "";
+}
+
+[data-model-pending] .chat-controls__inline-select-label:empty {
+  width: 6ch;
 }
 
 /* The context tray tucks behind the composer; each picker anchors its own menu. */
@@ -1711,24 +1689,8 @@ span.new-session-page__select {
 }
 
 .new-session-page__context-tray .new-session-page__trigger-label {
-  min-width: 0;
-  max-width: 300px;
-}
-
-.new-session-page__select--where > .new-session-page__trigger > .new-session-page__trigger-label,
-.new-session-page__select--project > .new-session-page__trigger > .new-session-page__trigger-label {
-  /* Short resolved names and their placeholders occupy the same track. */
   min-inline-size: 8ch;
-  text-align: start;
-}
-
-.new-session-page__trigger[aria-busy="true"] > .new-session-page__trigger-label::before {
-  display: block;
-  width: 6ch;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 12%, transparent);
-  content: "";
+  max-width: 300px;
 }
 
 .new-session-page__picker-chevron {
@@ -1805,9 +1767,7 @@ span.new-session-page__select {
 }
 
 .new-session-page__context-tray .new-session-page__picker-popover input,
-.new-session-page__context-tray .new-session-page__picker-popover input:hover,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+.new-session-page__context-tray .new-session-page__picker-popover input:is(:hover, :focus) {
   /* A field stands a touch taller than the rows it sits with. */
   height: calc(var(--picker-row-height) + 2px);
   padding-inline: var(--picker-row-inset);
@@ -1819,8 +1779,7 @@ span.new-session-page__select {
   box-shadow: none;
 }
 
-.new-session-page__context-tray .new-session-page__picker-popover input:focus,
-.new-session-page__context-tray .new-session-page__picker-popover input:focus-visible {
+.new-session-page__context-tray .new-session-page__picker-popover input:focus {
   background: color-mix(in srgb, var(--chat-composer-surface) 60%, var(--new-session-tray-surface));
 }
 
@@ -1840,24 +1799,6 @@ span.new-session-page__select {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--text) 20%, transparent) transparent;
   scroll-padding-block: 28px 4px;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar {
-  width: 10px;
-  background: transparent;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-track,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.new-session-page__picker-popover .new-session-page__picker-root::-webkit-scrollbar-thumb,
-.new-session-page__picker-popover .new-session-page__environment-list::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--text) 20%, transparent) padding-box;
 }
 
 .new-session-page__project-popover .new-session-page__picker-root {

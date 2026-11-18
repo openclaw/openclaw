@@ -111,7 +111,7 @@ suite.define(() => {
       methodResponses: {
         "agents.list": {
           ...agents,
-          agents: agents.agents.map((agent) => ({ ...agent, workspaceGit: false })),
+          agents: [{ ...agents.agents[0], workspaceGit: false }],
         },
       },
     });
