@@ -679,7 +679,7 @@ describe("ManagedWorktreeService branch discovery", () => {
       ["alpha-old", "2020-01-01T00:00:00Z"],
       ["zulu-new", "2024-01-01T00:00:00Z"],
       ["mid", "2022-01-01T00:00:00Z"],
-    ]) {
+    ] as const) {
       vi.stubEnv("GIT_COMMITTER_DATE", date);
       await git(repo, "branch", name, await createChildCommit("HEAD^{tree}", name));
     }
