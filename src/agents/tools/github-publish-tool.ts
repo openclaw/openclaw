@@ -20,6 +20,7 @@ import {
   type SessionGitHubPublishParams,
   SessionGitHubPublishParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
 import { captureExecRequestOwners } from "../../infra/exec-request-context.js";
 import { resolveReplyRunForCurrentSessionId } from "../../sessions/session-controller.identity.js";
 import { findSessionControllerOperationByRunId } from "../../sessions/session-controller.queries.js";
@@ -36,10 +37,7 @@ import {
   withGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
-import {
-  callAgentToolGatewayRequest,
-  callInProcessGatewayTool as callGateway,
-} from "./in-process-gateway.js";
+import { callAgentToolGatewayRequest, callInProcessGatewayTool } from "./in-process-gateway.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const publicationOperatorActions = GitHubPublicationActionSchema.properties.action.anyOf.map(
@@ -241,6 +239,15 @@ export function createGitHubPublishTool(
       if (!caller?.sessionKey) {
         throw new Error("GitHub publication requires the current Gateway session.");
       }
+      // Bound the response wait, including Code Mode callers. A timeout does not undo
+      // accepted Gateway work; inspect its existing receipt before retrying.
+      const callGateway: typeof callInProcessGatewayTool = (...args) =>
+        waitForGatewayDispatch(
+          args[0],
+          callInProcessGatewayTool(...args),
+          args[2]?.timeoutMs ?? 600_000,
+          signal,
+        );
       if (action === "readiness") {
         if (
           Object.keys(input).some(
