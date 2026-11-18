@@ -202,6 +202,52 @@ it("selects advertised classes for the draft OS and retains custom values across
   }
 });
 
+it("offers Linux machine classes when the applied target is unset and the catalog omits its single OS", async () => {
+  const config = {
+    cloudWorkers: { profiles: { worker: machineProfile("standard", { target: undefined }) } },
+  };
+  const request = createGatewayRequestMock(async (method) => {
+    if (method === "config.get") {
+      return configSnapshot(config, "initial");
+    }
+    if (method === "environments.list") {
+      return {
+        environments: [],
+        profiles: [
+          {
+            id: "worker",
+            providerId: "crabbox",
+            machines: [
+              { id: "standard", label: "Standard", os: "linux", default: true },
+              { id: "large", label: "Large", os: "linux" },
+            ],
+          },
+        ],
+      };
+    }
+    throw new Error(`Unexpected request ${method}`);
+  });
+  const { runtimeConfig, view, page } = mountProfiles(createTestGatewayClient(request));
+  try {
+    await waitForSolid(() =>
+      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
+    );
+    click(profileRow(page, "worker"), "Edit");
+    expect(osSelect(page)).toBeNull();
+    const picker = expectDefined(
+      page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class"),
+      "device class picker for applied default OS",
+    );
+    picker.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="large"]')).not.toBeNull(),
+    );
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});
+
 it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
   const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
   const catalog = {

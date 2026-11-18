@@ -492,12 +492,20 @@ export function CloudWorkersPage() {
     const systems = () => advertised()?.summary?.operatingSystems ?? [];
     const machines = createMemo(() => {
       const current = advertised();
-      const os =
-        view.draft.target ||
-        (current?.configured.target === view.draft.target
-          ? current.summary?.operatingSystems?.find((system) => system.default)?.id
-          : undefined);
-      return (current?.summary?.machines ?? [])
+      const options = current?.summary?.machines ?? [];
+      let os = view.draft.target;
+      if (current && !os && !current.configured.target) {
+        const systems = current.summary?.operatingSystems;
+        os = systems?.find((system) => system.default)?.id ?? "";
+        if (!systems?.length) {
+          // The Gateway omits a singleton OS list; use its machine tags only if they agree.
+          const single = options.find((machine) => machine.os)?.os;
+          if (single && options.every((machine) => !machine.os || machine.os === single)) {
+            os = single;
+          }
+        }
+      }
+      return options
         .filter((machine) => !machine.os || machine.os === os)
         .map((machine) => ({ value: machine.id, label: machine.label }));
     });
