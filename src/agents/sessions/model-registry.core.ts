@@ -231,6 +231,7 @@ export class ModelRegistry {
 
   /** Parse owner-prepared catalogs without opening their persistence store. */
   static fromCapturedSources(
+    this: void,
     authStorage: AuthStorage,
     modelsJsonPath: string,
     options: ModelRegistryOptions & { pluginCatalogs: readonly PersistedPluginModelCatalog[] },

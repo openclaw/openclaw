@@ -40,6 +40,8 @@ if (values.owner) {
 }
 const { runIsolatedCompletion } = await import("../../src/agents/isolated-completion.js");
 const { ModelRegistry } = await import("../../src/agents/sessions/model-registry.core.js");
+const createRegistryAsync = ModelRegistry.createAsync;
+const registryFromCapturedSources = ModelRegistry.fromCapturedSources;
 const { refreshPreparedModelRuntimeSnapshots } =
   await import("../../src/agents/prepared-model-runtime.js");
 const { withOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.js");
@@ -59,6 +61,31 @@ try {
     { label: "isolated-completion-registry", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
       let requests = 0;
+      let ownerWallMs = 0,
+        ownerCpuUs = 0,
+        ownerCalls = 0;
+      const observeRegistry = (registry: ReturnType<typeof registryFromCapturedSources>) => {
+        const fork = registry.fork.bind(registry);
+        registry.fork = (...args) => {
+          const start = performance.now(),
+            cpu = process.threadCpuUsage();
+          try {
+            return fork(...args);
+          } finally {
+            const used = process.threadCpuUsage(cpu);
+            ownerCpuUs += used.user + used.system;
+            ownerWallMs += performance.now() - start;
+            ownerCalls++;
+          }
+        };
+        return registry;
+      };
+      if (!values.allocation && !values.counts) {
+        ModelRegistry.createAsync = async (...args) =>
+          observeRegistry(await createRegistryAsync(...args));
+        ModelRegistry.fromCapturedSources = (...args) =>
+          observeRegistry(registryFromCapturedSources(...args));
+      }
       await using server = await startCompletionServer((request, response) => {
         let body = "";
         request.setEncoding("utf8");
@@ -137,23 +164,9 @@ try {
         const coldAndWarmupMs = performance.now() - cold;
         await inspector.post("HeapProfiler.collectGarbage");
         const clone = globalThis.structuredClone;
-        // oxlint-disable-next-line typescript/unbound-method -- Forward the live receiver with apply and restore the exact method after measurement.
-        const fork = ModelRegistry.prototype.fork;
-        let ownerWallMs = 0,
-          ownerCpuUs = 0;
-        if (!values.allocation && !values.counts) {
-          ModelRegistry.prototype.fork = function (...args) {
-            const start = performance.now(),
-              cpu = process.threadCpuUsage();
-            try {
-              return fork.apply(this, args);
-            } finally {
-              const used = process.threadCpuUsage(cpu);
-              ownerCpuUs += used.user + used.system;
-              ownerWallMs += performance.now() - start;
-            }
-          };
-        }
+        ownerWallMs = 0;
+        ownerCpuUs = 0;
+        ownerCalls = 0;
         let catalogClones = 0,
           copiedRows = 0;
         const fullCloneStacks = new Set<string>();
@@ -184,7 +197,6 @@ try {
           await run(iterations);
         } finally {
           globalThis.structuredClone = clone;
-          ModelRegistry.prototype.fork = fork;
         }
         const wallMs = performance.now() - start,
           cpu = process.cpuUsage(cpu0);
@@ -192,6 +204,9 @@ try {
           ? (await inspector.post("HeapProfiler.stopSampling")).profile
           : undefined;
         assert.equal(requests - requestStart, iterations);
+        if (!values.allocation && !values.counts) {
+          assert.equal(ownerCalls, iterations);
+        }
         console.log(
           JSON.stringify({
             ownerSha256: hash("sha256", source),
@@ -218,5 +233,7 @@ try {
     },
   );
 } finally {
+  ModelRegistry.createAsync = createRegistryAsync;
+  ModelRegistry.fromCapturedSources = registryFromCapturedSources;
   inspector.disconnect();
 }
