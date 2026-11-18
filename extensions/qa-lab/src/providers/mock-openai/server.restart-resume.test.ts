@@ -1,3 +1,4 @@
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "openclaw/plugin-sdk/qa-runtime";
 import { expect, it } from "vitest";
 import type { ResponsesInputItem } from "./mock-openai-contracts.js";
 import {
@@ -47,9 +48,7 @@ it("advances ordinary QA tool work once per fresh Gateway resume input", async (
     input.push(
       wait,
       makeToolOutputWithCallId(String(wait.call_id), "The run was aborted."),
-      makeUserInput(
-        "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.",
-      ),
+      makeUserInput(RESTART_RECOVERY_INTERRUPTION_NOTE),
     );
   }
 
