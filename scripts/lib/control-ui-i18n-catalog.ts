@@ -567,7 +567,6 @@ export function loadControlUiSourceCatalog(): TranslationMap {
       skillGroups: registerSkillLibraryEnglish.catalog.skillGroups,
       skillStatus: registerSkillLibraryEnglish.catalog.skillStatus,
       pluginUi: registerPluginManagementEnglish.catalog.pluginUi,
-      labsPage: { ...en.labsPage, swarm: registerLabsEnglish.catalog.labsPage.swarm },
       aboutPage: registerAboutEnglish.catalog.aboutPage,
       dashboardsPage: registerDashboardsEnglish.catalog.dashboardsPage,
       worktrees: registerSessionOrganizationEnglish.catalog.worktrees,

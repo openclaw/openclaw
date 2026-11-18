@@ -3,20 +3,6 @@ import { en } from "./en.ts";
 
 const enLabs = {
   labsPage: {
-    swarm: {
-      groupTitle: "Parallel tasks",
-      progress: "{complete} of {total}",
-      active: "{running} running · {queued} queued · {failed} failed or stopped",
-      finished: "{done} completed · {failed} failed or stopped",
-      completed: "{done} completed",
-      failedOrStopped: "Failed or stopped",
-      childOutcome: "Subagents finished. Check the conversation for the final reply.",
-      childOutcomeProcessing: "Subagents finished. The parent agent is processing their results.",
-      details: "Subagent details",
-      detailsUnavailable:
-        "Subagent details are unavailable. Counts include all accepted subagents.",
-      otherGroups: "{count} more active groups",
-    },
     decisionAssistance: {
       title: "Decision assistance",
       description: "Enable experimental assistance from your configured Decision model.",
@@ -85,9 +71,7 @@ const enLabs = {
 
 export const registerLabsEnglish = Object.assign(
   () => {
-    const { swarm, ...labsPage } = enLabs.labsPage;
-    Object.assign(en.labsPage, labsPage);
-    Object.assign(en.labsPage.swarm, swarm);
+    Object.assign(en.labsPage, enLabs.labsPage);
   },
   { catalog: enLabs },
 );
