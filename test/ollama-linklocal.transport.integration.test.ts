@@ -23,10 +23,15 @@ const fixture = vi.hoisted(() => ({
   redirectLocation: "",
 }));
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup: (hostname: string) => fixture.lookup(hostname),
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: (hostname: string) => fixture.lookup(hostname),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 vi.mock("../src/infra/net/runtime-fetch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/infra/net/runtime-fetch.js")>();

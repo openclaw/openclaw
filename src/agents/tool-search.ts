@@ -49,7 +49,12 @@ import {
   formatToolSearchControlResult,
   ToolSearchRuntime,
 } from "./tool-search-runtime.js";
-import type { ToolSearchCatalogRef, ToolSearchToolContext } from "./tool-search-types.js";
+import type {
+  ToolSearchCatalogRef,
+  ToolSearchCatalogSession,
+  ToolSearchToolContext,
+} from "./tool-search-types.js";
+import { hasToolUsageRanking, type ToolUsageRankingSnapshot } from "./tool-usage-ranking.js";
 import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
@@ -61,6 +66,7 @@ export {
 } from "./tool-search-catalog.js";
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {
+  buildRunGrantedToolDirectory,
   buildToolSchemaDirectoryPrompt,
   resolveToolSearchCatalogTool,
 } from "./tool-search-directory.js";
@@ -261,6 +267,35 @@ export function applyToolSearchCatalog(params: {
         : tool,
     ),
   };
+}
+
+/**
+ * The ranking snapshot depends on the registered catalog, so it reaches the MCP
+ * directory after `applyToolSearchCatalog`. Only the unranked directory this
+ * catalog produced is replaced; without learned usage the tools are unchanged.
+ */
+export function applyUsageRankedMcpToolSearchDirectory(
+  tools: AnyAgentTool[],
+  catalog: ToolSearchCatalogSession | undefined,
+  usageRanking: ToolUsageRankingSnapshot | undefined,
+): AnyAgentTool[] {
+  if (!catalog || !hasToolUsageRanking(usageRanking)) {
+    return tools;
+  }
+  const directory = buildMcpToolSearchDirectory(catalog);
+  const ranked = buildMcpToolSearchDirectory(catalog, usageRanking);
+  if (!directory || ranked === directory) {
+    return tools;
+  }
+  const unrankedDescription = `${TOOL_SEARCH_DESCRIPTION}\n\n${directory}`;
+  return tools.map((tool) =>
+    tool.name === TOOL_SEARCH_RAW_TOOL_NAME && tool.description === unrankedDescription
+      ? copyAgentToolMetadata(tool, {
+          ...tool,
+          description: `${TOOL_SEARCH_DESCRIPTION}\n\n${ranked}`,
+        })
+      : tool,
+  );
 }
 
 export { applyToolSchemaDirectoryCatalog };

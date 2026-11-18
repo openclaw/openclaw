@@ -1,5 +1,5 @@
 {
-  "commit": "b556fdf457b026574bf0f1e7b4914b15f3f179ce",
+  "commit": "e13cf15ece9bbd969b7362927c315362c90c97ff",
   "entrypoints": {
     "account-core": [
       "DEFAULT_ACCOUNT_ID",
@@ -68,7 +68,8 @@
       "createOpenClawCodingToolsAsync",
       "disposeRegisteredAgentHarnesses",
       "resolveActiveEmbeddedRunSessionId",
-      "resolveWebSearchToolPolicy"
+      "resolveWebSearchToolPolicy",
+      "resolveWebSearchToolPolicyAsync"
     ],
     "agent-harness-runtime": [
       "AgentApprovalEventData",
@@ -148,9 +149,7 @@
       "ExecAutoReviewer",
       "FAST_MODE_AUTO_PROGRESS_KIND",
       "FastModeAutoProgressState",
-      "HEARTBEAT_RESPONSE_TOOL_NAME",
       "HarnessContextEngine",
-      "HeartbeatToolResponse",
       "LlmBoundaryTokenPressure",
       "LoadCodexBundleMcpThreadConfigParams",
       "McpToolCatalog",
@@ -174,6 +173,7 @@
       "SandboxWorkspaceAccess",
       "SessionMcpRuntime",
       "SessionWriteLockAcquireTimeoutConfig",
+      "StreamingDirectiveAccumulator",
       "TOOL_PROGRESS_OUTPUT_MAX_CHARS",
       "ToolProgressDetailMode",
       "ToolResultFailureKind",
@@ -220,6 +220,7 @@
       "consumePreExecutionBlockedToolCall",
       "createAgentToolResultMiddlewareRunner",
       "createCodexAppServerToolResultExtensionRunner",
+      "createStreamingDirectiveAccumulator",
       "decodeHeaderEnvPlaceholder",
       "deliverAgentHarnessUserInputPrompt",
       "detectAndLoadAgentHarnessPromptImages",
@@ -276,6 +277,7 @@
       "isSubagentSessionKey",
       "isToolResultError",
       "isToolWrappedWithBeforeToolCallHook",
+      "isTranscriptOnlyOpenClawAssistantMessage",
       "listNodes",
       "loadAgentHarnessMcpConfig",
       "loadCodexBundleMcpThreadConfig",
@@ -285,11 +287,11 @@
       "nativeHookRelayTesting",
       "normalizeAgentHarnessUserInputAnswer",
       "normalizeAgentRuntimeTools",
-      "normalizeHeartbeatToolResponse",
       "normalizeProviderToolSchemas",
       "normalizeQuestionTimeoutSeconds",
       "normalizeUsage",
       "onAgentEvent",
+      "prepareAgentRunTerminalReply",
       "prepareAgentRuntimeAuth",
       "prepareAgentWorkspaceContext",
       "prepareHarnessNativeMcpAppPreview",
@@ -323,6 +325,7 @@
       "resolveEmbeddedAttemptToolConstructionPlan",
       "resolveFastModeForElapsed",
       "resolveMainSessionDelegationMode",
+      "resolveMessageToolSourceReplyFinal",
       "resolveModelAuthMode",
       "resolveModelAuthModeAsync",
       "resolveNativeHookRelayDeferredToolApproval",
@@ -472,7 +475,9 @@
       "prepareAgentWorkspaceAttachments",
       "readWorkspaceSkillResources",
       "registerAgentWorkspaceAccess",
-      "resolveWorkspaceWorkerArgv"
+      "resolveWorkspaceWorkerArgv",
+      "resolveWorkspaceWorkerExecArgv",
+      "resolveWorkspaceWorkerUrl"
     ],
     "allow-from": [
       "AllowlistMatch",
@@ -1133,6 +1138,7 @@
       "fanInChannelIngressLifecycles",
       "identityEntryAuthenticationClassifier",
       "meetsIdentifierAuthentication",
+      "prepareChannelIngressEvent",
       "readChannelIngressStoreAllowFromForDmPolicy",
       "resolveChannelImplicitMentions",
       "resolveChannelMessageIngress",
@@ -1656,11 +1662,22 @@
       "replaceConfigFile",
       "updateConfig"
     ],
+    "context-engine-transcript-runtime": [
+      "SessionTranscriptMessageEntry",
+      "SessionTranscriptReadFenceError",
+      "SessionTranscriptVisibleMessageDeltaParams",
+      "SessionTranscriptVisibleMessageDeltaResult",
+      "readSessionTranscriptVisibleMessageDelta"
+    ],
     "control-ui": [
+      "AgentsWorkspaceGetResult",
       "ControlUiAccessory",
       "ControlUiAction",
       "ControlUiAgent",
       "ControlUiAgentPickerProps",
+      "ControlUiChannelSettingsContext",
+      "ControlUiChannelSettingsSnapshot",
+      "ControlUiChannelSettingsView",
       "ControlUiComponentHandle",
       "ControlUiComponents",
       "ControlUiConnection",
@@ -1680,11 +1697,18 @@
       "ControlUiSessionListResult",
       "ControlUiSessionListSnapshot",
       "ControlUiSessionListSubscription",
+      "ControlUiSettingsComponents",
+      "ControlUiSettingsContext",
+      "ControlUiSettingsPlacement",
+      "ControlUiSettingsSnapshot",
+      "ControlUiSettingsView",
       "ControlUiSurface",
       "ControlUiSurfaceProps",
       "ControlUiView",
       "ControlUiViewContext",
       "ControlUiWidget",
+      "DoctorMemoryStatusPayload",
+      "MemorySearchResponse",
       "createSessionHeaderLink",
       "defineControlUiPlugin"
     ],
@@ -1865,6 +1889,7 @@
       "ProviderPrepareDynamicModelContext",
       "ProviderPrepareExtraParamsContext",
       "ProviderPrepareRuntimeAuthContext",
+      "ProviderPrepareRuntimeAuthContextV2",
       "ProviderPreparedRuntimeAuth",
       "ProviderReasoningOutputMode",
       "ProviderReasoningOutputModeContext",
@@ -1878,6 +1903,7 @@
       "ProviderResolveUsageAuthContext",
       "ProviderResolveWebSocketSessionPolicyContext",
       "ProviderResolvedUsageAuth",
+      "ProviderRuntimeAuthModel",
       "ProviderRuntimeModel",
       "ProviderSanitizeReplayHistoryContext",
       "ProviderSanitizeReplayHistoryContextV2",
@@ -1976,6 +2002,7 @@
     ],
     "database-engine-runtime": [
       "DatabaseEngineInput",
+      "getDatabaseEngineInput",
       "openEngineWorkerStore",
       "resolveDatabaseEngineInput",
       "runEngineStoreOperation"
@@ -1984,26 +2011,62 @@
       "DatabaseEngineAdapter",
       "DatabaseEngineInput",
       "EngineConnection",
+      "FullTextCapability",
+      "SearchSchema",
+      "SearchStore",
       "StoreSchema",
+      "StoreSearchCapabilities",
+      "TextIndex",
+      "TextIndexDefinition",
+      "TextQuery",
+      "VectorCapability",
+      "VectorIndex",
+      "VectorSearch",
+      "admitStoreSearch",
+      "jsonPathValue",
       "openEngineStore",
+      "postgresIndexOrderingMigration",
       "runEngineStoreReadSnapshot",
       "runEngineWorkerWrite",
-      "withEngineStoreAdmission"
+      "withEngineStoreAdmission",
+      "withLegacyPostgresIndexOrdering"
     ],
     "decisions": [
       "DecisionAnswer",
+      "DecisionAnswerV2",
       "DecisionBatch",
       "DecisionBatchResult",
+      "DecisionBatchResultV2",
+      "DecisionBatchV2",
+      "DecisionContentV2",
+      "DecisionContractError",
       "DecisionEntry",
+      "DecisionEvaluateOptionsV2",
       "DecisionOutcome",
+      "DecisionOutcomeV2",
+      "DecisionProviderContextV2",
       "DecisionProviderV1",
+      "DecisionProviderV2",
       "DecisionQuestion",
+      "DecisionQuestionV2",
       "DecisionRuntimeV1",
+      "DecisionRuntimeV2",
       "JsonValue",
+      "ModelInferenceCapabilitiesSchema",
       "ProviderDecisionOutcome",
+      "ProviderDecisionOutcomeV2",
       "ProviderFailureReason",
-      "UnavailableReason"
+      "UnavailableReason",
+      "decisionBatchV1ToV2",
+      "decisionBatchV2ToV1",
+      "decisionResultV1ToV2",
+      "decisionResultV2ToV1",
+      "decodeSystemOneResponse",
+      "encodeSystemOneQuestions",
+      "validateDecisionBatchV2",
+      "validateDecisionResultV2"
     ],
+    "decisions-openai-runtime": ["evaluateOpenAICompatibleDecision", "supportsOpenAIDecisionBatch"],
     "dedupe-runtime": [
       "PersistentDedupeCache",
       "createDedupeCache",
@@ -2103,6 +2166,7 @@
       "formatErrorMessageForDisplay",
       "formatUncaughtError",
       "isApprovalNotFoundError",
+      "materializeErrorStack",
       "readErrorName",
       "toErrorObject",
       "toStringifiedError"
@@ -2127,6 +2191,7 @@
     ],
     "feature-contract": [
       "FeatureClient",
+      "FeatureClientContract",
       "FeatureContract",
       "FeatureDisposer",
       "FeatureEvent",
@@ -2355,6 +2420,7 @@
       "resolveMessagePresentationControlValue",
       "resolveMessagePresentationOptionAction"
     ],
+    "json-schema-validator": ["JsonSchemaValidatorProvider", "createJsonSchemaValidatorProvider"],
     "json-store": ["loadJsonFile", "saveJsonFile", "writeJsonFileAtomically"],
     "lazy-runtime": [
       "createLazyRuntimeMethod",
@@ -2734,6 +2800,7 @@
       "createPluginCommandRuntime"
     ],
     "plugin-config-runtime": [
+      "createPluginConfigParser",
       "mergeDeep",
       "normalizePluginsConfig",
       "requireRuntimeConfig",
@@ -2798,6 +2865,9 @@
       "PluginConversationBindingResolvedEvent",
       "PluginHeartbeatPromptContributionEvent",
       "PluginHeartbeatPromptContributionResult",
+      "PluginHookBeforeChannelIngressContext",
+      "PluginHookBeforeChannelIngressEvent",
+      "PluginHookBeforeChannelIngressResult",
       "PluginHookInboundClaimContext",
       "PluginHookInboundClaimEvent",
       "PluginHookInboundClaimResult",
@@ -2863,6 +2933,7 @@
       "ProviderPrepareDynamicModelContext",
       "ProviderPrepareExtraParamsContext",
       "ProviderPrepareRuntimeAuthContext",
+      "ProviderPrepareRuntimeAuthContextV2",
       "ProviderPreparedRuntimeAuth",
       "ProviderReasoningOutputMode",
       "ProviderReasoningOutputModeContext",
@@ -2878,6 +2949,7 @@
       "ProviderResolveUsageAuthContext",
       "ProviderResolveWebSocketSessionPolicyContext",
       "ProviderResolvedUsageAuth",
+      "ProviderRuntimeAuthModel",
       "ProviderRuntimeModel",
       "ProviderSanitizeReplayHistoryContext",
       "ProviderSanitizeReplayHistoryContextV2",
@@ -2946,6 +3018,7 @@
     ],
     "provider-auth": [
       "ApiKeyStorageOptions",
+      "AuthProfileCredential",
       "AuthProfileStore",
       "CLAUDE_CLI_PROFILE_ID",
       "CODEX_CLI_PROFILE_ID",
@@ -2966,6 +3039,7 @@
       "SecretInputMode",
       "WriteOAuthCredentialsOptions",
       "applyAuthProfileConfig",
+      "applyProviderAuthConfigPatch",
       "buildApiKeyCredential",
       "buildCopilotIdeHeaders",
       "buildOauthProviderAuthResult",
@@ -2996,6 +3070,7 @@
       "listProfilesForProvider",
       "listUsableProviderAuthProfileIds",
       "listUsableProviderAuthProfileIdsAsync",
+      "loadAuthProfileStoreForRuntimeAsync",
       "normalizeApiKeyConfig",
       "normalizeApiKeyInput",
       "normalizeGithubCopilotDomain",
@@ -3037,6 +3112,7 @@
       "resolveOwningPluginIdsForProvider",
       "resolvePluginProviders"
     ],
+    "provider-request-headers": ["ModelRequestHeaders", "omitNullRequestHeaders"],
     "proxy-capture": [
       "AsyncDebugProxyCaptureReader",
       "AsyncDebugProxyCaptureStore",
@@ -3069,13 +3145,10 @@
     "reply-chunking": [
       "ChunkMode",
       "ReplyPayload",
-      "SILENT_REPLY_TOKEN",
       "chunkByParagraph",
       "chunkMarkdownTextWithMode",
       "chunkText",
       "chunkTextWithMode",
-      "isSilentReplyPayloadText",
-      "isSilentReplyText",
       "resolveChunkMode",
       "resolveTextChunkLimit"
     ],
@@ -3162,11 +3235,8 @@
       "ChunkMode",
       "CommandTurnContext",
       "ConversationLabelParams",
-      "DEFAULT_HEARTBEAT_ACK_MAX_CHARS",
       "FinalizedMsgContext",
       "GetReplyOptions",
-      "HEARTBEAT_PROMPT",
-      "HEARTBEAT_TOKEN",
       "MsgContext",
       "PreparedAgentRunStart",
       "ReplyDispatchBeforeDeliverOptions",
@@ -3203,12 +3273,9 @@
       "parseActivationCommand",
       "resetInboundDedupe",
       "resolveChunkMode",
-      "resolveHeartbeatPromptCore",
-      "resolveHeartbeatReplyPayload",
       "resolveInboundDebounceMs",
       "resolveTextChunkLimit",
-      "settleReplyDispatcher",
-      "stripHeartbeatToken"
+      "settleReplyDispatcher"
     ],
     "root-walk": ["RootWalkEntry", "RootWalkOptions", "walkRootDirectory"],
     "routing": [
@@ -3281,7 +3348,10 @@
     ],
     "runtime-env": [
       "BackoffPolicy",
+      "RuntimeDynamicExecutionFeature",
       "RuntimeEnv",
+      "RuntimeExecutionProfile",
+      "annotateRuntimeExecutionError",
       "computeBackoff",
       "createNonExitingRuntime",
       "createSubsystemLogger",
@@ -3291,11 +3361,13 @@
       "formatDurationPrecise",
       "formatDurationSeconds",
       "getChildLogger",
+      "getRuntimeExecutionProfile",
       "info",
       "isTruthyEnvValue",
       "isVerbose",
       "isWSL2Sync",
       "logVerbose",
+      "noteRuntimeDynamicExecution",
       "registerUncaughtExceptionHandler",
       "registerUnhandledRejectionHandler",
       "resetLogger",
@@ -3316,6 +3388,7 @@
       "resolveOpenProviderRuntimeGroupPolicy",
       "warnMissingProviderGroupPolicyFallbackOnce"
     ],
+    "runtime-profile": ["RuntimeExecutionProfile", "getRuntimeExecutionProfile"],
     "runtime-store": ["PluginRuntime", "createPluginRuntimeStore"],
     "secret-file": [
       "SecretFileReadOptions",
@@ -3505,6 +3578,8 @@
       "SessionRecentConversationText",
       "SessionScope",
       "SessionStoreAgentIdRequiredError",
+      "SessionStoreSelectedEntries",
+      "SessionStoreSelectedEntry",
       "SessionStoreTranscriptEvent",
       "SqliteSessionFileMarker",
       "applySessionEntryPatch",
@@ -3559,7 +3634,8 @@
       "updateLastRoute",
       "updateLastRouteWithAuthority",
       "updateSessionStoreEntry",
-      "upsertSessionEntry"
+      "upsertSessionEntry",
+      "withSessionEntriesAsync"
     ],
     "setup": [
       "ChannelSetupAdapter",
@@ -3913,6 +3989,7 @@
     "tool-plugin": [
       "DefineToolPluginOptions",
       "DefinedToolPluginEntry",
+      "ToolArgumentValidationError",
       "ToolPluginExecutionContext",
       "ToolPluginFactoryContext",
       "ToolPluginMetadata",
@@ -3920,6 +3997,7 @@
       "ToolPluginToolDefinition",
       "defineToolPlugin",
       "getToolPluginMetadata",
+      "openRecord",
       "toolPluginMetadataSymbol"
     ],
     "tool-results": ["AgentToolResult", "jsonResult", "textResult"],
@@ -4025,6 +4103,6 @@
       "isCompleteHtmlDocument"
     ]
   },
-  "release": "v2026.11.2",
+  "release": "v2026.11.5",
   "schema": "openclaw.plugin-sdk-shipped-surface/v1"
 }

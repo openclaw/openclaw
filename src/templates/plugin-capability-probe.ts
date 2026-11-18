@@ -24,9 +24,14 @@ import {
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { CONVERSATION_ACCESS_SURFACE_ENTRY } from "../plugins/manifest-contract-keys.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveTemplatePluginSetupRequirements } from "./package-setup-requirements.js";
+import {
+  displayableTemplatePluginId,
+  templatePluginAllowlistMessage,
+} from "./plugin-allowlist-blocker.js";
 import type { TemplatePackage, TemplatePackagePreflightResult } from "./types.js";
 
 export function inspectTemplatePluginCapabilities(
@@ -40,12 +45,15 @@ export function inspectTemplatePluginCapabilities(
     config,
     currentArtifactDir,
   });
+  // Approval covers the package, so every entry gets the grant any sibling declares.
+  const conversationAccessAccepted = declared.contracts.includes(CONVERSATION_ACCESS_SURFACE_ENTRY);
   return {
     declared,
     grants: buildPluginCapabilitySummary({
       manifest: manifest ?? {},
       origin: "global",
       entryConfig: config.plugins?.entries?.[pluginId],
+      conversationAccessAccepted,
     }).grants,
     grantsByPluginId: Object.fromEntries(
       manifests
@@ -56,6 +64,7 @@ export function inspectTemplatePluginCapabilities(
             manifest: ownedManifest,
             origin: "global",
             entryConfig: config.plugins?.entries?.[ownedManifest.id],
+            conversationAccessAccepted,
           }).grants,
         ]),
     ),
@@ -273,6 +282,18 @@ export async function preflightTemplatePluginPackage(
       rootConfig: options.config,
     });
     if (!activation.enabled) {
+      const allowlistPluginId =
+        activation.reason === "not in allowlist" && (!result.ok || result.action === "install")
+          ? displayableTemplatePluginId(probe.pluginId)
+          : undefined;
+      if (allowlistPluginId) {
+        return {
+          ok: false,
+          code: "plugin_disabled",
+          allowlistPluginId,
+          message: templatePluginAllowlistMessage(`${pkg.ref}@${pkg.version}`, allowlistPluginId),
+        };
+      }
       return {
         ok: false,
         code: "plugin_disabled",

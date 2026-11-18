@@ -17,7 +17,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
   releaseSessionControllerClaim,
@@ -45,7 +44,6 @@ import { agentHandlers } from "./agent.js";
 import { resetSubagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 export {
   flushScheduledDispatchStep,
@@ -306,17 +304,6 @@ export function backendGatewayClient(): NonNullable<AgentHandlerArgs["client"]> 
   };
 }
 
-export function cronContinuationGatewayClient(): AgentHandlerArgs["client"] {
-  const client = backendGatewayClient();
-  if (!client) {
-    throw new Error("expected backend gateway client");
-  }
-  return {
-    ...client,
-    internal: { ...client.internal, cronRunContinuation: true },
-  };
-}
-
 export function cronMediaCompletionEvent(): AgentInternalEvent {
   return {
     type: "task_completion",
@@ -330,62 +317,6 @@ export function cronMediaCompletionEvent(): AgentInternalEvent {
     result: "MEDIA:/tmp/header.png",
     replyInstruction: "Continue the original cron task.",
   };
-}
-
-export function readyCronContinuationEntry(): SessionEntry {
-  return {
-    sessionId: "run-1",
-    updatedAt: Date.now(),
-    lifecycleRevision: "revision-1",
-    modelProvider: "openai",
-    model: "gpt-5.4",
-    cronRunContinuation: {
-      lifecycleRevision: "revision-1",
-      phase: "ready",
-      basePersisted: true,
-    },
-  };
-}
-
-export function setupCronContinuationReleaseFixture() {
-  const sessionKey = "agent:main:cron:job-1:run:run-1";
-  const entry: SessionEntry = readyCronContinuationEntry();
-  mocks.loadSessionEntry.mockReturnValue({
-    cfg: {},
-    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
-    canonicalKey: sessionKey,
-    entry,
-  });
-  return {
-    sessionKey,
-    store: { [sessionKey]: structuredClone(entry) } as Record<string, SessionEntry>,
-  };
-}
-
-export async function invokeGatewaySuspendPrepare(
-  context: GatewayRequestContext,
-  requestId: string,
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    suspendHandlers["gateway.suspend.prepare"],
-    'suspendHandlers["gateway.suspend.prepare"] test invariant',
-  )({
-    params: { requestId },
-    respond: respond as never,
-    context: {
-      ...context,
-      cron: {
-        pauseScheduling: vi.fn(),
-        resumeScheduling: vi.fn(),
-        getSuspensionBlockerCount: () => 0,
-      },
-    } as unknown as GatewayRequestContext,
-    req: { type: "req", id: requestId, method: "gateway.suspend.prepare" },
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return respond;
 }
 
 // Operator-write client that is NOT the in-process backend ACP spawn caller:

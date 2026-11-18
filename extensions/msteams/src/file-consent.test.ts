@@ -6,7 +6,15 @@ import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }));
-vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: lookupMock,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();

@@ -1,2 +1,0 @@
-# Prompt-path image gating and snapshot reuse across embedded, CLI recovery, and worker admission.
-162

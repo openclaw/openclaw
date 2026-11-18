@@ -19,7 +19,7 @@ export type TelegramSendWidgetParams = {
   reply_parameters?: { message_id: number };
 };
 
-export type TelegramWidgetMessage = Message & {
+type TelegramWidgetMessage = Message & {
   widget?: { html: string; chat_data?: string; public_data?: string; id?: string };
 };
 

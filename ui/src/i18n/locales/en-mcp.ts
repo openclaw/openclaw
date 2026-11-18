@@ -62,7 +62,7 @@ const enMcp = {
     settings: "Settings",
     apps: "MCP Apps",
     noServers: "No MCP servers yet.",
-    setUpFirstServer: "Add an MCP server",
+    setUpFirstServer: "MCP server setup guide",
     operatorCommands: "Command line",
     operatorCommandsHint: "Status, diagnostics, and runtime reload.",
     serversHelp: "About MCP servers",

@@ -7,6 +7,7 @@ it("keeps cold chat preparation independent of tool construction", () => {
       [
         "src/gateway/server-methods/chat-send-external-entry.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
+        "src/agents/agent-tools.assembly.ts",
       ],
       [
         "src/agents/agent-tools.ts",
@@ -16,6 +17,10 @@ it("keeps cold chat preparation independent of tool construction", () => {
         "src/agents/openclaw-plugin-tools.ts",
         "src/agents/harness/host-capability.ts",
         "src/agents/tools/cron-tool.ts",
+        "src/agents/openclaw-tools.swarm.ts",
+        "src/agents/agent-tools.read.ts",
+        "src/agents/sessions/index.ts",
+        "src/infra/outbound/message.ts",
       ],
     ),
   ).toEqual([]);

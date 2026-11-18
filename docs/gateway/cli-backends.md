@@ -15,9 +15,11 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Images pass through if the CLI accepts image paths.
 
 With Claude CLI, a successful `sessions_yield` closes the current subprocess after
-its tool result is consumed and suppresses later reply text. The next child-completion
-turn resumes the same saved Claude session in a new subprocess. This avoids recording
-the yield as a user interruption; it adds process startup time after a yield.
+its tool result is consumed and suppresses later reply text. A confirmed final
+`message` reply to the current conversation ends the turn the same way, so the chat
+shows that reply without a second native conclusion. The next turn resumes the same
+saved Claude session in a new subprocess. This avoids recording the yield or final
+reply as a user interruption; it adds process startup time to the next turn.
 An intentional yield is not a failed completion and does not trigger model fallback,
 even when it has no final answer. Genuine CLI failures remain eligible for fallback.
 
@@ -188,8 +190,10 @@ Discovery grants no tool execution authority. Discovered calls still pass throug
 OpenClaw's MCP policy and approvals. Tool-free turns do not receive `ToolSearch`.
 Reading a schema does not require permission to execute a shell command.
 
-Operators who want Claude Code's native subagents, workflows, or web search can
-opt in per agent, or for every agent, through the Anthropic plugin config:
+Managed turns keep Claude Code's native `WebSearch` by default, so a Claude login
+without an OpenClaw search provider can still search the web. Operators choose the
+kept Claude Code tools per agent, or for every agent, through the Anthropic plugin
+config. A list replaces the default, so include `WebSearch` to keep it:
 
 ```json5
 {
@@ -198,7 +202,7 @@ opt in per agent, or for every agent, through the Anthropic plugin config:
       anthropic: {
         config: {
           managedNativeTools: {
-            default: ["Agent", "Workflow", "WebSearch"],
+            default: ["Agent", "Workflow", "WebSearch"], // unset means ["WebSearch"]
             agents: { ops: [] }, // per-agent list replaces the default
           },
         },
@@ -208,7 +212,10 @@ opt in per agent, or for every agent, through the Anthropic plugin config:
 }
 ```
 
-Only `Agent`, `Workflow`, and `WebSearch` are accepted in this opt-in. `Agent` and
+To turn native web search off, set `default: []` (or a list without `WebSearch`),
+or `agents.<id>: []` for one agent.
+
+Only `Agent`, `Workflow`, and `WebSearch` are accepted. `Agent` and
 `Workflow` add orchestration without granting file, shell, or network authority, so
 descendants act through the same policy-filtered OpenClaw tools as the parent.
 `WebSearch` is Claude Code's server-side search, billed to the Claude login; it gives the agent the `web_search` capability without an OpenClaw search
@@ -222,28 +229,36 @@ a project's `.claude/agents/` are not loaded.
 - The same list applies to ordinary turns, verified child completions, and cron
   turns in a session, so the tool definitions and cached prefix stay stable.
   Changing the list keeps the native session; its next turn rebuilds the
-  cached prefix once.
+  cached prefix once. Upgrading from a release before `WebSearch` became the
+  default changes the launch tool list, so each existing `claude-cli`
+  conversation starts one fresh Claude Code session on its next turn
+  (`cli session reset: reason=prompt-tools`). OpenClaw keeps the chat history;
+  earlier turns reach the new session as a history notice rather than being
+  replayed, and that first turn pays a full prompt-cache write.
 - Managed isolation stays in force: Claude settings, hooks, plugins, slash
   commands, Chrome, and Claude-only MCP servers remain excluded, and scheduled
   wake-ups, cron creation, background shell commands, and monitors stay blocked.
 - Restricted senders, delegated execution, turns with an explicit tool cap, and
   `tools.fs.workspaceOnly` still receive no native execution tools. Read-only
-  discovery can remain available for their authorized MCP tools. A capped turn in an
-  opted-in session therefore launches with different tool definitions.
+  discovery can remain available for their authorized MCP tools. A capped turn in a
+  session that keeps native tools therefore launches with different tool definitions.
 - `WebSearch` is kept only while the agent's tool policy allows `web_search`
   (tool profiles, `tools.allow`/`tools.deny` including `group:web`, per-agent,
-  group, sender, and sandbox policy) and `tools.web.search` is enabled without a
-  pinned `tools.web.search.provider`; a pinned provider keeps search on OpenClaw's
-  `web_search`. A session that turns web search off drops it from its next turn.
+  group, sender, and sandbox policy), `tools.web.search` is enabled, and no
+  OpenClaw search provider is pinned (`tools.web.search.provider`) or configured
+  (credentials that make OpenClaw list `web_search`). A configured provider keeps
+  priority, so the agent sees one search tool: OpenClaw's `web_search`. A session
+  that turns web search off drops it from its next turn.
   Verified child completions keep the definition but refuse `WebSearch` calls,
   because a completion's requester cap is checked per OpenClaw tool call and a
   native call has no such check. `before_tool_call` sees these calls as
   `web_search`.
 - Each native call still passes `before_tool_call` and exec policy: ask
   `on-miss` or `always` routes it through approval, and exec security `deny`,
-  or `allowlist` with ask `off`, refuses it. Under those two settings the
-  opt-in has no effect, because `Agent` and `Workflow` are refused before any
-  descendant starts.
+  or `allowlist` with ask `off`, refuses it. Under those two settings kept
+  native tools have no effect: `WebSearch` calls are refused, and `Agent` and
+  `Workflow` are refused before any descendant starts. With the default exec
+  policy on the Gateway host, `WebSearch` calls run without a prompt.
 - Descendants see the managed turn's tool list: the selected orchestration
   tools plus OpenClaw's policy-filtered tools, never Claude-native file or
   shell tools. Their OpenClaw tool calls pass the same grant and hooks as the
@@ -364,6 +379,11 @@ executable over its structured stdio protocol. Claude Code owns its existing loc
 subscription. OpenClaw uses a non-secret route marker. It never reads, persists,
 refreshes, or forwards native tokens, or sends synthesized Anthropic API
 requests. Compatible agent turns share one warm Claude Code subprocess.
+Agent turns send OpenClaw's system prompt as Claude Code's replacement system
+prompt, so they run under OpenClaw's prompt and workspace identity instead of
+Claude Code's default coding-CLI prompt. Claude Code still adds its short SDK
+identity line. One-shot side completions, such as
+session recaps, keep the `--append-system-prompt-file` argv.
 Gateway shutdown closes these warm subprocesses and waits for their process trees
 and retained runtime resources to finish cleanup.
 A changed model, system prompt, or configured tool surface starts a
@@ -376,10 +396,21 @@ For local plugin-managed turns, prompt-build hook context stays private: Claude
 receives it as a native hook attachment, while OpenClaw history preserves the original user message. The
 native session retains the context for resume. Imported visible history and
 cross-provider fallback preludes do not copy private hook attachments.
+Claude Code saves a single hook value above 10,000 characters to a file and
+shows the model only a preview, which message-only turns cannot open. OpenClaw
+splits longer private context, such as a long subagent result in a completion
+turn, across 128 prompt hooks of at most 10,000 UTF-16 code units each. Claude
+renders these as separate reminders, so each segment is a labeled, complete
+JSON string. The labels describe how to concatenate decoded segments without
+separators, preserving the original instruction/data boundaries. Cuts preserve
+JSON escapes and surrogate pairs. This bounded allowance covers a
+160,000-code-unit result even when runtime-context and transport JSON escaping
+expand it sevenfold, with room for framing. Larger context can still spill to
+Claude Code's file fallback.
 
 Local plugin-managed Claude turns also receive the renderer-owned Runtime facts
 through this private hook context on every turn. Session identity stays out of the
-appended system prompt, so otherwise identical conversations can share its stable
+system prompt, so otherwise identical conversations can share its stable
 prefix. Policy and workspace instructions remain in the system prompt; process
 and paired-node transports keep their existing Runtime delivery.
 A hook that replaces the entire system prompt still replaces its Runtime facts;
@@ -636,6 +667,7 @@ A `claude-cli` attempt can fail over to a non-CLI candidate in [`agents.defaults
 - Tool blocks are coalesced to compact `(tool call: name)` and `(tool result: …)` hints to keep the prompt budget honest. An oversized summary is truncated and labeled `(truncated)`.
 - Same-provider `claude-cli` to `claude-cli` fallbacks rely on Claude's own `--resume` and skip the prelude.
 - The seed reuses the existing Claude session-file path validation, so arbitrary paths cannot be read.
+- A turn that called a tool and then exceeded the stream output limit (`CLI JSONL output exceeded …`) does not fall back. Another model would run the user message again and repeat the completed tool calls, so the run fails with that error instead.
 
 ## Images
 
@@ -660,18 +692,18 @@ Images come from the current turn's attachments and explicit image references, i
 JSON examples inside double-quoted banner text are not treated as response or error records.
 For JSONL, banner scanning starts fresh on each line.
 
-Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Pure tool-result records
-hand payloads to consumers without retaining them, so those payloads do not count
-toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
-records and cumulative snapshots still count. Forwarded subagent assistant
+Claude streaming limits count what the parser keeps: text, thinking, and
+tool-input payloads, assistant content blocks, block headers, and tool ids. Frames
+whose content the parser discards (tool-result payloads, message and request
+metadata, block and message stops, thinking signatures and progress ticks) pay a
+fixed allowance each, so the 8 MiB output limit also bounds how many frames a turn
+can stream. Mixed user records still count in full. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
 allowance for their parent progress id. Child attribution alone does not earn
 that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Discarded stream control frames (thinking signatures and progress
-ticks, block and message stops, message deltas) are charged a fixed allowance,
-and progress ticks and stops also skip the frame count like partial-message
-envelopes. Single-line limits and bounded frame counts remain active.
+output limit. The 20,000-frame limit counts only frames that leave more than
+1 KiB of their raw line uncharged, such as large tool results. Single-line limits
+remain active.
 
 Input modes:
 
@@ -692,20 +724,20 @@ Anthropic owns `claude-cli` and Google owns `google-gemini-cli`. OpenAI Codex ag
 
 The bundled Anthropic plugin registers for `claude-cli`:
 
-| Key                   | Value                                                                                                                                                                                                         |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`             | `claude`                                                                                                                                                                                                      |
-| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor` |
-| `output`              | `jsonl`                                                                                                                                                                                                       |
-| `input`               | `stdin`                                                                                                                                                                                                       |
-| `modelArg`            | `--model`                                                                                                                                                                                                     |
-| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                             |
-| `sessionMode`         | `always`                                                                                                                                                                                                      |
-| agent runtime         | Direct stdio transport to a warm, session-scoped Claude Code subprocess                                                                                                                                       |
-| `imageArg`            | `@`                                                                                                                                                                                                           |
-| `imagePathScope`      | `workspace`                                                                                                                                                                                                   |
-| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                 |
-| `systemPromptMode`    | `append`                                                                                                                                                                                                      |
+| Key                   | Value                                                                                                                                                                                                                  |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`             | `claude`                                                                                                                                                                                                               |
+| `args`                | `-p --output-format stream-json --include-partial-messages --verbose --setting-sources user --allowedTools mcp__openclaw__* --disallowedTools ScheduleWakeup,CronCreate,CronList,Bash(run_in_background:true),Monitor` |
+| `output`              | `jsonl`                                                                                                                                                                                                                |
+| `input`               | `stdin`                                                                                                                                                                                                                |
+| `modelArg`            | `--model`                                                                                                                                                                                                              |
+| `sessionArgs`         | `["--session-id", "{sessionId}"]`                                                                                                                                                                                      |
+| `sessionMode`         | `always`                                                                                                                                                                                                               |
+| agent runtime         | Direct stdio transport to a warm, session-scoped Claude Code subprocess                                                                                                                                                |
+| `imageArg`            | `@`                                                                                                                                                                                                                    |
+| `imagePathScope`      | `workspace`                                                                                                                                                                                                            |
+| `systemPromptFileArg` | `--append-system-prompt-file`                                                                                                                                                                                          |
+| `systemPromptMode`    | `append`                                                                                                                                                                                                               |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
 `--exclude-dynamic-system-prompt-sections` after a bounded version check on the
@@ -916,8 +948,9 @@ that lifetime. See [MCP configuration](/gateway/config-extensions#mcp) for clean
 triggers, capacity limits, and idle-sweep behavior.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
-exceeds its deadline, OpenClaw refuses replacement, including from a later run.
-Check the cleanup error and the backend's remaining processes before retrying.
+exceeds its deadline, the run waiting for it fails with the cleanup error. The
+next run starts a new process; check `openclaw logs` and the backend's remaining
+processes if the error repeats.
 Command output and process exit alone do not confirm that descendants stopped.
 
 For `claude-cli`, the installed Claude Code process reads and refreshes its own native

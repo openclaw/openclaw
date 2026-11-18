@@ -88,7 +88,20 @@ export const ChatPendingInputsPageSchema = closedObject({
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
-      cancelledByUser: Type.Optional(Type.Literal(true)),
+      endCause: Type.Optional(
+        Type.String({
+          enum: [
+            "user-stop",
+            "delete",
+            "reset",
+            "revoked",
+            "restart-unrecoverable",
+            "overflow",
+            "policy-refused",
+            "failed",
+          ],
+        }),
+      ),
       steerNow: Type.Optional(
         closedObject({
           status: Type.Enum(["available", "blocked"]),

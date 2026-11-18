@@ -1,3 +1,4 @@
+import { isNativeAppUiClient } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -14,9 +15,11 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createOperatorAuthorityInactiveError } from "../infra/operator-authority-error.js";
+import {
+  createOperatorAuthorityInactiveError,
+  isOperatorAuthorityUnavailable,
+} from "../infra/operator-authority-error.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   intersectOperatorScopes,
   resolveMissingOperatorScope,
@@ -28,6 +31,7 @@ import type { UserChannelAuthorizationReference } from "../state/user-profiles.t
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
+  bindGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
@@ -36,6 +40,7 @@ import {
 } from "./device-revocation.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
   openclawIdTunnelRolePolicy,
   onOpenClawIdTunnelPrincipalsChanged,
   type OpenClawIdTunnelPrincipal,
@@ -72,19 +77,6 @@ type OperatorSourceBucket = {
   entries: Set<OperatorSource>;
 };
 const operatorSources = new WeakMap<object, OperatorSourceBucket>();
-const continuationAuthorities = resolveGlobalSingleton(
-  Symbol.for("openclaw.gatewayOperatorContinuationAuthorities"),
-  () => new WeakMap<AdmittedRunOperatorAuthority, AdmittedRunOperatorAuthority>(),
-);
-
-/** Accepted continuations retain policy custody independently of a recovered work claim. */
-export function bindGatewayOperatorContinuationAuthority(
-  work: AdmittedRunOperatorAuthority,
-  source: AdmittedRunOperatorAuthority,
-): void {
-  continuationAuthorities.set(work, source);
-}
-
 function getOperatorSources(owner: object): OperatorSourceBucket {
   let sources = operatorSources.get(owner);
   if (!sources) {
@@ -222,12 +214,13 @@ export function captureChannelOperatorRunAuthority(input: {
   const metadata = getProcessGatewayPluginMetadataSnapshot();
   const membershipPolicy = openclawIdTunnelRolePolicy(params.openclawIdPrincipal);
   const resolveRole = (cfg: OpenClawConfig) =>
-    membershipPolicy ??
-    resolveOperatorRolePolicyForAssignment(
-      params.profileId,
-      params.assignedRole,
-      cfg,
-      params.githubLogin ?? null,
+    openclawIdSubjectRolePolicy(params.openclawIdPrincipal, () =>
+      resolveOperatorRolePolicyForAssignment(
+        params.profileId,
+        params.assignedRole,
+        cfg,
+        params.githubLogin ?? null,
+      ),
     );
   const role = resolveRole(initialConfig);
   const modelPolicy = prepareRunModelPolicy({
@@ -253,7 +246,7 @@ export function captureChannelOperatorRunAuthority(input: {
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
       githubLogin: params.githubLogin ?? null,
-      ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+      ...(membershipPolicy ? { policy: resolveRole(params.getRuntimeConfig()) } : {}),
     }),
     get modelPolicy() {
       return modelPolicy.readCurrent();
@@ -289,8 +282,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
     "getRuntimeConfig" | "getCommittedRuntimeConfig" | "resolveGatewayContext"
   >;
   hasCurrentClientAuthority?: () => boolean;
-  /** Only an accepting work owner may outlive the original scheduling claim. */
-  independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
@@ -311,25 +302,21 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertAdmittedRunOperatorAuthority(inherited);
     inherited.assertCurrent();
     const scopes = intersectOperatorScopes(inherited.scopes, params.client?.connect.scopes ?? []);
-    const continuation = continuationAuthorities.get(inherited);
-    const source = params.independentContinuation ? (continuation ?? inherited) : inherited;
     const authority = roleScopesAllow({
       role: "operator",
-      requestedScopes: source.scopes,
+      requestedScopes: inherited.scopes,
       allowedScopes: scopes,
     })
-      ? source
+      ? inherited
       : createAdmittedRunOperatorAuthority({
-          ...source,
+          ...inherited,
           scopes,
           get modelPolicy() {
-            return source.modelPolicy;
+            return inherited.modelPolicy;
           },
         });
-    if (continuation && !params.independentContinuation && authority !== inherited) {
-      continuationAuthorities.set(authority, continuation);
-    }
-    return { authority, release: source.retain?.() ?? (() => {}) };
+    bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
+    return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
@@ -341,6 +328,16 @@ export async function captureGatewayOperatorRunAuthority(input: {
     client.internal.openclawIdPrincipal.authority !== undefined &&
     client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID &&
     params.hasCurrentClientAuthority?.() === true &&
+    isOpenClawIdTunnelPrincipalCurrent(client.internal.openclawIdPrincipal);
+  // An OpenClaw ID owner device whose account is linked to a personal profile (OCF-510) is
+  // the owner, attributed to that person; only its real tunnel socket carries that subject.
+  const isLinkedOwnerDevice = (currentActor: typeof actor) =>
+    currentActor?.kind === "system" &&
+    client?.internal?.openclawIdPrincipal?.kind === "owner" &&
+    !client.internal.remoteIngressPrincipal &&
+    !client.internal.syntheticClient &&
+    Boolean(client.connId) &&
+    Boolean(client.authenticatedUserProfile?.profileId) &&
     isOpenClawIdTunnelPrincipalCurrent(client.internal.openclawIdPrincipal);
   // Other owner subjects require a real socket or the host-bound ingress grant.
   // Autonomous/synthetic system callers must not acquire the owner profile.
@@ -362,6 +359,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     !client.internal.agentRuntimeIdentity &&
     !client.internal.agentToolCaller &&
     (client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
+      isLinkedOwnerDevice(currentActor) ||
       (currentActor?.kind === "system" &&
         !client.authenticatedUserProfile &&
         !client.authenticatedUserId &&
@@ -377,7 +375,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
     ? structuredClone(client.internal.openclawIdPrincipal)
     : undefined;
   const membershipPolicy = openclawIdTunnelRolePolicy(openclawIdPrincipal);
-  const profileId = actor?.kind === "operator" ? actor.profileId : GATEWAY_OWNER_PROFILE_ID;
+  const profileId =
+    actor?.kind === "operator"
+      ? actor.profileId
+      : isLinkedOwnerDevice(actor) && client.authenticatedUserProfile
+        ? client.authenticatedUserProfile.profileId
+        : GATEWAY_OWNER_PROFILE_ID;
   const connectionId = client.connId;
   const connectionSignal = client.connectionSignal;
   if (params.hasCurrentClientAuthority?.() === false) {
@@ -426,14 +429,13 @@ export async function captureGatewayOperatorRunAuthority(input: {
   };
   const resolveCurrentRole = (cfg = getConfig()) => {
     const profile = assertProfileCurrent();
-    return (
-      membershipPolicy ??
+    return openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
       resolveOperatorRolePolicyForAssignment(
         profileId,
         profile.assignedRole,
         cfg,
         profile.githubLogin ?? null,
-      )
+      ),
     );
   };
   const assertRoleCurrent = () => {
@@ -454,17 +456,23 @@ export async function captureGatewayOperatorRunAuthority(input: {
       try {
         check();
       } catch (error) {
-        revoke(error);
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoke(error);
+        }
       }
     }
   };
   const assertSourceCurrent = composeSessionSourceAssertion(
     sourceAuthorities.map((authority) =>
-      composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
-        authority?.signal?.throwIfAborted();
-        assertSource();
-        authority?.signal?.throwIfAborted();
-      }),
+      composeSessionSourceAssertion(
+        [authority?.assertCurrent],
+        (assertSource) => {
+          authority?.signal?.throwIfAborted();
+          assertSource();
+          authority?.signal?.throwIfAborted();
+        },
+        { synchronousCheck: true },
+      ),
     ),
     (assertSources) => {
       if (revoked || references === 0) {
@@ -500,16 +508,23 @@ export async function captureGatewayOperatorRunAuthority(input: {
         );
       }
     },
+    { synchronousCheck: true },
   );
-  const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
-    try {
-      assertSource();
-      assertRoleCurrent();
-    } catch (error) {
-      revoked = true;
-      throw error;
-    }
-  });
+  const assertCurrent = composeSessionSourceAssertion(
+    [assertSourceCurrent],
+    (assertSource) => {
+      try {
+        assertSource();
+        assertRoleCurrent();
+      } catch (error) {
+        if (!isOperatorAuthorityUnavailable(error)) {
+          revoke(error);
+        }
+        throw error;
+      }
+    },
+    { synchronousCheck: true },
+  );
   const releaseHold = () => {
     let released = false;
     return () => {
@@ -555,7 +570,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
         ? onOpenClawIdTunnelPrincipalsChanged(() => recheck(assertSourceCurrent))
         : undefined,
       onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "assignment" && change.profileId === profileId) {
+        if (
+          change.kind === "assignment" &&
+          change.profileId === profileId &&
+          change.roleOnly &&
+          openclawIdPrincipal?.kind === "owner"
+        ) {
+          // A linked owner device's authority is its certificate; its person's role is not.
+          recheck(assertCapturedRoleCurrent);
+        } else if (change.kind === "assignment" && change.profileId === profileId) {
           revoke(new Error("Your operator role changed; reconnect before continuing."));
         } else if (
           change.kind === "config" &&
@@ -602,8 +625,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertCapturedRoleCurrent = () => {
       const current = assertProfileCurrent();
       const policy = resolveCurrentRole();
+      // A current owner certificate, not the linked person's stored role, bounds owner work.
+      const ownerCertificate =
+        openclawIdPrincipal?.kind === "owner" &&
+        isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal);
       if (
-        current.assignedRole !== capturedAssignedRole ||
+        (!ownerCertificate && current.assignedRole !== capturedAssignedRole) ||
         !isOperatorRoleSourcePolicyCurrent(capturedSourcePolicy, sourceRolePolicy(policy), scopes)
       ) {
         throw new Error("Your operator role changed; reconnect before continuing.");
@@ -635,21 +662,23 @@ export async function captureGatewayOperatorRunAuthority(input: {
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
       assertCurrent,
     };
-    const recoverySnapshot = captureGatewayOperatorRecoverySnapshot({
-      client,
-      authority: admission,
-      modelPolicy: modelPolicy.original,
-      identity: preparedProfile,
-      config: getConfig(),
-    });
+    const { snapshot: recoverySnapshot, unavailableReason: recoverySnapshotUnavailableReason } =
+      captureGatewayOperatorRecoverySnapshot({
+        client,
+        authority: admission,
+        modelPolicy: modelPolicy.original,
+        identity: preparedProfile,
+        config: getConfig(),
+      });
     assertCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
       recoverySnapshot,
+      recoverySnapshotUnavailableReason,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         ...assertProfileCurrent(),
-        ...(membershipPolicy ? { policy: membershipPolicy } : {}),
+        ...(membershipPolicy ? { policy: resolveCurrentRole() } : {}),
       }),
       source: source.token,
       invocation: params.invocationAuthority,
@@ -669,11 +698,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
           }
         }),
     });
+    bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&
       client.sharedGatewaySessionGeneration &&
-      (isBrowserOperatorUiClient(client.connect.client) || isWebchatClient(client.connect.client))
+      (isBrowserOperatorUiClient(client.connect.client) ||
+        isWebchatClient(client.connect.client) ||
+        isNativeAppUiClient(client.connect.client))
     ) {
       // The handshake owns the credential/generation checks, including device
       // reconnects bound to that shared credential. The profile name grants nothing.

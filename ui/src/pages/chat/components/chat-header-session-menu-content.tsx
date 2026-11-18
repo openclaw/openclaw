@@ -60,9 +60,10 @@ const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
 };
 
 const VIEW_SETTINGS = [
-  ["reasoning", "chatShowThinking", "chat.view.reasoning", false],
-  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true],
-  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined],
+  ["reasoning", "chatShowThinking", "chat.view.reasoning", false, true],
+  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true, true],
+  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined, true],
+  ["inline-commands", "chatInlineCommands", "chat.view.inlineCommands", false, false],
 ] as const;
 
 export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
@@ -336,14 +337,16 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       return [...viewActions()];
     }
     return [
-      ...VIEW_SETTINGS.map(([value, key, label, onboarding]) => ({
+      ...VIEW_SETTINGS.map(([value, key, label, onboarding, defaultValue]) => ({
         id: `view:${value}`,
         label: t(label),
         class: "session-menu__item",
         labelClass: "session-menu__text",
         type: "checkbox" as const,
         checked:
-          props.onboarding && onboarding !== undefined ? onboarding : props.settings[key] !== false,
+          props.onboarding && onboarding !== undefined
+            ? onboarding
+            : (props.settings[key] ?? defaultValue),
         disabled: props.onboarding,
         attributes: { title: props.onboarding ? t("chat.onboardingDisabled") : undefined },
         closeOnSelect: false,
@@ -592,8 +595,8 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
     if (nextView) {
       event.preventDefault();
       inputs.onCompactViewChange(nextView);
-      if (managementView === "icon") {
-        view.appearance.prepare();
+      if (managementView) {
+        view.prepareView(managementView);
       } else if (nextView === "sharing" && !props.sharing?.openDisabledReason) {
         props.sharing?.onOpen();
       }
@@ -648,7 +651,7 @@ export function ChatHeaderSessionMenuContent(inputs: HeaderMenuContentProps) {
       const setting = value.slice("view:".length);
       const option = VIEW_SETTINGS.find(([id]) => id === setting);
       if (option) {
-        props.onSettingsChange({ [option[1]]: props.settings[option[1]] === false });
+        props.onSettingsChange({ [option[1]]: !(props.settings[option[1]] ?? option[4]) });
       } else if (
         setting === "speech-bubbles" &&
         props.bubbleModeEnabled &&

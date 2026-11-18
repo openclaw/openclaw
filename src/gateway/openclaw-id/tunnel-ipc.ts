@@ -25,7 +25,7 @@ export type TunnelStageMessage =
   | { type: "discard"; keyPath: string; keep: string };
 
 /** A staged child's answer: the K_srv the staged key file holds, or null when there is none. */
-export type TunnelStagedMessage = { type: "staged"; endpointKey: string | null };
+type TunnelStagedMessage = { type: "staged"; endpointKey: string | null };
 
 /** Sent once, right after the child starts. */
 export type TunnelStartMessage = {

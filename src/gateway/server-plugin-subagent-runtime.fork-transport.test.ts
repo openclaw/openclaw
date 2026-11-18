@@ -1,13 +1,23 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
 import "../agents/ai-transport-runtime-host.js";
+import { bindSessionMcpRuntimeTestScheduler } from "../agents/agent-bundle-mcp-manager.test-support.js";
 import { providerResponse } from "../agents/embedded-agent-runner.wire.test-support.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
+import { registerSandboxBackend } from "../agents/sandbox/backend.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { requireGit } from "../agents/worktrees/git.js";
+import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  initializeManagedWorktreeTestRepository,
+  makeWorktreeRecord,
+} from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -30,6 +40,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
+import { readLocalWorkspaceProjection } from "./worker-environments/local-workspace-store.test-support.js";
 
 const PLUGIN_ID = "test-session-fork-transport";
 const SESSION_ID = "fork-transport-parent";
@@ -42,7 +53,7 @@ type RecordedRequest = {
   body: unknown;
 };
 
-it("sends no request for another operator's session but forks for its owner at the parent's thinking level", async () => {
+it.each([false, true])("forks a managed worktree with sandbox=%s", async (required) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const providerDir = state.path("provider");
     fs.mkdirSync(providerDir);
@@ -97,6 +108,9 @@ it("sends no request for another operator's session but forks for its owner at t
           });
         }),
     });
+    // The fork runs the parent's turn setup, which acquires the session MCP runtime the
+    // Gateway would bind.
+    await bindSessionMcpRuntimeTestScheduler();
     const lifetime = new AbortController();
     try {
       await withEnvAsync(
@@ -124,7 +138,8 @@ it("sends no request for another operator's session but forks for its owner at t
             api: "anthropic-messages",
             baseUrl,
             reasoning: true,
-            contextWindow: 8192,
+            // The fork runs the parent's full turn setup, so it needs a real turn's window.
+            contextWindow: 200_000,
             maxTokens: 4096,
           });
           const config: OpenClawConfig = {
@@ -134,6 +149,12 @@ it("sends no request for another operator's session but forks for its owner at t
                 workspace: state.workspaceDir,
                 userTimezone: "UTC",
                 thinkingDefault: "high",
+                sandbox: {
+                  mode: "off",
+                  docker: { user: "1000:1000" },
+                  browser: { enabled: false },
+                  prune: { idleHours: 0, maxAgeDays: 0 },
+                },
                 models: {
                   [`${fixture.providerId}/fork-model`]: { agentRuntime: { id: "openclaw" } },
                 },
@@ -176,6 +197,27 @@ it("sends no request for another operator's session but forks for its owner at t
           setRuntimeConfigSnapshot(config);
           const owner = ensureProfileForEmail("fork-owner@example.test");
           const stranger = ensureProfileForEmail("fork-stranger@example.test");
+          const repoRoot = await initializeManagedWorktreeTestRepository(state.root);
+          const checkout = state.path("managed-checkout");
+          await requireGit(repoRoot, ["worktree", "add", "-b", "openclaw/fork", checkout]);
+          const worktree = makeWorktreeRecord(repoRoot, randomUUID(), {
+            path: checkout,
+            branch: "openclaw/fork",
+            ownerId: SESSION_KEY,
+          });
+          await insertRegistryWorktree(process.env, worktree, { provisionedPaths: [] });
+          const restoreBackend = registerSandboxBackend("docker", async ({ scopeKey }) => ({
+            id: "docker",
+            runtimeId: scopeKey,
+            runtimeLabel: "Synthetic fork sandbox",
+            workdir: "/workspace",
+            buildExecSpec: async () => {
+              throw new Error("unexpected exec");
+            },
+            runShellCommand: async () => {
+              throw new Error("unexpected shell");
+            },
+          }));
           await upsertSessionEntryCore(
             { agentId: "research", sessionKey: SESSION_KEY },
             {
@@ -183,6 +225,15 @@ it("sends no request for another operator's session but forks for its owner at t
               updatedAt: 1,
               visibility: "shared",
               createdActor: { type: "human", source: "profile", id: owner.id },
+              ...(required ? { sandbox: "required" as const } : {}),
+              spawnedCwd: checkout,
+              sessionRoot: checkout,
+              worktree: {
+                id: worktree.id,
+                branch: worktree.branch,
+                repoRoot,
+                canonicalWorkspaceDir: repoRoot,
+              },
             },
           );
           const context = requestContext(config);
@@ -212,6 +263,8 @@ it("sends no request for another operator's session but forks for its owner at t
               100,
             );
             await appendUser("OUTSIDE_HISTORY_WINDOW_1672", 2);
+            // A completed parent turn: the run appends its user message, then its prompt
+            // checkpoint, then the reply. A running parent is replayed from its live request.
             await appendUser("Parent question", 3);
             await transcript.appendCustomEntryAsync("openclaw.system-prompt", {
               prefix: "Stable parent instructions",
@@ -227,6 +280,15 @@ it("sends no request for another operator's session but forks for its owner at t
               historyId: compactionId,
               tools: [],
             });
+            await transcript.appendMessageAsync(
+              makeAgentAssistantMessage({
+                api: "anthropic-messages",
+                provider: model.provider,
+                model: model.id,
+                content: [{ type: "text", text: "Parent answer" }],
+                timestamp: 4,
+              }),
+            );
 
             const forkAs = (profileId: string) =>
               withPluginRuntimeGatewayRequestScope(
@@ -244,6 +306,8 @@ it("sends no request for another operator's session but forks for its owner at t
             expect(requests).toHaveLength(0);
 
             await expect(forkAs(owner.id)).resolves.toMatchObject({ text: "fork-ok" });
+            const projection = await readLocalWorkspaceProjection(worktree.id);
+            expect(Boolean(projection)).toBe(required);
             expect(requests).toHaveLength(1);
             const sent = JSON.stringify(requests[0]?.body);
             expect(sent).not.toContain("DISCARDED_PRE_COMPACTION_1672");
@@ -255,17 +319,36 @@ it("sends no request for another operator's session but forks for its owner at t
               body: {
                 model: "fork-model",
                 thinking: { type: "enabled" },
-                system: [{ type: "text", text: "Stable parent instructions" }],
+                // The session's pinned prefix, not a prompt rebuilt for the fork.
+                system: [expect.objectContaining({ text: "Stable parent instructions" })],
                 messages: [
                   user(
                     "The conversation history before this point was compacted into the following summary:\n\n<summary>\nEarlier request summarized for review\n</summary>",
                   ),
-                  user(expect.stringContaining("[Thu 1970-01-01 00:00 UTC] Parent question")),
-                  user("Review the parent"),
+                  { role: "user", content: "[Thu 1970-01-01 00:00 UTC] Parent question" },
+                  { role: "assistant", content: [{ type: "text", text: "Parent answer" }] },
+                  // The question is a real turn on that prefix, sent like the parent's turns.
+                  {
+                    role: "user",
+                    content: [
+                      expect.objectContaining({
+                        text: expect.stringMatching(/\] Review the parent$/),
+                      }),
+                    ],
+                  },
+                  {
+                    role: "user",
+                    content: [
+                      expect.objectContaining({
+                        text: expect.stringContaining("OpenClaw runtime context"),
+                      }),
+                    ],
+                  },
                 ],
               },
             });
           } finally {
+            restoreBackend();
             lifetime.abort();
             await disposeSessionReadContexts();
             await resetPreparedModelRuntimeSnapshotsForTest();

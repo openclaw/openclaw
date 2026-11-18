@@ -47,7 +47,7 @@ describe("sanitizeUserFacingText", () => {
     ],
     [
       "Error: fetch failed",
-      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+      "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
     ],
     ["Error: request timed out", "LLM request timed out."],
     [

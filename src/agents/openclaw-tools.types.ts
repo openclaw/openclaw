@@ -29,6 +29,8 @@ import type {
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Reads the sticky untrusted-content flag for the current user turn. */
+  isTurnTainted?: () => boolean;
   /** Session-owned declaration used only for tool listing, never invocation authority. */
   listingClientCaps?: string[];
   /** Creator policy retained by the scheduled session owner. */
@@ -86,6 +88,9 @@ export type OpenClawSharedToolsOptions = {
   webSearchEnabled?: boolean;
   /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
   onWebSearchConfiguration?: (configured: boolean) => void;
+  /** Assembly records permission ceilings before applying route-only presentation. */
+  retainUnavailableMessageTool?: boolean;
+  onMessageToolAvailability?: (available: boolean) => void;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Dynamic audio state for runs that can accept steered input after tool creation. */
@@ -116,6 +121,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Internal listing owner pins discovery changes or renders a read-only inventory. */
+  githubPublicationConfigurationAware?: true;
   /** Internal inventory projection; the resulting GitHub tool cannot execute. */
   githubPublicationPreview?: true;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */

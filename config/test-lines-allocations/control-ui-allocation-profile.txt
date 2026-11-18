@@ -1,2 +1,0 @@
-# Collected-allocation ledger: once-only attribution, native caller ownership, and missing stack bytes.
-40

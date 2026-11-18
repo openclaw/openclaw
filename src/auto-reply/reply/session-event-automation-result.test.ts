@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import {
   admitModelTurn,
   completionConfig,
@@ -16,9 +18,14 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { resolveAdmittedCronCompletionStatus } from "../../cron/completion-status.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { resolveCronRunErrorReason } from "../../cron/run-error-reason.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
+import type { DeferredCronNotifications } from "../../cron/service/state.js";
+import { applyJobResult } from "../../cron/service/timer-outcomes.js";
+import { createChatAbortSignalReason } from "../../gateway/chat-abort.js";
 import { runGatewayCronSessionEvent } from "../../gateway/server-cron-event-dispatch.js";
 import { createGatewayCronTargetResolver } from "../../gateway/server-cron-targets.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
@@ -37,6 +44,11 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
+import * as agentExecution from "./agent-runner-execution.js";
+import {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+} from "./session-event-handoff.js";
 
 // mock-isolation: Only model decisions are synthetic; tool, controller and storage owners stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -51,12 +63,66 @@ await Promise.all([
   ),
 ]);
 
+it("records operation-only Stop for a staged event before execution", async ({ signal }) => {
+  await withOpenClawTestState(
+    { label: "session-event-operation-stop", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const target = { agentId: "main", sessionKey: "agent:main:event-operation-stop" };
+      await replaceSessionEntry(target, {
+        sessionId: "event-operation-stop",
+        permissionMode: "full",
+        updatedAt: 1,
+      });
+      using execution = vi
+        .spyOn(agentExecution, "executeAgentTurn")
+        .mockImplementationOnce(async (params) => {
+          expect(
+            params.followupRun.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+          ).toBeDefined();
+          expect(expectDefined(params.replyOperation, "event operation").abortByUser()).toBe(true);
+          throw new Error("execution refused after user Stop");
+        });
+      try {
+        const expectedTarget = await captureSessionEventTargetForHost(
+          target.agentId,
+          target.sessionKey,
+        );
+        const receipt = enqueueSessionEventForHost("Stop this queued event", {
+          ...target,
+          source: "restart",
+          expectedTarget,
+          abortSignal: signal,
+          deliver: false,
+        });
+        await withinTest(receipt.settled, signal);
+        expect(execution).toHaveBeenCalledOnce();
+        expect(signal.aborted).toBe(false);
+        expect(
+          await listSessionPendingInputs({
+            ...target,
+            sessionId: expectedTarget.sessionId,
+            storePath: expectedTarget.storePath,
+          }),
+        ).toMatchObject({ items: [{ state: "cancelled", endCause: "user-stop" }] });
+      } finally {
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
+
 // Queue/readmission is covered by session-event-config-readmission.test.ts's
 // queued Gmail and scheduled destination cases; result settlement is admission-independent.
 it.for([
   { result: "progress" },
   { result: "no_change" },
   { result: "failed" },
+  { result: "thrown" },
   { result: "progress", notification: "none" },
   { result: "progress", notification: "conversation" },
   { result: "no_change", notification: "conversation" },
@@ -72,7 +138,7 @@ it.for([
   "settles automation $result ($notification/$messageTool/$alias) through its shared session owner",
   async (scenario, { signal }) => {
     const progress = scenario.result === "progress";
-    const failed = scenario.result === "failed";
+    const failed = scenario.result === "failed" || scenario.result === "thrown";
     const notification = "notification" in scenario ? scenario.notification : undefined;
     const nativeOnly = notification === "native-only";
     const otherConversation = notification === "other-conversation";
@@ -235,6 +301,9 @@ it.for([
               },
             });
           }
+          if (scenario.result === "thrown") {
+            throw new Error(failure);
+          }
           if (failed) {
             return {
               payloads: [{ text: failure, isError: true }],
@@ -268,7 +337,7 @@ it.for([
           expect(outcome, outcome.error).toMatchObject({
             status: failed ? "error" : "ok",
             executionStarted: true,
-            ...(failed ? { error: failure } : {}),
+            ...(failed ? { error: expect.stringContaining(failure) } : {}),
           });
           expect(outcome.result).toEqual(result);
           const settled = expectDefined(
@@ -296,11 +365,7 @@ it.for([
               summary,
               delivered: !notificationDisabled && !deliveryFails,
             });
-            if (unavailable || otherConversation) {
-              expect(outcome.deliveryError).toBeTruthy();
-            } else {
-              expect(outcome.deliveryError).toBeUndefined();
-            }
+            expect(Boolean(outcome.deliveryError)).toBe(unavailable || otherConversation);
             expect(
               resolveAdmittedCronCompletionStatus(
                 job,
@@ -337,7 +402,7 @@ it.for([
                 outcome.deliverySuppressionReason,
               ),
             ).toBe("succeeded");
-          } else {
+          } else if (scenario.result === "failed") {
             expect(sendText.mock.calls.some(([sent]) => sent.text.includes(failure))).toBe(true);
           }
         } finally {
@@ -350,7 +415,16 @@ it.for([
   },
 );
 
-it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalled"] as const)(
+it.for([
+  "user",
+  "caller",
+  "auth-revoked",
+  "restart",
+  "superseded",
+  "frozen-superseded",
+  "timeout",
+  "stalled",
+] as const)(
   "preserves controller-owned %s through the scheduled event receipt",
   async (reason, { signal }) => {
     await withOpenClawTestState(
@@ -378,29 +452,37 @@ it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalle
             }
             owner.supersede();
             expect(owner.abortSignal.aborted).toBe(reason !== "frozen-superseded");
+          } else if (reason === "user") {
+            owner.abortByUser();
+          } else if (reason === "auth-revoked") {
+            owner.abort(createChatAbortSignalReason("auth-revoked"));
           } else {
             owner.abort(
               reason === "timeout"
                 ? new DOMException("deadline", "TimeoutError")
                 : reason === "restart"
                   ? createAgentRunRestartAbortError()
-                  : undefined,
+                  : new DOMException("caller stopped", "AbortError"),
             );
             expect(owner.result).toMatchObject({ kind: "aborted" });
           }
           return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
         });
+        const startedAt = Date.now();
+        const job = makeCronJob({
+          id: "owned-stop-job",
+          agentId: "main",
+          sessionTarget: `session:${scope.sessionKey}`,
+          schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+          state: { nextRunAtMs: startedAt },
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "Wait for cancellation." },
+        });
         try {
           const outcome = await runGatewayCronSessionEvent(
             {
               occurrence: TEST_SCHEDULED_OCCURRENCE,
-              job: makeCronJob({
-                id: "owned-stop-job",
-                agentId: "main",
-                sessionTarget: `session:${scope.sessionKey}`,
-                delivery: { mode: "none" },
-                payload: { kind: "agentTurn", message: "Wait for cancellation." },
-              }),
+              job,
               text: "Wait for cancellation.",
               admissionSource: "operator-schedule",
               deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
@@ -410,15 +492,46 @@ it.for(["user", "restart", "superseded", "frozen-superseded", "timeout", "stalle
             createGatewayCronTargetResolver(state.env, { warn() {} }).resolveCronTarget,
           );
           expect(outcome).toMatchObject({ status: "error", executionStarted: true });
-          if (reason === "timeout") {
+          if (reason === "timeout" || reason === "stalled" || reason === "caller") {
             expect(outcome.errorClassification).toEqual({ kind: "reason", reason: "timeout" });
-          } else if (reason === "stalled") {
-            expect(outcome.errorClassification?.kind).not.toBe("aborted");
+          } else if (reason === "auth-revoked") {
+            expect(outcome.errorClassification).toEqual({
+              kind: "reason",
+              reason: "auth_permanent",
+            });
           } else {
             expect(outcome.errorClassification).toEqual({ kind: "aborted" });
             expect(outcome.interruptedByRestart).toBe(reason === "restart");
           }
           expect(model).toHaveBeenCalledOnce();
+          const cron = createCronRegressionState({
+            storePath: state.statePath("cron", "jobs.json"),
+            runIsolatedAgentJob: async () => ({ status: "ok" }),
+          });
+          const deferredNotifications: DeferredCronNotifications = [];
+          const endedAt = Date.now();
+          applyJobResult(
+            cron,
+            job,
+            {
+              ...outcome,
+              startedAt,
+              endedAt,
+              errorReason: resolveCronRunErrorReason(
+                outcome.error,
+                outcome.provider,
+                outcome.errorClassification,
+              ),
+            },
+            { deferredNotifications },
+          );
+          const retry = ["timeout", "stalled", "caller", "restart"].includes(reason);
+          expect(job.enabled).toBe(retry);
+          if (retry) {
+            expect(job.state.nextRunAtMs).toBe(endedAt + (reason === "restart" ? 2_000 : 30_000));
+            expect(job.state.autoDisabled).toBeUndefined();
+          }
+          expect(deferredNotifications).toHaveLength(reason === "auth-revoked" ? 1 : 0);
         } finally {
           await drainGlobalSingletonLifecycleState("restart");
           resetSystemEventsForTest();

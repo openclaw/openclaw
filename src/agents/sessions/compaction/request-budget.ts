@@ -1,40 +1,23 @@
-import { resolveSummaryFloorChars } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
+import {
+  commitCompactionSummary,
+  resolveSummaryFloorChars,
+  type PreparedCompactionFloor,
+} from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
+import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
+  SAFETY_MARGIN,
   createFreshLlmBoundaryTokenEstimator,
+  estimateCompactionHistoryTokens,
+  estimateVariableRequestTokens,
   type FixedRequestTokenPressure,
 } from "../context-token-pressure.js";
+import type { CompactionRequestBudget } from "./preparation.types.js";
 
-/** Ephemeral foreground facts; a separately routed summarizer cannot reconstruct these. */
-export type CompactionRequestBudget = Readonly<{
-  contextWindow: number;
-  reserveTokens: number;
-  fixedTokens: number;
-  pendingTokens: number;
-  /** Known queue reservation, replaced by the SDK's projected queue at submission. */
-  pendingQueuedContextTokens?: number;
-  /** Overlap credit applies only to the user body, never newly added context. */
-  pendingUserTokens?: number;
-  pendingUserIdempotencyKey?: string;
-}>;
-
-/** Input preservation exists before the foreground prompt can supply a token budget. */
-export type CompactionRequestConstraints = Readonly<{
-  requestBudget?: CompactionRequestBudget;
-  /** Source of the active run, including after its input has been processed. */
-  requestFromEntryId?: string;
-  pendingUserEntryId?: string;
-}>;
-
+const log = createSubsystemLogger("agents/session");
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
-
-function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
-  const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
-  return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
-}
 
 /** Bind prepared foreground facts to the exact owned prompt invocation, outside public options. */
 export function attachPromptCompactionRequestBudget(
@@ -134,30 +117,6 @@ export function withCompactionQueuedContext(
   };
 }
 
-export function estimateCompactionHistoryTokens(
-  messages: AgentMessage[],
-  budget?: CompactionRequestBudget,
-): number {
-  // A key identifies overlapping input, not proof that its content is replaced.
-  // A retained carrier can reuse a larger canonical user, so charge the larger representation.
-  const pending =
-    budget?.pendingTokens && budget.pendingUserIdempotencyKey
-      ? messages.findLast(
-          (message) =>
-            message.role === "user" &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === budget.pendingUserIdempotencyKey,
-        )
-      : undefined;
-  const overlap = pending
-    ? Math.min(
-        estimateCompactionHistoryTokens([pending]),
-        budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
-      )
-    : 0;
-  return estimateVariableRequestTokens(messages, "") - overlap;
-}
-
 export function estimateCompactedRequestTokens(
   messages: AgentMessage[],
   budget: CompactionRequestBudget,
@@ -196,6 +155,29 @@ export function replayTokenBudget(
     model.contextWindow - settings.reserveTokens - estimateCompactedRequestTokens(messages, budget);
   // The estimator above carries the safety margin; the summary is fitted without it.
   return Math.floor(remaining / SAFETY_MARGIN) - 1;
+}
+
+/** Commits the harness summary; a floor the token budget shrank or dropped gets one warning. */
+export function commitSessionCompactionSummary(
+  result: Parameters<typeof commitCompactionSummary>[0],
+  preparation: Parameters<typeof commitCompactionSummary>[1],
+  withoutSummary: boolean,
+  replayBudget: () => number | undefined,
+  preparedFloor?: PreparedCompactionFloor,
+): string {
+  return commitCompactionSummary(
+    result,
+    preparation,
+    withoutSummary,
+    replayBudget,
+    (reduction) =>
+      log.warn(
+        `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
+          `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
+          `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
+      ),
+    preparedFloor,
+  );
 }
 
 export function assertCompactionRequestCanFit(

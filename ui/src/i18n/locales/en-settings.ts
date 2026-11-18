@@ -1,6 +1,7 @@
 import activeMemoryPresentation from "../../../../extensions/active-memory/control-ui.presentation.json" with { type: "json" };
 import memoryWikiPresentation from "../../../../extensions/memory-wiki/control-ui.presentation.json" with { type: "json" };
 import type { TranslationMap } from "../lib/types.ts";
+import { registerModelProviderAuthEnglish } from "./en-model-provider-auth.ts";
 import { registerPreferencesEnglish } from "./en-preferences.ts";
 import { registerSettingsSidebarEnglish } from "./en-settings-sidebar.ts";
 import { en } from "./en.ts";
@@ -127,6 +128,13 @@ const enSettings = {
       notSet: "Not set",
       inheritDefault: "Inherit default",
       inheritDefaultModel: "Inherit default ({model})",
+      utilityModel: "Utility model",
+      utilityModelHelp:
+        "Runs this agent's background tasks: titles, progress narration, session summaries. Inherit the Models page default or choose one for this agent only.",
+      utilityModelInheritAutomatic: "Automatic",
+      utilityModelDisabled: "Disabled for this agent",
+      utilityModelFallbacks: "This agent's utility fallbacks: {models}",
+      inheritDefaultThinking: "Inherit default ({level})",
       fallbacks: "Fallbacks",
       addFallback: "Add fallback…",
     },
@@ -228,7 +236,7 @@ const enSettings = {
       editFile: "Edit file",
       closePreview: "Close preview",
       coreFilesTitle: "Core files",
-      coreFilesSubtitle: "Bootstrap persona, identity, and tool guidance.",
+      coreFilesSubtitle: "Instructions for this agent’s behavior, identity, and tools.",
       workspace: "Workspace",
       loadHint: "Load the agent workspace files to edit core instructions.",
       empty: "No files yet.",
@@ -255,7 +263,7 @@ const enSettings = {
     lastError: "Last error",
     refreshingStaleSnapshot: "Refreshing channel status… Showing the last available status.",
     hub: {
-      connectedTitle: "Connected channels",
+      connectedTitle: "Your channels",
       addTitle: "Add a channel",
       addSubtitle: "Choose a messaging app to set up.",
       updatedAgo: "Updated {ago}",
@@ -266,7 +274,7 @@ const enSettings = {
       stateAttention: "Needs attention",
       stateNotConfigured: "Not configured",
       details: "Details",
-      setUp: "Set up",
+      setUp: registerModelProviderAuthEnglish.catalog.channels.hub.setUp,
       guidedSetup: "Guided step-by-step setup",
       openDetails: "Open details",
       lastMessageAgo: "Last message {ago}",
@@ -274,6 +282,7 @@ const enSettings = {
       browseAllSubtitle: "Browse all channels, including plugins you can install.",
       runSetup: "Run setup",
       adminRequired: "You can view channels, but only admins can change them.",
+      adminRequiredTooltip: "Admin access required to change channels.",
       saveBeforeSetup: "Save or discard your settings changes before starting setup.",
     },
     pairing: {
@@ -406,6 +415,7 @@ const enSettings = {
       notReady: "Not configured",
       unavailable: "Unavailable",
       unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
+      catalogFailedHint: "Couldn’t check realtime voice readiness.",
       activeProvider: "Active provider: {provider}",
       noProvider: "No realtime voice provider is configured yet.",
     },
@@ -432,6 +442,27 @@ const enSettings = {
       title: "GPT-Live",
       hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
       ready: "Ready",
+    },
+    transcription: {
+      title: "Speech to text",
+      description:
+        "Speech to text for Talk dictation and inbound voice notes (tools.media). Status shows the provider Talk uses.",
+      unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
+      failedHint: "Couldn’t check speech-to-text readiness.",
+      noProvider: "No speech-to-text model is configured yet.",
+      readyWithoutProvider: "A configured local transcription model is ready.",
+      modelTitle: "Speech-to-text model",
+      modelDescription:
+        "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",
+      invalidModel:
+        "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
+      automatic: "Automatic",
+      custom: "Other model (provider/model)",
+      preferredNotReadyTitle: "Preferred model",
+      providerNotReady: "Not ready",
+      providerNotReadyDescription:
+        "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
+      openModels: "Open Models",
     },
   },
   configForm: {
@@ -484,6 +515,7 @@ const enSettings = {
     schemaUnavailable: "Schema unavailable.",
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
+    editInAdvancedRaw: "Edit this setting in the Raw tab of Advanced settings.",
     noSettingsMatch: "No settings match your search.",
     noSettingsInSection: "No settings in this section.",
     sections: {
@@ -557,7 +589,7 @@ const enSettings = {
       },
       bindings: {
         label: "Bindings",
-        description: "Key bindings and shortcuts",
+        description: "Route conversations to agents and bind persistent ACP sessions.",
       },
       broadcast: {
         label: "Broadcast",
@@ -601,7 +633,7 @@ const enSettings = {
       },
       acp: {
         label: "ACP",
-        description: "Agent Communication Protocol runtime and streaming settings",
+        description: "Agent Client Protocol (ACP) runtime and streaming settings",
       },
       mcp: {
         label: "MCP",
@@ -648,7 +680,6 @@ const enSettings = {
     loadingPreview: "Loading tool preview…",
     previewError: "Couldn’t load this session’s tool preview. Try again.",
     emptyPreview: "No tools in this preview. More may become available before a reply.",
-    morePreviewTitle: "{count} more tools are listed in the groups below.",
     morePreview: "+{count} more listed tools",
     quickPresets: "Tool presets",
     catalogTitle: "Tool catalog",
@@ -808,8 +839,6 @@ const enSettings = {
       retry: "Retry connection",
       reconnect: "Reconnect",
       reconnectHint: "Reconnect to the current Gateway to try again.",
-      showSecret: "Show secret",
-      hideSecret: "Hide secret",
       toggleSecretVisibility: "Toggle secret visibility",
     },
   },
@@ -956,7 +985,7 @@ const enSettings = {
     providerList: "View supported backends",
     advanced: "Advanced",
     preparedPoolHelp:
-      "Maximum cloud devices kept ready across projects and profiles. Leave empty for the default of 4; zero releases unused reserves and stops refills. Ready devices incur running-device charges.",
+      "Ready devices across all projects. Default: 4. Set 0 to release unused reserves and stop refills. Running charges apply.",
     savePool: "Save pool",
     repositoryProfile: "Default profile",
     selectProfile: "Choose a profile",
@@ -1091,10 +1120,10 @@ const enSettings = {
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
-      apiKey: "API key",
+      apiKey: registerModelProviderAuthEnglish.catalog.modelProviders.status.apiKey,
       denied: "Credentials rejected",
-      signInAgain: "Sign in again",
-      signInUnavailable: "Sign-in unavailable",
+      signInExpired: "Sign-in expired",
+      refreshing: "Refreshing",
       managedExternally: "Managed externally",
       configured: "Account added",
       modelsUnavailable: "Models unavailable",
@@ -1143,7 +1172,7 @@ const enSettings = {
       kindOauth: "Signed-in account",
       kindNumbered: "{kind} {number}",
       accounts: "{count} accounts",
-      reorderHint: "Drag to set your preferred account order.",
+      reorderHint: "Drag to reorder",
       reorder: "Reorder {account}, position {position}",
       priority: "Priority {position}",
       automaticOrder: "Account selection is automatic.",
@@ -1152,9 +1181,10 @@ const enSettings = {
       partialOrder: "Priority is inherited or managed across provider routes.",
       partialStoredOrder: "Clear the custom order before changing priority.",
       resetOrder: "Clear custom order",
-      resetOrderHint:
-        "Remove this agent's custom priority and use the default order. Accounts stay connected.",
+      resetOrderHint: "Use the default account order for this agent. Accounts stay connected.",
       addAccount: "Add account",
+      signInAgain: "Sign in again",
+      signInAgainFor: "Sign in again as {account}",
       lastUsed: "Last used {time} ago",
       sourceConfig: "Provider config",
       sourceExternal: "External CLI",
@@ -1173,6 +1203,8 @@ const enSettings = {
       checking: "Checking…",
       checkFailed:
         "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkBillingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then use Test access to try again.",
       checkInconclusive:
         "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
       checkUnavailable:
@@ -1240,6 +1272,8 @@ const enSettings = {
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
       ready: "Added {provider}. {model} is ready to chat.",
+      billingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then save again.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1250,33 +1284,37 @@ const enSettings = {
       utilityHelpLabel: "About the utility model",
       decisionHelpLabel: "About the decision model",
       utilityHelpPurpose:
-        "Handles short background tasks such as generated titles, progress narration, and session summaries.",
+        "Runs short background tasks, such as titles, progress updates and summaries.",
       utilityHelpAutomatic:
-        "Automatic uses the primary model provider's recommended small model when available. Generated titles otherwise use the primary model.",
+        "Automatic uses the provider’s recommended small model; titles otherwise use the primary model.",
       automatic: "Automatic (provider default)",
       automaticUnavailable: "No recommended small model",
       disabled: "Disabled",
       fallback: "Fallback model",
       utilityFallback: "Utility fallback model",
+      utilityOverridesTitle: "Agents with their own utility settings:",
+      utilityOverridesOthers: "Other agents use this default.",
+      utilityOverrideDefaultModel: "default model",
+      utilityOverrideFallbacks: "fallbacks: {models}",
       noFallback: "No fallback model",
       clearFallbacks: "No fallback model (remove all {count})",
       moreFallbackOne: "1 more fallback after this one",
       moreFallbacks: "{count} more fallbacks after this one",
       selectModel: "Select a model",
-      discoveringMore: "Discovering more models…",
+      discoveringMore: "Looking for more models in the background…",
+      savedDiscoveringMore: "Saved. Looking for more models in the background…",
       discoverFailed: "Couldn’t load more models. Try again.",
       discoverFailedFor: "Couldn’t load models from {providers}. Try again.",
       retryDiscover: "Retry",
       thinkingHelpLabel: "About effort defaults",
       thinkingHelp:
-        "Sets the global default for new sessions when no session-specific thinking level is set. Choices follow the primary model's reported capabilities. A saved level stays visible if the model changes; other models map unsupported levels to their closest supported option.",
-      thinkingDefaultHelp:
-        "Uses the selected model's thinking policy instead of saving a global thinking override.",
+        "Default effort for new sessions. Levels follow the primary model; other models use the closest supported level. Saved choices are kept.",
+      thinkingDefaultHelp: "Default: use the model’s own effort setting.",
       fastModeHelpLabel: "About speed defaults",
       fastModeHelp:
-        "Sets the global default for new sessions. Auto starts fast and returns to standard after the model's configured interval. Fast requests fast mode, Off requests standard, and Ultrafast requests the Ultrafast service tier when available. Saved preferences remain unchanged when capabilities change.",
+        "Default speed for new sessions. Auto: fast, then standard. Fast: fast mode. Off: standard. Ultrafast: where supported.",
       fastModeDefaultHelp:
-        "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.",
+        "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.",
     },
     installedAgents: {
       title: "Installed agents",
@@ -1302,7 +1340,7 @@ const enSettings = {
       check: "Check again",
       checking: "Checking…",
       empty: "No supported coding apps yet.",
-      note: "Update installed agents from Control UI",
+      note: "Update installed agents from the OpenClaw app",
       enabled: "{name} is enabled.",
       sessionExpired:
         "This setup session ended. Close this dialog and check the installed agent status.",
@@ -1312,7 +1350,7 @@ const enSettings = {
       adminRequired: "You can view Models, but only admins can change them.",
     },
     notes: {
-      defaultModel: "Update defaults from Control UI",
+      defaultModel: "Update defaults from the OpenClaw app",
     },
   },
   updates: {
@@ -1338,7 +1376,7 @@ const enSettings = {
     page: {
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
-      controlUiCommit: "Control UI commit",
+      controlUiCommit: "Web app commit",
       builtAt: "Built",
       installedAt: "Installed",
       installedAtUnknown: "Unknown",
@@ -1417,8 +1455,7 @@ const enSettings = {
       checkStatus: "Check status",
       retryUpdate: "Retry update",
       reportFailure: "Report update failure",
-      reportOwnerRequired:
-        "You need admin access to report an update failure. Sign in and connect to the Gateway.",
+      reportOwnerRequired: "Connect and sign in as an admin to report this failure.",
       reportResult: "Failure report",
       reportSubmitting: "Submitting report…",
       reportCreated: "GitHub issue created",
@@ -1636,7 +1673,9 @@ const enSettings = {
       locationHint: "Allow agents to use device location when a tool asks for it.",
       locationModes: { off: "Off", whileUsing: "While using", always: "Always" },
       preciseLocation: "Precise location",
-      preciseLocationHint: "Always may require System Settings to approve background location.",
+      locationAlwaysHint: "Always may require System Settings to approve background location.",
+      preciseLocationHint:
+        "Allow the Gateway to request this Mac’s precise location when location access is enabled.",
       preciseLocationReadOnlyHint: "Manage precise location access in Settings.",
       preciseLocationStatuses: { enabled: "Enabled", disabled: "Disabled" },
       privacy: "Privacy",
@@ -1817,6 +1856,8 @@ const enSettings = {
       status: "Status",
       unsubscribe: "Unsubscribe",
       sendTest: "Send test",
+      testAllBrowsers: "Test all browsers",
+      testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
       testError: "Not sent",
@@ -1832,7 +1873,7 @@ const enSettings = {
       accountDefaults: "Account defaults",
       installedApp: "This browser or app",
       deliverDevice: "Deliver to this browser or app",
-      notificationLabel: "Notification label",
+      notificationLabel: "Notification title prefix",
       approvalRequested: "Approval requested",
       agentFinished: "Agent finished",
       agentQuestion: "Agent question",
@@ -1849,6 +1890,7 @@ const enSettings = {
       quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
       onlyAgents: "Only these agents",
+      onlyAgentsHint: "Enter agent IDs separated by commas. Leave blank for all agents.",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
       inheritQuietHours: "Use account quiet hours",
@@ -1980,9 +2022,6 @@ const enSettings = {
         title: "Browser tab icon",
         default: "Default",
         agent: "Agent avatar",
-        square: "Square",
-        rounded: "Rounded corners",
-        circle: "Circle",
         lobsterdex: "Lobsterdex",
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
@@ -1996,7 +2035,7 @@ const enSettings = {
       devices: "Microphone and camera",
       messageWidth: "Message width",
       messageWidthHint:
-        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+        "Optional CSS width for the centered chat, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
@@ -2018,7 +2057,7 @@ const enSettings = {
       title: "Session observer",
       scope: "Applies to everyone on this Gateway.",
       toggle: "Session observer",
-      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
+      toggleHint: "Generate live status digests for sessions that are open in the app.",
       resolvedModel: "Resolved small model",
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
@@ -2030,7 +2069,7 @@ const enSettings = {
       modelCatalogUnavailable: "Explicit model catalog unavailable",
       auto: "Auto (provider default)",
       disabled: "Disabled",
-      toggleNote: "Update the Control UI session observer",
+      toggleNote: "Update the session observer",
       modelNote: "Update the default utility model",
     },
     connection: {
@@ -2073,7 +2112,7 @@ const enSettings = {
     rawDraftBlocksFormEdit: en.configView.rawDraftBlocksFormEdit,
     rawDraftUnverified: en.configView.rawDraftUnverified,
     invalidConfig: "Your configuration is invalid. Some settings may not work as expected.",
-    dismissWarning: "Don’t remind me again",
+    dismissWarning: "Dismiss warning",
     viewPendingChangesRaw: "View pending changes",
     hideEnvValues: "Hide environment values",
     revealEnvValues: "Reveal environment values",
@@ -2086,8 +2125,6 @@ const enSettings = {
     secretCountPlural: "{count} secrets",
     redacted: "redacted",
     visible: "visible",
-    revealSensitive: "Reveal sensitive values",
-    hideSensitive: "Hide sensitive values",
     toggleRawRedaction: "Toggle raw config redaction",
     sensitiveHidden:
       "{count} sensitive value hidden. Use the reveal button above to edit the raw config.",
@@ -2119,8 +2156,8 @@ const enSettings = {
     },
     sessionStorage: {
       title: "Session storage",
-      description: "Transcript counts and disk usage across agent databases.",
-      transcripts: "Transcripts",
+      description: "Chat counts and disk usage across agent databases.",
+      transcripts: "Chats",
       transcriptCounts: "{hot} uncompressed · {cold} archived",
       database: "Databases",
       walSize: "Write-ahead logs: {size}",
@@ -2132,29 +2169,28 @@ const enSettings = {
       agentCounts:
         "{hot} uncompressed · {cold} archived · Database {database} · WAL {wal} · Archive files {archives} · Compressed in database {embedded}",
       worker: "Background maintenance",
-      completed: "Last completed {time} · {count} transcripts archived",
+      completed: "Last completed {time} · {count} chats archived",
       notRun: "No maintenance batches completed yet.",
       running: "Running",
-      runningProgress: "{archived} transcripts archived · {externalized} archives moved to files",
+      runningProgress: "{archived} chats archived · {externalized} archives moved to files",
       externalized: "{count} compressed archives moved from the database to files.",
       idle: "Idle",
       failed: "Needs attention",
       adminRequired: "You need admin access to inspect session storage.",
       disconnected: "Reconnect to inspect session storage.",
       automatic: "Automatic archival",
-      enabled: "Archive older transcripts",
+      enabled: "Archive older chats",
       enabledHint:
-        "Inactive transcripts move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
+        "Inactive chats move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
       afterDays: "Archive after (days)",
-      afterDaysHint:
-        "Days since the transcript last changed. Changes apply without a Gateway restart.",
+      afterDaysHint: "Days since the chat last changed. Changes apply without a Gateway restart.",
       backupHint:
         "OpenClaw backups capture archived history with the database. Direct database copies also need the archive files. Missing or damaged archives require recovery from a backup.",
       advanced: "Advanced session settings",
       runNow: "Run now",
       runHint: "Start one maintenance batch using the saved, applied policy.",
       runStarted: "Maintenance batch started. You can leave this page while it runs.",
-      runCompleted: "Maintenance batch completed. {count} transcripts archived.",
+      runCompleted: "Maintenance batch completed. {count} chats archived.",
     },
   },
   memoryPage: {

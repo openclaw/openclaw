@@ -17,7 +17,6 @@ import {
   type DatabasePortRecoveryIntent,
 } from "./database-port-recovery.js";
 import { makeDatabasePortManifest } from "./database-port-recovery.test-support.js";
-import { acquireEmbeddedStateLock } from "./embedded-state-lock.js";
 import * as gatewayLockProcessModule from "./gateway-lock-process.js";
 import { acquireGatewayLock, resolveGatewayLockPaths } from "./gateway-lock.js";
 import * as ownerLease from "./gateway-owner-lease.js";
@@ -104,10 +103,7 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
           ? runStartupConfigPreflight({ gateway: true })
           : entry === "direct Gateway"
             ? acquireGatewayLock(lockOptions)
-            : acquireEmbeddedStateLock({
-                options: { ...lockOptions, timeoutMs: 1000 },
-                formatActiveGatewayRefusal: () => "unexpected live Gateway",
-              });
+            : acquireGatewayLock({ ...lockOptions, role: "agent-embedded", timeoutMs: 1000 });
       await expect(attempt).rejects.toThrow(intent.manifestPath);
       await expect(attempt).rejects.toThrow("openclaw database port --resume");
       await expect(attempt).rejects.toThrow("openclaw database port --rollback");

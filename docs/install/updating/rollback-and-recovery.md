@@ -63,6 +63,17 @@ separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.
 Preserve every recovery location named in the update report until you have
 verified the installation.
+
+A verified update that cannot remove an obsolete package backup still succeeds
+with a warning that names the backup it could not remove. This includes the npm
+link to a dev checkout that a switch to a package moved aside, when the
+filesystem refuses to remove that unchanged link; see
+[replacing the package directory](/cli/update/how-updates-run#replacing-the-package-directory)
+for how to remove that link safely. A backup link that was replaced or cannot be
+read, and a backup directory that another writer replaced, still fail the
+update. See [status and history](/cli/update/status-and-history) for the
+warning.
+
 If a launcher backup cannot be restored, the update error names the affected
 launcher and the retained backup path.
 
@@ -272,12 +283,17 @@ verification failure. The command still exits nonzero; recovery does not turn a
 rejected version into a successful update.
 
 Recovery reports distinguish restored package files from a healthy Gateway.
-Once the updater verifies that the target Gateway is serving, later optional
-recognized maintenance failures, such as a late restart-health report or removing
-an old CLI wrapper, remain warnings and do not trigger rollback or turn the update
-into a failure. Authority refusals, data-at-risk failures, and unclassified errors
-still block successful completion. This does not rewrite an earlier failed
-attempt when a later status check finds the Gateway healthy.
+Once the updater verifies that the target Gateway is serving, a late
+restart-health report remains a warning and does not trigger rollback or turn the
+update into a failure. An old CLI wrapper that cannot be removed after a switch
+from a Git checkout to a package install is also a warning, whether or not the
+Gateway restarted: the package install is kept, and the wrapper keeps starting
+the old checkout wherever it comes first on `PATH` until you remove it. The
+warning names the path it could not remove or inspect. A wrapper that a system package owns still fails the
+update and rolls the package install back. Authority refusals, data-at-risk
+failures, and unclassified errors still block successful completion. This does
+not rewrite an earlier failed attempt when a later status check finds the
+Gateway healthy.
 
 A verified rollback names the version serving after recovery, including when
 an additional repair was needed. If the restored service fails its health check,
@@ -433,6 +449,7 @@ repair. A reachable version retained after a schema migration can continue
 serving while you diagnose it.
 The failed update retains its nonzero exit code even if the agent repairs it.
 
+- If `openclaw` cannot start after an update was interrupted on an `install-cli.sh` prefix or the durable service copy, and `lib/node_modules/openclaw` is missing, rename the leftover `lib/node_modules/.openclaw.release-link-*` link onto `lib/node_modules/openclaw`. It names the unchanged previous release. See [release directories](/cli/update/how-updates-run#release-directories-on-openclaw-owned-prefixes).
 - For `openclaw update --channel dev` on source checkouts, the updater auto-bootstraps `pnpm` when needed. If you see a pnpm/corepack bootstrap error, install `pnpm` manually (or re-enable `corepack`) and rerun the update.
 - Check: [Troubleshooting](/gateway/troubleshooting)
 - For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).

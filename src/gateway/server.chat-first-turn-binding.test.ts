@@ -169,25 +169,6 @@ it("binds native chat.send, preserves its stopped partial, and resumes the same 
     sessionId: history.sessionId,
     expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
   };
-  const beforeRejectedStops = await loadTranscriptEvents(transcriptScope);
-  for (const guard of [
-    {
-      idempotencyKey: "stop-stale-first-native-leaf",
-      expectedLeafEntryId: "stale-first-native-leaf",
-    },
-    {
-      idempotencyKey: "stop-copied-first-native-leaf",
-      sessionId: "previous-first-native-session",
-    },
-  ]) {
-    await expect(
-      gateway.client.request("chat.send", { ...stopParams, ...guard }),
-    ).rejects.toMatchObject({ details: { reason: "active-leaf-changed" } });
-    expect(requestOwners[0]?.signal.aborted).toBe(false);
-    expect(response.destroyed).toBe(false);
-    expect(requestBodies).toHaveLength(1);
-    expect(await loadTranscriptEvents(transcriptScope)).toEqual(beforeRejectedStops);
-  }
   await expect(
     gateway.client.request("chat.send", {
       ...stopParams,

@@ -21,12 +21,7 @@ import { syncThemeBackgroundArtwork } from "./theme-background-artwork.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
-import {
-  applyChatFontSmoothing,
-  applyTypefaceOverrides,
-  resolveTypefaces,
-  syncTypefaceStylesheets,
-} from "./typography.ts";
+import { applyTypefaceOverrides, resolveTypefaces, syncTypefaceStylesheets } from "./typography.ts";
 
 function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   return (
@@ -68,7 +63,6 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   const typefaces = resolveTypefaces(effectiveTheme, settings.fontUi, settings.fontChat);
   syncTypefaceStylesheets(typefaces);
   applyTypefaceOverrides(settings.fontUi, settings.fontChat);
-  applyChatFontSmoothing(typefaces.chat);
   syncCustomThemeStyleTag(catalogTheme?.palette ?? settings.customTheme);
   applyControlUiAccent(settings.accent);
   // Custom palette CSS can change while the theme ID and inline styles stay the same.

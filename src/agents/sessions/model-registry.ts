@@ -3,7 +3,7 @@ import { getAgentDir } from "../config.js";
 import type { AuthStorage } from "./auth-storage.core.js";
 import { ModelRegistry as CoreModelRegistry } from "./model-registry.core.js";
 
-export type { ProviderConfigInput, ResolvedRequestAuth } from "./model-registry.core.js";
+export type { ProviderConfigInput } from "./model-registry.core.js";
 export type ModelRegistry = CoreModelRegistry;
 
 type ModelRegistryOptions = NonNullable<Parameters<typeof CoreModelRegistry.create>[2]>;

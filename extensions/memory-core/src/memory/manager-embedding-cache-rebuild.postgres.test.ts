@@ -5,6 +5,7 @@ import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { createPostgresIndexFixture } from "./postgres-index.test-support.js";
 
 const embeddingInputs = vi.hoisted(() => [] as Array<string | EmbeddingInput>);
@@ -50,6 +51,7 @@ describe("PostgreSQL full memory rebuild at cache capacity", () => {
     "embeds only misses and retains every needed vector after pruning",
     async () =>
       fixture.run(async () => {
+        keepPublishedCacheDuplicates();
         const memory = path.join(fixture.workspace, "memory");
         await fs.mkdir(memory, { recursive: true });
         await fs.writeFile(path.join(memory, "b.md"), "Previously cached beta.");
