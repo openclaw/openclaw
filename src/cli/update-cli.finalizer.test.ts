@@ -268,7 +268,13 @@ describe("update-cli", () => {
       });
       if (!requestedChannel) {
         mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(postDoctorRecords);
-        mocks.syncPluginsForUpdateChannel.mockImplementationOnce(syncChanged);
+        // A real config change: publication writes config only then, against post-Doctor state.
+        mocks.syncPluginsForUpdateChannel.mockImplementationOnce(async ({ config }) =>
+          pluginSyncResult(
+            { ...config, plugins: { ...config?.plugins, allow: ["post-plugin"] } },
+            true,
+          ),
+        );
         mocks.updateNpmInstalledPlugins.mockImplementation(async ({ config }) =>
           npmPluginUpdateResult(config),
         );
