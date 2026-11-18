@@ -217,7 +217,18 @@ export function readUnchangedUpdateDatabaseGeneration(
   ) {
     throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
   }
-  return serializePhysicalGeneration(current, after) === receipt.physical
+  if (serializePhysicalGeneration(current, after) === receipt.physical) {
+    return receipt.generation;
+  }
+  // A non-writing open since a closed receipt adds only a zero-commit index (iChange and
+  // checksum zero); the receipt's generation is that index's empty-reader alternate.
+  const openedWithoutCommit =
+    after !== null &&
+    !current.journal &&
+    (current.wal?.size ?? 0n) === 0n &&
+    after.readUInt32LE(8) === 0 &&
+    after.readBigUInt64LE(24) === 0n;
+  return openedWithoutCommit && serializePhysicalGeneration(current, null) === receipt.physical
     ? receipt.generation
     : undefined;
 }
