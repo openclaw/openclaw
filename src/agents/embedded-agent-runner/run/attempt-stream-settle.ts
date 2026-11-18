@@ -37,6 +37,7 @@ import {
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
+import { createAttemptModelRequestTransformer } from "../model-request-hook.js";
 import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
@@ -544,6 +545,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
+    transformPayload: createAttemptModelRequestTransformer(attempt, input.sessionAgentId),
     ...(sessionFork
       ? {
           finalizePayload: (payload: Record<string, unknown>) =>

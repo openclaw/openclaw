@@ -1,8 +1,5 @@
 /**
  * Run with --expose-gc; use --trace-gc-nvp only for a separate promotion pass.
- * Startup's notification-retirement scan over retained subagent history:
- * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/subagent-sweep-measure.ts
- *   --operation notification-retirement --runs 10000 --operations 3000 --yield-ms 0
  * Run baseline and candidate in alternating order with separate state/output paths.
  * Residual eligible-history backlog (settled history without obligations is already indexed out):
  * --workload obligations --runs 20000 --operations 100 --yield-ms 0
@@ -33,7 +30,6 @@ const { values } = parseArgs({
     operations: { type: "string", default: "4000" },
     runs: { type: "string", default: "500" },
     workload: { type: "string", default: "settled" },
-    operation: { type: "string", default: "sweep" },
     "yield-ms": { type: "string", default: "1" },
     "start-at": { type: "string", default: "0" },
     "gc-log": { type: "string" },
@@ -50,8 +46,6 @@ const runCount = integer("runs", 10);
 const yieldMs = integer("yield-ms", 0);
 const startAt = integer("start-at", 0);
 const workload = values.workload;
-const operation = values.operation;
-assert.ok(operation === "sweep" || operation === "notification-retirement");
 assert.ok(workload === "settled" || workload === "mixed" || workload === "obligations");
 assert.ok(global.gc, "Run with --expose-gc");
 const stateDir = values["state-dir"]
@@ -116,13 +110,7 @@ const sweeper = createSubagentRegistrySweeper({
   getRunsForCollectorGroup: memory.getSubagentRunsForCollectorGroup,
   warn: unexpected,
 });
-const { suspendReplacedStoreNotifications } =
-  await import("../../src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.js");
-const retirementOptions = { runs: subagentRuns, resumedRuns: new Set<object>() };
-const sweepOnce =
-  operation === "notification-retirement"
-    ? () => suspendReplacedStoreNotifications(retirementOptions)
-    : () => (values.timer ? sweeper.runTick() : sweeper.sweepOnce());
+const sweepOnce = () => (values.timer ? sweeper.runTick() : sweeper.sweepOnce());
 
 const composition = { settled: 0, running: 0, pendingDelivery: 0, futureArchive: 0 };
 const claims = new Map<string, string | undefined>();
@@ -198,13 +186,9 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
     bytesPerSweep: totalBytes / operations,
     registryBytes,
     registryBytesPerSweep: registryBytes / operations,
-    ...(operation === "sweep"
-      ? {
-          // The production idle timer runs once every 60 seconds; this is an extrapolation.
-          projectedBytesPerIdleMinute: totalBytes / operations,
-          projectedRegistryBytesPerIdleMinute: registryBytes / operations,
-        }
-      : {}),
+    // The production idle timer runs once every 60 seconds; this is an extrapolation.
+    projectedBytesPerIdleMinute: totalBytes / operations,
+    projectedRegistryBytesPerIdleMinute: registryBytes / operations,
   };
 }
 
@@ -296,7 +280,7 @@ try {
     ? (await inspector.post("HeapProfiler.stopSampling")).profile
     : undefined;
   assertUnchanged();
-  assert.equal(lifecycleSweeps, operation === "sweep" ? operations + 100 : 0);
+  assert.equal(lifecycleSweeps, operations + 100);
   // Count one separate pass; coverage instrumentation never enters timing/allocation samples.
   await inspector.post("Profiler.enable");
   await inspector.post("Profiler.startPreciseCoverage", { callCount: true, detailed: false });
@@ -343,7 +327,6 @@ try {
   const result = {
     scope: "production registry sweep and canonical memory; no Gateway/model latency claim",
     node: process.version,
-    operation,
     workload,
     timer: values.timer,
     observeStalls: values["observe-stalls"],
@@ -354,7 +337,7 @@ try {
     startAt,
     stateDir,
     profilePath,
-    ...(operation === "sweep" ? { idleSweepIntervalMs: 60_000 } : {}),
+    idleSweepIntervalMs: 60_000,
     allocationScope:
       "whole capture includes timing/yield overhead; registry stacks are also reported",
     unchangedRecordsSha256: hash("sha256", expectedJson, "hex"),
@@ -372,7 +355,7 @@ try {
     gc: {
       total: totalGc,
       msPerSweep: totalGc.totalMs / operations,
-      ...(operation === "sweep" ? { projectedMsPerIdleMinute: totalGc.totalMs / operations } : {}),
+      projectedMsPerIdleMinute: totalGc.totalMs / operations,
       minor: gc(constants.NODE_PERFORMANCE_GC_MINOR),
       major: gc(constants.NODE_PERFORMANCE_GC_MAJOR),
     },
