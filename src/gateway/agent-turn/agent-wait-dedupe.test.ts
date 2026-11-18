@@ -32,6 +32,8 @@ import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { agentHandlers } from "../server-methods/agent.js";
+import { prepareChatAdmission } from "../server-methods/chat-send-admission.test-support.js";
+import { createPendingChatSendReservationAccess } from "../server-methods/chat-send-reservation.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
@@ -830,107 +832,154 @@ it.each(["lifecycle-first", "dedupe-first"] as const)(
   },
 );
 
-it("waits by the original run ID after reopening a completed session", async () => {
-  await withSessionRowProjectionState(async (create) => {
-    const runId = " completed-before-restart ";
-    const endedAt = Date.now();
-    const startedAt = endedAt - 1;
-    const completed = derivePersistedSessionLifecyclePatch({
-      event: {
-        runId: "execution",
-        clientRunId: runId,
-        ts: endedAt,
-        data: { phase: "end", startedAt, endedAt },
-      },
-      currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+it.each([" completed-before-restart ", "legacy-run"])(
+  "recovers the initiating wire ID from a single reopened session (%s)",
+  async (persistedId) => {
+    await withSessionRowProjectionState(async (create) => {
+      const runId = persistedId.trim() === persistedId ? ` ${persistedId} ` : persistedId;
+      const endedAt = Date.now();
+      const startedAt = endedAt - 1;
+      const completed = derivePersistedSessionLifecyclePatch({
+        event: {
+          runId: "execution",
+          clientRunId: persistedId,
+          ts: endedAt,
+          data: { phase: "end", startedAt, endedAt },
+        },
+        currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      });
+      expect(completed.lastRunId).toBe(persistedId);
+      const original = seedProjectionRow("finished", completed);
+      await appendProjectionMessages(
+        original.scope,
+        {
+          role: "user",
+          content: "original",
+          timestamp: startedAt,
+          idempotencyKey: runId + ":user",
+        },
+        {
+          role: "user",
+          content: "steer",
+          timestamp: endedAt,
+          idempotencyKey: runId.trim() + ":user",
+          __openclaw: { steerTargetRunId: runId },
+        },
+      );
+      const context = createGatewayRequestContext(makeContextParams());
+      setRuntimeConfigSnapshot({});
+      const projection = await create({ cfg: {}, modelCatalog: [] });
+      bindSessionRowProjection(context, () => projection);
+      await expectReply(
+        invokeWait(context, runId, 0),
+        expect.objectContaining({ runId, status: "ok", startedAt, endedAt }),
+      );
+      await expectReply(invokeWait(context, runId.trim(), 0), {
+        runId: runId.trim(),
+        status: "timeout",
+      });
     });
-    expect(completed.lastRunId).toBe(runId);
-    const original = seedProjectionRow("finished", completed);
+  },
+);
+
+it("drops a restored result when another chat reserves the ID during the history read", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const runId = "reserved-again";
+    const original = seedProjectionRow("finished", {
+      lastRunId: runId,
+      status: "done",
+      startedAt: 1,
+      endedAt: 2,
+    });
     await appendProjectionMessages(original.scope, {
       role: "user",
       content: "original",
-      timestamp: startedAt,
+      timestamp: 1,
       idempotencyKey: runId + ":user",
-    });
-    await appendProjectionMessages(
-      original.scope,
-      ...Array.from({ length: 34 }, (_, i) => ({
-        role: "assistant" as const,
-        content: [{ type: "text" as const, text: String(i) }],
-        timestamp: endedAt,
-      })),
-    );
-    const legacy = seedProjectionRow("legacy", { ...completed, lastRunId: "old-run" });
-    await appendProjectionMessages(legacy.scope, {
-      role: "user",
-      content: "old",
-      timestamp: startedAt,
-      idempotencyKey: " old-run :user",
-    });
-    const oldCollision = seedProjectionRow("first-collision", {
-      ...completed,
-      lastRunId: "shared-run",
-    });
-    await appendProjectionMessages(oldCollision.scope, {
-      role: "user",
-      content: "old",
-      timestamp: startedAt,
-      idempotencyKey: " shared-run :user",
-    });
-    const newCollision = seedProjectionRow("second-collision", {
-      ...completed,
-      lastRunId: " shared-run ",
-    });
-    await appendProjectionMessages(newCollision.scope, {
-      role: "user",
-      content: "new",
-      timestamp: startedAt,
-      idempotencyKey: " shared-run :user",
     });
     const context = createGatewayRequestContext(makeContextParams());
     setRuntimeConfigSnapshot({});
     const projection = await create({ cfg: {}, modelCatalog: [] });
     bindSessionRowProjection(context, () => projection);
-    await expectReply(
-      invokeWait(context, runId, 0),
-      expect.objectContaining({
-        runId,
-        status: "ok",
-        startedAt,
-        endedAt,
-      }),
-    );
-    for (const id of [runId.trim(), "old-run"]) {
-      await expectReply(invokeWait(context, id, 0), { runId: id, status: "timeout" });
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const read = projection.readRestoredCompletion;
+    vi.spyOn(projection, "readRestoredCompletion").mockImplementationOnce(async (id) => {
+      const result = await read(id);
+      entered.resolve();
+      await release.promise;
+      return result;
+    });
+    const waiter = invokeWait(context, runId, 0);
+    try {
+      await entered.promise;
+      const admission = await prepareChatAdmission({
+        context,
+        client: null,
+        params: { sessionKey: "agent:main:second", idempotencyKey: runId, message: "new attempt" },
+      });
+      createPendingChatSendReservationAccess({
+        ...admission,
+        attemptId: "second-attempt",
+      }).reserve();
+      admission.session.releaseSessionStorage?.();
+    } finally {
+      release.resolve();
     }
-    await expectReply(
-      invokeWait(context, " old-run ", 0),
-      expect.objectContaining({ status: "ok" }),
-    );
-    // No live job/dedupe state remains. The later failed session still retires the restored result.
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:later" },
-      {
-        sessionId: "later",
-        updatedAt: endedAt + 1,
-        lastRunId: runId,
-        status: "failed",
-        endedAt: endedAt + 1,
-      },
-    );
+    await expectReply(waiter, { runId, status: "timeout" });
+  });
+});
+
+it("keeps a reused run ambiguous after a second restart and a later turn", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const runId = "reused";
+    const row = seedProjectionRow("first", {
+      lastRunId: runId,
+      status: "done",
+      startedAt: 1,
+      endedAt: 2,
+    });
+    await appendProjectionMessages(row.scope, {
+      role: "user",
+      content: "original",
+      timestamp: 1,
+      idempotencyKey: runId + ":user",
+    });
+    const context = createGatewayRequestContext(makeContextParams());
+    setRuntimeConfigSnapshot({});
+    let projection = await create({ cfg: {}, modelCatalog: [] });
+    bindSessionRowProjection(context, () => projection);
+    const wait = () => invokeWait(context, runId, 0);
+    await expectReply(wait(), expect.objectContaining({ status: "ok" }));
+    const target = { agentId: "main", sessionKey: "agent:main:second" };
+    await upsertSessionEntryCore(target, {
+      sessionId: "second",
+      updatedAt: 3,
+      ...derivePersistedSessionLifecyclePatch({
+        event: { runId, ts: 3, data: { phase: "start", startedAt: 3 } },
+        currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      }),
+    });
     await projection.ensureMaterialized();
-    await expectReply(invokeWait(context, runId, 0), { runId, status: "timeout" });
-    await expectReply(invokeWait(context, " shared-run ", 0), {
-      runId: " shared-run ",
-      status: "timeout",
-    });
-    await expectReply(invokeWait(context, "shared-run", 0), {
-      runId: "shared-run",
-      status: "timeout",
-    });
-    await expectReply(invokeWait(context, "missing-run", 0), {
-      runId: "missing-run",
-      status: "timeout",
-    });
+    await expectReply(wait(), { runId, status: "timeout" });
+    projection.dispose();
+    projection = await create({ cfg: {}, modelCatalog: [] });
+    await expectReply(wait(), { runId, status: "timeout" });
+    for (const [id, endedAt] of [
+      [runId, 4],
+      ["later", 5],
+    ] as const) {
+      await upsertSessionEntryCore(target, {
+        sessionId: "second",
+        updatedAt: endedAt,
+        status: "done",
+        lastRunId: id,
+        lifecycleRunId: undefined,
+        endedAt,
+      });
+    }
+    projection.dispose();
+    projection = await create({ cfg: {}, modelCatalog: [] });
+    await expectReply(wait(), { runId, status: "timeout" });
   });
 });

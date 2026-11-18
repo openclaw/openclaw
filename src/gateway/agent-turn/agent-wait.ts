@@ -62,28 +62,27 @@ export function prepareAgentWaitForTurn(
       runId,
       timeoutMs,
       source,
-      readRestoredCompletion: () => {
-        if (
-          !recovery?.recoverWithSessionAuthorization ||
-          source ||
-          runContext ||
-          context.dedupe.has(pendingChatSendDedupeKey(runId)) ||
-          context.dedupe.has(`chat:${runId}`) ||
-          context.dedupe.has(`agent:${runId}`)
-        ) {
-          return undefined;
-        }
-        const completed = getSessionRowProjection(context)?.readRestoredCompletion(runId);
-        return completed?.then(
-          (entry) =>
-            entry && {
-              status: "ok" as const,
-              startedAt: entry.startedAt,
-              endedAt: entry.endedAt,
-              session: captureAgentJobSession({ ...entry, lifecycleGeneration }),
-            },
-        );
-      },
+      canRestoreCompletion: () =>
+        recovery?.recoverWithSessionAuthorization === true &&
+        !source &&
+        !runContext &&
+        !getAgentRunContext(runId) &&
+        !resolveAgentWaitSource(context, runId) &&
+        !context.dedupe.has(pendingChatSendDedupeKey(runId)) &&
+        !context.dedupe.has(`chat:${runId}`) &&
+        !context.dedupe.has(`agent:${runId}`),
+      readRestoredCompletion: () =>
+        getSessionRowProjection(context)
+          ?.readRestoredCompletion(runId)
+          ?.then(
+            (entry) =>
+              entry && {
+                status: "ok" as const,
+                startedAt: entry.startedAt,
+                endedAt: entry.endedAt,
+                session: captureAgentJobSession({ ...entry, lifecycleGeneration }),
+              },
+          ),
       stopWaiting: () => {
         queuedDuringWait = queuedResult();
         return queuedDuringWait !== undefined;

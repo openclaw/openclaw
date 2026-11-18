@@ -23,6 +23,11 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
   };
 }
 
+/** Older session writers trimmed the client run ID; newer writers preserve the exact bytes. */
+export function matchesPersistedClientRunId(stored: string, wire: string): boolean {
+  return stored === wire || stored === wire.trim();
+}
+
 /** Projection refreshes can retain a recovered result only while the same attempt owns the row. */
 export function samePersistedSessionRun(
   before: SessionEntry | undefined,

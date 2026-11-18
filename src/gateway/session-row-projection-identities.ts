@@ -9,7 +9,10 @@ import { isInternalSessionEffectsKey } from "../config/sessions/internal-session
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveSessionCreatorActor } from "../config/sessions/session-entry-provenance.js";
-import { samePersistedSessionRun } from "../config/sessions/terminal-status.js";
+import {
+  matchesPersistedClientRunId,
+  samePersistedSessionRun,
+} from "../config/sessions/terminal-status.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import {
@@ -304,104 +307,86 @@ export function indexSessionRow(
   }
 }
 
-/** A new Gateway can recover only its initial rows. Later attempts retire the old ID permanently. */
+/** A bare run ID can recover only an uncontested single-session startup snapshot. */
 export function createRestoredCompletionIndex(isReady: () => boolean) {
   type Completion = Pick<NonNullable<Row["storedEntry"]>, "sessionId" | "startedAt" | "endedAt"> & {
     agentId: string;
     sessionKey: string;
     storePath: string;
+    lastRunId: string;
     sourceKey?: Promise<string | undefined>;
   };
-  const candidates = new Map<string, Completion>();
+  let candidate: Completion | undefined;
   return {
     restore(rows: Iterable<Row>) {
-      const seen = new Set<string>();
+      // Another session's latest row can already have overwritten a reuse of this ID.
       for (const row of rows) {
         const entry = row.storedEntry;
-        if (!entry?.lastRunId) {
-          continue;
+        if (
+          candidate ||
+          !entry?.lastRunId ||
+          entry.status !== "done" ||
+          entry.endedAt === undefined
+        ) {
+          candidate = undefined;
+          break;
         }
-        // A legacy row can stand for any wire ID with this trimmed spelling.
-        const key = entry.lastRunId.trim();
-        if (seen.has(key)) {
-          candidates.delete(key);
-        } else if (entry.status === "done" && entry.endedAt !== undefined) {
-          candidates.set(key, {
-            storePath: row.storeTarget.storePath,
-            sessionKey: row.key,
-            agentId: row.agentId,
-            sessionId: entry.sessionId,
-            startedAt: entry.startedAt,
-            endedAt: entry.endedAt,
-          });
-        }
-        seen.add(key);
+        candidate = {
+          lastRunId: entry.lastRunId,
+          storePath: row.storeTarget.storePath,
+          sessionKey: row.key,
+          agentId: row.agentId,
+          sessionId: entry.sessionId,
+          startedAt: entry.startedAt,
+          endedAt: entry.endedAt,
+        };
       }
       return read;
     },
     update(before: Row["storedEntry"], after?: Row["storedEntry"]) {
-      if (candidates.size && !samePersistedSessionRun(before, after)) {
-        for (const key of [before?.lastRunId, after?.lastRunId, after?.lifecycleRunId]) {
-          if (key) {
-            candidates.delete(key.trim());
-          }
-        }
+      if (candidate && !samePersistedSessionRun(before, after)) {
+        candidate = undefined;
       }
     },
   };
   function read(runId: string) {
-    // Older writers trimmed the row ID. Its persisted user-turn key still has the wire bytes.
-    const key = runId.trim();
-    const completion = candidates.get(key);
-    if (!completion || !isReady()) {
+    const completion = candidate;
+    if (!completion || !matchesPersistedClientRunId(completion.lastRunId, runId) || !isReady()) {
       return undefined;
     }
-    completion.sourceKey ??= readUserKey(completion).catch((error: unknown) => {
+    completion.sourceKey ??= readUserKey(completion).catch(() => {
       completion.sourceKey = undefined;
-      throw error;
+      return undefined;
     });
     const inputKey = buildRunUserTurnIdempotencyKey(runId);
     return completion.sourceKey.then((source) =>
-      isReady() && candidates.get(key) === completion && source === inputKey
-        ? completion
-        : undefined,
+      isReady() && candidate === completion && source === inputKey ? completion : undefined,
     );
   }
   async function readUserKey(completion: Completion) {
-    let offset = 0;
-    while (isReady()) {
-      const page = await readSessionTranscriptBoundedMessageTailPageAsync(completion, {
-        offset,
-        maxMessages: 32,
-        maxBytes: 256 * 1024,
-        readOnly: true,
-      });
-      if (page.scannedMessages === 0) {
-        return undefined;
-      }
-      // A single oversized message can exhaust the page budget. Read that event alone.
-      const tail = page.newestContiguousEventCount
-        ? page
-        : await readSessionTranscriptBoundedMessageTailPageAsync(completion, {
-            offset,
-            maxMessages: 1,
-            maxBytes: Number.MAX_SAFE_INTEGER,
-            readOnly: true,
-          });
-      if (!tail.newestContiguousEventCount) {
-        return undefined;
-      }
-      for (const { event } of tail.events.toReversed().slice(0, tail.newestContiguousEventCount)) {
-        const message = asOptionalRecord(asOptionalRecord(event)?.message);
-        if (message?.role === "user") {
-          return typeof message.idempotencyKey === "string" ? message.idempotencyKey : undefined;
+    const page = await readSessionTranscriptBoundedMessageTailPageAsync(completion, {
+      offset: 0,
+      maxMessages: 64,
+      maxBytes: 256 * 1024,
+      readOnly: true,
+    });
+    if (page.newestContiguousEventCount !== page.totalMessages) {
+      return undefined;
+    }
+    // A legacy row may have trimmed the wire ID. Only its initiating user input owns the run.
+    let inputKey: string | undefined;
+    for (const { event } of page.events) {
+      const message = asOptionalRecord(asOptionalRecord(event)?.message);
+      if (
+        message?.role === "user" &&
+        asOptionalRecord(message["__openclaw"])?.steerTargetRunId == null
+      ) {
+        if (inputKey !== undefined || typeof message.idempotencyKey !== "string") {
+          return undefined;
         }
-      }
-      offset += tail.newestContiguousEventCount;
-      if (offset >= tail.totalMessages) {
-        return undefined;
+        inputKey = message.idempotencyKey;
       }
     }
-    return undefined;
+    return inputKey;
   }
 }

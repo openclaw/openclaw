@@ -641,6 +641,7 @@ export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
   source?: "agent" | "chat";
+  canRestoreCompletion?: () => boolean;
   readRestoredCompletion?: () => Promise<AgentJobObservation | undefined> | undefined;
   /** A caller-owned nonterminal observation can finish this wait without ending the run. */
   stopWaiting?: () => boolean;
@@ -650,7 +651,11 @@ export async function waitForAgentJob(params: {
   if (cached) {
     return projectAgentJobObservation(cached);
   }
-  if (!pendingAgentRunTerminals.has(params.runId) && !agentRunStarts.has(params.runId)) {
+  if (
+    params.canRestoreCompletion?.() &&
+    !pendingAgentRunTerminals.has(params.runId) &&
+    !agentRunStarts.has(params.runId)
+  ) {
     const recovery = params.readRestoredCompletion?.();
     if (recovery) {
       const restored = await recovery;
@@ -660,6 +665,7 @@ export async function waitForAgentJob(params: {
       }
       if (
         restored &&
+        params.canRestoreCompletion?.() &&
         !pendingAgentRunTerminals.has(params.runId) &&
         !agentRunStarts.has(params.runId)
       ) {
