@@ -45,23 +45,20 @@ import {
   createHostSandboxFsBridge,
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
-import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
+import {
+  createBaseOnlyToolConstructionPlan,
+  registerExplicitMediaToolConstructionTest,
+  createOpenClawOnlyToolConstructionPlan,
+  createPluginOnlyToolConstructionPlan,
+} from "./test-helpers/tool-construction-plan.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant-");
 const openClawOnlyPlan = createOpenClawOnlyToolConstructionPlan();
-const pluginOnlyPlan = {
-  ...openClawOnlyPlan,
-  includeOpenClawTools: false,
-  includePluginTools: true,
-};
-const baseOnlyPlan = {
-  ...openClawOnlyPlan,
-  includeOpenClawTools: false,
-  includeBaseCodingTools: true,
-};
+const pluginOnlyPlan = createPluginOnlyToolConstructionPlan();
+const baseOnlyPlan = createBaseOnlyToolConstructionPlan();
 const skillLocator = "/skills/pond/SKILL.md";
 const skillContent = "# Pond\ncomplete instructions";
 const fullSkillResult: AgentToolResult<ReadToolDetails> = {
@@ -388,10 +385,12 @@ describe("createOpenClawCodingTools", () => {
     const tool = requireTool(tools, "already_wrapped");
     await tool.execute("call-wrapped", {});
 
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
     expect(beforeToolCall.mock.calls[0]?.[1]).toMatchObject({
       agentId: "main",
       sessionId: "session-new",
     });
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("honors the shipped dispatcher deny tool_call", () => {
@@ -466,6 +465,8 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow).toContain("sessions_spawn");
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
+
+  registerExplicitMediaToolConstructionTest(expectToolSurface);
 
   it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
     for (const runtimeToolAllowlist of [["group:messaging"], ["group:openclaw"], ["*"]]) {
