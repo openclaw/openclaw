@@ -22,7 +22,7 @@ import {
 import {
   ScheduleControls,
   ScheduleDetails,
-  ScheduleSummary,
+  ScheduleNote,
   TRAY_SCHEDULE_FIELDS,
   TrayErrors,
 } from "./view-schedule.tsx";
@@ -335,6 +335,7 @@ function PromptBlock(
           </span>
           <div class="cron-editor-schedule">
             <ScheduleControls {...props} phoneLayout={props.phoneLayout} />
+            <ScheduleNote {...props} />
           </div>
           {props.isAgentTurn ? (
             <span class="cron-prompt__run-controls">
@@ -376,7 +377,6 @@ function PromptBlock(
             fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
           />
         </div>
-        <ScheduleSummary {...props} />
       </div>
     </div>
   );

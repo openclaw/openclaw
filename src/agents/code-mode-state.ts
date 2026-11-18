@@ -70,6 +70,7 @@ type CodeModeRunState = {
   settlementMode: CodeModeSettlementMode;
   output: CodeModeOutputState;
   expiresAt: number;
+  remainingRequiredBudgetMs?: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
   catalogProjection: CodeModeCatalogProjection;
@@ -476,10 +477,14 @@ export function waitForPendingBridgeSettlement(
   });
 }
 
+export function hasAvailableCodeModeRunSlot(): boolean {
+  removeExpiredRuns();
+  return activeRuns.size + activeRunReservations < MAX_ACTIVE_CODE_MODE_RUNS;
+}
+
 export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
-    removeExpiredRuns();
-    if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
+    if (!hasAvailableCodeModeRunSlot()) {
       throw new ToolInputError(
         "too many suspended code mode runs. Resume an existing run with wait, or use exec with awaitResults:true to collect an existing tool result without suspending. Do not repeat already-dispatched work.",
       );
@@ -611,9 +616,10 @@ export function createPendingBridgeStates(
 
 export function storeSuspendedRun(
   params: Omit<CodeModeRunState, "runId" | "expiresAt" | "agentWaitRetainUntil">,
+  remainingRequiredBudgetMs?: number,
 ) {
   const runId = params.owner.runId;
-  if (params.owner.completionRequired) {
+  if (params.owner.completionRequired && remainingRequiredBudgetMs === undefined) {
     throw new ToolInputError("Required Code Mode work cannot publish an unfinished continuation.");
   }
   if (params.owner.signal.aborted) {
@@ -636,12 +642,21 @@ export function storeSuspendedRun(
         { nowMs: now },
       )
     : undefined;
-  const state: CodeModeRunState = { ...params, runId, expiresAt, agentWaitRetainUntil };
+  const state: CodeModeRunState = {
+    ...params,
+    runId,
+    expiresAt,
+    agentWaitRetainUntil,
+    remainingRequiredBudgetMs,
+  };
   const result = params.output.takeResult(
     {
       status: "waiting" as const,
       runId,
-      reason: codeModeWaitingReason(params.pending),
+      reason:
+        remainingRequiredBudgetMs === undefined
+          ? codeModeWaitingReason(params.pending)
+          : "steering",
       pendingToolCalls: pendingToolCalls(params.pending),
       telemetry: telemetry(params.runtime),
     },
