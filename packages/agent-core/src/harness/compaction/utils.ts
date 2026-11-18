@@ -17,7 +17,6 @@ import {
 
 export {
   MAX_SUMMARY_INPUT_CHARS,
-  renderConversationEntriesWithinBudget,
   type BoundedConversation,
   type ConversationEntryDescriptor,
   type ConversationTextVariant,
@@ -589,7 +588,7 @@ export function collectConversationRangeDescriptors<TSource>(
  * for a lazy source; `text` is transient and lets array callers avoid reserialization.
  * A fresh collector defines a fresh summary sequence, including omission and call state.
  */
-export function createConversationEntryCollector<TSource = number>(): (
+function createConversationEntryCollector<TSource = number>(): (
   message: Message,
   source: TSource,
 ) => Array<{ descriptor: ConversationEntryDescriptor<TSource>; text: ConversationEntryText }> {

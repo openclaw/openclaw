@@ -82,7 +82,6 @@ export type {
   ExactReplaySourceFact,
   ExactReplayReaders,
   ExactReplayContext,
-  ExactReplayEqualityRequest,
 } from "./exact-replay-facts.js";
 function pairing<S>(message: ReplayMessageFact<S>): ToolPairingMessageFact {
   if (message.role === "assistant" && message.content) {

@@ -59,7 +59,7 @@ export function transformThinkingReplay<T, B>(
   return touched ? result : messages;
 }
 
-export function findCurrentThinkingToolTurn<T, B>(
+function findCurrentThinkingToolTurn<T, B>(
   messages: readonly T[],
   adapter: ThinkingReplayAdapter<T, B>,
 ): number {
