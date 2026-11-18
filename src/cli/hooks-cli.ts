@@ -34,6 +34,7 @@ import { summarizeStringEntries } from "../shared/string-sample.js";
 import { displayPath } from "../utils.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { formatConfigSetPath } from "./config-cli-path.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import { canFallbackToImplicitLocalGateway } from "./gateway-rpc.js";
@@ -43,6 +44,7 @@ import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import type { RunPluginInstallCommandParams } from "./plugins-install-preflight.js";
 import type { RunPluginUpdateCommandParams } from "./plugins-update-command.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 import { formatCliRequirements, formatCliStatusTable } from "./skills-hooks-cli.format.js";
 
 type HooksReportOptions = {
@@ -412,11 +414,14 @@ function isAmbiguousHookSelectionError(error: unknown): boolean {
 
 /**
  * Build the online recovery guidance for a hook toggle refused while the
- * Gateway owns state. Resolve the hook through the report owner so the
- * suggested `config set` path uses the hook's resolved config key, which can
- * differ from the typed name when hook metadata overrides it. When the hook
- * cannot be resolved, point at key discovery instead of presenting the typed
- * identifier as an exact working command.
+ * Gateway owns state. Resolve the hook against the local inventory the
+ * mutation will use, so the suggested `config set` path names the hook's
+ * local resolved config key, which can differ from the typed name when hook
+ * metadata overrides it. A remote report (OPENCLAW_GATEWAY_URL / remote
+ * target) can resolve the same name to a different key, which would point
+ * the guidance at the wrong local entry. When the hook cannot be resolved,
+ * point at key discovery instead of presenting the typed identifier as an
+ * exact working command.
  */
 async function resolveToggleOnlineAlternative(params: {
   agentId: string | undefined;
@@ -427,12 +432,17 @@ async function resolveToggleOnlineAlternative(params: {
   const action = enabled ? "enable" : "disable";
   let hook: HookStatusEntry | undefined;
   try {
-    hook = await loadHooksReport(agentId, (report) => resolveHookSelection(report, name));
+    // The suggested `config set` command mutates the local config file, so
+    // resolve against the local mutation target, never another Gateway's
+    // inventory.
+    const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+    hook = await withHooksReport(config, resolveHooksReportTarget(config, agentId), (report) =>
+      resolveHookSelection(report, name),
+    );
   } catch (error) {
-    // A remote report can be ambiguous for a locally unique hook: remote
-    // selection errors must not reject the offline local toggle, which
-    // resolves against local inventory below. Surface the candidates as
-    // refusal guidance instead of failing the preflight.
+    // A locally ambiguous identifier also blocks the local toggle below, so
+    // surface the candidates as refusal guidance instead of failing the
+    // preflight.
     if (isAmbiguousHookSelectionError(error)) {
       return `While the Gateway is running, ${action} it online instead: ${formatErrorMessage(error)}`;
     }
@@ -441,7 +451,11 @@ async function resolveToggleOnlineAlternative(params: {
   const reloadNote =
     "The Gateway hot-reloads the change without a restart in the default hybrid reload mode; with gateway.reload.mode=off, restart the Gateway for the change to take effect.";
   const entryStep = (key: string) =>
-    `\`${formatCliCommand(`openclaw config set hooks.internal.entries.${key}.enabled ${enabled}`)}\``;
+    `\`${formatCliCommand(
+      `openclaw config set ${quoteCliArg(
+        formatConfigSetPath(["hooks", "internal", "entries", key, "enabled"]),
+      )} ${enabled}`,
+    )}\``;
   const masterStep = enabled
     ? `\`${formatCliCommand("openclaw config set hooks.internal.enabled true")}\``
     : "";

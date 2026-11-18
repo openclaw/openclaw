@@ -5,6 +5,7 @@ import type { TransformConfigFileParams } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
+import { parseConcreteConfigPath } from "../shared/dot-path.js";
 import { makeHookStatusEntry } from "./cli-fixtures.test-support.js";
 import { ExpectedCliError } from "./expected-cli-error.js";
 
@@ -344,6 +345,55 @@ describe("hooks CLI metadata config keys", () => {
       nextConfig,
       baseHash: "config-hash",
     });
+  });
+
+  it("resolves online guidance against the local inventory when the remote report disagrees", async () => {
+    mocks.foreignOwner = true;
+    // The remote Gateway resolves the same name to a different config key.
+    mocks.callGateway.mockResolvedValue({
+      ...report,
+      hooks: [{ ...hook, hookKey: "remote-key" }],
+    });
+    // The local mutation target keeps the local key: the suggested `config set`
+    // command mutates the local config file, so it must name the local key.
+    mocks.buildWorkspaceHookStatus.mockReturnValue(report);
+    const error = await runHooks("disable", "display-name").catch((err: unknown) => err);
+    expect(error).toMatchObject({ code: "OWNER_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    expect(message).toContain(
+      "openclaw config set hooks.internal.entries.metadata-key.enabled false",
+    );
+    expect(message).not.toContain("remote-key");
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("quotes a literal dotted hook key in the suggested config command", async () => {
+    mocks.foreignOwner = true;
+    const dottedHook = makeHookStatusEntry({
+      name: "audit-hook",
+      description: "Hook with a literal dotted config key",
+      source: "openclaw-workspace",
+      baseDir: "/tmp/openclaw-hook-workspace",
+      hookKey: "team.audit",
+    });
+    mocks.buildWorkspaceHookStatus.mockReturnValue({ ...report, hooks: [dottedHook] });
+    const error = await runHooks("disable", "audit-hook").catch((err: unknown) => err);
+    expect(error).toMatchObject({ code: "OWNER_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    expect(message).toContain(
+      `openclaw config set 'hooks.internal.entries["team.audit"].enabled' false`,
+    );
+    expect(message).not.toContain("entries.team.audit.enabled");
+    // The suggested spelling must round-trip through `config set` path parsing
+    // to the literal key instead of nested team/audit segments.
+    expect(parseConcreteConfigPath('hooks.internal.entries["team.audit"].enabled')).toEqual([
+      "hooks",
+      "internal",
+      "entries",
+      "team.audit",
+      "enabled",
+    ]);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {
