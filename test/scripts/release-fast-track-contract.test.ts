@@ -13,7 +13,7 @@ import {
   serializeFastTrackRequest,
   type FastTrackRequest,
 } from "../../scripts/lib/release-fast-track-contract.mts";
-import { main as runFastTrackCli } from "../../scripts/release-fast-track.mts";
+import { runReleasePublishPreflightCommand } from "../../scripts/release-publish-preflight.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -121,6 +121,8 @@ it.each([
   { policy: "authorized-beta-focused-v1" },
   { delta: { commits: -1, added: 0, deleted: 0 } },
   { channel: "latest" },
+  { releaseTag: "v2026.11.33", channel: "latest" },
+  { releaseTag: "v2026.11.2", channel: "extended-stable" },
   {
     artifacts: [
       { name: "openclaw.tgz", digest },
@@ -357,9 +359,9 @@ it("submits canonical review bytes and reads only the bound result without any m
 });
 
 it("exposes request/status CLI without token disclosure or a machine approval verb", async () => {
-  await expect(runFastTrackCli(["approve", "--request", "unused.json"])).rejects.toThrow(
-    /no machine approval/u,
-  );
+  await expect(
+    runReleasePublishPreflightCommand(["approval", "approve", "--request", "unused.json"]),
+  ).rejects.toThrow(/no machine approval/u);
   const value = { ...request(), expiresAt: new Date(Date.now() + 3600000).toISOString() };
   const directory = roots.make("release-fast-track-cli-");
   const file = join(directory, "request.json");
@@ -379,7 +381,9 @@ it("exposes request/status CLI without token disclosure or a machine approval ve
   );
   const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   try {
-    await runFastTrackCli(["status", "--request", file]);
+    for (const operation of ["request", "status"]) {
+      await runReleasePublishPreflightCommand(["approval", operation, "--request", file]);
+    }
     const text = String(output.mock.calls.at(-1)?.[0]);
     expect(JSON.parse(text)).toMatchObject({ state: "pending", publicationAuthorized: false });
     expect(text).not.toContain("synthetic-secret-never-printed");
@@ -411,7 +415,8 @@ it("never prints a malformed identity token when Node rejects an Authorization h
     [
       "--import",
       "./scripts/tsx.mjs",
-      "scripts/release-fast-track.mts",
+      "scripts/release-publish-preflight.mts",
+      "approval",
       "status",
       "--request",
       file,
@@ -426,6 +431,7 @@ it("never prints a malformed identity token when Node rejects an Authorization h
     },
   );
   expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("well-formed request-only or read-only Google identity token");
   expect(result.stderr).not.toContain("DO-NOT-PRINT-THIS-SYNTHETIC-CREDENTIAL");
   expect(result.stdout).not.toContain("DO-NOT-PRINT-THIS-SYNTHETIC-CREDENTIAL");
 });

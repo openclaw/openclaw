@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { validateNpmPublishBoundary } from "../openclaw-npm-extended-stable-release.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./release-version.mjs";
 
 export const FAST_TRACK_POLICY = "approved-fast-track-v1";
@@ -62,8 +63,13 @@ export const fastTrackRequestSchema = z
     expiresAt: z.string().datetime(),
   })
   .superRefine((request, context) => {
-    if (request.releaseTag.includes("-beta.") && request.channel !== "beta") {
-      context.addIssue({ code: "custom", message: "Beta prereleases require channel beta." });
+    try {
+      validateNpmPublishBoundary(request.releaseTag.slice(1), request.channel);
+    } catch {
+      context.addIssue({
+        code: "custom",
+        message: "Release tag does not match publication channel.",
+      });
     }
     for (const [name, values] of [
       ["artifacts", request.artifacts.map((item) => item.name)],

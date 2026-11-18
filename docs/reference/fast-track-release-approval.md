@@ -16,14 +16,18 @@ an approval receipt for Full Release Validation or the historical
 
 ## Request and inspect
 
+Approval request/status operations use the existing publication-preflight command,
+not a separate release CLI. The normal preflight report and dispatch contract
+remain unchanged; approval operations do not run or bypass those gates.
+
 Use a Google-issued ID token for the independently managed approval service.
 Request-only identities can create/read requests; read-only identities can read
 results. Neither can approve. Keep tokens in the environment or a managed secret
 channel, not arguments, request files, logs or commits.
 
 ```sh
-node --import ./scripts/tsx.mjs scripts/release-fast-track.mts request --request request.json
-node --import ./scripts/tsx.mjs scripts/release-fast-track.mts status --request request.json
+pnpm release:publish-preflight approval request --request request.json
+pnpm release:publish-preflight approval status --request request.json
 ```
 
 The operator configures `FAST_TRACK_APPROVAL_SERVICE_ORIGIN` to a fixed HTTPS
