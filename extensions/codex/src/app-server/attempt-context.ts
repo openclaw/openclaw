@@ -447,10 +447,50 @@ export async function prepareCodexWatchedSessionsContext(params: {
   });
 }
 
+/**
+ * Skill Library pins live in the Gateway state directory, which a remote app-server's
+ * own file tools cannot open: point those entries at skills_read, or drop them.
+ */
+function withoutGatewayOnlySkillLocations(
+  prompt: string,
+  skills: readonly { source: string; filePath: string }[],
+  readable: boolean,
+): string | undefined {
+  const escape = (value: string) =>
+    value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&apos;");
+  const locations = new Set(
+    skills
+      .filter((skill) => skill.source === "openclaw-library")
+      .map((skill) => `    <location>${escape(skill.filePath)}</location>`),
+  );
+  if (locations.size === 0) {
+    return prompt;
+  }
+  const rewritten = prompt.replace(/^ {2}<skill>\n[\s\S]*?\n {2}<\/skill>\n/gmu, (block) => {
+    const location = block.split("\n").find((line) => locations.has(line));
+    if (!location) {
+      return block;
+    }
+    return readable
+      ? block.replace(
+          location,
+          "    <location_note>Not on this machine: read it with skills_read by name.</location_note>",
+        )
+      : "";
+  });
+  return /^ {2}<skill>$/mu.test(rewritten) ? rewritten : undefined;
+}
+
 export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
   dynamicTools?: readonly CodexDynamicToolSpec[];
+  remoteWorkspace?: boolean;
 }): string | undefined {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
@@ -460,9 +500,17 @@ export function renderCodexSkillsInstructions(params: {
       normalizeLowercaseStringOrEmpty(tool.name),
     ),
   );
-  const prompt = params.skillsPrompt?.trim();
   const search = names.has("skills_search");
   const read = names.has("skills_read");
+  const trimmed = params.skillsPrompt?.trim();
+  const prompt =
+    trimmed && params.remoteWorkspace
+      ? withoutGatewayOnlySkillLocations(
+          trimmed,
+          params.attempt.skillsSnapshot?.resolvedSkills ?? [],
+          read,
+        )
+      : trimmed;
   if (!prompt && !search) {
     return undefined;
   }
