@@ -272,6 +272,11 @@ export function setAtPath(
       if (index === undefined) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
       }
+      if (index > current.length) {
+        throw new Error(
+          `Array index ${index} is out of range for an array of length ${current.length}`,
+        );
+      }
       const existing = current[index];
       if (!existing || typeof existing !== "object") {
         current[index] = nextIsIndex ? [] : {};
@@ -295,6 +300,11 @@ export function setAtPath(
     const index = parseConfigPathArrayIndex(last);
     if (index === undefined) {
       throw new Error(`Expected numeric index for array segment "${last}"`);
+    }
+    if (index > current.length) {
+      throw new Error(
+        `Array index ${index} is out of range for an array of length ${current.length}`,
+      );
     }
     current[index] = value;
     return;
