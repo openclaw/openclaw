@@ -11766,9 +11766,13 @@ describe("ci workflow guards", () => {
         check_name: "checks-node-compact-small-1",
         groups_gzip_base64: expect.any(String),
       });
+      // The unfiltered infra group must retain its Bun subprocess prerequisite.
+      expect(row.requires_bun ?? false).toBe(grouped);
       if (eventName === "pull_request") {
+        if (!grouped) {
+          expect(row).not.toHaveProperty("requires_bun");
+        }
         for (const field of [
-          "requires_bun",
           "requires_dist",
           "requires_go",
           "requires_ripgrep",
