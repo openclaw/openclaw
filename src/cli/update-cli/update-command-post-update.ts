@@ -85,6 +85,7 @@ async function finishSettledUpdate(
   const { fence, assertCurrent, originalRun, compensate, forward, recordPhase, sentinelOptions } =
     captured;
   let gatewayStartAttempted: "install" | "restart" | undefined;
+  let candidateOwnsMigratedState = false;
   const onGatewayStartAttempted = (action: "install" | "restart" = "restart") => {
     gatewayStartAttempted = gatewayStartAttempted === "restart" ? gatewayStartAttempted : action;
     observeGatewayStartAttempted?.();
@@ -223,8 +224,9 @@ async function finishSettledUpdate(
           step: "package rollback",
           status: "skipped",
           endedAtMs: Date.now(),
-          detail:
-            "No retained previous package transaction is available; automatic package restoration was not attempted.",
+          detail: candidateOwnsMigratedState
+            ? "The started candidate owns the migrated state; automatic package restoration was not attempted."
+            : "No retained previous package transaction is available; automatic package restoration was not attempted.",
         },
         params.opts.run,
       );
@@ -536,6 +538,15 @@ async function finishSettledUpdate(
         await restoreWindowsAutoStart(resultWithPostUpdate);
       }
       let verificationFailure = "restart-unhealthy";
+      // Once a start is attempted the candidate owns the migrated state, even when the
+      // restart then throws. Later failures concern its runtime, not the refused rollback;
+      // only the owners that observe a data risk may record one.
+      const releaseRollbackBlock = () => {
+        if (gatewayStartAttempted && params.rollbackBlockedReason) {
+          params.rollbackBlockedReason = undefined;
+          candidateOwnsMigratedState = true;
+        }
+      };
       const restart = async () => {
         const restarted = await forward(() =>
           maybeRestartService({
@@ -571,7 +582,7 @@ async function finishSettledUpdate(
               recordVerifiedDowntime(verifiedAtMs);
             },
           }),
-        );
+        ).finally(releaseRollbackBlock);
         if (restarted !== "failed" && restarted !== "restart-health-failed") {
           return restarted === "ok";
         }

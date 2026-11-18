@@ -650,19 +650,28 @@ it.for([
     );
     expect(mocks.restart).toHaveBeenCalledTimes(restored ? 1 : 0);
     const packageRestored = restored || service !== "stopped" || !previousVerified;
+    const reason =
+      restored || service !== "stopped"
+        ? result.reason
+        : change === "unknown-runtime" ||
+            change === "new-shared-deferred" ||
+            change.startsWith("new-agent-previous-")
+          ? "rollback-state-unverified"
+          : previousVerified
+            ? "state-migrated-no-rollback"
+            : "previous-version-unverified";
     expect(outcome.result).toMatchObject({
       ...(packageRestored ? { root: previousRoot, after: result.before } : {}),
-      reason:
-        restored || service !== "stopped"
-          ? result.reason
-          : change === "unknown-runtime" ||
-              change === "new-shared-deferred" ||
-              change.startsWith("new-agent-previous-")
-            ? "rollback-state-unverified"
-            : previousVerified
-              ? "state-migrated-no-rollback"
-              : "previous-version-unverified",
+      reason,
     });
+    // Each refusal here has evidence: an unknown root, a store the previous version cannot
+    // open, a forward schema or preserved edits. Its reason is also the recorded risk.
+    const recovery = outcome.result.recovery;
+    expect(recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined).toBe(
+      reason === "rollback-state-unverified" || reason === "state-migrated-no-rollback"
+        ? reason
+        : undefined,
+    );
     if (service !== "stopped") {
       expect(mocks.stop).not.toHaveBeenCalled();
       expect(outcome.result.recovery).toMatchObject({
@@ -794,4 +803,113 @@ it.each([
     stateDir: serviceStateDir,
     restart: mocks.restart,
   });
+});
+
+it.for([
+  ...(process.platform === "win32" || process.getuid?.() === 0
+    ? []
+    : [{ failure: "schema-read-denied", risk: undefined }]),
+  { failure: "no-baseline", risk: undefined },
+  { failure: "shared-schema-forward", risk: "state-migrated-no-rollback" },
+] as const)(
+  "refuses rollback after $failure with data at risk=$risk",
+  async ({ failure, risk }) => {
+    const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+    const shared = path.join(serviceStateDir, "state/openclaw.sqlite");
+    const agent = path.join(serviceStateDir, "agents/main/agent/openclaw-agent.sqlite");
+    setVersion(shared, 7);
+    setVersion(agent, 3);
+    const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, env);
+    if (failure === "shared-schema-forward") {
+      setVersion(shared, 8);
+    }
+    if (failure === "schema-read-denied") {
+      // The rollback's schema read fails; nothing tells whether Doctor migrated it.
+      fs.chmodSync(agent, 0o000);
+    }
+    const rollback = vi.fn(async () => restoredStep());
+    let outcome: Awaited<ReturnType<typeof rollbackFailedUpdate>>;
+    try {
+      outcome = await runRollback({
+        configSnapshot,
+        schemaVersions: failure === "no-baseline" ? undefined : schemaVersions,
+        previousVerified: true,
+        preManagedServiceStop: stoppedService({ running: false }),
+        packageTransaction: { backupRoot: "/backup", rollback, complete: vi.fn() },
+      });
+    } finally {
+      fs.chmodSync(agent, 0o600);
+    }
+    expect(rollback).not.toHaveBeenCalled();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      rolledBack: false,
+      result: {
+        status: "error",
+        root: candidateRoot,
+        reason: risk ?? "rollback-state-unverified",
+        rollbackOutcome: { status: "not-attempted" },
+      },
+    });
+    const recovery = outcome.result.recovery;
+    expect(recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined).toBe(risk);
+    const next = resolveUpdateResultNextAction({
+      result: outcome.result,
+      env,
+      serviceRunning: false,
+    });
+    if (risk) {
+      expect(next).toContain(`Keep the Gateway stopped: data at risk (${risk})`);
+    } else {
+      expect(next).not.toMatch(/data at risk|Keep the Gateway stopped/u);
+    }
+  },
+);
+
+it("keeps the risk when configuration cannot be restored after the package was", async () => {
+  const env = { OPENCLAW_STATE_DIR: serviceStateDir };
+  setVersion(path.join(serviceStateDir, "state/openclaw.sqlite"), 7);
+  const configDir = dirs.make("rollback-config-restore-");
+  const configPath = path.join(configDir, "openclaw.json");
+  const original = '{"gateway":{"mode":"local","port":19101}}\n';
+  const candidate = '{"gateway":{"mode":"local","port":19102}}\n';
+  fs.writeFileSync(configPath, original);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  const { configSnapshot, schemaVersions } = await readRollbackFixtureState(serviceStateDir, {
+    ...env,
+    OPENCLAW_CONFIG_PATH: configPath,
+  });
+  fs.writeFileSync(configPath, candidate);
+  // The package restore succeeds; the configuration it must restore then cannot be read.
+  const rollback = vi.fn(async () => {
+    fs.rmSync(configPath);
+    fs.mkdirSync(configPath);
+    return restoredStep("package rollback");
+  });
+  const outcome = await runRollback({
+    configSnapshot,
+    schemaVersions,
+    activationConfig: {
+      path: configPath,
+      raw: original,
+      hash: hashConfigRaw(candidate),
+      doctorOwned: true,
+    },
+    previousVerified: true,
+    preManagedServiceStop: stoppedService({ running: false, serviceEnv: env }),
+    packageTransaction: { backupRoot: previousRoot, rollback, complete: vi.fn() },
+  });
+  expect(rollback).toHaveBeenCalledOnce();
+  expect(fs.statSync(configPath).isDirectory()).toBe(true);
+  expect(outcome).toMatchObject({
+    rolledBack: false,
+    result: {
+      status: "error",
+      root: previousRoot,
+      reason: "rollback-state-unverified",
+      recovery: { serviceRestartSafe: false, dataAtRisk: "rollback-state-unverified" },
+    },
+  });
+  expect(mocks.restart).not.toHaveBeenCalled();
 });
