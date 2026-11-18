@@ -3,7 +3,10 @@ import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-re
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
+import {
+  waitForMobileSidebarDrawerOpen,
+  waitForSessionRosterHydration,
+} from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar selection overflow",
@@ -40,11 +43,13 @@ suite.define(() => {
       });
       if (width === 390) {
         await navigationDrawerToggle(page).click();
+        // Toolbar geometry is measured below; let the drawer finish sliding in.
+        await waitForMobileSidebarDrawerOpen(page);
         // Navigation skips the closed drawer; geometry needs its full roster after opening.
         await waitForControlUiInitialRoster(page);
       }
       if (overflow) {
-        await page.getByRole("button", { name: "Show more", exact: true }).click();
+        // The lone list shows its next page as its end scrolls into view below.
         const body = page.locator(".sidebar-shell__body");
         const toolbar = page.locator(".sidebar-session-toolbar");
         const toolbarBefore = await toolbar.boundingBox();
