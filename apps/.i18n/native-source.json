@@ -976,6 +976,7 @@
     {"path":"apps/macos/Sources/OpenClaw/QuickChatController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.ed03436287056c7c","source":"Dictation stopped because speech recognition failed."},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.f47dbe72f59ee9cb","source":"Microphone and speech recognition permission required."},
     {"path":"apps/macos/Sources/OpenClaw/QuickChatController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.7c8e53602789e09a","source":"No app is available to paste into."},
+    {"path":"apps/ios/Sources/Chat/SessionDashboardScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.666ae0b869968321","source":"Chat"},
     {"path":"apps/ios/Sources/Chat/SessionDashboardScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.c1fcddaf62cc51c5","source":"Connect to your gateway to open this session dashboard."},
     {"path":"apps/ios/Sources/Chat/SessionDashboardScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.96f0a6c8fdc28f16","source":"Dashboard needs a connected gateway"},
     {"path":"apps/ios/Sources/Chat/SessionDashboardScreen.swift","kind":"ui-call","surface":"apple","id":"native.apple.d800fa5d7ab06b98","source":"Done"},
