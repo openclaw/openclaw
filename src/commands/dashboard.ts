@@ -338,13 +338,14 @@ export async function dashboardCommand(
     runtime.exit(1);
     return;
   }
-  const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;
+  const { port, basePath, links, tlsConfig } = target;
 
   runtime.log(`Dashboard URL: ${links.httpUrl}`);
-  runtime.log("One-time browser pairing included in browser/clipboard URL.");
 
   const copied = await copyToClipboard(browserUrl).catch(() => false);
-  runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
+  runtime.log(
+    copied ? "One-time browser pairing URL copied to clipboard." : "Copy to clipboard unavailable.",
+  );
 
   let opened = false;
   let hint: string | undefined;
@@ -368,28 +369,26 @@ export async function dashboardCommand(
         ? undefined
         : copied
           ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
-          : "Browser launch failed. Open the Dashboard URL above manually.";
+          : "Browser launch failed.";
     }
   } else {
-    hint = copied
-      ? "Browser launch disabled (--no-open). One-time browser pairing URL copied to clipboard."
-      : "Browser launch disabled (--no-open). Use the URL above.";
+    hint = "Browser launch disabled (--no-open).";
   }
 
   const handoffDeliveryFailed = !copied && !opened;
-  const suppressNoOpenHint = options.noOpen === true && handoffDeliveryFailed;
 
   if (opened) {
-    runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
-  } else if (hint && !suppressNoOpenHint) {
+    runtime.log(
+      "Opened the one-time browser pairing URL in your browser. Keep that tab to control OpenClaw.",
+    );
+  } else if (hint) {
     runtime.log(hint);
   }
 
   if (handoffDeliveryFailed) {
     runtime.log(
-      includeTokenInUrl
-        ? "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment with key `token` to authenticate."
-        : "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
+      "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
     );
+    runtime.log("Treat `browserUrl` as a credential; do not share it in logs or support requests.");
   }
 }
