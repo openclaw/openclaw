@@ -1741,7 +1741,11 @@ when nothing needs an operator:
 - the killed update was a command-line `openclaw update`, not one the Gateway
   started, whose recorded process is no longer running;
 - the update lease store still holds that process's lease, so claiming the
-  installation shows its child processes are gone too.
+  installation shows its child processes are gone too. When a restart emptied
+  that store, the update instead checks the boot each of that update's
+  processes recorded. If every one ran on this same Linux or macOS machine in an
+  earlier boot, none of them can still be running, and the update claims the
+  installation as usual before it settles anything.
 
 It settles the plugin and configuration changes the way repair does. When the
 version from before that update is still installed they are rolled back, and
@@ -1798,11 +1802,15 @@ repair can settle the recovery, the message adds the reason and the command:
 - **An update is still recorded as running** and its process is not known to
   have exited, or another updater holds the installation. Wait for it; run
   `openclaw update repair` if it has stopped.
-- **The update lease store no longer holds the killed update's lease.** A
-  restart cleared temporary files, the store was replaced, or another command
-  already claimed the installation. That includes an earlier `openclaw update`
-  that claimed it and then refused for one of the reasons above, so a second
-  attempt reports this reason. Run `openclaw update repair`.
+- **The update lease store no longer holds the killed update's lease.** The
+  store was removed or replaced, or another command already claimed the
+  installation. That includes an earlier `openclaw update` that claimed it and
+  then refused for one of the reasons above, so a second attempt reports this
+  reason. After a restart the update also refuses this way when the boot record
+  cannot show the killed update's processes gone: the killed update ran an
+  older version that did not record its boot, the machine has no stable
+  identity, it runs on Windows or inside a container, or one of that update's
+  processes recorded no boot. Run `openclaw update repair`.
 - **The recovery could not be settled.** The message includes the cause. Run
   `openclaw update repair`.
 - **The installation is a source checkout that cannot show the killed update's

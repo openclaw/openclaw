@@ -15,7 +15,10 @@ import {
 } from "./update-doctor-config-schema.js";
 import { updateRecoveryCaptureStateSchema } from "./update-recovery-receipt-schema.js";
 import { updateRecoverySchema } from "./update-recovery.js";
-import { UpdateRunDriverSchema as driver } from "./update-run-driver-schema.js";
+import {
+  RecordedUpdateRunDriverSchema as recordedDriver,
+  UpdateRunDriverSchema as driver,
+} from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT, UPDATE_RUN_DIAGNOSTIC_LIMIT } from "./update-run-limits.js";
 import { UpdateSnapshotCapacitySchema } from "./update-snapshot-capacity-schema.js";
 
@@ -268,7 +271,7 @@ export const UpdateRunRecordSchema = z.object({
     admission: admission.optional(),
     candidateAdmission: candidateAdmission.optional(),
     updateRecoveryCapture: updateRecoveryCaptureStateSchema.optional(),
-    driver: driver.optional(),
+    driver: recordedDriver.optional(),
     managedHandoff: z.object({ parent: driver, helper: driver }).optional(),
     packageStage: z
       .object({
@@ -282,7 +285,7 @@ export const UpdateRunRecordSchema = z.object({
     // Lets the next update recognize a killed checkout update's build; rechecked on disk.
     gitActivation: UpdateRunGitActivationSchema.optional(),
     previousDrivers: z
-      .array(driver)
+      .array(recordedDriver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)
       .optional(),
     requester: z

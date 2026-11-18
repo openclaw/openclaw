@@ -465,6 +465,13 @@ That marker permanently excludes the run from automatic reconciliation, even
 if known parents later exit; existing recorded identities remain protected.
 A fresh run without identity follows the legacy explicit repair/supersession
 rules below.
+On Linux and macOS each adopter also stores an optional `namespace` string on
+its `origin.driver` entry, retained with it in `origin.previousDrivers`: the
+platform, kernel boot, Linux PID namespace, and digested machine identity it ran
+under, or `null` when they could not be read. A later `openclaw update` reads it
+only to show that a killed run's processes ended with an earlier boot of the
+same machine. Older readers drop the key; lease payloads, recovery receipts, and
+the public run record never carry it.
 This is additive JSON metadata;
 there are no new columns, tables, or schema versions. The separate
 `verification.pid` still identifies the Gateway service, not the updater.
@@ -483,7 +490,9 @@ it reserves its plugin recovery: `sha` (the activated commit), `buildId` (the
 activated build) and `previousBuildId` (the build it replaced, or `null`). The
 next `openclaw update` reads it only for a killed run and only together with the
 checkout on disk; it never grants execution authority. It is an exact retained
-receipt like the driver identities. Public history projections omit it. This is
+receipt like the driver identities: when the origin outgrows its byte budget,
+driver `namespace` values are dropped first and the activation stays exact.
+Public history projections omit it. This is
 additive JSON metadata with no new columns, tables, or schema versions; older
 readers drop the key, and runs without it keep the earlier behavior.
 

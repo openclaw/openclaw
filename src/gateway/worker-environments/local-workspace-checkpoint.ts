@@ -31,8 +31,14 @@ import type {
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
-import { serializeWorkerWorkspaceReconciliationPlan } from "./workspace-manifest.js";
-import { applyStagedWorkerWorkspace } from "./workspace-reconcile.js";
+import {
+  parseWorkerWorkspaceReconciliationPlan,
+  serializeWorkerWorkspaceReconciliationPlan,
+} from "./workspace-manifest.js";
+import {
+  applyStagedWorkerWorkspace,
+  recoverWorkerWorkspaceReconciliation,
+} from "./workspace-reconcile.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   workerWorkspaceResultRef,
@@ -386,7 +392,7 @@ export function createLocalWorkspaceCheckpointRejection(params: {
   };
 }
 
-export function pendingLocalWorkspaceDirection(
+function pendingLocalWorkspaceDirection(
   value: string | null,
 ): LocalWorkspaceSyncTarget | undefined {
   return value === "canonical" || value === "projection" ? value : undefined;
@@ -439,6 +445,9 @@ export async function stageLocalWorkspaceCheckpoint(
 export async function prepareLocalWorkspaceCheckpoint(params: {
   operation: "prepare" | "reuse";
   baselineRef: string | null;
+  settle: () => Promise<void>;
+  probeUnchanged: (targets: readonly LocalWorkspaceSyncTarget[]) => Promise<string | undefined>;
+  quiescence?: { pause: () => Promise<void>; resume: () => Promise<void> };
   synchronize: (
     target: LocalWorkspaceSyncTarget,
     options?: { captureRejected?: true },
@@ -458,6 +467,16 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
   if (params.baselineRef) {
     phases.mark(`${phase}.canonical`);
     try {
+      if (params.operation === "reuse" && selected.pending_ref && !selected.rejectedResult) {
+        await params.settle();
+        await params.quiescence?.resume();
+        // Settlement knows its delta; probe unrelated edits before another capture.
+        const unchanged = await params.probeUnchanged(["canonical", "projection"]);
+        if (unchanged) {
+          await params.quiescence?.pause();
+          return unchanged;
+        }
+      }
       await timeWorktreePreparationPhase("synchronizeCanonical", () =>
         params.synchronize("canonical"),
       );
@@ -487,6 +506,41 @@ export type LocalWorkspaceCheckpointUpdate = (
   publicationPack?: Uint8Array<ArrayBuffer>,
 ) => Promise<void>;
 
+export async function recoverLocalWorkspaceCheckpoint(params: {
+  selected: LocalWorkspaceProjection;
+  canonicalRoot: string;
+  buildCacheInputs: () => Promise<string[]>;
+  update: LocalWorkspaceCheckpointUpdate;
+  application: Pick<
+    Parameters<typeof recoverWorkerWorkspaceReconciliation>[0],
+    "assertCurrent" | "workerAuthority"
+  >;
+  quiescence?: { pause: () => Promise<void>; markPhase: (phase: "recovery") => void };
+}) {
+  const { selected } = params;
+  if (!selected.journal_json) {
+    return;
+  }
+  await params.quiescence?.pause();
+  params.quiescence?.markPhase("recovery");
+  const target = pendingLocalWorkspaceDirection(selected.pending_target);
+  if (!selected.journal_pack || !target) {
+    throw new Error("Local workspace recovery metadata is incomplete");
+  }
+  // A refresh resumes from its pending Git receipt. Restoring an old rollback
+  // pack would discard partial progress and can prevent a long refresh finishing.
+  if (!isLocalWorkspaceBaseRefreshRef(selected.pending_ref)) {
+    const plan = parseWorkerWorkspaceReconciliationPlan(selected.journal_json);
+    await recoverWorkerWorkspaceReconciliation({
+      root: target === "canonical" ? params.canonicalRoot : selected.projection_path,
+      journal: { ...plan, basePack: selected.journal_pack },
+      buildCacheInputs: await params.buildCacheInputs(),
+      ...params.application,
+    });
+  }
+  await params.update({ journal_json: null, journal_pack: null });
+}
+
 export function applyLocalWorkspaceCheckpoint(params: {
   selected: Pick<LocalWorkspaceProjection, "worktree_id" | "pending_ref" | "base_commit">;
   reason: import("../../agents/sandbox/local-workspace-quiescence.js").LocalWorkspacePauseReason;
@@ -510,16 +564,20 @@ export function applyLocalWorkspaceCheckpoint(params: {
   const acceptance = {
     journal: {
       load: async () => undefined,
-      begin: async (journal, publicationPack) => {
-        await params.update(
-          {
-            journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
-            journal_pack: journal.basePack,
+      // Refresh recovery resumes from its pending Git receipt; apply retains the
+      // in-memory rollback pack without a second copy for SQLite publication.
+      begin: params.refreshBaseCommit
+        ? undefined
+        : async (journal, publicationPack) => {
+            await params.update(
+              {
+                journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
+                journal_pack: journal.basePack,
+              },
+              undefined,
+              publicationPack,
+            );
           },
-          undefined,
-          publicationPack,
-        );
-      },
       abort: async () => {
         await params.update({ journal_json: null, journal_pack: null });
       },
