@@ -2119,8 +2119,8 @@ which is a separate check. The next `openclaw update` settles that as well when
 no operator is needed: on a package install, or a source checkout that still
 holds exactly the build the killed update installed, the killed update was a
 command-line `openclaw update` whose process has exited, and the update lease
-store still holds its lease. On Linux and macOS hosts a restart that cleared
-that store does not block it: the killed update recorded the boot it ran in,
+store still holds its lease. On Linux and macOS hosts, outside containers, a
+restart that cleared that store does not block it: the killed update recorded the boot it ran in,
 which shows its processes gone. It reports an `interrupted-update-recovery` warning.
 If the killed update had replaced the installed version without confirming it,
 had begun rolling back on it, or left the Gateway stopped, the update first
@@ -2128,8 +2128,10 @@ finishes that version as `openclaw update repair` does (Doctor, plugin
 convergence, Gateway restart). That work is recorded on its own repair run,
 named by an `interrupted-update-finalization` warning. Then the update
 continues. A stopped Gateway is restarted only when the update would restart it
-anyway. With `--no-restart`, or when finishing fails, the update stops and
-names `openclaw update repair`.
+anyway. When that Gateway is still stopped and the update runs with
+`--no-restart`, or when finishing fails, the update stops and names
+`openclaw update repair`. After a failed finish, later updates keep stopping
+until `openclaw update repair` completes it.
 Otherwise it stops with `Update <id> has unfinished recovery` and, when repair
 can settle it, the reason and the command to run; see
 [how a killed update is settled](/cli/update/how-updates-run#replacing-the-package-directory).

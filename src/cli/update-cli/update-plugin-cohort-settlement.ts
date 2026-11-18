@@ -34,7 +34,7 @@ import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-
 import {
   hasUnrecordedUpdateRunDriver,
   inspectUpdateRunAbandonment,
-  needsPostCoreRepair,
+  inspectNewerRecoveryHistory,
   updateRunLastActivity,
 } from "../../infra/update-run-activity.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
@@ -111,9 +111,18 @@ async function inspectGitActivation(
   if (activation.buildId !== to.buildId || activation.previousBuildId !== from.buildId) {
     return " whose recorded build does not match its plugin recovery";
   }
-  // Read-only probes must not refresh the checkout's index.
+  // Settlement tells the two cores apart by version and build ID alone.
+  if (from.version === to.version && from.buildId === to.buildId) {
+    return " whose build has the same version and build ID as the build it replaced";
+  }
+  // Read-only probes must not refresh the checkout's index or fetch a partial clone's objects.
+  const { gitReadOnlyEnvironment } = await import("../../infra/git-exec.js");
   const git = (argv: string[]) =>
-    runCommandWithTimeout(argv, { cwd: root, timeoutMs, env: { GIT_OPTIONAL_LOCKS: "0" } });
+    runCommandWithTimeout(argv, {
+      cwd: root,
+      timeoutMs,
+      env: gitReadOnlyEnvironment(argv.slice(1), { GIT_OPTIONAL_LOCKS: "0" }),
+    });
   const head = await git(["git", "-C", root, "rev-parse", "HEAD"]);
   if (head.code !== 0 || head.stdout.trim() !== activation.sha) {
     return ", and the checkout is no longer at the commit that update activated";
@@ -290,7 +299,8 @@ export async function settleManagedHandoffPluginCohort(
  * core; a stopped Gateway only when this update would restart it anyway. Inspect
  * before package settlement, whose own claim retires that lease, and run the
  * returned settlement after it. The settlement throws for recovery this update
- * leaves to repair; recovery that repair cannot settle stays with admission's refusal.
+ * leaves to repair, including a finish that a repair run left unfinished; recovery
+ * that repair cannot settle stays with admission's refusal.
  */
 export async function inspectInterruptedUpdateRecovery(
   root: string,
@@ -334,12 +344,41 @@ export async function inspectInterruptedUpdateRecovery(
       () => undefined,
       (error: unknown) => (error instanceof UpdateRecoveryRequiredError ? error : undefined),
     );
+  /**
+   * Finishing runs after settlement retired the plugin recovery, so once it fails only
+   * repair's own bookkeeping shows the work unfinished: an interrupted run no repair has
+   * acknowledged, whose newest repair since ended without success. This update would
+   * skip that finish. Repair that succeeds acknowledges the run, even with a warning.
+   */
+  const refuseUnfinishedRepair = () => {
+    const history = listUpdateRuns({ limit: 100 }, options);
+    for (const owed of history) {
+      // Repair's own rule for the interrupted runs it still owes.
+      if (!isAbandonedUpdateRun(owed) || isAcknowledgedAbandonedUpdateRun(owed)) {
+        continue;
+      }
+      const latest = history.find(
+        (run) =>
+          run.createdAtMs > owed.createdAtMs &&
+          run.steps.some((step) => step.step === "finalize:repair-continuation"),
+      );
+      if (latest && latest.status !== "running" && latest.status !== "succeeded") {
+        const outcome = `${latest.status}${latest.reason ? `: ${latest.reason}` : ""}`;
+        return new Error(
+          `Interrupted update ${owed.runId} is still unfinished: update repair run ${latest.runId} did not finish it (${outcome}). Run ${repair}, then retry ${update}.`,
+        );
+      }
+    }
+    return undefined;
+  };
   const inspect = async () => {
     const pending = await pendingRecovery();
-    const pair = pending
-      ? await inspectPluginCohortRecoveryAdmission({ env }).catch(() => undefined)
-      : undefined;
-    if (!pending || !pair) {
+    if (!pending) {
+      const refused = refuseUnfinishedRepair();
+      return refused && { unfinishedRepair: true as const, refused };
+    }
+    const pair = await inspectPluginCohortRecoveryAdmission({ env }).catch(() => undefined);
+    if (!pair) {
       return undefined;
     }
     const installKind = await resolveUpdateInstallKind(root);
@@ -356,25 +395,23 @@ export async function inspectInterruptedUpdateRecovery(
       const history = listUpdateRuns({ limit: 100 }, options);
       const since = getUpdateRun(pair.cohort.runId, options)?.createdAtMs ?? 0;
       const stop = findUpdateGatewayStop(history);
+      // Repair's own rule: post-core work since the killed run, unproven past a page that ends after it.
+      const { postCoreRuns, incomplete } = inspectNewerRecoveryHistory(since, history);
       const others = new Set(
-        history
-          .filter(
+        [
+          ...history.filter(
             (run) =>
               run.status === "running" ||
-              (!isAcknowledgedAbandonedUpdateRun(run) &&
-                (isAbandonedUpdateRun(run) ||
-                  (run.status === "failed" &&
-                    run.createdAtMs >= since &&
-                    needsPostCoreRepair(run)))),
-          )
-          .map((run) => run.runId),
+              (isAbandonedUpdateRun(run) && !isAcknowledgedAbandonedUpdateRun(run)),
+          ),
+          ...postCoreRuns,
+        ].map((run) => run.runId),
       );
       if (stop?.started === false) {
         others.add(stop.runId);
       }
       others.delete(pair.cohort.runId);
-      // A full page cannot show that nothing older still owes recovery.
-      return others.size || history.length === 100
+      return others.size || incomplete
         ? refuse(
             `Other update history also needs repair${others.size ? ` (${[...others].join(", ")})` : ""}.`,
           )
@@ -468,13 +505,24 @@ export async function inspectInterruptedUpdateRecovery(
   if (!inspected) {
     return undefined;
   }
+  // Admission can follow a managed service to another state directory: not this recovery.
+  const admitsOtherState = async (
+    resolveAdmissionEnv: (invocationCwd: string | undefined) => Promise<NodeJS.ProcessEnv>,
+  ) =>
+    resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd)) !==
+    resolveOpenClawStateSqlitePath(env);
+  if (inspected.unfinishedRepair) {
+    return async (resolveAdmissionEnv) => {
+      if (!(await admitsOtherState(resolveAdmissionEnv))) {
+        throw inspected.refused;
+      }
+    };
+  }
   const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
     inspected;
   const rebooted = inspected.rebooted === true;
   return async (resolveAdmissionEnv) => {
-    // Admission can follow a managed service to another state directory: not this recovery.
-    const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
-    if (admitted !== resolveOpenClawStateSqlitePath(env)) {
+    if (await admitsOtherState(resolveAdmissionEnv)) {
       return;
     }
     if (refused) {

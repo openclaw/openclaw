@@ -340,7 +340,10 @@ The update refuses and names the command to run, in most cases
 `openclaw update repair`, when the update ran with `--no-restart` and the
 Gateway is still stopped, when finishing the installed version fails, when the
 Gateway started that update, when an update may still be running, or when the
-update lease store no longer holds that update's lease. After a restart cleared
+update lease store no longer holds that update's lease. After a failed finish,
+every later update refuses the same way until a repair finishes that update. A
+source checkout also refuses when the build that update installed has the same
+version and build ID as the build it replaced. After a restart cleared
 that store, the update still settles the recovery on Linux and macOS hosts when
 the killed update recorded that it ran in an earlier boot of the same machine.
 Windows, containers, and updates killed while running an older version keep
