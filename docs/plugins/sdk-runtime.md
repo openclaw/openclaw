@@ -171,7 +171,8 @@ the Control UI and never delivers a reply. Cache reuse is not guaranteed:
 compaction, images and one-shot payload hooks can still change bytes, so use the
 returned cache-read usage to measure actual reuse.
 
-Conversation access is required through
+Conversation access is required: approved through the plugin's capability review
+when its manifest declares `contracts.conversationAccess: ["read"]`, or set with
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
 bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
@@ -179,6 +180,11 @@ live through the run and its settlement. Tool policy is checked as the anchored
 turn's requester: the sender, owner flag, group and channel that the turn's
 stored user message recorded. Plugins cannot supply requester facts. CLI
 runtimes are not supported.
+
+Sandboxed managed-worktree forks prepare the same private workspace and selected
+working directory as an ordinary turn of the source session. The durable project
+workspace remains the transcript cwd. Host-executed forks retain their durable
+workspace behavior.
 
 #### Tool-free forks
 
@@ -200,16 +206,17 @@ command lane and the `agents.defaults.subagents.maxConcurrent` cap with
 
 Use `api.runtime.subagent.runForkedTurn(...)` when background work must act on a
 stored session's conversation with tools, for example a reviewer that records
-what it learned. The fork reads through one completed transcript entry. In an
-`agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the finished turn
-to fork.
+what it learned. The fork reads through one transcript entry: the one `through`
+names, or the session's latest message when `through` is omitted. In an
+`agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the finished
+turn to fork.
 
 ```typescript
 const result = await api.runtime.subagent.runForkedTurn({
   sessionKey,
-  through: { sessionId, entryId }, // the completed entry to read through
+  through: { sessionId, entryId }, // optional; the latest message when omitted
   prompt: "Review this conversation and record one reusable note.",
-  tools: ["my_plugin_note"], // tools this plugin registered
+  tools: ["my_plugin_note", "read"], // this plugin's tools, plus read, ls or exec
   runId: `my-plugin-review:${reviewId}`, // optional; unique per run
   timeoutMs: 120_000, // optional; defaults to 120 seconds, no upper bound
   maxTokens: 4_096, // optional; defaults to the session's output limit
@@ -225,12 +232,23 @@ if (result.status === "refused") {
 }
 ```
 
-- `tools` names the tools the fork may run. It accepts only exact tools the
-  calling plugin uniquely registered. Core tools and tools another plugin
-  registered are rejected, the same rule as `subagent.run({ toolsAlsoAllow })`.
-  The source session's tool policy is still checked, including explicit denies;
+- `tools` names the tools the fork may run: exact tools the calling plugin
+  uniquely registered, plus `read`, `ls` and `exec`. Other core tools and tools
+  another plugin registered are rejected, the same rule as
+  `subagent.run({ toolsAlsoAllow })`. Every tool the session lists stays in the
+  request, so the provider serves its cached prefix; a call to any other tool
+  returns "not available in this background run" as a normal tool result.
+- The source session's tool policy is still checked, including explicit denies;
   a denied tool returns `{ status: "refused", reason: "tool_policy" }` before any
-  model call. Pass `[]` for a tool-free fork.
+  model call. `read`, `ls` and `exec` are never added to that policy: the session
+  must already allow them. Pass `[]` for a tool-free fork.
+- `exec` runs only when the anchored turn came from the owner. A fork never asks
+  for approval: a command the agent's exec approvals would ask about is denied,
+  and nothing is queued for approval. Allowlist entries and full-permission exec
+  apply as they do for the session's own turns.
+- A manifest's `contracts.tools` may claim a core catalog id only when the
+  catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
+  `exec`, `read` or another core-built tool grants nothing.
 - `through.sessionId` must still be the session's current id, and the entry must
   be on its active transcript; otherwise the call fails. A reset that keeps the
   session id does not refuse the fork. `outcome.source` reports the
@@ -1021,6 +1039,17 @@ message before the lifecycle owner receives it.
 Do not use this error for an ordinary upstream 401/403 or an unverified diagnostic
 code. Those remain provider failures. A code string alone does not establish a
 deployment-policy denial.
+
+## Harness runtime updates
+
+A native harness whose own runtime is too old for the requested model can return
+`AgentHarnessRuntimeUpdateRequiredError` from
+`openclaw/plugin-sdk/agent-harness-runtime` as its prompt error. Its message must
+name the update. The host records the code `harness_update_required` in the
+run's failure notice, and Control UI then offers **Start a new session**, which
+starts a session on the OpenClaw harness that asks the agent to perform the
+update. OpenClaw never installs or updates the runtime itself. Preserve the
+Error object through terminal emission, as for request-policy denials.
 
 ## Harness execution identity
 

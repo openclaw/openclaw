@@ -15,6 +15,7 @@ import {
   prepareSessionManagerEntries,
 } from "./session-manager-codec.js";
 import { SessionManagerCore } from "./session-manager-core.js";
+import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { toolResult as makeToolResult } from "./session-message-fixtures.test-support.js";
@@ -296,6 +297,62 @@ const parentTraversalCases: Array<
 ];
 
 describe("model context projection isolation", () => {
+  it("isolates SDK edits from published context, including opaque values and symbols", async () => {
+    const manager = SessionManager.fromEntries([
+      sessionHeader("sdk-context"),
+      messageEntry(
+        makeAgentAssistantMessage({
+          content: [
+            {
+              type: "toolCall",
+              id: "call",
+              name: "read",
+              arguments: { nested: { path: "original" } },
+            },
+          ],
+        }),
+      ),
+    ]);
+    const entry = manager.getEntry("entry");
+    assert(entry?.type === "message" && entry.message.role === "assistant");
+    const call = entry.message.content[0];
+    assert(call?.type === "toolCall");
+    const marker = Symbol("sdk-data");
+    for (const value of [
+      { nested: { path: "original" } },
+      { map: new Map([["key", { path: "original" }]]), set: new Set(["original"]) },
+      { bytes: new Uint8Array([1, 2]) },
+      { [marker]: { path: "original" } },
+    ]) {
+      call.arguments = value;
+      const context = await manager[sessionManagerReadInitialContext]();
+      const projectedMessage = context.messages[0];
+      assert(projectedMessage?.role === "assistant");
+      const projectedCall = projectedMessage.content[0];
+      assert(projectedCall?.type === "toolCall");
+      expect(projectedCall.arguments).toEqual(value);
+      expect(projectedCall.arguments).not.toBe(value);
+      expect(Reflect.set(projectedCall.arguments, "edited", true)).toBe(false);
+      if (value.nested) {
+        value.nested.path = "sdk edit";
+        expect(projectedCall.arguments.nested).toEqual({ path: "original" });
+      } else if (value.map) {
+        const map = projectedCall.arguments.map;
+        assert(map instanceof Map);
+        map.set("key", "context edit");
+        expect(value.map.get("key")).toEqual({ path: "original" });
+      } else if (value.bytes) {
+        const bytes = projectedCall.arguments.bytes;
+        assert(bytes instanceof Uint8Array);
+        bytes[0] = 9;
+        expect(value.bytes[0]).toBe(1);
+      } else {
+        const symbolValue = Reflect.get(projectedCall.arguments, marker);
+        expect(Reflect.set(symbolValue, "path", "context edit")).toBe(false);
+        expect(value[marker]).toEqual({ path: "original" });
+      }
+    }
+  });
   const toolResult = makeToolResult("visible");
   const customMessage = {
     role: "custom" as const,
@@ -394,6 +451,7 @@ describe("model context projection isolation", () => {
     assert(projected?.type === "message" && projected.message.role === "assistant");
     const call = projected.message.content[0];
     assert(call?.type === "toolCall");
+    expect(projected.message.content).toBe(message.content);
     expect(Reflect.set(call.arguments, "path", "changed.txt")).toBe(false);
     expect(Reflect.set(projected.message.content, "length", 0)).toBe(false);
     expect(message.content).toMatchObject([{ arguments: { path: "original.txt" } }]);

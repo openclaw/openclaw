@@ -119,14 +119,22 @@ describe("subagent spawn sandbox-CLI admission", () => {
   });
 
   it.each([
-    { sandboxMode: "all", sandbox: "require", childModel: undefined, model: "openai/gpt-5.4" },
+    {
+      sandboxMode: "all",
+      sandbox: "require",
+      childModel: undefined,
+      model: "openai/gpt-5.4",
+      // No Codex harness is registered here, so the turn, and the receipt, fall back to openclaw.
+      runtime: "openclaw",
+    },
     {
       sandboxMode: undefined,
       sandbox: "inherit",
       childModel: "test-cli/haiku",
       model: "test-cli/haiku",
+      runtime: "test-cli",
     },
-  ] as const)("admits $model with sandbox=$sandboxMode", async ({ model, ...params }) => {
+  ] as const)("admits $model with sandbox=$sandboxMode", async ({ model, runtime, ...params }) => {
     await checkChildPlan(params, (plan) => {
       if (!plan.ok) {
         throw new Error(JSON.stringify(plan.result));
@@ -137,8 +145,30 @@ describe("subagent spawn sandbox-CLI admission", () => {
           resolvedProvider: params.sandboxMode === "all" ? "openai" : "test-cli",
           resolvedModel: model,
         },
+        acceptedModelFields: { resolvedRuntime: runtime },
       });
     });
+  });
+
+  it("names the API-key billing route on the spawn receipt", async () => {
+    vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-anthropic-key");
+    try {
+      await checkChildPlan(
+        { childModel: "anthropic/claude-opus-4-6", sandbox: "inherit" },
+        (plan) => {
+          if (!plan.ok) {
+            throw new Error(JSON.stringify(plan.result));
+          }
+          expect(plan.resolved.acceptedModelFields).toMatchObject({
+            resolvedModel: "anthropic/claude-opus-4-6",
+            resolvedRuntime: "openclaw",
+            resolvedAuth: "api-key",
+          });
+        },
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("rejects a sandbox-classified visible child whose model runs on a host CLI backend", async () => {

@@ -3,7 +3,10 @@ import { createMemo, Errored, For, Loading, Match, refresh, Show, Switch } from 
 import { FilePreviewDocument } from "../../components/file-preview-document.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createSessionAutomationSchedule } from "../chat/components/session-automation-schedule-loader.ts";
-import type { TemplateCreator } from "./creator-publication.ts";
+import type { TemplatePackagePreview } from "./creator-publication.ts";
+type PackagePreviewReader = (
+  item: TemplateDraftReviewItem,
+) => Promise<TemplatePackagePreview | null>;
 
 function propertyValue(key: string, value: unknown): string {
   if (
@@ -38,8 +41,11 @@ function Properties(props: { rows: Array<[string, string]> }) {
   );
 }
 
-function PackagePreview(props: { flow: TemplateCreator; item: TemplateDraftReviewItem }) {
-  const preview = createMemo(() => props.flow.readPackagePreview(props.item));
+function PackagePreview(props: {
+  readPackagePreview: PackagePreviewReader;
+  item: TemplateDraftReviewItem;
+}) {
+  const preview = createMemo(() => props.readPackagePreview(props.item));
   const requirement = () => props.item.requirement!;
   const documentTitle = () => {
     const source = requirement();
@@ -117,8 +123,8 @@ function PackagePreview(props: { flow: TemplateCreator; item: TemplateDraftRevie
 
 /** All values come from the reviewed archive or its explicitly pinned package. */
 export function TemplateItemDetails(props: {
-  flow: TemplateCreator;
-  item: TemplateDraftReviewItem;
+  readPackagePreview: PackagePreviewReader;
+  item: TemplateDraftReviewItem & { contentUnavailable?: boolean };
 }) {
   const schedule = createSessionAutomationSchedule();
   const server = createMemo(() => {
@@ -133,11 +139,16 @@ export function TemplateItemDetails(props: {
     <Switch fallback={<p class="template-creator__detail-panel">{props.item.detail}</p>}>
       <Match when={props.item.kind === "file"}>
         <div class="template-creator__detail-panel">
-          <FilePreviewDocument path={props.item.label} content={props.item.detail} markdown />
+          <Show
+            when={!props.item.contentUnavailable}
+            fallback={<p role="status">{t("templatesDraft.contentUnavailable")}</p>}
+          >
+            <FilePreviewDocument path={props.item.label} content={props.item.detail} markdown />
+          </Show>
         </div>
       </Match>
       <Match when={props.item.requirement}>
-        <PackagePreview flow={props.flow} item={props.item} />
+        <PackagePreview readPackagePreview={props.readPackagePreview} item={props.item} />
       </Match>
       <Match when={props.item.kind === "mcp"}>
         <div class="template-creator__detail-group">

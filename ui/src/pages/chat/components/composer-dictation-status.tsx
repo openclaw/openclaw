@@ -40,10 +40,8 @@ export function ActiveDictationStatus(props: {
     <Show when={phase()} keyed>
       {(current) => (
         <div
-          class={[
-            "agent-chat__dictation-status",
-            { "agent-chat__dictation-status--finalizing": current === "thinking" },
-          ]}
+          class="agent-chat__dictation-status"
+          data-transcribing={current === "thinking" ? "" : undefined}
           role={current === "listening" ? undefined : "status"}
           aria-live={current === "listening" ? undefined : "polite"}
           aria-atomic={current === "listening" ? undefined : "true"}

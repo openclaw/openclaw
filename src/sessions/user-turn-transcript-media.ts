@@ -1,5 +1,6 @@
 import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.transcript-target.js";
+import { readQueuedChatInputAdmission } from "../gateway/queued-chat-input-admission.js";
 import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { persistUserTurnTranscript } from "./user-turn-transcript.persistence.js";
@@ -42,10 +43,16 @@ export async function stageUserTurnPendingInput(
   const runtimeTarget =
     storageTarget ?? (await resolveSessionTranscriptRuntimeTarget(target, config));
   phase.mark("persist.stage.custody");
+  const replay = readQueuedChatInputAdmission(options.runId);
   try {
     return await stageSessionPendingInput(
       { ...target, ...runtimeTarget },
-      { ...stageOptions, assertFreshInputCurrent: recorder.assertOriginalInputCommit, config },
+      {
+        ...stageOptions,
+        reattachInputId: replay?.target.inputId ?? options.reattachInputId,
+        assertFreshInputCurrent: recorder.assertOriginalInputCommit,
+        config,
+      },
     );
   } catch (error) {
     return retainUncertainInputMedia(recorder, error);

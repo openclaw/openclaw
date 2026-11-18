@@ -8,5 +8,6 @@ hashes.sha512Async = async (message: Uint8Array) => {
   if (globalThis.crypto?.subtle && subtleSha512Async) {
     return await subtleSha512Async(message);
   }
-  return Uint8Array.from((await import("@noble/hashes/sha2.js")).sha512(message));
+  const { sha512 } = await import("@noble/hashes/sha2.js");
+  return Uint8Array.from(sha512(message));
 };

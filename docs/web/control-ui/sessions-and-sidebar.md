@@ -130,6 +130,13 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
+The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
+**Involving me**, and **All owners** stay within the selected agent; changing the
+owner never expands the list to other agents. Sidebar pins and personal sections
+also follow that agent scope without removing their saved references. Choose
+**Show all** in the agent picker to browse across agents. Explicit rail shortcuts
+remain available across agent selections.
+
 Session activity and unread indicators stay in the leading column across owner
 filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
 same column so titles stay aligned when status changes or hover and keyboard
@@ -699,7 +706,7 @@ the search; Arrow Down and Enter let you select a matching owner.
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Link sharing**, enable **Anyone with the link**, review **Make this session public?**, then select **Make public**.
-3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The mobile sharing page also shows the code. Select **Use claw QR** for the image-styled version, **Download claw QR** to save its full-size PNG, or **Use standard QR** if scanning is difficult. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
+3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The sharing menu and mobile sharing page show the claw QR automatically. If the panel is too narrow or the artwork can’t load, a plain QR appears instead. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 

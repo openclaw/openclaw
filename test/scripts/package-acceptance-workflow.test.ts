@@ -1715,6 +1715,43 @@ describe("frozen admission workflow barriers", () => {
     },
   );
 
+  it("admits the current bundle contract from the parent's sparse tooling checkout", () => {
+    const client = "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts";
+    const f = liveAdmissionFixture({ docker_lanes: "agent-bundle-mcp-tools" }, {}, {}, [client]);
+    const origin = join(f.root, "tooling-origin.git");
+    const sparse = join(f.root, "sparse-tooling");
+    f.toolingGit("clone", "--bare", "--no-hardlinks", f.tooling, origin);
+    f.toolingGit("-C", origin, "config", "uploadpack.allowFilter", "true");
+    f.toolingGit(
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      pathToFileURL(origin).href,
+      sparse,
+    );
+    const checkout = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
+      "Checkout trusted workflow helper",
+    );
+    f.toolingGit(
+      "-C",
+      sparse,
+      "sparse-checkout",
+      "set",
+      "--no-cone",
+      ...String(checkout.with?.["sparse-checkout"]).trim().split("\n"),
+    );
+    f.toolingGit("-C", sparse, "checkout", "--detach", f.toolingSha);
+    const planned = f.run("Plan frozen source admission", { ADMISSION_TOOLING_ROOT: sparse });
+    expect(planned.status, planned.stderr).toBe(0);
+    const admitted = f.admit({ ADMISSION_TOOLING_ROOT: sparse });
+    expect(admitted.status, admitted.stderr).toBe(0);
+    expect(f.readJson().sources.tooling).toContainEqual({
+      path: client,
+      oid: f.toolingGit("rev-parse", `${f.toolingSha}:${client}`),
+    });
+  });
+
   it("plans without selected objects and rejects admission before acquisition", () => {
     const f = liveAdmissionFixture(
       {
@@ -5150,11 +5187,13 @@ describe("package acceptance workflow", () => {
     return { file, jobName, checkoutName, consumerName, toolingPath, toolingRef };
   }
 
-  function runAndroidPin(pin: string, tag = "v2026.9.1") {
+  function runAndroidPin(pin: string | null, tag = "v2026.9.1") {
     const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const root = tempDirs.make("release-android-pin-");
     mkdirSync(join(root, "apps/android"), { recursive: true });
-    writeJson(join(root, "apps/android/version.json"), { version: pin });
+    if (pin !== null) {
+      writeJson(join(root, "apps/android/version.json"), { version: pin });
+    }
     for (const [command, sha] of [
       ["git", "a"],
       ["gh", "c"],
@@ -7197,6 +7236,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
   );
 
   it.each([
+    ["v2026.9.1", null, false],
     ["v2026.9.1", "2026.7.4", false],
     ["v2026.9.1", "2026.9.1", true],
     ["v2026.9.1-1", "2026.9.1", true],
@@ -7243,7 +7283,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     inputs.publish_openclaw_npm = false;
     expect(admitted("qualify_android_native")).toBe(false);
     expect(admitted("publish_android")).toBe(false);
-    expect(outputs.android_pin_version).toBe(pin);
+    expect(outputs.android_pin_version).toBe(pin ?? "");
     expect(workflowStep(target, "Checkout release tag").with?.["sparse-checkout"]).toContain(
       "apps/android/version.json",
     );
@@ -7251,7 +7291,7 @@ wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMEN
     if (tag.includes("beta") || native) {
       return;
     }
-    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run pnpm android:version:pin -- --from-gateway before the next tag.`;
+    const note = "- Android APK: skipped — Android releases are independent of Gateway releases.";
     expect(readFileSync(summaryPath, "utf8")).toContain(note);
     expect(outputs.android_release_note).toBe(note);
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -9693,7 +9733,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(job.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("telegram_mode: none");
     expect(job.secrets).toBeUndefined();
-    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended/floor");
+    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended,");
   });
 });
 
@@ -9808,6 +9848,12 @@ describe("package artifact reuse", () => {
     expect(parsedWorkflow.on?.workflow_call?.inputs).toHaveProperty(
       "enable_prepublish_plugin_registry",
     );
+    expect(
+      workflowStep(
+        workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image"),
+        "Upload prerelease plugin registry artifact",
+      ).with,
+    ).toMatchObject({ "compression-level": 0, "if-no-files-found": "error" });
     expect(workflow).toContain("Pack prerelease plugin registry artifact");
     expect(workflow).toContain("Validate prerelease plugin registry artifact");
     expect(workflow).toContain("Download targeted prerelease plugin registry artifact");

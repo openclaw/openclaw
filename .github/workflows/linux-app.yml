@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "apps/linux/**"
+      - "ui/src/components/browser/browser-inspect-script.ts"
       - "scripts/lib/openclaw-bun.json"
       - "scripts/stage-openclaw-bun.sh"
       - ".github/workflows/linux-app.yml"
@@ -478,6 +479,10 @@ jobs:
         with:
           cache-mode: off
           install-bun: "false"
+
+      - name: Verify Windows terminal and registry integration
+        working-directory: .
+        run: node scripts/run-vitest.mjs src/daemon/terminal-cli.windows.test.ts --maxWorkers=1 --reporter=verbose
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

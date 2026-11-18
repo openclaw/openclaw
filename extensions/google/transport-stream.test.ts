@@ -1926,12 +1926,10 @@ describe("google transport stream", () => {
     const cancel = vi.fn();
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
-        new ReadableStream<Uint8Array>({
-          pull() {
-            resolveBodyRead();
-          },
-          cancel,
-        }),
+        new ReadableStream<Uint8Array>(
+          { pull: () => resolveBodyRead(), cancel },
+          { highWaterMark: 0 },
+        ), // Signal only when the transport actually reads the body.
         { headers: { "content-type": "text/event-stream" } },
       ),
     );

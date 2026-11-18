@@ -115,6 +115,7 @@ export async function prepareCodexAttemptContext(
       : {}),
     trigger: params.trigger,
     inputProvenance: params.inputProvenance,
+    requesterDeviceId: params.approvalReviewerDeviceId,
     ...buildAgentHookContextChannelFields({
       sessionKey: contextSessionKey,
       messageChannel: params.messageChannel,

@@ -205,7 +205,7 @@ export function SessionRailComposer(props: {
             readonly={dictationActive()}
             onPaste={(event) => {
               if (props.connected) {
-                handleChatAttachmentPaste(event, props.attachmentProps);
+                handleChatAttachmentPaste(event, props.attachmentProps, { imagesOnly: true });
                 if (event.defaultPrevented) {
                   event.stopPropagation();
                 }
