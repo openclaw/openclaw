@@ -270,7 +270,7 @@ function reconcileKeywordIndex(
       records.map((r) => [r.id, r.path, r.hash, r.revision]),
     ]),
   );
-  const tracked = tableExists(db, rows);
+  const tracked = tableExists(db, rows) && tableExists(db, table);
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')`,
   );
@@ -281,6 +281,7 @@ function reconcileKeywordIndex(
   // and forget its recorded snapshot so this call repopulates it.
   if (!tracked) {
     db.exec(`DELETE FROM ${table}`);
+    db.exec(`DELETE FROM ${rows}`);
     db.prepare("DELETE FROM keyword_state_v1 WHERE binding=?").run(binding);
   }
   const state = db.prepare("SELECT * FROM keyword_state_v1 WHERE binding=?").get(binding);
