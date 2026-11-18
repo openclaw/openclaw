@@ -26,7 +26,7 @@ export type CronTestPage = HTMLElement & {
   deliveryDirectory: CronPageState["deliveryDirectory"];
   patchForm: CronPageState["actions"]["onFormChange"];
   closePanel: CronPageState["actions"]["onClosePanel"];
-  submitForm: (runNow?: boolean) => void;
+  submitForm: () => void;
   selectJob: CronPageState["actions"]["onSelectJob"];
   removeJob: CronPageState["actions"]["onRemove"];
   settle: () => Promise<void>;
@@ -213,8 +213,7 @@ export function createPage(
   Object.defineProperty(page, "deliveryDirectory", { get: () => state.deliveryDirectory });
   page.patchForm = state.actions.onFormChange;
   page.closePanel = state.actions.onClosePanel;
-  page.submitForm = (runNow = false) =>
-    runNow ? state.actions.onSubmitRunNow() : state.actions.onSubmit();
+  page.submitForm = state.actions.onSubmit;
   page.selectJob = state.actions.onSelectJob;
   page.removeJob = state.actions.onRemove;
   page.refreshView = () => state.publish();
@@ -244,6 +243,16 @@ export async function heldJob(page: CronTestPage, id: string): Promise<CronJob> 
 /** Opens a held automation, as choosing it in the Automations sidebar does. */
 export async function openJob(page: CronTestPage, id: string): Promise<void> {
   page.selectJob(await heldJob(page, id));
+  await page.settle();
+}
+
+/** Opens a held automation and its settings, as Edit on the automation's prompt does. */
+export async function editJob(page: CronTestPage, id: string): Promise<void> {
+  await openJob(page, id);
+  await waitForSolid(() =>
+    expect(page.querySelector('[data-test-id="cron-edit"]')).toBeInstanceOf(HTMLButtonElement),
+  );
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
   await page.settle();
 }
 

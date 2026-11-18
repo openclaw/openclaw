@@ -9,6 +9,13 @@ title: "PR merge recovery"
 
 Investigate retained outcomes before acting. A failed command, open PR, or absent process does not prove that a remote write did not execute. For fresh admission rules, see [PR merge admission](/reference/scripts/merge-admission).
 
+To leave opportunistic shared dependency-cache collection for a later invocation,
+set `OPENCLAW_PR_DEFER_CACHE_COLLECTION=1` on the recovery command only. This
+does not repair a cache, release another operation's holds, or bypass native
+recovery admission. Source authentication, dependency qualification, lifetime
+registration, locks, and task-owned cleanup still run. See
+[PR tooling](/reference/scripts/pr-tooling#defer-shared-cache-collection).
+
 Ordinary `merge-run` reconciliation checks the retained receipt head. It cannot validate a selected replacement head before its successor intent exists. If replacement admission refuses before the successor-intent CAS, that attempt does not consume the previous outcome. For a confirmed-cancelled auto request, do not cancel it again or reconcile the replacement as the retained head. Investigate the refusal before choosing another explicit same-scope recovery under the rules below. A local pre-dispatch refusal alone does not authorize a retry.
 
 - `merge-run` owns remote dispatch separately from the process lock. Before any merge/auto/queue request it records the exact repository identity, PR, main target, prepared head, observed main, method, route, and attempt in `refs/openclaw/pr-merge-outcomes/<PR>`. Private Git commits retain the required objects across worktree removal and GC. Do not delete or push these refs; process-lock recovery never clears them.

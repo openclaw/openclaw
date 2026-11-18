@@ -15,7 +15,7 @@ import {
   getButtonByText,
   openCronMenu,
   scheduledJob,
-  selectSegmented,
+  chooseSchedule,
 } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
@@ -34,7 +34,7 @@ function expectRpc(request: unknown, method: string, params: unknown) {
 }
 
 function expectHistoryTab(page: ParentNode) {
-  expect(dom.attribute(page, dom.testId("cron-detail-tab-history"), "aria-selected")).toBe("true");
+  expect(page.querySelector('.cron-page[data-view="detail"] .cron-history')).not.toBeNull();
 }
 
 function pacedJob(id: string, overrides: Partial<CronJob> = {}) {
@@ -59,7 +59,7 @@ async function submitWhenReady(page: ReturnType<typeof harness.createPage>) {
 }
 
 async function chooseOneTime(page: ReturnType<typeof harness.createPage>) {
-  selectSegmented(page.querySelector(dom.testId("cron-schedule-kind-at")) as HTMLElement);
+  chooseSchedule(page, "at");
   await page.settle();
   dom.fillInput(page, "#cron-schedule-at", "2099-01-01T12:00");
 }
@@ -84,7 +84,7 @@ it("allows offline drafting but disables submission without a live connection", 
     await page.settle();
     expect(page.cron.cronFieldErrors).toEqual({});
     expect(page.querySelector<HTMLInputElement>("#cron-name")!.matches(":disabled")).toBe(false);
-    for (const id of ["cron-submit", "cron-submit-run"]) {
+    for (const id of ["cron-submit"]) {
       const button = page.querySelector<HTMLButtonElement>(dom.testId(id))!;
       expect(button.disabled, id).toBe(true);
       button.click();
@@ -106,7 +106,7 @@ it("does not treat an accepted edit as completion of a newer clone", async () =>
   });
   const { page } = mountCronPage(request);
   try {
-    await harness.openJob(page, job.id);
+    await harness.editJob(page, job.id);
     await dom.waitForElement(page, "#cron-name");
     dom.click(page, dom.testId("cron-submit"));
     await waitFor(() => expect(request).toHaveBeenCalledWith("cron.update", expect.anything()));
@@ -233,8 +233,6 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
   updateCronRunsFilter(page.cron, previousFilters);
   page.routeSearch = "?job=linked-job";
   await page.settle();
-  dom.click(page, dom.testId("cron-detail-tab-history"));
-  await page.settle();
   expect(dom.callsFor(request, "cron.runs").at(-1)).toEqual([
     "cron.runs",
     expect.objectContaining({
@@ -245,6 +243,9 @@ it.each(["visible", "later page"])("opens linked history for a job on %s", async
       deliveryStatuses: ["not-delivered"],
     }),
   ]);
+  // The model catalog loads only for the settings.
+  expect(dom.callsFor(request, "models.list")).toHaveLength(0);
+  dom.click(page, dom.testId("cron-edit"));
   await waitFor(() => expect(dom.callsFor(request, "models.list")).toHaveLength(1));
 });
 
@@ -316,7 +317,7 @@ it("drops pending automation scratch when admin access is removed", async () => 
     "cron.scratch.get": () => scratch.promise,
   });
   const { page, gateway } = mountCronPage(request);
-  await harness.openJob(page, job.id);
+  await harness.editJob(page, job.id);
   await dom.waitForElement(page, "openclaw-cron-scratch-editor");
   expect(dom.callsFor(request, "cron.scratch.get")).toHaveLength(0);
   getButtonByText(page, "Load scratch").click();
@@ -390,95 +391,6 @@ it.each([
 );
 
 it.each([
-  { destination: "another page", accepted: true },
-  { destination: "another automation", accepted: true },
-  { destination: "another automation", accepted: false },
-  { destination: "the submitted editor", accepted: false },
-] as const)(
-  "settles create-and-run at $destination (accepted: $accepted)",
-  async ({ destination, accepted }) => {
-    const addRequested = createDeferred();
-    const added = createDeferred<{ id: string }>();
-    const selected = createCronViewJob("selected-job", { name: "Selected automation" });
-    const request = cronRpc(
-      {
-        "cron.add": () => {
-          addRequested.resolve();
-          return added.promise;
-        },
-        "cron.list": () => harness.cronListResponse([]),
-        "cron.get": () => selected,
-        "cron.runs": () => cronRunsResponse(),
-        "cron.run": () => ({ ok: true, enqueued: true, runId: "run-fresh" }),
-        "models.list": () => ({ models: [] }),
-      },
-      () => ({}),
-    );
-    const { page, gateway } = mountCronPage(request, { scopeId: "writer" });
-    let currentPage = page;
-    try {
-      (await dom.waitForElement(page, dom.testId("cron-new-task"))).click();
-      await dom.waitForElement(page, "#cron-payload-text");
-      dom.fillInput(page, "#cron-name", "Repo pulse");
-      dom.fillInput(page, "#cron-payload-text", "Review overnight activity");
-      await page.settle();
-      (await dom.waitForElement(page, dom.testId("cron-submit-run"))).click();
-      await addRequested.promise;
-      const submittedState = page.cron;
-      if (destination === "another page") {
-        page.remove();
-        currentPage = harness.createPage(harness.createContext(gateway, "writer"));
-      }
-      if (destination === "another automation") {
-        page.routeSearch = `?job=${selected.id}`;
-        await waitFor(() => expect(dom.inputValue(page, "#cron-name")).toBe(selected.name));
-      }
-      await currentPage.settle();
-      if (accepted) {
-        added.resolve({ id: "job-fresh" });
-      } else {
-        added.reject(new Error("Creation rejected"));
-      }
-      await waitFor(() => expect(submittedState.cronBusy).toBe(false));
-      await currentPage.settle();
-      if (destination === "another automation") {
-        expect.soft(currentPage.cron).toMatchObject({
-          cronEditingJob: { id: selected.id },
-          cronRunsJobId: selected.id,
-          cronRunsScope: "job",
-        });
-        expect.soft(dom.inputValue(currentPage, "#cron-name")).toBe(selected.name);
-      }
-      if (!accepted) {
-        expect(request.mock.calls.some(([method]) => method === "cron.run")).toBe(false);
-        expect(currentPage.cron.cronError).toBe(
-          destination === "the submitted editor" ? "Creation rejected" : null,
-        );
-        expect(currentPage.cron.cronCreateOpen).toBe(destination === "the submitted editor");
-        return;
-      }
-      await waitFor(() => {
-        const methods = request.mock.calls.map((call) => call[0]);
-        expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
-      });
-      expect(request).toHaveBeenCalledWith(
-        "cron.add",
-        expect.objectContaining({ agentId: "writer" }),
-      );
-      expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
-      await waitFor(() => expect(submittedState.cronCreateOpen).toBe(false));
-      if (destination === "another page") {
-        expect(currentPage.cron).not.toBe(submittedState);
-        expect(currentPage.cron.cronError).toBeNull();
-      }
-    } finally {
-      added.resolve({ id: "job-fresh" });
-      currentPage.remove();
-    }
-  },
-);
-
-it.each([
   { outcome: "queued", result: { ok: true, enqueued: true, runId: "run-alpha" } },
   { outcome: "invalid specification", result: { ok: true, ran: false, reason: "invalid-spec" } },
 ])("keeps selected history after a stale $outcome run", async ({ result }) => {
@@ -512,13 +424,8 @@ it.each([
     await expectRpc(request, "cron.run", { id: alpha.id, mode: "force" });
     // Another automation can open while the run is still being acknowledged.
     await harness.openJob(page, beta.id);
-    await waitFor(() => {
-      expect(betaReads).toBe(0);
-      expect(page.querySelector(dom.testId("cron-detail-tab-history"))).not.toBeNull();
-    });
-    (page.querySelector(dom.testId("cron-detail-tab-history")) as HTMLElement).dispatchEvent(
-      new MouseEvent("click", { detail: 1, bubbles: true }),
-    );
+    // The automation opens on its history.
+    await waitFor(() => expect(betaReads).toBe(1));
     await page.settle();
     // A notification queued before the acknowledgement must not rescue the stale target.
     expect(page.querySelector(".cron-history")).not.toBeNull();
@@ -633,7 +540,7 @@ it.each([false, true])("preserves valid pacing when editing (once: %s)", async (
     "cron.update": () => saved,
   });
   const { page } = mountCronPage(request);
-  await harness.openJob(page, source.id);
+  await harness.editJob(page, source.id);
   await dom.waitForElement(page, "#cron-name");
   dom.fillInput(page, "#cron-name", saved.name);
   await page.settle();
@@ -647,7 +554,8 @@ it.each([false, true])("preserves valid pacing when editing (once: %s)", async (
   await waitFor(() => expect(page.cron.cronEditingJob?.configRevision).toBe("saved-revision"));
   await waitFor(() => expect(page.cron.cronBusy).toBe(false));
   expect(page.cron.cronEditingJob?.name).toBe(saved.name);
-  expect(page.querySelector<HTMLButtonElement>(dom.testId("cron-submit"))!.disabled).toBe(false);
+  // A saved edit returns to the automation's prompt and history.
+  await waitFor(() => expect(page.querySelector('.cron-page[data-view="detail"]')).not.toBeNull());
   const submitted = request.mock.calls.find(([method]) => method === "cron.update")?.[1];
   expect(submitted).toMatchObject({
     id: source.id,

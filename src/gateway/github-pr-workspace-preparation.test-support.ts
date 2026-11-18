@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Value } from "typebox/value";
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { SessionGitHubPullRequestPrepareResultSchema } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import * as sandboxEngine from "../agents/sandbox/docker.js";
@@ -31,6 +31,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import * as skillsRuntime from "../skills/runtime/refresh.js";
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import {
@@ -40,7 +41,9 @@ import {
 import { commandResult, githubPublicationTestMocks } from "./github-publication.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
@@ -65,7 +68,11 @@ export function observeManagedLayoutCaptures() {
         run({
           ...store,
           manifest: async (row, action) => {
-            if (layoutChanged && (action.kind === "probe" || action.kind === "scan")) {
+            if (
+              layoutChanged &&
+              (action.kind === "probe" || action.kind === "scan") &&
+              !action.prehash
+            ) {
               observations.push(`${action.kind}:${action.target}`);
             }
             return await store.manifest(row, action);
@@ -349,13 +356,19 @@ export async function fixture(
     invocation: {
       requester?: "guest" | "maintainer";
       caller?: "guest" | "maintainer" | null;
+      client?: GatewayRequestOptions["client"];
     } = {},
   ) => {
     const principal = invocation.requester === "maintainer" ? f.maintainerSource : f.guestSource;
     const caller = invocation.caller === undefined ? invocation.requester : invocation.caller;
     const callerSource = caller === "maintainer" ? f.maintainerSource : f.guestSource;
     const operator =
-      caller === null ? undefined : await captureGatewayOperatorRunAuthority(callerSource);
+      caller === null
+        ? undefined
+        : await captureGatewayOperatorRunAuthority({
+            ...callerSource,
+            client: invocation.client ?? callerSource.client,
+          });
     using _ = { [Symbol.dispose]: () => operator?.release() };
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
@@ -364,7 +377,7 @@ export async function fixture(
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: principal.client,
+        client: invocation.client ?? principal.client,
         context: Object.assign(createRequestContext(), principal.context, {
           githubPublicationService: f.coordinator,
           workerSessionPlacementService: f.placements,
@@ -420,6 +433,37 @@ export async function fixture(
     invoke,
     advanceHead,
     writes,
+  };
+}
+
+export async function admitSharedParent(
+  f: Awaited<ReturnType<typeof fixture>>,
+  sharingScope: { agentId: string; sessionKey: string },
+) {
+  const sessionId = randomUUID();
+  await upsertSessionEntryCore(sharingScope, {
+    sessionId,
+    sandbox: "required",
+    createdActor: { type: "human", source: "profile", id: f.maintainerProfile },
+    visibility: "read-only",
+  });
+  await addSessionMember(sharingScope, {
+    identityId: f.guestProfile,
+    addedBy: f.maintainerProfile,
+  });
+  const principal = await prepareSessionPrincipalRunAuthority({
+    context: Object.assign(createRequestContext(), f.guestSource.context),
+    ...sharingScope,
+    sessionId,
+    profileId: f.guestProfile,
+  });
+  onTestFinished(principal.release);
+  return {
+    ...f.guestSource.client,
+    internal: {
+      ...f.guestSource.client.internal,
+      operatorRunAuthority: principal.authority,
+    },
   };
 }
 

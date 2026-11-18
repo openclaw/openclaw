@@ -54,8 +54,7 @@ afterEach(async () => {
 it("fails a running child restored from an earlier Gateway so its requester wakes", async () => {
   using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const entry = restoredRunningRow();
-  // Restore retires completion authority for rows no live Gateway context owns.
-  subagentRuns.retireCompletionAuthority(entry);
+  // Startup has admitted fresh completion custody; child execution still did not survive.
 
   const { complete, settled } = settle(entry);
 
@@ -82,7 +81,10 @@ it("fails a running child restored from an earlier Gateway so its requester wake
 });
 
 it.each([
-  ["a row this process still owns", (_entry: SubagentRunRecord) => {}],
+  [
+    "a row awaiting fresh completion admission",
+    (entry: SubagentRunRecord) => subagentRuns.retireCompletionAuthority(entry),
+  ],
   [
     "a row this process created",
     (entry: SubagentRunRecord) => {

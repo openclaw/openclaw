@@ -11,10 +11,8 @@ import {
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
-import {
-  loadDevicePairingStateForMutation,
-  normalizeDevicePairingRole,
-} from "./device-pairing-state.kernel.js";
+import { normalizeDevicePairingRole } from "./device-pairing-roles.js";
+import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
 import {
   persistDevicePairingStoreState as persistState,
   updatePairedDeviceInTransaction,

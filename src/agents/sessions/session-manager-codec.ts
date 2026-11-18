@@ -295,7 +295,7 @@ export function projectSessionModelContextData(branch: readonly SessionEntry[]):
 
 export function projectSessionModelContextEntries(branch: readonly SessionEntry[]): SessionEntry[] {
   // Stored snapshots stay shared; mutable SDK edits detach before internal publication.
-  return freezeJsonSnapshot(cloneTranscriptView(projectSessionModelContextData(branch)));
+  return cloneTranscriptView(projectSessionModelContextData(branch), { freeze: true });
 }
 
 /** Reuse immutable text without sharing the freshly hydrated message containers. */

@@ -534,13 +534,12 @@ suite.define(() => {
       for (const text of ["46k / 200k · 23%", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
       }
-      // A priced run shows its cost; its token counts move into the row tooltip.
-      expect(await popover.locator(".context-usage__latest").first().getAttribute("title")).toBe(
+      // The run's token counts live in its row label tooltip; the cost cell explains its parts.
+      const run = popover.locator('[data-chat-usage-row="run"]');
+      expect(await run.locator('[role="rowheader"]').getAttribute("title")).toBe(
         "In 757.3k · Out 42.3k",
       );
-      const costBreakdown = await popover
-        .locator(".context-usage__stats > div[title]")
-        .getAttribute("title");
+      const costBreakdown = await run.locator('[role="cell"][title]').getAttribute("title");
       for (const amount of ["$0.0035", "$0.018", "$0.0015", "$0.0005"]) {
         expect(costBreakdown).toContain(amount);
       }

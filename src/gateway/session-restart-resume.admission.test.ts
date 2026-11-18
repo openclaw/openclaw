@@ -8,7 +8,11 @@ import type { SessionEventReceipt } from "../auto-reply/reply/session-event-cont
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { loadExactSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadExactSessionEntry,
+  readLatestSessionTranscriptReport,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -49,6 +53,50 @@ import {
   persistRunningSessionsForRestart,
 } from "./session-restart-resume.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+
+it("logs an unavailable recovery reason as data while preserving the refusal notice", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:unavailable-source",
+      sessionId: "unavailable-source",
+    };
+    replaceSessionEntrySync(target, {
+      sessionId: "unavailable-source",
+      updatedAt: 1,
+    });
+    replaceSessionEntrySync(target, {
+      ...loadExactSessionEntry(target)!.entry,
+      resumeAfterRestart: {
+        operatorSource: { kind: "unavailable", reason: "no-auth-method" },
+      },
+    });
+    const warn = vi.fn();
+    await resumeMarkedSessions({
+      context: createContext([], () => cfg),
+      signal: new AbortController().signal,
+      log: { warn },
+    });
+    const refusal = "Error: Queued operator authority cannot be recovered; submit a new request.";
+    expect(warn).toHaveBeenCalledWith(
+      `Skipped restart resume for ${target.sessionKey}: ${refusal} ${JSON.stringify({
+        sessionId: "unavailable-source",
+        admissionStage: "principal",
+        operatorRecoveryUnavailableReason: "no-auth-method",
+      })}`,
+    );
+    const report = await readLatestSessionTranscriptReport(target, ["run-failed-before-reply"]);
+    expect(report).toMatchObject({
+      ok: true,
+      value: {
+        content: `The Gateway restarted, but this run could not resume. ${refusal} Resolve this error, then send a new message to continue.`,
+        details: { error: refusal },
+      },
+    });
+    expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeUndefined();
+  }));
 
 it.for(["aborted", "draining"] as const)(
   "retains restart custody while admission is %s by another restart",
@@ -92,9 +140,7 @@ it.for(["aborted", "draining"] as const)(
       void recovery.catch(() => {});
       try {
         await withinTest(entered.promise, test.signal);
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-          queuedInputIds: [],
-        });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
         if (mode === "aborted") {
           const error = new Error("Another restart interrupted admission");
           controller.abort(error);
@@ -104,14 +150,12 @@ it.for(["aborted", "draining"] as const)(
           markGatewayRestartDraining();
           replaceSessionEntrySync(target, {
             ...loadExactSessionEntry(target)!.entry,
-            resumeAfterRestart: { queuedInputIds: ["next-shutdown-input"] },
+            resumeAfterRestart: {},
           });
           accepted.resolve({ ok: true });
           await recovery;
         }
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-          queuedInputIds: mode === "draining" ? ["next-shutdown-input"] : [],
-        });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
         expect(enqueue).toHaveBeenCalledOnce();
       } finally {
         accepted.resolve({ ok: true });

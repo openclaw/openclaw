@@ -82,7 +82,7 @@ it("acknowledges staged chat input and joins its terminal disposition without ho
     await recorder.completeProcessingAsync?.(
       buildAgentRunTerminalOutcome({ status: "error", stopReason: "rpc" }),
     );
-    recorder.finishPendingInput?.("cancelled");
+    recorder.finishPendingInput?.("cancelled", "failed");
     expect(() => recorder.withPendingInput?.(() => {})).toThrow("ownership ended");
     await fixture.finishDispatch();
     const writes = sql.queries.filter((query) =>

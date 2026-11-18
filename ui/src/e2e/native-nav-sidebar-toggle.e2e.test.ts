@@ -3,7 +3,10 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import {
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -373,6 +376,7 @@ suite.define(() => {
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
     await toggle.click();
+    await waitForControlUiRoute(page, { routeId: "activity" });
     const collapse = page
       .locator("openclaw-app-sidebar")
       .getByRole("button", { name: "Collapse sidebar", exact: true });
