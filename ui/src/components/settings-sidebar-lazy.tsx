@@ -1,4 +1,4 @@
-import { children, Errored, For, isPending, lazy, Loading, Show } from "solid-js";
+import { createSignal, Errored, For, lazy, Loading, Show } from "solid-js";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -41,26 +41,27 @@ export function LazySettingsSaveStatus(
 export function LazySettingsSidebar(
   props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsSidebar>[0],
 ) {
-  // Observe the lazy content while Errored retains its fallback during a retry.
-  const content = children(() => (
-    <SettingsSidebar host={props.host} sidebarProps={props.sidebarProps} />
-  ));
+  const [attempt, setAttempt] = createSignal(0);
   return (
-    <Errored
-      fallback={(_error, reset) => (
-        <SettingsSidebarFallback
-          sidebarProps={props.sidebarProps}
-          failed={!isPending(() => content())}
-          retry={reset}
-        />
-      )}
+    <Loading
+      on={attempt()}
+      fallback={<SettingsSidebarFallback sidebarProps={props.sidebarProps} failed={false} />}
     >
-      <Loading
-        fallback={<SettingsSidebarFallback sidebarProps={props.sidebarProps} failed={false} />}
+      <Errored
+        fallback={(_error, reset) => (
+          <SettingsSidebarFallback
+            sidebarProps={props.sidebarProps}
+            failed={true}
+            retry={() => {
+              setAttempt((value) => value + 1);
+              reset();
+            }}
+          />
+        )}
       >
-        {content()}
-      </Loading>
-    </Errored>
+        <SettingsSidebar host={props.host} sidebarProps={props.sidebarProps} />
+      </Errored>
+    </Loading>
   );
 }
 
