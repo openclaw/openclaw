@@ -195,6 +195,17 @@ async function ensureCli(deps: ConnectDeps): Promise<string | ConnectOutcome> {
       "GBrain is not running next to this container. Start it with the GBrain Compose overlay (docker compose -f docker-compose.yml -f deploy/gbrain/compose.yaml up -d); OpenClaw connects on its own.",
     );
   }
+  // An existing Bun install wins wherever Bun links global binaries (BUN_INSTALL_BIN, XDG_CACHE_HOME, ...).
+  const bun = deps.findExecutable("bun", [path.join(bunBin, "bun")]);
+  let bunCandidates = candidates;
+  if (bun) {
+    const globalBin = (await deps.run([bun, "pm", "bin", "-g"], 30_000)).stdout.trim();
+    bunCandidates = [...candidates, ...(globalBin ? [path.join(globalBin, "gbrain")] : [])];
+    const linked = deps.findExecutable("gbrain", bunCandidates);
+    if (linked) {
+      return linked;
+    }
+  }
   const asset = gbrainReleaseAsset(deps.platform, deps.arch);
   if (asset) {
     try {
@@ -207,19 +218,11 @@ async function ensureCli(deps: ConnectDeps): Promise<string | ConnectOutcome> {
       );
     }
   }
-  const bun = deps.findExecutable("bun", [path.join(bunBin, "bun")]);
   if (!bun) {
     return blocked(
       "bun-missing",
       "GBrain publishes release binaries only for Apple Silicon macOS and x86-64 Linux; on this computer it needs Bun 1.4.4 or newer. Install it with: curl -fsSL https://bun.sh/install | bash (on Linux, Bun's installer also needs unzip). OpenClaw finishes the GBrain setup within a minute.",
     );
-  }
-  // Bun links global binaries where its own settings say (BUN_INSTALL_BIN, XDG_CACHE_HOME, ...).
-  const globalBin = (await deps.run([bun, "pm", "bin", "-g"], 30_000)).stdout.trim();
-  const bunCandidates = [...candidates, ...(globalBin ? [path.join(globalBin, "gbrain")] : [])];
-  const linked = deps.findExecutable("gbrain", bunCandidates);
-  if (linked) {
-    return linked;
   }
   const install = await deps.run([bun, "install", "-g", GBRAIN_INSTALL_SPEC], 10 * 60_000);
   const installed = deps.findExecutable("gbrain", bunCandidates);

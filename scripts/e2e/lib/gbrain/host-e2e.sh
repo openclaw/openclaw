@@ -204,7 +204,8 @@ install_plugin() {
 }
 step plugin-install install_plugin || fail "plugins.install"
 if [ -n "$RELEASE_ASSET" ]; then
-  step no-bun bash -c '! command -v bun && ! command -v unzip; echo "bun and unzip absent: $?"'
+  # The proof is that this host never needs Bun (macOS ships unzip, so it is not checked).
+  step no-bun bash -c '! command -v bun' || fail "host already has Bun; not a Bun-free run"
 elif ! command -v bun >/dev/null 2>&1; then
   sleep 10
   step bun-missing-message grep -m1 'needs Bun 1.4.4' "$WORK/logs/gateway.out" || fail "no Bun message"

@@ -173,6 +173,19 @@ describe("connectGbrain", () => {
     }
   });
 
+  it("uses a GBrain that Bun already linked outside PATH instead of downloading the release", async () => {
+    const host = fakeHost({
+      platform: "darwin",
+      arch: "arm64",
+      executables: [BUN, `${BUN_GLOBAL_BIN}/gbrain`],
+    });
+    expect(await connectGbrain(host.deps, { allowSetup: true })).toMatchObject({
+      state: "connected",
+    });
+    expect(host.releaseInstalls).toEqual([]);
+    expect(host.commands[0]).toBe("pm bin -g");
+  });
+
   it("reports a failed release download and writes nothing", async () => {
     const host = fakeHost({
       platform: "darwin",
