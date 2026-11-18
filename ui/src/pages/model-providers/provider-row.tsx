@@ -342,7 +342,7 @@ function defaultModelsUsing(props: ProviderRowProps): string | undefined {
   return names.length ? [...new Set(names)].join(", ") : undefined;
 }
 
-/** What "Remove provider" can delete, and the credential it has to leave behind. */
+/** What credential removal can delete, and the credentials it has to leave behind. */
 function removalPlan(card: ModelProviderCard): {
   removeTargets: ModelProviderRemovalTarget[];
   keptSource?: string;
@@ -396,13 +396,38 @@ function ProviderActions(props: ProviderRowProps) {
     );
   return (
     <div class="model-providers__card-actions provider-row__footer">
+      <Show when={props.card.configKey}>
+        {(configKey) => (
+          <button
+            class="btn btn--sm btn--ghost danger"
+            disabled={
+              configMutationDisabled(props) || Boolean(props.busy["logout:" + props.card.id])
+            }
+            title={props.mutationBlockedReason ?? ""}
+            aria-label={t("modelProviders.actionNamed", {
+              action: t("modelProviders.remove.action"),
+              name: providerName(props.card),
+            })}
+            onClick={() =>
+              props.onRequestLogout({
+                cardId: props.card.id,
+                label: providerName(props.card),
+                removeConfigKey: configKey(),
+                defaultModels: defaultModels(),
+              })
+            }
+          >
+            {t("modelProviders.remove.action")}
+          </button>
+        )}
+      </Show>
       <Show when={removal().removeTargets.length > 0}>
         <button
           class="btn btn--sm btn--ghost danger provider-row__remove"
           disabled={configMutationDisabled(props) || Boolean(props.busy[`logout:${props.card.id}`])}
           title={props.mutationBlockedReason ?? ""}
           aria-label={t("modelProviders.actionNamed", {
-            action: t("modelProviders.remove.action"),
+            action: t("modelProviders.remove.accessAction"),
             name: providerName(props.card),
           })}
           onClick={() =>
@@ -414,7 +439,7 @@ function ProviderActions(props: ProviderRowProps) {
             })
           }
         >
-          {t("modelProviders.remove.action")}
+          {t("modelProviders.remove.accessAction")}
         </button>
       </Show>
       <Show when={isProviderUsable(props.card)}>

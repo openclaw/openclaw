@@ -469,7 +469,7 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     // The open form stands in for the button that opened it.
     expect(button(provider!, "Replace")).toBeUndefined();
-    expect(button(provider!, "Remove provider")?.disabled).toBe(true);
+    expect(button(provider!, "Remove saved access")?.disabled).toBe(true);
     expect(
       provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
     ).toBe(true);
@@ -984,7 +984,7 @@ describe("renderModelProviders", () => {
         onRequestLogout,
       }),
     );
-    button(expand(container), "Remove provider")!.click();
+    button(expand(container), "Remove saved access")!.click();
     expect(onRequestLogout).toHaveBeenCalledWith(
       expect.objectContaining({
         cardId: "openai",

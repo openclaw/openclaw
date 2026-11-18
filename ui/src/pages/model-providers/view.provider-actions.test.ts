@@ -19,6 +19,7 @@ function actions(container: HTMLElement, providerId: string) {
 const providerCards = [
   card({
     displayName: "openai",
+    configKey: "openai",
     apiKey: { source: "config" },
     configApiKeys: [{ key: "openai", reference: false }],
   }),
@@ -41,6 +42,7 @@ it("names connected and unconnected provider actions with their displayed provid
   // The saved key's own row owns replacing it, so the footer doesn't offer it again.
   expect(actions(container, "openai")).toEqual([
     { name: "Remove provider: OpenAI", text: "Remove provider", disabled: false },
+    { name: "Remove saved access: OpenAI", text: "Remove saved access", disabled: false },
     { name: "Test access: OpenAI", text: "Test access", disabled: false },
     { name: "Add account: OpenAI", text: "Add account", disabled: false },
   ]);
@@ -64,7 +66,7 @@ it("keeps provider identification through probe and access changes", () => {
     busy: { "probe:openai": true },
   });
   const container = mount(viewProps);
-  expect(actions(container, "openai")[1]).toEqual({
+  expect(actions(container, "openai")[2]).toEqual({
     name: "Testing…: OpenAI",
     text: "Testing…",
     disabled: true,
@@ -76,6 +78,7 @@ it("keeps provider identification through probe and access changes", () => {
   flush();
   expect(actions(container, "openai")).toEqual([
     { name: "Remove provider: OpenAI", text: "Remove provider", disabled: true },
+    { name: "Remove saved access: OpenAI", text: "Remove saved access", disabled: true },
     { name: "Test access: OpenAI", text: "Test access", disabled: true },
     { name: "Add account: OpenAI", text: "Add account", disabled: true },
   ]);

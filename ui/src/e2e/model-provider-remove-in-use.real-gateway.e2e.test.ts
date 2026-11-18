@@ -145,10 +145,10 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const row = await expandProvider(page, "tencent-tokenhub");
         await row
-          .getByRole("button", { name: "Remove provider: Tencent TokenHub", exact: true })
+          .getByRole("button", { name: "Remove saved access: Tencent TokenHub", exact: true })
           .click();
         const dialog = page.locator("openclaw-modal-dialog");
-        const confirm = dialog.getByRole("button", { name: "Remove provider", exact: true });
+        const confirm = dialog.getByRole("button", { name: "Remove saved access", exact: true });
         await confirm.waitFor();
         const shot = async (name: string, content: Locator) => {
           // Capture settled frames, not the dialog's entry fade.
@@ -175,7 +175,7 @@ suite.define(() => {
           .poll(
             () =>
               page
-                .getByRole("button", { name: "Remove provider: Tencent TokenHub", exact: true })
+                .getByRole("button", { name: "Remove saved access: Tencent TokenHub", exact: true })
                 .count(),
             { timeout: 30_000 },
           )

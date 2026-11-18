@@ -1,3 +1,8 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  collectBaseArrayPaths,
+  formatConfigPatchPath,
+} from "../../../../src/config/patch-replace-paths.js";
 import type {
   ModelAuthLogoutResult,
   ModelAuthOrderSetResult,
@@ -330,7 +335,9 @@ export function createModelProviderProfileActions(options: {
       logoutConfirmation?.abort();
     },
     async requestLogout(pending: ModelProviderPendingLogout): Promise<void> {
+      const client = options.getClient();
       if (
+        !client ||
         logoutConfirmation ||
         !options.canMutate() ||
         options.isBusy(`logout:${pending.cardId}`)
@@ -341,35 +348,103 @@ export function createModelProviderProfileActions(options: {
       // authorize a logout under a different scope.
       const controller = new AbortController();
       logoutConfirmation = controller;
+      const { isCurrent } = captureScope(client);
+      const config = options.getConfig();
+      const configHash = config.state.configSnapshot?.hash;
+      const removingConfig = "removeConfigKey" in pending;
       const removing = "removeTargets" in pending;
+      const defaults =
+        "defaultModels" in pending && pending.defaultModels
+          ? t("modelProviders.remove.defaults", { models: pending.defaultModels })
+          : "";
       const confirmed = await showConfirmDialog({
-        title: removing
+        title: removingConfig
           ? t("modelProviders.remove.title", { provider: pending.label })
-          : t("modelProviders.logout.title", { account: pending.label }),
-        message: removing
-          ? [
-              pending.removeTargets.some((target) => !target.credentialType)
-                ? t("modelProviders.remove.accounts", { provider: pending.label })
-                : "",
-              pending.configKey ? t("modelProviders.remove.keys", { key: pending.configKey }) : "",
-              pending.keptSource
-                ? t("modelProviders.remove.kept", { source: pending.keptSource })
-                : "",
-              pending.defaultModels
-                ? t("modelProviders.remove.defaults", { models: pending.defaultModels })
-                : "",
-            ]
+          : removing
+            ? t("modelProviders.remove.accessTitle", { provider: pending.label })
+            : t("modelProviders.logout.title", { account: pending.label }),
+        message: removingConfig
+          ? [t("modelProviders.remove.config", { key: pending.removeConfigKey }), defaults]
               .filter(Boolean)
               .join(" ")
-          : t("modelProviders.logout.confirm", { provider: pending.label }),
-        confirmLabel: t(removing ? "modelProviders.remove.action" : "modelProviders.logout.action"),
+          : removing
+            ? [
+                pending.removeTargets.some((target) => !target.credentialType)
+                  ? t("modelProviders.remove.accounts", { provider: pending.label })
+                  : "",
+                pending.configKey
+                  ? t("modelProviders.remove.keys", { key: pending.configKey })
+                  : "",
+                pending.keptSource
+                  ? t("modelProviders.remove.kept", { source: pending.keptSource })
+                  : "",
+                defaults,
+              ]
+                .filter(Boolean)
+                .join(" ")
+            : t("modelProviders.logout.confirm", { provider: pending.label }),
+        confirmLabel: t(
+          removingConfig
+            ? "modelProviders.remove.action"
+            : removing
+              ? "modelProviders.remove.accessAction"
+              : "modelProviders.logout.action",
+        ),
         danger: true,
         signal: controller.signal,
       }).finally(() => {
         logoutConfirmation = null;
       });
-      if (confirmed && !controller.signal.aborted && options.canMutate()) {
+      if (!confirmed || controller.signal.aborted || !isCurrent() || !options.canMutate()) {
+        return;
+      }
+      if (!removingConfig) {
         await logout(pending.cardId, removing ? pending.removeTargets : [pending.target]);
+        return;
+      }
+      const provider = pending.removeConfigKey;
+      const busyKey = "logout:" + pending.cardId;
+      options.setBusy(busyKey, true);
+      options.clearMessage(pending.cardId);
+      clearProbe(pending.cardId);
+      try {
+        const patched = await config.patchFromSnapshot((snapshot) => {
+          const providers = asNullableRecord(asNullableRecord(snapshot.models)?.providers);
+          if (
+            config.state.configSnapshot?.hash !== configHash ||
+            !providers ||
+            !Object.hasOwn(providers, provider)
+          ) {
+            return { error: t("modelProviders.remove.configChanged") };
+          }
+          return {
+            options: {
+              raw: { models: { providers: { [provider]: null } } },
+              note: t("modelProviders.remove.configNote", { key: provider }),
+              replacePaths: collectBaseArrayPaths(
+                providers[provider],
+                formatConfigPatchPath("models.providers", provider),
+              ),
+              canDispatch: () => isCurrent() && options.hasMutationAccess(),
+            },
+          };
+        });
+        if (isCurrent()) {
+          if (patched) {
+            invalidateModelAuthStatusRequests(client);
+            await options.refresh();
+          } else {
+            showProfileActionError(config.state.lastError ?? t("modelProviders.configUnavailable"));
+          }
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          showProfileActionError(error);
+        }
+      } finally {
+        if (isCurrent()) {
+          options.setBusy(busyKey, false);
+        }
       }
     },
     logout,
