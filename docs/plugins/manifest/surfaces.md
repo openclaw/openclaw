@@ -621,15 +621,17 @@ The manifest ids are plugin-local. Widget grants use `<plugin-id>.<id>`, such as
 {
   "catalog": {
     "featured": true,
-    "order": 10
+    "order": 10,
+    "sidebar": true
   }
 }
 ```
 
-| Field      | Type      | What it means                                                              |
-| ---------- | --------- | -------------------------------------------------------------------------- |
-| `featured` | `boolean` | Whether catalog surfaces should feature this plugin.                       |
-| `order`    | `number`  | Ascending display hint among curated plugins; lower values appear earlier. |
+| Field      | Type      | What it means                                                                                                                                       |
+| ---------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `featured` | `boolean` | Whether catalog surfaces should feature this plugin.                                                                                                |
+| `order`    | `number`  | Ascending display hint among curated plugins; lower values appear earlier.                                                                          |
+| `sidebar`  | `boolean` | For a bundled plugin, whether the Control UI Customize sidebar lists it while it is enabled. Plugins installed from outside OpenClaw always appear. |
 
 ## cliCommands reference
 
