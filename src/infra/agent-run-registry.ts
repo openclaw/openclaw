@@ -398,7 +398,7 @@ export function getActiveAgentRunDelegatedAuthority(
 
 function readActiveAgentRunDelegatedAuthority(
   operationalRunInstance: Readonly<{ instanceId: string; runId: string }>,
-  assertSource: (context: AgentRunContext) => void,
+  assertSource?: (context: AgentRunContext) => void,
 ): AgentRunDelegatedAuthority | undefined {
   const context = getAgentRunRegistryState().contexts.get(operationalRunInstance.runId);
   const authority = context?.delegatedAuthority;
@@ -417,7 +417,7 @@ function readActiveAgentRunDelegatedAuthority(
     return undefined;
   }
   try {
-    assertSource(context);
+    assertSource?.(context);
     return getAgentRunContext(operationalRunInstance.runId) === context &&
       context.delegatedAuthority === authority &&
       getAgentRunContextOwnerStatus(
@@ -477,17 +477,14 @@ export function captureAgentRunDelegatedSourceAssertion(
 export function validateAgentRunDelegatedAuthority(
   authority: AgentRunDelegatedAuthority,
   ancestor?: AgentRunDelegatedAuthority,
+  scope: "source" | "lifecycle" = "source",
 ): boolean {
-  const active = getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance);
-  return Boolean(
-    active &&
-    isCurrentAgentRunApprovalAuthority(
-      active,
-      getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases,
-      authority,
-      ancestor,
-    ),
-  );
+  const active =
+    scope === "lifecycle"
+      ? readActiveAgentRunDelegatedAuthority(authority.operationalRunInstance)
+      : getActiveAgentRunDelegatedAuthority(authority.operationalRunInstance);
+  const leases = getAgentRunContext(authority.operationalRunInstance.runId)?.approvalLeases;
+  return Boolean(active && isCurrentAgentRunApprovalAuthority(active, leases, authority, ancestor));
 }
 
 /** Narrows an admitted run to one live tool generation without replacing its outer claim. */

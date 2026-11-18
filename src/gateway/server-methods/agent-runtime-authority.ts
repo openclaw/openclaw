@@ -5,6 +5,7 @@ export function hasActiveAgentRuntimeAuthority(
   client: GatewayClient | null,
   context: Pick<GatewayRequestContext, "validateAgentRuntimeApprovalAuthority">,
   assertCallerCurrent?: () => void,
+  scope?: "lifecycle",
 ): boolean {
   try {
     assertCallerCurrent?.();
@@ -15,15 +16,16 @@ export function hasActiveAgentRuntimeAuthority(
   const validate = context.validateAgentRuntimeApprovalAuthority;
   // Production dispatch always supplies the validator. Lightweight direct-handler
   // contexts have no live authority owner and therefore no identity to invalidate.
-  return !identity || !validate || validate(identity);
+  return !identity || !validate || validate(identity, scope);
 }
 
 export function assertActiveAgentRuntimeAuthority(
   client: GatewayClient | null,
   context: Pick<GatewayRequestContext, "validateAgentRuntimeApprovalAuthority">,
   assertCallerCurrent?: () => void,
+  scope?: "lifecycle",
 ): void {
-  if (!hasActiveAgentRuntimeAuthority(client, context, assertCallerCurrent)) {
+  if (!hasActiveAgentRuntimeAuthority(client, context, assertCallerCurrent, scope)) {
     throw new TypeError("agent runtime authority is no longer active");
   }
 }
@@ -36,7 +38,11 @@ export function createAgentRuntimeAuthorityGuard(
 ) {
   const hasActive = () => hasActiveAgentRuntimeAuthority(client, context, assertCallerCurrent);
   return {
-    commitGuard: assertCallerCurrent,
+    // Stop/release and exact turn ownership still fence effects; policy stays admitted.
+    commitGuard:
+      client?.internal?.agentRuntimeIdentity && context.validateAgentRuntimeApprovalAuthority
+        ? () => assertActiveAgentRuntimeAuthority(client, context, assertCallerCurrent, "lifecycle")
+        : assertCallerCurrent,
     ensureActive() {
       if (hasActive()) {
         return true;

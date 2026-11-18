@@ -10,7 +10,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
+import {
+  prepareUserProfileRoleAuthority,
+  prepareUserProfileSelectionAuthority,
+} from "../state/user-channel-identity-operations.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
@@ -276,11 +279,14 @@ export async function prepareSessionSharingProfiles(
       };
     }
     const prepared = await prepareUserProfileRoleAuthority(profileId, options);
+    const selection =
+      prepared && (await prepareUserProfileSelectionAuthority(profileId, prepared.readSource()));
     const profile = prepared && { ...prepared, aliases: new Set(prepared.aliases) };
     return () => {
       if (prepared && !prepared.isCurrent()) {
         prepared.readSource();
-        if (!admitted) {
+        // Admitted policy survives role edits, but cannot follow a merge into another person.
+        if (!admitted || !selection?.isCurrent() || selection.profileId !== prepared.profileId) {
           throw new SessionSharingProfileFactsChangedError(
             authenticatedProfileUnavailableError(),
             prepared.readSource,

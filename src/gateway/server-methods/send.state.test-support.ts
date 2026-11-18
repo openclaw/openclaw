@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { SessionTranscriptAppendResult } from "../../config/sessions/transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { makeContext } from "./send.test-support.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -28,4 +29,12 @@ export function fixedStoreContext(): GatewayRequestContext {
       defaults: { sessionStore: { agentId: "ops" } },
     },
   }));
+}
+
+export function transcriptResult(messageId: string): SessionTranscriptAppendResult {
+  return {
+    ok: true,
+    target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+    messageId,
+  };
 }

@@ -328,6 +328,7 @@ export function captureWorkerTurnClaimCurrentness(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
   delegatedAuthority: AgentRunDelegatedAuthority,
+  scope: "source" | "lifecycle" = "source",
 ): (() => boolean) | undefined {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const owners = path ? workerTurnOwners.get(path) : undefined;
@@ -347,8 +348,11 @@ export function captureWorkerTurnClaimCurrentness(
     owners?.get(claim.sessionId) === bound &&
     bound.runtime.claimAuthority.isCurrent();
   return () =>
-    validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
-    isBoundCurrent();
+    validateAgentRunDelegatedAuthority(
+      delegatedAuthority,
+      bound.runtime.delegatedAuthority,
+      scope,
+    ) && isBoundCurrent();
 }
 
 function resolveBoundWorkerTurnRuntime(

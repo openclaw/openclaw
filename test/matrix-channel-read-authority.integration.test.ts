@@ -368,13 +368,17 @@ describe("registered installed Matrix reads", () => {
         }
       });
       if (owner === "caller") {
-        await expect(fixture.invoke("read", { limit: 1 })).resolves.toMatchObject({
-          details: { ok: true, messages: [{ content: message.content.body }] },
-        });
+        await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
         const requests = fixture.requests.length;
         await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
         expect(fixture.requests).toHaveLength(requests);
-        expect(fixture.requests.filter((request) => request.path === messagePath)).toHaveLength(1);
+        if (boundary === "preparation") {
+          expect(fixture.requests.map((request) => request.path)).toEqual([revokeAt]);
+        } else {
+          expect(fixture.requests.filter((request) => request.path === messagePath)).toHaveLength(
+            1,
+          );
+        }
       } else {
         await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
         if (boundary === "preparation") {

@@ -6,21 +6,25 @@ import {
   type WorkerTurnExecutionIdentityStore,
 } from "./worker-environments/placement-turn-claim-events.js";
 
-export type AgentRuntimeApprovalAuthorityValidator = (identity: AgentRuntimeIdentity) => boolean;
+export type AgentRuntimeApprovalAuthorityValidator = (
+  identity: AgentRuntimeIdentity,
+  scope?: "source" | "lifecycle",
+) => boolean;
 
 /** Builds the use-time approval gate from the run owner and canonical worker store. */
 export function createAgentRuntimeApprovalAuthorityValidator(
   placements?: WorkerTurnExecutionIdentityStore,
 ): AgentRuntimeApprovalAuthorityValidator {
-  return (identity) => {
+  return (identity, scope = "source") => {
     const authority = identity.delegatedAuthority;
     if (authority.kind === "worker") {
       const isCurrent =
-        placements && captureWorkerTurnClaimCurrentness(placements, authority.turnClaim, authority);
+        placements &&
+        captureWorkerTurnClaimCurrentness(placements, authority.turnClaim, authority, scope);
       if (!isCurrent?.()) {
         return false;
       }
-    } else if (!validateAgentRunDelegatedAuthority(authority)) {
+    } else if (!validateAgentRunDelegatedAuthority(authority, undefined, scope)) {
       return false;
     }
     const messageActionContext = identity.messageActionContext;

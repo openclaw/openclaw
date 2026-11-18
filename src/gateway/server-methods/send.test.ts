@@ -39,7 +39,11 @@ import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import { registerSendDeliveryAttemptTests } from "./send.delivery-attempt.test-support.js";
 import { registerSendSessionRoutingTests } from "./send.session-routing.test-support.js";
-import { fixedStoreContext, withTempOpenClawStateDir } from "./send.state.test-support.js";
+import {
+  fixedStoreContext,
+  transcriptResult,
+  withTempOpenClawStateDir,
+} from "./send.state.test-support.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
   createTelegramSourceSendRequest,
@@ -58,14 +62,6 @@ import { registerSendUploadPolicyTests } from "./send.upload-policy.test-support
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
-
-function transcriptResult(messageId: string): SessionTranscriptAppendResult {
-  return {
-    ok: true,
-    target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
-    messageId,
-  };
-}
 
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
@@ -678,7 +674,7 @@ describe("gateway send conversation ownership", () => {
     },
   );
 
-  it("finishes admitted Telegram deliveries after runtime revocation and refuses the next request", async () => {
+  it("fences later Telegram deliveries after runtime closure and refuses the next request", async () => {
     const { telegramMessageActions } = await loadBundledPluginFacade<{
       telegramMessageActions: NonNullable<ChannelPlugin["actions"]>;
     }>({ pluginId: "telegram", artifactBasename: "runtime-api.js" });
@@ -730,15 +726,16 @@ describe("gateway send conversation ownership", () => {
     releaseFirstSend.resolve();
     const { respond } = await request;
 
-    expect(physicalSends).toEqual(["album", "last-photo"]);
+    expect(physicalSends).toEqual(["album"]);
     expect(deliveryCall()?.skipQueue).toBe(true);
-    expectSuccess(respond);
+    expectAuthorityDenied(respond);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
     expectAuthorityDenied((await invoke("telegram-next")).respond);
     expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
   });
 
   it.each(["dispatch", "handoff"] as const)(
-    "finishes admitted delivery after runtime revocation at %s and refuses the next request",
+    "fences delivery after runtime closure at %s and refuses the next request",
     async (boundary) => {
       const delivery = holdDelivery(boundary);
       const authority = liveAuthority();
@@ -758,16 +755,17 @@ describe("gateway send conversation ownership", () => {
       delivery.release.resolve();
 
       const { respond } = await request;
-      expectSuccess(respond);
+      expectAuthorityDenied(respond);
       expect(deliveryCall()?.skipQueue).toBe(true);
-      expect(delivery.platformSend).toHaveBeenCalledOnce();
+      expect(delivery.platformSend).not.toHaveBeenCalled();
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
       expectAuthorityDenied((await invoke("delivery-next")).respond);
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
     },
   );
 
   it.each(["read", "send"] as const)(
-    "finishes admitted delegated %s after turn revocation and refuses the next request",
+    "fences delegated %s after turn closure and refuses the next request",
     async (action) => {
       const delivery = holdDelivery(action === "read" ? "read" : "dispatch");
       const sessionKey = "agent:main:slack:channel:C1";
@@ -792,8 +790,9 @@ describe("gateway send conversation ownership", () => {
         await delivery.entered.promise;
         expect(revokeMessageActionTurnCapability(owned.turnCapability)).toBe(true);
         delivery.release.resolve();
-        expectSuccess((await request).respond);
-        expect(delivery.platformSend).toHaveBeenCalledOnce();
+        expectAuthorityDenied((await request).respond);
+        expect(delivery.platformSend).not.toHaveBeenCalled();
+        expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
         expectAuthorityDenied((await invoke("turn-next")).respond);
         const provider =
           action === "read" ? mocks.dispatchChannelMessageAction : mocks.deliverOutboundPayloads;
@@ -1507,7 +1506,7 @@ describe("gateway send conversation ownership", () => {
     });
 
     it.each(["dispatch", "handoff"] as const)(
-      "finishes canonical outbound send after runtime revocation at %s and refuses the next request",
+      "fences canonical outbound send after runtime closure at %s and refuses the next request",
       async (boundary) => {
         const delivery = holdDelivery(boundary);
         const authority = liveAuthority();
@@ -1527,12 +1526,12 @@ describe("gateway send conversation ownership", () => {
         await delivery.entered.promise;
         authority.revoke();
         delivery.release.resolve();
-        expectSuccess((await request).respond);
+        expectAuthorityDenied((await request).respond);
         expect(deliveryCall()?.skipQueue).toBe(true);
-        expect(delivery.platformSend).toHaveBeenCalledOnce();
+        expect(delivery.platformSend).not.toHaveBeenCalled();
         expectAuthorityDenied((await invoke("canonical-next")).respond);
         expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
-        expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+        expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
       },
     );
   });

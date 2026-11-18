@@ -856,7 +856,7 @@ describe("Gateway message.action Slack download completion", () => {
     },
     { name: "late completion after plugin disablement", phase: "gateway-mirror", revoke: "plugin" },
   ] satisfies Array<FixtureOptions & { name: string; phase: Phase }>)(
-    "returns and caches the admitted download at $name but refuses the next request",
+    "rejects and cleans up the download at $name and refuses the next request",
     async (options) => {
       await withDownloadFixture(options, async (fixture) => {
         const response = await fixture.invokeGateway();
@@ -866,13 +866,11 @@ describe("Gateway message.action Slack download completion", () => {
           expect(fixture.gatewayMirrorSnapshots[0]).toMatchObject({ responses: 0, cacheWrites: 0 });
           expect(fixture.gatewayMirrorSnapshots[0]?.artifacts).toHaveLength(1);
         }
-        expect(response).toMatchObject({
-          ok: true,
-          payload: { fileId: FILE_ID, ...("image" in options ? {} : { ok: true }) },
-          error: undefined,
-        });
-        const saved = payloadPath(response.payload);
-        await expect(fs.readFile(saved)).resolves.toEqual(fixture.body);
+        expect(response.ok).toBe(false);
+        expect(response.payload).toBeUndefined();
+        expect(response.error?.message).toMatch(/no longer active|authority/i);
+        expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);
+        expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
         const requestCount = fixture.requests.length;
 
         const next = await fixture.invokeGateway(`gateway-download-next-${sequence}`);
@@ -880,10 +878,10 @@ describe("Gateway message.action Slack download completion", () => {
         expect(next.payload).toBeUndefined();
         expect(next.error).toBeDefined();
         expect(fixture.gatewayResponses).toHaveLength(2);
-        expect(fixture.gatewayCacheWrites.filter((entry) => entry.ok)).toHaveLength(1);
+        expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);
         expect(fixture.requests).toHaveLength(requestCount);
         expect(fixture.binaryRequests()).toHaveLength(1);
-        expect(await filesUnder(fixture.mediaDir)).toContain(saved);
+        expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
       });
     },
   );

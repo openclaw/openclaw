@@ -168,7 +168,7 @@ it.for([
         expect.soft(enqueued).not.toHaveBeenCalled();
         const errorMessage = expect.stringContaining(
           boundary === "mailbox"
-            ? "operator source identity changed; start a new request"
+            ? "Authenticated profile verification is unavailable."
             : change === "profile merge"
               ? "Selected account changed"
               : "authority is no longer current",
