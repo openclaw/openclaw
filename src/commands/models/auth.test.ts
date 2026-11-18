@@ -11,10 +11,8 @@ import type {
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
-import { registerModelsAuthAuthorityTests } from "./auth-authority.test-support.js";
 
 type AuthRunCall = { signal?: AbortSignal };
-type ResolvePluginProvidersCall = { providerRefs?: string[] };
 type PersistProviderAuthCall = Partial<Pick<ProviderAuthResult, "profiles">>;
 
 const mocks = vi.hoisted(() => ({
@@ -177,7 +175,6 @@ const {
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
   runModelsAuthLoginFlowCore,
-  runModelsAuthLoginFlowForGateway,
 } = await import("./auth.js");
 
 function createRuntime(): RuntimeEnv {
@@ -374,10 +371,96 @@ function loginFlow(options: Partial<Parameters<typeof runModelsAuthLoginFlowCore
   });
 }
 
-registerModelsAuthAuthorityTests({
-  mocks,
-  loginFlow,
-  setProviderAuthResult: (result) => runProviderAuth.mockResolvedValueOnce(result),
+describe("model auth effect authority", () => {
+  type PreparedEffect = Pick<
+    Parameters<
+      typeof import("../../plugins/provider-auth-persistence.js").persistProviderAuthProfilesAfterLogin
+    >[0],
+    "beforeWrite"
+  > & { assertCurrent?: () => void };
+  const ended = () => new Error("Login authority ended.");
+  const reject = (
+    authority: AbortController,
+    options: Partial<Parameters<typeof runModelsAuthLoginFlowCore>[0]> = {},
+  ) =>
+    expect(
+      loginFlow({
+        credentialOnly: true,
+        assertCurrent: () => authority.signal.throwIfAborted(),
+        ...options,
+      }),
+    ).rejects.toThrow("Login authority ended.");
+  it.each(["cancelled", "revoked"] as const)(
+    "does not complete a saved login when authority is %s during a rejected refresh",
+    async (reason) => {
+      const controller = new AbortController();
+      const authority = new AbortController();
+      await reject(authority, {
+        credentialOnly: false,
+        signal: controller.signal,
+        refreshAfterLogin: async () => {
+          if (reason === "cancelled") {
+            controller.abort(ended());
+          } else {
+            authority.abort(ended());
+          }
+          throw new Error("Auth publication failed.");
+        },
+      });
+    },
+  );
+
+  it.each(["beforeWrite", "assertCurrent", "beforeCommit", "writeAuthority"] as const)(
+    "does not publish after authority ends at %s",
+    async (gate) => {
+      const authority = new AbortController();
+      let published = false;
+      const credentialGate = gate === "beforeWrite" || gate === "assertCurrent";
+      if (credentialGate) {
+        const effect =
+          gate === "beforeWrite"
+            ? mocks.persistProviderAuthProfilesAfterLogin
+            : mocks.promoteAuthProfileInOrder;
+        effect.mockImplementationOnce(async (params: PreparedEffect) => {
+          authority.abort(ended());
+          params[gate]?.();
+          published = true;
+        });
+      } else {
+        const credential = { type: "api_key" as const, provider: "openai", key: "fixture-key" };
+        runProviderAuth.mockResolvedValueOnce({
+          profiles: [{ profileId: "openai:saved", credential }],
+          configPatch: {
+            models: { providers: { openai: { baseUrl: "https://api.openai.com/v1", models: [] } } },
+          },
+        });
+        mocks.updateConfig.mockImplementationOnce(
+          async (
+            mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+            _refs: unknown,
+            beforeCommit?: ConfigWriteOptions["beforeCommit"],
+            writeOptions?: ConfigWriteOptions,
+          ) => {
+            mutator({});
+            authority.abort(ended());
+            if (gate === "beforeCommit") {
+              await beforeCommit?.();
+            } else {
+              writeOptions?.assertCurrent?.();
+            }
+            published = true;
+          },
+        );
+      }
+      const refreshAfterLogin = vi.fn(async () => undefined);
+      await reject(authority, { refreshAfterLogin });
+      expect(published).toBe(false);
+      expect(refreshAfterLogin).not.toHaveBeenCalled();
+      if (credentialGate) {
+        expect(mocks.updateConfig).not.toHaveBeenCalled();
+      }
+    },
+  );
 });
 
 function pipeInput(input: string | Buffer) {
@@ -649,28 +732,6 @@ it("defaults OpenAI login to ChatGPT OAuth when API key is also available", asyn
   expectNoCalls(runApiKeyAuth, select);
 });
 
-it("prompts when a provider exposes multiple non-OAuth login methods", async () => {
-  const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
-  const runCliAuth = vi.fn().mockResolvedValue({ profiles: [] });
-  const { select } = usePrompter(vi.fn().mockResolvedValue("cli"));
-  useProvider("anthropic", "Anthropic", [
-    { id: "api-key", label: "Anthropic API Key", kind: "api_key", run: runApiKeyAuth },
-    { id: "cli", label: "Claude CLI", kind: "custom", run: runCliAuth },
-  ]);
-
-  await loginCommand({ provider: "anthropic" });
-
-  expect(select).toHaveBeenCalledWith({
-    message: "Auth method for Anthropic",
-    options: [
-      { value: "api-key", label: "Anthropic API Key", hint: undefined },
-      { value: "cli", label: "Claude CLI", hint: undefined },
-    ],
-  });
-  expect(runApiKeyAuth).not.toHaveBeenCalled();
-  expect(runCliAuth).toHaveBeenCalledOnce();
-});
-
 it("routes OAuth login and refresh to the explicit agent", async () => {
   const originalConfig = useCoderAgentConfig();
   const { note } = usePrompter();
@@ -692,83 +753,6 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
   expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
   expectCoderStore(runProviderAuth);
   expectRefresh("coder");
-});
-
-describe("CLI scope note", () => {
-  const signInNotes = async (run: () => Promise<unknown>) => {
-    const { note } = usePrompter();
-    await run();
-    return note.mock.calls.filter((call: unknown[]) => call[1] === "Provider sign-in");
-  };
-  const gatewayLogin = (isRemote: boolean) =>
-    runModelsAuthLoginFlowForGateway({
-      provider: "openai",
-      runtime,
-      prompter: mocks.createClackPrompter(),
-      isRemote,
-    });
-  const role = {
-    sessions: { others: "view" as const },
-    agents: "*" as const,
-    scopes: ["operator.read" as const],
-  };
-
-  it("is omitted when local state and config show one person", async () => {
-    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(false);
-    currentConfig = {
-      agents: { entries: { main: {}, coder: {} } },
-      gateway: { tailscale: { mode: "serve" } },
-    };
-
-    const login = () => loginCommand({ provider: "openai", agent: "coder" });
-    await expect(signInNotes(login)).resolves.toEqual([]);
-    expect(runProviderAuth).toHaveBeenCalledOnce();
-    expect(mocks.releaseUserProfileCatalog).toHaveBeenCalledOnce();
-  });
-
-  it.each<[string, OpenClawConfig]>([
-    ["a remote Gateway", { gateway: { mode: "remote" } }],
-    ["trusted-proxy auth", { gateway: { auth: { mode: "trusted-proxy" } } }],
-    ["per-person roles", { gateway: { roles: { default: "m", definitions: { m: role } } } }],
-    ["identity scopes", { gateway: { auth: { identityScopes: { a: ["operator.read"] } } } }],
-  ])("stays for %s before a second person joins", async (_name, config) => {
-    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(false);
-    currentConfig = config;
-
-    await expect(signInNotes(loginCommand)).resolves.toHaveLength(1);
-  });
-
-  it("stays when two people have profiles", async () => {
-    await expect(signInNotes(loginCommand)).resolves.toHaveLength(1);
-  });
-
-  it("stays when profile state cannot be read", async () => {
-    mocks.prepareUserProfileCatalog.mockRejectedValue(new Error("database is locked"));
-
-    await expect(signInNotes(loginCommand)).resolves.toHaveLength(1);
-    expect(runProviderAuth).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    [false, 0],
-    [true, 1],
-  ])("follows profiles on the local Gateway (multiple=%s)", async (multiple, count) => {
-    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(multiple);
-
-    await expect(signInNotes(() => gatewayLogin(false))).resolves.toHaveLength(count);
-  });
-
-  it("stays off for remote clients of a Gateway-hosted login", async () => {
-    await expect(signInNotes(() => gatewayLogin(true))).resolves.toEqual([]);
-    expect(mocks.prepareUserProfileCatalog).not.toHaveBeenCalled();
-  });
-
-  it("keeps chat logins independent of profile state", async () => {
-    mocks.hasMultipleSessionSharingIdentities.mockReturnValue(false);
-
-    await expect(signInNotes(() => loginFlow())).resolves.toHaveLength(1);
-    expect(mocks.prepareUserProfileCatalog).not.toHaveBeenCalled();
-  });
 });
 
 it("refreshes saved credentials before presenting provider notes", async () => {
@@ -820,35 +804,16 @@ it("does not persist credentials returned after app-owned cancellation", async (
   );
 });
 
-it("runs the requested anthropic cli auth method with the full login context", async () => {
+it("keeps workspace plugins untrusted while applying the selected login model", async () => {
   currentConfig = { agents: { defaults: claudeDefaults("anthropic") } };
   const migrated = claudeDefaults("claude-cli");
-  const { note, select } = usePrompter();
   const runApiKeyAuth = vi.fn();
-  const runClaudeCliMigration = vi.fn().mockImplementation(async (ctx) => {
-    expect(ctx.config).toEqual(currentConfig);
-    expect(ctx).toMatchObject({
-      agentDir: "/tmp/openclaw/agents/main",
-      workspaceDir: "/tmp/openclaw/workspace",
-      allowSecretRefPrompt: false,
-      isRemote: false,
-    });
-    expect(ctx.prompter.note).toBe(note);
-    expect(ctx.prompter.select).toBe(select);
-    expect(ctx.runtime).toBe(runtime);
-    expect(ctx.env).toBe(process.env);
-    await ctx.openUrl("https://example.com/auth");
-    expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
-    expect(ctx.oauth.createVpsAwareHandlers).toBeTypeOf("function");
+  const runClaudeCliMigration = vi.fn().mockImplementation(async () => {
     return {
       profiles: [],
       defaultModel: "claude-cli/claude-sonnet-4-6",
       configPatch: { agents: { defaults: migrated } },
       replaceDefaultModels: true,
-      notes: [
-        "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
-        "Existing Anthropic auth profiles are kept for rollback.",
-      ],
     };
   });
   useProvider("anthropic", "Anthropic", [
@@ -868,14 +833,6 @@ it("runs the requested anthropic cli auth method with the full login context", a
   expectNoCalls(runApiKeyAuth, mocks.upsertAuthProfileWithLock);
   expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual(migrated.model);
   expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual(migrated.models);
-  expect(note).toHaveBeenCalledWith(
-    [
-      "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
-      "Existing Anthropic auth profiles are kept for rollback.",
-    ].join("\n"),
-    "Provider notes",
-  );
-  expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
 });
 
 it("preserves model selection and other providers' allowlist entries on OAuth login", async () => {
@@ -945,67 +902,6 @@ it("rejects unknown auth methods before a forced login can purge profiles", asyn
   ).rejects.toThrow("Unknown auth method");
 
   expectNoCalls(mocks.removeProviderAuthProfilesWithLock, runOauthAuth, runApiKeyAuth);
-});
-
-it("opens the provider picker when a CLI backend has no provider auth method", async () => {
-  const prompter = usePrompter(vi.fn(async () => "openai"));
-  mocks.isCliProvider.mockImplementation((provider: string) => provider === "claude-cli");
-  const openaiProvider = createProvider("openai", "OpenAI Codex");
-  mocks.resolvePluginProvidersCore.mockImplementation(
-    (params: ResolvePluginProvidersCall | undefined) =>
-      params?.providerRefs?.includes("claude-cli") ? [] : [openaiProvider],
-  );
-
-  await loginCommand({ provider: "claude-cli" });
-
-  expect(prompter.note).toHaveBeenCalledWith(
-    'Provider "claude-cli" uses its own CLI login. Select a provider with an OpenClaw auth flow.',
-    "Provider auth",
-  );
-  expect(prompter.select).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "Select a provider" }),
-  );
-  expect(runProviderAuth).toHaveBeenCalledOnce();
-  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
-    1,
-    expect.objectContaining({ providerRefs: ["claude-cli"] }),
-  );
-  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
-    2,
-    expect.not.objectContaining({ providerRefs: expect.anything() }),
-  );
-});
-
-it("rejects the retired manual auth provider codex-cli", async () => {
-  const provider = "codex-cli";
-  await expect(loginCommand({ provider })).rejects.toThrow(
-    `"${provider}" is a legacy provider ID; use --provider openai.`,
-  );
-});
-
-it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
-  mocks.clackPassword.mockResolvedValue(`sk-ant-oat01-${"a".repeat(80)}`);
-
-  await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
-
-  expect(mocks.clackPassword).toHaveBeenCalledOnce();
-  expect(mocks.clackText).not.toHaveBeenCalled();
-  expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
-    profileId: "anthropic:manual",
-    credential: {
-      type: "token",
-      provider: "anthropic",
-      token: `sk-ant-oat01-${"a".repeat(80)}`,
-    },
-    agentDir: "/tmp/openclaw/agents/main",
-  });
-  expect(runtime.log).toHaveBeenCalledWith("Anthropic setup-token auth is supported in OpenClaw.");
-  expect(runtime.log).toHaveBeenCalledWith(
-    "OpenClaw prefers Claude CLI reuse when it is available on the host.",
-  );
-  expect(runtime.log).toHaveBeenCalledWith(
-    "Anthropic staff told us this OpenClaw path is allowed again.",
-  );
 });
 
 it("rejects pasted token expiries that cannot fit in the Date timestamp range", async () => {

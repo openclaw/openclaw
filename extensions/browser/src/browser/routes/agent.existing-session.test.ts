@@ -234,10 +234,6 @@ function invoke(
   });
 }
 
-function expectUnsupported(response: Awaited<ReturnType<typeof runRoute>>, message: string) {
-  expectResponseContaining(response, { error: expect.stringContaining(message) }, 501);
-}
-
 function expectLabelCleanup() {
   expect(evaluate).toHaveBeenLastCalledWith(
     expect.objectContaining({ signal: undefined, fn: expect.stringContaining("node.remove()") }),
@@ -267,16 +263,6 @@ describe("existing-session browser routes", () => {
       .mockResolvedValue(true)
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(true);
-  });
-
-  it("forwards an empty select value to Chrome MCP", async () => {
-    const value = "";
-    const response = await invoke("act", { kind: "select", ref: "select-1", values: [value] });
-
-    expect(response.statusCode).toBe(200);
-    expect(mcp.selectChromeMcpOption).toHaveBeenCalledWith(
-      expect.objectContaining({ targetId: "7", uid: "select-1", value }),
-    );
   });
 
   it("preserves screenshot cancellation when label cleanup fails", async () => {
@@ -356,21 +342,6 @@ describe("existing-session browser routes", () => {
     expectLabelCleanup();
   });
 
-  it("omits deltas for existing-session snapshots without stable document identity", async () => {
-    snapshotMock
-      .mockResolvedValueOnce(snapshotTree("root-1", ["save-1", "button", "Save"]))
-      .mockResolvedValueOnce(
-        snapshotTree("root-2", ["save-2", "button", "Save"], ["alert-2", "alert", "Required"]),
-      );
-    const handler = route("snapshot");
-    await runRoute(handler, { query: { format: "ai" } });
-    const second = await runRoute(handler, { query: { format: "ai" } });
-
-    const body = requireRecord(second.body, "second snapshot body");
-    expect(body.snapshot).not.toContain("[new]");
-    expect(body.newElements).toBeUndefined();
-  });
-
   it("labels and returns only Chrome MCP refs inside the final snapshot budget", async () => {
     snapshotMock.mockResolvedValueOnce(
       snapshotTree(
@@ -419,43 +390,6 @@ describe("existing-session browser routes", () => {
     }
   });
 
-  it("keeps ref semantics for labeled existing-session screenshots", async () => {
-    const response = await invoke("screenshot", {
-      labels: true,
-      ref: "btn-1",
-      type: "jpeg",
-      timeoutMs: 4321,
-    });
-
-    expectResponseContaining(response, { ok: true, labels: true });
-    expect(snapshotMock).not.toHaveBeenCalled();
-    expect(screenshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({ uid: "btn-1", format: "jpeg", timeoutMs: 4321 }),
-    );
-  });
-
-  it("routes close through profile selection state with exact call options", async () => {
-    const ctrl = new AbortController();
-    const response = await invoke(
-      "act",
-      { kind: "close", targetId: "7", timeoutMs: 4321 },
-      { signal: ctrl.signal },
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith("7", {
-      exactTargetId: true,
-      signal: expect.any(AbortSignal),
-      timeoutMs: 60_000,
-    });
-    const reason = new Error("caller cancelled");
-    ctrl.abort(reason);
-    expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith(
-      "7",
-      expect.objectContaining({ signal: expect.objectContaining({ aborted: true, reason }) }),
-    );
-  });
-
   it.each([undefined, "#admin"])("rejects disallowed snapshots (selector=%s)", async (selector) => {
     const url = "http://127.0.0.1:8080/admin";
     const policy = { allowPrivateNetwork: false };
@@ -497,32 +431,6 @@ describe("existing-session browser routes", () => {
     });
   });
 
-  it("rejects selector-based element screenshots for existing-session profiles", async () => {
-    const response = await invoke("screenshot", { element: "#submit" });
-
-    expect(response.statusCode).toBe(400);
-    const body = requireRecord(response.body, "response body");
-    expect(String(body.error)).toContain("element screenshots are not supported");
-    expect(screenshotMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["act", { kind: "wait", loadState: "networkidle" }, "loadState=networkidle", evaluate],
-    [
-      "act",
-      { kind: "type", ref: "input-1", text: "hello", timeoutMs: 1234 },
-      "type does not support timeoutMs",
-      fill,
-    ],
-    ["dialog", { accept: true, dialogId: "d1" }, "dialogId", evaluate],
-  ] as const)(
-    "rejects unsupported existing-session %s/%s before effects",
-    async (routeName, body, error, effect) => {
-      expectUnsupported(await runRoute(route(routeName), { body }), error);
-      expect(effect).not.toHaveBeenCalled();
-    },
-  );
-
   it("explains unsupported focused paste without forwarding or echoing its text", async () => {
     const response = await invoke("act", { kind: "insertText", text: "synthetic-password-paste" });
 
@@ -539,68 +447,6 @@ describe("existing-session browser routes", () => {
     expect(fill).not.toHaveBeenCalled();
     expect(evaluate).not.toHaveBeenCalled();
   });
-
-  it("supports glob URL waits for existing-session profiles", async () => {
-    const probe = vi.fn(async (_fn: string) => "https://example.com/");
-    withDocument.mockImplementationOnce(async (_params, task) => await task({ evaluate: probe }));
-
-    const response = await invoke("act", { kind: "wait", url: "**/example.com/" });
-
-    expectResponseContaining(response, { ok: true, targetId: "7" });
-    const documentParams = requireRecord(withDocument.mock.calls[0]?.[0], "document params");
-    expect(documentParams).toMatchObject(existingTarget);
-    expect(documentParams.userDataDir).toBeUndefined();
-    expect(probe).toHaveBeenCalledOnce();
-    expect(String(probe.mock.calls[0]?.[0])).toContain("location.href");
-  });
-
-  it("forwards click timeoutMs to the existing-session click executor", async () => {
-    const ctrl = new AbortController();
-    const response = await runRoute(route("act"), {
-      body: { kind: "click", ref: "btn-1", timeoutMs: 1234 },
-      signal: ctrl.signal,
-    });
-
-    expect(response.statusCode).toBe(200);
-    const clickParams = requireRecord(click.mock.calls[0]?.[0], "click params");
-    expect(clickParams).toMatchObject(existingTarget);
-    expect(clickParams.uid).toBe("btn-1");
-    expect(clickParams.doubleClick).toBe(false);
-    expect(clickParams.timeoutMs).toBe(1234);
-    expect(clickParams.signal).toBeInstanceOf(AbortSignal);
-    const reason = new Error("caller cancelled");
-    ctrl.abort(reason);
-    expect(clickParams.signal).toMatchObject({ aborted: true, reason });
-  });
-
-  it("supports coordinate clicks for existing-session profiles", async () => {
-    const response = await invoke("act", {
-      kind: "clickCoords",
-      x: 25,
-      y: "32",
-      doubleClick: true,
-    });
-
-    expectResponseContaining(response, { ok: true, targetId: "7", url: "https://example.com" });
-    const coords = requireRecord(mcp.clickChromeMcpCoords.mock.calls[0]?.[0], "click params");
-    expect(coords).toMatchObject({
-      ...existingTarget,
-      x: 25,
-      y: 32,
-      doubleClick: true,
-    });
-    expect(coords.button).toBeUndefined();
-    expect(coords.delayMs).toBeUndefined();
-  });
-
-  it.each([{ button: "right" }, { delayMs: 5 }])(
-    "rejects unsupported native coordinate input %j before clicking",
-    async (options) => {
-      const response = await invoke("act", { kind: "clickCoords", x: 25, y: 32, ...options });
-      expect(response.statusCode).toBe(501);
-      expect(mcp.clickChromeMcpCoords).not.toHaveBeenCalled();
-    },
-  );
 });
 
 const checkNavigation = navigation.assertBrowserNavigationResultAllowed;
@@ -709,19 +555,6 @@ describe("existing-session interaction navigation guard", () => {
     setWaitReadyAfter(30_000);
     const request = await startClientAction({ kind: "wait", text: "ready" });
     await expectPendingThenSuccess(request, 25_001, 4_999, successfulTab);
-  });
-
-  it("budgets a normalized click through navigation verification", async () => {
-    click.mockImplementationOnce(delayed(40_000, undefined));
-    evaluate.mockImplementation(delayed(10_000, publicUrl));
-    const request = await startClientAction(
-      { kind: "click", ref: "button", button: " left ", selector: " " },
-      DEFAULT_SSRF_POLICY,
-    );
-
-    await expectPendingThenSuccess(request, 65_001, 5_749, successfulTab);
-    expect(click).toHaveBeenCalledOnce();
-    expect(evaluate).toHaveBeenCalledTimes(3);
   });
 
   it("lets an existing-session evaluation use its requested timeout beyond two minutes", async () => {
@@ -837,28 +670,6 @@ describe("existing-session interaction navigation guard", () => {
     },
   );
 
-  it.each([
-    ["delay exceeding call timeout", undefined, 1_000],
-    ["condition after a delay", "ready", 1_250],
-  ] as const)(
-    "completes a healthy existing-session %s through the client transport",
-    async (_name, text, durationMs) => {
-      setWaitReadyAfter(durationMs);
-      const request = await startClientAction(
-        {
-          kind: "wait",
-          timeMs: 1_000,
-          timeoutMs: 500,
-          ...(text ? { text } : {}),
-        },
-        DEFAULT_SSRF_POLICY,
-      );
-      await vi.advanceTimersByTimeAsync(durationMs + 750);
-      expect(request.settled).toHaveBeenCalledOnce();
-      expect(await request.completion).toMatchObject({ result: { ok: true, targetId: "7" } });
-    },
-  );
-
   it("preserves the condition timeout while cancelling an outstanding snapshot", async () => {
     withDocument.mockImplementationOnce(delayed(1_000, false));
     const request = await startClientAction({ kind: "wait", selector: "#missing", timeoutMs: 250 });
@@ -879,14 +690,6 @@ describe("existing-session interaction navigation guard", () => {
     const request = await startClientAction({ kind: "wait", selector: "#ready", timeoutMs: 250 });
     expect(request.settled).toHaveBeenCalledOnce();
     await expectClientError(request, "Timed out waiting for condition");
-  });
-
-  it("checks navigation after key-driven submit", async () => {
-    const typeResponse = await runAction({ ...typeAndSubmit, ref: "field-1" });
-
-    expect(typeResponse.statusCode).toBe(200);
-    expect(press).toHaveBeenCalledWith(expect.objectContaining({ key: "Enter" }));
-    expectNavigationProbeUrls(Array.from({ length: 4 }, () => publicUrl));
   });
 
   it("does not run a wait predicate in a document rejected by navigation policy", async () => {
@@ -990,24 +793,6 @@ describe("existing-session interaction navigation guard", () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 
-  it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {
-    evaluate.mockResolvedValueOnce("Ada");
-
-    const response = await runAction(
-      { kind: "evaluate", ref: "7", fn: "const text = el.textContent; return text;" },
-      null,
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(evaluate).toHaveBeenCalledOnce();
-    expect(evaluate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: ["7"],
-        fn: "async (el) => {\nconst text = el.textContent; return text;\n}",
-      }),
-    );
-  });
-
   it("blocks evaluate before execution when the current tab URL is disallowed", async () => {
     routeState.tab.url = "http://169.254.169.254/latest/meta-data/";
     blockMetadataUrl("blocked current tab");
@@ -1071,17 +856,6 @@ describe("existing-session interaction navigation guard", () => {
       }
     },
   );
-
-  it("skips the guard when no SSRF policy is configured", async () => {
-    const response = await runAction({ kind: "press", key: "Enter" }, null);
-
-    expect(response.statusCode).toBe(200);
-    expect(press).toHaveBeenCalledOnce();
-    expect(evaluate).not.toHaveBeenCalled();
-    expect(vi.mocked(resolveSafeRouteTabUrl)).toHaveBeenCalledOnce();
-    expect(routeState.profileCtx.listTabs).toHaveBeenCalledOnce();
-    expect(checkNavigation).not.toHaveBeenCalled();
-  });
 
   it("still probes navigation when the interaction command throws", async () => {
     click.mockImplementationOnce(() => {

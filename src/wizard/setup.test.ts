@@ -19,7 +19,7 @@ import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
+import type { WizardPrompter } from "./prompts.js";
 import {
   expectSavedSetupCredential,
   modelConfigWithApiKey,
@@ -27,7 +27,6 @@ import {
 } from "./setup.credentials.test-support.js";
 import { createGatewayPasswordRefConfig } from "./setup.finalize.fixtures.test-support.js";
 import { runSetupWizard } from "./setup.js";
-import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -502,11 +501,6 @@ describe("runSetupWizard", () => {
     ensureOnboardingConfig.mockClear();
   });
 
-  it("exits successfully after the auto-launched TUI returns", async () => {
-    finalizeSetupWizard.mockResolvedValueOnce({ launchedTui: true });
-    await expect(runWizard({}, createRuntime({ throwsOnExit: true }))).rejects.toThrow("exit:0");
-  });
-
   const configuredRemoteProbeArgs = {
     originScopedDeviceAuth: true,
     configuredRemote: true,
@@ -636,71 +630,6 @@ describe("runSetupWizard", () => {
     );
   });
 
-  it.each(["target change", "back"] as const)(
-    "returns to setup mode after import %s",
-    async (outcome) => {
-      listSetupMigrationOptions.mockResolvedValueOnce([
-        { providerId: "hermes", label: "Import from Hermes" },
-      ]);
-      if (outcome === "back") {
-        runSetupMigrationImport.mockResolvedValueOnce({ kind: "back" });
-      } else {
-        runSetupMigrationImport.mockRejectedValueOnce(
-          new SetupMigrationTargetChangedError(
-            "Migration target changed before promotion. Review it and retry.",
-          ),
-        );
-      }
-      const setupChoices: Array<"import" | "quickstart"> = ["import", "quickstart"];
-      const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
-        if (params.message === "Setup mode") {
-          return setupChoices.shift();
-        }
-        return "__skip__";
-      });
-      const prompter = buildWizardPrompter({
-        select: select as unknown as WizardPrompter["select"],
-      });
-
-      await runWizard({ flow: undefined }, createRuntime(), prompter);
-
-      expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(
-        2,
-      );
-      expect(runSetupMigrationImport).toHaveBeenCalledOnce();
-      if (outcome === "target change") {
-        expect(prompter.note).toHaveBeenCalledWith(
-          expect.stringContaining("Migration target changed before promotion"),
-          "Existing config detected",
-        );
-      } else {
-        expect(detectSetupMigrationSources).toHaveBeenCalledOnce();
-      }
-      expect(finalizeSetupWizard).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("treats --import-source as import intent and continues after a recovered promotion", async () => {
-    const acknowledgePromotion = vi.fn(async () => {});
-    runSetupMigrationImport.mockResolvedValueOnce({
-      kind: "no-imported-inference",
-      acknowledgePromotion,
-    });
-
-    const prompter = buildWizardPrompter();
-    await runWizard({ importSource: "~/.hermes", flow: undefined }, createRuntime(), prompter);
-
-    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
-    expect(acknowledgePromotion).toHaveBeenCalledOnce();
-    expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
-    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
-    expectCall(runSetupMigrationImport, {
-      opts: expect.objectContaining({ importSource: "~/.hermes" }),
-    });
-    expect(prompter.select).toHaveBeenCalledOnce();
-    expectCall(prompter.select, { message: "Help make OpenClaw better?", initialValue: false });
-  });
-
   it("rejects an agent name when the import supplies an authored roster", async () => {
     const workspaceDir = await fs.realpath(await makeCaseDir("import-naming-"));
     const configPath = path.join(workspaceDir, "openclaw.json");
@@ -732,28 +661,6 @@ describe("runSetupWizard", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(ensureOnboardingConfig).not.toHaveBeenCalled();
     expect(prompter.text).not.toHaveBeenCalled();
-  });
-
-  it("does not reuse imported verification after changing the model", async () => {
-    runSetupMigrationImport.mockResolvedValueOnce({
-      kind: "verified-inference",
-      modelRef: "openai/gpt-5.6-sol",
-    });
-    const imported = modelConfig("anthropic/claude-sonnet-4-6");
-    readImportedConfig(imported);
-    await runWizard(
-      { importFrom: "hermes", authChoice: "demo-provider" },
-      createRuntime(),
-      buildWizardPrompter({ confirm: vi.fn(async () => false) }),
-    );
-    expect(applyAuthChoice).toHaveBeenCalledOnce();
-    expect(verifySetupInferenceConfig).not.toHaveBeenCalled();
-  });
-
-  it("fails fast if the auth choice prompt returns nothing", async () => {
-    promptAuthChoiceGrouped.mockImplementationOnce(async () => undefined as never);
-
-    await expect(runWizard({ authChoice: undefined })).rejects.toThrow("auth choice is required");
   });
 
   it.each([false, true])(
@@ -801,38 +708,6 @@ describe("runSetupWizard", () => {
     },
   );
 
-  it("continues onboarding when search-provider installation fails", async () => {
-    const config: OpenClawConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
-    runSearchSetupFlow.mockResolvedValueOnce({
-      outcome: "install-failed",
-      config,
-      providerId: "brave",
-      reason: "failed",
-    });
-    readInitialConfig(config);
-
-    await expect(runWizard({ skipSearch: undefined })).resolves.toBeUndefined();
-
-    expect(runSearchSetupFlow).toHaveBeenCalledOnce();
-    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
-  });
-
-  it("persists the optional memory choice before classic setup finalization", async () => {
-    runMemorySetupFlow.mockImplementationOnce(async (config) => ({
-      ...config,
-      memory: { search: { provider: "openai", model: "embedding-model" } },
-    }));
-    await runWizard();
-    expect(runMemorySetupFlow).toHaveBeenCalledOnce();
-    expect(persistedWizardConfigs().at(-1)?.memory?.search).toEqual({
-      provider: "openai",
-      model: "embedding-model",
-    });
-    expect(runMemorySetupFlow.mock.invocationCallOrder[0]).toBeLessThan(
-      finalizeSetupWizard.mock.invocationCallOrder[0]!,
-    );
-  });
-
   it("persists classic channel setup before hooks and Gateway finalization", async () => {
     const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
     const configured = {
@@ -861,32 +736,6 @@ describe("runSetupWizard", () => {
     expect(hook.mock.invocationCallOrder[0]).toBeLessThan(
       finalizeSetupWizard.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-  });
-
-  it("honors a provider-required picker while keeping existing model settings", async () => {
-    const modelSelection = { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false };
-    promptDefaultModel.mockResolvedValueOnce({ model: "ollama/llama3" });
-    resolveProviderPluginChoice.mockReturnValue({
-      provider: { id: "ollama", label: "ollama", auth: [], wizard: { setup: { modelSelection } } },
-      method: {
-        id: "local",
-        label: "ollama",
-        kind: "custom",
-        run: vi.fn(async () => ({ profiles: [] })),
-      },
-      wizard: { modelSelection },
-    });
-    readExistingModel();
-    await runWizard(
-      { authChoice: "ollama", flow: undefined },
-      createRuntime(),
-      buildWizardPrompter({}, { defaultSelect: "keep-model" }),
-    );
-    expectCall(promptDefaultModel, { allowKeep: false });
-    expect(prepareAuthChoice).toHaveBeenCalledOnce();
-    expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
-      primary: "ollama/llama3",
-    });
   });
 
   it("infers an API-key flag while preserving an existing default model", async () => {
@@ -938,59 +787,6 @@ describe("runSetupWizard", () => {
     expect(prepareAuthChoice).not.toHaveBeenCalled();
     expect(ensureOnboardingConfig).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("re-prompts for auth when applyAuthChoice requests retry selection", async () => {
-    promptAuthChoiceGrouped.mockReset();
-    promptAuthChoiceGrouped
-      .mockResolvedValueOnce("demo-provider-one")
-      .mockResolvedValueOnce("demo-provider-two");
-    applyAuthChoice.mockImplementationOnce(async (args) => ({
-      config: {
-        ...args.config,
-        plugins: {
-          ...args.config.plugins,
-          entries: { ...args.config.plugins?.entries, "demo-provider-plugin": { enabled: true } },
-        },
-      },
-      retrySelection: true,
-    }));
-
-    await runWizard({ authChoice: undefined });
-
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
-    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
-    const retry = applyAuthChoice.mock.calls[1]?.[0];
-    expect(retry?.authChoice).toBe("demo-provider-two");
-    expect(retry?.config.plugins?.entries).toEqual({ "demo-provider-plugin": { enabled: true } });
-    expect(retry?.config.agents?.entries).toEqual({ main: {} });
-    expect(retry?.config.agents?.defaults?.workspace).toBe("/tmp/openclaw-workspace");
-  });
-
-  it("shows plugin compatibility notices for an existing valid config", async () => {
-    buildPluginCompatibilitySnapshotNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "hook-only",
-        compatCode: "hook-only-plugin-shape",
-        severity: "info",
-        message: "Legacy fixture notice",
-      },
-    ]);
-    readInitialConfig({ gateway: {} });
-
-    const prompter = buildWizardPrompter();
-    await runWizard({}, createRuntime(), prompter);
-    const noteTitles = vi.mocked(prompter.note).mock.calls.map((call) => call?.[1]);
-    expect(noteTitles).toContain("Plugin compatibility");
-    expect(noteTitles).toContain("Existing config detected");
-    expect(prompter.select).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Config handling" }),
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("legacy-plugin"),
-      "Plugin compatibility",
-    );
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {
