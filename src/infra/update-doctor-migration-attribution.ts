@@ -219,6 +219,7 @@ function* updateSqliteMigrationSteps<T>(
               await import("./update-candidate-state.inspection.js");
             const pair = await readUpdateSqliteDatabaseGenerationPairIsolated([pathname], {
               signal,
+              digests: capture.digests,
             });
             const observed = pair.committed[pathname];
             before =
@@ -294,7 +295,10 @@ function* updateSqliteMigrationSteps<T>(
         async readAsync(signal) {
           const { readUpdateSqliteDatabaseGenerationPairIsolated } =
             await import("./update-candidate-state.inspection.js");
-          const pair = await readUpdateSqliteDatabaseGenerationPairIsolated([pathname], { signal });
+          const pair = await readUpdateSqliteDatabaseGenerationPairIsolated([pathname], {
+            signal,
+            digests: capture.digests,
+          });
           after = pair.committed[pathname];
         },
       };

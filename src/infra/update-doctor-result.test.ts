@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import * as updateState from "./update-candidate-state.js";
 import {
   captureUpdateDoctorConfigWrites,
+  createUpdateDoctorDatabaseWriteCapture,
   consumeUpdatePostInstallDoctorResult,
   createDeferredConfiguredPluginRepairDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -36,6 +38,29 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await Promise.all(resultPaths.splice(0).map((resultPath) => fs.rm(resultPath, { force: true })));
+});
+
+it("shares verified digests only between generation reads of one write capture", async () => {
+  const pathname = path.join(resolvePreferredOpenClawTmpDir(), "capture-digests.sqlite");
+  const reads = vi
+    .spyOn(updateState, "readUpdateDatabaseGenerationPairIsolated")
+    .mockResolvedValue({
+      committed: { [pathname]: "generation" },
+      physical: { [pathname]: "generation" },
+      emptyReaderAlternates: {},
+    });
+  const options = { env: {}, signal: new AbortController().signal, warn: vi.fn() };
+  const first = createUpdateDoctorDatabaseWriteCapture({ [pathname]: "generation" }, options)!;
+  await first.admit();
+  await first.settle();
+  const second = createUpdateDoctorDatabaseWriteCapture({ [pathname]: "generation" }, options)!;
+  await second.admit();
+  const digests = reads.mock.calls.map(([, readOptions]) => readOptions?.digests);
+  expect(digests[0]).toBeInstanceOf(Map);
+  expect(digests[1]).toBe(digests[0]);
+  expect(digests[2]).toBeInstanceOf(Map);
+  expect(digests[2]).not.toBe(digests[0]);
+  expect(first.receipt?.unchanged).toBe(true);
 });
 
 describe("post-install doctor result IPC", () => {

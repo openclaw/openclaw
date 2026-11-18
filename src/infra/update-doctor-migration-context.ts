@@ -12,6 +12,8 @@ import { resolveUpdateSqlitePath } from "./update-database-path.js";
 export type UpdateDoctorMigrationCapture = {
   /** Captured SQLite sources admitted by this Doctor session. */
   openedSqlitePaths?: Set<string>;
+  /** Digests this Doctor run's generation reads verified; never outlives the capture. */
+  digests?: import("./sqlite-file-generation.js").SqliteFileDigests;
   expected(pathname: string): string | null | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;

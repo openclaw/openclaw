@@ -149,9 +149,11 @@ function readOptionalFile(
   }
 }
 
-/** One observation owns its digests; every read still checks the complete family. */
-export function createSqliteFileGenerationReader() {
-  const verified = new Map<string, SqliteFileFingerprint>();
+/** Digests retained under the timestamp rule, keyed by file path. */
+export type SqliteFileDigests = Map<string, SqliteFileFingerprint>;
+
+/** One observation owns its digests unless the caller supplies them; every read still checks the complete family. */
+export function createSqliteFileGenerationReader(verified: SqliteFileDigests = new Map()) {
   return (pathname: string): SqliteFileGeneration => {
     const database = fingerprintFile(pathname, verified);
     const journal = readOptionalFile(`${pathname}-journal`, verified);
@@ -254,6 +256,29 @@ function parseFileFingerprint(fingerprint: unknown): SqliteFileFingerprint {
     sha256: fingerprint.sha256,
     size: BigInt(fingerprint.size as string),
   };
+}
+
+export function serializeSqliteFileDigests(
+  digests: SqliteFileDigests,
+): Record<string, SerializedSqliteFileFingerprint> {
+  return Object.fromEntries(
+    [...digests].map(([pathname, fingerprint]) => [
+      pathname,
+      serializeFileFingerprint(fingerprint),
+    ]),
+  );
+}
+
+export function parseSqliteFileDigests(serialized: unknown): SqliteFileDigests {
+  if (!isRecord(serialized)) {
+    throw new Error("SQLite file digests must be an object");
+  }
+  return new Map(
+    Object.entries(serialized).map(([pathname, fingerprint]) => [
+      pathname,
+      parseFileFingerprint(fingerprint),
+    ]),
+  );
 }
 
 export function parseSqliteFileGeneration(serialized: string): SqliteFileGeneration {

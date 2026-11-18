@@ -781,3 +781,112 @@ it("refuses a write that lands during a drained read", () => {
   expect(wrote).toBe(true);
   expect(copy).toHaveBeenCalledOnce();
 });
+
+function countSourceHashBytes(file: string) {
+  const source = fs.statSync(file, { bigint: true });
+  const read = fs.readSync.bind(fs);
+  const counter = { bytes: 0 };
+  vi.spyOn(fs, "readSync").mockImplementation(
+    (
+      descriptor: number,
+      buffer: NodeJS.ArrayBufferView,
+      offsetOrOptions: number | fs.ReadOptions = {},
+      length?: number,
+      position?: fs.ReadPosition | null,
+    ) => {
+      const options =
+        typeof offsetOrOptions === "number"
+          ? { offset: offsetOrOptions, length, position }
+          : offsetOrOptions;
+      const count = read(descriptor, buffer, options);
+      const opened = fs.fstatSync(descriptor, { bigint: true });
+      if (opened.dev === source.dev && opened.ino === source.ino) {
+        counter.bytes += count;
+      }
+      return count;
+    },
+  );
+  return counter;
+}
+
+function drainedPayloadFixture() {
+  const { file, immutableRead } = generationFixture();
+  const database = new DatabaseSync(file);
+  database.exec(
+    "CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES (zeroblob(2097152));",
+  );
+  database.close();
+  immutableRead.mockRestore();
+  // Older than the timestamp quantum, so verified digests may be retained.
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_000);
+  return file;
+}
+
+it("skips both hashes of an unchanged drained family an earlier observation verified", () => {
+  const file = drainedPayloadFixture();
+  const size = fs.statSync(file).size;
+  const digests: fileGeneration.SqliteFileDigests = new Map();
+  const counter = countSourceHashBytes(file);
+  const first = readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  // The first observation has no earlier digest: both reads hash fresh bytes.
+  expect(counter.bytes).toBe(2 * size);
+  counter.bytes = 0;
+  const second = readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  expect(counter.bytes).toBe(0);
+  expect(second).toEqual(first);
+  expect(first.generation).toBe(expectedClosedGeneration(file));
+});
+
+it.each([
+  [
+    "a new inode with the same bytes",
+    (file: string) => {
+      fs.copyFileSync(file, `${file}.replacement`);
+      fs.renameSync(`${file}.replacement`, file);
+    },
+  ],
+  [
+    "changed timestamps with the same bytes",
+    (file: string) => {
+      const old = new Date(Date.now() - 60_000);
+      fs.utimesSync(file, old, old);
+    },
+  ],
+])("reads fresh bytes at both checks after %s", (_name, change) => {
+  const file = drainedPayloadFixture();
+  const digests: fileGeneration.SqliteFileDigests = new Map();
+  const before = readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  change(file);
+  const size = fs.statSync(file).size;
+  const counter = countSourceHashBytes(file);
+  const after = readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  expect(counter.bytes).toBe(2 * size);
+  expect(after.generation).toBe(expectedClosedGeneration(file));
+  expect(before.generation).toBeDefined();
+});
+
+it("hashes fresh bytes when a journal appears after the digest", () => {
+  const file = drainedPayloadFixture();
+  const digests: fileGeneration.SqliteFileDigests = new Map();
+  readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  fs.writeFileSync(`${file}-journal`, "");
+  const counter = countSourceHashBytes(file);
+  readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  // A family with a journal never takes an earlier digest.
+  expect(counter.bytes).toBeGreaterThanOrEqual(fs.statSync(file).size);
+});
+
+it("rehashes a drained family written between observations", () => {
+  const file = drainedPayloadFixture();
+  const digests: fileGeneration.SqliteFileDigests = new Map();
+  const before = readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  using writer = new DatabaseSync(file);
+  writer.exec("UPDATE receipt SET value = 'after!'");
+  writer.close();
+  const size = fs.statSync(file).size;
+  const counter = countSourceHashBytes(file);
+  const after = readUpdateDatabaseGeneration(file, undefined, undefined, digests);
+  expect(counter.bytes).toBe(2 * size);
+  expect(after.generation).toBe(expectedClosedGeneration(file));
+  expect(after.generation).not.toBe(before.generation);
+});

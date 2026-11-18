@@ -3,6 +3,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { readBackupEngineImage } from "./database-engine/physical-store-inspection.js";
 import type { BackupEngine } from "./database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor.js";
+import type { SqliteFileDigests } from "./sqlite-file-generation.js";
 import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import {
@@ -136,15 +137,20 @@ export async function rereadUpdatePhysicalDatabaseGeneration(
 export async function readUpdatePhysicalDatabaseGenerationPair(
   paths: readonly string[],
   pluginOwners?: DatabasePortPluginOwners,
+  digests?: SqliteFileDigests,
 ) {
   // A drained source's failed observation classifies again from its private copy.
   const postgres = new Set<string>();
   // Classify the captured image without reacquiring the live source family.
-  const result = readUpdateDatabaseGenerationPair(paths, (imagePath, sourcePath) => {
-    if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
-      postgres.add(sourcePath);
-    }
-  });
+  const result = readUpdateDatabaseGenerationPair(
+    paths,
+    (imagePath, sourcePath) => {
+      if (readBackupEngineImage(imagePath, sourcePath).engine === "postgres") {
+        postgres.add(sourcePath);
+      }
+    },
+    digests,
+  );
   const fingerprints = await readUpdatePostgresDatabaseGenerations([...postgres], pluginOwners);
   Object.assign(result.committed, fingerprints);
   Object.assign(result.physical, fingerprints);

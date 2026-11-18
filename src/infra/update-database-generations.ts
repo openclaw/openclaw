@@ -9,6 +9,7 @@ import {
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
   serializeSqliteFileGeneration,
+  type SqliteFileDigests,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup, SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
@@ -225,7 +226,8 @@ export function readUnchangedUpdateDatabaseGeneration(
     return undefined;
   }
   const before = readWalIndexHeader(pathname);
-  // Never carry a digest reader across observations: coarse clocks can hide writes.
+  // Receipt checks carry no digests. Only an update run's generation reads reuse earlier
+  // digests, under the exact-fingerprint and timestamp age rule (readUpdateDatabaseGeneration).
   const current = readStableSqliteFileGeneration(pathname);
   const after = readWalIndexHeader(pathname);
   verifyGenerationFamily(pathname, entries, current);
@@ -256,6 +258,7 @@ export function readUpdateDatabaseGeneration(
   pathname: string,
   inspectImage?: (imagePath: string, sourcePath: string) => void,
   retain?: { stagingRoot: string; accept: () => boolean },
+  digests?: SqliteFileDigests,
 ): DatabaseGenerationObservation {
   const entries = readGenerationFamily(pathname);
   const entry = entries[0];
@@ -265,14 +268,27 @@ export function readUpdateDatabaseGeneration(
   const before = readWalIndexHeader(pathname);
   // Acquisition binds this provisional observation; the final stable read
   // below verifies the whole family before its generation can be published.
-  const readGeneration = createSqliteFileGenerationReader();
+  // An update run does not redo verified work (#182616): digests an earlier observation
+  // verified serve both reads of a family without a journal or WAL, but only while the
+  // file keeps the exact fingerprint and passes the timestamp age rule. Anything else,
+  // and every family with a journal or WAL, hashes fresh bytes.
+  const carried = digests !== undefined && !entries[1] && !entries[2];
+  const provisional: SqliteFileDigests = new Map(carried ? digests : undefined);
+  const readGeneration = createSqliteFileGenerationReader(provisional);
   const generation = readGeneration(pathname);
+  // Without a digest-verified private copy, the final read trusts only earlier observations'
+  // digests, never this observation's provisional hash: a first read hashes fresh bytes twice.
+  const final: SqliteFileDigests = new Map(carried ? digests : undefined);
   const observe = (
     content: { sha256: string; family?: SqlitePrivateSnapshotFamily },
     prepared?: PreparedSqliteReadOnlyLocation,
   ): { observation: DatabaseGenerationObservation; retained: boolean } => {
-    // Without a digest-verified copy, only fresh bytes prove the digest named this content.
-    const current = readStableSqliteFileGeneration(pathname, prepared ? readGeneration : undefined);
+    // Without a digest-verified copy or an earlier verified digest, only fresh bytes prove
+    // the digest named this content.
+    const current = readStableSqliteFileGeneration(
+      pathname,
+      prepared ? readGeneration : createSqliteFileGenerationReader(final),
+    );
     const after = readWalIndexHeader(pathname);
     verifyGenerationFamily(pathname, entries, current);
     if (
@@ -309,6 +325,15 @@ export function readUpdateDatabaseGeneration(
       }
       preparedSource = { sourcePath: pathname, prepared, family: content.family };
     }
+    if (digests) {
+      // Publish only digests this observation verified; anything not retained is hashed again next time.
+      for (const file of [pathname, `${pathname}-journal`, `${pathname}-wal`]) {
+        digests.delete(file);
+      }
+      for (const [file, digest] of prepared ? provisional : final) {
+        digests.set(file, digest);
+      }
+    }
     return {
       retained: preparedSource !== undefined,
       observation: {
@@ -332,7 +357,8 @@ export function readUpdateDatabaseGeneration(
   if (drained && !retain) {
     // No journal or WAL frames to apply: the file's digest is its committed content, so a
     // private copy adds nothing. An immutable open adds no lock, WAL, or index to the source,
-    // and the observation re-hashes it, so a write racing this read cannot publish.
+    // and the observation re-reads it (fresh bytes, or a digest an earlier observation verified
+    // whose exact fingerprint still holds), so a write racing this read cannot publish.
     try {
       inspectDrainedSource(pathname, inspectImage);
       return observe({ sha256: generation.database.sha256 }).observation;
@@ -394,12 +420,13 @@ export function readUpdateDatabaseGenerations(
 export function readUpdateDatabaseGenerationPair(
   paths: readonly string[],
   inspectImage?: (imagePath: string, sourcePath: string) => void,
+  digests?: SqliteFileDigests,
 ): UpdateDatabaseGenerationPair {
   const committed: UpdateDatabaseGenerations = {};
   const physical: UpdateDatabaseGenerations = {};
   const emptyReaderAlternates: Record<string, string> = {};
   for (const pathname of paths) {
-    const observation = readUpdateDatabaseGeneration(pathname, inspectImage);
+    const observation = readUpdateDatabaseGeneration(pathname, inspectImage, undefined, digests);
     committed[pathname] = observation.generation;
     physical[pathname] = observation.physical;
     if (observation.emptyReaderAlternate) {
