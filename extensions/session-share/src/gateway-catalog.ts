@@ -174,10 +174,14 @@ export function createSessionShareGatewayCatalog(api: OpenClawPluginApi): Sessio
           sources.set(hostId, source);
           source.client.start();
         }
-      } catch {
+      } catch (error) {
         await stop();
+        if (error instanceof SourceConfigurationChangedError) {
+          throw error;
+        }
         throw new Error(
           "Cannot start Session Share Gateway sources. Check their WSS URLs and SecretRefs.",
+          { cause: error },
         );
       }
     },

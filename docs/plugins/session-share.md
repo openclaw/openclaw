@@ -120,8 +120,9 @@ cannot be recalled.
 
 Gateway sources appear alongside paired nodes in the existing read-only session
 catalog. Each catalog poll requests a fresh filtered page from the source.
-Reads recheck the same source group and canonical-profile boundary. Disconnects,
-reconnects, and configuration replacement invalidate in-flight replies. These
+Reads recheck the same source group and canonical-profile boundary. Disconnects
+and reconnects invalidate in-flight replies. An admitted read may finish after a
+configuration change; the next request requires restarting the service. These
 connections expose no steering or other mutation operation.
 
 ## Enable the receiver and pair the source

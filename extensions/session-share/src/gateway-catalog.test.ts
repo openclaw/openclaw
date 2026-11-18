@@ -346,7 +346,7 @@ it("never adopts replacement source B configuration while source A credentials a
   >;
   gateways.b!.url = "wss://new-b.example.test";
   release();
-  await expect(start).rejects.toThrow("Cannot start Session Share");
+  await expect(start).rejects.toThrow("configuration changed; restart the service");
   expect(
     transport.clients.every((client) => client.options.url !== "wss://old-b.example.test/"),
   ).toBe(true);
