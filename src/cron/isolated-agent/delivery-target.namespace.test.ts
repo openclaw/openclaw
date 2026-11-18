@@ -69,9 +69,15 @@ it("preserves a namespace directory identity through cron session routing", asyn
 });
 
 it.each([
-  { channel: "last", destination: undefined, denied: false, expected: "missing" },
-  { channel: "last", destination: "allowed-room", denied: false, expected: "allowed-room" },
-  { channel: "last", explicitTo: true, destination: undefined, denied: false, expected: "@alpha" },
+  { channel: "last", expected: "missing" },
+  { channel: "last", destination: "allowed-room", expected: "allowed-room" },
+  {
+    channel: "last",
+    destination: "allowed-room",
+    ambiguous: true,
+    expected: "ambiguous",
+  },
+  { channel: "last", explicitTo: true, expected: "@alpha" },
   { channel: "last", destination: "denied-room", denied: true, expected: "@operator" },
   {
     channel: "last",
@@ -80,18 +86,16 @@ it.each([
     denied: true,
     expected: "denied",
   },
-  { channel: "alpha", destination: "allowed-room", denied: false, expected: "@alpha" },
+  { channel: "alpha", destination: "allowed-room", expected: "@alpha" },
   {
     channel: "last",
     explicitTo: true,
     noSource: true,
-    destination: undefined,
-    denied: false,
     expected: "missing",
   },
 ])(
   "resolves cron namespace with $channel channel ($expected)",
-  async ({ channel, explicitTo, noSource, destination, denied, expected }) => {
+  async ({ channel, explicitTo, noSource, destination, ambiguous, denied, expected }) => {
     await withTempCronHome(async () => {
       const normalizeTarget = vi.fn((raw: string) => (raw.startsWith("@") ? raw : `@${raw}`));
       const resolveTarget = vi.fn(({ to, allowFrom }: { to?: string; allowFrom?: string[] }) =>
@@ -116,7 +120,9 @@ it.each([
       };
       plugin.directory = {
         listGroups: async () =>
-          destination ? [{ kind: "group", id: destination, name: "alpha" }] : [],
+          [destination, ...(ambiguous ? ["other-room"] : [])].flatMap((id) =>
+            id ? [{ kind: "group" as const, id, name: "alpha" }] : [],
+          ),
       };
       setActivePluginRegistry(createTestRegistry([{ pluginId: "alpha", source: "test", plugin }]));
 
@@ -136,7 +142,13 @@ it.each([
         },
       );
 
-      if (expected === "missing" || expected === "denied") {
+      if (expected === "ambiguous") {
+        expect(result).toMatchObject({
+          ok: false,
+          error: { reasonCode: "message_target_ambiguous" },
+        });
+        expect(resolveTarget).not.toHaveBeenCalled();
+      } else if (expected === "missing" || expected === "denied") {
         expect(result).toMatchObject({
           ok: false,
           error: {

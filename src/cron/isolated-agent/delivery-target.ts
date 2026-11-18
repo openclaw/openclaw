@@ -382,7 +382,9 @@ export async function resolveDeliveryTarget(
       if (!currentTargetResolution.ok) {
         if (
           currentTargetResolution.error instanceof MessageActionDeniedError &&
-          currentTargetResolution.error.reasonCode === "message_target_missing"
+          ["message_target_missing", "message_target_ambiguous"].includes(
+            currentTargetResolution.error.reasonCode,
+          )
         ) {
           return failTarget(currentTargetResolution.error);
         }

@@ -277,8 +277,8 @@ export async function resolveChannelTarget(params: {
       : [kind === "user" ? "user" : "group"];
   const entries = (
     await Promise.all(
-      directoryKinds.map((kind) =>
-        getDirectoryEntries({ ...params, kind, query, preferLiveOnMiss: true, plugin }),
+      directoryKinds.map((entryKind) =>
+        getDirectoryEntries({ ...params, kind: entryKind, query, preferLiveOnMiss: true, plugin }),
       ),
     )
   ).flat();
