@@ -521,7 +521,12 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     return entries;
   });
   const recordedError = createMemo(() => props.error);
-  const { ready, receipt } = createCatalogRead(() => props.reads.browse, recordedError);
+  const receipt = createMemo(() => ({ promise: props.reads.browse }), {
+    equals: (previous, next) => previous.promise === next.promise,
+  });
+  // The discovery owner has already published browse errors. Let this read
+  // coordinate first results without parking an Errored subtree during retry.
+  const ready = createMemo(() => receipt().promise?.then(() => true) ?? true);
   const resultAvailable = createMemo(() => props.result !== null);
   const query = createMemo(() => props.query.trim());
   const intent = createMemo(() => props.intent);
@@ -561,7 +566,7 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             intent(),
             category(),
             connected(),
-            recordedError(),
+            latest(recordedError),
             resultAvailable() ? null : receipt().promise,
           ]}
           fallback={
@@ -585,16 +590,8 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             class="plugin-catalog-results__body"
             style={{ "overflow-anchor": windowed() ? "none" : undefined }}
           >
-            <Errored
-              fallback={(error, reset) =>
-                renderError(formatUiError(error()), () => {
-                  props.onRetry();
-                  reset();
-                })
-              }
-            >
-              {readCatalog()}
-            </Errored>
+            {readCatalog()}
+            {recordedError() ? renderError(recordedError()!, props.onRetry) : undefined}
             {grouped() ? (
               <GroupedCatalog {...props} installedByCatalogId={installedByCatalogId()} />
             ) : props.hasCurrentResult || !recordedError() ? (

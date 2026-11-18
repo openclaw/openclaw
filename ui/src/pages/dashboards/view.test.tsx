@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createMemo, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -60,7 +60,6 @@ it.each([
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData(rows)}
-      readReady={() => undefined}
       filters={{ ...filters, view, group }}
       handlers={handlers}
     />
@@ -83,13 +82,9 @@ it.each([
   ["error", '[role="alert"]', "Dashboard service unavailable"],
 ])("resolves the accessible dashboard skeleton to %s", async (outcome, selector, message) => {
   const [value, setValue] = createSignal<DashboardsRouteData>();
-  const pending = Promise.withResolvers<void>();
-  const { container } = mountSolid(() => {
-    const ready = createMemo(() => pending.promise);
-    return (
-      <DashboardsView data={value()} readReady={ready} filters={filters} handlers={handlers} />
-    );
-  });
+  const { container } = mountSolid(() => (
+    <DashboardsView data={value()} filters={filters} handlers={handlers} />
+  ));
 
   const busy = container.querySelector('[aria-busy="true"]');
   expect(busy).not.toBeNull();
@@ -112,11 +107,6 @@ it.each([
     data.error = "Dashboard service unavailable";
   }
   setValue(data);
-  if (outcome === "error") {
-    pending.reject(new Error(data.error!));
-  } else {
-    pending.resolve();
-  }
 
   await waitForSolid(() => {
     expect(busy?.isConnected).toBe(false);
@@ -140,7 +130,6 @@ it.each([
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData([dashboard])}
-      readReady={() => undefined}
       filters={{ ...filters, sort: selected.sort, ownerIds: [...selected.ownerIds] }}
       handlers={handlers}
     />
@@ -152,12 +141,7 @@ it.each([
 
 it("names an agent-authored dashboard by its agent", () => {
   const { container } = mountSolid(() => (
-    <DashboardsView
-      data={routeData([dashboard])}
-      readReady={() => undefined}
-      filters={filters}
-      handlers={handlers}
-    />
+    <DashboardsView data={routeData([dashboard])} filters={filters} handlers={handlers} />
   ));
 
   expect(container.querySelector(".dashboard-card__author-name")?.textContent).toBe("Molty");
@@ -168,7 +152,6 @@ it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (baseP
   const { container } = mountSolid(() => (
     <DashboardsView
       data={routeData([dashboard], basePath)}
-      readReady={() => undefined}
       filters={filters}
       handlers={{ ...handlers, onNavigate }}
     />

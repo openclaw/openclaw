@@ -298,7 +298,6 @@ describe("session activity semantics", () => {
       mountDashboards(
         () =>
           createComponent(DashboardsView, {
-            readReady: () => undefined,
             data: {
               result: input.result!,
               error: null,

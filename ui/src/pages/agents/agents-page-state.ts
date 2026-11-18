@@ -206,6 +206,7 @@ export function createAgentsPageState(
     canRead: () =>
       canPresentGatewayMethod(context.gateway.snapshot, "tools.catalog", "operator.read"),
     isCurrent: isCurrentToolsRead,
+    changed: publish,
   });
   const effectiveTools = createAgentEffectiveTools({
     scope: () => state,
@@ -574,11 +575,8 @@ export function createAgentsPageState(
         onClear: (agentId: string) => skillReset.clear(agentId),
       },
       tools: {
-        readCatalog: toolsCatalog.read,
-        catalogRequest: toolsCatalog.request(),
-        readEffective: effectiveTools.read,
-        effectivePreview: effectiveTools.cached,
-        effectiveRequest: effectiveTools.request(),
+        toolsCatalog: toolsCatalog.read(),
+        effectiveTools: effectiveTools.read(),
         onRetryCatalog: () => {
           if (state.agentsSelectedId) {
             toolsCatalog.ensure(state.agentsSelectedId);

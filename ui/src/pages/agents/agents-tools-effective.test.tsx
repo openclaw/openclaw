@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { flush, resolve } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
@@ -128,10 +127,8 @@ async function mountEffective(
       emitGatewayEvent(currentGateway, { type: "event", event, payload });
     },
     async settleEffective() {
-      flush();
-      const result = await resolve(() => page.read().tools.readEffective());
-      flush();
-      return result;
+      await waitForSolid(() => expect(page.read().tools.effectiveTools.pending).toBe(false));
+      return page.read().tools.effectiveTools.result;
     },
   };
 }
@@ -298,7 +295,7 @@ describe("Agents effective-tools read", () => {
       await waitForSolid(() => expect(view.container.textContent).toContain("Unavailable"));
       expect(preview(view.container)).toBeUndefined();
       expect(view.container.textContent).not.toContain("No tools in this preview.");
-      expect(view.page.read().tools.effectivePreview).toBeNull();
+      expect(view.page.read().tools.effectiveTools.result).toBeNull();
     },
   );
 
@@ -318,7 +315,7 @@ describe("Agents effective-tools read", () => {
       hello: gatewayHelloForMethods([], []),
     });
     await waitForSolid(() => expect(preview(view.container)).toBeUndefined());
-    expect(view.page.read().tools.effectivePreview).toBeNull();
+    expect(view.page.read().tools.effectiveTools.result).toBeNull();
     next.resolve(effective("Revoked preview"));
     await view.settleEffective();
     expect(preview(view.container)).toBeUndefined();

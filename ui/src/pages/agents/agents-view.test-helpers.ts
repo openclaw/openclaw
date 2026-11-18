@@ -149,11 +149,8 @@ export function createAgentViewTestProps(
       onDisableAll: () => false,
     },
     tools: {
-      readCatalog: () => null,
-      readEffective: () => null,
-      effectivePreview: null,
-      effectiveRequest: null,
-      catalogRequest: null,
+      toolsCatalog: { result: null, pending: false, failed: false },
+      effectiveTools: { result: null, pending: false, failed: false },
       onRetryCatalog: () => undefined,
       onOpenGitHubConnections: () => undefined,
       githubIdentity: githubIdentityViewFixture(),

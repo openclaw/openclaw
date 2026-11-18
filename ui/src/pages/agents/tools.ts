@@ -1,5 +1,4 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal } from "solid-js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -50,6 +49,7 @@ type ReadOptions = {
     requestGeneration: number;
   };
   isCurrent: (client: GatewayBrowserClient, generation: number, agentId: string) => boolean;
+  changed: () => void;
 };
 type CatalogRequest = {
   client: GatewayBrowserClient;
@@ -60,41 +60,42 @@ type CatalogRequest = {
 export function createAgentToolsCatalog(options: ReadOptions) {
   let target: CatalogRequest | null = null;
   let accepted: CatalogRequest | null = null;
-  const [request, setRequest] = createSignal<{
-    result: Promise<ToolsCatalogResult | null>;
-  } | null>(null);
+  let result: ToolsCatalogResult | null = null;
+  let failed = false;
   const isCurrent = (current: CatalogRequest) =>
     target === current &&
     options.canRead() &&
     options.isCurrent(current.client, current.generation, current.agentId);
-  const read: () => ToolsCatalogResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: CatalogRequest) {
     try {
-      const result = await current.client.request<ToolsCatalogResult>("tools.catalog", {
+      const next = await current.client.request<ToolsCatalogResult>("tools.catalog", {
         agentId: current.agentId,
         includePlugins: true,
       });
       if (!isCurrent(current)) {
-        return null;
+        return;
       }
       accepted = current;
-      return result;
-    } catch (error) {
+      result = next;
+      options.changed();
+    } catch {
       if (!isCurrent(current)) {
-        return null;
+        return;
       }
       target = null;
-      throw error;
+      failed = true;
+      options.changed();
     }
   }
   function reset() {
     target = null;
     accepted = null;
-    setRequest(null);
+    result = null;
+    failed = false;
+    options.changed();
   }
   return {
-    read,
-    request,
+    read: () => ({ result, pending: target !== accepted, failed }),
     ensure(agentId: string) {
       if (!options.canRead()) {
         reset();
@@ -113,10 +114,10 @@ export function createAgentToolsCatalog(options: ReadOptions) {
       }
       accepted = null;
       target = { client, generation, agentId };
-      const result = load(target);
-      // A hidden panel can leave the receipt unobserved until it is revisited.
-      void result.catch(() => undefined);
-      setRequest({ result });
+      result = null;
+      failed = false;
+      options.changed();
+      void load(target);
     },
     reset,
     invalidate() {
@@ -139,23 +140,17 @@ export function createAgentEffectiveTools(
     isSessionAgent: (agentId: string) => boolean;
     isPresented: () => boolean;
     key: (agentId: string, sessionKey: string) => string;
-    changed: () => void;
   },
 ) {
   let target: EffectiveRequest | null = null;
   let accepted: EffectiveRequest | null = null;
-  let presentationScope: EffectiveRequest | null = null;
   let cached: ToolsEffectiveResult | null = null;
   let refreshPending = false;
-  const [request, setRequest] = createSignal<{
-    result: Promise<ToolsEffectiveResult | null>;
-    scope: EffectiveRequest;
-  } | null>(null);
+  let failed = false;
   const isCurrent = (current: EffectiveRequest) =>
     target === current &&
     options.canRead() &&
     options.isCurrent(current.client, current.generation, current.agentId);
-  const read: () => ToolsEffectiveResult | null = createMemo(async () => request()?.result ?? null);
   async function load(current: EffectiveRequest) {
     try {
       const result = await readToolsEffective(current.client, {
@@ -163,22 +158,20 @@ export function createAgentEffectiveTools(
         sessionKey: current.sessionKey,
       });
       if (!isCurrent(current)) {
-        return null;
+        return;
       }
       accepted = current;
-      // Ordering retains the accepted answer; availability consumes the native read.
       cached = result;
       options.changed();
-      return result;
-    } catch (error) {
+    } catch {
       if (!isCurrent(current)) {
-        return null;
+        return;
       }
       target = null;
       accepted = null;
       cached = null;
+      failed = true;
       options.changed();
-      throw error;
     }
   }
   function ensure(refresh = false) {
@@ -223,29 +216,22 @@ export function createAgentEffectiveTools(
     const previous = target ?? accepted;
     if (previous?.client !== client || previous.generation !== generation || previous.key !== key) {
       cached = null;
-      presentationScope = null;
     }
     target = { client, generation, agentId: resolvedAgentId, sessionKey: resolvedSessionKey, key };
-    const result = load(target);
-    void result.catch(() => undefined);
-    // Same-query refreshes retain informational rows, not verified permission facts.
-    presentationScope ??= target;
-    setRequest({ result, scope: presentationScope });
+    failed = false;
+    options.changed();
+    void load(target);
   }
   function reset() {
     target = null;
     accepted = null;
-    presentationScope = null;
     cached = null;
     refreshPending = false;
-    setRequest(null);
+    failed = false;
+    options.changed();
   }
   return {
-    read,
-    get cached() {
-      return cached;
-    },
-    request,
+    read: () => ({ result: cached, pending: target !== accepted, failed }),
     ensure,
     reset,
     subscribe(gateway: Pick<ApplicationContext["gateway"], "subscribeEvents" | "snapshot">) {

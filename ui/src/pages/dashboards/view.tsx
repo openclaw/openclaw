@@ -7,17 +7,7 @@ import {
   Virtualizer,
   type VirtualItem,
 } from "@tanstack/virtual-core";
-import {
-  Errored,
-  For,
-  Loading,
-  Show,
-  createMemo,
-  createSignal,
-  isPending,
-  latest,
-  onSettled,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -25,7 +15,6 @@ import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -618,15 +607,10 @@ function DashboardGallerySkeleton(props: { view: DashboardGalleryFilters["view"]
 
 export function DashboardsView(props: {
   data?: DashboardsRouteData;
-  readReady: () => void;
   filters: DashboardGalleryFilters;
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
-  const readiness = () => {
-    latest(props.readReady);
-    return null;
-  };
   return (
     <>
       <HubPageHeader
@@ -656,45 +640,32 @@ export function DashboardsView(props: {
       />
       <SettingsWorkspace>
         <SettingsPage wide>
-          <Loading
-            on={!props.data?.result && !props.data?.error}
-            fallback={<DashboardGallerySkeleton view={props.filters.view} />}
-          >
-            <Show
-              when={!props.data?.result && isPending(props.readReady)}
-              fallback={
-                <Errored
-                  fallback={(error) => (
-                    <PanelRefreshStatus
-                      status={{
-                        error: formatUiError(error()),
-                        hasLoaded: Boolean(props.data?.result),
-                        stale: Boolean(props.data?.result),
-                        awaitingGateway: false,
-                      }}
-                      errorMessage={t("dashboardsPage.loadError", {
-                        error: formatUiError(error()),
-                      })}
-                    />
-                  )}
-                >
-                  {readiness()}
-                </Errored>
-              }
-            >
-              <DashboardGallerySkeleton view={props.filters.view} />
-            </Show>
-            <Show when={props.data?.result ? props.data : undefined}>
-              {(data) => (
-                <DashboardList
-                  data={data()}
-                  filters={props.filters}
-                  handlers={props.handlers}
-                  gatewaySnapshot={props.gatewaySnapshot}
-                />
-              )}
-            </Show>
-          </Loading>
+          <Show when={!props.data?.result && !props.data?.error}>
+            <DashboardGallerySkeleton view={props.filters.view} />
+          </Show>
+          <Show when={props.data?.error}>
+            {(error) => (
+              <PanelRefreshStatus
+                status={{
+                  error: error(),
+                  hasLoaded: Boolean(props.data?.result),
+                  stale: Boolean(props.data?.result),
+                  awaitingGateway: false,
+                }}
+                errorMessage={t("dashboardsPage.loadError", { error: error() })}
+              />
+            )}
+          </Show>
+          <Show when={props.data?.result ? props.data : undefined}>
+            {(data) => (
+              <DashboardList
+                data={data()}
+                filters={props.filters}
+                handlers={props.handlers}
+                gatewaySnapshot={props.gatewaySnapshot}
+              />
+            )}
+          </Show>
         </SettingsPage>
       </SettingsWorkspace>
     </>

@@ -265,7 +265,11 @@ describe("agents tools panel (browser)", () => {
       ...toolPreview,
       groups: [{ id: "core", label: "Built-in tools", source: "core", tools: [] }],
     };
-    view.update({ ...params, effective: emptyPreview, effectivePreview: emptyPreview });
+    view.update({
+      ...params,
+      effective: emptyPreview,
+      effectiveTools: { result: emptyPreview, pending: false, failed: false },
+    });
     expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("0");
     expect(container.textContent).toContain("No tools in this preview.");
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
@@ -650,7 +654,7 @@ describe("agents tools panel (browser)", () => {
         agents: { entries: { main: { tools: { profile: "full", deny: ["alpha"] } } } },
       },
       effective: preview,
-      effectivePreview: preview,
+      effectiveTools: { result: preview, pending: false, failed: false },
     });
 
     await waitForSolid(() => expect(alphaSwitch()?.checked).toBe(false));

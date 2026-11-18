@@ -1,15 +1,4 @@
-import type { JSX } from "@solidjs/web";
-import {
-  Errored,
-  For,
-  Loading,
-  Show,
-  createMemo,
-  createSignal,
-  isPending,
-  latest,
-  onSettled,
-} from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import {
   createRuntimeToolMatcher,
   createToolPolicyMatcher,
@@ -153,70 +142,30 @@ export function AgentTools(
       denied,
     };
   };
-  // Admission and retirement must not wait behind the async preview they replace.
-  const effectiveScope = createMemo(() =>
-    latest(() => params.effectiveRequest?.scope ?? params.agentId),
-  );
-  const effectivePreviewTools = createMemo(() =>
-    resolvePreviewTools(latest(() => params.effectivePreview)),
-  );
-
-  function EffectiveBoundary(props: {
-    children: (preview: () => EffectivePreview) => JSX.Element;
-  }) {
-    const ready = createMemo((): EffectivePreview => {
-      const readEffective = params.readEffective.bind(params);
-      readEffective();
-      const result = latest(() => params.effectivePreview);
-      if (isPending(readEffective)) {
-        return {
-          result,
-          facts: effectivePreviewTools(),
-          status: "previewLoading",
-          empty: "loadingPreview",
-        };
-      }
+  const effectivePreviewTools = createMemo(() => resolvePreviewTools(params.effectiveTools.result));
+  const preview = createMemo((): EffectivePreview => {
+    if (!params.runtimeSessionMatchesSelectedAgent) {
+      return { status: "otherAgent", empty: "switchAgent", result: null };
+    }
+    const { result, pending, failed } = params.effectiveTools;
+    if (failed) {
+      return { status: "previewUnavailable", empty: "previewError", result: null };
+    }
+    if (pending) {
       return {
         result,
         facts: effectivePreviewTools(),
-        status: result ? null : "previewNotLoaded",
-        empty: result ? null : "previewNotLoaded",
+        status: "previewLoading",
+        empty: "loadingPreview",
       };
-    });
-    return (
-      <Show
-        when={params.runtimeSessionMatchesSelectedAgent}
-        fallback={props.children(() => ({
-          status: "otherAgent",
-          empty: "switchAgent",
-          result: null,
-        }))}
-      >
-        <Show when={effectiveScope()} keyed>
-          <Errored
-            fallback={(_error) =>
-              props.children(() => ({
-                status: "previewUnavailable",
-                empty: "previewError",
-                result: null,
-              }))
-            }
-          >
-            <Loading
-              on={effectiveScope()}
-              fallback={props.children(() => ({
-                status: "previewLoading",
-                empty: "loadingPreview",
-                result: null,
-              }))}
-            >
-              {props.children(ready)}
-            </Loading>
-          </Errored>
-        </Show>
-      </Show>
-    );
-  }
+    }
+    return {
+      result,
+      facts: effectivePreviewTools(),
+      status: result ? null : "previewNotLoaded",
+      empty: result ? null : "previewNotLoaded",
+    };
+  });
 
   const handleToolsUpdate = (targetIds: string[], nextEnabled: boolean) => {
     const nextAllow = new Set(normalizeToolList(alsoAllow()));
@@ -328,12 +277,7 @@ export function AgentTools(
                 {enabledCount()}/{toolIds().length}
               </code>,
             ],
-            [
-              "agentTools.listed",
-              <EffectiveBoundary>
-                {(preview) => <ToolListed preview={preview()} />}
-              </EffectiveBoundary>,
-            ],
+            ["agentTools.listed", <ToolListed preview={preview()} />],
           ])}
           <Show when={canEdit()}>
             <SettingsRow
@@ -495,16 +439,12 @@ export function AgentTools(
                           });
                           function PreviewPart(partProps: { part: "details" | "policy" }) {
                             return (
-                              <EffectiveBoundary>
-                                {(preview) => (
-                                  <ToolPreview
-                                    preview={preview()}
-                                    tool={tool()}
-                                    configDirty={params.configDirty}
-                                    part={partProps.part}
-                                  />
-                                )}
-                              </EffectiveBoundary>
+                              <ToolPreview
+                                preview={preview()}
+                                tool={tool()}
+                                configDirty={params.configDirty}
+                                part={partProps.part}
+                              />
                             );
                           }
                           return (
@@ -585,7 +525,7 @@ export function AgentTools(
   return (
     <>
       <Show
-        when={hasConfig() && (params.catalogRequest ?? params.agentId)}
+        when={hasConfig() && params.agentId}
         keyed
         fallback={
           params.canReadConfig && params.configLoading ? (
@@ -595,37 +535,32 @@ export function AgentTools(
           ) : undefined
         }
       >
-        <Errored fallback={(_error) => <Configuration catalog={null} failed />}>
-          <Loading fallback={<Configuration catalog={null} pending />}>
-            <Configuration catalog={params.readCatalog()} />
-          </Loading>
-        </Errored>
+        <Configuration
+          catalog={params.toolsCatalog.result}
+          pending={params.toolsCatalog.pending}
+          failed={params.toolsCatalog.failed}
+        />
       </Show>
-      <EffectiveBoundary>
-        {(preview) => (
-          <ToolRuntime
-            preview={preview()}
-            sessionKey={params.runtimeSessionKey}
-            onJump={hasConfig() ? jumpToTool : undefined}
-          />
-        )}
-      </EffectiveBoundary>
+      <ToolRuntime
+        preview={preview()}
+        sessionKey={params.runtimeSessionKey}
+        onJump={hasConfig() ? jumpToTool : undefined}
+      />
       <GitHubIdentity
         identity={params.githubIdentity}
         onOpenConnections={params.onOpenGitHubConnections}
       />
-      <Show when={hasConfig() && (params.catalogRequest ?? params.agentId)} keyed>
-        <Errored fallback={(_error) => <Catalog catalog={null} />}>
-          <Loading
-            fallback={
-              <SettingsSection title={t("agentTools.catalogTitle")}>
-                <SettingsLoadingSkeleton label={t("agentTools.loadingCatalog")} />
-              </SettingsSection>
-            }
-          >
-            <Catalog catalog={params.readCatalog()} />
-          </Loading>
-        </Errored>
+      <Show when={hasConfig() && params.agentId} keyed>
+        <Show
+          when={!params.toolsCatalog.pending}
+          fallback={
+            <SettingsSection title={t("agentTools.catalogTitle")}>
+              <SettingsLoadingSkeleton label={t("agentTools.loadingCatalog")} />
+            </SettingsSection>
+          }
+        >
+          <Catalog catalog={params.toolsCatalog.result} />
+        </Show>
       </Show>
     </>
   );
