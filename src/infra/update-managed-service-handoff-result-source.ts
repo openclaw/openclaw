@@ -1,6 +1,19 @@
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 import { MANAGED_HANDOFF_SENTINEL_SOURCE } from "./update-managed-service-handoff-sentinel-source.js";
 
+const INSTALLED_GATEWAY_RECOVERY_PROBE = `
+import { writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [modulePath, resultPath, version, buildId, timeoutMs] = JSON.parse(process.argv[1]);
+const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(modulePath).href);
+const { healthy, runtime, gatewayVersion, gatewayBuildId, channelProbeErrors, activatedPluginErrors } =
+  await waitForGatewayUpdateRecovery(version, buildId ?? undefined, timeoutMs);
+writeFileSync(resultPath, JSON.stringify({
+  healthy, runtime: { status: runtime?.status, pid: runtime?.pid },
+  gatewayVersion, gatewayBuildId, channelProbeErrors, activatedPluginErrors,
+}), { mode: 0o600, flag: "wx" });
+`;
+
 // Terminal recording runs inside the sealed helper with its captured lifecycle owners.
 export const MANAGED_HANDOFF_RESULT_SOURCE =
   MANAGED_HANDOFF_SENTINEL_SOURCE +
@@ -23,6 +36,21 @@ function parseManagedUpdateResult(output) {
   return result;
 }
 
+async function probeInstalledGatewayRecovery(version, buildId, timeoutMs) {
+  // The installed daemon CLI must initialize its own SQLite admission registry.
+  // Use the terminal writer's owned runner so the probe joins before lease cleanup.
+  const resultPath = path.join(params.cwd, "recovery-probe.json");
+  try {
+    const exit = await runOwnedUpdateCommand("recovery-probe", [process.execPath, ...params.runtimeArgs, "--input-type=module", "-e",
+      ${JSON.stringify(INSTALLED_GATEWAY_RECOVERY_PROBE)},
+      JSON.stringify([params.recoveryModulePath, resultPath, version, buildId, timeoutMs])], timeoutMs);
+    if (exit.signal || exit.code !== 0) throw new Error("installed recovery probe exited with " + (exit.signal ?? exit.code));
+    return JSON.parse(fs.readFileSync(resultPath, "utf8"));
+  } finally {
+    fs.rmSync(resultPath, { force: true });
+  }
+}
+
 async function observeUnrecordedRecovery() {
   if (!triageFailure || typeof triageFailure.restored === "boolean" || !ownsManagedUpdateLease()) return;
   const previous = closedUpdateResult?.steps?.findLast((step) => step.name === "gateway recovery verification");
@@ -43,9 +71,7 @@ async function observeUnrecordedRecovery() {
   // generation without granting restart authority or claiming candidate activation.
   if (!terminationRequested && params.serviceRecovery && !restorationArmed && params.recovery?.version) {
     try {
-      const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(params.recoveryModulePath).href);
-      if (!ownsManagedUpdateLease()) return;
-      const health = await waitForGatewayUpdateRecovery(params.recovery.version, params.recovery.buildId, Math.min(params.recoveryTimeoutMs, 3000));
+      const health = await probeInstalledGatewayRecovery(params.recovery.version, params.recovery.buildId, Math.min(params.recoveryTimeoutMs, 3000));
       if (!ownsManagedUpdateLease()) return;
       const running = health.runtime?.status === "running";
       const versionMatch = health.gatewayVersion === params.recovery.version &&

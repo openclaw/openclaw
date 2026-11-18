@@ -443,6 +443,12 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Managed update recovery probes load the installed runtime in a separate process
+under the handoff lease. That lets the installed package initialize its own
+SQLite admission state. The updater driving the handoff must contain this fix.
+If migration leaves data at risk and rollback cannot be verified, the Gateway
+stays stopped for operator repair.
+
 Candidate Doctor imports historical image-project snapshots as non-repository
 runtime preparation while retaining the original serialized snapshot as evidence.
 Historical shared-schema-21 placements retain their existing preparation evidence
