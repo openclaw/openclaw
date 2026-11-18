@@ -1,2 +1,2 @@
-235
-# Worktree activity, removed-binding, and Discord requester FIFO regressions.
+337
+# Worktree activity, removed-binding, requester FIFO, and asynchronous shell capture regressions.
