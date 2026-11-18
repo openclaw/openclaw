@@ -57,7 +57,7 @@ it.each(["save", "toggle"] as const)(
     });
     const { gateway, page } = conflictPage(request);
 
-    await harness.openJob(page, staleJob.id);
+    await harness.editJob(page, staleJob.id);
     await harness.waitForCronPage(() => expect(page.cron.cronEditingJob?.id).toBe(staleJob.id));
 
     page.cron.cronJobsQuery = "missing from filtered results";
@@ -87,10 +87,8 @@ it.each(["save", "toggle"] as const)(
     expect(page.cron).toMatchObject({ cronJobs: [], cronJobsTotal: 0 });
     expect(dom.inputValue(page, "#cron-name")).toBe(authoritativeJob.name);
     expect(dom.text(page, ".cron-detail-title")).toContain(authoritativeJob.name);
-    expect(dom.text(page, dom.testId("cron-detail-description"))).toContain(
-      authoritativeJob.description,
-    );
-    expect(page.querySelector(dom.testId("cron-detail-tab-history"))).not.toBeNull();
+    // The reloaded definition stays in the settings for review.
+    expect(page.querySelector('.cron-page[data-view="edit"]')).not.toBeNull();
     expect(dom.text(page, ".callout.danger")).toContain("review it before retrying");
     expect(updates).toBe(1);
     await harness.waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
@@ -157,7 +155,7 @@ it.each(["another automation", "reopened editor", "Gateway source"] as const)(
       await page.settle();
       expect(page.cron.cronEditingJob).toBe(selected);
       expect(page.cron.cronForm).toBe(draft);
-      expect(dom.inputValue(page, "#cron-name")).toBe("Newer unsaved intent");
+      expect(page.cron.cronForm.name).toBe("Newer unsaved intent");
       expect(dom.text(page, ".callout.danger")).toBe("Newer editor feedback");
       dom.expectCalls(request, ["cron.update"], 1);
     } finally {

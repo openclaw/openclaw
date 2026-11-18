@@ -78,10 +78,7 @@ export function failedRunId(job: CronJob): string | null {
     : null;
 }
 
-/** An automation opens on its settings; only a link to one of its runs opens its history. */
-export function resolveCronDetailTab(
-  job: CronJob | null,
-  runId: string | null | undefined,
-): "history" | "settings" {
-  return job && runId ? "history" : "settings";
+/** An automation opens on its prompt and history; its settings open from Edit. */
+export function resolveCronDetailTab(job: CronJob | null): "history" | "settings" {
+  return job ? "history" : "settings";
 }
