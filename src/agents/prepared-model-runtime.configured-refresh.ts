@@ -9,6 +9,7 @@ import {
   withRemoteModelCatalogSnapshot,
   type ActiveRemoteModelCatalog,
   type RemoteCatalogPublicationResult,
+  type ValidatedRemoteModelCatalog,
 } from "../model-catalog/remote-overlay.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -82,6 +83,7 @@ function applyRemoteModelCatalogUpdateNow(
   host: PreparedModelRuntimeCatalogPublicationHost,
   getConfig: () => OpenClawConfig,
   signal?: AbortSignal,
+  prepared?: ValidatedRemoteModelCatalog,
 ): Promise<RemoteCatalogPublicationResult> {
   signal?.throwIfAborted();
   const assertLifetime = host.captureLifetime();
@@ -91,7 +93,7 @@ function applyRemoteModelCatalogUpdateNow(
   const completion: Promise<RemoteCatalogPublicationResult> = host.publicationQueue.track(
     runOutsideRemoteModelCatalogSnapshot(async (): Promise<RemoteCatalogPublicationResult> => {
       const config = getConfig();
-      const update = await readRemoteModelCatalogUpdate(config);
+      const update = await readRemoteModelCatalogUpdate(config, prepared);
       assertLifetime();
       // The next catalog check retries if an overlapping config publication wins.
       const replacement = update ? host.getPendingReplacement() : undefined;

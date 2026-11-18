@@ -4,7 +4,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeNextRunAtMs } from "../cron/schedule.js";
-import type { RemoteCatalogPublicationResult } from "../model-catalog/remote-overlay.js";
+import type {
+  RemoteCatalogPublicationResult,
+  ValidatedRemoteModelCatalog,
+} from "../model-catalog/remote-overlay.js";
 import {
   refreshRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_TTL_MS,
@@ -21,7 +24,10 @@ import { getUpdateSchedule } from "./update-status-state.js";
 export function createGatewayUpdateCheck(params: {
   lifecycle: UpdateCheckLifecycle;
   getConfig: () => OpenClawConfig;
-  applyRemoteCatalogUpdate: (signal: AbortSignal) => Promise<RemoteCatalogPublicationResult>;
+  applyRemoteCatalogUpdate: (
+    signal: AbortSignal,
+    prepared?: ValidatedRemoteModelCatalog,
+  ) => Promise<RemoteCatalogPublicationResult>;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
@@ -114,9 +120,13 @@ export function createGatewayUpdateCheck(params: {
         }
         let nextCheckInMs = REMOTE_MODEL_CATALOG_TTL_MS;
         try {
+          let prepared: ValidatedRemoteModelCatalog | undefined;
           const result = await refreshRemoteModelCatalog({
             config: params.getConfig(),
             signal: lifecycle.signal,
+            onStoredCatalog: (catalog) => {
+              prepared = catalog;
+            },
           });
           if (lifecycle.signal.aborted) {
             return REMOTE_MODEL_CATALOG_TTL_MS;
@@ -129,7 +139,7 @@ export function createGatewayUpdateCheck(params: {
               { error: result.error },
             );
           } else if (result.status !== "disabled") {
-            const state = await params.applyRemoteCatalogUpdate(lifecycle.signal);
+            const state = await params.applyRemoteCatalogUpdate(lifecycle.signal, prepared);
             if (state === "published") {
               params.log.info("remote model catalog applied");
             } else if (state === "superseded") {

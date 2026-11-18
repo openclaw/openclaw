@@ -17,7 +17,10 @@ import {
   isRemoteCatalogSourceActive,
   isRemoteModelCatalogRefreshEnabled,
 } from "./remote-config.js";
-import type { ActiveRemoteModelCatalog } from "./remote-overlay.types.js";
+import type {
+  ActiveRemoteModelCatalog,
+  ValidatedRemoteModelCatalog,
+} from "./remote-overlay.types.js";
 import {
   publishRemoteModelCatalogStartupPublication,
   readRemoteModelCatalogStartupPublication,
@@ -25,7 +28,10 @@ import {
 import { readRemoteModelCatalogAsync } from "./remote-store.js";
 
 export type RemoteCatalogPublicationResult = "published" | "unchanged" | "superseded";
-export type { ActiveRemoteModelCatalog } from "./remote-overlay.types.js";
+export type {
+  ActiveRemoteModelCatalog,
+  ValidatedRemoteModelCatalog,
+} from "./remote-overlay.types.js";
 
 const remoteCatalogScope = new AsyncContext<{ catalog: ActiveRemoteModelCatalog | null }>(
   Symbol.for("openclaw.remoteModelCatalogScope"),
@@ -42,11 +48,16 @@ function isCompatible(bundle: RemoteModelCatalogWireBundle): boolean {
 function selectCompatibleRemoteModelCatalog(
   stored: Awaited<ReturnType<typeof readRemoteModelCatalogAsync>>,
   bundledGeneratedAt: number,
+  prepared?: ValidatedRemoteModelCatalog,
 ): ActiveRemoteModelCatalog | null {
   if (!stored) {
     return null;
   }
-  const bundle = parseRemoteModelCatalogWireBundle(JSON.parse(stored.bundle_json));
+  // The read owner still selects the current row; an overtaking write invalidates the handoff.
+  const bundle =
+    prepared?.sourceUrl === stored.source_url && prepared.bundleJson === stored.bundle_json
+      ? prepared.bundle
+      : parseRemoteModelCatalogWireBundle(JSON.parse(stored.bundle_json));
   if (!isCompatible(bundle)) {
     return null;
   }
@@ -135,6 +146,7 @@ export function runOutsideRemoteModelCatalogSnapshot<T>(run: () => T): T {
 
 async function readStoredRemoteModelCatalog(
   config: OpenClawConfig,
+  prepared?: ValidatedRemoteModelCatalog,
 ): Promise<{ snapshot: ActiveRemoteModelCatalog; bundledGeneratedAt: number } | undefined> {
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
@@ -147,6 +159,7 @@ async function readStoredRemoteModelCatalog(
   const snapshot = selectCompatibleRemoteModelCatalog(
     await readRemoteModelCatalogAsync(context),
     bundledGeneratedAt,
+    prepared,
   );
   context.admission.assertCurrent();
   return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl)
@@ -157,8 +170,9 @@ async function readStoredRemoteModelCatalog(
 /** Preparation does not change the pair visible to current readers. */
 export async function readRemoteModelCatalogUpdate(
   config: OpenClawConfig,
+  prepared?: ValidatedRemoteModelCatalog,
 ): Promise<ActiveRemoteModelCatalog | undefined> {
-  const stored = await readStoredRemoteModelCatalog(config);
+  const stored = await readStoredRemoteModelCatalog(config, prepared);
   return stored && stored.snapshot.generatedAt > stored.bundledGeneratedAt
     ? stored.snapshot
     : undefined;

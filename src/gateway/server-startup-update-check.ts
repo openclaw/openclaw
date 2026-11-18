@@ -123,9 +123,9 @@ export function createDeferredGatewayUpdateCheck(params: {
           owner = (await import("../infra/update-startup-scheduler.js")).createGatewayUpdateCheck({
             lifecycle,
             getConfig: params.getConfig,
-            applyRemoteCatalogUpdate: (signal) =>
+            applyRemoteCatalogUpdate: (signal, prepared) =>
               withPluginRuntimeRegistryScope(params.getPluginRegistry(), () =>
-                applyRemoteModelCatalogUpdate(params.getConfig, signal),
+                applyRemoteModelCatalogUpdate(params.getConfig, signal, prepared),
               ),
             onUpdateRunCreated: wakeUpdateRunWatcher,
             log: params.log,

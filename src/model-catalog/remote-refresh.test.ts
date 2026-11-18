@@ -232,11 +232,21 @@ describe("remote model catalog refresh", () => {
       pricing: { "anthropic/history-only": { input: 2, output: 8 } },
     };
     mockDownload(legacy);
-    await expectRefresh({ status: "updated", providers: 1, models: 1 }, mirrorConfig("v1/"));
+    const onStoredCatalog = vi.fn();
+    const config = mirrorConfig("v1/");
+    await expect(
+      refreshCatalog({ config, databaseOptions, force: true, onStoredCatalog }),
+    ).resolves.toMatchObject({ status: "updated", providers: 1, models: 1 });
     const persisted = JSON.parse(readCatalog(databaseOptions)?.bundle_json ?? "null");
     expect(persisted.pricing).toEqual(legacy.pricing);
     expect(persisted.providers.anthropic).not.toHaveProperty("baseUrl");
     expect(persisted.providers.anthropic.models[0]).not.toHaveProperty("headers");
+    expect(onStoredCatalog).toHaveBeenCalledOnce();
+    expect(onStoredCatalog.mock.calls[0]?.[0]).toEqual({
+      sourceUrl: config.models.catalogRefresh.url,
+      bundleJson: JSON.stringify(persisted),
+      bundle: persisted,
+    });
   });
 
   it("does not report a catalog older than the bundled build as applicable", async () => {

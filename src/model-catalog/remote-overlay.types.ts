@@ -1,5 +1,16 @@
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
-import type { RemoteModelCatalogPrice, RemoteModelCatalogUpstreamPrice } from "./remote-bundle.js";
+import type {
+  RemoteModelCatalogPrice,
+  RemoteModelCatalogUpstreamPrice,
+  RemoteModelCatalogWireBundle,
+} from "./remote-bundle.js";
+
+/** A validated download retained only through its immediate activation. */
+export type ValidatedRemoteModelCatalog = {
+  readonly sourceUrl: string;
+  readonly bundleJson: string;
+  readonly bundle: RemoteModelCatalogWireBundle;
+};
 
 export type ActiveRemoteModelCatalog = {
   sourceUrl: string;

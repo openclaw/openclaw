@@ -14,6 +14,7 @@ import {
   type RemoteModelCatalogWireBundle,
 } from "./remote-bundle.js";
 import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-config.js";
+import type { ValidatedRemoteModelCatalog } from "./remote-overlay.types.js";
 import {
   markRemoteModelCatalogCheckedAsync,
   readRemoteModelCatalogAsync,
@@ -82,6 +83,7 @@ export async function refreshRemoteModelCatalog(params: {
   force?: boolean;
   signal?: AbortSignal;
   databaseOptions?: Pick<OpenClawStateDatabaseOptions, "path" | "env" | "initializationAgentPaths">;
+  onStoredCatalog?: (catalog: ValidatedRemoteModelCatalog) => void;
 }): Promise<RemoteModelCatalogRefreshResult> {
   if (!isRemoteModelCatalogRefreshEnabled(params.config)) {
     return { status: "disabled", providers: 0, models: 0 };
@@ -184,7 +186,7 @@ export async function refreshRemoteModelCatalog(params: {
         return { status: "unchanged", ...storedCounts(writeResult.row.bundle_json) };
       }
       const bundledGeneratedAt = bundledCatalogGeneratedAt();
-      return {
+      const result: RemoteModelCatalogRefreshResult = {
         status:
           unchanged || bundledGeneratedAt === undefined || bundle.generatedAt <= bundledGeneratedAt
             ? "unchanged"
@@ -192,6 +194,8 @@ export async function refreshRemoteModelCatalog(params: {
         generatedAt: bundle.generatedAt,
         ...bundleCounts(bundle),
       };
+      params.onStoredCatalog?.({ sourceUrl: url, bundleJson, bundle });
+      return result;
     } finally {
       await guarded.release();
     }

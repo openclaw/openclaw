@@ -8,6 +8,7 @@ import { createModelPickerRecommendationRank } from "../agents/model-catalog-ord
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import * as remoteBundle from "./remote-bundle.js";
 import {
   captureRemoteModelCatalogStartupSnapshot as captureStartup,
   prepareRemoteModelCatalogStartupSnapshot as prepareStartup,
@@ -65,6 +66,41 @@ beforeEach(() => {
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
 
 describe("remote model catalog overlay", () => {
+  it.each(["matching", "changed bytes", "changed source"] as const)(
+    "reuses a validated download only for the matching stored catalog (%s)",
+    async (change) => {
+      const validated = remoteBundle.parseRemoteModelCatalogWireBundle(bundle);
+      const prepared = {
+        sourceUrl: defaultUrl,
+        bundleJson: JSON.stringify(validated),
+        bundle: validated,
+      };
+      let config: OpenClawConfig = {};
+      let expectedInput = 2.5;
+      stageBundle(validated);
+      if (change === "changed bytes") {
+        expectedInput = 5;
+        stageBundle({
+          ...bundle,
+          generatedAt: 300,
+          pricing: { "openai/gpt-external": { input: 5, output: 20 } },
+        });
+      } else if (change === "changed source") {
+        config = mirrorConfig;
+        stageBundle(validated, mirrorConfig.models.catalogRefresh.url);
+      }
+      const parse = vi.spyOn(remoteBundle, "parseRemoteModelCatalogWireBundle");
+      try {
+        const update = await readUpdate(config, prepared);
+        expect(update?.pricing["openai/gpt-external"]?.cost.input).toBe(expectedInput);
+        expect(parse).toHaveBeenCalledTimes(change === "matching" ? 0 : 1);
+        expect(read).toHaveBeenCalledOnce();
+      } finally {
+        parse.mockRestore();
+      }
+    },
+  );
+
   it.each([false, true])("avoids unprepared reads (stamp missing=%s)", async (missingStamp) => {
     if (missingStamp) {
       builtAt.mockReturnValue(undefined);
