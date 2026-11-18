@@ -1,9 +1,12 @@
-import fs from "node:fs/promises";
 import type { Profiler } from "node:inspector";
 import type { DiagnosticsCpuProfileParams } from "../../packages/gateway-protocol/src/schema/diagnostics.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.js";
-import { reserveDiagnosticProfileFile } from "./diagnostic-profile-file.js";
+import {
+  reserveDiagnosticProfileFile,
+  settleDiagnosticProfileFile,
+  writeDiagnosticProfileParts,
+} from "./diagnostic-profile-file.js";
 import {
   assertProfile,
   captureDiagnosticProfile,
@@ -20,8 +23,6 @@ const MAX_NODES = 16_384;
 const MAX_SAMPLES = 65_536;
 const SUMMARY_STACK_DEPTH = 8;
 const MAX_SUMMARY_ROWS = 128;
-const MAX_FILE_BYTES = 64 * 1024 * 1024;
-const WRITE_CHUNK_BYTES = 64 * 1024;
 
 function sanitizeNode(node: Profiler.ProfileNode, packageRoot: string | null) {
   const { callFrame, redacted } = sanitizeDiagnosticProfileFrame(node.callFrame, packageRoot);
@@ -176,7 +177,7 @@ export async function captureDiagnosticCpuProfile(
   };
   const reserveFile = async () => {
     try {
-      return (artifact = await reserveDiagnosticProfileFile("cpu", assertActive, MAX_FILE_BYTES));
+      return (artifact = await reserveDiagnosticProfileFile("cpu", assertActive));
     } catch (error) {
       throw error instanceof ProfileFailure ? error : new ProfileFailure("capture-failed");
     }
@@ -240,34 +241,16 @@ export async function captureDiagnosticCpuProfile(
           }
           yield "}";
         }
-        let sizeBytes = 0;
-        let chunk = "";
-        let chunkBytes = 0;
-        const flush = async () => {
-          assertActive();
-          await file.handle.writeFile(chunk, "utf8").catch(() => {
-            throw new ProfileFailure("capture-failed");
-          });
-          chunk = "";
-          chunkBytes = 0;
-        };
-        // Bound encoding work between asynchronous writes instead of stringifying
-        // a large graph in one main-thread turn. The artifact keeps the full timeline.
-        for (const part of parts()) {
-          const bytes = Buffer.byteLength(part);
-          sizeBytes += bytes;
-          if (sizeBytes > MAX_FILE_BYTES) {
-            throw new ProfileFailure("profile-too-large");
-          }
-          chunk += part;
-          chunkBytes += bytes;
-          if (chunkBytes >= WRITE_CHUNK_BYTES) {
-            await flush();
-          }
-        }
-        if (chunk) {
-          await flush();
-        }
+        const sizeBytes = await writeDiagnosticProfileParts(
+          file,
+          parts(),
+          assertActive,
+          async (write) => {
+            await write.catch(() => {
+              throw new ProfileFailure("capture-failed");
+            });
+          },
+        );
         return {
           path: file.path,
           sizeBytes,
@@ -289,26 +272,5 @@ export async function captureDiagnosticCpuProfile(
       },
     }),
   );
-  const closeFailed = artifact
-    ? await artifact.handle.close().then(
-        () => false,
-        () => true,
-      )
-    : false;
-  if (artifact && (outcome.status === "unavailable" || closeFailed)) {
-    const removalFailed = await fs.unlink(artifact.path).then(
-      () => false,
-      () => true,
-    );
-    if (outcome.status === "unavailable") {
-      outcome.cleanupFailed ||= closeFailed || removalFailed;
-    } else {
-      return {
-        status: "unavailable" as const,
-        reason: "cleanup-failed" as const,
-        cleanupFailed: true,
-      };
-    }
-  }
-  return outcome;
+  return settleDiagnosticProfileFile(artifact, outcome);
 }
