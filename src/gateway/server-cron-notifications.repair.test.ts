@@ -22,6 +22,13 @@ vi.mock("../infra/fs-safe.js", async (importOriginal) => ({
   withTimeout: mocks.withTimeout,
 }));
 
+// mock-isolation: Repair queues a session event; webhook transport belongs to notification tests.
+vi.mock("../infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: () => {
+    throw new Error("Cron failure repair must not send a webhook");
+  },
+}));
+
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createGatewayCronFailureRepair } from "./server-cron-notifications.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
