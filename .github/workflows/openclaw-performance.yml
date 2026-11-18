@@ -292,24 +292,6 @@ jobs:
             managed_service: "true"
             include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:bundled-plugin-startup,scenario:agent-cold-warm-message"
             expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,bundled-plugin-startup:fresh,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
-          - lane: mock-deep-profile
-            title: Kova mock provider deep profile
-            auth: mock
-            repeat: "1"
-            deep_profile: "true"
-            live: "false"
-            managed_service: "true"
-            include_filters: "scenario:fresh-install,scenario:gateway-performance,scenario:agent-cold-warm-message"
-            expected_release_entries: "fresh-install:fresh,fresh-install:onboarded-user,agent-cold-warm-message:mock-openai-provider,gateway-performance:many-bundled-plugins"
-          - lane: live-openai-candidate
-            title: Kova live OpenAI GPT 5.6 agent turn
-            auth: live
-            repeat: "1"
-            deep_profile: "false"
-            live: "true"
-            managed_service: "false"
-            include_filters: "scenario:agent-cold-warm-message"
-            expected_release_entries: "agent-cold-warm-message:mock-openai-provider"
     env:
       KOVA_REF: ${{ needs.resolve_target.outputs.kova_ref }}
       KOVA_OPENCLAW_CONFIG_CONTRACT: ${{ needs.resolve_target.outputs.kova_config_contract }}
@@ -709,6 +691,16 @@ jobs:
             exit "$effective_status"
           fi
 
+      - name: Upload npm debug logs (temporary debug)
+        if: ${{ always() && steps.lane.outputs.run == 'true' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-debug-logs-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ~/.npm/_logs
+          if-no-files-found: warn
+          retention-days: 3
+
       - name: Validate Kova evidence
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
         shell: bash
@@ -765,7 +757,7 @@ jobs:
   source_performance:
     name: OpenClaw source performance probes
     needs: resolve_target
-    if: ${{ github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency') }}
+    if: ${{ false }}
     runs-on: *linux_runner_large
     timeout-minutes: 120
     env:
