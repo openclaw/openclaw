@@ -199,6 +199,16 @@ export async function withSandboxRegistryEntryLock<T>(
 }
 
 /** Persist removal intent before waiting for provisioning, and retain failed cleanup for retry. */
+export async function beginSandboxRegistryRemoval(
+  entry: SandboxRegistryEntry,
+  guard: WorkspaceStateGuard,
+): Promise<SandboxRegistryEntry | null> {
+  return executeRegistry(
+    { type: "sandboxRegistry.beginRemoval", input: { entry, reserveRuntime: true } },
+    guard,
+  );
+}
+
 export async function removeSandboxRegistryRuntime(
   entry: SandboxRegistryEntry,
   removeRuntime: (entry: SandboxRegistryEntry) => Promise<void>,

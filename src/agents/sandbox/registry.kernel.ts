@@ -74,13 +74,16 @@ export function reserveSandboxRegistryInDatabase(
 }
 
 export function shouldPruneSandboxRegistryEntry(
-  entry: Pick<SandboxRegistryEntry, "lastUsedAtMs" | "createdAtMs">,
+  entry: Pick<SandboxRegistryEntry, "lastUsedAtMs" | "createdAtMs"> & { sessionKey?: string },
   prune: SandboxRegistryPrune,
 ): boolean {
   const now = asDateTimestampMs(prune.now) ?? 0;
   const lastUsed = asDateTimestampMs(entry.lastUsedAtMs) ?? 0;
   const created = asDateTimestampMs(entry.createdAtMs) ?? 0;
   return (
+    // Builders hold runtime-use custody during installation; abandoned builders
+    // must recover even when ordinary idle/age pruning is disabled.
+    entry.sessionKey?.startsWith("worktree-dependencies:") === true ||
     (prune.idleHours > 0 && now - lastUsed > prune.idleHours * 60 * 60 * 1000) ||
     (prune.maxAgeDays > 0 && now - created > prune.maxAgeDays * 24 * 60 * 60 * 1000)
   );

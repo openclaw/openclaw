@@ -113,16 +113,16 @@ describe("registry race safety", () => {
       const read = kind === "container" ? readRegistry : readBrowserRegistry;
       await update();
       const [selected] = (await read()).entries;
-      await expect(assertRetirementCurrent(kind, selected!)).resolves.toBeUndefined();
+      expect(assertRetirementCurrent(kind, selected!)).toBeUndefined();
       await update({ lastUsedAtMs: 2 });
-      await expect(assertRetirementCurrent(kind, selected!)).resolves.toBeUndefined();
+      expect(assertRetirementCurrent(kind, selected!)).toBeUndefined();
 
       await removeSandboxRegistryGeneration(kind, selected!);
-      await expect(assertRetirementCurrent(kind, selected!)).rejects.toThrow("generation changed");
+      expect(() => assertRetirementCurrent(kind, selected!)).toThrow("generation changed");
       await update({ createdAtMs: 2 });
-      await expect(assertRetirementCurrent(kind, selected!)).rejects.toThrow("generation changed");
+      expect(() => assertRetirementCurrent(kind, selected!)).toThrow("generation changed");
       const [replacement] = (await read()).entries;
-      await expect(assertRetirementCurrent(kind, replacement!)).resolves.toBeUndefined();
+      expect(assertRetirementCurrent(kind, replacement!)).toBeUndefined();
       // A superseded worker receipt leaves the generation unknown until it is read again.
       const observe = admission.observeSqliteWorkerCommittedFacts;
       vi.spyOn(admission, "observeSqliteWorkerCommittedFacts").mockImplementation(
@@ -140,9 +140,7 @@ describe("registry race safety", () => {
           }),
       );
       await update({ createdAtMs: 2, lastUsedAtMs: 3 });
-      await expect(assertRetirementCurrent(kind, replacement!)).rejects.toThrow(
-        "generation changed",
-      );
+      expect(() => assertRetirementCurrent(kind, replacement!)).toThrow("generation changed");
     },
   );
 
