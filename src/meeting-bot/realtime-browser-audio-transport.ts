@@ -125,8 +125,8 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
       params.nativeTransport.startInput(() => {});
       // Like the node transport, tolerate transient pull errors: a browser request can miss its
       // deadline while the capture lives on (for example, a slow host DNS lookup in the browser's
-      // URL check). The page keeps only the newest audio and closes a capture that goes 10 s
-      // without a pull, so a second consecutive failure ends the call.
+      // URL check). We end the call on a second consecutive failure as a cautious limit; the page
+      // keeps only the newest audio and closes a capture after 10 s without a pull reaching it.
       let consecutiveInputErrors = 0;
       const pull = async () => {
         if (stopped) {
