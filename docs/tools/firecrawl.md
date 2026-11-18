@@ -1,5 +1,5 @@
 ---
-summary: "Firecrawl search, scrape, and web_fetch fallback"
+summary: "Use Firecrawl in OpenClaw to search the web, read any page, and pull data from many providers with Firecrawl Alexandria."
 read_when:
   - You want Firecrawl-backed web extraction
   - You want keyless Firecrawl Search (Free) or keyless web_fetch
