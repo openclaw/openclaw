@@ -96,29 +96,35 @@ export async function prepareOpenClawAgentDatabaseExecution(
   signal?: AbortSignal,
 ): Promise<void> {
   assertCurrent();
-  const execution = captureOpenClawAgentDatabaseExecution(options);
+  let execution: OpenClawAgentDatabaseExecution | undefined;
   try {
     await runOpenClawAgentWorkerWrite(
       options,
-      () =>
-        execution.prepare(
+      async () => {
+        assertCurrent();
+        // Join the retained creator only after this preparation owns the writer turn.
+        execution = await captureOpenClawAgentDatabaseExecutionAsync(options, true);
+        assertCurrent();
+        return execution.prepare(
           createSessionWorkerExecutionSource(
             assertCurrent,
             `Agent ${options.agentId} database preparation admission expired`,
           ),
           signal,
-        ),
+        );
+      },
       undefined,
       signal,
     );
   } finally {
-    await execution.release();
+    await execution?.release();
   }
 }
 
 /** Observe filesystem identity asynchronously while retaining the current authority cohort. */
 export async function captureOpenClawAgentDatabaseExecutionAsync(
   options: OpenClawAgentDatabaseOptions,
+  inheritCreationIdentity = false,
 ): Promise<OpenClawAgentDatabaseExecution & { capturedIdentity: DatabasePathIdentity }> {
   assertAgentSessionWriteAdmission(options);
   const pathname = resolveOpenClawAgentSqlitePath(options);
@@ -151,8 +157,10 @@ export async function captureOpenClawAgentDatabaseExecutionAsync(
     return Object.assign(
       captureAgentDatabaseExecution(
         options,
-        toAgentExecutionConstraints(identity),
-        false,
+        inheritCreationIdentity && identity.key.startsWith("path:")
+          ? {}
+          : toAgentExecutionConstraints(identity),
+        inheritCreationIdentity,
         identity,
       ),
       { capturedIdentity: identity },
