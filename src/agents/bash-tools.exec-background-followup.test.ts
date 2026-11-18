@@ -199,7 +199,7 @@ test.each([
     const deadlineAtMs = started.details.deadlineAtMs;
     if (args.timeoutSeconds === 0) {
       expect(deadlineAtMs).toBeUndefined();
-      expect(started.details.followUp).not.toContain("Automatic stop will be requested");
+      expect(started.details.deadlineAtMs).toBeUndefined();
     } else {
       if (deadlineAtMs === undefined) {
         throw new Error("Expected the actual process timeout deadline");
@@ -208,7 +208,7 @@ test.each([
       expect(deadlineAtMs).toBeLessThanOrEqual(Date.now() + 5_001);
       expect(started.content).toContainEqual({
         type: "text",
-        text: expect.stringContaining(new Date(deadlineAtMs).toISOString()),
+        text: expect.stringContaining("times out in"),
       });
     }
     expect(started.details).toMatchObject({ followUp: expect.stringContaining("Use process") });
@@ -476,10 +476,10 @@ test("reports manual collection after destination capture fails, then recovers o
       const handle = runningSession(started.details);
       const followUp = expectDefined(handle.followUp, "background continuation guidance");
       expect(followUp).toContain(
-        recovered ? "wake this conversation automatically" : "poll with a timeout",
+        recovered ? "Its exit wakes this conversation with the result" : "poll with a timeout",
       );
       if (!recovered) {
-        expect(followUp).not.toContain("wake this conversation automatically");
+        expect(followUp).not.toContain("Its exit wakes this conversation with the result");
       }
       expect(started.content).toContainEqual({
         type: "text",
@@ -685,3 +685,24 @@ test.for(["edit", "rewind"] as const)(
     }
   },
 );
+
+test("wakes a dashboard conversation on silent success, with exit, duration and a bounded tail", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:silent-waiter";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  for (const [script, expected] of [
+    ["void 0", /^Exec completed \([^,]+, code 0, [^)]+\) with no output\.$/],
+    [
+      'process.stdout.write("x".repeat(3000) + "TAIL_END")',
+      /^Exec completed \([^,]+, code 0, [^)]+\), last 2000 of 3008 output chars \(process log has the rest\):\nx{1992}TAIL_END$/,
+    ],
+  ] as const) {
+    await exec("silent-waiter", script);
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(wakes.mock.calls.at(-1)?.[0]).toMatch(expected);
+  }
+});
