@@ -1,3 +1,5 @@
+import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { PairedDeviceTokenIdentity } from "../infra/device-pairing-core.types.js";
 import { resolveAuthenticatedDeviceTokenIdentity } from "../infra/device-pairing-identity.js";
 import { isPublishedPairedDeviceTokenExact } from "../infra/device-pairing-publication.js";
@@ -9,7 +11,24 @@ import type { GatewayRequestHandlerOptions } from "./server-methods/shared-types
 
 /** Opaque admission owned by the signed-device handshake, not a human identity. */
 export type PublicationReaderAdmission = Readonly<PairedDeviceTokenIdentity>;
-const admissions = new WeakSet<PublicationReaderAdmission>();
+const admissions = new WeakMap<PublicationReaderAdmission, () => void>();
+
+function capturePublicationReaderEnablement(): () => void {
+  const epoch = runtimeConfigPublication.publicationReadDisableEpoch;
+  let revoked = false;
+  const assertCurrent = () => {
+    if (
+      revoked ||
+      epoch !== runtimeConfigPublication.publicationReadDisableEpoch ||
+      readRuntimeConfig().gateway?.sessionControl?.publicationReadEnabled !== true
+    ) {
+      revoked = true;
+      throw new Error("Gateway publication reads are disabled or this admission was revoked");
+    }
+  };
+  assertCurrent();
+  return assertCurrent;
+}
 
 function isPublicationReaderAdmission(
   admission: PublicationReaderAdmission | undefined,
@@ -24,6 +43,7 @@ export function isPublicationReaderCurrent(
     return false;
   }
   try {
+    admissions.get(admission)!();
     return isPublishedPairedDeviceTokenExact(admission, "operator", [PUBLICATION_READ_SCOPE]);
   } catch {
     return false;
@@ -46,6 +66,8 @@ export async function preparePublicationReaderAdmission(input: {
   hasHumanIdentity: boolean;
 }): Promise<PublicationReaderAdmission | undefined> {
   const requested = input.requestedScopes.includes(PUBLICATION_READ_SCOPE);
+  // Capture before the paired-device read yields, not from a request-scoped config copy.
+  const assertEnabled = requested ? capturePublicationReaderEnablement() : undefined;
   const device =
     input.authMethod === "device-token" && input.deviceId
       ? await readCurrentPairedDevice(input.deviceId, (row) => row)
@@ -62,6 +84,7 @@ export async function preparePublicationReaderAdmission(input: {
     input.hasHumanIdentity ||
     !input.publicKey ||
     !input.token ||
+    !assertEnabled ||
     !isSingleton(input.requestedScopes) ||
     !isSingleton(input.scopes) ||
     !isSingleton(storedScopes)
@@ -77,7 +100,8 @@ export async function preparePublicationReaderAdmission(input: {
   if (!identity) {
     throw new Error("publication reader device authority changed");
   }
-  admissions.add(identity);
+  assertEnabled();
+  admissions.set(identity, assertEnabled);
   return identity;
 }
 

@@ -159,6 +159,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "gateway.tools",
       "gateway.uploads",
       "gateway.cliAgents",
+      "gateway.sessionControl",
       "gateway.controlUi.enabled",
       "gateway.controlUi.environment",
       "gateway.controlUi.communityInvite",
