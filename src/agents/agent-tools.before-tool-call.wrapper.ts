@@ -442,7 +442,6 @@ export function wrapToolWithBeforeToolCallHook(
       let liveness: ReturnType<typeof startToolExecutionLiveness> | undefined;
       let skillUse: ReturnType<typeof createToolSkillUseRecorder> | undefined;
       const startedAt = Date.now();
-      let completed = false;
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
@@ -514,7 +513,6 @@ export function wrapToolWithBeforeToolCallHook(
         }
         const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
         if (terminalDiagnostic.type === "tool.execution.completed" && !signal?.aborted) {
-          completed = true;
           recordProgress?.();
         }
         const skillMatch = findSkillUsageMatch({
@@ -572,7 +570,7 @@ export function wrapToolWithBeforeToolCallHook(
         throw err;
       } finally {
         skillUse?.close();
-        liveness?.close(completed);
+        liveness?.close();
       }
     },
   };
