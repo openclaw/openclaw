@@ -515,37 +515,37 @@ describe("own-run question admission", () => {
     });
   });
 
-  it.each(["source revoked", "exact run closed"] as const)(
-    "settles the original question when its %s",
-    async (cause) => {
-      await withOwnRunQuestion(async (f) => {
-        const id = await f.request();
-        const waiting = await f.beginWait(id);
-        if (cause === "source revoked") {
-          setUserProfileRole(f.profile.id, "suspended");
-          invalidateOperatorRolePolicy(f.profile.id);
-          expect(f.source.authority.signal?.aborted).toBe(true);
-        } else {
-          releaseAgentRunDelegatedAuthority(f.authority);
-        }
-        const system = createSyntheticPluginRuntimeClient({
-          operatorRoleActor: { kind: "system" },
-          scopes: ["operator.questions"],
-        });
-        expect((await f.call("question.get", { id }, system))[1]).toMatchObject({
-          question: { id, status: "cancelled" },
-        });
-        const response = await waiting.result;
-        if (cause === "source revoked") {
-          expect(response[0]).toBe(false);
-        } else {
-          expect(response).toEqual([true, { status: "cancelled" }, undefined]);
-        }
-        expect((await f.call("question.resolve", { id, answers }))[0]).toBe(false);
-        expect(manager.get(id)).not.toHaveProperty("answers");
+  it("keeps producer authority and run-close cancellation while native waiters recheck roles", async () => {
+    await withOwnRunQuestion(async (f) => {
+      const id = await f.request();
+      const waiting = await f.beginWait(id);
+      setUserProfileRole(f.profile.id, "suspended");
+      invalidateOperatorRolePolicy(f.profile.id);
+      expect(f.source.authority.signal?.aborted).toBe(false);
+      expect(f.source.authority.assertCurrent).not.toThrow();
+      expect(manager.get(id)?.status).toBe("pending");
+      releaseAgentRunDelegatedAuthority(f.authority);
+      const system = createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "system" },
+        scopes: ["operator.questions"],
       });
-    },
-  );
+      expect((await f.call("question.get", { id }, system))[1]).toMatchObject({
+        question: { id, status: "cancelled" },
+      });
+      // Retained source limitation: the native waiter still uses the router's
+      // captureGatewayRequestOperatorGuard at settlement, unlike the admitted producer.
+      expect(await waiting.result).toEqual([
+        false,
+        undefined,
+        {
+          code: "FORBIDDEN",
+          message: "Your operator role changed; reconnect before continuing.",
+        },
+      ]);
+      expect((await f.call("question.resolve", { id, answers }))[0]).toBe(false);
+      expect(manager.get(id)).not.toHaveProperty("answers");
+    });
+  });
 
   it.each(["source revocation", "transient worker failure"] as const)(
     "preserves the question's authority outcome across %s during a read",

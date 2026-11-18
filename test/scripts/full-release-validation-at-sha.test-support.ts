@@ -101,6 +101,7 @@ export function createDispatchFixture(
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
     toolingLagFetchFailure?: boolean;
+    toolingLagComparisonFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
@@ -143,7 +144,7 @@ export function createDispatchFixture(
   writeFileSync(npmCallsPath, "");
   writeFileSync(
     publishedVersionsPath,
-    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.9.6"]),
+    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.7.35", "2026.9.6"]),
   );
   const npmPath = join(binDir, "npm");
   writeFileSync(
@@ -192,6 +193,9 @@ for (const method of ["execFileSync", "spawnSync"]) {
       const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
         .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
       if (mainFetches.length > 1) failure = "fixture origin/main fetch failed";
+    }
+    if (args[0] === "diff" && args.includes("--shortstat") && ${JSON.stringify(options.toolingLagComparisonFailure ?? false)}) {
+      failure = "fixture tooling comparison failed";
     }
     const bareFetch = args.includes("https://github.com/openclaw/openclaw.git");
     if (bareFetch && ${JSON.stringify(options.bareShaFetchFailure ?? false)}) {

@@ -437,13 +437,18 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (closed) {
             return;
           }
-          await attachment.close();
-          await lease.close();
-          lease.release();
+          if (!attachment.dispatched) {
+            lease.abandonUnattached();
+          } else {
+            await attachment.close();
+            await lease.close();
+            lease.release();
+          }
           attachment.dispose();
           port1.close();
           port2.close();
           closed = true;
+          owners.delete(resource);
           if (source.closing) {
             await retireNativeResourceBroker(source);
           }
@@ -456,6 +461,8 @@ export function captureRetainedNativeWorkerSource(options?: {
         try {
           await resource.close();
         } catch (cleanupError) {
+          // A failed constructor cannot return its close obligation to the caller.
+          source.retain(resource, () => resource.close());
           throw new AggregateError(
             [error, cleanupError],
             "Native resource creation cleanup failed",

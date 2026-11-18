@@ -35,6 +35,7 @@ import {
 } from "./mcp-cli-probe.js";
 import { resolveMcpServeOptions } from "./mcp-cli-serve-options.js";
 import {
+  applyMcpConfigureControls,
   applyMcpHttpControls,
   applyMcpServerControls,
   parseCsvList,
@@ -43,10 +44,10 @@ import {
 } from "./mcp-cli-server-controls.js";
 import {
   offlineMcpAction,
-  setMcpServerOffline,
-  unsetMcpServerOffline,
-  configureMcpServerOffline,
-  updateMcpToolsOffline,
+  setMcpServer,
+  unsetMcpServer,
+  configureMcpServer,
+  updateMcpTools,
 } from "./mcp-cli-state-owner.js";
 import { exitCliAfterOutput, requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { parseKeyValueEntries } from "./parse-key-value-entries.js";
@@ -57,6 +58,9 @@ const disposeAllSessionMcpRuntimes = createLazyRuntimeMethod(
   () => import("../agents/agent-bundle-mcp-manager-api.js"),
   (runtime) => runtime.disposeAllSessionMcpRuntimes,
 );
+
+const PROBE_ONLINE_ALTERNATIVE =
+  "Probing a server needs the Gateway stopped. Save without probing (mcp add --no-probe, or mcp configure without --probe) to use the running Gateway.";
 
 function fail(message: string, json?: boolean): never {
   if (json) {
@@ -709,82 +713,77 @@ export function registerMcpCli(program: Command) {
     .option("--client-key <path>", "HTTP mutual TLS client key path")
     .option("--no-probe", "Save without connecting first")
     .action(
-      offlineMcpAction(
-        "add",
-        async (
-          _owner,
-          name: string,
-          opts: McpServerControlOptions & {
-            command?: string;
-            arg?: string[];
-            env?: string[];
-            cwd?: string;
-            url?: string;
-            transport?: string;
-            header?: string[];
-            disabled?: boolean;
-          },
-        ) => {
-          const server: Record<string, unknown> = {};
-          const command = readNonBlankString(opts.command);
-          const url = normalizeStringifiedOptionalString(opts.url);
-          if (command && url) {
-            fail("Specify either --command for stdio or --url for HTTP, not both.");
+      async (
+        name: string,
+        opts: McpServerControlOptions & {
+          command?: string;
+          arg?: string[];
+          env?: string[];
+          cwd?: string;
+          url?: string;
+          transport?: string;
+          header?: string[];
+          disabled?: boolean;
+        },
+      ) => {
+        const server: Record<string, unknown> = {};
+        const command = readNonBlankString(opts.command);
+        const url = normalizeStringifiedOptionalString(opts.url);
+        if (command && url) {
+          fail("Specify either --command for stdio or --url for HTTP, not both.");
+        }
+        if (!command && !url) {
+          fail("Specify --command for stdio or --url for HTTP.");
+        }
+        if (command) {
+          server.command = command;
+          if (opts.arg && opts.arg.length > 0) {
+            server.args = opts.arg;
           }
-          if (!command && !url) {
-            fail("Specify --command for stdio or --url for HTTP.");
-          }
-          if (command) {
-            server.command = command;
-            if (opts.arg && opts.arg.length > 0) {
-              server.args = opts.arg;
-            }
-            setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env", fail));
-            setOptionalField(server, "cwd", readNonBlankString(opts.cwd));
-          }
-          if (url) {
-            server.url = url;
-            setOptionalField(
-              server,
-              "transport",
-              normalizeStringifiedOptionalString(opts.transport),
-            );
-            setOptionalField(
-              server,
-              "headers",
-              parseKeyValueEntries(opts.header, "--header", fail),
-            );
-            applyMcpHttpControls(server, opts, fail);
-          }
-          if (opts.disabled) {
-            server.enabled = false;
-          }
-          applyMcpServerControls(server, opts, fail);
+          setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env", fail));
+          setOptionalField(server, "cwd", readNonBlankString(opts.cwd));
+        }
+        if (url) {
+          server.url = url;
+          setOptionalField(server, "transport", normalizeStringifiedOptionalString(opts.transport));
+          setOptionalField(server, "headers", parseKeyValueEntries(opts.header, "--header", fail));
+          applyMcpHttpControls(server, opts, fail);
+        }
+        if (opts.disabled) {
+          server.enabled = false;
+        }
+        applyMcpServerControls(server, opts, fail);
 
+        const probing = opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
+        const save = async () => {
           const loaded = await loadMcpConfig();
           const targetName = name.trim();
           if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
             fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
           }
-          if (opts.probe !== false && server.enabled !== false && server.auth !== "oauth") {
+          if (probing) {
             await probeMcpServersOrFail({
               config: loaded.config,
               path: loaded.path,
               servers: { [name]: server },
             });
           }
-          const result = await setMcpServerOffline({ name, server, createOnly: true });
-          if (!result.ok) {
-            fail(result.error);
-          }
-          defaultRuntime.log(terminalText`Saved MCP server "${name}" to ${result.path}.`);
-          if (server.auth === "oauth") {
-            defaultRuntime.log(
-              terminalText`Run ${formatCliCommand(`openclaw mcp login ${name}`)} to authorize this MCP server.`,
-            );
-          }
-        },
-      ),
+          return setMcpServer({ name, server, createOnly: true });
+        };
+        // Probes launch the server under offline custody; unprobed saves use the running Gateway.
+        const result = probing
+          ? await offlineMcpAction("add", save, PROBE_ONLINE_ALTERNATIVE)()
+          : await save();
+        if (!result.ok) {
+          fail(result.error);
+        }
+        defaultRuntime.log(terminalText`Saved MCP server "${name}" to ${result.path}.`);
+        if (server.auth === "oauth") {
+          defaultRuntime.log(
+            terminalText`Run ${formatCliCommand(`openclaw mcp login ${name}`)} to authorize this MCP server.`,
+          );
+        }
+      },
     );
 
   mcp
@@ -797,7 +796,7 @@ export function registerMcpCli(program: Command) {
       if (parsed.error) {
         fail(parsed.error);
       }
-      const result = await setMcpServerOffline({ name, server: parsed.value });
+      const result = await setMcpServer({ name, server: parsed.value });
       if (!result.ok) {
         fail(result.error);
       }
@@ -815,7 +814,7 @@ export function registerMcpCli(program: Command) {
       if (!opts.clear && opts.include === undefined && opts.exclude === undefined) {
         fail("Specify --include, --exclude, or --clear.");
       }
-      const result = await updateMcpToolsOffline({
+      const result = await updateMcpTools({
         name,
         tools: opts.clear
           ? null
@@ -859,30 +858,20 @@ export function registerMcpCli(program: Command) {
     .option("--clear-tls", "Clear TLS verification and mTLS overrides", false)
     .option("--probe", "Check the updated server before saving", false)
     .action(
-      offlineMcpAction(
-        "configure",
-        async (
-          _owner,
-          name: string,
-          opts: McpServerControlOptions & {
-            enable?: boolean;
-            disable?: boolean;
-          },
-        ) => {
-          if (opts.enable && opts.disable) {
-            fail("Specify only one of --enable or --disable.");
-          }
+      async (
+        name: string,
+        opts: McpServerControlOptions & {
+          enable?: boolean;
+          disable?: boolean;
+        },
+      ) => {
+        if (opts.enable && opts.disable) {
+          fail("Specify only one of --enable or --disable.");
+        }
+        const apply = async () => {
           const loaded = await loadMcpConfig();
           const current = requireMcpServer(loaded, name);
-          const next = { ...current };
-          if (opts.enable) {
-            delete next.enabled;
-          }
-          if (opts.disable) {
-            next.enabled = false;
-          }
-          applyMcpServerControls(next, opts, fail);
-          applyMcpHttpControls(next, opts, fail);
+          const next = applyMcpConfigureControls(current, opts, fail);
           if (opts.probe && next.enabled !== false && next.auth !== "oauth") {
             await probeMcpServersOrFail({
               config: loaded.config,
@@ -891,7 +880,8 @@ export function registerMcpCli(program: Command) {
             });
           }
           if (opts.enable && Object.keys(next).length === 0) {
-            const result = await unsetMcpServerOffline({ name });
+            // Removing an emptied override only applies to the definition read above.
+            const result = await unsetMcpServer({ name, expectedServer: current });
             if (!result.ok) {
               fail(result.error);
             }
@@ -900,9 +890,11 @@ export function registerMcpCli(program: Command) {
             );
             return;
           }
-          const result = await configureMcpServerOffline({
+          // Apply flags to the definition the write is bound to, so an edit that landed after
+          // the read above is kept rather than overwritten.
+          const result = await configureMcpServer({
             name,
-            update: () => next,
+            update: (server) => applyMcpConfigureControls(server, opts, fail),
           });
           if (!result.ok) {
             fail(result.error);
@@ -911,8 +903,12 @@ export function registerMcpCli(program: Command) {
             failUnknownMcpServer(name, result.path);
           }
           defaultRuntime.log(terminalText`Updated MCP server "${name}" in ${result.path}.`);
-        },
-      ),
+        };
+        // Probes launch the server under offline custody; unprobed saves use the running Gateway.
+        await (opts.probe
+          ? offlineMcpAction("configure", apply, PROBE_ONLINE_ALTERNATIVE)()
+          : apply());
+      },
     );
 
   registerMcpOAuthCommands(mcp, {
@@ -935,7 +931,7 @@ export function registerMcpCli(program: Command) {
     .description("Remove one OpenClaw-managed MCP server")
     .argument("<name>", "MCP server name")
     .action(async (name: string) => {
-      const result = await unsetMcpServerOffline({ name });
+      const result = await unsetMcpServer({ name });
       if (!result.ok) {
         fail(result.error);
       }

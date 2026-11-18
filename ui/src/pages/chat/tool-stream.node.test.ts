@@ -358,7 +358,7 @@ describe("app-tool-stream approval lifecycle", () => {
       const activity = messages.flatMap(readPreparedActivity);
       expect(activity).toEqual([completed]);
       expect(summarizeToolGroup(activity)).toBe(
-        withResult ? "Called Process" : "Called Process · Outcome unknown",
+        withResult ? "Used tools" : "Tool calls · Outcome unknown",
       );
       expect(activity[0]).not.toHaveProperty("diagnostic");
       expect(completedEvent.diagnostic).toEqual({ source: "native-tool" });

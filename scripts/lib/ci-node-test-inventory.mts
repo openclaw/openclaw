@@ -71,6 +71,12 @@ export type NodeTestVolume = {
   }[];
 };
 
+export type NodeTestTargetVolume = {
+  target: string;
+  configs: string[];
+  volume: NodeTestVolume;
+};
+
 export function summarizeNodeTestFiles(files: readonly string[]) {
   const unique = [...new Set(files)].toSorted();
   return {

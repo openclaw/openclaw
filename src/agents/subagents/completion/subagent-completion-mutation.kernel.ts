@@ -155,7 +155,7 @@ function prepareBlockedSubagentCompletion(
     return undefined;
   }
   // A block carries no turn outcome, so only the private rule can settle it as consumed.
-  const consumed = hasConsumedPrivateRequesterInput(subagent);
+  const consumed = params.disposition !== "ambiguous" && hasConsumedPrivateRequesterInput(subagent);
   if (params.operatorAuthorityUnavailable) {
     subagent.suppressCompletionDelivery = true;
     subagent.requesterSettleWake = undefined;
@@ -194,14 +194,6 @@ function prepareBlockedSubagentCompletion(
     completion.capturedAt ??= retiredEndedAt;
   }
   const delivery = ensureDeliveryState(subagent);
-  if (
-    params.storeReplaced &&
-    (delivery.status === "delivered" ||
-      delivery.announcedAt !== undefined ||
-      delivery.deliveredAt !== undefined)
-  ) {
-    return undefined;
-  }
   delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
   if (typeof params.enqueuedAt === "number") {
     delivery.enqueuedAt ??= params.enqueuedAt;
@@ -210,10 +202,9 @@ function prepareBlockedSubagentCompletion(
     requesterDelivery:
       delivery.requesterDelivery?.state === "consumed" ? delivery.requesterDelivery : undefined,
     status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
-    disposition:
-      params.suspendedReason || params.storeReplaced
-        ? ("permanent_failure" as const)
-        : (params.disposition ?? delivery.disposition ?? "permanent_failure"),
+    disposition: params.suspendedReason
+      ? ("permanent_failure" as const)
+      : (params.disposition ?? delivery.disposition ?? "permanent_failure"),
     lastError: params.reason,
     deliveredAt: undefined,
     announcedAt: undefined,
@@ -224,9 +215,7 @@ function prepareBlockedSubagentCompletion(
     queueId: undefined,
   });
   Object.assign(subagent, { cleanupHandled: false, wakeOnDescendantSettle: undefined });
-  if (params.storeReplaced) {
-    subagent.requesterSettleWake = undefined;
-  } else if (params.suspendedReason) {
+  if (params.suspendedReason) {
     if (isCompletedRequesterDeliveryBlocked(subagent)) {
       // This requester already ran. An ordinary settle wake would replay it;
       // a separately owned yield batch still has genuine unfinished work.
@@ -371,7 +360,6 @@ function mutateRequesterBatch(
     if (consumeSubagentPauseNotice(subagent)) {
       // A notice is one paused member's input, not settlement of its frozen cohort.
       if (
-        params.outcome.storeReplaced ||
         params.outcome.disposition === "intentional_non_delivery" ||
         params.outcome.reason === "operator_authority_unavailable"
       ) {
@@ -403,8 +391,6 @@ function mutateRequesterBatch(
             subagent: expected,
             reason: params.outcome.error ?? params.outcome.reason ?? "requester settle wake failed",
             disposition: params.outcome.disposition,
-            storeReplaced: params.outcome.storeReplaced,
-            suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
           },
           now,
           subagent,

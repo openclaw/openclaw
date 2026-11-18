@@ -2,12 +2,14 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import {
+  captureSettledGitHubPublicationWorkspaceSnapshot,
   createGitHubPublicationCommandRunner,
   readGitHubPublicationBaseSha,
   requireGitHubPublicationCommit,
 } from "./github-publication-git-transport.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
+import { captureWorkspaceManifestDocument } from "./worker-environments/workspace-manifest-worker.js";
 
 export type VerifiedWorkspaceSource = {
   repository: string;
@@ -38,6 +40,7 @@ export async function prepareManagedWorkspaceSource(params: {
   baseCommit?: string;
   assertCurrent: () => void;
   pristineError: string;
+  signal?: AbortSignal;
 }) {
   const { owner, identity, target, assertCurrent, pristineError } = params;
   const integrationSource = params.source ?? params.verifiedBase;
@@ -218,6 +221,40 @@ export async function prepareManagedWorkspaceSource(params: {
               }
             }
           }
+          let canonical: Awaited<ReturnType<typeof captureWorkspaceManifestDocument>> | undefined;
+          if (initialImport && !recoveredImport) {
+            quiescence?.markPhase("operation.pristine");
+            const source = params.source!;
+            const admittedPaths = await state.canonicalPaths();
+            const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
+              { cwd, assertCurrent: check },
+              policy,
+              admittedPaths,
+            );
+            const headTree = await git(["rev-parse", "HEAD^{tree}"]);
+            if (
+              initialHead !== state.current().base_commit ||
+              snapshot.sourceIndexTree !== headTree ||
+              snapshot.workspaceTree !== headTree
+            ) {
+              throw new Error(pristineError);
+            }
+            // A projection may first be captured after unrelated commits already exist.
+            // Only verified published history or the immutable empty source is disposable.
+            if (source.emptySource) {
+              if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
+                throw new Error(pristineError);
+              }
+            }
+            const buildCacheInputs = new Set(await state.buildCacheInputs());
+            canonical = await captureWorkspaceManifestDocument({
+              root: cwd,
+              baseCommit: state.current().base_commit,
+              includePaths: admittedPaths,
+              buildCacheInputs,
+              signal: params.signal,
+            });
+          }
           check();
           return {
             baseCommit,
@@ -225,6 +262,8 @@ export async function prepareManagedWorkspaceSource(params: {
             continuingIntegration,
             recoveredImport,
             previousBase: state.current().base_commit,
+            previousBaseline: state.current().baseline_ref,
+            canonical,
           };
         },
       );

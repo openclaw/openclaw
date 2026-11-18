@@ -54,6 +54,8 @@ type AdmissionOptions = Partial<{
   compatibleBudget: boolean;
   strictReplay: boolean;
   responseSchema: boolean;
+  boundarySafe: boolean;
+  pressure: "maintenance" | "overflow";
 }>;
 
 describe("provider request admission", () => {
@@ -73,21 +75,23 @@ describe("provider request admission", () => {
     ${"unchanged schema"}                  | ${24_000} | ${100}     | ${16_000} | ${true}  | ${{ compatibleBudget: true, responseSchema: true }}
     ${"oversized engine assembly"}         | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, oversizedAssembly: true }}
     ${"exaggerated engine estimate"}       | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{ ownsCompaction: true }}
-    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true }}
+    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, boundarySafe: true, pressure: "maintenance" }}
     ${"unchanged measured prefix"}         | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{}}
     ${"visible completion"}                | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${largerVisible}
     ${"system tweak"}                      | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakSystem: true }}
     ${"tool definitions tweak"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakTools: true }}
     ${"split completion + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, asyncFragments: true, tweakSystem: true }}
     ${"late response identity"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...largerVisible, asyncFragments: true }}
-    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true }}
+    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true, boundarySafe: true, pressure: "maintenance" }}
     ${"opaque reasoning"}                  | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000 }}
-    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true }}
+    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true, boundarySafe: true, pressure: "maintenance" }}
     ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
     ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
-    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{}}
+    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ boundarySafe: true, pressure: "maintenance" }}
     ${"oversized prompt without usage"}    | ${0}      | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
     ${"changed system invalidates prefix"} | ${1_000}  | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+    ${"soft pressure, open tool batch"}    | ${23_000} | ${12_000}  | ${16_000} | ${true}  | ${{ boundarySafe: false }}
+    ${"over window, open tool batch"}      | ${33_000} | ${2_000}   | ${16_000} | ${false} | ${{ boundarySafe: false, pressure: "overflow" }}
   `(
     "admits only fitting provider requests: $name",
     async ({
@@ -109,6 +113,8 @@ describe("provider request admission", () => {
         compatibleBudget,
         strictReplay,
         responseSchema,
+        boundarySafe,
+        pressure,
       },
     }: AdmissionCase) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
@@ -397,6 +403,7 @@ describe("provider request admission", () => {
       }
       const streamGuards = installEmbeddedAttemptStreamGuards(fixture.input, {
         onRejectedProviderReplayRepaired: vi.fn(),
+        isToolBoundarySafe: () => boundarySafe === true,
         onIdleTimeout: vi.fn(),
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({
           runId: fixture.input.attempt.runId,
@@ -444,6 +451,9 @@ describe("provider request admission", () => {
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
         expect(pendingPrecheck !== null).toBe(!fits);
+        if (pressure) {
+          expect(pendingPrecheck?.pressure).toBe(pressure);
+        }
         if (oversizedAssembly) {
           expect(pendingPrecheck).toMatchObject({
             route: "compact_only",

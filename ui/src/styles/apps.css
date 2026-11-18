@@ -1,3 +1,11 @@
+/* The Apps page reads in the standard wide page column, under its header. */
+openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-workspace__body {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
 .apps-hero {
   display: flex;
   flex-direction: column;

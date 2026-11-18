@@ -17,7 +17,7 @@ import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 export const MCP_OAUTH_LINK_CALLBACK_PATH = "/oauth/mcp/callback";
 
-export function resolveMcpOAuthLinkRedirectUrl(cfg: OpenClawConfig): string {
+function resolveMcpOAuthLinkRedirectUrl(cfg: OpenClawConfig): string {
   return `${resolveGatewayPublicOrigin(cfg) ?? `http://127.0.0.1:${resolveGatewayPort(cfg)}`}${MCP_OAUTH_LINK_CALLBACK_PATH}`;
 }
 

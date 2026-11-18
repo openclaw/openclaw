@@ -8,12 +8,17 @@ import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../infra/diagn
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { AssistantMessageEvent, Message, Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../plugins/hook-agent-context.js";
 import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
 import { assertOperatorModelAllowed } from "./admitted-run-context.js";
 import { buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import type { RunBtwSideQuestionParams } from "./btw-runtime.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { wrapStreamFnWithModelRequestGate } from "./embedded-agent-runner/model-request-hook.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -91,7 +96,7 @@ export async function recordBtwUsage(
   }
 }
 
-async function resolveSideQuestionStream(input: SideQuestionStreamInput) {
+async function resolveSideQuestionStream(input: SideQuestionStreamInput & { agentId?: string }) {
   const {
     params,
     modelRegistry,
@@ -118,7 +123,7 @@ async function resolveSideQuestionStream(input: SideQuestionStreamInput) {
     auth,
     apiRegistry: modelRegistryRuntime.apiRegistry,
   });
-  const { streamFn } = resolveEmbeddedAgentStream({
+  const resolved = resolveEmbeddedAgentStream({
     llmRuntime: modelRegistryRuntime.llmRuntime,
     currentStreamFn: modelRegistryRuntime.llmRuntime.streamSimple,
     providerStreamFn,
@@ -128,7 +133,21 @@ async function resolveSideQuestionStream(input: SideQuestionStreamInput) {
     resolvedApiKey: apiKey,
     authProfileId: resolvedAuthProfileId,
   });
-  return streamFn;
+  return wrapStreamFnWithModelRequestGate(
+    resolved.streamFn,
+    {
+      runId: params.authorityRunId,
+      agentId: input.agentId ?? params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId,
+      workspaceDir,
+      modelProviderId: runtimeModel.provider,
+      modelId: runtimeModel.id,
+      ...buildAgentHookContextChannelFields(params),
+      ...buildAgentHookContextIdentityFields(params),
+    },
+    "side_question",
+  );
 }
 
 export async function runLightweightBtwStream(

@@ -50,13 +50,13 @@ import type {
 } from "./subagent-completion-mutation.types.js";
 
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
-export class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
+class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
 
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
-async function recordRequiredCompletionFailure(
+export async function recordRequiredCompletionFailure(
   entry: SubagentRunRecord,
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
@@ -479,10 +479,6 @@ export async function blockSubagentCompletionDelivery(
     requesterBatch: _requesterBatch,
     ...request
   } = params;
-  if (params.storeReplaced) {
-    const current = currentCompletionOwner(subagentRuns, params.subagent);
-    subagentRuns.retireCompletionAuthority(current);
-  }
   const result = await mutateCompletion(
     [params.subagent],
     (rows) => {
@@ -501,7 +497,6 @@ export async function blockSubagentCompletionDelivery(
           applied === true &&
           (params.suspendedReason ||
             params.operatorAuthorityUnavailable ||
-            params.storeReplaced ||
             params.disposition === "permanent_failure")
         ) {
           // The durable outcome precedes releasing the completion input.
@@ -512,9 +507,7 @@ export async function blockSubagentCompletionDelivery(
   );
   if (
     result.applied &&
-    (params.storeReplaced ||
-      params.suspendedReason === "permanent_failure" ||
-      params.disposition === "permanent_failure")
+    (params.suspendedReason === "permanent_failure" || params.disposition === "permanent_failure")
   ) {
     await recordRequiredCompletionFailure(params.subagent, params.reason, params.requesterBatch);
   }

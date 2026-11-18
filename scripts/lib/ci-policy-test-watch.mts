@@ -469,9 +469,8 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   },
   ...[
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
+    "src/agents/embedded-agent-runner/run/attempt-prompt-submit.foreground.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
     "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",

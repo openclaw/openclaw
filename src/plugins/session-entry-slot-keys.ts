@@ -83,6 +83,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "inheritedToolAllow",
   "delegatedToolPolicy",
   "lifecycleRunId",
+  "lifecycleRestartScope",
   "lastRunId",
   "activeWriterRunId",
   "resumeAfterRestart",

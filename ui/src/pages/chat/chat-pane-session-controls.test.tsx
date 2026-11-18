@@ -377,7 +377,7 @@ describe("chat pane composer controls", () => {
   });
 
   it.each([
-    { label: "empty", cached: false, connected: true, error: null, message: "No models available" },
+    { label: "empty", cached: false, connected: true, error: null, message: "Set up a model" },
     {
       label: "offline",
       cached: true,
@@ -431,21 +431,27 @@ describe("chat pane composer controls", () => {
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
-      await waitForSolid(() =>
-        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-      );
+      if (error) {
+        await waitForSolid(() =>
+          expect(
+            container.querySelector(".chat-controls__model-catalog-state")?.textContent,
+          ).toContain(message),
+        );
+        expect(
+          container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
+        ).toBe(String(!connected));
+      } else {
+        await waitForSolid(() =>
+          expect(container.querySelector("button[data-chat-model-setup]")?.textContent).toBe(
+            message,
+          ),
+        );
+        expect(container.querySelector(".chat-controls__model-picker")).toBeNull();
+      }
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
       expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
-      await waitForSolid(() =>
-        expect(
-          container.querySelector(".chat-controls__model-catalog-state")?.textContent,
-        ).toContain(message),
-      );
-      expect(
-        container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
-      ).toBe(String(!connected));
       expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(cached ? 1 : 0);
       const permissionContainer = document.createElement("div");
       mountSolid(() => createComponent(ChatPermissionPicker, controls.permissionPicker), {

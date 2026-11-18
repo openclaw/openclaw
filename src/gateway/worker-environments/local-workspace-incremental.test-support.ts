@@ -300,6 +300,7 @@ export async function proveSharedSandboxCheckpoints(
           const result = await store.manifest(row, action);
           if (
             (action.kind === "scan" || (action.kind === "probe" && result.kind === "scan")) &&
+            !action.prehash &&
             action.target === "canonical"
           ) {
             scans++;
@@ -398,7 +399,7 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
       run({
         ...store,
         manifest: async (row, action) => {
-          if (action.kind === "scan") {
+          if (action.kind === "scan" && !action.prehash) {
             scans.push(action.target);
           }
           return await store.manifest(row, action);

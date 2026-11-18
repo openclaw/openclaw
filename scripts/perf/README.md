@@ -5225,7 +5225,7 @@ sides between pairs. Run at least five pairs using the host production guard.
 The append-normalized case should eliminate repeated nested-argument hashing;
 sealed history should remain at zero warm hash bytes, and mutable SDK content
 must still be inspected. Diagnostic output and in-place mutation coverage live
-in `prompt-cache-observability.history.test.ts`.
+in `prompt-cache-observability.test.ts`.
 
 `prompt-cache-observation-measure.ts` measures the complete observation boundary:
 append-shaped frozen messages → `cloneTranscriptView` → `convertToLlm` →
@@ -6048,6 +6048,20 @@ claims. Allocation and untraced timing are separate passes. `--protected 0`
 measures the common all-local inventory. `--captures` selects the count established
 by the Gateway probe. `--owner-source /absolute/path/placement-read-authority.base.ts`
 selects a preserved source beside the original module so relative imports resolve.
+
+`--local-publication` advances the local publication sequence after each preparation,
+without changing preservation membership. This reproduces maintenance guards that
+overlap unrelated local turns. Compare both unchanged controls before claiming a win.
+For the complete scheduled worktree cleanup, use `worktree-cleanup-pacing-measure.ts`
+with `--registry-worktrees 800 --placement-replicas 10000 --worktrees 2` and the
+62,000-file source fixture. This adds preserved nested repositories, active owners,
+a live lease, foreign locks, and 64 remote placements. A real unrelated local claim
+and release follows each maintenance-inventory preparation. `maxCallbackMs` measures
+the longest synchronous async callback; CPU and allocation cover the complete pass.
+Pass `--agent-db-fixture` only a closed synthetic database. Independent periodic Git
+maintenance is parked while cleanup pacing is virtualized. Checkouts in the protected
+cohort have Git registrations but omit the large tracked-file inventory. Both eligible
+checkouts have the complete inventory and must preserve identical recovery snapshots.
 
 Run concurrent baseline/candidate pairs under the campaign quiet lock and guard,
 pass the same future `--start-at` epoch milliseconds, and swap the interleaved CPU
