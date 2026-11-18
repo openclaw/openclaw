@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { createOperationalRunInstanceRef } from "../agents/operational-run-instance.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import {
   activateMcpLoopbackClientGrantCapture,
@@ -16,7 +17,6 @@ import {
   sendLoopbackToolCall,
   startLoopbackServerForTest,
 } from "./mcp-http.test-support.js";
-import type { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 // The loopback caller identity must carry the conversation tool-policy assertion
 // that tools re-asserting caller policy (for example the GitHub reader) rely on.
@@ -167,5 +167,36 @@ describe("loopback caller conversation tool-policy assertion", () => {
     expect(typeof toolCallerIdentity!.assertToolAllowed).toBe("function");
     // With no conversation policy, the default posture allows any tool the catalog serves.
     expect(() => toolCallerIdentity!.assertToolAllowed!("github_read")).not.toThrow();
+  });
+
+  it("expands plugin-id and plugin-group allowances to concrete plugin tool names", async () => {
+    let toolCallerIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
+    const githubTool = makeMessageTool({
+      name: "github_read",
+      execute: async () => {
+        toolCallerIdentity = getGatewayToolCallerIdentity();
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    });
+    setPluginToolMeta(githubTool, { pluginId: "github", optional: true });
+    resolveGatewayScopedToolsMock.mockResolvedValue({
+      agentId: "main",
+      tools: [githubTool],
+    });
+    await startLoopbackServerForTest();
+    const { scope } = await createCliGrant("run-policy-plugin-groups", {
+      context: { conversationToolPolicy: { allow: ["github"] } },
+    });
+
+    expectMcpResultText(
+      await readOkMcpPayload(await sendLoopbackToolCall({ ...scope, name: "github_read" })),
+      "ok",
+    );
+    expect(toolCallerIdentity).toBeDefined();
+    expect(typeof toolCallerIdentity!.assertToolAllowed).toBe("function");
+    // The plugin-id "github" expands to the concrete github_read the catalog served.
+    expect(() => toolCallerIdentity!.assertToolAllowed!("github_read")).not.toThrow();
+    // A non-plugin tool remains outside the allowlist.
+    expect(() => toolCallerIdentity!.assertToolAllowed!("exec")).toThrow(/not allowed/);
   });
 });
