@@ -83,6 +83,11 @@ cancellation, supersession, or persistence failure suppresses terminal presentat
 Starts and partial updates remain transient. Older missing child
 history cannot be reconstructed from source code or outer results.
 
+Local and sandbox exec publish their finite timeout allowance before process
+preparation, then replace it with the supervisor deadline after spawn. A hung
+preparation retains that allowance plus the existing 900-second quiet-tool
+window; commands without a timeout retain only the quiet-tool window.
+
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.
 If guest code does not catch an error, `exec` or `wait` returns a failed tool

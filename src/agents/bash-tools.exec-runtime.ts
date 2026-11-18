@@ -260,6 +260,11 @@ export async function runExecProcess({
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
+  const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
+  if (timeoutMs !== undefined) {
+    // Preparation can outlast the quiet window; spawn replaces this with its enforced deadline.
+    recordDiagnosticToolExecutionDeadline(startedAt + timeoutMs);
+  }
   const sessionId = createProcessSessionId();
   const execCommand = opts.execCommand ?? opts.command;
   const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
@@ -372,7 +377,6 @@ export async function runExecProcess({
       }
     };
 
-  const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
   let sandboxPrepared = false;
