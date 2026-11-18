@@ -12,7 +12,7 @@ import {
   cronList,
   cronRuns,
   cronSidebarFeatureMethods,
-  openAutomation,
+  editAutomation,
   openAutomationActivity,
 } from "./cron-fixtures.test-support.ts";
 
@@ -54,7 +54,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
-        await openAutomation(page, job.id);
+        await editAutomation(page, job.id);
         const input = page.locator("#cron-schedule-at");
         await input.waitFor({ state: "visible" });
         expect(await input.inputValue()).toBe("2026-10-30T12:00");
@@ -76,9 +76,10 @@ suite.define(() => {
         expect(requests.at(-1)?.params).toHaveProperty("patch");
         expect(requests.at(-1)?.params).not.toHaveProperty("patch.schedule");
         expect(requests.at(-1)?.params).not.toHaveProperty("patch.state");
-        await expect.poll(() => input.inputValue()).toBe("2026-10-30T12:00");
+        await input.waitFor({ state: "detached" });
         await openAutomationActivity(page);
-        await openAutomation(page, job.id);
+        await editAutomation(page, job.id);
+        expect(await input.inputValue()).toBe("2026-10-30T12:00");
         await expect
           .poll(() => summary.textContent())
           .toContain("Next activity at 10/30/2026, 12:10 PM");
