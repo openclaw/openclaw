@@ -65,6 +65,17 @@ extension OnboardingView {
                     .font(.callout)
                     .padding(.top, 8)
                 }
+                Label {
+                    Text(
+                        "OpenClaw can take actions using the permissions and services you enable. " +
+                            "Review prompts and only connect tools you trust.")
+                } icon: {
+                    Image(systemName: "info.circle")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: 500)
+                .padding(.top, 24)
             }
         }
     }

@@ -80,7 +80,9 @@ your build may use different labels or layouts.
 <a id="welcome-and-security-notice" />
 On a new install, **Get started** sets OpenClaw up on this Mac. To use OpenClaw
 that already runs somewhere else, choose **Already use OpenClaw on another
-computer? Connect to it** instead; it opens the choices in the next step.
+computer? Connect to it** instead; it opens the choices in the next step. A
+note at the bottom reminds you that OpenClaw acts with the permissions and
+services you enable.
 
 OpenClaw is a personal agent designed for one trusted operator. For shared use,
 separate trust boundaries and limit tool access; see [Security](/gateway/security).
