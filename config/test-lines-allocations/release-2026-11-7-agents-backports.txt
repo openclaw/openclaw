@@ -1,4 +1,4 @@
-490
+502
 # Agents release backports: production-boundary regressions for bounded sends, registry custody,
 # Stop/slash parsing, cleanup joins, requester turnover and source-specific companion contracts.
 # Reuses existing test fixtures; includes held-history deadline and parked QuickJS regressions.
