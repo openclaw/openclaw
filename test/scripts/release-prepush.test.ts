@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertAuditBounds,
@@ -69,33 +70,56 @@ describe("release:prepush", () => {
     expect(output).toContain("Usage: pnpm release:prepush");
   });
 
-  it("selects the canonical release head in a real divergent Git history", () => {
-    const repo = mkdtempSync(join(tmpdir(), "openclaw-release-baseline-"));
-    const git = (args: string[]) =>
-      execFileSync("git", ["-C", repo, ...args], { encoding: "utf8" }).trim();
-    try {
-      git(["init", "--quiet", "--initial-branch=main"]);
-      git(["config", "user.name", "Release Test"]);
-      git(["config", "user.email", "release-test@example.com"]);
-      git(["commit", "--quiet", "--allow-empty", "-m", "shared"]);
-      git(["branch", "release/2026.10.6"]);
-      git(["commit", "--quiet", "--allow-empty", "-m", "main only"]);
-      const mainSha = git(["rev-parse", "HEAD"]);
-      git(["switch", "--quiet", "release/2026.10.6"]);
-      git(["commit", "--quiet", "--allow-empty", "-m", "published release"]);
-      const releaseSha = git(["rev-parse", "HEAD"]);
-      git(["commit", "--quiet", "--allow-empty", "-m", "candidate"]);
-      const candidateSha = git(["rev-parse", "HEAD"]);
+  it.each([false, true])(
+    "selects the release head after refreshing history (shallow: %s)",
+    (shallow) => {
+      const repo = mkdtempSync(join(tmpdir(), "openclaw-release-baseline-"));
+      let checkout = repo;
+      const git = (args: string[]) =>
+        execFileSync("git", ["-C", checkout, ...args], { encoding: "utf8" }).trim();
+      try {
+        git(["init", "--quiet", "--initial-branch=main"]);
+        git(["config", "user.name", "Release Test"]);
+        git(["config", "user.email", "release-test@example.com"]);
+        git(["commit", "--quiet", "--allow-empty", "-m", "shared"]);
+        git(["branch", "release/2026.10.6"]);
+        git(["commit", "--quiet", "--allow-empty", "-m", "main only"]);
+        const mainSha = git(["rev-parse", "HEAD"]);
+        git(["switch", "--quiet", "release/2026.10.6"]);
+        git(["commit", "--quiet", "--allow-empty", "-m", "published release"]);
+        const releaseSha = git(["rev-parse", "HEAD"]);
+        git(["commit", "--quiet", "--allow-empty", "-m", "candidate"]);
+        const candidateSha = git(["rev-parse", "HEAD"]);
+        if (shallow) {
+          const shallowCheckout = join(repo, "shallow");
+          git(["clone", "--quiet", "--depth=2", `file://${repo}`, shallowCheckout]);
+          checkout = shallowCheckout;
+          expect(git(["rev-parse", "--is-shallow-repository"])).toBe("true");
+          const moduleUrl = pathToFileURL(resolve("scripts/release-prepush.mts")).href;
+          execFileSync(
+            process.execPath,
+            [
+              "--import",
+              resolve("scripts/tsx.mjs"),
+              "--input-type=module",
+              "--eval",
+              `import { refreshMain } from ${JSON.stringify(moduleUrl)}; refreshMain();`,
+            ],
+            { cwd: checkout, encoding: "utf8" },
+          );
+          expect(git(["rev-parse", "--is-shallow-repository"])).toBe("false");
+        }
 
-      expect(
-        selectChangedGateBase(mainSha, candidateSha, releaseSha, (baseSha, headSha) =>
-          git(["merge-base", baseSha, headSha]),
-        ),
-      ).toBe(releaseSha);
-    } finally {
-      rmSync(repo, { force: true, recursive: true });
-    }
-  });
+        expect(
+          selectChangedGateBase(mainSha, candidateSha, releaseSha, (baseSha, headSha) =>
+            git(["merge-base", baseSha, headSha]),
+          ),
+        ).toBe(releaseSha);
+      } finally {
+        rmSync(repo, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("rejects a candidate that does not advance the canonical release branch", () => {
     const mergeBase = vi
