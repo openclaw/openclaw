@@ -2,7 +2,10 @@ import { getSubagentRunsForRequesterSession } from "../agents/subagents/registry
 import type { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { listOrphanedSessionPendingInputTargets } from "../config/sessions/session-pending-input-withdrawal.js";
-import { isRestartResumeMarkerOutOfScope } from "../config/sessions/session-restart-resume-scope.js";
+import {
+  createRestartResumeMarker,
+  isRestartResumeEntryOutOfScope,
+} from "../config/sessions/session-restart-resume-scope.js";
 import type { restartResumeSkipReason } from "../config/sessions/session-run-lifecycle-projection.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
@@ -30,6 +33,8 @@ export type PreparedRestartStore = {
   windows?: GatewayRestartResumeWindow[];
   entries: Awaited<ReturnType<typeof readSessionEntrySummariesInWorker>>;
   orphaned: Awaited<ReturnType<typeof listOrphanedSessionPendingInputTargets>>;
+  /** Orphaned sessions whose queued input belongs to another restart resume scope. */
+  outOfScope: Set<string>;
   sessions: Map<string, Deferred>;
 };
 
@@ -72,9 +77,11 @@ async function prepareRestartStore(
   target: RestartStoreTarget,
 ): Promise<PreparedRestartStore | undefined> {
   const { signal, log } = params;
+  let summaries: PreparedRestartStore["entries"];
   let entries: PreparedRestartStore["entries"];
   try {
-    entries = (await readSessionEntrySummariesInWorker(target)).filter(({ sessionKey, entry }) => {
+    summaries = await readSessionEntrySummariesInWorker(target);
+    entries = summaries.filter(({ sessionKey, entry }) => {
       if (entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId) {
         return true;
       }
@@ -112,6 +119,16 @@ async function prepareRestartStore(
     target,
     entries,
     orphaned,
+    // With a token set, input of a session without scope evidence ends too (fail closed).
+    outOfScope: new Set(
+      orphaned
+        .map(({ sessionKey }) => sessionKey)
+        .filter((sessionKey) =>
+          isRestartResumeEntryOutOfScope(
+            summaries.find((row) => row.sessionKey === sessionKey)?.entry ?? {},
+          ),
+        ),
+    ),
     sessions: new Map(
       [...entries, ...orphaned].map(({ sessionKey }) => [sessionKey, createDeferredCore()]),
     ),
@@ -144,9 +161,10 @@ const LEGACY_RESTART_RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 /**
  * What a startup session resumes under: its shutdown marker, a parked yield, a run orphaned
- * in a recorded crash window, or a recent legacy cycle. A shutdown marker from another restart
- * resume scope was ended by the supervisor (for example by an explicit stop): it is `stale`,
- * cleared without resuming, and the session's queued input ends.
+ * in a recorded crash window, or a recent legacy cycle. Work from another restart resume scope
+ * was ended by the supervisor (for example by an explicit stop): it is `stale`, cleared without
+ * resuming, and the session's queued input ends. Recovered markers carry the current scope, so
+ * another restart under the same scope still resumes them.
  */
 export function resolveStartupRestartMarker(
   selected: InternalSessionEntry,
@@ -171,7 +189,9 @@ export function resolveStartupRestartMarker(
     (!selected.activeWriterRunId || !hasAgentRunContextExecutionOwner(selected.activeWriterRunId))
       ? selected.lifecycleRunId
       : undefined;
-  const stale = isRestartResumeMarkerOutOfScope(selected.resumeAfterRestart);
+  const stale =
+    Boolean(selected.resumeAfterRestart || orphanedRun || parked || selected.mainRestartRecovery) &&
+    isRestartResumeEntryOutOfScope(selected);
   const marker: InternalSessionEntry["resumeAfterRestart"] = stale
     ? undefined
     : (selected.resumeAfterRestart ??
@@ -188,7 +208,7 @@ export function resolveStartupRestartMarker(
         selected.status === "interrupted" &&
         selected.updatedAt <= performance.timeOrigin &&
         selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
-        ? {}
+        ? createRestartResumeMarker({})
         : undefined));
   return { orphanedRun, stale, marker };
 }

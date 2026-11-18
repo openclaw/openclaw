@@ -4,6 +4,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import type { SessionGoalOperationResult } from "../../config/sessions/goals-operations.js";
+import { resolveRestartResumeScope } from "../../config/sessions/session-restart-resume-scope.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,
@@ -416,6 +417,7 @@ export async function handleChatSendWithStorage(
               }),
               activeWriterRunId: clientRunId,
               lifecycleRunId: clientRunId,
+              lifecycleRestartScope: resolveRestartResumeScope(),
               lastRunId: undefined,
               lastInteractionAt: admissionStartedAt,
             },
