@@ -850,7 +850,7 @@ src/gateway/operator-approval-session-events.ts	4
 src/gateway/operator-approval-store.receipts.ts	1
 src/gateway/operator-approval-store.rows.ts	3
 src/gateway/operator-invocation-authority.ts	3
-src/gateway/operator-run-authority.ts	2
+src/gateway/operator-run-authority.ts	1
 src/gateway/operator-run-recovery.ts	3
 src/gateway/plugin-command-scheduled-run.ts	9
 src/gateway/question-manager.ts	4

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createClackPrompter } from "../wizard/clack-prompter.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
 
@@ -15,6 +16,36 @@ describe("runGuidedOnboarding quick start", () => {
     setupApplyResult,
     setupDeps,
   } = setupGuidedCustodianTestSuite();
+
+  it.each(["skip", "candidate:claude-cli"])(
+    "prints one completion message after quick start with %s",
+    async (choice) => {
+      using capture = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      const rendered = createClackPrompter();
+      const prompter = createWizardPrompter(
+        { note: rendered.note, progress: rendered.progress, outro: rendered.outro },
+        { selectValues: ["quick", "one"] },
+      );
+      promptAuthChoiceGrouped.mockResolvedValueOnce(choice);
+      const deps = setupDeps({
+        prompter,
+        applySetup: vi.fn(async () => ({
+          ...setupApplyResult(),
+          lines: ["Workspace: /tmp/work"],
+          gateway: { status: "skipped" as const, reason: "explicit" as const },
+        })),
+      });
+
+      await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+      const transcript = capture.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(transcript).toContain("Local setup");
+      expect(transcript.split("Everything's in place.")).toHaveLength(2);
+      if (choice === "skip") {
+        expect(transcript).toContain("Next steps");
+      }
+    },
+  );
 
   it("quick start restores stdin before foreground launch", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });

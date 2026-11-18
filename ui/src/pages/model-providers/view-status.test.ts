@@ -8,6 +8,36 @@ import { card, mount, props, text } from "./view.test-support.tsx";
 
 beforeEach(() => i18n.setLocale("en"));
 
+it("uses the scoped check outcome without hiding catalog or account problems", () => {
+  const viewProps = props({ cards: [card({ catalogStatus: "ready" })] });
+  const container = mount(viewProps);
+  const status = () => text(container.querySelector(".provider-row__status"));
+  const probe = { provider: "openai", status: "billing" as const, results: [] };
+  mount({ ...viewProps, probeResults: { openai: probe } }, container);
+  expect(status()).toBe("Billing problem");
+  mount({ ...viewProps, probeResults: { another: probe } }, container);
+  expect(status()).toBe("Ready");
+  const partial = {
+    provider: "openai",
+    status: "ok" as const,
+    results: [{ label: "Secondary account", status: "auth" as const }],
+  };
+  mount({ ...viewProps, probeResults: { openai: partial } }, container);
+  expect(status()).toBe("Access verified with warnings");
+  for (const [catalogStatus, label] of [
+    ["auth-rejected", "Credentials rejected"],
+    ["unavailable", "Models unavailable"],
+  ] as const) {
+    mount(
+      { ...viewProps, cards: [card({ catalogStatus })], probeResults: { openai: partial } },
+      container,
+    );
+    expect(status()).toBe(label);
+  }
+  mount({ ...viewProps, probeResults: { openai: { ...partial, results: [] } } }, container);
+  expect(status()).toBe("Ready");
+});
+
 it("uses catalog evidence for short-lived OAuth without treating expiry alone as sign-out", () => {
   const oauth = {
     profileId: "example:account",

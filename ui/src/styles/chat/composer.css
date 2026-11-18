@@ -70,59 +70,8 @@
   --skeleton-base: var(--skeleton-base-raised);
 }
 
-@property --chat-dictation-edge-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-/* Dictation remains the same writing surface. A masked gradient paints inside
-   its actual radius and corner-shape, so capture never introduces a competing
-   rounded-rectangle geometry. */
-.agent-chat__input--dictating,
-.agent-chat__input--dictating:focus-within {
-  isolation: isolate;
-}
-
-.agent-chat__input--dictating::after {
-  content: "";
-  position: absolute;
-  z-index: 5;
-  inset: -1px;
-  padding: 1px;
-  border-radius: inherit;
-  corner-shape: inherit;
-  /* Comet, not a ring: a long fading tail behind a bright head, dark again
-     right in front of it, so the light reads as travelling, not as a ring. */
-  background: conic-gradient(
-    from var(--chat-dictation-edge-angle),
-    transparent 0deg 200deg,
-    color-mix(in srgb, var(--accent) 10%, transparent) 252deg,
-    color-mix(in srgb, var(--accent) 45%, transparent) 286deg,
-    color-mix(in srgb, var(--accent) 92%, white) 294deg,
-    transparent 301deg 360deg
-  );
-  -webkit-mask:
-    linear-gradient(white 0 0) content-box,
-    linear-gradient(white 0 0);
-  mask-composite: exclude;
-  animation: chat-dictation-edge-orbit 6.6s linear infinite;
-  pointer-events: none;
-}
-
-@keyframes chat-dictation-edge-orbit {
-  to {
-    --chat-dictation-edge-angle: 360deg;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .chat-controls__inline-select[open] > .chat-picker-overlay {
-    animation: none;
-  }
-
-  .agent-chat__input--dictating::after {
-    --chat-dictation-edge-angle: 238deg;
     animation: none;
   }
 }
@@ -193,29 +142,6 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.agent-chat__composer-status-stack {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 10px 0;
-}
-
-.agent-chat__composer-status-stack:not(
-  :has(.compaction-indicator, .agent-chat__goal, .agent-chat__dictation-status)
-) {
-  display: none;
-}
-
-.agent-chat__composer-status-stack .compaction-indicator,
-.agent-chat__composer-status-stack .agent-chat__goal {
-  margin: 0;
-}
-
-.agent-chat__input--dictating .agent-chat__composer-status-stack {
-  padding: 12px 14px 0;
 }
 
 /* Capture mode pares the footer back to the two decisions that matter: stop
@@ -607,60 +533,66 @@
   height: 100%;
 }
 
-/* Bars-only meter; the stop-voice pill button supplies the chrome around it. */
+/* Timeline meter: 2px dots on a 4px pitch (BAR_WIDTH/BAR_PITCH in microphone-meter.ts)
+   across whatever width the surrounding row gives it. The canvas draws the moving
+   bars over the resting dots; the mask softens both ends so bars drift in and out. */
 .agent-chat__voice-activity {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
+  display: block;
+  min-width: 48px;
   height: 20px;
+  color: color-mix(in srgb, var(--accent) 88%, var(--text));
+  mask-image: linear-gradient(
+    90deg,
+    rgb(0 0 0 / 0.15),
+    black var(--voice-meter-fade, 40px),
+    black calc(100% - var(--voice-meter-fade, 40px)),
+    rgb(0 0 0 / 0.15)
+  );
 }
 
-.agent-chat__voice-activity-bar {
-  position: relative;
-  width: 3px;
-  height: 18px;
-  flex: 0 0 3px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 88%, var(--text));
-  box-shadow: 0 0 5px color-mix(in srgb, var(--accent) 30%, transparent);
-  opacity: 0.9;
-  transform: scaleY(0.18);
-  transform-origin: center;
+.agent-chat__voice-activity::before,
+.agent-chat__voice-activity[data-status="connecting"]::after {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle, currentColor 0.9px, transparent 1.2px) center / 4px 4px
+    repeat-x;
+  content: "";
+}
+
+.agent-chat__voice-activity::before {
+  opacity: 0.6;
 }
 
 .agent-chat__voice-activity-canvas {
   position: absolute;
   display: none;
-  left: -8px;
-  top: -8px;
+  inset: 0;
   pointer-events: none;
 }
 
-@keyframes agent-chat-voice-connecting {
-  0%,
-  100% {
-    opacity: 0.42;
-    transform: scaleY(0.2);
-  }
+/* Connecting: dim dots with a brighter band sweeping left to right. */
+.agent-chat__voice-activity[data-status="connecting"]::before {
+  opacity: 0.35;
+}
 
-  50% {
-    opacity: 0.9;
-    transform: scaleY(0.58);
+.agent-chat__voice-activity[data-status="connecting"]::after {
+  mask: linear-gradient(90deg, transparent, black, transparent) -100% 0 / 40% 100% no-repeat;
+}
+
+@keyframes agent-chat-voice-connecting {
+  to {
+    mask-position: 200% 0;
   }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .agent-chat__voice-activity[data-status="connecting"] .agent-chat__voice-activity-bar {
-    animation: agent-chat-voice-connecting 1.05s ease-in-out infinite;
-    animation-delay: var(--talk-bar-delay);
+  .agent-chat__voice-activity[data-status="connecting"]::after {
+    animation: agent-chat-voice-connecting 1.4s ease-in-out infinite;
   }
 
-  .agent-chat__voice-activity:has(> .agent-chat__voice-activity-canvas[data-ready])
-    > .agent-chat__voice-activity-bar {
+  .agent-chat__voice-activity:has(> .agent-chat__voice-activity-canvas[data-ready])::before {
     visibility: hidden;
-    transform: none;
   }
 
   .agent-chat__voice-activity-canvas[data-ready] {
@@ -668,13 +600,32 @@
   }
 }
 
+/* Dictation status takes the footer space the hidden pickers leave beside Stop
+   and Send, so starting dictation adds no row above the draft. */
 .agent-chat__dictation-status {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 8px;
-  width: 100%;
-  color: var(--accent);
+  min-width: 0;
+  padding-inline-start: 8px;
   font-size: 12px;
+}
+
+/* Once the pickers return, a narrow toolbar needs a full line for the status. */
+@container chat-composer (max-width: 480px) {
+  .agent-chat__composer-footer:has([data-transcribing]) {
+    flex-wrap: wrap;
+  }
+
+  .agent-chat__input--mobile-toolbar [data-transcribing] {
+    flex-basis: 100%;
+  }
+}
+
+/* The dictation timeline takes the rest of the row, so it grows with the composer. */
+.agent-chat__dictation-status .agent-chat__voice-activity {
+  flex: 1;
 }
 
 .chat-controls__account-selection {
@@ -691,28 +642,18 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-chat__voice-activity-bar {
-    animation: none !important;
-    opacity: 0.78;
-    transform: scaleY(0.38);
-    transition: none !important;
+  /* Still states that stay distinct without motion: an even row of short bars
+     while listening, taller bars in the middle while thinking, dim dots while
+     connecting. Talk's text status is screen-reader-only, so the shape carries it. */
+  .agent-chat__voice-activity[data-status="listening"]::before {
+    background: linear-gradient(90deg, currentColor 2px, transparent 2px) center / 4px 6px repeat-x;
   }
 
-  .agent-chat__voice-activity[data-status="connecting"] .agent-chat__voice-activity-bar {
-    opacity: 0.48;
-    transform: scaleY(0.18);
-  }
-
-  .agent-chat__voice-activity[data-status="connecting"]
-    .agent-chat__voice-activity-bar:nth-child(4) {
-    opacity: 0.9;
-    transform: scaleY(0.56);
-  }
-
-  .agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar:nth-child(3),
-  .agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar:nth-child(4),
-  .agent-chat__voice-activity[data-status="thinking"] .agent-chat__voice-activity-bar:nth-child(5) {
-    transform: scaleY(0.72);
+  .agent-chat__voice-activity[data-status="thinking"]::after {
+    position: absolute;
+    inset: 0 33%;
+    background: linear-gradient(90deg, currentColor 2px, transparent 2px) center / 4px 12px repeat-x;
+    content: "";
   }
 
   .chat-send-btn--voice-live .agent-chat__voice-activity,
@@ -1197,6 +1138,11 @@
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* Phones: the timeline alone shows listening. */
+  .agent-chat__dictation-phase--listening {
+    display: none;
+  }
+
   .agent-chat__composer-alert .callout__dismiss {
     width: 44px;
     height: 44px;

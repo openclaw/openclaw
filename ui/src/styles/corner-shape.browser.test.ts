@@ -11,7 +11,7 @@ function corners(circular: string, superelliptical: string, selectors: string) {
 const COMPOSER_CASES = corners(
   "20px",
   "25px",
-  ".agent-chat__input, .agent-chat__input--dictating::after, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status",
+  ".agent-chat__input, .agent-chat__disabled-banner, .agent-chat__composer-notices .chat-composer-neighbor-card, .agent-chat__composer-alert, .agent-chat__talk-status",
 );
 
 const CORNER_CASES = [
@@ -53,7 +53,7 @@ const markup = `<main>
   <label style="--radius-sm: 12px"><input class="oc-checkbox round-checkbox" type="checkbox" /></label>
   <button class="btn" type="button">Send</button><div class="card">Surface</div>
   <section class="option-card" role="group"><div class="option-card__choices"><button type="button" class="option-card__choice">Choice</button></div></section>
-  <div class="exec-approval-card">Surface</div><div class="agent-chat__input agent-chat__input--dictating">Surface</div>
+  <div class="exec-approval-card">Surface</div><div class="agent-chat__input">Surface</div>
   <div class="agent-chat__composer-shell">
     <div class="agent-chat__disabled-banner callout">Archived session</div>
     <div class="agent-chat__composer-notices">

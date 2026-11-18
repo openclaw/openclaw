@@ -421,7 +421,7 @@ describe("grouped chat rendering", () => {
           );
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
-        expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);
+        expectCount(".chat-tool-msg-collapse .chat-message-image", expanded ? 3 : 0);
         if (expanded) {
           expect(harness.view.textContent!.match(/Viewed image/g)).toHaveLength(1);
         }
