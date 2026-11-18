@@ -213,3 +213,48 @@ it.each<EndCause>([
   },
   60_000,
 );
+
+it("a later publication of an ended child's row leaves a replacement session's processes", async () => {
+  if (process.platform === "win32") {
+    return;
+  }
+  const runId = "replaced-child";
+  const childKey = `agent:main:subagent:${runId}`;
+  const storePath = await writeChildSession(fixture.stateDir, parentKey, "parent");
+  await writeChildSession(fixture.stateDir, childKey, runId);
+  await registerSubagentRun({
+    runId,
+    childSessionKey: childKey,
+    childAgentId: "main",
+    sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
+    requesterSessionKey: parentKey,
+    requesterAgentId: "main",
+    requesterDisplayKey: parentKey,
+    task: "replaced",
+    cleanup: "keep",
+    expectsCompletionMessage: false,
+  });
+  lifecycle(runId, childKey, { phase: "end" });
+  await vi.waitFor(() => expect(subagentRuns.get(runId)?.execution.endedAt).toBeDefined(), {
+    timeout: 30_000,
+  });
+  await fixture.settle();
+  // The child key now belongs to a reset session whose own work started after that end.
+  const pids = await startChildProcesses(childKey);
+  try {
+    await mutateSubagentRuns([runId], (rows) => ({
+      value: undefined,
+      postimages: new Map([[runId, { ...structuredClone(rows.get(runId)!), label: "renamed" }]]),
+    }));
+    await fixture.settle();
+    expect(pids.filter(isPidAlive)).toEqual(pids);
+  } finally {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already stopped.
+      }
+    }
+  }
+}, 60_000);

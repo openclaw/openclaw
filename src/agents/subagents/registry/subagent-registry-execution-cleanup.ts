@@ -153,8 +153,8 @@ function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {
   return resolver ? getRpcSourceForGateway(current.runId, resolver) !== undefined : false;
 }
 
-/** Scope keys of a hidden subagent chat whose task ended; undefined while it can still take a turn. */
-function endedSubagentTaskScopes(childSessionKey: string, childAgentId?: string) {
+/** A hidden subagent chat whose task ended: its scope keys and when it ended; undefined while it can still take a turn. */
+function endedSubagentTask(childSessionKey: string, childAgentId?: string) {
   const runs = [...getSubagentRunsForChildSession(childSessionKey, childAgentId)];
   if (
     runs.length === 0 ||
@@ -169,20 +169,24 @@ function endedSubagentTaskScopes(childSessionKey: string, childAgentId?: string)
   ) {
     return undefined;
   }
-  // The row counts processes under the same keys, so whatever it counts is stopped.
-  return new Set(
-    runs.flatMap((run) => [
-      run.childSessionKey,
-      ...(run.childSessionIdentity?.sessionId ? [run.childSessionIdentity.sessionId] : []),
-    ]),
-  );
+  return {
+    // The row counts processes under the same keys, so whatever it counts is stopped.
+    scopes: new Set(
+      runs.flatMap((run) => [
+        run.childSessionKey,
+        ...(run.childSessionIdentity?.sessionId ? [run.childSessionIdentity.sessionId] : []),
+      ]),
+    ),
+    // A retained row can outlive a reset of its child key; later processes are not its own.
+    endedAt: Math.max(...runs.map((run) => run.execution.endedAt ?? 0)),
+  };
 }
 
 /**
  * A hidden subagent whose task ended (done, failed, killed, timed out) holds no process:
  * nothing would manage it. Derived from the stored rows on every registry publication, so
  * no end path can skip it. A yielded subagent keeps the command it waits on. Accepted edge:
- * a command spawned in the instant after a kill is stopped by the next publication for it.
+ * a command that starts after the recorded end (a kill racing a spawn) is left running.
  */
 export function stopEndedSubagentProcesses(event: { runIds: readonly string[] | undefined }) {
   const children = new Map<string, string | undefined>();
@@ -193,17 +197,21 @@ export function stopEndedSubagentProcesses(event: { runIds: readonly string[] | 
     }
   }
   for (const [childSessionKey, childAgentId] of children) {
-    const scopes = endedSubagentTaskScopes(childSessionKey, childAgentId);
-    if (!scopes) {
+    const ended = endedSubagentTask(childSessionKey, childAgentId);
+    if (!ended) {
       continue;
     }
     void runWithGatewayDetachedWorkContinuation(
       () =>
-        stopSessionExecProcesses(scopes, () => {
-          if (!endedSubagentTaskScopes(childSessionKey, childAgentId)) {
-            throw new Error("Subagent task resumed before its processes were stopped");
-          }
-        }),
+        stopSessionExecProcesses(
+          ended.scopes,
+          () => {
+            if (!endedSubagentTask(childSessionKey, childAgentId)) {
+              throw new Error("Subagent task resumed before its processes were stopped");
+            }
+          },
+          ended.endedAt,
+        ),
       "subagents:task-end-processes",
     ).catch((error: unknown) => {
       log.warn("failed to stop an ended subagent's processes", { childSessionKey, error });
