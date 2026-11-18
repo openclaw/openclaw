@@ -86,9 +86,10 @@ new version of it. Correct or withdraw that replacement instead.
 
 ## Impact and visibility
 
-Correction, withdrawal, and supersession receipts include `operation`,
-`targetId`, `replacementId` (for corrections and supersessions), `reason`, and
-`impact`. `impact.items` lists authorized direct and
+Agent receipts for corrections, withdrawals, and supersessions return the
+changed records and `impact`; the complete receipt from `knowledge_mutation`
+also includes `operation`, `targetId`, `replacementId` (for corrections and
+supersessions), and `reason`. `impact.items` lists authorized direct and
 transitive dependents through `dependencies`, `entities`, `owner`, and
 relationship endpoints. These are unresolved impacts, not automatic repairs.
 Nothing rewrites prose copies, cascades, or deletes. Follow up by inspecting and

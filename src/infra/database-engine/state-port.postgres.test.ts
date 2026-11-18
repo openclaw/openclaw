@@ -81,7 +81,8 @@ describe.skipIf(!connection)("shared-state database port", () => {
       storeId,
       assertCurrent() {},
     });
-    expect(staged).toEqual({ tables: before.tables, allocations: before.allocations });
+    const { catalog: _catalog, ...sourceVerification } = before;
+    expect(staged).toEqual(sourceVerification);
     const plannerRows = (schema: string) =>
       rows(
         `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -92,7 +93,7 @@ describe.skipIf(!connection)("shared-state database port", () => {
     expect(await rows(`SELECT sequence FROM "${namespace}".audit_events`)).toEqual([
       { sequence: "9007199254740993" },
     ]);
-    expect(Object.keys(staged.tables)).toHaveLength(136);
+    expect(Object.keys(staged.tables)).toHaveLength(137);
     expect(await rows(`SELECT display_name, avatar FROM "${namespace}".user_profiles`)).toEqual([
       { display_name: "Café 🦞", avatar: Buffer.from([0, 255, 128]) },
     ]);

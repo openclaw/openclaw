@@ -4,7 +4,7 @@ import { stableStringify } from "../packages/normalization-core/src/stable-strin
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
+import { ensureGitCommit, resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { isChangedTsgoCoreTestInput } from "./lib/tsgo-core-test-shards.mts";
@@ -443,8 +443,11 @@ export function listChangedPathsFromGit(params: {
   cwd?: string;
   mergeHeadFirstParent?: boolean;
 }): string[] {
-  const head = params.head ?? "HEAD";
   const cwd = params.cwd ?? process.cwd();
+  if (!params.base) {
+    return [];
+  }
+  const head = ensureGitCommit(params.head ?? "HEAD", cwd);
   const resolvedBase = resolveMergeHeadDiffBase({
     base: params.base,
     head,
@@ -452,10 +455,7 @@ export function listChangedPathsFromGit(params: {
     maxBuffer: GIT_OUTPUT_MAX_BUFFER,
     preferFirstParent: params.mergeHeadFirstParent === true,
   });
-  const base = typeof resolvedBase === "string" ? resolvedBase : "";
-  if (!base) {
-    return [];
-  }
+  const base = ensureGitCommit(resolvedBase, cwd);
   let rangePaths: string[];
   let noMergeBase = false;
   try {
@@ -533,7 +533,7 @@ function runGitLsFiles(extraArgs: string[], cwd = process.cwd()): string[] {
  * Lists staged changed paths for pre-commit checks.
  */
 export function listStagedChangedPaths(cwd = process.cwd(), base?: string) {
-  return runGitNameOnlyDiff(["--cached", ...(base ? [base] : [])], cwd);
+  return runGitNameOnlyDiff(["--cached", ...(base ? [ensureGitCommit(base, cwd)] : [])], cwd);
 }
 
 /**
@@ -618,7 +618,8 @@ function readGitText(ref: string, filePath: string) {
   if (ref === "WORKTREE") {
     return readFileSync(filePath, "utf8");
   }
-  const spec = ref === "INDEX" ? `:${filePath}` : `${ref}:${filePath}`;
+  const spec =
+    ref === "INDEX" || ref === "" ? `:${filePath}` : `${ensureGitCommit(ref)}:${filePath}`;
   return execFileSync("git", ["show", spec], {
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",

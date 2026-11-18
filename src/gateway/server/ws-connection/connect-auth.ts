@@ -28,6 +28,10 @@ import {
   openclawIdPeerKeyOf,
 } from "../../openclaw-id/device-token-binding.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
+import {
+  GATEWAY_DELEGATION_DENIED,
+  hasGatewayDelegationClaim,
+} from "../../trusted-proxy-delegation.js";
 import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
@@ -232,6 +236,13 @@ async function authenticateGatewayConnectCore(
     });
     close(1008, truncateCloseReason(authMessage));
   };
+  if (
+    hasGatewayDelegationClaim(upgradeReq, resolvedAuth.trustedProxy?.userHeader) &&
+    (!authResult.delegation || role !== "operator")
+  ) {
+    rejectUnauthorized({ ok: false, reason: GATEWAY_DELEGATION_DENIED });
+    return undefined;
+  }
   const clearUnboundScopes = () => {
     if (scopes.length > 0) {
       scopes = [];
@@ -304,7 +315,7 @@ async function authenticateGatewayConnectCore(
 
     if (decision.kind === "reject-control-ui-insecure-auth") {
       const errorMessage =
-        "control ui requires device identity (use HTTPS or localhost secure context)";
+        "web app requires device identity (use HTTPS or localhost secure context)";
       markHandshakeFailure("control-ui-insecure-auth", {
         insecureAuthConfigured: false,
       });
@@ -559,7 +570,7 @@ async function authenticateGatewayConnectCore(
   if (controlUiBuildMismatch) {
     // Build identity predates this rejection. Frozen clients recognize the shipped
     // protocol-mismatch signal and surface its literal reload guidance.
-    const message = "protocol mismatch: Control UI updated; reload this page to continue";
+    const message = "protocol mismatch: OpenClaw updated; reload this page to continue";
     markHandshakeFailure("control-ui-build-mismatch", {
       clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
       gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
@@ -605,6 +616,7 @@ async function authenticateGatewayConnectCore(
       authMethod,
       authModeOverride: resolvedAuth.modeSource === "override" ? resolvedAuth.mode : undefined,
       verifiedIdentity: authResult.user,
+      delegation: authResult.delegation,
       browserOrigin: context.browserOrigin,
     }),
     resolvedAuth,

@@ -107,7 +107,7 @@ function createAgentConfigApplication(respond: RespondFn) {
       if (outcome === "applied") {
         return true;
       }
-      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${outcome}); run config.get, then apply the saved config or restart the Gateway.`;
+      const message = `Agent configuration was saved but its application to the active Gateway was not confirmed (${typeof outcome === "object" ? outcome.status : outcome}); run config.get, then apply the saved config or restart the Gateway.`;
       if (onUnconfirmed) {
         onUnconfirmed(message);
       } else {
@@ -295,9 +295,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
           avatar: params.avatar,
           beforePersistentApply: () => {
             assertOwnerCurrent?.();
-            preparation?.assertCurrent();
+            preparation?.assertAuthorityCurrent();
           },
-          ...(preparation ? { expectedConfigHash: preparation.expectedConfigHash } : {}),
+          ...(preparation
+            ? {
+                expectedConfigHash: preparation.expectedConfigHash,
+                assertBeforePublish: preparation.assertCurrent,
+              }
+            : {}),
           assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
             method: "agents.create",
             requestParams: params,
@@ -340,7 +345,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }),
               error: applicationError,
             }
-          : await completeAgentOnboarding(options, result.agentId, result.name)
+          : await completeAgentOnboarding(options, result.agentId)
         : undefined;
       let onboardingOperatorAuthority:
         | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>

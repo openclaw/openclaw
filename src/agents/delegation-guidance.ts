@@ -68,9 +68,7 @@ export function buildSubagentPromptGuidance(params: {
       sessionsCreateToolName: availableTools.has("sessions_create")
         ? params.resolveToolName("sessions_create")
         : undefined,
-      suggestTaskToolName: availableTools.has("suggest_task")
-        ? params.resolveToolName("suggest_task")
-        : undefined,
+      // suggest_task is run-granted: the granting turn lists it, so the cached prompt omits it.
     }),
   };
 }

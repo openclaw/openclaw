@@ -9,6 +9,7 @@ import {
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../../infra/installation-target-context.js";
 import { compareValidSemver } from "../../infra/semver.js";
+import type { ImageContent } from "../../llm/types.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
@@ -23,7 +24,6 @@ import {
   detectImageReferences,
   hasHydratableMediaImages,
 } from "../embedded-agent-runner/run/images.js";
-import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { resolveFastModeForElapsed } from "../fast-mode.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
@@ -41,6 +41,7 @@ import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { resolveCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { readCliStreamRefusalOutput, recordCliStreamRefusalToolEffects } from "./exit-error.js";
 import {
   buildCliArgs,
   isClaudeCliBackendId,
@@ -53,6 +54,11 @@ import {
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
+import {
+  recallNativeSessionSystemPrompt,
+  rememberNativeSessionSystemPrompt,
+} from "./native-session-system-prompt.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import { resolveCliNoOutputTimeoutMs, resolveCliRunTimeoutOverrideMs } from "./reliability.js";
 import { recordCliModelCompleted, recordCliTrajectoryEvent } from "./trajectory.js";
@@ -73,13 +79,11 @@ function exactToolAvailabilityError(params: {
 }
 
 type ExecutePreparedCliRunOptions = {
+  /** Exact current-turn image snapshot approved by before_agent_run, reused on recovery. */
+  promptImages?: ImageContent[];
   onPhase?: (phase: "send" | "resolve" | "cleanup") => void;
   /** Receives the exact composed prompt sent to the CLI, once per attempt. */
   onPromptPrepared?: (prompt: string) => void;
-};
-
-type PreparedCliRunInternalParams = PreparedCliRunContext["params"] & {
-  mediaImageLayout?: MediaImageLayout;
 };
 
 export async function executePreparedCliRun(
@@ -101,7 +105,7 @@ export async function executePreparedCliRun(
         },
       }
     : inputContext;
-  const params = context.params as PreparedCliRunInternalParams;
+  const params = context.params;
   const assertCurrent = createCliRunCurrentAssertion(params);
   assertCurrent();
   const backend = context.preparedBackend.backend;
@@ -123,7 +127,12 @@ export async function executePreparedCliRun(
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
     isNewSession: isNew || resendSystemPromptForSoftResume,
-    systemPrompt: context.systemPrompt,
+    // A control operation resends the exact prompt the session's turns cached.
+    systemPrompt:
+      (params.controlOperation &&
+        resolvedSessionId &&
+        recallNativeSessionSystemPrompt(context.backendResolved.id, resolvedSessionId)) ||
+      context.systemPrompt,
   });
   const shouldSendSystemPrompt =
     systemPromptArg &&
@@ -141,10 +150,14 @@ export async function executePreparedCliRun(
     !params.forkCliSessionOnResume
       ? context.resumeContext
       : undefined;
+  const turnContext = [context.contextEngineSystemPromptAddition, resumeContext]
+    .filter(Boolean)
+    .join("\n\n");
   const basePrompt = usePluginOwnedExecution
     ? attemptPrompt
-    : composeCliPromptContext(attemptPrompt, { prependContext: resumeContext });
+    : composeCliPromptContext(attemptPrompt, { prependContext: turnContext });
   const privatePrependContext = [
+    usePluginOwnedExecution ? context.contextEngineSystemPromptAddition : undefined,
     context.promptContext?.prependContext,
     usePluginOwnedExecution ? resumeContext : undefined,
   ]
@@ -154,7 +167,7 @@ export async function executePreparedCliRun(
     params.controlOperation !== undefined
       ? basePrompt
       : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
-  const promptContext =
+  let promptContext: PreparedCliRunContext["promptContext"] =
     privatePrependContext || context.promptContext?.appendContext
       ? {
           ...(privatePrependContext
@@ -175,6 +188,15 @@ export async function executePreparedCliRun(
             : {}),
         }
       : undefined;
+  // Last text a plugin can screen before the CLI owns it; image paths stay host-owned.
+  if (context.beforeModelRequest) {
+    const request = await context.beforeModelRequest(
+      toCliModelRequestPayload(prompt, promptContext),
+    );
+    assertCurrent();
+    prompt = request.prompt;
+    promptContext = readCliPromptContext(request);
+  }
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
@@ -200,14 +222,20 @@ export async function executePreparedCliRun(
         imageOrder: params.imageOrder,
         mediaImageLayout: params.mediaImageLayout,
         media: params.media,
+        preparedImages: options?.promptImages,
         ...(imageTurnEntryId ? { imageTurnKey: hashCliImageTurnEntryId(imageTurnEntryId) } : {}),
       });
   prompt = imagePayload.prompt;
-  const promptInputBackend =
-    params.controlOperation === "compact" && context.backendResolved.manualCompaction
-      ? { ...backend, input: context.backendResolved.manualCompaction.input }
-      : backend;
-  const { argsPrompt, stdin } = resolvePromptInput({ backend: promptInputBackend, prompt });
+  const manualCompaction =
+    params.controlOperation === "compact" ? context.backendResolved.manualCompaction : undefined;
+  const invocationBackend = manualCompaction
+    ? {
+        ...backend,
+        input: manualCompaction.input,
+        systemPromptFileArg: manualCompaction.systemPromptFileArg ?? backend.systemPromptFileArg,
+      }
+    : backend;
+  const { argsPrompt, stdin } = resolvePromptInput({ backend: invocationBackend, prompt });
   const baseArgs = useResume ? (backend.resumeArgs ?? backend.args ?? []) : (backend.args ?? []);
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
@@ -281,6 +309,13 @@ export async function executePreparedCliRun(
         backend,
         systemPrompt: systemPromptArg,
       });
+    }
+    if (!nodePlacement && shouldSendSystemPrompt && resolvedSessionId && !params.controlOperation) {
+      rememberNativeSessionSystemPrompt(
+        context.backendResolved.id,
+        resolvedSessionId,
+        systemPromptArg,
+      );
     }
     const cliTurnStartedAt = Date.now();
     const restoreSkillEnv =
@@ -471,7 +506,7 @@ export async function executePreparedCliRun(
         const args = buildCliArgs({
           backend: nodePlacement
             ? { ...backend, systemPromptArg: undefined, systemPromptFileArg: undefined }
-            : backend,
+            : invocationBackend,
           baseArgs: Array.from(executionBaseArgs),
           modelId: context.normalizedModel,
           sessionId: resolvedSessionId,
@@ -561,14 +596,24 @@ export async function executePreparedCliRun(
       }
     }
     if (runFailed) {
+      const refused = readCliStreamRefusalOutput(runError);
+      if (refused) {
+        const { acceptedSessionSpawns } = toolTracking.withExecutionEvidence(refused);
+        recordCliStreamRefusalToolEffects(runError, {
+          toolSummary: events.getToolSummary(),
+          ...(acceptedSessionSpawns ? { acceptedSessionSpawns } : {}),
+        });
+      }
       throw toolTracking.attachDeliveryEvidence(runError);
     }
     if (!runOutput) {
       throw new Error("CLI run completed without output");
     }
+    const nativeCompaction = events.getNativeCompaction();
     return toolTracking.withExecutionEvidence({
       ...runOutput,
       toolSummary: events.getToolSummary(),
+      ...(nativeCompaction ? { nativeCompaction } : {}),
     });
   };
   try {

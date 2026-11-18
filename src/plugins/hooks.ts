@@ -15,11 +15,8 @@ import { finalizeGroupThreadToolReply } from "../auto-reply/group-thread-context
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
-import {
-  projectAgentEndEvent,
-  withAgentRunId,
-  withoutIncognitoLlmContent,
-} from "./hook-agent-observations.js";
+import { projectAgentEndEvent, withAgentRunId } from "./hook-agent-observations.js";
+import { mergeBeforeAgentFinalize } from "./hook-before-agent-finalize.js";
 import { createChannelIngressHookRunner } from "./hook-channel-ingress.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import { isHookContextEligible } from "./hook-context-eligibility.js";
@@ -34,12 +31,12 @@ import {
   clonePromptHookEvent,
   HookIsolationError,
 } from "./hook-isolation.js";
+import { createModelHookBindings } from "./hook-model.js";
 import { createPluginSystemContextLimiter, mergeAgentTurnPrepare } from "./hook-prompt-context.js";
 import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
   BeforeAgentFinalizeResultWithRetryCandidates,
-  BeforeAgentFinalizeRetry,
   HookFailurePolicy,
   HookRunnerOptions,
   HookContext,
@@ -50,10 +47,10 @@ import type {
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
 import { withHookTimeout } from "./hook-timeout.js";
+import { projectHookTurnTaint } from "./hook-turn-taint.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
   PluginHookAgentContext,
-  PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -174,6 +171,7 @@ export function createHookRunner(
   const failurePolicyByHook = {
     before_agent_run: "fail-closed",
     before_channel_ingress: "fail-closed",
+    before_model_request: "fail-closed",
     ...options.failurePolicyByHook,
   } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
   const voidHookTimeoutMsByHook = {
@@ -339,63 +337,6 @@ export function createHookRunner(
     };
   };
 
-  const mergeBeforeAgentFinalize = (
-    acc: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
-    next: PluginHookBeforeAgentFinalizeResult,
-  ): BeforeAgentFinalizeResultWithRetryCandidates => {
-    const normalizeRetry = (
-      retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
-    ): BeforeAgentFinalizeRetry | undefined => {
-      const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
-      if (!instruction) {
-        return undefined;
-      }
-      return {
-        ...retry,
-        instruction,
-      };
-    };
-    if (acc?.action === "finalize") {
-      return acc;
-    }
-    if (next.action === "finalize") {
-      return { action: "finalize", reason: next.reason };
-    }
-    if (acc?.action === "revise" && next.action === "revise") {
-      const nextRetry = normalizeRetry(next.retry);
-      const retryCandidates = [
-        ...(acc.retryCandidates ?? (acc.retry ? [acc.retry] : [])),
-        ...(nextRetry ? [nextRetry] : []),
-      ];
-      const retry = retryCandidates[0];
-      const result: BeforeAgentFinalizeResultWithRetryCandidates = {
-        action: "revise",
-        reason: concatOptionalTextSegments({ left: acc.reason, right: next.reason }),
-        ...(retry ? { retry } : {}),
-      };
-      if (retryCandidates.length > 1) {
-        Object.defineProperty(result, "retryCandidates", {
-          configurable: true,
-          enumerable: false,
-          value: retryCandidates,
-        });
-      }
-      return result;
-    }
-    if (acc?.action === "revise") {
-      return acc;
-    }
-    if (next.action === "revise") {
-      const retry = normalizeRetry(next.retry);
-      return {
-        action: "revise",
-        reason: next.reason,
-        ...(retry ? { retry } : {}),
-      };
-    }
-    return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
-  };
-
   const handleHookError = (params: {
     hookName: PluginHookName;
     pluginId: string;
@@ -531,7 +472,7 @@ export function createHookRunner(
           const invoke = () =>
             (current.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
               event,
-              projected?.context ?? ctx,
+              projectHookTurnTaint(hookName, projected?.context ?? ctx),
             );
           const handlerPromise =
             hookName === "gateway_stop"
@@ -647,7 +588,7 @@ export function createHookRunner(
             const promise = selection.invoke(current, () =>
               (current.handler as (event: unknown, ctx: unknown) => Promise<HookResult<K>>)(
                 handlerEvent,
-                handlerContext,
+                projectHookTurnTaint(hookName, handlerContext),
               ),
             );
             outcome = await awaitHook(current, promise, modifyingHookTimeoutMsByHook[hookName]);
@@ -1076,10 +1017,7 @@ export function createHookRunner(
           (ctx === undefined || isHookContextEligible(hook, ctx)),
       ),
     runBeforeAgentReply: bindClaimingHook("before_agent_reply"),
-    runModelCallStarted: bindVoidHook("model_call_started"),
-    runModelCallEnded: bindVoidHook("model_call_ended"),
-    runLlmInput: withoutIncognitoLlmContent(bindVoidHook("llm_input")),
-    runLlmOutput: withoutIncognitoLlmContent(bindVoidHook("llm_output")),
+    ...createModelHookBindings(bindModifyingHook, bindVoidHook),
     runBeforeAgentFinalize: async (
       event: HookEvent<"before_agent_finalize">,
       ctx: HookContext<"before_agent_finalize">,

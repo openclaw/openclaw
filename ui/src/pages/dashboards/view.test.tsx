@@ -36,10 +36,46 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
     error: null,
     basePath,
     fallbackAgentId: "main",
+    agents: [{ id: "main", name: "Molty" }],
     mainKey: "main",
     globalScope: false,
   };
 }
+
+it.each([
+  ["grid", "none", []],
+  ["list", "author", ["Author 0", "Author 1", "Author 2"]],
+] as const)("bounds the initial %s/%s gallery by cards", (view, group, headings) => {
+  const rows = Array.from({ length: 200 }, (_, index) => ({
+    ...dashboard,
+    key: `agent:main:dashboard:volume-${index}`,
+    displayName: `Volume ${index}`,
+    updatedAt: 200 - index,
+    createdActor: {
+      type: "human" as const,
+      id: `author-${Math.min(2, Math.floor(index / 5))}`,
+      label: `Author ${Math.min(2, Math.floor(index / 5))}`,
+    },
+  }));
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData(rows)}
+      readReady={() => undefined}
+      filters={{ ...filters, view, group }}
+      handlers={handlers}
+    />
+  ));
+
+  // Inspect the first render, before browser geometry admits virtual tracks.
+  const cards = container.querySelectorAll("[data-dashboard-session]");
+  expect(cards).toHaveLength(12);
+  expect(cards[11]?.getAttribute("data-dashboard-session")).toBe("agent:main:dashboard:volume-11");
+  expect(
+    [...container.querySelectorAll(".dashboards-group__heading > span")].map((heading) =>
+      heading.textContent?.trim(),
+    ),
+  ).toEqual(headings);
+});
 
 it.each([
   ["gallery", "[data-dashboard-session]", "Release health"],
@@ -88,7 +124,7 @@ it.each([
   });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your sessions appear here.",
+      "Ask your agent to make a dashboard in any conversation.",
     );
   }
   if (outcome === "error") {
@@ -112,6 +148,19 @@ it.each([
 
   const trigger = container.querySelector('button[aria-label="Filter by author"]');
   expect(trigger?.classList.contains("active")).toBe(active);
+});
+
+it("names an agent-authored dashboard by its agent", () => {
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData([dashboard])}
+      readReady={() => undefined}
+      filters={filters}
+      handlers={handlers}
+    />
+  ));
+
+  expect(container.querySelector(".dashboard-card__author-name")?.textContent).toBe("Molty");
 });
 
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {

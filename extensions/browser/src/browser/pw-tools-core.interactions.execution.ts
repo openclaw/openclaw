@@ -156,13 +156,52 @@ export async function executeActViaPlaywright(
   downloads?: BrowserDownloadResult[];
   targetId?: string;
 }> {
+  const action = opts.action;
+  return await runActionExecution(
+    opts,
+    actionUsesNavigationRequestGuard(action),
+    async (page, execution) => {
+      if (action.kind === "batch") {
+        const batch = await batchViaPlaywright({
+          ...execution,
+          evaluateEnabled: opts.evaluateEnabled,
+          page,
+          actions: action.actions,
+          stopOnError: action.stopOnError,
+        });
+        return {
+          results: batch.results,
+          ...(batch.aborted ? { aborted: batch.aborted } : {}),
+        };
+      }
+      const result = await executeSingleAction(action, {
+        ...execution,
+        evaluateEnabled: opts.evaluateEnabled,
+      });
+      return action.kind === "evaluate" ? { result } : {};
+    },
+  );
+}
+
+/**
+ * Owns one page operation's download policy, dialog interruption and policy-denial
+ * quarantine. Act calls and operator input bursts share it.
+ */
+export async function runActionExecution<T extends Record<string, unknown>>(
+  opts: GuardedInteractionOptions,
+  usesNavigationRequestGuard: boolean,
+  run: (page: Page, execution: GuardedInteractionOptions) => Promise<T>,
+): Promise<
+  | (T & { downloads?: BrowserDownloadResult[]; targetId?: string })
+  | { blockedByDialog: true; browserState: unknown; targetId?: string }
+> {
   const navigationPolicy = interactionNavigationPolicy(opts);
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
-  const withOperationTarget = async <T extends Record<string, unknown>>(payload: T) => {
+  const withOperationTarget = async <P extends Record<string, unknown>>(payload: P) => {
     const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
     return { ...payload, ...(targetId ? { targetId } : {}) };
   };
@@ -182,8 +221,7 @@ export async function executeActViaPlaywright(
   // Guarded interactions already hold a 250 ms event window while policy is
   // active. Policy-free internal callers need that window from download capture.
   const downloadGraceMs =
-    actionUsesNavigationRequestGuard(opts.action) &&
-    !hasInteractionNavigationPolicy(navigationPolicy)
+    usesNavigationRequestGuard && !hasInteractionNavigationPolicy(navigationPolicy)
       ? BROWSER_ACTION_NAVIGATION_GRACE_MS
       : 0;
   const drainDownloads = async (firstEventGraceMs = downloadGraceMs) =>
@@ -198,36 +236,21 @@ export async function executeActViaPlaywright(
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ...navigationPolicy,
-    evaluateEnabled: opts.evaluateEnabled,
     signal: dialogAbort.signal,
     assertCurrent: opts.assertCurrent,
   };
   try {
-    if (opts.action.kind === "batch") {
-      const batch = await batchViaPlaywright({
-        ...execution,
-        page,
-        actions: opts.action.actions,
-        stopOnError: opts.action.stopOnError,
-      });
-      const newDownloads = await drainDownloads();
-      return await withOperationTarget({
-        results: batch.results,
-        ...(batch.aborted ? { aborted: batch.aborted } : {}),
-        ...(newDownloads ? { downloads: newDownloads } : {}),
-      });
-    }
-    const result = await executeSingleAction(opts.action, execution);
+    const payload = await run(page, execution);
     const newDownloads = await drainDownloads();
     return await withOperationTarget({
-      ...(opts.action.kind === "evaluate" ? { result } : {}),
+      ...payload,
       ...(newDownloads ? { downloads: newDownloads } : {}),
     });
   } catch (err) {
     let failure = err;
     try {
       const failureGraceMs =
-        dialogAbort.signal.aborted && actionUsesNavigationRequestGuard(opts.action)
+        dialogAbort.signal.aborted && usesNavigationRequestGuard
           ? BROWSER_ACTION_NAVIGATION_GRACE_MS
           : downloadGraceMs;
       await drainDownloads(failureGraceMs);
@@ -238,7 +261,7 @@ export async function executeActViaPlaywright(
     }
     if (isBrowserObservedDialogBlockedError(failure)) {
       return await withOperationTarget({
-        blockedByDialog: true,
+        blockedByDialog: true as const,
         browserState: failure.browserState,
       });
     }

@@ -416,10 +416,18 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           resolveCodexBoundedTurnAbortError(abortController.signal, params.taskLabel, timeoutError),
       });
       if (result.error || result.turn?.status === "failed") {
-        const source = result.error
+        const notification = result.error
           ? readCodexErrorNotification(result.error)?.error
-          : result.turn?.error;
-        const failure = source ? resolveCodexPromptError(source) : undefined;
+          : undefined;
+        const priorFailure = notification ? resolveCodexPromptError(notification) : undefined;
+        const completed = result.turn?.error;
+        // Preserve recorded failure details when the completion adds none.
+        const retainPrior =
+          priorFailure !== undefined &&
+          completed?.codexErrorInfo == null &&
+          (!completed?.message || completed.message === notification?.message);
+        const failure =
+          completed && !retainPrior ? resolveCodexPromptError(completed) : priorFailure;
         throw failure instanceof Error
           ? failure
           : new Error(failure ?? `codex app-server ${params.taskLabel} turn failed`);

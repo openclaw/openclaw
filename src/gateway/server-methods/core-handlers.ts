@@ -52,6 +52,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./plugins-control-ui.js").then((module) => module.pluginsControlUiHandlers),
   cron: () => import("./cron.js").then((module) => module.cronHandlers),
   devices: () => import("./devices.js").then((module) => module.deviceHandlers),
+  "device-pair-code": () =>
+    import("./device-pair-code.js").then((module) => module.devicePairCodeHandlers),
   "device-pair-setup": () =>
     import("./device-pair-setup.js").then((module) => module.devicePairSetupHandlers),
   diagnostics: () => import("./diagnostics.js").then((module) => module.diagnosticsHandlers),
@@ -165,6 +167,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "talk-mode": () => import("../talk/handlers/mode.js").then((module) => module.talkModeHandlers),
   "task-suggestions": () =>
     import("./task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
+  "tool-usage": () => import("./tool-usage.js").then((module) => module.toolUsageHandlers),
   "tools-catalog": () => import("./tools-catalog.js").then((module) => module.toolsCatalogHandlers),
   "tools-github": () => import("./tools-github.js").then((module) => module.toolsGitHubHandlers),
   "tools-effective": () =>

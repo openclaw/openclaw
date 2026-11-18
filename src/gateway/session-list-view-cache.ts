@@ -88,6 +88,34 @@ export function retainCurrentSessionListPartitions(
   }
 }
 
+/** Aggregate count and runtime-membership facts from admitted partitions. */
+export function mergeSessionListOwnerCounts(parts: SessionListFilteredEntries[]) {
+  const counts = new Map<
+    string,
+    NonNullable<SessionEntrySelection["ownerSessionCounts"]>[number]
+  >();
+  const ownerSessionProfiles = new Map<string, string>();
+  for (const part of parts) {
+    for (const count of part.ownerSessionCounts ?? []) {
+      const combined = counts.get(count.profileId);
+      if (combined) {
+        combined.open += count.open;
+      } else {
+        counts.set(count.profileId, { ...count });
+      }
+    }
+    part.ownerSessionProfiles?.forEach((profileId, key) =>
+      ownerSessionProfiles.set(key, profileId),
+    );
+  }
+  return {
+    ownerSessionProfiles,
+    ownerSessionCounts: [...counts.values()].toSorted((a, b) =>
+      a.profileId.localeCompare(b.profileId),
+    ),
+  };
+}
+
 export type SessionListView = {
   key: string;
   refs: number;
@@ -98,6 +126,7 @@ export type SessionListView = {
   rowHistory?: SessionRowGeneration[];
   conditional?: boolean;
   selection?: SessionEntrySelection;
+  rowKeys?: Set<string>;
   selectedAt?: number;
   activityExpiresAt?: number;
   partitions?: SelectionPartitions;
@@ -110,6 +139,7 @@ function hasRowBaseline(view: SessionListView): boolean {
 /** The publication owns admission, recency, accounting and retirement of every list view. */
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
+  private readonly selections = new Set<SessionListView>();
   private rowEncodings = new WeakMap<
     GatewaySessionRow,
     { refs: number; bytes: number; extraBytes: number; factBytes: number }
@@ -119,6 +149,22 @@ export class SessionListViewCache {
 
   values() {
     return this.lists.values();
+  }
+
+  invalidateSelections() {
+    // Release obsolete entries even without another read; each populated view retires once.
+    for (const view of this.selections) {
+      view.selection = undefined;
+      this.update(view);
+    }
+  }
+
+  invalidateRows(key?: string) {
+    for (const view of this.lists.values()) {
+      if (key === undefined || view.rowKeys?.has(key)) {
+        this.retireRows(view);
+      }
+    }
   }
 
   hasRowBaselines() {
@@ -156,6 +202,7 @@ export class SessionListViewCache {
       this.retainRows(view, view.rows);
     }
     view.rows = undefined;
+    view.rowKeys = undefined;
     view.encodedBytes = 0;
     this.update(view);
   }
@@ -176,8 +223,9 @@ export class SessionListViewCache {
       this.retainRows(view, view.rows);
     }
     view.rows = rows;
+    view.rowKeys = retained ? new Set() : undefined;
     view.encodedBytes =
-      (retained ? this.retainRowEncodings(rows, extraRowEncodingBytes) : 0) +
+      (retained ? this.retainRowEncodings(rows, view.rowKeys!, extraRowEncodingBytes) : 0) +
       serializedJsonArrayBytes(rows) +
       sharedBytes;
     this.update(view);
@@ -185,10 +233,12 @@ export class SessionListViewCache {
 
   private retainRowEncodings(
     rows: GatewaySessionRow[],
+    keys: Set<string>,
     extraBytes?: (row: GatewaySessionRow) => number,
   ) {
     let bytes = 0;
     for (const row of rows) {
+      keys.add(row.key);
       let encoding = this.rowEncodings.get(row);
       if (encoding) {
         encoding.refs++;
@@ -230,13 +280,22 @@ export class SessionListViewCache {
     const history = (view.rowHistory ??= []);
     history.push(captureSessionRowGeneration(rows));
     view.historyRefs += rows.length;
-    if (history.length > ROW_HISTORY_LIMIT) {
-      view.historyRefs -= history.shift()!.ids.length;
-      emitTrustedDiagnosticEvent({
-        type: "sessions.list.baseline.retired",
-        cause: "history-evicted",
-      });
-    }
+  }
+
+  private retireOldestGeneration(view: SessionListView) {
+    const refs = view.rowHistory!.shift()!.ids.length;
+    const bytes = refs * 8 + 160;
+    view.historyRefs -= refs;
+    view.refs -= refs;
+    this.refs -= refs;
+    retainedRefs -= refs;
+    view.bytes -= bytes;
+    this.bytes -= bytes;
+    retainedBytes -= bytes;
+    emitTrustedDiagnosticEvent({
+      type: "sessions.list.baseline.retired",
+      cause: "history-evicted",
+    });
   }
 
   update(view: SessionListView) {
@@ -244,6 +303,11 @@ export class SessionListViewCache {
     // on its ephemeral view. This also covers admission evicting the view itself.
     if (this.lists.get(view.key) !== view) {
       return;
+    }
+    if (view.selection) {
+      this.selections.add(view);
+    } else {
+      this.selections.delete(view);
     }
     const rowRefs = (view.rows?.length ?? 0) + view.historyRefs;
     const entryRefs =
@@ -258,6 +322,7 @@ export class SessionListViewCache {
       1024 +
       view.key.length * 2 +
       rowRefs * 8 +
+      (view.rowKeys?.size ?? 0) * 32 +
       pairRefs * 8 +
       (entryRefs - pairRefs) * 48 +
       (view.partitions?.size ?? 0) * 64 +
@@ -269,10 +334,47 @@ export class SessionListViewCache {
     this.bytes += bytes - view.bytes;
     view.refs = refs;
     view.bytes = bytes;
-    if (bytes > MAX_ESTIMATED_BYTES) {
+    if (
+      this.bytes > MAX_ESTIMATED_BYTES &&
+      view.selection?.ownerSessionCounts &&
+      view.partitions?.size
+    ) {
+      // Retire count acceleration before displacing conditional sidebar baselines.
+      view.partitions = undefined;
+      this.update(view);
+      return;
+    }
+    if ((view.rowHistory?.length ?? 0) > ROW_HISTORY_LIMIT) {
+      this.retireOldestGeneration(view);
+    }
+    if (
+      view.bytes -
+        (view.historyRefs - (view.rowHistory?.at(-1)?.ids.length ?? 0)) * 8 -
+        Math.max(0, (view.rowHistory?.length ?? 0) - 1) * 160 >
+      MAX_ESTIMATED_BYTES
+    ) {
       this.remove(view);
     }
     while (this.lists.size > MAX_VIEWS || this.bytes > MAX_ESTIMATED_BYTES) {
+      // Retire optional count partitions, then old comparison witnesses, before whole views.
+      // Keep its newest generation even while current rows await reconstruction.
+      let history: SessionListView | undefined;
+      if (this.lists.size <= MAX_VIEWS) {
+        for (const candidate of this.lists.values()) {
+          if (candidate.selection?.ownerSessionCounts && candidate.partitions?.size) {
+            candidate.partitions = undefined;
+            this.update(candidate);
+            return;
+          }
+          if (!history && (candidate.rowHistory?.length ?? 0) > 1) {
+            history = candidate;
+          }
+        }
+      }
+      if (history) {
+        this.retireOldestGeneration(history);
+        continue;
+      }
       const oldest = this.lists.values().next().value!;
       this.remove(oldest);
     }
@@ -290,6 +392,7 @@ export class SessionListViewCache {
       });
     }
     this.lists.delete(view.key);
+    this.selections.delete(view);
     this.bytes -= view.bytes;
     retainedBytes -= view.bytes;
     retainedRefs -= view.refs;
@@ -305,6 +408,7 @@ export class SessionListViewCache {
     this.bytes = 0;
     this.refs = 0;
     this.lists.clear();
+    this.selections.clear();
     this.rowEncodings = new WeakMap();
     scheduleRetentionReport();
   }

@@ -1,3 +1,0 @@
-# Preserve cold/warm shell identity, responsive visibility, and device-token proof
-# while migrating startup assertions to the current connection presentation.
-25

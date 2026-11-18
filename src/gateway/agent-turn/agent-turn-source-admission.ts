@@ -1,4 +1,5 @@
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { captureRequesterCronAuthorityAdmissionAssertion } from "../../agents/subagents/requester-cron-authority.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -20,6 +21,17 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-
 import type { AgentRequestPreflight } from "./agent-request-preflight.js";
 import type { PrepareAgentRunDispatchParams } from "./agent-run-admission-types.js";
 import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
+
+export function captureAgentTurnRequesterAuthority(params: PrepareAgentRunDispatchParams) {
+  const assertCurrent = captureRequesterCronAuthorityAdmissionAssertion({
+    runId: params.runId,
+    sessionKey: params.resolvedSessionKey,
+    sessionId: params.getAdmittedSessionId(),
+    inputProvenance: params.inputProvenance,
+  });
+  assertCurrent?.();
+  return assertCurrent;
+}
 
 /** Authorize a principal to create or mutate the canonical session an agent turn targets. */
 export async function authorizeAgentTurnSession({

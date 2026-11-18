@@ -115,15 +115,19 @@ export async function listGatewayAgentsBasic(
     getPreparedAgentDeletionDiscovery(resolveOpenClawStateSqlitePath()) ??
     (await prepareAgentDatabaseDeletionSnapshotRead({}, "runtime-discovery", signal).read())
       .snapshot?.retainedDeletions;
-  const deletions =
+  const retained =
     disposition?.status === "present"
-      ? disposition.entries
+      ? disposition
       : disposition?.status === "unavailable"
-        ? disposition.known?.entries
+        ? disposition.known
         : undefined;
   signal?.throwIfAborted();
   const agents: GatewayAgentListRow[] = orderedIds
-    .filter((id) => !deletions?.some((entry) => entry.agentId === id))
+    .filter(
+      (id) =>
+        !retained?.entries.some((entry) => entry.agentId === id) &&
+        !retained?.held.some((entry) => entry.agentId === id),
+    )
     .map((id) => {
       const admissionRefusal = readAgentDatabaseAdmissionRefusal(id);
       const agent: GatewayAgentListRow = {

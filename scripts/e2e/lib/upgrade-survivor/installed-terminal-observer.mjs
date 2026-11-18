@@ -20,6 +20,11 @@ import {
   readInstalledTerminalMetadata,
 } from "./installed-terminal-contracts.mjs";
 import {
+  captureDirectoryWatchLaunch,
+  captureRetainedDirectoryWatchRuntime,
+  directoryWatchCoverage,
+} from "./installed-terminal-directory-watch.mjs";
+import {
   assertWorkerCellPackageIdentity,
   readWorkerCellPackageIdentity,
 } from "./worker-cell-package.mjs";
@@ -34,7 +39,7 @@ const closedEntryPaths = {
   "sqlite-session": "dist/infra/sqlite-readonly-location.worker.js",
   "finalizer-check": "dist/infra/update-migrated-finalize.worker.js",
 };
-const currentProbeSha256 = "8700a6c51bb2bd0040ec85d263d81ab1fd34057fa290290d568187ed945da1dc";
+const currentProbeSha256 = "ed25993c504b1a383e6b152164c854e170972579cb8ebe547df568aff5435188";
 // Fixed 2026.10.9/SRI fixture: runtime-paths-CNOx8gw6 + node-sqlite-C2ThNhQ8
 // emit this exact Node -e script. Its no-op selector and memory probe join locally.
 const publishedProbeSha256 = "954fe0502bbd8beb9de99ca78dced72c87b9a8ebd6110dd62fc25ee19eeb61ce";
@@ -59,6 +64,19 @@ const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const workerUrlDescriptors = Object.getOwnPropertyDescriptors(URL.prototype);
 const workerSearchParamsDescriptors = Object.getOwnPropertyDescriptors(URLSearchParams.prototype);
 const nativeArraySpecies = Object.getOwnPropertyDescriptor(Array, Symbol.species);
+const messagePortPrototype = workerThreads.MessagePort.prototype;
+const nativeMessagePortHasRef = Object.getOwnPropertyDescriptor(messagePortPrototype, "hasRef");
+const sqliteEngineFamilies = [
+  "state",
+  "agent",
+  "workboard",
+  "logbook",
+  "team-reports",
+  "quarantine",
+  "managed-update",
+  "package-activation",
+];
+
 function nativePrototypeMatches(prototype, expected) {
   const actual = Object.getOwnPropertyDescriptors(prototype);
   return (
@@ -213,7 +231,13 @@ function isolatedWorkerLaunch(data) {
     !execArgv ||
     execArgv.length !== 0 ||
     (data.eval !== undefined && typeof data.eval !== "boolean") ||
-    keys.some((key) => !["eval", "env", "execArgv", "workerData"].includes(key))
+    [data.stdout, data.stderr].some((value) => value !== undefined && typeof value !== "boolean") ||
+    keys.some(
+      (key) =>
+        !["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"].includes(
+          key,
+        ),
+    )
   ) {
     return undefined;
   }
@@ -233,7 +257,11 @@ function publishedWorkerOptions(data) {
 }
 
 function isolatedWorkerRole(launch, role) {
-  const allowed = new Set(["eval", "env", "execArgv", "workerData"]);
+  const allowed = new Set(
+    role === "heartbeat"
+      ? ["eval", "env", "execArgv", "workerData", "transferList", "stdout", "stderr"]
+      : ["eval", "env", "execArgv", "workerData"],
+  );
   return (
     launch?.environment === "empty" &&
     Array.isArray(launch.execArgv) &&
@@ -244,6 +272,137 @@ function isolatedWorkerRole(launch, role) {
     launch.keys.includes("execArgv") &&
     launch.keys.every((key) => allowed.has(key))
   );
+}
+
+function sqliteHeartbeatLaunch(fact) {
+  return (
+    fact?.kind === "sqlite-finite-clone-v1" &&
+    fact.effectiveEngines &&
+    Object.keys(fact.effectiveEngines).length === sqliteEngineFamilies.length &&
+    sqliteEngineFamilies.every((family) => fact.effectiveEngines[family] === "sqlite")
+  );
+}
+
+function heartbeatWorkerData(options) {
+  // V8 clones enumerable own values in order. A nested getter could change the
+  // engine selection before it is cloned, despite an earlier shallow snapshot.
+  const fields = (value, allowed) => {
+    const data = plainData(value, true);
+    return data && Object.keys(data).every((key) => allowed.includes(key)) ? data : undefined;
+  };
+  const data = fields(options.workerData, [
+    "databaseEngineSelection",
+    "databaseAdmissionPort",
+    "lossPort",
+    "postgresPool",
+    "path",
+    "expectedIdentity",
+    "deferActivation",
+    "identity",
+    "leaseMs",
+    "acquiredAt",
+    "heartbeatMs",
+    "processOwner",
+    "shared",
+    "renewalProgress",
+  ]);
+  const selection = fields(data?.databaseEngineSelection, ["effectiveEngines", "postgres"]);
+  const engines = fields(selection?.effectiveEngines, sqliteEngineFamilies);
+  const identity = fields(data?.identity, ["scope", "key", "owner"]);
+  const fact = { kind: "sqlite-finite-clone-v1", effectiveEngines: engines };
+  if (
+    !data ||
+    !selection ||
+    !identity ||
+    !sqliteHeartbeatLaunch(fact) ||
+    selection.postgres !== undefined ||
+    data.postgresPool !== undefined ||
+    typeof data.path !== "string" ||
+    typeof data.expectedIdentity !== "string" ||
+    ![identity.scope, identity.key, identity.owner].every((value) => typeof value === "string") ||
+    ![data.leaseMs, data.acquiredAt, data.heartbeatMs].every(Number.isFinite) ||
+    (data.deferActivation !== undefined && data.deferActivation !== true)
+  ) {
+    return undefined;
+  }
+  if (data.processOwner !== undefined) {
+    const owner = fields(data.processOwner, ["identity", "env"]);
+    const processIdentity = fields(owner?.identity, [
+      "pid",
+      "host",
+      "startedAt",
+      "processNamespace",
+      "machineIdentity",
+    ]);
+    const env = plainData(owner?.env, true);
+    if (
+      !owner ||
+      !processIdentity ||
+      !env ||
+      !Number.isFinite(processIdentity.pid) ||
+      typeof processIdentity.host !== "string" ||
+      (processIdentity.startedAt !== null && !Number.isFinite(processIdentity.startedAt)) ||
+      (processIdentity.machineIdentity != null &&
+        typeof processIdentity.machineIdentity !== "string") ||
+      !Object.values(env).every((value) => value === undefined || typeof value === "string")
+    ) {
+      return undefined;
+    }
+    if (processIdentity.processNamespace != null) {
+      const namespace = fields(processIdentity.processNamespace, [
+        "platform",
+        "identity",
+        "host",
+        "pidNsInode",
+      ]);
+      if (
+        !namespace ||
+        typeof namespace.platform !== "string" ||
+        typeof namespace.host !== "string" ||
+        ![namespace.identity, namespace.pidNsInode].every(
+          (value) => value === undefined || typeof value === "string",
+        )
+      ) {
+        return undefined;
+      }
+    }
+  }
+  const nativePort = (value) => {
+    if (!value || types.isProxy(value) || Object.getPrototypeOf(value) !== messagePortPrototype) {
+      return false;
+    }
+    try {
+      Reflect.apply(nativeMessagePortHasRef.value, value, []);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (
+    !nativePort(data.databaseAdmissionPort) ||
+    !nativePort(data.lossPort) ||
+    data.databaseAdmissionPort === data.lossPort ||
+    !types.isSharedArrayBuffer(data.shared) ||
+    !types.isSharedArrayBuffer(data.renewalProgress) ||
+    !Array.isArray(options.transferList) ||
+    types.isProxy(options.transferList) ||
+    Object.getPrototypeOf(options.transferList) !== Array.prototype
+  ) {
+    return undefined;
+  }
+  // Node's SafeArrayIterator bypasses public iterator hooks, but still consumes
+  // the original array's length and indices before serializing workerData.
+  const transfers = Object.getOwnPropertyDescriptors(options.transferList);
+  if (
+    Reflect.ownKeys(transfers).length !== 3 ||
+    transfers.length?.value !== 2 ||
+    transfers[0]?.value !== data.databaseAdmissionPort ||
+    transfers[1]?.value !== data.lossPort
+  ) {
+    return undefined;
+  }
+  // Retain mode/clone facts only; process identity and environment values are private.
+  return fact;
 }
 
 function childLaunchSnapshot(argv, options, synchronous = false) {
@@ -886,7 +1045,7 @@ function install(spec) {
       rootEntry: { ...expected, identity: fileIdentity(helperFile), source },
     };
   };
-  workerThreads.Worker = new Proxy(original.Worker, {
+  const observedWorker = new Proxy(original.Worker, {
     construct(target, args, newTarget) {
       // Native construction can invoke workerData clone getters after consuming
       // loader flags. Capture inert descriptors first; forward original inputs.
@@ -894,6 +1053,10 @@ function install(spec) {
       const options = workerOptionsData(args[1]);
       const launch = entry === undefined ? undefined : isolatedWorkerLaunch(options);
       const publishedOptions = entry === undefined ? undefined : publishedWorkerOptions(options);
+      const sqliteLaunch =
+        newTarget === observedWorker && isolatedWorkerRole(launch, "heartbeat")
+          ? heartbeatWorkerData(options)
+          : undefined;
       const child = Reflect.construct(target, args, newTarget);
       observe("thread", () => {
         const childThread = child.threadId;
@@ -913,10 +1076,39 @@ function install(spec) {
         ) {
           packageHasher = { kind: "published-inline", sha256: historicalHasherSha256, launch };
         }
+        let packageHeartbeat;
+        if (
+          isolatedWorkerRole(launch, "heartbeat") &&
+          spec.heartbeatWorkers &&
+          locationOf(entry).endsWith(`/${heartbeatRelativePath}`)
+        ) {
+          const file = locationOf(entry);
+          const stat = fs.lstatSync(file);
+          assert(stat.isFile() && !stat.isSymbolicLink() && stat.size <= 4 * 1024 * 1024);
+          assert.equal(fs.realpathSync(file), file);
+          const sha256 = digest(fs.readFileSync(file));
+          const root = file.slice(0, -heartbeatRelativePath.length - 1);
+          assert(
+            isHeartbeatPackageRoot(root, spec),
+            "Heartbeat package root is outside task custody",
+          );
+          const facts = heartbeatFacts(root);
+          const receipt = readHeartbeatReceipt(root, facts);
+          assert.equal(sha256, receipt.sha256);
+          if (receipt.sourceCommit === publishedRevision || sqliteLaunch) {
+            packageHeartbeat = {
+              root,
+              ...receipt,
+              launch,
+              ...(receipt.sourceCommit === publishedRevision ? {} : { sqliteLaunch }),
+            };
+          }
+        }
         report("thread", {
           childThread,
           entry: entry ?? "unknown",
           packageHasher,
+          packageHeartbeat,
           packageEntry: entry === undefined ? undefined : publishedWorker(entry, publishedOptions),
         });
         child.once("exit", (code) => report("thread-exit", { childThread, code }));
@@ -924,6 +1116,7 @@ function install(spec) {
       return child;
     },
   });
+  workerThreads.Worker = observedWorker;
   let spawnId = 0;
   const nativeOperation = (command, argv, data) => {
     const env = data?.env;
@@ -1098,6 +1291,20 @@ function install(spec) {
   };
   childProcess.spawn = function (...args) {
     const launch = childLaunchSnapshot(args[1], args[2]);
+    let directoryWatch;
+    let retainedRuntime;
+    // Registration is owned by the spawning process, not the retained child.
+    // Capture it before native launch; never initialize the product registry.
+    observe("directory-watch-custody", () => {
+      if (args[0] === process.execPath) {
+        retainedRuntime = captureRetainedDirectoryWatchRuntime(launch, qualifiedApplication, spec);
+        directoryWatch = captureDirectoryWatchLaunch(
+          args[0],
+          launch,
+          launch.options ? publishedEnvironment(launch.options, spec) : undefined,
+        );
+      }
+    });
     const child = Reflect.apply(original.spawn, this, args);
     observe("spawn", () => {
       const id = spawnId++;
@@ -1119,6 +1326,8 @@ function install(spec) {
         command: args[0],
         argv,
         packageEntry,
+        directoryWatch,
+        retainedRuntime,
         nativeOperation: nativeOperation(args[0], argv, launch.options),
       });
       // Native exit owns process lifetime. Parent-side IPC disconnect can omit
@@ -1150,6 +1359,7 @@ function install(spec) {
     ppid: process.ppid,
     argv: process.argv,
     node: process.version,
+    executableIdentity: fileIdentity(process.execPath),
     entry: process.argv[1],
   });
   observe("heartbeat-package", qualifyHeartbeatPackage);
@@ -1379,6 +1589,15 @@ function readObservation(directory, spec = {}) {
   }
   const candidate = handoff ? installedTerminalDescendants(rows, handoff.child) : new Set();
   const heartbeatCoverage = new Map();
+  const directoryWatches = new Map();
+  for (const row of rows) {
+    if (row.event === "spawn" && row.directoryWatch) {
+      directoryWatches.set(
+        row,
+        directoryWatchCoverage(row, rows, spec, (root) => isHeartbeatPackageRoot(root, spec)),
+      );
+    }
+  }
   const lifetimeBounds = new Map();
   const fullTraceProcesses = new Set();
   const ownerExit = (owner) =>
@@ -1464,7 +1683,9 @@ function readObservation(directory, spec = {}) {
     );
     const started = startups.filter((start) => start.pid === created.child && start.thread === 0);
     assert(
-      created.nodeChild === true && started.length === 1 && started[0].ppid === created.pid,
+      created.nodeChild === true &&
+        ((started.length === 1 && started[0].ppid === created.pid) ||
+          (started.length === 0 && directoryWatches.has(created))),
       "OS child absence requires exact preload startup",
     );
     assert(
@@ -1472,7 +1693,9 @@ function readObservation(directory, spec = {}) {
         rows.every((event) => BigInt(event.time) < BigInt(receipt.time)),
       "OS child observation exceeds kernel absence bound",
     );
-    fullTraceProcesses.add(created.child);
+    if (!directoryWatches.has(created)) {
+      fullTraceProcesses.add(created.child);
+    }
     lifetimeBounds.set(created, receipt);
     return receipt;
   };
@@ -1655,6 +1878,11 @@ function readObservation(directory, spec = {}) {
     }
     if (row.event === "spawn" && row.nodeChild && row.child !== null) {
       assert(row.argv !== null, "Node child argv observation is unqualified");
+      if (directoryWatches.has(row)) {
+        // This finite helper has no JS preload. Its native exit or post-join
+        // ESRCH bound proves teardown only; it never enters fullTraceProcesses.
+        heartbeatCoverage.set(row, directoryWatches.get(row));
+      }
       const ownerStarts = startups.filter(
         (start) => start.pid === row.pid && start.thread === row.thread,
       );
@@ -1827,6 +2055,43 @@ function readObservation(directory, spec = {}) {
       row.packageHasher?.kind === "published-inline" &&
       row.packageHasher.sha256 === historicalHasherSha256 &&
       digest(row.entry) === historicalHasherSha256;
+    const heartbeat = spec.heartbeatWorkers?.find(
+      (contract) =>
+        isolatedWorkerRole(row.packageHeartbeat?.launch, "heartbeat") &&
+        (contract.sourceCommit === publishedRevision ||
+          sqliteHeartbeatLaunch(row.packageHeartbeat?.sqliteLaunch)) &&
+        contract.relativePath === heartbeatRelativePath &&
+        row.packageHeartbeat &&
+        /^[a-f0-9]{64}$/u.test(row.packageHeartbeat.dependencySha256) &&
+        /^[a-f0-9]{64}$/u.test(row.packageHeartbeat.dependencyReferenceSha256) &&
+        /^\d+:\d+$/u.test(row.packageHeartbeat.dependencyIdentity) &&
+        isHeartbeatPackageRoot(row.packageHeartbeat.root, spec) &&
+        /^\d+:\d+$/u.test(row.packageHeartbeat.rootIdentity) &&
+        locationFromEntry(row.entry) ===
+          path.join(row.packageHeartbeat.root, heartbeatRelativePath) &&
+        row.packageHeartbeat.sha256 === contract.sha256 &&
+        row.packageHeartbeat.inventorySha256 === contract.inventorySha256 &&
+        row.packageHeartbeat.dependencySha256 === contract.dependencies?.sha256 &&
+        row.packageHeartbeat.dependencyReferenceSha256 === contract.dependencyReferenceSha256 &&
+        row.packageHeartbeat.sourceCommit === contract.sourceCommit &&
+        rows.some(
+          (qualified) =>
+            qualified.event === "heartbeat-package" &&
+            BigInt(qualified.time) < BigInt(row.time) &&
+            [
+              "qualifiedRoot",
+              "rootIdentity",
+              "manifestIdentity",
+              "manifestSha256",
+              "sha256",
+              "inventorySha256",
+              "sourceCommit",
+              "dependencyIdentity",
+              "dependencySha256",
+              "dependencyReferenceSha256",
+            ].every((key) => qualified[key] === row.packageHeartbeat[key]),
+        ),
+    );
     const entry = row.packageEntry;
     const rootEntry = entry?.rootEntry;
     const expectedRoot = publishedWorkerRoots[entry?.role];
@@ -1870,6 +2135,13 @@ function readObservation(directory, spec = {}) {
         reason: "settled-before-handoff",
         sourceCommit: publishedRevision,
         sha256: rootEntry.sha256,
+      });
+    } else if (heartbeat && (before || candidate.has(row.pid))) {
+      heartbeatCoverage.set(row, {
+        role: "state-lease-heartbeat",
+        reason: before ? "settled-before-handoff" : "candidate-subtree",
+        sourceCommit: heartbeat.sourceCommit,
+        sha256: heartbeat.sha256,
       });
     } else {
       assert(admittedFile || admittedInline, "Missing worker-thread preload coverage");

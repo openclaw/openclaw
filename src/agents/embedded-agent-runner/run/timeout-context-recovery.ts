@@ -119,7 +119,6 @@ export async function recoverEmbeddedRunTimeout(
     log.info(
       `[timeout-compaction] compaction succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; retrying prompt`,
     );
-    input.armPostCompactionGuard();
     await input.prepareCompactedTranscriptRetry(input.assertRecoveryActive);
     input.assertRecoveryActive();
     if (recoveryMarker) {

@@ -2,10 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { linkedClaw, nowSeconds } from "./openclaw-id.test-support.js";
 import { createTunnelPrincipalPublisher } from "./service-tunnel-principals.js";
+import { openClawIdRecoveryPrincipalSchema } from "./tunnel-principal-schema.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   isSameOpenClawIdTunnelPrincipal,
-  openClawIdRecoveryPrincipalSchema,
   openclawIdTunnelRolePolicy,
   openclawIdTunnelUser,
   recordOpenClawIdTunnelActivity,

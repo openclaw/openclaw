@@ -13,6 +13,7 @@ import { createLimiterSpy } from "./auth-rate-limit.test-support.js";
 import {
   assertGatewayAuthConfigured,
   gatewayPersonPrincipalAuthError,
+  gatewayIngressPrincipalAuthError,
   authorizeHttpGatewayConnect,
   authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -873,3 +874,20 @@ it.each([undefined, "https://linked-claw.example.test"])(
     }
   },
 );
+
+it("allows owner ingress with definitions alone but refuses it with a named-role default", () => {
+  const cfg: OpenClawConfig = {
+    gateway: {
+      roles: {
+        definitions: {
+          guest: { sessions: { others: "none" }, agents: [], scopes: [] },
+        },
+      },
+    },
+  };
+  const auth = resolveGatewayAuth({ authConfig: { mode: "token", token: "test-secret" }, env: {} });
+  const principal = { kind: "owner" as const };
+  expect(gatewayIngressPrincipalAuthError(auth, cfg, principal)).toBeUndefined();
+  cfg.gateway!.roles!.default = "guest";
+  expect(gatewayIngressPrincipalAuthError(auth, cfg, principal)).toContain("gateway.roles");
+});

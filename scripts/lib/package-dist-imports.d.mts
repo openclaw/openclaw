@@ -12,6 +12,12 @@ export type PackageDistImportOccurrence = {
 
 export function preparePackageDistJavaScript(file: string, source: string): string;
 
+export function resolvePackageDistCommonJs(
+  importedPath: string,
+  fileSet: ReadonlySet<string>,
+  packageJsons: ReadonlyMap<string, string>,
+): string | undefined;
+
 export function collectPackageDistImportErrors(
   params: { files: readonly string[]; packageJsons?: ReadonlyMap<string, string> } & (
     | {

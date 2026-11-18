@@ -1,2 +1,0 @@
-# Portal startup: hidden polling suppression, reveal catch-up, and no unrelated session-UI imports.
-31

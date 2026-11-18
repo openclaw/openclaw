@@ -3,6 +3,8 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listMessageActionDiscoveryChannels } from "../../channels/plugins/message-action-discovery.js";
+import * as preparedCatalogModule from "../../plugins/prepared-message-tool-catalog.js";
 
 const { readDeliveryMock, getChannelPluginMock, getBootstrapChannelPluginMock } = vi.hoisted(
   () => ({
@@ -44,6 +46,7 @@ import {
   resolveMessageToolActionSchemaActions,
   resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolDiscoveryAsync,
+  resolveMessageToolDiscovery,
   type MessageToolDiscoveryParams,
 } from "./message-tool-discovery.js";
 
@@ -458,4 +461,35 @@ describe("scheduled account discovery", () => {
       ).toBe(true);
     },
   );
+});
+
+it("uses modern raw-plugin fallback and current configuration facts", () => {
+  let configured = true;
+  const plugin = {
+    ...createChannelTestPluginBase({
+      id: "fixture",
+      config: {
+        resolveAccount: () => ({ configured }),
+        isConfigured: (account) => account.configured,
+      },
+    }),
+    message: {
+      send: { text: async () => ({ receipt: { platformMessageIds: [], parts: [], sentAt: 1 } }) },
+    },
+  };
+  const registry = createTestRegistry([{ pluginId: "fixture", source: "test", plugin }]);
+  setActivePluginRegistry(registry);
+  const unprepared = vi
+    .spyOn(preparedCatalogModule, "getPreparedMessageToolCatalog")
+    .mockReturnValue(undefined);
+  try {
+    expect(listMessageActionDiscoveryChannels()[0]).toBe(plugin);
+    const params = { cfg: {}, agentId: "main" };
+    expect(resolveMessageToolDiscovery(params).available).toBe(true);
+    configured = false;
+    expect(resolveMessageToolDiscovery(params).available).toBe(false);
+  } finally {
+    unprepared.mockRestore();
+    resetPluginRuntimeStateForTest();
+  }
 });

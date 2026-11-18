@@ -43,8 +43,15 @@ it.each([
   { state: "postgres", agent: "sqlite", warmed: ["agent"] },
   { state: "sqlite", agent: "postgres", warmed: ["state"] },
   { state: "sqlite", agent: "sqlite", warmed: ["state", "agent"] },
-] as const)("shares the pass budget (state=$state, agent=$agent)", async (engines) => {
+  { state: "sqlite", agent: "sqlite", warmed: [], pressure: "before" },
+  { state: "sqlite", agent: "sqlite", warmed: ["state"], pressure: "during" },
+] as const)("warms eligible databases ($state/$agent, pressure=$pressure)", async (engines) => {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  const pressure = "pressure" in engines ? engines.pressure : undefined;
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(1024 * 1024 * 1024);
+  const availableMemory = vi
+    .spyOn(process, "availableMemory")
+    .mockReturnValue(pressure === "before" ? 128 * 1024 * 1024 : 1024 * 1024 * 1024);
   const stateDir = dirs.make("gateway-page-cache-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const statePath = resolveOpenClawStateSqlitePath();
@@ -64,10 +71,20 @@ it.each([
   const read = vi.mocked(runSqliteReadOnlyOperation);
   read.mockReset();
   read.mockImplementation(async (_pathname, command) => {
+    if (command.type === "pageCache.step") {
+      return complete;
+    }
     if (command.type !== "pageCache.begin" || !command.input || !("maxBytes" in command.input)) {
       throw new Error("Expected a complete page-cache pass");
     }
-    return { ...complete, readBytes: command.input.maxBytes };
+    if (pressure === "during") {
+      availableMemory.mockReturnValue(128 * 1024 * 1024);
+    }
+    return {
+      ...complete,
+      complete: pressure !== "during",
+      readBytes: pressure === "during" ? 0 : command.input.maxBytes,
+    };
   });
   const log = { info: vi.fn(), warn: vi.fn() };
   try {
@@ -106,9 +123,13 @@ it.each([
     if (budgets.length > 0) {
       expect(Math.min(...budgets)).toBeGreaterThan(0);
       expect(Math.max(...budgets) - Math.min(...budgets)).toBeLessThanOrEqual(1);
-      expect(budgets.reduce((total, bytes) => total + bytes, 0)).toBe(2 * 1024 * 1024 * 1024);
+      if (!pressure) {
+        expect(budgets.reduce((total, bytes) => total + bytes, 0)).toBe(2 * 1024 * 1024 * 1024);
+      }
     }
-    expect(stateAdmission).toHaveBeenCalledTimes(engines.state === "sqlite" ? 1 : 0);
+    expect(stateAdmission).toHaveBeenCalledTimes(
+      engines.state === "sqlite" && pressure !== "before" ? 1 : 0,
+    );
     expect(log.warn).not.toHaveBeenCalled();
   } finally {
     await closeOpenClawStateDatabaseByPathAsync(statePath);

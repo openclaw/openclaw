@@ -15,7 +15,7 @@ import type { SessionEntrySummary } from "./session-accessor.types.js";
 import {
   assertCanonicalSessionKeyWrite,
   canonicalSessionKeyMigrationRequiredError,
-} from "./session-canonical-key.js";
+} from "./session-canonical-row.js";
 import type { SessionEntry } from "./types.js";
 
 function readWorktree(value: string): NonNullable<SessionEntry["worktree"]> {

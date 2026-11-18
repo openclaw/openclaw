@@ -195,7 +195,7 @@ export async function refuseCollaborativeSteering(
   const recorder = run.userTurnTranscriptRecorder;
   recorder?.markBlocked();
   try {
-    recorder?.finishPendingInput?.("cancelled");
+    recorder?.finishPendingInput?.("cancelled", "policy-refused");
     await recorder?.waitForPendingInputSettlement?.();
     await admitFollowupRunLifecycle(run);
   } finally {

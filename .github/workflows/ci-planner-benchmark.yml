@@ -1,0 +1,273 @@
+name: CI Planner Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      workload_sha:
+        description: Reviewed canonical repository workload commit
+        type: choice
+        required: true
+        default: "79f5aeb133830a1db60b55cff3cf7a617086aa07"
+        options:
+          - "79f5aeb133830a1db60b55cff3cf7a617086aa07"
+          - "ba284782cf1705d7e5f1f085b9cdefbb55932af6"
+      case:
+        description: Planner case to measure
+        type: choice
+        required: true
+        default: all
+        options: [all, main, cron, discord]
+      repetitions:
+        description: Serial repetitions per selected case
+        type: choice
+        required: true
+        default: "5"
+        options: ["1", "2", "3", "4", "5"]
+  pull_request:
+    types: [opened, reopened, synchronize]
+    paths:
+      - ".github/workflows/ci-planner-benchmark.yml"
+      - "scripts/bench-ci-planner.mts"
+      - "test/scripts/ci-planner-benchmark.test.ts"
+      - "config/knip.config.ts"
+      - "scripts/bench-ci-planner.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-planner-benchmark-${{ github.run_id }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  CI: "true"
+
+jobs:
+  validate:
+    if: >-
+      github.event_name == 'pull_request' && github.repository == 'openclaw/openclaw' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+        working-directory: harness
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: harness
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Setup pnpm from packageManager
+        uses: ./harness/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: harness/package.json
+          lockfile-path: harness/pnpm-lock.yaml
+          node-version: "24.22.1"
+          cache-mode: off
+
+      - name: Verify checkout and toolchain identities
+        env:
+          HARNESS_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
+          test "$(node --version)" = v24.22.1
+          test "pnpm@$(pnpm --version)" = "$(node -p 'require("./package.json").packageManager.split("+")[0]')"
+          /usr/bin/time --version
+
+      - name: Install from the frozen lockfile
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          git diff --exit-code
+
+      - name: Validate the measurement tool
+        timeout-minutes: 20
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+        run: |
+          set -euo pipefail
+          pnpm test test/scripts/ci-planner-benchmark.test.ts --maxWorkers=1 --reporter=verbose
+          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.tooling.json --incremental
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.tooling.json scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts
+          pnpm format:check scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts config/knip.config.ts .github/workflows/ci-planner-benchmark.yml scripts/bench-ci-planner.md
+          pnpm check:workflows
+          pnpm deadcode:unused-files
+
+  measure:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+        working-directory: harness
+    steps:
+      - name: Validate measurement selection
+        id: selection
+        working-directory: ${{ runner.temp }}
+        env:
+          WORKLOAD_SHA: ${{ inputs.workload_sha }}
+          BENCHMARK_CASE: ${{ inputs.case }}
+          REPETITIONS: ${{ inputs.repetitions }}
+          LC_ALL: C
+        run: |
+          set -euo pipefail
+          [[ "$WORKLOAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid workload SHA' >&2; exit 1; }
+          case "$WORKLOAD_SHA" in
+            79f5aeb133830a1db60b55cff3cf7a617086aa07)
+              WORKLOAD_SHA=79f5aeb133830a1db60b55cff3cf7a617086aa07
+              WORKLOAD=historical
+              ;;
+            ba284782cf1705d7e5f1f085b9cdefbb55932af6)
+              WORKLOAD_SHA=ba284782cf1705d7e5f1f085b9cdefbb55932af6
+              WORKLOAD=reviewed
+              ;;
+            *) echo 'Unreviewed workload SHA' >&2; exit 1 ;;
+          esac
+          case "$BENCHMARK_CASE" in
+            all|main|cron|discord) ;;
+            *) echo 'Invalid planner case' >&2; exit 1 ;;
+          esac
+          [[ "$REPETITIONS" =~ ^[1-5]$ ]] || { echo 'Invalid repetition count' >&2; exit 1; }
+          printf 'workload=%s\nworkload_sha=%s\ncase=%s\nrepetitions=%s\n' "$WORKLOAD" "$WORKLOAD_SHA" "$BENCHMARK_CASE" "$REPETITIONS" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout measurement harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout historical planner workload
+        if: ${{ steps.selection.outputs.workload == 'historical' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: 79f5aeb133830a1db60b55cff3cf7a617086aa07
+          path: workload
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout reviewed planner workload
+        if: ${{ steps.selection.outputs.workload == 'reviewed' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/openclaw
+          ref: ba284782cf1705d7e5f1f085b9cdefbb55932af6
+          path: workload
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+
+      - name: Setup pnpm from packageManager
+        uses: ./harness/.github/actions/setup-pnpm-store-cache
+        with:
+          package-manager-file: harness/package.json
+          lockfile-path: harness/pnpm-lock.yaml
+          node-version: "24.22.1"
+          cache-mode: off
+
+      - name: Verify checkout and toolchain identities
+        env:
+          HARNESS_SHA: ${{ github.sha }}
+          WORKLOAD_SHA: ${{ steps.selection.outputs.workload_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HARNESS_SHA"
+          test "$(git -C ../workload rev-parse HEAD)" = "$WORKLOAD_SHA"
+          test "$(node --version)" = v24.22.1
+          test "pnpm@$(pnpm --version)" = "$(node -p 'require("./package.json").packageManager.split("+")[0]')"
+          /usr/bin/time --version
+
+      - name: Verify matching package-manager pins before installation
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const harness = JSON.parse(readFileSync('package.json', 'utf8')).packageManager;
+          const workload = JSON.parse(readFileSync('../workload/package.json', 'utf8')).packageManager;
+          const pin = typeof harness === 'string' && harness.match(/^pnpm@12\.15\.0\+sha512\.[0-9a-f]{128}$/);
+          if (!pin || pin[0] !== harness || workload !== harness) {
+            throw new Error('Harness and workload must have identical integrity-pinned pnpm 12.15.0 packageManager values');
+          }
+          NODE
+
+      - name: Install each checkout from its own frozen lockfile
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          pnpm install --frozen-lockfile
+          (cd ../workload && pnpm install --frozen-lockfile)
+          git diff --exit-code
+          git -C ../workload diff --exit-code
+
+      - name: Validate the measurement tool
+        timeout-minutes: 20
+        env:
+          OPENCLAW_VITEST_RUNTIME: node
+        run: |
+          set -euo pipefail
+          pnpm test test/scripts/ci-planner-benchmark.test.ts --maxWorkers=1 --reporter=verbose
+          node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.root.tooling.json --incremental
+          node scripts/run-oxlint.mjs --tsconfig test/tsconfig/tsconfig.test.root.tooling.json scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts
+          pnpm format:check scripts/bench-ci-planner.mts test/scripts/ci-planner-benchmark.test.ts config/knip.config.ts .github/workflows/ci-planner-benchmark.yml scripts/bench-ci-planner.md
+          pnpm check:workflows
+          pnpm deadcode:unused-files
+
+      - name: Measure selected serial planner flows
+        timeout-minutes: 22
+        env:
+          WORKLOAD_SHA: ${{ steps.selection.outputs.workload_sha }}
+          BENCHMARK_CASE: ${{ steps.selection.outputs.case }}
+          REPETITIONS: ${{ steps.selection.outputs.repetitions }}
+          PLANNER_BENCHMARK_INSTALL_PROOF: separate pnpm install --frozen-lockfile completed for harness and workload in this job; caches off
+        run: |
+          set -euo pipefail
+          node scripts/bench-ci-planner.mts --workload ../workload --workload-sha "$WORKLOAD_SHA" --case "$BENCHMARK_CASE" --repetitions "$REPETITIONS" --output "$RUNNER_TEMP/ci-planner-benchmark.json"
+
+      - name: Check report size and completeness
+        id: report
+        if: always()
+        env:
+          REPORT: ${{ runner.temp }}/ci-planner-benchmark.json
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, statSync } from 'node:fs';
+          const file = process.env.REPORT;
+          if (statSync(file).size > 16 * 1024 * 1024) throw new Error('Planner report exceeds 16 MiB');
+          const report = JSON.parse(readFileSync(file, 'utf8'));
+          if (report.schema !== 'openclaw-ci-planner-benchmark.v1') throw new Error('Unexpected planner report');
+          NODE
+
+      - name: Upload bounded report, including failed flows
+        if: always() && steps.report.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-planner-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ci-planner-benchmark.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6

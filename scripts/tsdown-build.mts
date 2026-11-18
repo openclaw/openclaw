@@ -31,7 +31,11 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
-import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+  type MemoryLimitParams,
+} from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_DECLARATION_CONFIG_GROUPS,
@@ -814,7 +818,11 @@ export function createTsdownOutputScanner(params: { maxCaptureBytes?: number } =
 export function resolveTsdownBuildInvocation(
   params: TsdownBuildParams = {},
 ): TsdownBuildInvocation {
-  const env = resolveTsdownEnv(params.env ?? process.env, params);
+  const budget = resolveTsdownMemoryBudget(params);
+  const env = resolveTsdownEnv(params.env ?? process.env, {
+    ...params,
+    resolvedMemoryBudget: budget,
+  });
   const args = params.args ?? [];
   const forwardedArgs = wrapperOwnsTsdownCleanup(args)
     ? args.filter((arg) => arg !== "--clean" && !arg.startsWith("--clean="))
@@ -823,21 +831,30 @@ export function resolveTsdownBuildInvocation(
     (arg) => arg === "--concurrency" || arg.startsWith("--concurrency="),
   );
   const filters = readForwardedOptions(args, ["--filter", "-F"]);
+  const mainConfig = !args.some(isConfigArg) || selectsMainConfig(args);
   const runtimeOnly =
     !args.includes("--dts") &&
-    (!args.some(isConfigArg) || selectsMainConfig(args)) &&
+    mainConfig &&
     filters.length > 0 &&
     filters.every((filter) => filter === TSDOWN_UNIFIED_CONFIG_GROUP);
+  // Native allocations are outside the JS heap. Keep small runtime builds serial
+  // and declaration graphs serialized, regardless of which build entry point is used.
+  const defaultConcurrency =
+    !runtimeOnly && tsdownDeclarationsEnabled(args, env)
+      ? 1
+      : mainConfig
+        ? budget.maxOldSpaceMb >= DEFAULT_TSDOWN_MAX_OLD_SPACE_MB
+          ? 2
+          : 1
+        : null;
   const tsdownArgs = [
     "--config-loader",
     "unrun",
     "--logLevel",
     logLevel,
     "--no-clean",
-    // Native declaration children retain entire compiler graphs. Let tsdown own
-    // config admission so preparation and trace drainage cannot overlap unboundedly.
-    ...(!explicitConcurrency && !runtimeOnly && tsdownDeclarationsEnabled(args, env)
-      ? ["--concurrency", "1"]
+    ...(!explicitConcurrency && defaultConcurrency !== null
+      ? ["--concurrency", String(defaultConcurrency)]
       : []),
     ...forwardedArgs,
   ];
@@ -1512,6 +1529,29 @@ export async function runTsdownBuild(
       {
         reportShortfall(shortfall) {
           if (shortfall.fatal) {
+            try {
+              console.error(
+                "[tsdown-build:memory-refusal]",
+                JSON.stringify({
+                  sample: "after-refusal",
+                  memoryCapacity: readProcessMemoryCapacity({}),
+                  rssBytes: process.memoryUsage().rss,
+                  cgroup: readProcessCgroupV2Snapshot()
+                    ?.slice(0, 8)
+                    .map(({ counters }, depth) => {
+                      const current = Number(counters["memory.current"] ?? Number.NaN);
+                      const peak = Number(counters["memory.peak"] ?? Number.NaN);
+                      return {
+                        depth,
+                        currentBytes: Number.isSafeInteger(current) ? current : null,
+                        peakBytes: Number.isSafeInteger(peak) ? peak : null,
+                      };
+                    }),
+                }),
+              );
+            } catch {
+              // Diagnostics must preserve the original admission refusal.
+            }
             console.error(shortfall.message);
           } else {
             console.warn(shortfall.message);
