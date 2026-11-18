@@ -925,7 +925,7 @@ describe("native app i18n inventory", () => {
       (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
     );
     expectSourceAtSite(
-      "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
+      "Lists your %@ conversations in the sidebar without copying them.",
       (site) =>
         site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
         site.kind === "ui-localized-call-multiline",

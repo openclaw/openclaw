@@ -541,8 +541,10 @@ struct OnboardingAISetupView: View {
                         Text("Show your existing conversations")
                             .font(.callout.weight(.semibold))
                         Text(String(
-                            format: String(
-                                localized: "Lists your %@ conversations in the sidebar without copying them."),
+                            format: String(localized: """
+                            Lists your %@ conversations in the sidebar \
+                            without copying them.
+                            """),
                             self.model.nativeSessionCatalogSummary))
                             .font(.caption)
                             .foregroundStyle(.secondary)
