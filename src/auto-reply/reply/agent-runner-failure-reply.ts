@@ -195,7 +195,8 @@ export function resolveNonOwnerProviderFailureText(params: {
   const { error, facts } = params;
   if (
     params.senderIsOwner !== false ||
-    !params.config?.commands?.ownerAllowFrom?.length ||
+    // Command auth ignores "*" for ownership, so a wildcard-only list names no owner.
+    !params.config?.commands?.ownerAllowFrom?.some((entry) => String(entry).trim() !== "*") ||
     !isNonDirectConversationContext(params.sessionCtx)
   ) {
     return undefined;

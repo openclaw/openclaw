@@ -578,6 +578,7 @@ describe("provider failures seen by non-owners in shared chats", () => {
     ["a non-owner in a direct chat", false, createDirectFailureSessionCtx(), OWNER_LIST],
     ["a sender of unknown ownership", undefined, sharedChat, OWNER_LIST],
     ["any sender when no owner list is configured", false, sharedChat, []],
+    ["any sender when the owner list is only a wildcard", false, sharedChat, ["*"]],
   ] as const)(
     "keeps setup guidance for %s",
     async (_label, senderIsOwner, sessionCtx, ownerAllowFrom) => {
