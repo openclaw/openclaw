@@ -1,0 +1,3 @@
+# Exact net regression growth for the release 2026.11.6 FRV fixture repairs:
+# preserve bounded invalid-input rejection and distinguish sender context from tool output.
+12

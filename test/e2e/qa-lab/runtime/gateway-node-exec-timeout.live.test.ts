@@ -176,7 +176,7 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
 
       await Promise.all(
         [gatewayParent, nodeState, nodeTemp, proofDir].map((dir) =>
-          fs.mkdir(dir, { recursive: true }),
+          fs.mkdir(dir, { recursive: true, mode: 0o700 }),
         ),
       );
       await fs.writeFile(

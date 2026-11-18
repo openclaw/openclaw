@@ -307,9 +307,6 @@ export default {
               (item) => item && typeof item === "object" && String(item.type).endsWith("_output"),
             ),
           );
-          if (current.failedResponses > 0 && current.outputs.length === 0) {
-            current.unacknowledgedRetries++;
-          }
           const acknowledged = new Set(
             current.outputs.flatMap((item) =>
               item &&
@@ -322,6 +319,10 @@ export default {
                 : [],
             ),
           );
+          // Sender context is also an output item, but acknowledges no native call.
+          if (current.failedResponses > 0 && acknowledged.size === 0) {
+            current.unacknowledgedRetries++;
+          }
           const pending = Array.from({ length: current.count }, (_, i) => i).filter(
             (i) => !acknowledged.has(`call_${current.id}_${i}`),
           );

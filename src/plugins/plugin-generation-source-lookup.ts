@@ -8,6 +8,7 @@ import {
   throwSettledAggregate,
 } from "../infra/error-graph-internal.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { createPluginCaptureOwner } from "./plugin-capture-native-resource.client.js";
@@ -302,9 +303,12 @@ async function copyRecoverySourceAsync(input: RecoveryInput): Promise<PluginReco
       root = capture;
       release = () => capture.release();
     } else {
-      // Host-local recovery outlives the preparation generation that produced its bytes.
-      owner = await createPluginCaptureOwner(
-        captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
+      // Recovery ports and the resource descriptor outlive the predecessor. Do not
+      // capture its invocation in their async resources or descriptor snapshot.
+      owner = await runInDetachedAsyncContext(() =>
+        createPluginCaptureOwner(
+          captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }),
+        ),
       );
       ({ root } = await owner.copyRecovery(1, copyInput));
       const captureOwner = owner;

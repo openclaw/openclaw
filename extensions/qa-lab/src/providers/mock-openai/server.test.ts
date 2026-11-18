@@ -167,7 +167,7 @@ function readOpenAiPromptResponseText(server: MockServer, prompt: string, ...inp
 }
 
 function makeToolOutput(output: unknown) {
-  return { type: "function_call_output" as const, output };
+  return { type: "function_call_output" as const, call_id: "call_test", output };
 }
 
 function expectNoTool(response: unknown, name?: string) {

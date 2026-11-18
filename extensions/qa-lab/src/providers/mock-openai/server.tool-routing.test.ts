@@ -158,7 +158,17 @@ it.each(["sessions_spawn", "ls"])(
       })),
     });
     for (const [prompt, args] of cases) {
-      turn.input.splice(0, 1, makeUserInput(prompt));
+      turn.input.splice(
+        0,
+        turn.input.length,
+        {
+          type: "function_call_output",
+          name: "openclaw_current_sender",
+          namespace: "agent",
+          output: '{"sender":{"id":"gateway-owner"}}',
+        },
+        makeUserInput(prompt),
+      );
       expect(callArgs(outputToolCall(await turn.request(), toolName))).toEqual(args);
     }
   },
