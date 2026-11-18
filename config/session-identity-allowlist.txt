@@ -816,7 +816,7 @@ src/gateway/github-publication-task-workspace.ts	1
 src/gateway/github-publication-transcript.ts	6
 src/gateway/github-publication-workspace.ts	1
 src/gateway/github-publication-worktree-owner.ts	3
-src/gateway/github-publication.ts	4
+src/gateway/github-publication.ts	2
 src/gateway/github-repository-publication-workspace.ts	1
 src/gateway/github-repository-publication.kernel.ts	2
 src/gateway/github-repository-publication.ts	7
