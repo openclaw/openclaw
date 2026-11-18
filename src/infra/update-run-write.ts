@@ -10,7 +10,7 @@ import { completeUpdateFailureSummary } from "./update-failure-result.js";
 import { claimUpdateResultInTransaction } from "./update-result-claim.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
 import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
-import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
+import { encodeRun, findDisposableStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import {
@@ -39,7 +39,7 @@ export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void 
     record.steps.push(step);
   }
   while (record.steps.length > 128) {
-    const disposable = record.steps.findIndex((entry) => !isRetainedStep(entry));
+    const disposable = findDisposableStep(record.steps);
     if (disposable < 0) {
       throw new Error("Update run retained steps exceed the step limit");
     }
