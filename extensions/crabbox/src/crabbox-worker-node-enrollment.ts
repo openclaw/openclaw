@@ -1,6 +1,7 @@
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxNodeProcessRuntime } from "./crabbox-worker-node-process.js";
+import type { CrabboxWorkerNodeRuntimePreparation } from "./crabbox-worker-node-runtime.types.js";
 import {
   CRABBOX_LOCAL_RUNTIME_ARCHIVE_SOURCE,
   validateCrabboxOfflineRuntimeArchives,
@@ -56,12 +57,6 @@ export function createCrabboxNodeEnrollmentSetup(params: {
 }): { command: string; forwardedEnv: Record<string, string> } {
   return createCrabboxNodeSetup({ ...params, nodeBootstrap: params.enrollment.nodeBootstrap });
 }
-
-export type CrabboxWorkerNodeRuntimePreparation = Awaited<
-  ReturnType<
-    NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["prepareNodeRuntime"]>
-  >
->;
 
 export function createCrabboxNodeRuntimeSetup(params: {
   nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
