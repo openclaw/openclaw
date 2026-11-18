@@ -2,10 +2,13 @@ import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
-import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
-import { getSession, waitForExecScope } from "../agents/bash-process-registry.js";
+import {
+  getSession,
+  listExecSessionsForCancellation,
+  waitForExecScope,
+} from "../agents/bash-process-registry.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import {
   fullGatewayExec,
@@ -203,19 +206,21 @@ it("adopts one empty owner and keeps original message files separate from same-n
     );
     const process = createProcessTool({ scopeKey: target.sessionKey });
     try {
-      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow("background work");
+      await expect(adoptUnboundPullRequestWorkspace(input)).rejects.toThrow(
+        `background exec ${background.sessionId} is still running`,
+      );
       expect(getSession(background.sessionId)?.exited).toBe(false);
       expect(loadSessionEntryReadOnly(target)?.worktree).toBeUndefined();
     } finally {
       await process.execute("stop-fixture", { action: "kill", sessionId: background.sessionId });
       await waitForExecScope(target.sessionKey);
-      acknowledgeInternalToolResult(
-        await process.execute("observe-fixture", {
-          action: "poll",
-          sessionId: background.sessionId,
-        }),
-      );
     }
+    // A requested stop that was never polled leaves no competing execution.
+    const stopped = listExecSessionsForCancellation().find(
+      (candidate) => candidate.id === background.sessionId,
+    );
+    expect(stopped).toMatchObject({ exited: true, backgrounded: true });
+    expect(stopped?.terminalPollObserved).not.toBe(true);
     const queued = reserveSessionControllerSource(target.sessionKey, {
       policy: { mode: "followup" },
       target: captureSessionTarget({
