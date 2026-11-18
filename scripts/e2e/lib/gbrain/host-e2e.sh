@@ -208,6 +208,9 @@ if [ -n "$RELEASE_ASSET" ]; then
 elif ! command -v bun >/dev/null 2>&1; then
   sleep 10
   step bun-missing-message grep -m1 'needs Bun 1.4.4' "$WORK/logs/gateway.out" || fail "no Bun message"
+  if [ "$OS" = Linux ] && ! command -v unzip >/dev/null 2>&1; then
+    step unzip-install bash -c 'sudo apt-get install -y -qq unzip' || fail "unzip install"
+  fi
   step bun-install bash -c 'curl -fsSL https://bun.sh/install | bash' || fail "bun install"
 fi
 step connect wait_connected 600 || fail "plugin did not connect"
