@@ -7,6 +7,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.directory.integration.test.ts",
   "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
   "src/agents/subagents/registry/subagent-registry-maintenance.completion.test.ts",
+  "src/agents/subagents/registry/subagent-registry-restart-collector.test.ts",
   "src/agents/clawrouter-failover.integration.test.ts",
   "src/infra/backup-local-companion.test.ts",
   "src/commands/backup-verify-completeness.test.ts",

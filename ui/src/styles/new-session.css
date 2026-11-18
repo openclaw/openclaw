@@ -583,8 +583,16 @@ span.new-session-page__select {
   );
 }
 
+/* Branch names run long; give them more room than the field and fade what
+   still overflows instead of scrolling the whole list sideways. */
 .oc-popover.new-session-page__branch-popup {
-  width: anchor-size(width);
+  --oc-overlay-max-width: min(380px, calc(100dvw - 24px));
+  --oc-overlay-max-height: 320px;
+
+  display: flex;
+  flex-direction: column;
+  width: max(anchor-size(width), var(--oc-overlay-max-width));
+  overflow: hidden;
 }
 
 .new-session-page__project-error {
@@ -645,9 +653,50 @@ span.new-session-page__select {
   width: 100%;
 }
 
+/* The list scrolls inside the panel so its edges can fade without fading the surface. */
 .new-session-page__branch-suggestions {
   display: grid;
   gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* Keyboard-highlighted rows stop clear of the edge fades. */
+  scroll-padding-block: 28px;
+}
+
+@supports (animation-timeline: scroll()) {
+  .new-session-page__branch-suggestions {
+    animation: new-session-branch-list-edges linear both;
+    animation-timeline: scroll(self block);
+  }
+}
+
+@keyframes new-session-branch-list-edges {
+  0% {
+    mask-image: linear-gradient(black calc(100% - 28px), transparent);
+  }
+  0.01%,
+  99.99% {
+    mask-image: linear-gradient(transparent, black 28px, black calc(100% - 28px), transparent);
+  }
+  100% {
+    mask-image: linear-gradient(transparent, black 28px);
+  }
+}
+
+/* A dense list of one-line names: compact rows with the menu's pill gap. The
+   popup renders inside the checkout picker, so it opts out of that picker's
+   44px touch rows; a phone still shows a useful run of branches. */
+.oc-popover.new-session-page__branch-popup .session-menu__item {
+  min-width: 0;
+  min-height: 30px;
+  margin: 0;
+}
+
+@media (pointer: coarse) {
+  .oc-popover.new-session-page__branch-popup .session-menu__item {
+    min-height: 34px;
+  }
 }
 
 .new-session-page__branch-suggestions [aria-selected="true"] {
@@ -1071,6 +1120,25 @@ span.new-session-page__select {
     position-area: bottom span-all;
     justify-self: center;
   }
+
+  /* The wider branch list cannot hang off a mid-row field either. Center it
+     across the screen on whichever side of the field has more visible room,
+     and shrink it to that room so it never covers the field or the keyboard. */
+  .oc-popover.new-session-page__branch-popup {
+    position-area: top span-all;
+    position-try-fallbacks: --new-session-branch-below;
+    position-try-order: most-height;
+    justify-self: center;
+    max-height: min(320px, calc(100% - max(12px, env(safe-area-inset-top) + 8px)));
+    margin: 0 0 var(--oc-overlay-distance, 4px);
+  }
+}
+
+@position-try --new-session-branch-below {
+  position-area: bottom span-all;
+  /* The layout viewport keeps its height under an iOS keyboard; stop at the visible edge. */
+  inset-block-end: calc(100dvh - var(--shell-visible-height, 100dvh));
+  margin: var(--oc-overlay-distance, 4px) 0 0;
 }
 
 /* Keep the keyboard's visible canvas separate from its panned layout extent. */
