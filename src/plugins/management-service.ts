@@ -682,6 +682,7 @@ export const inspectManagedPlugin = withManagedPluginCache(
       manifest: manifest ?? {},
       origin: "official",
       entryConfig: params.config.plugins?.entries?.[pluginId],
+      conversationAccessAccepted: "if-declared",
     });
     return {
       ok: true,

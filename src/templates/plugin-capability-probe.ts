@@ -50,6 +50,7 @@ export function inspectTemplatePluginCapabilities(
       manifest: manifest ?? {},
       origin: "global",
       entryConfig: config.plugins?.entries?.[pluginId],
+      conversationAccessAccepted: "if-declared",
     }).grants,
     grantsByPluginId: Object.fromEntries(
       manifests
@@ -60,6 +61,7 @@ export function inspectTemplatePluginCapabilities(
             manifest: ownedManifest,
             origin: "global",
             entryConfig: config.plugins?.entries?.[ownedManifest.id],
+            conversationAccessAccepted: "if-declared",
           }).grants,
         ]),
     ),
