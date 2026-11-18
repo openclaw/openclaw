@@ -1779,7 +1779,11 @@ describe("CI timing sampler provenance", () => {
         }),
       ],
     });
-    invoke(fixture);
+    const result = invoke(fixture);
+    expect(result.stdout).toContain(
+      "Independent main compact contributors: 2 (Blacksmith: 2; GitHub: 0; Boat: 0).",
+    );
+    expect(result.stdout).toContain("Independent packed release contributors: 2;");
     expect(JSON.parse(fixture.contents()).compactGroupSeconds.github).toEqual({
       [`dual-all:${timingKeys[0]}`]: 32,
       [`dual-all:${timingKeys[1]}`]: 30,
@@ -1822,7 +1826,11 @@ describe("CI timing sampler provenance", () => {
       ],
       baseline: compactBaseline({}, { retained: 90 }),
     });
-    invoke(fixture);
+    const result = invoke(fixture);
+    expect(result.stdout).toContain(
+      "Independent main compact contributors: 2 (Blacksmith: 2; GitHub: 0; Boat: 0).",
+    );
+    expect(result.stdout).toContain("Independent packed release contributors: 2;");
     expect(readTimings(fixture).compactGroupSeconds.github).toEqual({
       retained: 90,
       "dispatch-fixture": 30,
