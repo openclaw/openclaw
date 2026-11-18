@@ -41,6 +41,17 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+// mock-isolation: catalog events count model-list requests; the npm Codex version read is
+// covered by extensions/openai/openai-codex-discovery.test.ts.
+vi.mock("../extensions/openai/codex-client-version.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../extensions/openai/codex-client-version.js")>();
+  return {
+    ...actual,
+    resolveOpenAICodexClientVersion: async () => actual.OPENAI_CODEX_CLIENT_VERSION_FLOOR,
+  };
+});
+
 // mock-isolation: Discovery and runtime hooks share fixture providers without real plugin loading.
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
