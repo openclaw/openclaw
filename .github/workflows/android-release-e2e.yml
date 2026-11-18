@@ -15,6 +15,15 @@ on:
         type: string
         default: ""
   workflow_dispatch:
+    inputs:
+      client_sha:
+        description: Optional frozen stable-release client source SHA (paired with client_release_tag)
+        type: string
+        default: ""
+      client_release_tag:
+        description: Published stable repository release identifying client_sha
+        type: string
+        default: ""
 
 permissions:
   actions: read
@@ -49,6 +58,9 @@ jobs:
           PY
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
           [[ "$TARGET_SHA" == "$GITHUB_SHA" ]]
+          if [[ -n "$CLIENT_SHA" || -n "$CLIENT_RELEASE_TAG" ]]; then
+            [[ -n "$CLIENT_SHA" && -n "$CLIENT_RELEASE_TAG" ]] || exit 1
+          fi
 
       - name: Checkout exact qualification target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

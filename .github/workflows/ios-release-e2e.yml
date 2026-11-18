@@ -22,6 +22,14 @@ on:
         default: true
   workflow_dispatch:
     inputs:
+      client_sha:
+        description: Optional frozen stable-release client source SHA (paired with client_release_tag)
+        type: string
+        default: ""
+      client_release_tag:
+        description: Published stable repository release identifying client_sha
+        type: string
+        default: ""
       mode:
         description: Stock qualification or four matched stock/SimSlim pairs
         type: choice
@@ -69,6 +77,9 @@ jobs:
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
           [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
+          if [[ -n "$CLIENT_SHA" || -n "$CLIENT_RELEASE_TAG" ]]; then
+            [[ -n "$CLIENT_SHA" && -n "$CLIENT_RELEASE_TAG" ]] || exit 1
+          fi
 
       - name: Reserve host CPU for release qualification
         timeout-minutes: 2

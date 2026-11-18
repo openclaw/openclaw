@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
@@ -71,7 +72,30 @@ describe("stable-release-source compatibility", () => {
       expect(workflow.jobs[platform].needs).toBe("select");
       expect(workflow.jobs[platform].with.client_sha).toBe("${{ needs.select.outputs.sha }}");
       const child = parse(readFileSync(`.github/workflows/${platform}-release-e2e.yml`, "utf8"));
+      expect(child.on.workflow_dispatch.inputs.client_sha).toMatchObject({
+        type: "string",
+        default: "",
+      });
+      expect(child.on.workflow_dispatch.inputs.client_release_tag).toMatchObject({
+        type: "string",
+        default: "",
+      });
       const steps = child.jobs.qualify.steps;
+      const pairStart = steps[0].run.indexOf('if [[ -n "$CLIENT_SHA"');
+      expect(pairStart).toBeGreaterThanOrEqual(0);
+      const pairCheck = steps[0].run.slice(pairStart);
+      for (const [sha, releaseTag, status] of [
+        ["", "", 0],
+        [sourceSha, tag, 0],
+        ["", tag, 1],
+        [sourceSha, "", 1],
+      ] as const) {
+        expect(
+          spawnSync("bash", ["-c", pairCheck], {
+            env: { ...process.env, CLIENT_SHA: sha, CLIENT_RELEASE_TAG: releaseTag },
+          }).status,
+        ).toBe(status);
+      }
       expect(
         steps.find(
           (step: { name?: string }) => step.name === "Checkout frozen stable client source",
