@@ -101,12 +101,10 @@ const enSettings = {
       avatarBot: "Blobster",
       avatarGenerate: "Generate",
       avatarUpload: "Upload",
-      avatarReset: "Reset",
       avatarPresets: "All Blobster presets",
       avatarPrompt: "Describe your blobster…",
       avatarUse: "Use avatar",
       avatarDiscard: "Discard",
-      avatarRegenerate: "Generate again",
       avatarGenerating: "Generating…",
       avatarPreparing: "Preparing avatar…",
       avatarPermission: "Connect with permission to update agent identity to generate an avatar.",
@@ -116,10 +114,8 @@ const enSettings = {
       avatarUploadHint:
         "Choose an image up to 2 MB. It will be resized for sessions and the sidebar.",
       chooseImage: "Choose image…",
-      replaceImage: "Replace image…",
       imageUnusable: "Couldn’t use that image. Choose an image file up to 2 MB.",
       imageTooDetailed: "Couldn’t save that avatar. Try a simpler image.",
-      fileHint: "Saving mirrors identity fields to IDENTITY.md; configured values take precedence.",
     },
     overview: {
       modelSelection: "Model selection",
@@ -228,8 +224,6 @@ const enSettings = {
     files: {
       emptyDraft: "Empty draft",
       minRead: "{count} min read",
-      markdownPreview: "Markdown preview",
-      extensionPreview: "{ext} preview",
       preview: "Preview",
       expandPreview: "Expand preview",
       collapsePreview: "Collapse preview",
