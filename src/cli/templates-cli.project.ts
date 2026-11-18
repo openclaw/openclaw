@@ -180,7 +180,7 @@ export async function runTemplatesDevCommand(
       );
     }
     const config = configSnapshot.resolved;
-    const existingMcpServers = config.mcp?.servers ?? {};
+    const existingMcpServers = configSnapshot.authoredConfig?.mcp?.servers ?? {};
     const existingAgentIds = listAgentIds(config);
     plan = await buildTemplateAddPlan({
       manifest: result.manifest,

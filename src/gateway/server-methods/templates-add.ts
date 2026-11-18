@@ -69,7 +69,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         source: params.source,
         ...(params.agentId ? { agentId: params.agentId } : {}),
         config,
-        sourceMcpServers: listedMcp.mcpServers,
+        sourceMcpServers: listedMcp.authoredConfig?.mcp?.servers ?? {},
       });
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
@@ -175,7 +175,7 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
           }
           return {
             config,
-            sourceMcpServers: listedMcp.mcpServers,
+            sourceMcpServers: listedMcp.authoredConfig?.mcp?.servers ?? {},
           };
         },
         policyConfig: { configPath, env: configEnv },

@@ -243,7 +243,7 @@ export async function runTemplatesAddCommand(
           existingWorkspacePaths: existingAgentIds.map((agentId) =>
             resolveAgentWorkspaceDir(config, agentId),
           ),
-          existingMcpServers: listedMcpServers.mcpServers,
+          existingMcpServers: listedMcpServers.authoredConfig?.mcp?.servers ?? {},
           packagePreflight: (
             pkg: Parameters<typeof preflightTemplatePackage>[0],
             workspace: string,
