@@ -9,7 +9,10 @@ import {
   runWithPluginExecutionFrame,
 } from "./plugin-instance-invocation.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
-import type { PluginRecoveryCaptureInput } from "./plugin-recovery-source-copy.js";
+import type {
+  PluginRecoveryCaptureInput,
+  PluginSourceCaptureDirectory,
+} from "./plugin-recovery-source-copy.types.js";
 
 export function getPluginSourceCaptureStorage(): PluginSourceCaptureStorage | undefined {
   return getPluginExecutionFrame()?.sourceCaptureStorage;
@@ -57,10 +60,7 @@ export const pluginSourceCaptureMaintenance = resolveGlobalSingleton(
     }>(),
 );
 
-export const pluginSourceCaptureDirectory = new AsyncLocalStorage<{
-  directory: string;
-  managedRoot?: string;
-}>();
+export const pluginSourceCaptureDirectory = new AsyncLocalStorage<PluginSourceCaptureDirectory>();
 
 /** Preparation borrows its existing capture domain; host-local recovery owns its own domain. */
 export const pluginRecoveryCapture = new AsyncLocalStorage<

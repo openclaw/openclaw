@@ -210,7 +210,7 @@ it("retires idle discovery workers while retaining the catalog and explicit refr
       throw new Error("Expected the real discovery worker");
     }
     const exited = once(worker, "exit", { signal: AbortSignal.timeout(5_000) });
-    channel("openclaw.memory.critical").publish(undefined);
+    channel("openclaw.memory.critical").publish(true);
     await expect(
       withinTest(exited, signal),
       "idle discovery worker exits after critical pressure",

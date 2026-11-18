@@ -5,11 +5,11 @@ import { inspectDarwinAcl } from "@openclaw/fs-safe/permissions";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openRootFileSync } from "./boundary-file-read.js";
-import {
-  performClientCredentialOperation,
-  type ClientCredentialOperation,
-  type ClientCredentialResult,
-} from "./client-credential-operations.js";
+import { performClientCredentialOperation } from "./client-credential-operations.js";
+import type {
+  ClientCredentialOperation,
+  ClientCredentialResult,
+} from "./client-credential-operations.types.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
   admitClientCredentialStore,
@@ -40,7 +40,7 @@ export type {
   ClientTokenKey,
   ClientCredentialOperation,
   ClientCredentialResult,
-} from "./client-credential-operations.js";
+} from "./client-credential-operations.types.js";
 
 const retainedPaths = resolveGlobalSingleton(
   Symbol.for("openclaw.clientCredentialCustody"),

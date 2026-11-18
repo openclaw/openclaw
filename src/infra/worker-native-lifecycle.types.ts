@@ -64,8 +64,9 @@ export interface NativeWorkerResourcePort {
   close(): void;
 }
 
+/** Private, version-matched modules expose their domain factory as the default export. */
 export type NativeWorkerResourceModule = {
-  createNativeWorkerResource(
+  default(
     port: NativeWorkerResourcePort,
     input: unknown,
     ownerPort?: NativeWorkerResourcePort,

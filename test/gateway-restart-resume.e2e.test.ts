@@ -965,9 +965,11 @@ it.skipIf(process.platform === "win32")(
           path.dirname(resolveOpenClawAgentSqlitePath({ agentId: "main", env: instance.env })),
           sessionKey,
         );
-        expect(marked?.resumeAfterRestart?.queuedInputIds).toHaveLength(1);
+        expect(asRecord(marked?.resumeAfterRestart)?.queuedInputIds).toHaveLength(1);
         // The recorded source keeps the connection's own scopes; restart grants no more.
-        expect(marked?.operatorSources?.[self.profile.id]?.scopes).toEqual(scopes);
+        expect(asRecord(asRecord(marked?.operatorSources)?.[self.profile.id])?.scopes).toEqual(
+          scopes,
+        );
         await closeOpenClawStateDatabaseAsync();
         await instance.startGateway();
         client = await connectPerson();

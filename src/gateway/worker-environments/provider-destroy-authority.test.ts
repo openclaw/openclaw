@@ -70,7 +70,8 @@ describe("worker deletion request authority", () => {
       release.resolve();
       await creating;
     }
-    expect((await deleting)[0]).toBe(!revoked);
+    const response = await deleting;
+    expect(response[0], JSON.stringify(response[2])).toBe(!revoked);
     expect(support.testState.store.get(original.environmentId)).toMatchObject(
       revoked
         ? { state: "provisioning", destroyRequestedAtMs: null }
@@ -212,7 +213,6 @@ describe("worker deletion request authority", () => {
           entered.resolve();
           await release.promise;
           lease.signal?.throwIfAborted();
-          lease.assertCurrent?.();
           await destroy();
         },
       });

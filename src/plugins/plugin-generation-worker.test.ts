@@ -379,7 +379,7 @@ it("finishes a capture after more than two minutes without retiring its worker",
     new URL(
       "data:text/javascript," +
         encodeURIComponent(
-          "export function createNativeWorkerResource() { return { async close() {} }; }",
+          "export default function createNativeWorkerResource() { return { async close() {} }; }",
         ),
     ),
   );

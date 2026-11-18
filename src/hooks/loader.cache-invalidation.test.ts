@@ -80,13 +80,20 @@ describe("loaded hook import freshness", () => {
 
   it("reloads when metadata stat fails after the handler passes file admission", async () => {
     const realOpenRootFile = boundaryFile.openRootFile;
-    const failStat = vi.fn(() => {
+    const realStat = fs.statSync;
+    const failStat = vi.fn((_file: fs.PathLike) => {
       throw new Error("fixture metadata unavailable");
     });
     vi.spyOn(boundaryFile, "openRootFile").mockImplementation(async (params) => {
       const opened = await realOpenRootFile(params);
       if (opened.ok) {
-        vi.spyOn(fs, "statSync").mockImplementationOnce(failStat);
+        const stat = vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+          if (file === opened.path) {
+            stat.mockRestore();
+            return failStat(file);
+          }
+          return realStat(file, options);
+        });
       }
       return opened;
     });

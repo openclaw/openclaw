@@ -1,4 +1,7 @@
-import type { ClientIdentityRecord, ClientTokenRecord } from "./client-credential-operations.js";
+import type {
+  ClientIdentityRecord,
+  ClientTokenRecord,
+} from "./client-credential-operations.types.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,

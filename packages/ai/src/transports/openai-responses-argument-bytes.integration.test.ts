@@ -7,6 +7,7 @@ import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
   createResponsesLoopbackServer,
   responsesLoopbackModel,
@@ -142,20 +143,20 @@ it.each(["reasoning", "usage"] as const)(
     const server = await createResponsesLoopbackServer((turn) => [
       completedResponse(
         `resp_fingerprint_${turn}`,
-        turn === 1 ? [call] : [wireMessage("msg_next", "Continued.")],
+        [turn === 1 ? call : wireMessage("msg_next", "Continued.")],
         { usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } },
       ),
     ]);
     onTestFinished(() => server.close());
-    const respond = async (reasoningEffort: "low" | "high") =>
-      (
-        await createOpenAIResponsesTransportStreamFn()(model, context, {
-          apiKey: "synthetic-byte-key",
-          ...identity,
-          transport: "sse",
-          reasoningEffort,
-        })
-      ).result();
+    const respond = async (reasoningEffort: "low" | "high") => {
+      const options = {
+        apiKey: "synthetic-byte-key",
+        ...identity,
+        transport: "sse",
+        reasoningEffort,
+      } satisfies OpenAIResponsesOptions;
+      return (await createOpenAIResponsesTransportStreamFn()(model, context, options)).result();
+    };
     const first = await respond("low");
     const tool = first.content.find((block) => block.type === "toolCall");
     assert(tool);

@@ -14,7 +14,7 @@ import { projectTranscriptPayloadNavigationSql } from "./session-model-context-p
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
 
-export const SESSION_MESSAGE_CUT_MAX_BYTES = 8 * 1024 * 1024;
+const SESSION_MESSAGE_CUT_MAX_BYTES = 8 * 1024 * 1024;
 
 /** Keep message bodies out of the tree planner and hydrate only the row being copied. */
 export function readSessionMessageCut(

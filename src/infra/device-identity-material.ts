@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
-import type { ClientCredentialResult } from "./client-credential-operations.js";
+import type { ClientCredentialResult } from "./client-credential-operations.types.js";
 import type { ClientCredentialDatabase } from "./client-credential-schema.js";
 import {
   deriveCanonicalEd25519PrivateKeyRaw,

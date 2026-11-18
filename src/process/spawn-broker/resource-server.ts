@@ -456,11 +456,7 @@ export async function createBrokerNativeResourceServer(options: {
           if (!live() || sourceSealed) {
             return;
           }
-          current.owner = module.createNativeWorkerResource(
-            current.target,
-            attachment.input,
-            current.ownerPort,
-          );
+          current.owner = module.default(current.target, attachment.input, current.ownerPort);
           current.created = true;
           publish(current, { type: "resource-created", id: attachment.id });
         })().catch((error: unknown) => {

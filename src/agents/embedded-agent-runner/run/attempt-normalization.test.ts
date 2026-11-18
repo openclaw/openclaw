@@ -41,7 +41,7 @@ it.each(["safe", "effectful", "opaque", "prior-effect", "refresh"] as const)(
     const failure = await normalizeEmbeddedRunAttempt(input).catch((error: unknown) => error);
     expect(failure !== reason).toBe(kind === "safe");
     expect(failure).toMatchObject({ name: "AbortError", message: reason.message });
-    expect(failure === reason || failure.cause === reason).toBe(true);
+    expect(failure === reason || (failure instanceof Error && failure.cause === reason)).toBe(true);
   },
 );
 

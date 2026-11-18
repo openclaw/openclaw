@@ -938,6 +938,7 @@ function postgresConnection(anchor: DatabaseSync): PostgresSqlConnection {
       throw new Error("Admission facts must not query PostgreSQL");
     },
     close() {},
+    releaseIdleTransport() {},
     runTransaction(operation, options, ...modes) {
       return runPostgresTransactionSync(this, operation, options, ...modes);
     },
@@ -957,18 +958,16 @@ function withPostgres(
 
 it("PostgreSQL keeps publications local until commit and restores nested and outer rollback", () =>
   withPostgres((connection, peer, anchor) => {
-    const transact = (operation: () => void) => transaction(connection, operation);
-
     publishFact(connection, key, "initial");
     expect(getFact(peer, key)).toBe("initial");
-    transact(() => {
+    transaction(connection, () => {
       expect(connection.isTransaction).toBe(true);
       expect(anchor.isTransaction).toBe(false);
       publishFact(connection, key, "outer");
       expect(getFact(connection, key)).toBe("outer");
       expect(getFact(peer, key)).toBe("initial");
       expect(() =>
-        transact(() => {
+        transaction(connection, () => {
           publishFact(connection, key, "nested");
           expect(getFact(connection, key)).toBe("nested");
           throw new Error("nested rollback");
@@ -979,7 +978,7 @@ it("PostgreSQL keeps publications local until commit and restores nested and out
     });
     expect(getFact(peer, key)).toBe("outer");
     expect(() =>
-      transact(() => {
+      transaction(connection, () => {
         publishFact(connection, key, "rolled back");
         throw new Error("outer rollback");
       }),

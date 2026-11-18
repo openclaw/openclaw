@@ -160,7 +160,7 @@ it.skipIf(process.platform === "win32").each([
   ["import", 'throw new Error("synthetic resource import failure");'],
   [
     "factory",
-    'export function createNativeWorkerResource() { throw new Error("synthetic resource factory failure"); }',
+    'export default function createNativeWorkerResource() { throw new Error("synthetic resource factory failure"); }',
   ],
 ])(
   "closes failed resource %s initialization without losing its original error",
@@ -185,7 +185,7 @@ it.skipIf(process.platform === "win32")(
     const ownerRequests: unknown[] = [];
     const { client, lease } = await fixture.attach(
       `
-      export function createNativeWorkerResource(target, _input, owner) {
+      export default function createNativeWorkerResource(target, _input, owner) {
         let permit;
         const permitted = new Promise(resolve => { permit = resolve; });
         owner.on("message", () => permit());
@@ -220,7 +220,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     await using fixture = resourceFixture();
     const { client, lease } = await fixture.attach(`
-      export function createNativeWorkerResource() {
+      export default function createNativeWorkerResource() {
         let attempts = 0;
         return { async close() {
           if (++attempts > 1) return;
@@ -268,7 +268,7 @@ it.skipIf(process.platform === "win32")(
         resourceFixture,
       );
       const { client, lease } = await fixture.attach(`
-        export function createNativeWorkerResource() { return { close() {} }; }
+        export default function createNativeWorkerResource() { return { close() {} }; }
       `);
       const directory = path.dirname(lease.attachment.endpoint);
       expect((await fs.promises.stat(directory)).mode & 0o777).toBe(0o700);
@@ -310,7 +310,7 @@ it.skipIf(process.platform === "win32")(
     {
       await using fixture = resourceFixture();
       const { client, lease } = await fixture.attach(`
-        export function createNativeWorkerResource() { return { close() {} }; }
+        export default function createNativeWorkerResource() { return { close() {} }; }
       `);
       expect((await owned.contents()).entries).toEqual(["existing-owner", "resource.sock"]);
       await client.close();

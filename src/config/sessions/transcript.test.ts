@@ -15,7 +15,6 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
-import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
   appendTranscriptEvent,
@@ -430,7 +429,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it.each(["file", "store", "agent", "bound"] as const)(
     "keeps owned write tracking scoped to the matching %s target",
     async (kind) => {
-      const file = (id: string) => resolveSessionTranscriptPathInDir(id, fixture.sessionsDir());
+      const file = (id: string) => path.join(fixture.sessionsDir(), `${id}.jsonl`);
       const ownerTarget = {
         agentId: "main",
         sessionKey: "global",
@@ -621,7 +620,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     await writeTranscriptStore({
       sessionFile: `sqlite:main:${sessionId}:${fixture.storePath()}`,
     });
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const sessionFile = path.join(fixture.sessionsDir(), `${sessionId}.jsonl`);
     writeLegacyTranscriptFixture({
       transcriptPath: sessionFile,
       message: { role: "user", content: "stale jsonl context", timestamp: 1_000 },
@@ -638,7 +637,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         transcriptPath: outsideFile,
         message: { role: "user", content: "outside text", timestamp: 1_000 },
       });
-      const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+      const sessionFile = path.join(fixture.sessionsDir(), `${sessionId}.jsonl`);
       writeLegacyTranscriptFixture({
         transcriptPath: sessionFile,
         message: { role: "user", content: "contained text", timestamp: 2_000 },
@@ -886,10 +885,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   it.each(["session", "lifecycle", "writer"] as const)(
     "rejects concurrent %s replacement",
     async (kind) => {
-      const replacementSessionFile = resolveSessionTranscriptPathInDir(
-        "replacement-session",
-        fixture.sessionsDir(),
-      );
+      const replacementSessionFile = path.join(fixture.sessionsDir(), "replacement-session.jsonl");
       const lifecycleRevision = kind === "writer" ? "owned-revision" : "original-revision";
       await writeTranscriptStore(
         kind === "session"

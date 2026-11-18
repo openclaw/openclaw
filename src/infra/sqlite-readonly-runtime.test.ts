@@ -28,9 +28,9 @@ function diagnostic(kind: string, addon = false) {
     musl: `Error loading shared library ${addon ? "libaddon.so" : "libnode.so"}: No such file or directory (needed by /fixture/${owner})`,
     version: `node: /fixture/${addon ? "libstdc++.so.6" : "libc.so.6"}: version '${addon ? "GLIBCXX_3.4.29" : "GLIBC_2.28"}' not found (required by /fixture/${owner})`,
   };
-  const message =
-    messages[kind] ?? (addon ? "" : "dyld[123]: Library not loaded: /fixture/libsimdutf.36.dylib");
-  return message ? `echo "${message}" >&2` : "";
+  return (
+    messages[kind] ?? (addon ? "" : "dyld[123]: Library not loaded: /fixture/libsimdutf.36.dylib")
+  );
 }
 
 const session = () =>
@@ -73,7 +73,7 @@ it
     await runtime(
       'if [ "$1" = "--version" ]; then echo v26.12.0; exit 0; fi\n' +
         // Admit the request before exiting so the control observes a worker crash, not EPIPE.
-        `${diagnostic(kind, true)}\ndd bs=1 count=1 <&3 >/dev/null 2>&1\nexit ${ordinaryExit}`,
+        `echo "${diagnostic(kind, true)}" >&2\ndd bs=1 count=1 <&3 >/dev/null 2>&1\nexit ${ordinaryExit}`,
     );
     await expect(runWorker()).rejects.toThrow(
       `SQLite read-only worker exited with code ${ordinaryExit}`,
@@ -81,7 +81,8 @@ it
     expect([readChildRuntimeViability().available, readiness().ready]).toEqual([true, true]);
 
     const brokenExit = kind === "symbol" || kind === "musl" ? 127 : kind === "version" ? 1 : 134;
-    const executable = await runtime(`${diagnostic(kind)}\nexit ${brokenExit}`);
+    const detail = kind === "removed" || kind === "permission" ? "" : diagnostic(kind);
+    const executable = await runtime(`echo "${detail}" >&2\nexit ${brokenExit}`);
     if (kind === "removed") {
       await fs.unlink(executable);
     } else if (kind === "permission") {
@@ -89,7 +90,7 @@ it
     }
     await expect(runWorker()).rejects.toMatchObject({
       code: "NODE_RUNTIME_UNAVAILABLE",
-      message: `The Node.js runtime this Gateway started with (${executable}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
+      message: `The Node.js runtime this Gateway started with (${executable}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.${detail ? `\n${detail}` : ""}`,
     });
     expect(readChildRuntimeViability()).toEqual({ execPath: executable, available: false });
     expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });

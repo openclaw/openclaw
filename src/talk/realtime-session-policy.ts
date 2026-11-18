@@ -16,7 +16,7 @@ import type { RealtimeVoiceBridge } from "./provider-types.js";
 
 export type RealtimeVoiceWakeNamePolicy = "always" | "automatic" | "never";
 
-export type RealtimeVoiceSessionPolicy = {
+type RealtimeVoiceSessionPolicy = {
   handlesAgentConsult: boolean;
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
   consultToolsAllow: string[] | undefined;

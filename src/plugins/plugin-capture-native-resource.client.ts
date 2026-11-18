@@ -19,7 +19,7 @@ import {
 } from "./plugin-capture-native-resource.types.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import type { PluginNativeCaptureRoot } from "./plugin-native-root.types.js";
-import type { PluginRecoveryCaptureInput } from "./plugin-recovery-source-copy.js";
+import type { PluginRecoveryCaptureInput } from "./plugin-recovery-source-copy.types.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
 
 export function createPluginCaptureResourceClient(

@@ -40,7 +40,7 @@ const REALTIME_VOICE_CLOSING_REMAINDER = new RegExp(
   ].join("|")})\b|[.! ,;:—–-])*$`,
 );
 
-export type SkippableRealtimeVoiceConsultTranscriptReason =
+type SkippableRealtimeVoiceConsultTranscriptReason =
   | "empty"
   | "incomplete-transcript"
   | "trailing-fragment"

@@ -81,7 +81,7 @@ it("joins the same native close after transport loss instead of abandoning or du
         moduleUrl:
           "data:text/javascript," +
           encodeURIComponent(
-            "export function createNativeWorkerResource(_target,_input,owner){const fixture=globalThis.__openclawResourceRetirementFixture;owner.on('message',fixture.receive);return fixture;}",
+            "export default function createNativeWorkerResource(_target,_input,owner){const fixture=globalThis.__openclawResourceRetirementFixture;owner.on('message',fixture.receive);return fixture;}",
           ),
       },
     });

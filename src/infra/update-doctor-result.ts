@@ -187,7 +187,7 @@ export type DoctorConfigCapture = {
   deferredInspectionCheckIds?: string[];
 };
 /** Runs a policy check under Doctor's held maintenance owner and its open scope. */
-export type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
+type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
 export type UpdateDoctorWriteAuthority = {
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;

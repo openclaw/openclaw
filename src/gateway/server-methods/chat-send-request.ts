@@ -89,7 +89,7 @@ export type NormalizedChatSendRequest = {
 };
 
 /** Talk settings are machine preferences, not user commands for a particular model. */
-export function shouldNormalizeTalkThinking(
+function shouldNormalizeTalkThinking(
   request: Pick<NormalizedChatSendRequest, "p" | "systemInputProvenance">,
 ): boolean {
   return (

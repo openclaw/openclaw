@@ -171,7 +171,9 @@ it.skipIf(process.platform === "win32")(
       },
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", instance.stateDir);
-    onTestFinished(() => vi.unstubAllEnvs());
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const readRun = (runId: string) => {
       const db = openNodeSqliteDatabase(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
         readOnly: true,

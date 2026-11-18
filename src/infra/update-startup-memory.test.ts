@@ -24,7 +24,7 @@ it("defers low-memory scheduled update and catalog work, but not explicit checks
   vi.spyOn(process, "constrainedMemory").mockReturnValue(1_000);
   const available = vi.spyOn(process, "availableMemory").mockReturnValue(100);
   const getConfig = vi.fn(() => ({ update: { checkOnStart: false } }));
-  refreshCatalog.mockReset().mockResolvedValue({ status: "disabled" });
+  refreshCatalog.mockReset().mockResolvedValue({ status: "disabled", providers: 0, models: 0 });
   const params = {
     lifecycle,
     getConfig,

@@ -536,11 +536,24 @@ suite.define(() => {
   }, 90_000);
 
   it("persists visible selections and refreshes queued requests on desktop", async () => {
-    // The subscription scenario owns its original route, independently of the configured-key case.
+    // Removing the configured key alone leaves the saved Platform profile eligible.
+    // Pin the subscription transport so its account-specific reasoning ladder owns this scenario.
     const config = await call<{ hash: string }>("config.get", {});
     await call("config.patch", {
       baseHash: config.hash,
-      raw: JSON.stringify({ models: { providers: { openai: null } } }),
+      raw: JSON.stringify({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              api: "openai-chatgpt-responses",
+              auth: "oauth",
+              apiKey: null,
+              models: [],
+            },
+          },
+        },
+      }),
       replacePaths: ["models.providers.openai.models"],
       response: "summary",
     });

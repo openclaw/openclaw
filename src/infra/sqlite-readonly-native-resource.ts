@@ -39,7 +39,7 @@ type Directory = {
 };
 
 /** NativeLifetime installs this owner before delivering the port to its target Worker. */
-export function createNativeWorkerResource(
+export default function createSqliteReadonlyNativeResource(
   port: NativeWorkerResourcePort,
   input: unknown,
   ownerPort?: NativeWorkerResourcePort,

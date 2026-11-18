@@ -11,7 +11,7 @@ import {
   createSqliteReadOnlyNativeResourceClient,
   createSqliteReadOnlyNativeResourceConnection,
 } from "./sqlite-readonly-native-resource.client.js";
-import { createNativeWorkerResource } from "./sqlite-readonly-native-resource.js";
+import createSqliteReadonlyNativeResource from "./sqlite-readonly-native-resource.js";
 import type {
   SqliteNativeOwnerRequest,
   SqliteNativeSessionLaunch,
@@ -89,7 +89,7 @@ function fixture() {
     },
   });
   const ownerPort = host.port;
-  const resource = createNativeWorkerResource(port1, undefined, ownerPort);
+  const resource = createSqliteReadonlyNativeResource(port1, undefined, ownerPort);
   const client = createSqliteReadOnlyNativeResourceClient(port2);
   const launch: SqliteNativeSessionLaunch = {
     env: { FIXTURE: "captured" },

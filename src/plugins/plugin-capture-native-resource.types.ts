@@ -1,6 +1,6 @@
 import type { NativeWorkerFailure } from "../infra/worker-native-error.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
-import type { PluginRecoveryCaptureInput } from "./plugin-recovery-source-copy.js";
+import type { PluginRecoveryCaptureInput } from "./plugin-recovery-source-copy.types.js";
 export const PLUGIN_CAPTURE_RESOURCE_PORT = "pluginCaptureResourcePort";
 export type PluginCaptureResourceInput = { owner: string; role: "owner" | "execution" };
 export type PluginCaptureResourceCommand =

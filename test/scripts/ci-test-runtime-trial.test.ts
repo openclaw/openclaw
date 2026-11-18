@@ -60,6 +60,39 @@ it.each(["node", "bun-all", "dual-all"])(
   },
 );
 
+it.each([false, true])(
+  "installs pinned Bun for Node capture subprocesses (split=%s)",
+  (runtimeJobs) => {
+    const capture = "test/scripts/bun-standalone-codegen.test.ts";
+    const tooling = "test/vitest/vitest.tooling.config.ts";
+    const selections = [
+      { targets: [capture] },
+      { groups: [{ configs: [tooling], includePatterns: [capture] }] },
+      { configs: [tooling] },
+      { targets: ["test/scripts/bun-standalone-imports.test.ts"] },
+    ];
+    const outputs = manifest({
+      eventName: "workflow_dispatch",
+      runtimeJobs,
+      scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "node" },
+      nodeTestShards: selections.map((selection, index) =>
+        Object.assign({}, fixture.nodeTestShards[0], selection, {
+          checkName: `capture-${index}`,
+          shardName: `capture-${index}`,
+        }),
+      ),
+    });
+    expect(
+      nodeRows(outputs).map((row: { requires_bun?: boolean }) => Boolean(row.requires_bun)),
+    ).toEqual([true, true, true, false]);
+    expect(
+      nodeRows(outputs).every(
+        (row: { test_runtime_policy: string }) => row.test_runtime_policy === "node",
+      ),
+    ).toBe(true);
+  },
+);
+
 it("doubles explicit row deadlines only for dual-all", () => {
   for (const policy of ["bun-all", "dual-all"] as const) {
     const outputs = manifest({

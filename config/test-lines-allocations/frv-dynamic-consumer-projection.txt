@@ -1,0 +1,2 @@
+# Prove dynamic workflow member edges disappear with either consumer or target selector.
+20

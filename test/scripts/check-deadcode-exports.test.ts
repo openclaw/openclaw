@@ -242,6 +242,26 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     });
   });
 
+  it("tracks target-selected prerelease planner members without retaining removed consumers", () => {
+    const file = ".github/workflows/plugin-prerelease.yml";
+    const source = fs.readFileSync(file, "utf8");
+    const symbol = "resolvePluginPrereleaseExtensionRuntimes";
+    const compile = knipConfig.compilers.yml;
+    expect(compile(source, file)).toContain(symbol);
+    expect(compile(source, file)).toContain(
+      'from "../../scripts/lib/plugin-prerelease-test-plan.mts";',
+    );
+    expect(compile(source.replaceAll(`planner.${symbol}`, "undefined"), file)).not.toContain(
+      symbol,
+    );
+    expect(
+      compile(
+        source.replaceAll('targetPlanPath("plugin-prerelease-test-plan")', "otherPath()"),
+        file,
+      ),
+    ).not.toContain(symbol);
+  });
+
   it.each([
     ["sh", "scripts/e2e/lib/upgrade-survivor/run.sh", "readPostCoreSnapshot", "./diagnostics.mjs"],
     [
@@ -718,7 +738,7 @@ const unrelatedArgs = [
     const compile = knipConfig.compilers.mjs;
     const compiled = compile("// dynamic consumers", "config/knip-dynamic-consumers.mjs");
     expect(compiled).toMatch(
-      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
+      /import \{ materializeRuntimeProcessScriptFile as __dynamic\d+_0, materializeRuntimeProcessScriptFileAsync as __dynamic\d+_1 \} from "\.\.\/src\/infra\/runtime-process-script-file\.ts";/u,
     );
     expect(compiled).toMatch(
       /import \{ resolveRuntimeBootstrapToolingEntrypointUrl as __dynamic\d+_0 \} from "\.\.\/runtime-process-bootstrap\.generated\.mjs";/u,
@@ -736,7 +756,7 @@ const unrelatedArgs = [
         [
           [
             "scripts/generate-runtime-script-assets.mjs",
-            'import { materializeRuntimeProcessScriptFile } from "./src/infra/runtime-process-script-file.ts";',
+            'import { materializeRuntimeProcessScriptFile, materializeRuntimeProcessScriptFileAsync } from "./src/infra/runtime-process-script-file.ts";',
             "",
           ],
           [

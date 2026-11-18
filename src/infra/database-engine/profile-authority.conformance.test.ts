@@ -73,6 +73,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         client,
         context,
         req: { type: "req", id: "profile-authority", method: "users.preferences.set" },
+        params: {},
         respond: vi.fn(),
         isWebchatConnect: () => false,
       });

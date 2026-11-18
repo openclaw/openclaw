@@ -28,7 +28,7 @@ export type RealtimeVoiceFastContextConfig = {
   fallbackToConsult: boolean;
 };
 
-export type RealtimeVoiceFastContextLabels = {
+type RealtimeVoiceFastContextLabels = {
   audienceLabel: string;
   contextName: string;
 };

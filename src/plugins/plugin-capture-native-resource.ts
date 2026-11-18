@@ -39,7 +39,7 @@ type Domain = {
 // One physical token owner per domain; execution resources borrow it through the existing relay.
 const domains = new Map<string, Domain>();
 
-export function createNativeWorkerResource(
+export default function createPluginCaptureNativeResource(
   port: NativeWorkerResourcePort,
   input: unknown,
   ownerPort?: NativeWorkerResourcePort,

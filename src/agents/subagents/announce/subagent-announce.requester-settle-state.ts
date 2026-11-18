@@ -12,7 +12,7 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
 
-export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
+const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
 export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {

@@ -261,18 +261,15 @@ it("does not transfer retained projection custody to a deleted and recreated ses
     });
     expect(await readSessionEntryReadOnlyInWorker(fixture.scope)).toBeUndefined();
     const nextSessionId = randomUUID();
-    const created = await createSessionEntryWithTranscript(
-      { ...fixture.scope, sessionId: nextSessionId },
-      () => ({
-        ok: true,
-        entry: {
-          ...saved.entry,
-          sessionId: nextSessionId,
-          lifecycleRevision: randomUUID(),
-          localWorkspaceHandoff: undefined,
-        },
-      }),
-    );
+    const created = await createSessionEntryWithTranscript(fixture.scope, () => ({
+      ok: true,
+      entry: {
+        ...saved.entry,
+        sessionId: nextSessionId,
+        lifecycleRevision: randomUUID(),
+        localWorkspaceHandoff: undefined,
+      },
+    }));
     expect(created.ok).toBe(true);
     using recreated = expectDefined(
       await resolveLocalWorkspaceOwner({ cfg, ...fixture.scope }),

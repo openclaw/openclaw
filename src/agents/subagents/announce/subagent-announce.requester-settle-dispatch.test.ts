@@ -88,7 +88,7 @@ describe("requester settle dispatch deadline", () => {
     async (yielded) => {
       const context = createContext();
       const { child, completeBatch, params } = dispatchFixture();
-      child.requesterSettleWake!.requesterYieldBatch = yielded;
+      child.requesterSettleWake!.requesterYieldBatch = yielded ? true : undefined;
       child.delivery = {
         status: "pending",
         requesterDelivery: { state: "consumed", runId: "committed-requester-turn", at: 3_001 },

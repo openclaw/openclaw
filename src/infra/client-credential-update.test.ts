@@ -55,6 +55,7 @@ import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.t
 import { openEngineStore } from "./database-engine/open.js";
 import { getPostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { generateStoredDeviceIdentity } from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { isPostgresSqlConnection } from "./sql-connection.js";

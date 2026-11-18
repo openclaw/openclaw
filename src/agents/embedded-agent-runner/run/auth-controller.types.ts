@@ -22,7 +22,7 @@ export type EmbeddedRunAuthState = {
   thinkLevel: ThinkLevel;
 };
 
-export type RuntimeApiKeySink = {
+type RuntimeApiKeySink = {
   setRuntimeApiKey(provider: string, apiKey: string): void;
 };
 

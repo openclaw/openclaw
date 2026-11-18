@@ -3,10 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  performClientCredentialOperation,
-  type ClientIdentityRecord,
-} from "./client-credential-operations.js";
+import { performClientCredentialOperation } from "./client-credential-operations.js";
+import type { ClientIdentityRecord } from "./client-credential-operations.types.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { writeClientCredentialReceipt } from "./client-credential-readiness.js";
 import {

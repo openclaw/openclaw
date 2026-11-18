@@ -1,27 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { relativePluginPathInsideRootSync } from "./path-safety.js";
-import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 import {
   createPluginNativeReferenceValidator,
   linkPluginNativeReference,
 } from "./plugin-native-reference.js";
-import type {
-  PluginNativeArtifactFact,
-  PluginNativeNamespaceFact,
-} from "./plugin-source-admission.types.js";
-import type { pluginSourceCaptureDirectory } from "./plugin-source-capture-context.js";
+import type { PluginRecoveryCopyInput } from "./plugin-recovery-source-copy.types.js";
+import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
 
-export type PluginRecoveryCopyInput = {
-  rootDir: string;
-  boundaryRoot: string;
-  references?: ReadonlyMap<string, PluginNativeArtifactFact>;
-  namespaces?: ReadonlyMap<string, PluginNativeNamespaceFact>;
-};
-export type PluginRecoveryCaptureInput = PluginRecoveryCopyInput & {
-  storage: PluginSourceCaptureStorage;
-  directory?: ReturnType<typeof pluginSourceCaptureDirectory.getStore>;
-};
 /** Sync forks and broker-owned async recovery use the same link and native admission policy. */
 export function* copyPluginRecoveryFiles(
   input: PluginRecoveryCopyInput,

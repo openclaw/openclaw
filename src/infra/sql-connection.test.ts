@@ -14,6 +14,7 @@ it("uses the SQLite handle and the PostgreSQL anchor as publication identities",
       prepare: vi.fn(),
       exec: vi.fn(),
       close: vi.fn(),
+      releaseIdleTransport: vi.fn(),
       query: vi.fn(),
       runTransaction: (operation) => operation(),
     };

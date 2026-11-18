@@ -223,7 +223,7 @@ it("retains an independent resource after completed execution source close", asy
   const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const moduleUrl = new URL(
     `data:text/javascript,${encodeURIComponent(
-      'export function createNativeWorkerResource(port) { port.on("message", value => port.postMessage(value)); return { async close() { port.close(); } }; }',
+      'export default function createNativeWorkerResource(port) { port.on("message", value => port.postMessage(value)); return { async close() { port.close(); } }; }',
     )}`,
   );
   const resource = await source.captureIndependentResource(moduleUrl);
@@ -255,7 +255,7 @@ it("replaces failed retained broker authority after completed source close", asy
   const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const moduleUrl = new URL(
     `data:text/javascript,${encodeURIComponent(
-      'export function createNativeWorkerResource(port) { port.on("message", value => { if (value === "exit") process.exit(17); else port.postMessage(process.pid); }); return { async close() { port.close(); } }; }',
+      'export default function createNativeWorkerResource(port) { port.on("message", value => { if (value === "exit") process.exit(17); else port.postMessage(process.pid); }); return { async close() { port.close(); } }; }',
     )}`,
   );
   const resource = await source.captureIndependentResource(moduleUrl);
@@ -289,7 +289,7 @@ it("shares cold broker admission between independent and synchronous execution r
   const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
   const moduleUrl = new URL(
     `data:text/javascript,${encodeURIComponent(
-      'export function createNativeWorkerResource(port) { port.on("message", () => port.postMessage(process.pid)); return { async close() { port.close(); } }; }',
+      'export default function createNativeWorkerResource(port) { port.on("message", () => port.postMessage(process.pid)); return { async close() { port.close(); } }; }',
     )}`,
   );
   const preparing = source.captureIndependentResource(moduleUrl);

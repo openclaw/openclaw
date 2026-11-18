@@ -1,10 +1,8 @@
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
 import { once } from "node:events";
+import { syncBuiltinESMExports } from "node:module";
 import { describe, expect, it, vi } from "vitest";
-import {
-  findCommandReservationCandidates,
-  parseDarwinProcessBirths,
-} from "./command-reservation-census.js";
+import { findCommandReservationCandidates } from "./command-reservation-census.js";
 
 // Orphaned by its shell, like a command whose killed spawner never bound it.
 async function spawnOrphan(): Promise<number> {
@@ -41,21 +39,57 @@ describe.skipIf(process.platform === "win32")("command reservation census", () =
     }
   });
 
-  it("reads Darwin rows for accounts printed as a negative uid", () => {
-    const uid = process.getuid?.();
-    expect(
-      parseDarwinProcessBirths(
-        `  600     1    -2 S    Sun Oct 25 19:58:03 2026    \n  700   600 ${uid} Z+   Sun Oct 25 19:58:03 2026\n`,
-      ),
-    ).toEqual([{ pid: 700, ppid: 600, bornAtMs: Date.UTC(2026, 9, 25, 19, 58, 3), zombie: true }]);
-
-    // Running as nobody itself: Node reports the unsigned uid.
+  it("filters Darwin census rows at the reservation boundary, including signed UIDs", () => {
+    const reservedAtMs = Date.UTC(2026, 9, 25, 19, 58, 3);
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
     const getuid = vi.spyOn(process, "getuid").mockReturnValue(4_294_967_294);
+    const census = vi.spyOn(childProcess, "spawnSync").mockReturnValue({
+      pid: 604,
+      status: 0,
+      signal: null,
+      output: [],
+      stderr: "",
+      stdout: [
+        "600 1 -2 S Sun Oct 25 19:58:03 2026",
+        "601 1 501 S Sun Oct 25 19:58:03 2026",
+        "602 1 -2 S Sun Oct 25 18:58:03 2026",
+        "603 1 -2 S unreadable-start-time",
+        "604 1 -2 S Sun Oct 25 19:58:03 2026",
+        `${process.pid} 1 -2 S Sun Oct 25 19:58:03 2026`,
+        `605 ${process.pid} -2 S Sun Oct 25 19:58:03 2026`,
+        "",
+      ].join("\n"),
+    });
+    syncBuiltinESMExports();
     try {
-      expect(
-        parseDarwinProcessBirths("  600     1    -2 S    Sun Oct 25 19:58:03 2026\n"),
-      ).toMatchObject([{ pid: 600 }]);
+      expect(findCommandReservationCandidates(reservedAtMs)).toEqual([600, 603]);
+      census.mockReturnValueOnce({
+        pid: 604,
+        status: 0,
+        signal: null,
+        output: [],
+        stderr: "",
+        stdout: "unreadable-row",
+      });
+      expect(() => findCommandReservationCandidates(reservedAtMs)).toThrow(
+        "Darwin process census is unreadable",
+      );
+      census.mockReturnValueOnce({
+        pid: 604,
+        status: 1,
+        signal: null,
+        output: [],
+        stderr: "unavailable",
+        stdout: "",
+      });
+      expect(() => findCommandReservationCandidates(reservedAtMs)).toThrow(
+        "Darwin process census is unavailable",
+      );
     } finally {
+      Object.defineProperty(process, "platform", platform);
+      census.mockRestore();
+      syncBuiltinESMExports();
       getuid.mockRestore();
     }
   });

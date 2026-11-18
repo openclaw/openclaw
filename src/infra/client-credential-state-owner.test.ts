@@ -8,7 +8,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { recoverClientCredentialStore } from "./client-credential-migration.js";
-import type { ClientSocketRecord } from "./client-credential-operations.js";
+import type { ClientSocketRecord } from "./client-credential-operations.types.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { readClientCredentialReceipt } from "./client-credential-readiness.js";
 import { readClientCredentialFileIdentity } from "./client-credential-receipt.js";

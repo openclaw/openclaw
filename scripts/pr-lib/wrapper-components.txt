@@ -407,6 +407,7 @@ src/infra/database-engine/observation.ts
 src/infra/database-engine/open.ts
 src/infra/database-engine/physical-facts-contract.ts
 src/infra/database-engine/physical-facts.ts
+src/infra/database-engine/physical-store-inspection.ts
 src/infra/database-engine/physical-store.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
@@ -999,6 +1000,7 @@ src/infra/directory-watch-host.worker.ts
 src/infra/directory-watch-parent.worker.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
+src/infra/device-identity-store-options.ts
 src/infra/device-identity-store.ts
 src/infra/device-identity.ts
 src/infra/dotenv-global-core.ts
@@ -1415,6 +1417,7 @@ src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts
 src/logging/json-console-line.ts
 src/logging/levels.ts
+src/logging/log-directory.ts
 src/logging/log-file-path.ts
 src/logging/log-file-shared.ts
 src/logging/logger-file-message.ts
@@ -1610,6 +1613,9 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-native-resource.client.ts
+src/plugins/plugin-capture-native-resource.ts
+src/plugins/plugin-capture-native-resource.types.ts
 src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
@@ -1668,6 +1674,7 @@ src/plugins/plugin-package-metadata-capture.ts
 src/plugins/plugin-peer-link.ts
 src/plugins/plugin-policy-id.ts
 src/plugins/plugin-provider-request-policy.ts
+src/plugins/plugin-recovery-source-copy.ts
 src/plugins/plugin-registry-comparison.ts
 src/plugins/plugin-registry-contributions.ts
 src/plugins/plugin-registry-id-normalizer.ts
@@ -1694,6 +1701,7 @@ src/plugins/plugin-source-capture-context.ts
 src/plugins/plugin-source-capture-directory.ts
 src/plugins/plugin-source-capture-native-loads.ts
 src/plugins/plugin-source-capture-path.ts
+src/plugins/plugin-source-capture-state.ts
 src/plugins/plugin-source-file.ts
 src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts

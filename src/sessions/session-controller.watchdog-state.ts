@@ -3,7 +3,7 @@ export const SESSION_WATCHDOG_ABORT_FLOOR_MS = 5 * 60_000;
 export const SESSION_WATCHDOG_QUIET_TOOL_MS = 15 * 60_000;
 export const SESSION_WATCHDOG_CLEANUP_MS = 60_000;
 
-export type SessionWatchdogWaitKind =
+type SessionWatchdogWaitKind =
   | "global_capacity"
   | "deferred_maintenance"
   | "human_question"
