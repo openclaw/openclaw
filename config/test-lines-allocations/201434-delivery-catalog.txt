@@ -1,0 +1,2 @@
+# Exact source regression growth for #201434: plain catalog retains lease, explicit invalidation retires it.
+4

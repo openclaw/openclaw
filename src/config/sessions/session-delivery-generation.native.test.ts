@@ -38,6 +38,8 @@ it.each(["runtime", "automation"] as const)(
   async (scope) => {
     const { generation, database, scope: target } = await fixture();
     sessionChanges.emit({ all: true, scope: "profiles" });
+    // Unkeyed catalog notification (session groups, sharing) after committed writer facts.
+    sessionChanges.emit({ all: true, scope: "sessions" });
     expect(generation.assertCurrent).not.toThrow();
     runOpenClawAgentWriteTransaction(
       () => {
@@ -53,6 +55,8 @@ it.each(["runtime", "automation"] as const)(
       { agentId: target.agentId, path: target.storePath },
     );
     expect(generation.assertCurrent).not.toThrow();
+    sessionChanges.emit({ all: true, scope: "sessions", factsInvalidated: true });
+    expect(generation.assertCurrent).toThrow(generationError());
   },
 );
 
