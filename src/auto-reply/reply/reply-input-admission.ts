@@ -1,5 +1,6 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import { applySessionEntryTargetOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntryTargetPatchScope } from "../../config/sessions/session-accessor.types.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
@@ -42,6 +43,7 @@ export function createReplyInputAdmission(params: {
 }) {
   const { replyOperation, followupRun, sessionKey, storePath } = params;
   let target: SessionEntryTargetPatchScope | undefined;
+  let admittedLifecycle: { target: SessionEntryTargetPatchScope; entry: SessionEntry } | undefined;
   const assertCurrent = () => {
     replyOperation.abortSignal.throwIfAborted();
     if (replyOperation.lifecycleGeneration) {
@@ -140,10 +142,44 @@ export function createReplyInputAdmission(params: {
           }),
         });
         if (persisted?.sessionEntry) {
+          if (target) {
+            admittedLifecycle = { target, entry: persisted.sessionEntry };
+          }
           params.setEntry(persisted.sessionEntry);
         }
       }
       bindSource();
+    },
+    async completeObservedTurn(this: void): Promise<void> {
+      if (!admittedLifecycle) {
+        return;
+      }
+      // Observation skips the runner's lifecycle manager. Complete only the
+      // durable start this admission committed, through its captured owner.
+      const { target: admittedTarget, entry } = admittedLifecycle;
+      const updated = await applySessionEntryTargetOperation(
+        admittedTarget,
+        {
+          kind: "lifecycle",
+          lifecycle: {
+            event: {
+              runId: params.runId,
+              sessionId: entry.sessionId,
+              ts: Date.now(),
+              data: { phase: "end", executionStarted: false },
+            },
+            currentLifecycleGeneration:
+              replyOperation.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
+            canonicalKey: admittedTarget.target.canonicalKey,
+            lifecycleRevision: entry.lifecycleRevision,
+            exactCronRun: false,
+          },
+        },
+        { skipMaintenance: true, takeCacheOwnership: true, requireWriteSuccess: true },
+      );
+      if (updated) {
+        params.setEntry(updated);
+      }
     },
     async recordPendingDelivery(this: void, delivery: PendingReplyDelivery): Promise<void> {
       const entry = await read();

@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { loadSessionEntry, loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { isIndexedSessionEntry } from "../../config/sessions/session-entry-codec.js";
 import type { DecisionBatch, DecisionOutcome } from "../../decisions/types.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../types.js";
@@ -67,10 +68,12 @@ it("streams invited replies and observes chatter without starting a primary run"
   expect(fixture.typing()).toBe(previousTyping);
   expect(fixture.partials).toHaveLength(previousPartials);
   const sessionKey = "agent:main:telegram:group:-10001";
-  const entry = loadSessionEntry({ storePath: fixture.storePath, sessionKey });
+  const entry = await readSessionEntryInWorker({ storePath: fixture.storePath, sessionKey });
   if (!entry) {
     throw new Error("The reply flow did not create its session");
   }
+  expect(entry.status).toBe("done");
+  expect(entry.lifecycleRunId).toBeUndefined();
   const events = await loadTranscriptEvents({
     agentId: "main",
     sessionId: entry.sessionId,

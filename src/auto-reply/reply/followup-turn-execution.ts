@@ -395,6 +395,7 @@ export async function executeFollowupTurn(params: {
       }
       const execute = () =>
         executeAgentTurn({
+          completeObservedTurn: inputAdmission.completeObservedTurn,
           recoveryMemoryFlushAttempted: turn.memoryFlushAttempted,
           completionSource: gatewayOwnsCompletion ? "reply-dispatch" : undefined,
           commandBody: turn.queued.prompt,
