@@ -62,37 +62,45 @@ it.each(["loaded", "unresolved"] as const)(
   },
 );
 
-it("keeps a cached page's sidebar after navigating from a rail preview", async () => {
-  vi.stubGlobal("innerWidth", 1280);
-  vi.stubGlobal(
-    "matchMedia",
-    vi.fn(() => Object.assign(new EventTarget(), { matches: false })),
-  );
-  const { owner, runtime, query, settle } = await mountShell();
-  owner.connect();
-  await runtime.router.navigate("activity", runtime.context);
-  await runtime.router.navigate("sessions", runtime.context);
-  await runtime.router.navigate("dashboards", runtime.context);
-  runtime.context.navigation.update({ navCollapsed: true });
-  await settle();
-  const sidebar = owner.navigationSidebar as AppSidebarElement;
-  expect(sidebar.navigationView).toBe("sessions");
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const event = new Event("pointerover", { bubbles: true });
-  Object.assign(event, { pointerType: "mouse" });
-  query('[data-navigation-view="online"]')!.dispatchEvent(event);
-  await vi.advanceTimersByTimeAsync(300);
-  vi.useRealTimers();
-  await vi.dynamicImportSettled();
-  await settle();
-  expect(sidebar.hasAttribute("data-peek")).toBe(true);
-  query<HTMLAnchorElement>(".sidebar-online__overview a")!.click();
-  await vi.dynamicImportSettled();
-  await settle();
-  expect(sidebar.activeRouteId).toBe("activity");
-  expect(sidebar.hasAttribute("data-peek")).toBe(false);
-  expect(sidebar.navigationView).toBe("online");
-});
+it.each(["loaded", "preloaded"] as const)(
+  "keeps a %s page's sidebar after navigating from a rail preview",
+  async (cache) => {
+    vi.stubGlobal("innerWidth", 1280);
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => Object.assign(new EventTarget(), { matches: false })),
+    );
+    const { owner, runtime, query, settle } = await mountShell();
+    owner.connect();
+    if (cache === "loaded") {
+      await runtime.router.navigate("activity", runtime.context);
+    }
+    await runtime.router.navigate("sessions", runtime.context);
+    if (cache === "preloaded") {
+      await runtime.router.preloadRoute("activity", runtime.context);
+    }
+    await runtime.router.navigate("dashboards", runtime.context);
+    runtime.context.navigation.update({ navCollapsed: true });
+    await settle();
+    const sidebar = owner.navigationSidebar as AppSidebarElement;
+    expect(sidebar.navigationView).toBe("sessions");
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const event = new Event("pointerover", { bubbles: true });
+    Object.assign(event, { pointerType: "mouse" });
+    query('[data-navigation-view="online"]')!.dispatchEvent(event);
+    await vi.advanceTimersByTimeAsync(300);
+    vi.useRealTimers();
+    await vi.dynamicImportSettled();
+    await settle();
+    expect(sidebar.hasAttribute("data-peek")).toBe(true);
+    query<HTMLAnchorElement>(".sidebar-online__overview a")!.click();
+    await vi.dynamicImportSettled();
+    await settle();
+    expect(sidebar.activeRouteId).toBe("activity");
+    expect(sidebar.hasAttribute("data-peek")).toBe(false);
+    expect(sidebar.navigationView).toBe("online");
+  },
+);
 
 it("keeps the displayed page's sidebar until a cold destination loads", async () => {
   const { owner, runtime, settle } = await mountShell();
@@ -117,7 +125,7 @@ it("keeps the displayed page's sidebar until a cold destination loads", async ()
 });
 
 it.each(["pages", "online"] as const)(
-  "preserves the manually selected %s view through metadata updates",
+  "preserves the manually selected %s view through revalidation and metadata updates",
   async (view) => {
     vi.stubGlobal(
       "matchMedia",
@@ -132,7 +140,6 @@ it.each(["pages", "online"] as const)(
     await runtime.router.navigate("sessions", runtime.context);
     await settle();
     const sidebar = owner.navigationSidebar as AppSidebarElement;
-    const destination = runtime.router.getState().matches[0];
     query<HTMLButtonElement>(
       view === "pages" ? "[data-rail-more]" : '[data-navigation-view="online"]',
     )!.click();
@@ -142,10 +149,11 @@ it.each(["pages", "online"] as const)(
     if (view === "pages") {
       expect(query(".sidebar-pages")).not.toBeNull();
     }
+    await runtime.router.revalidate(runtime.context, "sessions");
     runtime.context.gateway.setSessionKey("agent:main:metadata-update");
     runtime.context.plugins.selectReplacement("workspace", null);
     await settle();
-    expect(runtime.router.getState().matches[0]).toBe(destination);
+    expect(runtime.router.getState().matches[0]?.routeId).toBe("sessions");
     expect(sidebar.navigationView).toBe(view === "pages" ? "sessions" : "online");
     if (view === "pages") {
       expect(query(".sidebar-pages")).not.toBeNull();

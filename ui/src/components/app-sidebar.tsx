@@ -1,5 +1,4 @@
 import "../styles/sidebar-attention-floating.css";
-import type { RouteMatch } from "@openclaw/uirouter";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import {
@@ -90,8 +89,7 @@ function AppSidebarContent(
   sidebarOwners.set(host, owner);
   owner.bindContext(context);
   onSettled(() => {
-    let previousPage = "";
-    let previousDestination: RouteMatch | undefined;
+    let previousSelection = "";
     const synchronizePage = () => {
       const state = context.router.getState();
       const destination = state.pendingMatches[0] ?? state.matches[0];
@@ -116,12 +114,14 @@ function AppSidebarContent(
       const section = Boolean(
         navigationSectionForPage(context.plugins.registrations("navigation"), pluginKey),
       );
-      const page = `${route}\n${pluginKey}\n${section}`;
-      if (destination === previousDestination && page === previousPage) {
+      const navigationInFlight =
+        destination?.cause === "navigation" &&
+        (destination.isFetching !== false || destination.preload);
+      const selection = `${destination?.id}\n${state.pendingMatches.length > 0}\n${navigationInFlight}\n${route}\n${pluginKey}\n${section}`;
+      if (selection === previousSelection) {
         return;
       }
-      previousDestination = destination;
-      previousPage = page;
+      previousSelection = selection;
       const view = sidebarViewForPage(route, pluginKey, section);
       if (view && owner.navigationView !== view) {
         owner.navigationView = view;
@@ -129,7 +129,7 @@ function AppSidebarContent(
       }
     };
     // Observe each logical transition even when a cold destination keeps the current page.
-    // Match replacement also settles navigation after temporary rail previews restore their view.
+    // Navigation settlement repairs preview restoration; background revalidation keeps manual views.
     synchronizePage();
     const stops = [
       context.router.subscribe(synchronizePage),
