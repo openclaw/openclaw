@@ -106,8 +106,11 @@ and session access are checked on every request. Publication always resolves the
 current Git remote again. Unavailable targets do not hide existing shared receipts.
 Reopen the chat or reconnect after the managed workspace changes to refresh its
 options. Personal account discovery and personal receipts still
-require `operator.read` and the authenticated owner. Identity, role, access grant,
-connection, and session visibility are rechecked before returning awaited reads.
+require `operator.read` and the authenticated owner. The request fixes that profile
+and its role and scope ceiling at admission. A reconnect or permission change does
+not revoke an admitted read; the next request uses the new authority. Personal reads
+never follow a profile merge into another person's credentials. Credential-generation,
+session lifecycle, and workspace identity fences still protect the selected target.
 
 With `operator.sessions.write`, a requester can publish ordinary changes from
 sessions they created through the shared GitHub account. Workflow definition
