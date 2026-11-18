@@ -332,6 +332,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   let currentWatchedSessions = preparedWatchedSessions;
   phases?.mark("attempt.system-prompt.project-memory");
   const activeProjectKeys = attempt.preparedModelRuntime?.activeProjectKeys ?? [];
+  // Budgeted recall retains the live turn authority and owns late provider cleanup.
   const projectMemoryBootstrap =
     effectivePromptMode === "full" && activeProjectKeys.length > 0
       ? await prepareProjectMemoryBootstrap({
