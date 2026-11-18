@@ -6,7 +6,7 @@ import {
   buildDeviceAuthPayload,
   buildDeviceAuthPayloadV3,
   normalizeDeviceMetadataForAuth,
-} from "./device-auth.js";
+} from "../../packages/gateway-client/src/device-auth.js";
 
 const device = {
   deviceId: "dev-1",

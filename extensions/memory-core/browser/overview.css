@@ -1,0 +1,112 @@
+/* Is memory working: one row with the pet, the answer, and the one action. */
+.memory-overview__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 16px;
+  min-width: 0;
+}
+
+.memory-overview__lobster {
+  flex: none;
+  width: 64px;
+  aspect-ratio: 120 / 105;
+  transform-origin: 50% 82%;
+}
+
+.memory-overview__lobster .lobster-pet__svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.memory-overview__status--sleeping .memory-overview__lobster {
+  opacity: 0.56;
+  filter: saturate(0.7);
+}
+
+.memory-overview__status-copy {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.memory-overview__status-copy h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.memory-overview__status-copy p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.memory-overview__status-copy .memory-overview__status-error {
+  color: var(--danger);
+}
+
+.memory-overview__status-action {
+  flex: none;
+}
+
+/* A row without a control must not reserve a line for one when it stacks on a phone. */
+.memory-overview .settings-row__control:has(> span:empty) {
+  display: none;
+}
+
+/* A worded action does not fit beside the answer on a phone: it sits under it. */
+@media (max-width: 560px) {
+  .memory-overview__status {
+    flex-wrap: wrap;
+  }
+
+  .memory-overview__status-copy {
+    flex-basis: calc(100% - 64px - var(--space-3));
+  }
+
+  .memory-overview__status-action:has(> .btn--sm) {
+    margin-inline-start: calc(64px + var(--space-3));
+  }
+
+  .memory-overview__status-copy:has(+ .memory-overview__status-action > .refresh-button) {
+    flex-basis: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .memory-overview__lobster {
+    animation: memory-overview-breathe 5.5s ease-in-out infinite;
+  }
+
+  .memory-overview__lobster .lob-reading-book__page-glow {
+    animation: memory-overview-book-shimmer 7s ease-in-out infinite;
+  }
+}
+
+@keyframes memory-overview-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+
+  50% {
+    transform: scale(1.025);
+  }
+}
+
+@keyframes memory-overview-book-shimmer {
+  0%,
+  72%,
+  100% {
+    opacity: 0;
+  }
+
+  82% {
+    opacity: 0.24;
+  }
+}

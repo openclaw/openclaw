@@ -5,11 +5,8 @@ import {
   type Client,
   GatewayDispatchEvents,
   type GatewayGuildCreateDispatchData,
-  ReadyListener,
-  ResumedListener,
-  VoiceStateUpdateListener,
 } from "../internal/discord.js";
-import type { DiscordVoiceListenerManager } from "./listener-contract.js";
+import type { DiscordVoiceManager } from "./voice-runtime.js";
 
 const logger = createSubsystemLogger("discord/voice");
 
@@ -19,30 +16,25 @@ function startAutoJoin(operation: () => Promise<unknown>, context = "") {
   );
 }
 
-export class DiscordVoiceReadyListener extends ReadyListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
+export class DiscordVoiceReadyListener {
+  readonly type: GatewayDispatchEvents.Ready | GatewayDispatchEvents.Resumed =
+    GatewayDispatchEvents.Ready;
+
+  constructor(private manager: DiscordVoiceManager) {}
 
   async handle(_data: unknown, _client: Client): Promise<void> {
     startAutoJoin(() => this.manager.autoJoin());
   }
 }
 
-export class DiscordVoiceResumedListener extends ResumedListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
-
-  async handle(_data: unknown, _client: Client): Promise<void> {
-    startAutoJoin(() => this.manager.autoJoin());
-  }
+export class DiscordVoiceResumedListener extends DiscordVoiceReadyListener {
+  override readonly type = GatewayDispatchEvents.Resumed;
 }
 
 export class DiscordVoiceGuildCreateListener {
   readonly type = GatewayDispatchEvents.GuildCreate;
 
-  constructor(private manager: DiscordVoiceListenerManager) {}
+  constructor(private manager: DiscordVoiceManager) {}
 
   async handle(data: GatewayGuildCreateDispatchData, _client: Client): Promise<void> {
     if (!data.unavailable) {
@@ -55,10 +47,9 @@ export class DiscordVoiceGuildCreateListener {
   }
 }
 
-export class DiscordVoiceStateUpdateListener extends VoiceStateUpdateListener {
-  constructor(private manager: DiscordVoiceListenerManager) {
-    super();
-  }
+export class DiscordVoiceStateUpdateListener {
+  readonly type = GatewayDispatchEvents.VoiceStateUpdate;
+  constructor(private manager: DiscordVoiceManager) {}
 
   async handle(data: APIVoiceState, client: Client): Promise<void> {
     const transition = client.getPlugin("gateway")?.takeVoiceStateTransition(data);

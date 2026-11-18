@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for interactive replies and message presentation helpers.
- */
 import { reduceLegacyInteractiveReply } from "../interactive/payload.js";
 
 export {

@@ -1,20 +1,27 @@
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { withTranscriptWriteSequence } from "../config/sessions/session-accessor.js";
+import { projectAssistantTranscriptText } from "../config/sessions/transcript-assistant-delivery-read.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context-store.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureDeliveryQueueStateContext,
-  resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
-import { recordUpdateRunStep, recordUpdateRunVerification } from "../infra/update-run-ledger.js";
+import {
+  isUpdateRunTerminalNoticeText,
+  renderUpdateRunNotice,
+  type UpdateRunNoticeKind,
+} from "../infra/update-run-notice.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
-import { readUpdateRunReportHealth } from "../infra/update-run-report-health.js";
-import { renderUpdateRunNotice, type UpdateRunNoticeKind } from "../infra/update-run-report.js";
+import {
+  recordUpdateRunStepAsync as recordUpdateRunStep,
+  recordUpdateRunVerificationAsync as recordUpdateRunVerification,
+} from "../infra/update-run-write.async.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sendGatewayLifecycleNotice } from "./server-restart-sentinel-notice.js";
 import {
@@ -24,6 +31,34 @@ import {
 } from "./update-run-notice-target.js";
 
 const log = createSubsystemLogger("gateway/update-run");
+
+/** Replay the admitted completion bytes, including after an interrupted run changes outcome. */
+export async function appendUpdateRunFinishedNotice(
+  params: Parameters<typeof appendAssistantMessageToSessionTranscript>[0] & {
+    expectedSessionId: string;
+    idempotencyKey: string;
+  },
+) {
+  const previous = await withTranscriptWriteSequence(
+    {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.expectedSessionId,
+      storePath: params.storePath,
+    },
+    async (transcript) => {
+      const facts = await transcript.readMessageFacts({ idempotencyKeys: [params.idempotencyKey] });
+      return projectAssistantTranscriptText(
+        facts.messagesByIdempotencyKey.get(params.idempotencyKey),
+      );
+    },
+  );
+  // Re-enter the normal append owner so a replaced session still rejects the write.
+  return appendAssistantMessageToSessionTranscript({
+    ...params,
+    text: previous && isUpdateRunTerminalNoticeText(previous.text) ? previous.text : params.text,
+  });
+}
 
 /** Prepare routing before an update can replace lazily loaded channel modules. */
 export async function createUpdateRunNotifier(
@@ -49,33 +84,39 @@ export async function createUpdateRunNotifier(
     runWithoutOwnedSessionTranscriptWrites(async () => {
       // Pre-park and later activation share one durable notice, never a fifth milestone.
       const milestone = kind === "parking" ? "activating" : kind;
+      const noticeStep =
+        kind === "finished"
+          ? undefined
+          : run.steps.find((step) => step.step === `notice:${milestone}`);
       const recorded =
         kind === "finished"
           ? run.verification.noticeDelivered === true
-          : run.steps.some(
-              (step) => step.step === `notice:${milestone}` && step.status === "completed",
-            );
-      if (recorded) {
+          : noticeStep?.status === "completed";
+      if (recorded || noticeStep?.status === "skipped") {
         return { delivered: false, owned: recorded };
       }
-      const message = renderUpdateRunNotice(
-        run,
-        kind,
-        kind === "finished" && run.status === "failed"
-          ? {
-              currentHealth: await readUpdateRunReportHealth(run.verification, {
-                env: resolveDeliveryQueueStateEnv(undefined, context),
-              }),
-            }
-          : {},
-      );
+      const message = renderUpdateRunNotice(run, kind);
       if (!message) {
         return { delivered: false, owned: false };
       }
       const cfg = getConfig();
       const currentTarget = authorizeUpdateRunNoticeTarget(cfg, noticeTarget);
+      const recordNoticeStep = (status: "completed" | "skipped", detail?: string) =>
+        recordUpdateRunStep(
+          run.runId,
+          {
+            step: `notice:${milestone}`,
+            status,
+            endedAtMs: Date.now(),
+            ...(detail ? { detail } : {}),
+          },
+          { env },
+        );
       if (currentTarget.kind === "none") {
-        recordUpdateRunNoticeSkipped(run.runId, currentTarget.reason, env);
+        await recordUpdateRunNoticeSkipped(run.runId, currentTarget.reason, env);
+        if (kind !== "finished") {
+          await recordNoticeStep("skipped", currentTarget.reason);
+        }
         return { delivered: false, owned: false };
       }
       // Admission, the watcher, and successor startup share permanent delivery
@@ -96,7 +137,11 @@ export async function createUpdateRunNotifier(
         );
       } else {
         const internal = currentTarget.session;
-        const notice = await appendAssistantMessageToSessionTranscript({
+        const append =
+          kind === "finished"
+            ? appendUpdateRunFinishedNotice
+            : appendAssistantMessageToSessionTranscript;
+        const notice = await append({
           agentId: internal.agentId,
           sessionKey: internal.canonicalKey,
           expectedSessionId: internal.entry.sessionId,
@@ -111,7 +156,7 @@ export async function createUpdateRunNotifier(
         }
       }
       if (delivered && kind === "finished") {
-        recordUpdateRunVerification(run.runId, { noticeDelivered: true }, { env });
+        await recordUpdateRunVerification(run.runId, { noticeDelivered: true }, { env });
       }
       const custody =
         currentTarget.kind === "route"
@@ -119,15 +164,7 @@ export async function createUpdateRunNotifier(
           : null;
       const owned = delivered || custody?.status === "pending" || custody?.status === "completed";
       if (owned && kind !== "finished") {
-        recordUpdateRunStep(
-          run.runId,
-          {
-            step: `notice:${milestone}`,
-            status: "completed",
-            endedAtMs: Date.now(),
-          },
-          { env },
-        );
+        await recordNoticeStep("completed");
       }
       return { delivered, owned };
     });

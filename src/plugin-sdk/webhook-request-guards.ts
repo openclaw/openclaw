@@ -1,6 +1,9 @@
 // Webhook request guards validate incoming HTTP requests before plugin webhook dispatch.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -79,17 +82,12 @@ function resolveWebhookBodyReadLimits(params: {
     params.profile === "pre-auth"
       ? WEBHOOK_BODY_READ_DEFAULTS.preAuth
       : WEBHOOK_BODY_READ_DEFAULTS.postAuth;
-  const maxBytes =
-    typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes) && params.maxBytes > 0
-      ? Math.floor(params.maxBytes)
-      : defaults.maxBytes;
-  const timeoutMs =
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-      ? Math.floor(params.timeoutMs)
-      : defaults.timeoutMs;
-  return { maxBytes, timeoutMs };
+  const maxBytes = asPositiveFiniteNumber(params.maxBytes);
+  const timeoutMs = asPositiveFiniteNumber(params.timeoutMs);
+  return {
+    maxBytes: maxBytes === undefined ? defaults.maxBytes : Math.floor(maxBytes),
+    timeoutMs: timeoutMs === undefined ? defaults.timeoutMs : Math.floor(timeoutMs),
+  };
 }
 
 async function respondWebhookBodyReadError(params: {
@@ -239,30 +237,18 @@ export function applyBasicWebhookRequestGuards(params: {
 }
 
 /** Start the shared webhook request lifecycle and return a release hook for in-flight tracking. */
-export function beginWebhookRequestPipelineOrReject(params: {
-  /** Incoming request to validate before acquiring in-flight capacity. */
-  req: IncomingMessage;
-  /** Response used for guard or capacity rejections. */
-  res: ServerResponse;
-  /** Allowed HTTP methods; empty or omitted disables the method guard. */
-  allowMethods?: readonly string[];
-  /** Optional fixed-window limiter for pre-body request throttling. */
-  rateLimiter?: FixedWindowRateLimiter;
-  /** Key passed to the rate limiter when throttling is enabled. */
-  rateLimitKey?: string;
-  /** Clock override for deterministic limiter tests. */
-  nowMs?: number;
-  /** Require JSON content type for POST requests. */
-  requireJsonContentType?: boolean;
-  /** Optional per-key concurrency limiter acquired after basic guards pass. */
-  inFlightLimiter?: WebhookInFlightLimiter;
-  /** Key used for in-flight concurrency tracking. */
-  inFlightKey?: string;
-  /** Status code returned when the in-flight guard rejects. */
-  inFlightLimitStatusCode?: number;
-  /** Response body returned when the in-flight guard rejects. */
-  inFlightLimitMessage?: string;
-}): { ok: true; release: () => void } | { ok: false } {
+export function beginWebhookRequestPipelineOrReject(
+  params: Parameters<typeof applyBasicWebhookRequestGuards>[0] & {
+    /** Optional per-key concurrency limiter acquired after basic guards pass. */
+    inFlightLimiter?: WebhookInFlightLimiter;
+    /** Key used for in-flight concurrency tracking. */
+    inFlightKey?: string;
+    /** Status code returned when the in-flight guard rejects. */
+    inFlightLimitStatusCode?: number;
+    /** Response body returned when the in-flight guard rejects. */
+    inFlightLimitMessage?: string;
+  },
+): { ok: true; release: () => void } | { ok: false } {
   if (!applyBasicWebhookRequestGuards(params)) {
     return { ok: false };
   }

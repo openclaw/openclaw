@@ -1,15 +1,29 @@
 ---
 name: proof-video
-description: Add subtitles, captions, narration cues, or zoom to a proof video or PR recording using repo-local capture helpers and a system ffmpeg renderer.
+description: Capture and annotate PR screenshots and videos with measured arrows, outlines, alignment guides, spacing brackets, captions, zoom, and speed cues.
 ---
 
 # Proof video
 
-Use this developer skill for captioned Control UI recordings and native captures.
+For **PR screenshots**, start with the shared [visual-proof workflow](../openclaw-pr-maintainer/references/media.md#pr-visual-proof),
+then use [annotations](references/annotations.md#screenshot). Capture through the
+existing platform workflow; no recorder, video, or ffmpeg setup is needed for
+stills. These annotations are PR artifacts, not store/release screenshots.
+
+Use the recording sections below for captioned Control UI and native video.
 Captions are burned into an MP4; they are visual narration, not synthesized audio.
 Keep the raw video as evidence, attach the polished MP4, and never commit media or
 `.artifacts/` output. Inspect the entire capture for unrelated or private content
 before publishing under the PR's existing authorization.
+
+## Point out the claim
+
+For target selection, native/web geometry, and inspection, read
+[annotations](references/annotations.md).
+Both paths use the same SVG geometry renderer. Annotations are composited before
+zoom, while narration stays fixed in the viewport. Re-measure and replace marks
+after scrolling or layout changes; a cue describes a stationary capture, not a
+live element tracker. Clear marks during movement when they would become stale.
 
 ## Standalone recording
 
@@ -94,7 +108,7 @@ try {
   await page.waitForTimeout(8000);
   recording.speed(1);
   recording.caption("Return to the full session list.");
-  await page.getByRole("menuitemradio", { name: "All", exact: true }).click();
+  await page.getByRole("radio", { name: "All", exact: true }).click();
   await page.waitForFunction(() =>
     document
       .querySelector(".sidebar-session-sort")
@@ -187,10 +201,11 @@ cannot overlap other speed cues. Adjacent cues are allowed.
 node --import tsx scripts/render-proof-video.mts --cues <dir>/cues.json --rasterize
 ```
 
-`--rasterize` creates missing caption PNGs with fresh Playwright Chromium pages.
-The exported `rasterizeCaptions(browser, cues, dir)` also supports programmatic
+`--rasterize` creates missing caption and annotation PNGs with fresh Playwright Chromium pages.
+The exported `rasterizeProofOverlays(browser, cues, dir)` also supports programmatic
 native-capture workflows. Neither path needs libass or drawtext: Chromium
-rasterizes text and ffmpeg overlays PNGs after the zoom.
+rasterizes text and geometry. ffmpeg overlays annotations before zoom and captions
+after zoom.
 
 ## Verified capture mode and limitations
 

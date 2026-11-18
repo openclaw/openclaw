@@ -5,6 +5,8 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { GatewayComputerService } from "../desktop/computer-service.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { computerHandlers } from "./computer.js";
 import type {
   GatewayClient,
@@ -12,16 +14,12 @@ import type {
   GatewayRequestHandlerOptions,
 } from "./types.js";
 
+type ComputerMethods = Pick<GatewayComputerService, "status" | "invoke">;
+
 function createClient(identity?: AgentRuntimeIdentity): GatewayClient {
   return {
     connId: "computer-operator",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.write"],
-      client: { id: GATEWAY_CLIENT_IDS.CLI, version: "test", platform: "test", mode: "cli" },
-    },
+    connect: gatewayConnect(["operator.write"], { id: GATEWAY_CLIENT_IDS.CLI, mode: "cli" }),
     ...(identity ? { internal: { syntheticClient: true, agentRuntimeIdentity: identity } } : {}),
   };
 }
@@ -45,32 +43,45 @@ function createIdentity(): AgentRuntimeIdentity {
 async function invoke(
   method: "computer.status" | "computer.invoke",
   params: Record<string, unknown>,
-  service?: Pick<GatewayComputerService, "status" | "invoke">,
+  service?: ComputerMethods,
   options: Partial<Omit<GatewayRequestHandlerOptions, "context">> & {
     context?: Partial<GatewayRequestContext>;
   } = {},
 ) {
   const respond = vi.fn();
   const { context, ...requestOptions } = options;
-  const gatewayComputerService: GatewayComputerService | undefined = service
-    ? {
-        ...service,
-        close: async () => {},
-        reconcileRuntimePolicy: async () => {},
-        revokeRunAuthority: () => {},
-        preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
-      }
-    : undefined;
   await computerHandlers[method]!({
     req: { type: "req", id: "request-one", method, params },
     params,
     respond,
     client: createClient(),
     isWebchatConnect: () => false,
-    context: { gatewayComputerService, ...context },
+    context: { gatewayComputerService: service, ...context },
     ...requestOptions,
   } as GatewayRequestHandlerOptions);
   return respond.mock.calls[0];
+}
+function deferredInput(ownerSignal: AbortSignal, suspendAt = 1) {
+  const entered = createDeferredCore();
+  const prepared = createDeferredCore();
+  const owners: string[] = [];
+  const sideEffect = vi.fn();
+  const service = {
+    status: vi.fn(),
+    invoke: async (request: Parameters<GatewayComputerService["invoke"]>[0]) => {
+      owners.push(request.owner);
+      expect(request.ownerSignal).toBe(ownerSignal);
+      expect(request.ownerSignal).not.toBe(request.signal);
+      if (owners.length === suspendAt) {
+        entered.resolve();
+        await prepared.promise;
+      }
+      request.assertCurrent();
+      sideEffect();
+      return {};
+    },
+  };
+  return { service, entered, prepared, owners, sideEffect };
 }
 
 const snapshot = {
@@ -79,81 +90,100 @@ const snapshot = {
   generation: "provider-one",
   idempotencyKey: "snapshot-one",
 };
+const unavailableStatus = [true, { available: false, configured: false }];
 
 describe("Gateway computer RPC", () => {
+  it("retains one ingress execution owner across origin-free RPCs and fences deferred input", async () => {
+    const grant = new AbortController();
+    const binding = createRemoteControlUiIngressTestContext({
+      audienceId: "computer-grant",
+      signal: grant.signal,
+    });
+    const clientForRequest = () => {
+      const client = createClient();
+      delete client.connId;
+      const principal = binding.resolvePrincipal();
+      client.authenticatedUserProfile = principal.authenticatedUserProfile;
+      client.connectionSignal = new AbortController().signal;
+      client.internal = {
+        remoteIngressPrincipal: principal,
+        operatorRoleActor: principal.operatorRoleActor,
+      };
+      return client;
+    };
+    expect(await invoke("computer.status", {}, undefined, { client: clientForRequest() })).toEqual(
+      unavailableStatus,
+    );
+    const { owners, entered, prepared, sideEffect, service } = deferredInput(grant.signal, 2);
+    const dispatch = (params = snapshot) =>
+      invoke("computer.invoke", params, service, { client: clientForRequest() });
+    expect((await dispatch())?.[0]).toBe(true);
+    const pending = dispatch({ ...snapshot, idempotencyKey: "snapshot-two" });
+    await entered.promise;
+    grant.abort();
+    prepared.resolve();
+    expect((await pending)?.[0]).toBe(false);
+    expect(owners[0]).toBe(owners[1]);
+    expect(sideEffect).toHaveBeenCalledOnce();
+  });
   it("separates readable capability discovery from computer input authority", () => {
-    expect(authorizeOperatorScopesForMethod("computer.status", ["operator.read"])).toEqual({
-      allowed: true,
-    });
-    expect(authorizeOperatorScopesForMethod("computer.invoke", ["operator.read"])).toEqual({
-      allowed: false,
-      missingScope: "operator.write",
-    });
-    expect(authorizeOperatorScopesForMethod("computer.invoke", ["operator.write"])).toEqual({
-      allowed: true,
-    });
+    expect([
+      authorizeOperatorScopesForMethod("computer.status", ["operator.read"]),
+      authorizeOperatorScopesForMethod("computer.invoke", ["operator.read"]),
+      authorizeOperatorScopesForMethod("computer.invoke", ["operator.write"]),
+    ]).toEqual([
+      { allowed: true },
+      { allowed: false, missingScope: "operator.write" },
+      { allowed: true },
+    ]);
   });
 
-  it.each([false, true])(
-    "allows capability discovery before run admission (synthetic=%s)",
-    async (synthetic) => {
-      const client = createClient();
-      if (synthetic) {
-        delete client.connId;
-        client.internal = { syntheticClient: true };
-      }
-      expect(await invoke("computer.status", {}, undefined, { client })).toEqual([
-        true,
-        { available: false, configured: false },
-      ]);
-    },
-  );
+  it("allows synthetic capability discovery before run admission", async () => {
+    const client = createClient();
+    delete client.connId;
+    client.internal = { syntheticClient: true };
+    const status = vi.fn(async () => ({ available: false, configured: false }));
+    expect(
+      await invoke("computer.status", { probe: true }, { status, invoke: vi.fn() }, { client }),
+    ).toEqual(unavailableStatus);
+    expect(status).toHaveBeenCalledExactlyOnceWith({ probe: true });
+  });
 
   it.each([
-    { ...snapshot, command: "system.run" },
-    { ...snapshot, owner: "forged-operator" },
-    { ...snapshot, params: [] },
-    { ...snapshot, timeoutMs: 0 },
-  ])("rejects malformed or authority-bearing wire requests: %j", async (params) => {
+    ["computer.status", { probe: "false" }, false],
+    ["computer.invoke", { ...snapshot, command: "system.run" }, false],
+    ["computer.invoke", { ...snapshot, owner: "forged-operator" }, false],
+    ["computer.invoke", snapshot, true],
+  ] as const)("rejects malformed or unadmitted %s: %j", async (method, params, synthetic) => {
+    const client = createClient();
+    if (synthetic) {
+      client.internal = { syntheticClient: true };
+    }
     const dispatch = vi.fn();
-    const result = await invoke("computer.invoke", params, {
-      status: vi.fn(),
-      invoke: dispatch,
-    });
-    expect(result?.[0]).toBe(false);
-    expect(result?.[2]).toMatchObject({ code: ErrorCodes.INVALID_REQUEST });
+    const result = await invoke(method, params, { status: dispatch, invoke: dispatch }, { client });
+    expect(result).toMatchObject([
+      false,
+      undefined,
+      { code: synthetic ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST },
+    ]);
     expect(dispatch).not.toHaveBeenCalled();
   });
 
   it.each(["invalidation", "disconnect", "revocation"] as const)(
     "prevents desktop dispatch after operator %s during preparation",
     async (retirement) => {
-      const started = createDeferredCore();
-      const prepared = createDeferredCore();
-      const sideEffect = vi.fn();
       const client = createClient();
       const controller = new AbortController();
       const requestController = new AbortController();
       client.connectionSignal = controller.signal;
+      const { entered, prepared, sideEffect, service } = deferredInput(controller.signal);
       let current = true;
-      const result = invoke(
-        "computer.invoke",
-        snapshot,
-        {
-          status: vi.fn(),
-          invoke: async (request) => {
-            expect(request.ownerSignal).toBe(controller.signal);
-            expect(request.ownerSignal).not.toBe(request.signal);
-            started.resolve();
-            await prepared.promise;
-            request.assertCurrent();
-            sideEffect();
-            return {};
-          },
-        },
-        { client, signal: requestController.signal, hasCurrentClientAuthority: () => current },
-      );
-      await started.promise;
+      const result = invoke("computer.invoke", snapshot, service, {
+        client,
+        signal: requestController.signal,
+        hasCurrentClientAuthority: () => current,
+      });
+      await entered.promise;
       if (retirement === "invalidation") {
         client.invalidated = true;
       } else if (retirement === "disconnect") {
@@ -178,15 +208,11 @@ describe("Gateway computer RPC", () => {
       request.assertCurrent();
       return { captured: true };
     });
+    const service = {
+      invoke: dispatch,
+      status: async () => ({ configured: true, available: true }),
+    };
     const context: Partial<GatewayRequestContext> = {
-      gatewayComputerService: {
-        invoke: dispatch,
-        status: async () => ({ configured: true, available: true }),
-        close: async () => {},
-        reconcileRuntimePolicy: async () => {},
-        revokeRunAuthority: () => {},
-        preparePluginReload: () => ({ drain: async () => {}, resume: () => {} }),
-      },
       validateAgentRuntimeApprovalAuthority: (candidate: AgentRuntimeIdentity) =>
         candidate === identity && active,
     };
@@ -194,53 +220,23 @@ describe("Gateway computer RPC", () => {
     first.connectionSignal = new AbortController().signal;
     const second = { ...createClient(identity), connId: "computer-next-connection" };
     for (const client of [first, second]) {
-      expect(
-        await invoke("computer.invoke", snapshot, undefined, {
-          client,
-          context,
-        }),
-      ).toEqual([true, { payload: { captured: true } }]);
+      expect(await invoke("computer.invoke", snapshot, service, { client, context })).toEqual([
+        true,
+        { payload: { captured: true } },
+      ]);
     }
     expect(owners[0]).toBe(owners[1]);
     active = false;
-    expect(
-      (
-        await invoke("computer.invoke", snapshot, undefined, {
-          client: second,
-          context,
-        })
-      )?.[0],
-    ).toBe(false);
+    const invokeRetired = (params: Record<string, unknown>) =>
+      invoke("computer.invoke", params, service, { client: second, context });
+    expect((await invokeRetired(snapshot))?.[0]).toBe(false);
     expect(dispatch).toHaveBeenCalledTimes(2);
-    expect(
-      (
-        await invoke(
-          "computer.invoke",
-          {
-            ...snapshot,
-            command: "computer.act",
-            params: { action: "__close_execution", executionId: "execution-one" },
-          },
-          undefined,
-          {
-            client: second,
-            context,
-          },
-        )
-      )?.[0],
-    ).toBe(true);
+    const closed = await invokeRetired({
+      ...snapshot,
+      command: "computer.act",
+      params: { action: "__close_execution", executionId: "execution-one" },
+    });
+    expect(closed?.[0]).toBe(true);
     expect(owners[2]).toBe(owners[0]);
-  });
-
-  it("rejects a synthetic client without an admitted run", async () => {
-    const client = createClient();
-    client.internal = { syntheticClient: true };
-    const dispatch = vi.fn();
-    expect(
-      (
-        await invoke("computer.invoke", snapshot, { status: vi.fn(), invoke: dispatch }, { client })
-      )?.[0],
-    ).toBe(false);
-    expect(dispatch).not.toHaveBeenCalled();
   });
 });

@@ -1,20 +1,11 @@
 import { getProviderEnvVars as getImageProviderEnvVars } from "openclaw/plugin-sdk/image-generation-core";
 import { listKnownProviderAuthEnvVarNames as listAuthEnvVarNames } from "openclaw/plugin-sdk/provider-auth";
-import {
-  getProviderEnvVars,
-  listKnownProviderAuthEnvVarNames,
-  resolveProviderAuthEnvVarCandidates,
-} from "openclaw/plugin-sdk/provider-env-vars";
+import { resolveProviderAuthEnvVarCandidates } from "openclaw/plugin-sdk/provider-env-vars";
 import { describe, expect, it } from "vitest";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
-type LookupParams = NonNullable<Parameters<typeof listKnownProviderAuthEnvVarNames>[0]>;
+type LookupParams = NonNullable<Parameters<typeof listAuthEnvVarNames>[0]>;
 const readers = [
-  {
-    name: "provider-env-vars/getProviderEnvVars",
-    read: (params: LookupParams) => getProviderEnvVars("compat-provider", params),
-    expected: ["COMPAT_PROVIDER_KEY"],
-  },
   {
     name: "image-generation-core/getProviderEnvVars",
     read: (params: LookupParams) => getImageProviderEnvVars("compat-provider", params),
@@ -25,11 +16,6 @@ const readers = [
     read: (params: LookupParams) =>
       resolveProviderAuthEnvVarCandidates(params)["compat-provider"] ?? [],
     expected: ["COMPAT_PROVIDER_KEY"],
-  },
-  {
-    name: "provider-env-vars/listKnownProviderAuthEnvVarNames",
-    read: listKnownProviderAuthEnvVarNames,
-    expected: ["COMPAT_PROVIDER_KEY", "COMPAT_USAGE_KEY"],
   },
   {
     name: "provider-auth/listKnownProviderAuthEnvVarNames",

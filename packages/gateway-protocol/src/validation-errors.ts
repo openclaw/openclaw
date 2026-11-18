@@ -1,4 +1,5 @@
 import type { TypeBoxValidationError } from "@openclaw/normalization-core/json-schema";
+import { hasNonEmptyString, readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 
 /** Normalized validation error shape exposed by every protocol validator. */
 export type ValidationError = TypeBoxValidationError;
@@ -46,16 +47,16 @@ export function checkProtocolJson(data: unknown, maxDepth: number): ValidationEr
   return undefined;
 }
 
-function firstStringParam(value: unknown): string | undefined {
-  if (typeof value === "string" && value.trim()) {
-    return value;
+const MAX_VALIDATION_ERROR_FIELDS = 8;
+
+function stringParams(value: unknown, fallback?: unknown): string[] {
+  if (hasNonEmptyString(value)) {
+    return [value];
   }
-  if (Array.isArray(value)) {
-    return value.find(
-      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-    );
-  }
-  return undefined;
+  const values = Array.isArray(value)
+    ? value.slice(0, MAX_VALIDATION_ERROR_FIELDS).filter(hasNonEmptyString)
+    : [];
+  return values.length > 0 || fallback === undefined ? values : stringParams(fallback);
 }
 
 /** Convert validator errors into compact operator-facing failure text. */
@@ -70,23 +71,28 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const keyword = typeof err?.keyword === "string" ? err.keyword : "";
     const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
 
-    if (keyword === "additionalProperties") {
-      const additionalProperty =
-        firstStringParam(err?.params?.additionalProperty) ??
-        firstStringParam(err?.params?.additionalProperties);
-      if (additionalProperty) {
-        const where = instancePath ? `at ${instancePath}` : "at root";
-        parts.push(`${where}: unexpected property '${additionalProperty}'`);
+    if (keyword === "additionalProperties" || keyword === "required") {
+      const additional = keyword === "additionalProperties";
+      const properties = stringParams(
+        additional ? err?.params?.additionalProperty : err?.params?.missingProperty,
+        additional ? err?.params?.additionalProperties : err?.params?.requiredProperties,
+      );
+      if (properties.length > 0) {
+        const where = instancePath ? `at ${instancePath}: ` : additional ? "at root: " : "";
+        const message = additional ? "unexpected property" : "must have required property";
+        for (const property of properties) {
+          parts.push(`${where}${message} '${property}'`);
+        }
         continue;
       }
     }
-    if (keyword === "required") {
-      const missingProperty =
-        firstStringParam(err?.params?.missingProperty) ??
-        firstStringParam(err?.params?.requiredProperties);
-      if (missingProperty) {
+    if (keyword === "enum") {
+      const allowedValues = stringParams(err?.params?.allowedValues);
+      if (allowedValues.length > 0) {
         const where = instancePath ? `at ${instancePath}: ` : "";
-        parts.push(`${where}must have required property '${missingProperty}'`);
+        parts.push(
+          `${where}must be one of: ${allowedValues.map((value) => JSON.stringify(value)).join(", ")}`,
+        );
         continue;
       }
     }
@@ -98,9 +104,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
     const message =
       keyword === "then" || (keyword === "if" && failingKeyword === "then")
         ? "must have required conditional properties"
-        : typeof err?.message === "string" && err.message.trim()
-          ? err.message
-          : "validation error";
+        : (readNonBlankString(err?.message) ?? "validation error");
     const where = instancePath ? `at ${instancePath}: ` : "";
     parts.push(`${where}${message}`);
   }

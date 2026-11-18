@@ -11,12 +11,9 @@ import {
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
-/** Registry target id accepted by a secrets apply plan. */
-type SecretsPlanTargetType = string;
-
 /** One planned SecretRef mutation against config or auth-profile storage. */
 export type SecretsPlanTarget = {
-  type: SecretsPlanTargetType;
+  type: string;
   /**
    * Dot path in the target config surface for operator readability.
    * Examples:
@@ -65,15 +62,9 @@ export type SecretsApplyPlan = {
 };
 
 /** Resolves a user-supplied plan target through the registry after path safety checks. */
-export function resolveValidatedPlanTarget(candidate: {
-  type?: SecretsPlanTargetType;
-  path?: string;
-  pathSegments?: string[];
-  agentId?: string;
-  providerId?: string;
-  accountId?: string;
-  authProfileProvider?: string;
-}): ResolvedPlanTarget | null {
+export function resolveValidatedPlanTarget(
+  candidate: Partial<Omit<SecretsPlanTarget, "ref">>,
+): ResolvedPlanTarget | null {
   if (typeof candidate.type !== "string" || !candidate.type.trim()) {
     return null;
   }

@@ -1,19 +1,20 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { windowsProcessOwnershipEntrypoint } from "./cli-entrypoint.test-support.js";
 
-const fixture = fileURLToPath(
-  new URL("./runtime-cleanup-scope.windows.test-support.ts", import.meta.url),
-);
+const fixture = resolveRuntimeWorkerUrl(windowsProcessOwnershipEntrypoint);
 
 describe.runIf(process.platform === "win32")("Windows executable process ownership", () => {
   it.each([
     { ownership: "cli", inherited: false, exitCode: 0 },
     { ownership: "cli", inherited: true, exitCode: 0 },
     { ownership: "cli", inherited: true, exitCode: 1 },
+    { ownership: "legacy", inherited: false, exitCode: 0 },
+    { ownership: "legacy-worker", inherited: false, exitCode: 0 },
     { ownership: "borrowed", inherited: false, exitCode: 0 },
     { ownership: "gateway", inherited: false, exitCode: 0 },
   ])(
@@ -21,7 +22,13 @@ describe.runIf(process.platform === "win32")("Windows executable process ownersh
     async ({ ownership, inherited, exitCode }) => {
       const parent = spawn(
         process.execPath,
-        ["--import", "tsx", fixture, "harness", ownership, String(inherited), String(exitCode)],
+        [
+          ...resolveRuntimeWorkerArgv(fixture),
+          "harness",
+          ownership,
+          String(inherited),
+          String(exitCode),
+        ],
         { stdio: ["ignore", "ignore", "pipe", "ipc"], windowsHide: true },
       );
       const closed = once(parent, "close");
@@ -39,7 +46,7 @@ describe.runIf(process.platform === "win32")("Windows executable process ownersh
           ...(inherited ? { inheritedJob: true } : {}),
         });
         expect(isPidAlive(parent.pid!)).toBe(true);
-        if (ownership === "cli") {
+        if (ownership === "cli" || ownership.startsWith("legacy")) {
           expect(await waitForPidToExit(descendantPid!)).toBe(true);
         } else {
           expect(isPidAlive(descendantPid!)).toBe(true);

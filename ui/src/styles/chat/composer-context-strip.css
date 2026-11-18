@@ -10,6 +10,12 @@
   font-size: 12px;
 }
 
+.chat-reply-preview.composer-context-strip {
+  padding-inline: var(--chat-composer-editor-inset-inline, 14px);
+  border-bottom-color: color-mix(in srgb, var(--text-strong) 8%, transparent);
+  line-height: 20px;
+}
+
 .composer-context-strip__label {
   display: inline-flex;
   align-items: center;
@@ -19,8 +25,15 @@
   font-weight: 600;
 }
 
+/* The pending reply names its author like its sent reply line. */
+.chat-reply-preview__label {
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .composer-context-strip__label-text,
-.composer-context-strip__text {
+.composer-context-strip__text,
+.composer-context-strip__person-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -47,12 +60,6 @@
 .composer-context-strip__person[hidden],
 .composer-context-strip__more[hidden] {
   display: none;
-}
-
-.composer-context-strip__person-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .composer-context-strip__person .chat-author-avatar {
@@ -84,34 +91,11 @@
   height: 100%;
 }
 
+/* The 28px box overhangs the strip by 2px on each side, so the strip keeps its
+   height and the glyph stays centred on the stack's trailing control column. */
 .composer-context-strip__dismiss {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: var(--chat-stack-trailing-control-size, 24px);
-  height: var(--chat-stack-trailing-control-size, 24px);
-  padding: 0;
-  color: var(--muted);
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-}
-
-.composer-context-strip__dismiss:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-}
-
-.composer-context-strip__dismiss svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.75px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  margin: -2px;
 }
 
 @media (max-width: 768px), (pointer: coarse) {
@@ -122,7 +106,8 @@
 
   .composer-context-strip__dismiss::before {
     position: absolute;
-    inset: -10px;
+    /* The 28px button needs 8px per side to retain its 44px touch target. */
+    inset: -8px;
     content: "";
   }
 }

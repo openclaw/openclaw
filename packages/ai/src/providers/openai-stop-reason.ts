@@ -12,9 +12,11 @@ export function mapOpenAIStopReason(
   switch (reason) {
     case null:
     case "stop":
+    case "STOP":
     case "end":
       return { stopReason: "stop" };
     case "length":
+    case "MAX_TOKENS":
       return { stopReason: "length" };
     case "function_call":
     case "tool_calls":

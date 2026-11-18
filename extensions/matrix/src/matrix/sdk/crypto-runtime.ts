@@ -1,15 +1,17 @@
 import "fake-indexeddb/auto";
-import { installFakeIndexedDbTransactionPruner } from "./fake-indexeddb-prune.js";
-
-installFakeIndexedDbTransactionPruner();
 
 export { MatrixCryptoBootstrapper } from "./crypto-bootstrap.js";
 export type { MatrixCryptoBootstrapResult } from "./crypto-bootstrap.js";
 export { createMatrixCryptoFacade } from "./crypto-facade.js";
 export type { MatrixCryptoFacade } from "./crypto-facade.js";
 export { MatrixDecryptBridge } from "./decrypt-bridge.js";
-export { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
+export {
+  persistIdbToDisk,
+  restoreIdbFromDisk,
+  resolveDefaultIdbSnapshotPath,
+} from "./idb-persistence.js";
 export { MatrixVerificationManager } from "./verification-manager.js";
+export { beginMatrixSdkIndexedDbSession } from "./indexeddb-session.js";
 export type { MatrixVerificationSummary } from "./verification-manager.js";
 export {
   isMatrixDeviceOwnerVerified,

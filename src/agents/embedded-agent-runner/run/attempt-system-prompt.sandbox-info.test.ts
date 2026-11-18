@@ -1,5 +1,6 @@
 // Caller coverage for optional elevation reporting with real session and approval readers.
 import { expect, it } from "vitest";
+import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
 import {
   withPromptFixture,
   type ElevationCase,
@@ -35,8 +36,24 @@ const cases: ElevationCase[] = [
 ];
 
 it.each(cases)("prepares sandbox prompt reporting with elevation $name", async (testCase) => {
-  await withPromptFixture(testCase, async ({ prepare, policyRead, approvalRead }) => {
-    const prepared = await prepare();
+  await withPromptFixture(testCase, async ({ prepare, tools, policyRead, approvalRead }) => {
+    const completedPhases: string[] = [];
+    const prepared = await withDiagnosticsTimelineObserver(
+      (name) => () => {
+        completedPhases.push(name);
+      },
+      prepare,
+    );
+    expect(completedPhases).toEqual(
+      expect.arrayContaining([
+        "attempt.system-prompt.sandbox",
+        "attempt.system-prompt.runtime-and-references",
+        "attempt.system-prompt.tool-context",
+        "attempt.system-prompt.context",
+        "attempt.system-prompt.render",
+        "attempt.system-prompt.report",
+      ]),
+    );
     expect(prepared.systemPromptReport?.sandbox).toEqual({ mode: "all", sandboxed: true });
     expect(prepared.systemPromptText).toContain("## Sandbox");
     if (testCase.elevated?.enabled) {
@@ -49,25 +66,21 @@ it.each(cases)("prepares sandbox prompt reporting with elevation $name", async (
       expect(policyRead).not.toHaveBeenCalled();
       expect(approvalRead).not.toHaveBeenCalled();
       expect(prepared.systemPromptText).not.toContain("Current elevated level:");
+      if (testCase === disabled) {
+        if (!prepared.prepareToolPrompt) {
+          throw new Error("Expected the actual refreshable prompt entry");
+        }
+        policyRead.mockClear();
+        approvalRead.mockClear();
+        const refresh = await prepared.prepareToolPrompt(tools, { permissionChanged: true });
+        const prompt = refresh(prepared.systemPromptText);
+        expect(prompt).toContain("## Permission change");
+        expect(prompt).toContain("## Sandbox");
+        expect(prompt).not.toContain("Current elevated level:");
+        expect(policyRead).not.toHaveBeenCalled();
+        expect(approvalRead).not.toHaveBeenCalled();
+      }
     }
-  });
-});
-
-it("does not read elevation policy again for a disabled permission-prompt refresh", async () => {
-  await withPromptFixture(disabled, async ({ prepare, tools, policyRead, approvalRead }) => {
-    const prepared = await prepare();
-    if (!prepared.prepareToolPrompt) {
-      throw new Error("Expected the actual refreshable prompt entry");
-    }
-    policyRead.mockClear();
-    approvalRead.mockClear();
-    const refresh = await prepared.prepareToolPrompt(tools, { permissionChanged: true });
-    const prompt = refresh(prepared.systemPromptText);
-    expect(prompt).toContain("## Permission change");
-    expect(prompt).toContain("## Sandbox");
-    expect(prompt).not.toContain("Current elevated level:");
-    expect(policyRead).not.toHaveBeenCalled();
-    expect(approvalRead).not.toHaveBeenCalled();
   });
 });
 

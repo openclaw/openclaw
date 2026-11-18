@@ -9,6 +9,7 @@ describe("normalizeChatType", () => {
     { name: "normalizes channel", value: "channel", expected: "channel" },
     { name: "returns undefined for undefined", value: undefined, expected: undefined },
     { name: "returns undefined for unknown value", value: "nope", expected: undefined },
+    { name: "rejects the retired room alias", value: "room", expected: undefined },
   ] satisfies Array<{ name: string; value: string | undefined; expected: string | undefined }>)(
     "$name",
     ({ value, expected }) => {

@@ -16,6 +16,7 @@ private final class SendableTapHandler: @unchecked Sendable {
     }
 }
 
+@Suite(.testWaitLimit)
 struct MacRealtimeTalkAudioCaptureTests {
     @Test func `encoder downmixes resamples and emits little endian pcm16`() throws {
         let buffer = try makeFloatBuffer(
@@ -346,25 +347,15 @@ struct MacRealtimeTalkAudioCaptureTests {
     }
 
     @MainActor
-    private func waitForHandledCallback(_ stream: AsyncStream<Void>) async throws {
-        // Delivery and its watchdog share the callback's executor. A busy MainActor
-        // must not let a detached timeout outrun an already queued callback.
-        let delivery = Task { @MainActor in
-            var iterator = stream.makeAsyncIterator()
-            return await iterator.next() != nil
-        }
-        let watchdog = Task { @MainActor in
-            try await Task.sleep(for: .seconds(1))
-            delivery.cancel()
-        }
-        defer {
-            watchdog.cancel()
-            delivery.cancel()
-        }
-        let handled = await withTaskCancellationHandler {
-            await delivery.value
-        } onCancel: {
-            delivery.cancel()
+    private func waitForHandledCallback(
+        _ stream: AsyncStream<Void>,
+        sourceLocation: SourceLocation = #_sourceLocation) async throws
+    {
+        var iterator = stream.makeAsyncIterator()
+        let handled = await iterator.next() != nil
+        guard !Task.isCancelled else {
+            Issue.record("Still waiting for handled audio callback", sourceLocation: sourceLocation)
+            throw CancellationError()
         }
         #expect(handled)
     }

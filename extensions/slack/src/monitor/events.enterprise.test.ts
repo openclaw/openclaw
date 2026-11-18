@@ -1,82 +1,63 @@
 // Slack tests cover Enterprise Grid event registration boundaries.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SlackMonitorContext } from "./context.js";
-import type { SlackMessageHandler } from "./message-handler.js";
+import { describe, expect, it, vi } from "vitest";
+import { registerSlackCommonEvents, registerSlackWorkspaceEvents } from "./events.js";
+import { createSlackSystemEventTestHarness } from "./events/system-event-test-harness.js";
 
-const registrations = vi.hoisted(() => ({
-  agent: vi.fn(),
-  assistant: vi.fn(),
-  channel: vi.fn(),
-  channelIdChanged: vi.fn(),
-  home: vi.fn(),
-  interaction: vi.fn(),
-  member: vi.fn(),
-  message: vi.fn(),
-  pin: vi.fn(),
-  reaction: vi.fn(),
-}));
-
-vi.mock("./events/agent.js", () => ({ registerSlackAgentEvents: registrations.agent }));
-vi.mock("./events/assistant.js", () => ({
-  registerSlackAssistantEvents: registrations.assistant,
-}));
-vi.mock("./events/channels.js", () => ({
-  registerSlackChannelEvents: registrations.channel,
-  registerSlackChannelIdChangedEvent: registrations.channelIdChanged,
-}));
-vi.mock("./events/home.js", () => ({ registerSlackHomeEvents: registrations.home }));
-vi.mock("./events/interactions.js", () => ({
-  registerSlackInteractionEvents: registrations.interaction,
-}));
-vi.mock("./events/members.js", () => ({ registerSlackMemberEvents: registrations.member }));
-vi.mock("./events/messages.js", () => ({ registerSlackMessageEvents: registrations.message }));
-vi.mock("./events/pins.js", () => ({ registerSlackPinEvents: registrations.pin }));
-vi.mock("./events/reactions.js", () => ({
-  registerSlackReactionEvents: registrations.reaction,
-}));
-
-let registerSlackCommonEvents: typeof import("./events.js").registerSlackCommonEvents;
-let registerSlackWorkspaceEvents: typeof import("./events.js").registerSlackWorkspaceEvents;
-
-function registerCommonEvents() {
-  registerSlackCommonEvents({
-    ctx: {} as SlackMonitorContext,
-    handleSlackMessage: vi.fn() as SlackMessageHandler,
+function createRegistrationHarness() {
+  const { ctx } = createSlackSystemEventTestHarness();
+  const events: string[] = [];
+  vi.spyOn(ctx.app, "event").mockImplementation((name) => {
+    events.push(String(name));
   });
+  const action = vi.spyOn(ctx.app, "action");
+  const shortcut = vi.spyOn(ctx.app, "shortcut");
+  const view = vi.spyOn(ctx.app, "view");
+  return { ctx, events, action, shortcut, view };
 }
 
+const commonEvents = [
+  "message",
+  "app_mention",
+  "reaction_added",
+  "reaction_removed",
+  "pin_added",
+  "pin_removed",
+  "member_joined_channel",
+  "member_left_channel",
+  "channel_created",
+  "channel_rename",
+];
+
+const workspaceEvents = [
+  "channel_id_changed",
+  "app_home_opened",
+  "app_context_changed",
+  "agent_session_stopped",
+  "agent_session_title_changed",
+  "assistant_thread_started",
+  "assistant_thread_context_changed",
+];
+
 describe("Slack event registration", () => {
-  beforeAll(async () => {
-    ({ registerSlackCommonEvents, registerSlackWorkspaceEvents } = await import("./events.js"));
-  });
-
-  beforeEach(() => {
-    for (const registration of Object.values(registrations)) {
-      registration.mockClear();
-    }
-  });
-
   it("registers the Enterprise-capable common event set without workspace-only listeners", () => {
-    registerCommonEvents();
+    const harness = createRegistrationHarness();
+    registerSlackCommonEvents({ ctx: harness.ctx, handleSlackMessage: vi.fn() });
 
-    expect(registrations.message).toHaveBeenCalledOnce();
-    expect(registrations.reaction).toHaveBeenCalledOnce();
-    expect(registrations.pin).toHaveBeenCalledOnce();
-    expect(registrations.member).toHaveBeenCalledOnce();
-    expect(registrations.channel).toHaveBeenCalledOnce();
-    expect(registrations.channelIdChanged).not.toHaveBeenCalled();
-    expect(registrations.home).not.toHaveBeenCalled();
-    expect(registrations.agent).not.toHaveBeenCalled();
-    expect(registrations.interaction).toHaveBeenCalledOnce();
-    expect(registrations.assistant).not.toHaveBeenCalled();
+    expect(harness.events).toEqual(commonEvents);
+    expect(harness.action).toHaveBeenCalledOnce();
+    expect(harness.shortcut).toHaveBeenCalledOnce();
+    expect(harness.view).toHaveBeenCalledTimes(2);
   });
 
   it("adds workspace-only listeners without duplicating the common event set", () => {
-    registerCommonEvents();
-    registerSlackWorkspaceEvents({ ctx: {} as SlackMonitorContext });
+    const harness = createRegistrationHarness();
+    registerSlackCommonEvents({ ctx: harness.ctx, handleSlackMessage: vi.fn() });
+    registerSlackWorkspaceEvents({ ctx: harness.ctx });
 
-    for (const registration of Object.values(registrations)) {
-      expect(registration).toHaveBeenCalledOnce();
-    }
+    expect(harness.events).toEqual([...commonEvents, ...workspaceEvents]);
+    expect(new Set(harness.events).size).toBe(harness.events.length);
+    expect(harness.action).toHaveBeenCalledOnce();
+    expect(harness.shortcut).toHaveBeenCalledOnce();
+    expect(harness.view).toHaveBeenCalledTimes(2);
   });
 });

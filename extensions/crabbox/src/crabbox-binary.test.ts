@@ -5,80 +5,49 @@ import { resolveOpenClawRoot } from "./crabbox-worker-profile.js";
 
 const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
 const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
+const toolsDir = path.resolve(path.sep, "tools");
+const pathBinary = path.join(toolsDir, "crabbox");
+
+function discover(executables: string[], options: Parameters<typeof resolveCrabboxBinary>[0] = {}) {
+  return {
+    openclawRoot: OPENCLAW_ROOT,
+    pathEnv: toolsDir,
+    isExecutable: (candidate: string) => executables.includes(candidate),
+    ...options,
+  };
+}
 
 describe("Crabbox binary resolution", () => {
   it("prefers explicit, then sibling, then PATH, then the bare command", () => {
-    const toolsDir = path.resolve(path.sep, "tools");
-    const pathBinary = path.join(toolsDir, "crabbox");
     const relativePathBinary = path.resolve("relative-tools", "crabbox");
     const explicitBinary = path.resolve(path.sep, "custom", "crabbox");
 
+    expect(resolveCrabboxBinary(discover([], { explicit: explicitBinary }))).toBe(explicitBinary);
+    expect(resolveCrabboxBinary(discover([SIBLING_BINARY, pathBinary]))).toBe(SIBLING_BINARY);
     expect(
-      resolveCrabboxBinary({
-        explicit: explicitBinary,
-        openclawRoot: OPENCLAW_ROOT,
-        isExecutable: () => false,
-      }),
-    ).toBe(explicitBinary);
-    expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: toolsDir,
-        isExecutable: (candidate) => candidate === SIBLING_BINARY || candidate === pathBinary,
-      }),
-    ).toBe(SIBLING_BINARY);
-    expect(
-      resolveCrabboxBinary({
-        pathEnv: toolsDir,
-        isExecutable: (candidate) => candidate === SIBLING_BINARY || candidate === pathBinary,
-      }),
+      resolveCrabboxBinary(discover([SIBLING_BINARY, pathBinary], { openclawRoot: undefined })),
     ).toBe(pathBinary);
     expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: [path.resolve(path.sep, "not-executable"), toolsDir].join(path.delimiter),
-        isExecutable: (candidate) => candidate === pathBinary,
-      }),
+      resolveCrabboxBinary(
+        discover([pathBinary], {
+          pathEnv: [path.resolve(path.sep, "not-executable"), toolsDir].join(path.delimiter),
+        }),
+      ),
     ).toBe(pathBinary);
     expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: "relative-tools",
-        isExecutable: (candidate) => candidate === relativePathBinary,
-      }),
+      resolveCrabboxBinary(discover([relativePathBinary], { pathEnv: "relative-tools" })),
     ).toBe(relativePathBinary);
-    expect(
-      resolveCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: path.resolve(path.sep, "not-executable"),
-        isExecutable: () => false,
-      }),
-    ).toBe("crabbox");
+    expect(resolveCrabboxBinary(discover([]))).toBe("crabbox");
   });
 
-  it.each([
-    { extensions: ["", ".com", ".bat", ".cmd", ".exe"], preferred: ".exe" },
-    { extensions: ["", ".com", ".bat", ".cmd"], preferred: ".cmd" },
-    { extensions: ["", ".com", ".bat"], preferred: ".bat" },
-    { extensions: ["", ".com"], preferred: ".com" },
-    { extensions: [""], preferred: "" },
-  ])("selects the preferred Windows executable suffix $preferred", ({ extensions, preferred }) => {
-    const toolsDir = path.resolve(path.sep, "tools");
-    const pathBinary = path.join(toolsDir, "crabbox");
-    const executables = new Set(
-      [SIBLING_BINARY, pathBinary].flatMap((binary) =>
-        extensions.map((extension) => `${binary}${extension}`),
-      ),
+  it("prefers Windows executables to command scripts in sibling and PATH discovery", () => {
+    const executables = [SIBLING_BINARY, pathBinary].flatMap((binary) =>
+      ["", ".com", ".bat", ".cmd", ".exe"].map((extension) => `${binary}${extension}`),
     );
-    const discovery = {
-      platform: "win32" as const,
-      pathEnv: toolsDir,
-      isExecutable: (candidate: string) => executables.has(candidate),
-    };
-
-    expect(resolveCrabboxBinary(discovery)).toBe(`${pathBinary}${preferred}`);
-    expect(resolveCrabboxBinary({ ...discovery, openclawRoot: OPENCLAW_ROOT })).toBe(
-      `${SIBLING_BINARY}${preferred}`,
+    const discovery = discover(executables, { platform: "win32" });
+    expect(resolveCrabboxBinary(discovery)).toBe(`${SIBLING_BINARY}.exe`);
+    expect(resolveCrabboxBinary({ ...discovery, openclawRoot: undefined })).toBe(
+      `${pathBinary}.exe`,
     );
   });
 
@@ -101,20 +70,8 @@ describe("Crabbox binary resolution", () => {
   it("distinguishes executable discovery from the dispatch fallback", () => {
     const explicitBinary = path.resolve(path.sep, "custom", "crabbox");
 
-    expect(
-      findCrabboxBinary({
-        explicit: explicitBinary,
-        openclawRoot: OPENCLAW_ROOT,
-        isExecutable: () => false,
-      }),
-    ).toBeUndefined();
-    expect(
-      findCrabboxBinary({
-        openclawRoot: OPENCLAW_ROOT,
-        pathEnv: path.resolve(path.sep, "not-executable"),
-        isExecutable: () => false,
-      }),
-    ).toBeUndefined();
+    expect(findCrabboxBinary(discover([], { explicit: explicitBinary }))).toBeUndefined();
+    expect(findCrabboxBinary(discover([]))).toBeUndefined();
   });
 
   it("derives the package root from source and bundled plugin roots", () => {

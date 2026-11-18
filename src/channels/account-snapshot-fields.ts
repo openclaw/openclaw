@@ -47,13 +47,6 @@ export function redactChannelStatusSummaryBaseUrl<T>(summary: T): T {
     : ({ ...summary, baseUrl: redactedBaseUrl } as T);
 }
 
-/** Redacts a plugin-provided base URL at the public account-snapshot boundary. */
-export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAccountSnapshot>>(
-  snapshot: T,
-): T {
-  return redactChannelStatusSummaryBaseUrl(snapshot);
-}
-
 function readNullableNumber(
   record: Record<string, unknown>,
   key: string,
@@ -92,24 +85,31 @@ function readCredentialStatus(
     : undefined;
 }
 
-/** Status inspection must not redeem credentials to detect configured-but-unavailable accounts. */
-export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
-  const record = isRecord(account) ? account : null;
-  if (!record) {
+function resolveConfiguredFromCredentialStatusKeys(
+  account: unknown,
+  keys: readonly CredentialStatusKey[],
+  mode: "any" | "all",
+): boolean | undefined {
+  if (!isRecord(account)) {
     return undefined;
   }
-  let sawCredentialStatus = false;
-  for (const key of CREDENTIAL_STATUS_KEYS) {
-    const status = readCredentialStatus(record, key);
+  let configured: boolean | undefined;
+  for (const key of keys) {
+    const status = readCredentialStatus(account, key);
     if (!status) {
       continue;
     }
-    sawCredentialStatus = true;
-    if (status !== "missing") {
-      return true;
+    configured = status !== "missing";
+    if (mode === "any" ? configured : !configured) {
+      return configured;
     }
   }
-  return sawCredentialStatus ? false : undefined;
+  return configured;
+}
+
+/** Status inspection must not redeem credentials to detect configured-but-unavailable accounts. */
+export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
+  return resolveConfiguredFromCredentialStatusKeys(account, CREDENTIAL_STATUS_KEYS, "any");
 }
 
 /** Infers configured state only from the credential status keys required by a channel. */
@@ -117,22 +117,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
   account: unknown,
   requiredKeys: CredentialStatusKey[],
 ): boolean | undefined {
-  const record = isRecord(account) ? account : null;
-  if (!record) {
-    return undefined;
-  }
-  let sawCredentialStatus = false;
-  for (const key of requiredKeys) {
-    const status = readCredentialStatus(record, key);
-    if (!status) {
-      continue;
-    }
-    sawCredentialStatus = true;
-    if (status === "missing") {
-      return false;
-    }
-  }
-  return sawCredentialStatus ? true : undefined;
+  return resolveConfiguredFromCredentialStatusKeys(account, requiredKeys, "all");
 }
 
 /** Returns true when a credential exists but cannot be resolved at status-render time. */

@@ -1,6 +1,5 @@
 import type { SkillEntry } from "../types.js";
 
-/** Normalizes a skill name to the comparable key used by filters and commands. */
 export function normalizeSkillIndexName(value: string): string {
   return value
     .trim()

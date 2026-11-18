@@ -1,24 +1,46 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ApprovalChannelReviewer } from "../../packages/gateway-protocol/src/index.js";
 import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
 import {
   getLoadedChannelPlugin,
   resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
+import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { canChannelEnforcePluginReviewerPolicy } from "../infra/approval-channel-policy-support.js";
 import {
-  doesApprovalRequestSelectChannelAccount,
+  doesApprovalRequestSelectChannelAccountFromDelivery,
+  type ApprovalRequestSessionDelivery,
   type ApprovalRequestLike,
 } from "../infra/approval-request-account-binding.js";
 import { isPluginApprovalRequest, type ChannelApprovalKind } from "../infra/approval-types.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 
 type PreparedApprovalChannelCustody = {
   resolverId: string;
-  authorizes: (request: ApprovalRequestLike) => boolean;
+  authorizes: (request: ApprovalRequestLike) => Promise<boolean>;
+  isCurrent: (request: ApprovalRequestLike) => boolean;
+  [Symbol.dispose]: () => void;
 };
+
+function sameDelivery(
+  before: Pick<SessionEntry, "sessionId" | "delivery"> | undefined,
+  after: Pick<SessionEntry, "sessionId" | "delivery"> | undefined,
+) {
+  return (
+    before?.sessionId === after?.sessionId && isDeepStrictEqual(before?.delivery, after?.delivery)
+  );
+}
 
 export function prepareApprovalChannelCustody(params: {
   cfg: OpenClawConfig;
+  getCfg?: () => OpenClawConfig;
+  assertCurrent?: () => void;
   approvalKind: ChannelApprovalKind;
   reviewer: ApprovalChannelReviewer;
 }): PreparedApprovalChannelCustody | null {
@@ -36,61 +58,157 @@ export function prepareApprovalChannelCustody(params: {
   ) {
     return null;
   }
-  const authorizeActorAction = capability?.authorizeActorAction;
+  const authorizeActorAction =
+    capability?.authorizeActorActionAsync ?? capability?.authorizeActorAction;
+  const configCurrent = () =>
+    (!params.getCfg || params.getCfg() === params.cfg) &&
+    getLoadedChannelPlugin(channel) === plugin;
   if (!authorizeActorAction) {
-    // Without channel approver settings, an OpenClaw change needs a configured
-    // owner. The final decision guard re-prepares custody from current config.
-    if (params.approvalKind !== "system-agent") {
+    if (
+      params.approvalKind !== "system-agent" ||
+      !isConfiguredCommandOwner(params.cfg, { channel, accountId, senderId })
+    ) {
       return null;
     }
-    return isConfiguredCommandOwner(params.cfg, { channel, accountId, senderId })
-      ? { resolverId: `${channel}:${accountId}`, authorizes: () => true }
-      : null;
+    return {
+      resolverId: `${channel}:${accountId}`,
+      authorizes: async () => configCurrent(),
+      isCurrent: configCurrent,
+      [Symbol.dispose]() {},
+    };
   }
-  if (!plugin) {
+  if (!plugin || !plugin.config.listAccountIds(params.cfg).includes(accountId)) {
     return null;
   }
-  const isActorAuthorized = (candidateAccountId: string, request?: ApprovalRequestLike) => {
-    const pluginRequest =
-      params.approvalKind === "plugin" && request && isPluginApprovalRequest(request)
-        ? request
-        : undefined;
-    if (params.approvalKind === "plugin" && !pluginRequest) {
-      return false;
+  const prepared = new Map<
+    ApprovalRequestLike,
+    {
+      authorized: boolean;
+      isCurrent: () => boolean;
+      release: () => void;
     }
-    return authorizeActorAction({
-      cfg: params.cfg,
-      accountId: candidateAccountId,
-      senderId,
-      action: "approve",
-      approvalKind: params.approvalKind,
-      ...(pluginRequest ? { request: pluginRequest } : {}),
-    }).authorized;
+  >();
+  let active = true;
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    if (!active || !configCurrent()) {
+      throw new Error("approval reviewer policy changed during preparation");
+    }
   };
-  if (params.approvalKind !== "plugin" && !isActorAuthorized(accountId)) {
-    return null;
-  }
-  const accountIds = plugin.config.listAccountIds(params.cfg);
-  if (!accountIds.includes(accountId)) {
-    return null;
-  }
   return {
     resolverId: `${channel}:${accountId}`,
-    authorizes: (request) => {
-      const eligibleAccountIds = accountIds.filter((candidateAccountId) =>
-        isActorAuthorized(candidateAccountId, request),
-      );
-      return (
-        eligibleAccountIds.includes(accountId) &&
-        doesApprovalRequestSelectChannelAccount({
-          cfg: params.cfg,
-          request,
-          channel,
-          accountId,
-          defaultAccountId: plugin.config.defaultAccountId?.(params.cfg) ?? "",
-          eligibleAccountIds,
-        })
-      );
+    async authorizes(request) {
+      const existing = prepared.get(request);
+      if (existing) {
+        return active && configCurrent() && existing.authorized && existing.isCurrent();
+      }
+      assertCurrent();
+      const sessionKey = request.request.sessionKey?.trim() ?? "";
+      const agentId =
+        parseAgentSessionKey(sessionKey)?.agentId ?? request.request.agentId ?? "main";
+      let delivery: ApprovalRequestSessionDelivery | null = null;
+      let isCurrent = () => true;
+      let release = () => {};
+      const memory =
+        sessionKey &&
+        captureMemoryExactSessionReader(
+          {
+            sessionKey,
+            agentId,
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+          },
+          assertCurrent,
+        );
+      try {
+        if (memory) {
+          const entry = memory.read(sessionKey, "list");
+          delivery = entry ?? null;
+          isCurrent = () => sameDelivery(entry, memory.read(sessionKey, "list"));
+        } else if (
+          sessionKey &&
+          (!request.request.turnSourceAccountId ||
+            (request.request.turnSourceChannel &&
+              request.request.turnSourceChannel.trim().toLowerCase() !== channel))
+        ) {
+          const scope = {
+            agentId,
+            storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+            sessionKey,
+            projection: "list" as const,
+            hydrateSkillPromptRefs: false,
+          };
+          await withSessionEntryReadOnlyInWorker(scope, assertCurrent, async (read, owner) => {
+            if (!read.ok) {
+              throw read.error;
+            }
+            delivery = read.value ?? null;
+            if (owner.source) {
+              const retained = retainPreparedSessionEntryPredicate({
+                databaseIdentity: `file:${owner.source.databaseIdentity}`,
+                sessionKey: resolveSqliteSessionKey(sessionKey, agentId),
+                entry: read.value,
+                matches: sameDelivery,
+              });
+              isCurrent = retained.isCurrent;
+              release = retained.release;
+            }
+          });
+        }
+        const pluginRequest =
+          params.approvalKind === "plugin" && isPluginApprovalRequest(request)
+            ? request
+            : undefined;
+        const accountIds = plugin.config.listAccountIds(params.cfg);
+        const eligibleAccountIds =
+          params.approvalKind === "plugin" && !pluginRequest
+            ? []
+            : (
+                await Promise.all(
+                  accountIds.map(async (candidateAccountId) => {
+                    const result = await authorizeActorAction({
+                      cfg: params.cfg,
+                      accountId: candidateAccountId,
+                      senderId,
+                      action: "approve",
+                      approvalKind: params.approvalKind,
+                      ...(pluginRequest ? { request: pluginRequest } : {}),
+                      sessionDelivery: delivery,
+                    });
+                    return result.authorized ? candidateAccountId : undefined;
+                  }),
+                )
+              ).filter((value): value is string => value !== undefined);
+        assertCurrent();
+        const authorized =
+          eligibleAccountIds.includes(accountId) &&
+          doesApprovalRequestSelectChannelAccountFromDelivery(
+            {
+              cfg: params.cfg,
+              request,
+              channel,
+              accountId,
+              defaultAccountId: plugin.config.defaultAccountId?.(params.cfg) ?? "",
+              eligibleAccountIds,
+            },
+            delivery,
+          );
+        prepared.set(request, { authorized, isCurrent, release });
+        return authorized && isCurrent();
+      } catch (error) {
+        release();
+        throw error;
+      }
+    },
+    isCurrent(request) {
+      const state = prepared.get(request);
+      return active && configCurrent() && state?.authorized === true && state.isCurrent();
+    },
+    [Symbol.dispose]() {
+      active = false;
+      for (const state of prepared.values()) {
+        state.release();
+      }
+      prepared.clear();
     },
   };
 }

@@ -127,7 +127,13 @@ final class StatusMenuRenderer: NSObject {
     }
 
     func reconcile(_ descriptor: StatusMenuDescriptor) {
-        let entries = self.flatten(descriptor)
+        var entries: [RenderEntry] = []
+        for section in descriptor.sections where !section.entries.isEmpty {
+            if !entries.isEmpty {
+                entries.append(.separator("separator.\(section.id)"))
+            }
+            entries.append(contentsOf: section.entries.map(RenderEntry.content))
+        }
         let liveItems = self.menu.items
 
         func matches(_ item: NSMenuItem, _ entry: RenderEntry) -> Bool {
@@ -168,17 +174,6 @@ final class StatusMenuRenderer: NSObject {
         }
     }
 
-    private func flatten(_ descriptor: StatusMenuDescriptor) -> [RenderEntry] {
-        var entries: [RenderEntry] = []
-        for section in descriptor.sections where !section.entries.isEmpty {
-            if !entries.isEmpty {
-                entries.append(.separator("separator.\(section.id)"))
-            }
-            entries.append(contentsOf: section.entries.map(RenderEntry.content))
-        }
-        return entries
-    }
-
     private func makeItem(for entry: RenderEntry) -> NSMenuItem {
         let item = switch entry {
         case .separator:
@@ -202,7 +197,11 @@ final class StatusMenuRenderer: NSObject {
         switch content.kind {
         case .header:
             Self.configureHostedView(
-                item, rootView: StatusMenuHeaderView(state: self.state, isSleeping: self.isSleeping))
+                item,
+                rootView: StatusMenuHeaderView(
+                    state: self.state,
+                    isSleeping: self.isSleeping,
+                    onCheckForUpdates: self.onInstallUpdate))
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):
@@ -260,8 +259,10 @@ final class StatusMenuRenderer: NSObject {
 
     private func configureAction(_ item: NSMenuItem, action: StatusMenuDescriptor.Action) {
         let (title, symbol) = switch action {
+        case .openClawIDSignIn:
+            (String(localized: "Sign in with OpenClaw ID…"), "person.crop.circle")
         case .dashboard:
-            (String(localized: "Open Dashboard"), "gauge")
+            (String(localized: "Open OpenClaw"), "gauge")
         case .quickChat:
             (String(localized: "Quick Chat"), "text.bubble")
         case .talkMode:
@@ -283,15 +284,15 @@ final class StatusMenuRenderer: NSObject {
         }
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
-        item.isEnabled = action != .talkMode || voiceWakeSupported
         item.keyEquivalent = ""
+        if action == .dashboard {
+            item.isEnabled = self.state.connectionMode != .unconfigured ||
+                !DashboardManager.shared.gatewayEntries.isEmpty
+        }
 
         switch action {
-        case .settings:
-            item.keyEquivalent = ","
-            item.keyEquivalentModifierMask = [.command]
-        case .quit:
-            item.keyEquivalent = "q"
+        case .settings, .quit:
+            item.keyEquivalent = action == .settings ? "," : "q"
             item.keyEquivalentModifierMask = [.command]
         case .quickChat:
             if let shortcut = KeyboardShortcuts.getShortcut(for: .toggleQuickChat),
@@ -321,6 +322,8 @@ final class StatusMenuRenderer: NSObject {
         else { return }
 
         switch action {
+        case .openClawIDSignIn:
+            MacOpenClawIDSignInPresenter.shared.present()
         case .dashboard:
             AppNavigationActions.openDashboard()
         case .quickChat:
@@ -415,7 +418,7 @@ final class StatusMenuRenderer: NSObject {
         }
 
         entries.append(self.debugSeparator("logging"))
-        let enabled = AppLogSettings.fileLoggingEnabled()
+        let enabled = DiagnosticsFileLog.isEnabled()
         let title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")
         let fileLogging = self.debugItem("fileLogging", title, "doc.text.magnifyingglass")
         fileLogging.state = enabled ? .on : .off
@@ -508,7 +511,7 @@ final class StatusMenuRenderer: NSObject {
         case "verbose":
             Task { _ = await DebugActions.toggleVerboseLoggingMain() }
         case "fileLogging":
-            let enabled = !AppLogSettings.fileLoggingEnabled()
+            let enabled = !DiagnosticsFileLog.isEnabled()
             AppDefaults.standard.set(enabled, forKey: debugFileLogEnabledKey)
             sender.state = enabled ? .on : .off
             sender.title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")
@@ -536,7 +539,7 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     private func sendTestNotification(_ sender: NSMenuItem) async {
@@ -558,6 +561,6 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = message
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 }

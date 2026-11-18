@@ -1,5 +1,4 @@
 // One installation-bound trust decision shared by manifest and channel catalog discovery.
-import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { resolveUserPath } from "../utils.js";
@@ -7,31 +6,29 @@ import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
+import { isConversationAccessAccepted } from "./capability-summary.js";
 import type { PluginCandidate } from "./discovery.js";
-import { isTrustedOfficialPluginInstallRecord } from "./official-external-install-records.js";
+import {
+  isThirdPartyNpmInstallRecord,
+  isTrustedOfficialPluginInstallRecord,
+} from "./official-external-install-records.js";
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import type { PluginTrust } from "./plugin-trust.js";
 
 function resolveCandidateInstallOwner(params: {
-  pluginId: string;
   candidate: PluginCandidate;
   installRecords: Record<string, PluginInstallRecord>;
 }): string | undefined {
   if (isPluginCandidateInstallOwnerAmbiguous(params.candidate)) {
     return undefined;
   }
-  const installOwner = resolvePluginCandidateInstallOwner(params.candidate);
-  if (installOwner) {
-    return Object.hasOwn(params.installRecords, installOwner) ? installOwner : undefined;
-  }
-  return undefined;
+  const owner = resolvePluginCandidateInstallOwner(params.candidate);
+  return owner && Object.hasOwn(params.installRecords, owner) ? owner : undefined;
 }
 
 export function matchesInstalledPluginRecord(params: {
-  pluginId: string;
   candidate: PluginCandidate;
-  config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
   installPathOnly?: boolean;
@@ -79,7 +76,6 @@ export function matchesInstalledPluginRecord(params: {
 }
 
 export function resolvePluginTrust(params: {
-  pluginId: string;
   candidate: PluginCandidate;
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
@@ -102,15 +98,7 @@ export function resolvePluginTrust(params: {
     reason = "origin-path";
   } else if (!record || !installOwner) {
     reason = "record-missing";
-  } else if (
-    !matchesInstalledPluginRecord({
-      pluginId: params.pluginId,
-      candidate: params.candidate,
-      env: params.env,
-      installRecords: params.installRecords,
-      installPathOnly: true,
-    })
-  ) {
+  } else if (!matchesInstalledPluginRecord({ ...params, installPathOnly: true })) {
     reason = "install-path-mismatch";
   } else if (
     isTrustedOfficialPluginInstallRecord({
@@ -130,9 +118,18 @@ export function resolvePluginTrust(params: {
       record.clawhubChannel === undefined)
   ) {
     reason = "provenance-missing";
+  } else if (isThirdPartyNpmInstallRecord(installOwner, params.candidate.packageName, record)) {
+    reason = "third-party-npm";
   } else {
     reason = "provenance-invalid";
   }
+  // Approval binds to the recorded install, so it grants only when that install is what loaded.
+  const conversationAccessAccepted =
+    record !== undefined &&
+    reason !== "owner-ambiguous" &&
+    origin !== "workspace" &&
+    matchesInstalledPluginRecord({ ...params, installPathOnly: true }) &&
+    isConversationAccessAccepted(record);
   return {
     reason,
     registryPath: params.registryPath,
@@ -140,5 +137,6 @@ export function resolvePluginTrust(params: {
     installSource: record?.source,
     installSpec:
       record?.spec === undefined ? undefined : redactSensitiveText(record.spec, { mode: "tools" }),
+    ...(conversationAccessAccepted ? { conversationAccessAccepted: true } : {}),
   };
 }

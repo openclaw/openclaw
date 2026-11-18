@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -39,6 +38,7 @@ suite.define(() => {
         ],
       };
       const gateway = await installMockGateway(page, {
+        featureEvents: ["sessions.catalog.host"],
         featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
         methodResponses: { "sessions.catalog.list": { catalogs: [catalog] } },
       });
@@ -51,12 +51,20 @@ suite.define(() => {
         hosts: [{ ...catalog.hosts[0]!, sessions: [], pending: true }],
       };
       await gateway.setMethodResponse("sessions.catalog.list", { catalogs: [pendingCatalog] });
-      await sidebar.evaluate(async (element) => {
-        const sidebarElement = element as AppSidebarSessionNavigationElement;
-        await sidebarElement.sessionData.refreshSessionCatalogs();
-        await sidebarElement.updateComplete;
+      const beforeRefresh = await gateway.deferNext("sessions.catalog.list");
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+        document.dispatchEvent(new Event("visibilitychange"));
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          value: "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
       });
-      const request = (await gateway.getRequests("sessions.catalog.list")).at(-1)!;
+      const request = await gateway.waitForRequest("sessions.catalog.list", {
+        after: beforeRefresh,
+      });
+      await gateway.resolveDeferred("sessions.catalog.list");
       // Capture before the assertion so the original row-clearing regression has visual evidence.
       await page.screenshot({ path: path.join(artifactDir, "pending-node.png") });
       expect(await heldRow.count()).toBe(1);

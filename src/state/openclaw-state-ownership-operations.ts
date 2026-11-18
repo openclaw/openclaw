@@ -1,5 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
+import {
+  acquireStateDatabaseSchemaLease,
+  assertStateDatabaseAccessAllowed,
+} from "../infra/gateway-state-owner.js";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -7,8 +10,13 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
-import { OpenClawStateOwnershipMetadataError } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  OpenClawStateOwnershipMetadataError,
+  runWithSqliteCleanup,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
@@ -24,6 +32,7 @@ import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   inspectOpenClawStateOwnershipFromDatabase,
   normalizeOpenClawStateManagerId,
+  publishOpenClawStateOwnership,
   STATE_SUPERVISION_KEY,
   type OpenClawExternalStateOwnership,
 } from "./openclaw-state-ownership.js";
@@ -43,7 +52,7 @@ function requireOwnershipCheckpoint(
 }
 
 function claimOwnershipRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   databasePath: string,
   managerId: string,
   repairMalformed: boolean,
@@ -89,6 +98,7 @@ function claimOwnershipRow(
         }),
       ),
   );
+  publishOpenClawStateOwnership(database, ownership);
   return ownership;
 }
 
@@ -99,6 +109,9 @@ function repairMalformedOwnershipClaim(
   assertStateDatabaseAccessAllowed(databasePath);
   const existing = openClawStateDatabaseCache.getOpenClawStateDatabaseIfOpenAtPath(databasePath);
   const database = existing?.db ?? openNodeSqliteDatabase(databasePath);
+  if (isPostgresSqlConnection(database)) {
+    requireNativeDatabaseFile("postgres", "repair");
+  }
   let walMaintenance: SqliteWalMaintenance | undefined;
   try {
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -117,7 +130,6 @@ function repairMalformedOwnershipClaim(
       database,
       () => {
         assertStateDatabaseAccessAllowed(databasePath);
-        assertOpenClawStateDatabaseForMaintenance(database, { pathname: databasePath });
         return claimOwnershipRow(database, databasePath, managerId, true);
       },
       {
@@ -149,25 +161,33 @@ export function claimOpenClawStateOwnership(
     );
   }
   const normalizedManagerId = normalizeOpenClawStateManagerId(managerId);
-  try {
-    const database = openOpenClawStateDatabase(options);
-    const ownership = runOpenClawStateWriteTransaction(
-      ({ db, path: databasePath }) =>
-        claimOwnershipRow(db, databasePath, normalizedManagerId, false),
-      { ...options, database },
-      { operationLabel: "state.ownership.claim" },
-    );
-    requireOwnershipCheckpoint(database.walMaintenance, database.path);
-    return ownership;
-  } catch (error) {
-    if (!(error instanceof OpenClawStateOwnershipMetadataError)) {
-      throw error;
-    }
-    const ownership = repairMalformedOwnershipClaim(
-      resolveDatabasePath(options),
-      normalizedManagerId,
-    );
-    openOpenClawStateDatabase(options);
-    return ownership;
-  }
+  // Changing cached write authority needs exclusive custody through commit and checkpoint.
+  const lease = acquireStateDatabaseSchemaLease(resolveDatabasePath(options), {
+    busyTimeoutMs: 0,
+  });
+  return runWithSqliteCleanup(lease, "shared-state ownership claim", () =>
+    lease.run(() => {
+      try {
+        const database = openOpenClawStateDatabase(options);
+        const ownership = runOpenClawStateWriteTransaction(
+          ({ db, path: databasePath }) =>
+            claimOwnershipRow(db, databasePath, normalizedManagerId, false),
+          { ...options, database },
+          { operationLabel: "state.ownership.claim" },
+        );
+        requireOwnershipCheckpoint(database.walMaintenance, database.path);
+        return ownership;
+      } catch (error) {
+        if (!(error instanceof OpenClawStateOwnershipMetadataError)) {
+          throw error;
+        }
+        const ownership = repairMalformedOwnershipClaim(
+          resolveDatabasePath(options),
+          normalizedManagerId,
+        );
+        openOpenClawStateDatabase(options);
+        return ownership;
+      }
+    }),
+  );
 }

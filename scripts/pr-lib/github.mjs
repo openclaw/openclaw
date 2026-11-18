@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { execGhRead, execPlainGh } from "../lib/plain-gh.mjs";
+import { execGhRead, execGhReadAsync, execPlainGh, execPlainGhAsync } from "../lib/plain-gh.mjs";
 import {
   isGraphqlQuotaExhausted,
   isCoreQuotaExhausted,
@@ -10,6 +10,7 @@ import {
   rateLimitRetryGuidance,
   readWriterLogin,
 } from "./gh-api-preflight.mjs";
+import { bindGitInvocation } from "./git-invocation.mjs";
 
 function githubAccessFailure(error) {
   const limited = (text) =>
@@ -90,9 +91,8 @@ function quotaSummary(resource, quota) {
 
 // Keep the failing call's route and host: a pooled reader and the mutation CLI
 // may use different credentials. Never print raw API error bodies in quota diagnostics.
-export function execPrGh(args, options = {}, route = "read") {
+function* execPrGhSteps(args, options = {}) {
   const deadline = options.timeout > 0 ? Date.now() + options.timeout : undefined;
-  const run = route === "plain" ? execPlainGh : execGhRead;
   const inherited = options.env ?? process.env;
   const selectedGit = inherited.OPENCLAW_PR_GIT || inherited.GIT_EXEC;
   const notifier = inherited.OPENCLAW_PR_LOCK_NOTIFY_FD === "3" ? [3] : [];
@@ -105,17 +105,41 @@ export function execPrGh(args, options = {}, route = "read") {
       ...notifier,
     ],
   };
+  let commandArgs = args;
   let gitPath;
+  let inputDirectory;
+  let retainResources = false;
   try {
+    if (args[0] === "api" && option(args, "--input") === "-") {
+      // The relay cannot forward stdin. Keep caller bytes intact until its
+      // child finishes, including an explicitly empty payload.
+      const input =
+        options.input ?? (captured.stdio[0] === "inherit" ? readFileSync(0) : Buffer.alloc(0));
+      inputDirectory = mkdtempSync(join(resolve(tmpdir()), "openclaw-pr-gh-input-"));
+      const inputPath = join(inputDirectory, "payload");
+      writeFileSync(inputPath, input, { flag: "wx", mode: 0o600 });
+      commandArgs = args.map((arg, index) =>
+        arg === "--input=-"
+          ? `--input=${inputPath}`
+          : args[index - 1] === "--input" && arg === "-"
+            ? inputPath
+            : arg,
+      );
+      delete captured.input;
+      captured.stdio[0] = "ignore";
+    }
     if (selectedGit) {
       // gh resolves Git through PATH even for local repository selection. This
       // call-owned adapter also covers advisory commands without a supervisor.
-      gitPath = mkdtempSync(join(tmpdir(), "openclaw-pr-gh-git-"));
-      symlinkSync(resolve(options.cwd ?? process.cwd(), selectedGit), join(gitPath, "git"));
-      captured.env = { ...inherited, PATH: `${gitPath}${delimiter}${inherited.PATH ?? ""}` };
+      if (process.platform !== "win32") {
+        gitPath = mkdtempSync(join(tmpdir(), "openclaw-pr-gh-git-"));
+      }
+      captured.env = bindGitInvocation(gitPath, selectedGit, inherited, options.cwd).env;
     }
-    return run(args, captured);
+    return yield [commandArgs, captured];
   } catch (error) {
+    // Forced capture closure proves leader exit, not descendant input lifetime.
+    retainResources = error?.processTreeState === "indeterminate";
     const graphqlQuotaExhausted = resourceFor(args) === "graphql" && isGraphqlQuotaExhausted(error);
     const coreQuotaExhausted = resourceFor(args) === "core" && isCoreQuotaExhausted(error);
     const reason = githubAccessFailure(error);
@@ -144,12 +168,15 @@ export function execPrGh(args, options = {}, route = "read") {
           throw error;
         }
         resources = JSON.parse(
-          run(["api", ...host, "rate_limit"], {
-            ...captured,
-            ...(remaining === undefined ? {} : { timeout: remaining }),
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe", ...notifier],
-          }),
+          yield [
+            ["api", ...host, "rate_limit"],
+            {
+              ...captured,
+              ...(remaining === undefined ? {} : { timeout: remaining }),
+              encoding: "utf8",
+              stdio: ["ignore", "pipe", "pipe", ...notifier],
+            },
+          ],
         ).resources;
       } catch {
         // A failed diagnostics probe must not conceal the original resource or retry it.
@@ -163,16 +190,55 @@ export function execPrGh(args, options = {}, route = "read") {
     failure.status = reason === "quota" ? 75 : 77;
     failure.graphqlQuotaExhausted = graphqlQuotaExhausted;
     failure.coreQuotaExhausted = coreQuotaExhausted;
+    if (retainResources) {
+      failure.processTreeState = "indeterminate";
+    }
     throw failure;
   } finally {
-    if (gitPath) {
+    for (const directory of [inputDirectory, gitPath]) {
+      if (!directory || retainResources) {
+        continue;
+      }
       try {
-        rmSync(gitPath, { recursive: true, force: true });
+        rmSync(directory, { recursive: true, force: true });
       } catch {
         // Best-effort cleanup must preserve the result and combined JSON output.
       }
     }
   }
+}
+
+// A single preparation/diagnostics owner serves both execution modes.
+export function execPrGh(args, options = {}, route = "read") {
+  const run = route === "plain" ? execPlainGh : execGhRead;
+  const steps = execPrGhSteps(args, options);
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      step = steps.next(run(...step.value));
+    } catch (error) {
+      step = steps.throw(error);
+    }
+  }
+  return step.value;
+}
+
+export async function execPrGhAsync(args, options = {}, route = "read") {
+  const run = route === "plain" ? execPlainGhAsync : execGhReadAsync;
+  const steps = execPrGhSteps(args, options);
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      step = steps.next(await run(...step.value));
+    } catch (error) {
+      step = steps.throw(error);
+    }
+  }
+  return step.value;
+}
+
+export async function execPrGhJsonAsync(args, options = {}, route = "read") {
+  return JSON.parse(await execPrGhAsync(args, { ...options, encoding: "utf8" }, route));
 }
 
 export function execPrGhJson(args, options = {}, route = "read") {
@@ -992,14 +1058,18 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       process.stdout.write('{"graphqlQuotaExhausted":true}\n');
     } else {
       // Quota errors contain only bounded numeric metadata, never raw response text.
-      if (error.code !== "OPENCLAW_GH_ACCESS" && error.stdout) {
-        process.stdout.write(error.stdout);
+      if (error.code === "OPENCLAW_GH_ACCESS") {
+        console.error(error.message);
+      } else if (error.stdout?.length || error.stderr?.length) {
+        if (error.stdout?.length) {
+          process.stdout.write(error.stdout);
+        }
+        if (error.stderr?.length) {
+          process.stderr.write(error.stderr);
+        }
+      } else {
+        console.error(error.message);
       }
-      console.error(
-        error.code === "OPENCLAW_GH_ACCESS"
-          ? error.message
-          : String(error.stderr || error.message).trim(),
-      );
       process.exitCode = Number.isInteger(error.status) && error.status > 0 ? error.status : 1;
     }
   }

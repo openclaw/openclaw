@@ -1,10 +1,10 @@
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  buildOpenAICompatibleLiveModels,
   createUpstreamProviderCatalog,
-  fetchLiveProviderModelIds,
   listProviderCatalogSnapshotEntries,
-  type LiveModelCatalogFetchGuard,
+  projectProviderCatalogSnapshotRows,
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeZenModelDefinition,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -44,6 +44,10 @@ const OPENCODE_ZEN_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
     ];
   }),
 );
+const OPENCODE_ZEN_PROVIDER_ROUTE = {
+  api: "openai-completions",
+  baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL,
+} as const;
 const opencodeZenCatalog = createUpstreamProviderCatalog({
   providerId: PROVIDER_ID,
   seed: OPENCODE_ZEN_SEED_CATALOG,
@@ -51,47 +55,56 @@ const opencodeZenCatalog = createUpstreamProviderCatalog({
   upstreamSeed: new Map(
     Array.from(OPENCODE_ZEN_SEED_CATALOG, ([id, { model }]) => [id, { model }]),
   ),
-  providerConfig: { api: "openai-completions", baseUrl: OPENCODE_ZEN_OPENAI_BASE_URL },
+  providerConfig: OPENCODE_ZEN_PROVIDER_ROUTE,
+  projectRows: (rows, snapshot) => [
+    ...projectProviderCatalogSnapshotRows(rows, snapshot),
+    ...buildOpenAICompatibleLiveModels(rows, { ...OPENCODE_ZEN_PROVIDER_ROUTE, models: [] })
+      .filter((model) => !snapshot.has(model.id.toLowerCase()))
+      .map((model): OpencodeZenModelDefinition => {
+        const input: OpencodeZenModelDefinition["input"] = model.input.includes("image")
+          ? ["text", "image"]
+          : ["text"];
+        return Object.assign(model, OPENCODE_ZEN_PROVIDER_ROUTE, {
+          provider: PROVIDER_ID,
+          input,
+        });
+      }),
+  ],
   metadataEndpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
   modelsEndpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
   anthropicBaseUrl: OPENCODE_ZEN_ANTHROPIC_BASE_URL,
   timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
   ttlMs: OPENCODE_ZEN_MODELS_CACHE_TTL_MS,
   auditContext: "opencode-zen-model-discovery",
+  starterModelAuditContext: "opencode-zen-onboarding-model-discovery",
   isStaticEntryActive: (entry) => entry?.status !== "deprecated",
+  // Zen accepts none/low/high/max, but its public K3 feed still lists only max.
+  // Preserve the verified seed contract so refresh cannot silently re-enable Off.
+  decorateModel: (model) =>
+    model.id === "kimi-k3"
+      ? {
+          ...model,
+          compat: {
+            ...model.compat,
+            supportedReasoningEfforts: OPENCODE_ZEN_SEED_CATALOG.get(model.id)?.model.compat
+              ?.supportedReasoningEfforts,
+          },
+        }
+      : model,
 });
 
 export async function prepareOpencodeZenModel(params: {
   modelId: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<ProviderRuntimeModel | undefined> {
-  const snapshot = await opencodeZenCatalog.refreshMetadata(params);
+  const snapshot = await opencodeZenCatalog.refreshMetadata({});
   return snapshot?.get(params.modelId.trim().toLowerCase())?.model;
 }
 
-export const { buildStaticProvider: buildStaticOpencodeZenProviderConfig } = opencodeZenCatalog;
-export const buildOpencodeZenLiveProviderConfig =
-  opencodeZenCatalog.buildLiveProvider.bind(opencodeZenCatalog);
-
-export async function resolveOpencodeZenStarterModel(params: {
-  apiKey: string;
-  preferredModelRef: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
-}): Promise<string | undefined> {
-  const liveModelIds = await fetchLiveProviderModelIds({
-    providerId: PROVIDER_ID,
-    endpoint: OPENCODE_ZEN_MODELS_ENDPOINT,
-    discoveryApiKey: params.apiKey,
-    fetchGuard: params.fetchGuard,
-    signal: params.signal,
-    timeoutMs: OPENCODE_ZEN_MODELS_TIMEOUT_MS,
-    auditContext: "opencode-zen-onboarding-model-discovery",
-  });
-  const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
-  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
-}
+export const {
+  buildStaticProvider: buildStaticOpencodeZenProviderConfig,
+  buildLiveProvider: buildOpencodeZenLiveProviderConfig,
+  resolveStarterModel: resolveOpencodeZenStarterModel,
+} = opencodeZenCatalog;
 
 export function listOpencodeZenModelCatalogEntries(): ModelCatalogEntry[] {
   return listProviderCatalogSnapshotEntries(opencodeZenCatalog.getSnapshot());

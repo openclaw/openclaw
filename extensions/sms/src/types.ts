@@ -9,11 +9,9 @@ type SmsChannelConfigFields = Omit<SmsAccountSchemaInput, "allowFrom"> & {
 
 export type SmsChannelConfig = Omit<z.input<typeof SmsConfigSchema>, "accounts" | "allowFrom"> &
   SmsChannelConfigFields & {
-    accounts?: Record<string, SmsAccountRaw>;
+    accounts?: Record<string, SmsChannelConfigFields>;
     defaultAccount?: string;
   };
-
-type SmsAccountRaw = SmsChannelConfigFields;
 
 export interface ResolvedSmsAccount {
   accountId: string;

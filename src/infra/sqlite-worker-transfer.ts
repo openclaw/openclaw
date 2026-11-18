@@ -1,7 +1,9 @@
 import { deserialize, serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 export const SQLITE_WORKER_TRANSFER_FRAME_BYTES = 8 * 1024 * 1024;
 export type SqliteWorkerTransferHandle = { id: number; kinds: string[] };
-export type SqliteWorkerTransferValue = { kind: string; value: unknown };
+type SqliteWorkerTransferValue = { kind: string; value: unknown };
 export type SqliteWorkerTransferInput =
   | SqliteWorkerTransferValue
   /** Already serialized bytes remain owned by the producer and immutable until release. */
@@ -38,28 +40,20 @@ export function createSqliteWorkerTransferOwner() {
 
   const cleanup = (transfer: Transfer) => {
     const errors: unknown[] = [];
-    if (!transfer.iteratorClosed) {
-      try {
-        transfer.iterator.return?.();
-        transfer.iteratorClosed = true;
-      } catch (error) {
-        errors.push(error);
+    for (const [completed, close] of [
+      ["iteratorClosed", () => transfer.iterator.return?.()],
+      ["cleaned", () => transfer.cleanup?.()],
+    ] as const) {
+      if (!transfer[completed]) {
+        try {
+          close();
+          transfer[completed] = true;
+        } catch (error) {
+          errors.push(error);
+        }
       }
     }
-    if (!transfer.cleaned) {
-      try {
-        transfer.cleanup?.();
-        transfer.cleaned = true;
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length) {
-      throw new AggregateError(errors, "SQLite read transfer cleanup failed", { cause: errors[0] });
-    }
+    throwSqliteLifecycleErrors(errors, "SQLite read transfer cleanup failed");
   };
   const cancel = () => {
     if (current) {
@@ -192,7 +186,11 @@ export function createSqliteWorkerTransferReceiver(
           if (frame.offset !== 0) {
             throw new Error("SQLite read transfer omitted the start of a record");
           }
-          record = { kind: frame.kind, bytes: new Uint8Array(frame.recordBytes), offset: 0 };
+          record = {
+            kind: frame.kind,
+            bytes: frame.recordDone ? frame.bytes : new Uint8Array(frame.recordBytes),
+            offset: 0,
+          };
         }
         const end = frame.offset + frame.bytes.byteLength;
         if (
@@ -204,7 +202,9 @@ export function createSqliteWorkerTransferReceiver(
         ) {
           throw new Error("SQLite read transfer returned a discontinuous record");
         }
-        record.bytes.set(frame.bytes, frame.offset);
+        if (record.bytes !== frame.bytes) {
+          record.bytes.set(frame.bytes, frame.offset);
+        }
         record.offset = end;
         if (frame.recordDone) {
           const value: unknown = deserialize(record.bytes);
@@ -218,6 +218,51 @@ export function createSqliteWorkerTransferReceiver(
         record = undefined;
         finished = true;
         throw error;
+      }
+    },
+  };
+}
+
+/** Collect one framed record across intermediate grants and the final commit grant. */
+export function createSqliteWorkerTransferCollector(
+  kind: string,
+  consume: (value: unknown) => void,
+) {
+  let id: number | undefined;
+  let completed = false;
+  let receiver: ReturnType<typeof createSqliteWorkerTransferReceiver> | undefined;
+  return {
+    get id() {
+      return id;
+    },
+    get completed() {
+      return completed;
+    },
+    accept(envelope: unknown) {
+      if (!isRecord(envelope) || !isRecord(envelope.handle) || !Array.isArray(envelope.frames)) {
+        throw new Error("SQLite publication omitted its transfer envelope");
+      }
+      const handle = envelope.handle;
+      if (
+        completed ||
+        !Number.isSafeInteger(handle.id) ||
+        Number(handle.id) < 1 ||
+        !Array.isArray(handle.kinds) ||
+        handle.kinds.length !== 1 ||
+        handle.kinds[0] !== kind ||
+        (id !== undefined && handle.id !== id)
+      ) {
+        throw new Error("SQLite publication changed its transfer identity");
+      }
+      if (!receiver) {
+        id = Number(handle.id);
+        receiver = createSqliteWorkerTransferReceiver({ id, kinds: [kind] }, (record) =>
+          consume(record.value),
+        );
+      }
+      for (const frame of envelope.frames) {
+        // SAFETY: The framing owner validates complete records, ordering, and bounds.
+        completed = receiver.accept(frame as SqliteWorkerTransferFrame) !== undefined;
       }
     },
   };

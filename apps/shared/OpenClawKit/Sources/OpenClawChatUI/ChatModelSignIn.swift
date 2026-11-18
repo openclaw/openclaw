@@ -119,7 +119,7 @@ final class ChatModelSignInModel {
                 if self.sessionID == id { self.sessionID = nil }
                 self
                     .message =
-                    String(localized: "Sign-in could not start. Refresh the options or use Models in the Dashboard.")
+                    String(localized: "Sign-in could not start. Refresh the options or use Models in the web app.")
                 throw error
             } catch let error as GatewayNodeSessionRequestError {
                 if self.sessionID == id { self.sessionID = nil }
@@ -141,12 +141,14 @@ final class ChatModelSignInModel {
         guard let id = self.sessionID, !self.busy, !self.cancelling, !self.closed else { return }
         var params = ["sessionId": AnyCodable(id)]
         if let step = self.step, wizardStepExecutor(step) != "gateway" {
-            let value: AnyCodable? = switch wizardStepType(step) {
-            case "text": AnyCodable(self.text)
-            case "confirm": AnyCodable(self.confirmation)
-            case "select": parseWizardOptions(step.options).indices.contains(self.selection)
-                ? parseWizardOptions(step.options)[self.selection].value : nil
-            default: nil
+            let value: AnyCodable?
+            switch wizardStepType(step) {
+            case "text": value = AnyCodable(self.text)
+            case "confirm": value = AnyCodable(self.confirmation)
+            case "select":
+                let options = parseWizardOptions(step.options)
+                value = options.indices.contains(self.selection) ? options[self.selection].value : nil
+            default: value = nil
             }
             var answer = ["stepId": AnyCodable(step.id)]
             if let value { answer["value"] = value }
@@ -349,7 +351,7 @@ struct OpenClawChatModelSignInSheet: View {
                 }.disabled(self.model.busy)
             }
             if self.model.authStatus?.loginOptions.isEmpty == true {
-                Text("No native sign-in options are available. Open Models in the Dashboard, or update the Gateway.")
+                Text("No native sign-in options are available. Open Models in the web app, or update the Gateway.")
                     .font(OpenClawChatTypography.callout)
             }
         }

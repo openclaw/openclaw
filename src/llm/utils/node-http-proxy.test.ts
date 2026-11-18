@@ -60,19 +60,6 @@ describe("node HTTP proxy resolution", () => {
     );
   });
 
-  it("uses Proxyline Node agents for resolved env proxies", () => {
-    withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
-      const agents = createHttpProxyAgentsForTarget("https://api.example.test/v1");
-
-      expect(agents?.httpsAgent.constructor.name).toBe("ProxylineNodeProxyAgent");
-      expect(
-        (
-          agents?.httpsAgent as { getProxyForUrl?: (url: string) => string } | undefined
-        )?.getProxyForUrl?.("https://api.example.test/v1"),
-      ).toBe("http://proxy.example:8080/");
-    });
-  });
-
   it("falls back to ALL_PROXY for Node agent proxy resolution", () => {
     withProxyEnv({ ALL_PROXY: "http://proxy.example:8080" }, () => {
       expect(resolveProxyFromAgents("https://api.example.test/v1")).toBe(

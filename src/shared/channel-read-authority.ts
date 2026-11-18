@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { captureEffectAuthority } from "./effect-authority.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 type ChannelReadResource = {
@@ -79,6 +80,7 @@ export async function withChannelReadAuthority<T>(
     onAccepted?.(result);
     return result;
   }
+  const effect = captureEffectAuthority();
   const parent = authorityScope.getStore();
   const parentCompletion = parent?.[completionKey];
   const sourceSignals = [parentCompletion?.signal, signal].filter((source): source is AbortSignal =>
@@ -152,18 +154,22 @@ export async function withChannelReadAuthority<T>(
     let result: T;
     try {
       result = await authorityScope.run(scopedAuthority, run);
-    } finally {
+    } catch (error) {
       // Fence both results and errors, including work already issued before revocation.
+      await effect.initiate(assertAuthority);
+      throw error;
+    }
+    await effect.initiate(() => {
       assertAuthority();
-    }
-    if (parentCompletion) {
-      for (const resource of resources) {
-        parentCompletion.registerResource(resource);
+      if (parentCompletion) {
+        for (const resource of resources) {
+          parentCompletion.registerResource(resource);
+        }
+        resources.clear();
       }
-      resources.clear();
-    }
-    onAccepted?.(result);
-    open = false;
+      onAccepted?.(result);
+      open = false;
+    });
     // Acceptance is final before teardown; closing a resource does not revoke the read.
     if (resources.size > 0) {
       await settleReadResources(resources, true);

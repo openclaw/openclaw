@@ -1,37 +1,15 @@
+import type { TalkRealtimeRelayEventPayload } from "../../../../../src/gateway/talk/relay/state.js";
 import type { RealtimeTalkEvent } from "./shared.ts";
 
 export type GatewayRelayEvent = {
-  relaySessionId?: string;
   talkEvent?: RealtimeTalkEvent;
 } & (
-  | { type?: "ready" }
-  | { type?: "audio"; audioBase64?: string }
-  | { type?: "clear"; reason?: "barge-in" }
-  | { type?: "mark"; markName?: string }
-  | {
-      type?: "transcript";
-      role?: "user" | "assistant";
-      text?: string;
-      final?: boolean;
-      textMode?: "snapshot";
-      transcriptId?: string;
-    }
-  | {
-      type?: "toolCall";
-      callId?: string;
-      name?: string;
-      args?: unknown;
-      forced?: boolean;
-    }
-  | { type?: "toolCallCancelled"; callId?: string }
-  | { type?: "toolResult"; callId?: string }
-  | { type?: "error"; message?: string }
-  | { type?: "close"; reason?: string }
+  | Partial<Exclude<TalkRealtimeRelayEventPayload, { type: "close" }>>
+  | { relaySessionId?: string; type?: "close"; reason?: string }
 );
 
 export type DelayedToolResult = {
   callId: string;
   result: unknown;
-  options?: { suppressResponse?: boolean; willContinue?: boolean };
   timer?: number;
 };

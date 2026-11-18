@@ -1,7 +1,6 @@
 import { vi } from "vitest";
-import type { ProcessSupervisor, SpawnInput, SpawnProcessAdapter } from "./types.js";
-
-type ChildSpawnOptions = Omit<Extract<SpawnInput, { mode: "child" }>, "mode">;
+import { createDeferredCore } from "../../shared/deferred.js";
+import type { SpawnProcessAdapter } from "./types.js";
 
 type StubOutputSubscriber = {
   listener: (chunk: string) => void;
@@ -17,19 +16,7 @@ export type StubChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
   disposeMock: ReturnType<typeof vi.fn>;
 };
 
-export function createWriteStdoutArgv(output: string): string[] {
-  if (process.platform === "win32") {
-    return [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`];
-  }
-  return ["/usr/bin/printf", "%s", output];
-}
-
-export function createSilentIdleArgv(): string[] {
-  return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
-}
-
 export function createStubChildAdapter(options?: {
-  pid?: number;
   onKill?: (signal: NodeJS.Signals | undefined, adapter: StubChildAdapter) => void;
 }): StubChildAdapter {
   const stdoutSubscribers: StubOutputSubscriber[] = [];
@@ -42,18 +29,11 @@ export function createStubChildAdapter(options?: {
       subscriber.listener(chunk);
     }
   };
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | null }) => void)
-    | null = null;
-  const waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      resolveWait = resolve;
-    },
-  );
+  const result = createDeferredCore<Awaited<ReturnType<StubChildAdapter["wait"]>>>();
   const killMock = vi.fn();
   const disposeMock = vi.fn();
   const adapter: StubChildAdapter = {
-    pid: options?.pid ?? 1234,
+    pid: 1234,
     stdin: undefined,
     supportsRawOutput: true,
     onStdout: (listener, onRaw) => {
@@ -62,7 +42,7 @@ export function createStubChildAdapter(options?: {
     onStderr: (listener, onRaw) => {
       stderrSubscribers.push({ listener, ...(onRaw ? { onRaw } : {}) });
     },
-    wait: async () => await waitPromise,
+    wait: async () => await result.promise,
     kill: (signal) => {
       killMock(signal);
       options?.onKill?.(signal, adapter);
@@ -82,19 +62,11 @@ export function createStubChildAdapter(options?: {
       emitOutput(stderrSubscribers, chunk);
     },
     settle: (code, signal = null) => {
-      resolveWait?.({ code, signal });
-      resolveWait = null;
+      result.resolve({ code, signal });
     },
     killMock,
     disposeMock,
   };
 
   return adapter;
-}
-
-export async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
-  return supervisor.spawn({
-    ...options,
-    mode: "child",
-  });
 }

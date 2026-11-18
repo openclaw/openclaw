@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
+import type { QaBusInboundMessageInput } from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   summarizeLiveTransportRttSamples,
   type LiveTransportRttSample,
 } from "./live-transports/shared/live-transport-rtt.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
-import type { QaBusInboundMessageInput } from "./runtime-api.js";
 
 type RoundTripInput = Omit<QaBusInboundMessageInput, "replyToId" | "text">;
 

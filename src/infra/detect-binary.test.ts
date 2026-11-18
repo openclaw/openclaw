@@ -44,9 +44,11 @@ describe("detectBinary", () => {
               encoding: "utf8",
               stdio: ["ignore", "pipe", "ignore"],
             }).trim().length > 0;
-        } catch {
-          // which signals missing or non-executable candidates with a nonzero exit.
+        } catch (error) {
+          // which signals missing or non-executable candidates with exit status 1.
+          expect(error).toMatchObject({ status: 1, signal: null });
         }
+        expect(expected).toBe(name === "lane-n1-executable");
         runCommandWithTimeoutMock.mockResolvedValue({
           code: expected ? 0 : 1,
           stdout: expected ? path.join(root, name) : "",
@@ -178,9 +180,11 @@ describe.skipIf(process.platform === "win32")("detectBinary POSIX path traversal
             encoding: "utf8",
             stdio: ["ignore", "pipe", "ignore"],
           }).trim().length > 0;
-      } catch {
+      } catch (error) {
         // A lexical decoy must not satisfy lookup through the symlink's real parent.
+        expect(error).toMatchObject({ status: 1, signal: null });
       }
+      expect(expected).toBe(location === "actual");
 
       await expect(detectBinary("lane-n1-traversal")).resolves.toBe(expected);
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();

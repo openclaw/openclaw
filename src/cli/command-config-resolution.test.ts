@@ -17,36 +17,28 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 import { resolveCommandConfigWithSecrets } from "./command-config-resolution.js";
 
 describe("resolveCommandConfigWithSecrets", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
-  it("emits diagnostics to stderr and preserves resolved config when auto-enable is off", async () => {
+  it("preserves scoped secret resolution and stderr diagnostics without auto-enable", async () => {
     const runtime = createTestRuntime();
     const config = { channels: {} };
     const resolvedConfig = { channels: { telegram: {} } };
-    const targetIds = new Set(["channels.telegram.token"]);
+    const request = {
+      config,
+      commandName: "status",
+      targetIds: new Set(["channels.telegram.token"]),
+      agentId: "ops",
+      mode: "read_only_status" as const,
+      allowedPaths: new Set(["channels.telegram.token"]),
+      forcedActivePaths: new Set(["channels.telegram.token"]),
+    };
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig,
       diagnostics: ["resolved channels.telegram.token"],
     });
 
-    const result = await resolveCommandConfigWithSecrets({
-      config,
-      commandName: "status",
-      targetIds,
-      agentId: "ops",
-      mode: "read_only_status",
-      runtime,
-    });
-
-    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith({
-      config,
-      commandName: "status",
-      targetIds,
-      agentId: "ops",
-      mode: "read_only_status",
-    });
+    const result = await resolveCommandConfigWithSecrets({ ...request, runtime });
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(request);
     expect(runtime.error).toHaveBeenCalledWith("[secrets] resolved channels.telegram.token");
     expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.applyPluginAutoEnable).not.toHaveBeenCalled();
@@ -60,13 +52,9 @@ describe("resolveCommandConfigWithSecrets", () => {
   it("returns auto-enabled config when requested", async () => {
     const resolvedConfig = { channels: {} };
     const effectiveConfig = { channels: {}, plugins: { allow: ["telegram"] } };
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig,
-      diagnostics: [],
-    });
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({ resolvedConfig, diagnostics: [] });
     mocks.applyPluginAutoEnable.mockReturnValue({
       config: effectiveConfig,
-      changes: ["enabled telegram"],
     });
 
     const result = await resolveCommandConfigWithSecrets({
@@ -74,7 +62,7 @@ describe("resolveCommandConfigWithSecrets", () => {
       commandName: "message",
       targetIds: new Set(["channels.telegram.token"]),
       autoEnable: true,
-      env: { OPENCLAW_AUTO_ENABLE: "1" } as NodeJS.ProcessEnv,
+      env: { OPENCLAW_AUTO_ENABLE: "1" },
     });
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
@@ -82,30 +70,5 @@ describe("resolveCommandConfigWithSecrets", () => {
       env: { OPENCLAW_AUTO_ENABLE: "1" },
     });
     expect(result.effectiveConfig).toBe(effectiveConfig);
-  });
-
-  it("passes scoped target paths to command secret resolution", async () => {
-    const config = { tools: { web: { search: { provider: "tavily" } } } };
-    const allowedPaths = new Set(["plugins.entries.tavily.config.webSearch.apiKey"]);
-    const forcedActivePaths = new Set(["plugins.entries.tavily.config.webSearch.apiKey"]);
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: config,
-      diagnostics: [],
-    });
-
-    await resolveCommandConfigWithSecrets({
-      config,
-      commandName: "infer web search",
-      targetIds: new Set(["plugins.entries.*.config.webSearch.apiKey"]),
-      allowedPaths,
-      forcedActivePaths,
-    });
-
-    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedPaths,
-        forcedActivePaths,
-      }),
-    );
   });
 });

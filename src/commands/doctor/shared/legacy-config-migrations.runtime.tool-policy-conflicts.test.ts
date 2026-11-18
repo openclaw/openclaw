@@ -1,4 +1,3 @@
-// Covers doctor repair for tool policy scopes that set both allow and alsoAllow.
 import { describe, expect, it } from "vitest";
 import {
   isToolAllowed,
@@ -21,67 +20,55 @@ function runRegisteredMigrations(raw: unknown): { config: unknown; changes: stri
 function isValid(config: unknown): boolean {
   return validateConfigObjectWithPlugins(config, { pluginValidation: "core-only" }).ok;
 }
+const conflict = (allow = ["message"], alsoAllow = ["exec"]) => ({ allow, alsoAllow });
+const globalConflict = conflict(["read"]);
+const messageRead = ["message", "read"];
+type Policy = { allow?: string[]; alsoAllow: string[] };
 
 describe("tool policy allow/alsoAllow conflict repair", () => {
-  it("repairs a top-level tools policy that sets both lists without a profile", () => {
-    const raw = { tools: { allow: ["message", "read"], alsoAllow: ["exec"] } };
+  const repairs: [string, unknown, string[], string[]?][] = [
+    ["no profile", { tools: conflict(messageRead) }, ["tools"], [...messageRead, "exec"]],
+    ["full profile", { tools: { profile: "full", ...conflict() } }, ["tools"], ["message", "exec"]],
+    [
+      "agent and provider scopes",
+      {
+        tools: { byProvider: { sandbox: conflict() } },
+        agents: { entries: { sandbox: { tools: conflict(["message"], ["read"]) } } },
+      },
+      ["tools.byProvider.sandbox", "agents.entries.sandbox.tools"],
+    ],
+    [
+      "profile-bound repair",
+      { tools: { profile: "messaging", ...conflict(), exec: { security: "allowlist" } } },
+      ["tools"],
+    ],
+  ];
+  it.each(repairs)("repairs conflicts in %s exactly once", (name, raw, paths, allow) => {
     expect(isValid(raw)).toBe(false);
-
     const res = runRegisteredMigrations(raw);
-
-    expect(res.changes).toContain("Merged tools.alsoAllow into tools.allow.");
     expect(isValid(res.config)).toBe(true);
-    const tools = (res.config as { tools: { allow: string[]; alsoAllow?: string[] } }).tools;
-    expect(tools.allow).toEqual(["message", "read", "exec"]);
-    expect(tools.alsoAllow).toEqual([]);
-  });
-
-  it("repairs the conflict when the scope already selects the full profile", () => {
-    const raw = { tools: { profile: "full", allow: ["message"], alsoAllow: ["exec"] } };
-    expect(isValid(raw)).toBe(false);
-
-    const res = runRegisteredMigrations(raw);
-
-    expect(isValid(res.config)).toBe(true);
-    expect((res.config as { tools: { allow: string[] } }).tools.allow).toEqual(["message", "exec"]);
-  });
-
-  it("repairs per-agent and per-provider tool policy scopes", () => {
-    const raw = {
-      tools: { byProvider: { sandbox: { allow: ["message"], alsoAllow: ["exec"] } } },
-      agents: { entries: { sandbox: { tools: { allow: ["message"], alsoAllow: ["read"] } } } },
-    };
-    expect(isValid(raw)).toBe(false);
-
-    const res = runRegisteredMigrations(raw);
-
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        "Merged tools.byProvider.sandbox.alsoAllow into tools.byProvider.sandbox.allow.",
-        "Merged agents.entries.sandbox.tools.alsoAllow into agents.entries.sandbox.tools.allow.",
-      ]),
-    );
-    expect(isValid(res.config)).toBe(true);
+    for (const path of paths) {
+      expect(
+        res.changes.filter((change) => change === `Merged ${path}.alsoAllow into ${path}.allow.`),
+      ).toHaveLength(1);
+    }
+    if (allow) {
+      expect(res.config).toMatchObject({ tools: { allow, alsoAllow: [] } });
+    }
+    if (name === "profile-bound repair") {
+      expect(res.changes).toContain(
+        'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
+      );
+    }
     expect(runRegisteredMigrations(res.config)).toEqual({ config: res.config, changes: [] });
   });
 
-  it.each([
-    {
-      scope: "agent",
-      global: { alsoAllow: ["exec"] },
-      agent: { allow: ["read", "message"], alsoAllow: ["message"] },
-    },
-    {
-      scope: "global with an agent extras override",
-      global: { allow: ["read"], alsoAllow: ["exec"] },
-      agent: { alsoAllow: ["message"] },
-    },
-    {
-      scope: "global with an empty agent extras override",
-      global: { allow: ["read"], alsoAllow: ["exec"] },
-      agent: { alsoAllow: [] },
-    },
-  ])("preserves sandbox permissions for a conflict at $scope", ({ global, agent }) => {
+  const sandboxCases: [string, Policy, Policy][] = [
+    ["agent", { alsoAllow: ["exec"] }, conflict(["read", "message"], ["message"])],
+    ["global with an agent extras override", globalConflict, { alsoAllow: ["message"] }],
+    ["global with an empty agent extras override", globalConflict, { alsoAllow: [] }],
+  ];
+  it.each(sandboxCases)("preserves sandbox grants at %s", (_scope, global, agent) => {
     const raw: OpenClawConfig = {
       tools: { sandbox: { tools: global } },
       agents: {
@@ -102,47 +89,10 @@ describe("tool policy allow/alsoAllow conflict repair", () => {
     expect(res.changes.some((change) => change.startsWith("Merged "))).toBe(false);
   });
 
-  it("leaves the profile-bound repair to own its scopes", () => {
-    const raw = {
-      tools: {
-        profile: "messaging",
-        allow: ["message"],
-        alsoAllow: ["exec"],
-        exec: { security: "allowlist" },
-      },
-    };
-
-    const res = runRegisteredMigrations(raw);
-
-    // The profile-bound owner rewrites the scope; this repair must not merge it a second time.
-    expect(res.changes).toContain(
-      'Set tools.profile to "full" so tools.allow controls explicit configured-section grants directly.',
-    );
-    expect(
-      res.changes.filter((change) => change.startsWith("Merged tools.alsoAllow")),
-    ).toHaveLength(1);
-    expect(isValid(res.config)).toBe(true);
-  });
-
-  it("does not touch a scope that sets only one of the lists", () => {
-    const raw = { tools: { alsoAllow: ["exec"] } };
-
-    const res = runRegisteredMigrations(raw);
-
-    expect(res.changes).toEqual([]);
-    expect(res.config).toEqual(raw);
-  });
-
-  it("leaves plugin-owned config untouched", () => {
-    const raw = {
-      plugins: {
-        entries: { acme: { config: { tools: { allow: ["message"], alsoAllow: ["exec"] } } } },
-      },
-    };
-
-    const res = runRegisteredMigrations(raw);
-
-    expect(res.changes).toEqual([]);
-    expect(res.config).toEqual(raw);
+  it.each([
+    { tools: { alsoAllow: ["exec"] } },
+    { plugins: { entries: { acme: { config: { tools: conflict() } } } } },
+  ])("leaves non-conflicting or plugin-owned config untouched: %j", (raw) => {
+    expect(runRegisteredMigrations(raw)).toEqual({ config: raw, changes: [] });
   });
 });

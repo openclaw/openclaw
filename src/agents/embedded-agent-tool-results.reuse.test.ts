@@ -1,32 +1,31 @@
-import { afterEach, expect, it, vi } from "vitest";
-import * as redaction from "../logging/redact.js";
+import { expect, it } from "vitest";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
-import { sanitizeToolResult } from "./embedded-agent-tool-results.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { SessionManager } from "./sessions/index.js";
-import { redactTranscriptMessage } from "./transcript-redact.js";
+import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
-afterEach(() => vi.restoreAllMocks());
-
-it("deep-redacts one result once across persistence, trajectory and both lifecycle schedulers", async () => {
-  const deepRedact = vi.spyOn(redaction, "redactModelVisibleSecrets");
+it("preserves tool output across trajectory, delivery, and guarded storage", async () => {
   const secret = "sk-or-v1-abcdef0123456789";
-  const output = `OPENROUTER_API_KEY=${secret}\n${"src/example.ts: build completed successfully\n".repeat(7_200)}`;
-  const exposed: unknown[] = [];
+  const output = `OPENROUTER_API_KEY=${secret}\n${"src/example.ts: build completed successfully\n".repeat(10)}`;
+  const trajectoryResults: unknown[] = [];
+  const deliveryResults: unknown[] = [];
+  let terminalResult: unknown;
   const sm = SessionManager.inMemory();
   installSessionToolResultGuard(sm, {
-    transformMessageForPersistence: redactTranscriptMessage,
+    transformMessageForPersistence: sanitizeTranscriptMessage,
   });
   const { emit, subscription } = createSubscribedSessionHarness({
-    runId: "sanitize-reuse",
+    runId: "tool-output-fidelity",
     trajectoryRecorder: {
-      recordEvent: (_type, event) => {
-        exposed.push(event);
+      recordEvent: (type, event) => {
+        if (type === "tool.result") {
+          trajectoryResults.push(event?.result);
+        }
       },
       flush: async () => {},
     },
     onAgentToolResult: (event) => {
-      exposed.push(event.result);
+      deliveryResults.push(event.result);
     },
   });
   const result = {
@@ -37,6 +36,17 @@ it("deep-redacts one result once across persistence, trajectory and both lifecyc
     details: { status: "completed", aggregated: output, credentials: { apiKey: secret } },
   };
   const callId = "call-1";
+  const expectedResult = {
+    content: [
+      { type: "text", text: output },
+      { type: "image", mimeType: "image/png", bytes: 5, omitted: true },
+    ],
+    details: { status: "completed", aggregated: output, credentials: { apiKey: secret } },
+  };
+  const expectedTrajectoryResult = {
+    ...expectedResult,
+    details: { status: "completed", credentials: { apiKey: secret } },
+  };
   try {
     await subscription.runToolLifecycle({
       toolName: "exec",
@@ -44,7 +54,7 @@ it("deep-redacts one result once across persistence, trajectory and both lifecyc
       args: {},
       execute: async (onImplementationStart) => {
         onImplementationStart();
-        sm.appendMessage({
+        await sm.appendMessageAsync({
           role: "toolResult",
           toolCallId: callId,
           toolName: "exec",
@@ -55,9 +65,31 @@ it("deep-redacts one result once across persistence, trajectory and both lifecyc
         return result;
       },
       onTerminal: (terminal) => {
-        exposed.push(sanitizeToolResult(terminal.result));
+        terminalResult = terminal.readSanitizedResult();
       },
     });
+    expect(trajectoryResults).toEqual([expectedTrajectoryResult]);
+    expect(deliveryResults).toEqual([expectedResult]);
+    expect(terminalResult).toEqual(expectedResult);
+    const storedToolResults = sm
+      .getEntries()
+      .flatMap((entry) =>
+        entry.type === "message" && entry.message.role === "toolResult" ? [entry.message] : [],
+      );
+    expect(storedToolResults).toMatchObject([
+      {
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "exec",
+        content: [
+          { type: "text", text: output },
+          { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+        ],
+        details: expectedResult.details,
+        isError: false,
+        timestamp: 0,
+      },
+    ]);
     emit({
       type: "tool_execution_end",
       toolName: "exec",
@@ -66,15 +98,9 @@ it("deep-redacts one result once across persistence, trajectory and both lifecyc
       isError: false,
     });
     await subscription.waitForPendingEvents();
-    expect(exposed.length).toBeGreaterThanOrEqual(5);
-    expect(JSON.stringify(exposed)).not.toContain(secret);
-    expect(JSON.stringify(sm.getEntries())).not.toContain(secret);
-    expect(sanitizeToolResult(result)).toMatchObject({
-      content: [{ type: "text" }, { type: "image", bytes: 5, omitted: true }],
-      details: { credentials: { apiKey: expect.not.stringContaining(secret) } },
-    });
+    expect(trajectoryResults).toEqual([expectedTrajectoryResult, expectedTrajectoryResult]);
+    expect(deliveryResults).toEqual([expectedResult, expectedResult]);
   } finally {
     subscription.unsubscribe();
   }
-  expect(deepRedact).toHaveBeenCalledOnce();
 });

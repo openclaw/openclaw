@@ -209,17 +209,12 @@ export async function runPrCiSweeper({
     if (now - Date.parse(listed.created_at) > LOOKBACK_MS) {
       break;
     }
-    if (listed.draft) {
-      results.push({
-        number: listed.number,
-        sha: listed.head.sha.slice(0, 12),
-        action: "skip",
-        reason: "draft",
-      });
-      core.info(`pr-ci-sweeper: skip #${listed.number} (draft)`);
-      continue;
-    }
-    const ciRuns = await listPullRequestCiRuns({ github, owner, repo, headSha: listed.head.sha });
+    // Metadata-only exclusions precede CI in the canonical classifier. Preserve
+    // that precedence without querying runs for PRs that cannot be re-fired.
+    const ciRuns =
+      classifyPrForSweep({ pr: listed, ciRuns: [], botCloseCount: 0, now }).action === "refire"
+        ? await listPullRequestCiRuns({ github, owner, repo, headSha: listed.head.sha })
+        : [];
     // Classify on cheap list data first so most PRs (usually ci-attached) skip
     // without the authoritative pulls.get + close-history reads, but still log
     // the decision with the attached run ids as evidence: the silent skip here

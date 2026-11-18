@@ -35,6 +35,10 @@ export function chunkTextForOutbound(
 
 /** Markdown IR parsing and slicing primitives for plugin-owned renderers. */
 export {
+  applyMarkdownTextEdits,
+  type MarkdownTextEdit,
+} from "../../packages/markdown-core/src/ir-spans.js";
+export {
   chunkMarkdownIR,
   markdownToIR,
   markdownToIRWithMeta,

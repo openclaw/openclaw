@@ -10,6 +10,7 @@ import {
 import {
   asSessionCapabilityLookup,
   createSubagentSessionStore,
+  withPreparedSessionCapabilityRead,
   type SessionCapabilityLookup,
   type SessionCapabilityStore,
 } from "./subagent-session-store.js";
@@ -27,8 +28,7 @@ function buildKeyCandidates(
     config: cfg,
     agentId: explicitAgentId,
   });
-  const prefixed = `agent:${agentId}:${rawKey}`;
-  return prefixed === rawKey ? [rawKey] : [rawKey, prefixed];
+  return [rawKey, `agent:${agentId}:${rawKey}`];
 }
 
 function resolveEntryForSessionKey(params: {
@@ -106,4 +106,10 @@ export function getSubagentDepthFromSessionStore(
       agentId: opts?.agentId,
     }),
   );
+}
+
+export function getSubagentDepthFromSessionStoreInWorker(
+  ...args: Parameters<typeof getSubagentDepthFromSessionStore>
+): Promise<number> {
+  return withPreparedSessionCapabilityRead(() => getSubagentDepthFromSessionStore(...args));
 }

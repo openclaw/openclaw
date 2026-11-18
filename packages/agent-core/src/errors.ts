@@ -1,6 +1,16 @@
 import type { AgentMessage } from "./types.js";
 
 export const TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE = "openclaw_transcript_not_continuable";
+export const REPETITIVE_OUTPUT_ERROR_MESSAGE =
+  "Repetitive output stopped. Try a larger model or shorten your request before retrying.";
+
+/** A tool rejected model-authored arguments during prepareArguments, before execution. */
+export class ToolArgumentValidationError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "ToolArgumentValidationError";
+  }
+}
 
 export class TranscriptNotContinuableError extends Error {
   public readonly code = TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE;

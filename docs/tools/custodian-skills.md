@@ -18,7 +18,7 @@ Normal skill controls still apply. `skills.entries.<name>.enabled: false` disabl
 
 Every shipped Custodian skill uses the same five sections in this order:
 
-1. **Gather** reads redacted current config and probes live state.
+1. **Gather** reads redacted current config and checks live state.
 2. **Mutate** uses validated non-interactive writes, never a direct file edit. Those writes are `openclaw config set` / `openclaw config patch` from a trusted shell, or the in-session Custodian tool actions where policy allows.
 3. **Repair** diagnoses with `openclaw doctor --lint`. Only an explicitly approved repair uses `openclaw doctor --fix --non-interactive`. The read-only `diagnose-gateway` skill recommends that separate step but never runs it.
 4. **Prove** exercises one live end-to-end outcome.

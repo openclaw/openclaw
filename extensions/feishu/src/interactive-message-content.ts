@@ -14,22 +14,6 @@ function normalizeCardTemplateVariable(value: unknown): string | undefined {
   return undefined;
 }
 
-function readCardTemplateVariables(parsed: Record<string, unknown>): Map<string, string> {
-  const variables = new Map<string, string>();
-  for (const source of [parsed.template_variable, parsed.template_variables]) {
-    if (!isRecord(source)) {
-      continue;
-    }
-    for (const [key, value] of Object.entries(source)) {
-      const normalized = normalizeCardTemplateVariable(value);
-      if (normalized !== undefined) {
-        variables.set(key, normalized);
-      }
-    }
-  }
-  return variables;
-}
-
 function applyCardTemplateVariables(text: string, variables: Map<string, string>): string {
   if (variables.size === 0) {
     return text;
@@ -74,43 +58,6 @@ function normalizeInteractiveValue(value: unknown, variables: Map<string, string
   return "";
 }
 
-function extractInteractiveTableText(
-  element: Record<string, unknown>,
-  variables: Map<string, string>,
-): string | undefined {
-  if (!Array.isArray(element.columns) || !Array.isArray(element.rows)) {
-    return undefined;
-  }
-  const columns = element.columns.flatMap((column) => {
-    if (!isRecord(column) || typeof column.name !== "string") {
-      return [];
-    }
-    return [
-      {
-        name: column.name,
-        title: typeof column.display_name === "string" ? column.display_name : column.name,
-      },
-    ];
-  });
-  if (columns.length === 0) {
-    return undefined;
-  }
-
-  const lines = [
-    columns.map((column) => applyCardTemplateVariables(column.title, variables)).join(" | "),
-  ];
-  for (const row of element.rows) {
-    if (!isRecord(row)) {
-      continue;
-    }
-    const cells = columns.map((column) => normalizeInteractiveValue(row[column.name], variables));
-    if (cells.some(Boolean)) {
-      lines.push(cells.join(" | "));
-    }
-  }
-  return lines.join("\n");
-}
-
 function extractInteractiveElementText(
   element: unknown,
   variables: Map<string, string>,
@@ -142,7 +89,37 @@ function extractInteractiveElementText(
     return mention ? (mention.startsWith("@") ? mention : `@${mention}`) : undefined;
   }
   if (tag === "table") {
-    return extractInteractiveTableText(element, variables);
+    if (!Array.isArray(element.columns) || !Array.isArray(element.rows)) {
+      return undefined;
+    }
+    const columns = element.columns.flatMap((column) => {
+      if (!isRecord(column) || typeof column.name !== "string") {
+        return [];
+      }
+      return [
+        {
+          name: column.name,
+          title: typeof column.display_name === "string" ? column.display_name : column.name,
+        },
+      ];
+    });
+    if (columns.length === 0) {
+      return undefined;
+    }
+
+    const lines = [
+      columns.map((column) => applyCardTemplateVariables(column.title, variables)).join(" | "),
+    ];
+    for (const row of element.rows) {
+      if (!isRecord(row)) {
+        continue;
+      }
+      const cells = columns.map((column) => normalizeInteractiveValue(row[column.name], variables));
+      if (cells.some(Boolean)) {
+        lines.push(cells.join(" | "));
+      }
+    }
+    return lines.join("\n");
   }
 
   const nestedText = [
@@ -184,59 +161,50 @@ function extractInteractiveElementsText(
   return texts.join("\n").trim();
 }
 
-function readInteractiveElementArrays(parsed: Record<string, unknown>): unknown[][] {
-  const body = isRecord(parsed.body) ? parsed.body : undefined;
-  const elementArrays: unknown[][] = [];
-
-  for (const candidate of [parsed.elements, body?.elements]) {
-    if (Array.isArray(candidate)) {
-      elementArrays.push(candidate);
-    }
-  }
-
-  for (const candidate of [parsed.i18n_elements, body?.i18n_elements]) {
-    if (!isRecord(candidate)) {
-      continue;
-    }
-    for (const localeElements of Object.values(candidate)) {
-      if (Array.isArray(localeElements)) {
-        elementArrays.push(localeElements);
-      }
-    }
-  }
-
-  return elementArrays;
-}
-
-function readInteractiveCardTitle(
-  parsed: Record<string, unknown>,
-  variables: Map<string, string>,
-): string {
-  if (typeof parsed.title === "string") {
-    return applyCardTemplateVariables(parsed.title, variables).trim();
-  }
-  const header = isRecord(parsed.header) ? parsed.header : undefined;
-  const title = isRecord(header?.title) ? header.title : undefined;
-  return typeof title?.content === "string"
-    ? applyCardTemplateVariables(title.content, variables).trim()
-    : "";
-}
-
 export function parseInteractiveCardContent(parsed: unknown): string {
   if (!isRecord(parsed)) {
     return INTERACTIVE_CARD_FALLBACK_TEXT;
   }
 
-  const variables = readCardTemplateVariables(parsed);
-  const title = readInteractiveCardTitle(parsed, variables);
-  for (const elements of readInteractiveElementArrays(parsed)) {
+  const variables = new Map<string, string>();
+  for (const source of [parsed.template_variable, parsed.template_variables]) {
+    if (!isRecord(source)) {
+      continue;
+    }
+    for (const [key, value] of Object.entries(source)) {
+      const normalized = normalizeCardTemplateVariable(value);
+      if (normalized !== undefined) {
+        variables.set(key, normalized);
+      }
+    }
+  }
+  let title: string;
+  if (typeof parsed.title === "string") {
+    title = applyCardTemplateVariables(parsed.title, variables).trim();
+  } else {
+    const header = isRecord(parsed.header) ? parsed.header : undefined;
+    const headerTitle = isRecord(header?.title) ? header.title : undefined;
+    title =
+      typeof headerTitle?.content === "string"
+        ? applyCardTemplateVariables(headerTitle.content, variables).trim()
+        : "";
+  }
+  const body = isRecord(parsed.body) ? parsed.body : undefined;
+  const elementArrays: unknown[][] = [
+    parsed.elements,
+    body?.elements,
+    ...[parsed.i18n_elements, body?.i18n_elements].flatMap((candidate) =>
+      isRecord(candidate) ? Object.values(candidate) : [],
+    ),
+  ].filter(Array.isArray);
+  for (const elements of elementArrays) {
     const text = extractInteractiveElementsText(elements, variables);
     if (text) {
       return title ? `${title}\n${text}` : text;
     }
   }
 
-  const postText = renderPostContent(parsed).textContent.trim();
+  const postText = renderPostContent(parsed).textContent;
   if (postText && postText !== POST_FALLBACK_TEXT) {
     return postText;
   }

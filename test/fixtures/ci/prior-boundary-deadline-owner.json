@@ -1,0 +1,57 @@
+{
+  "_fixture": "Admission-relevant owner fields and exact boundary step from 7eebb1f8c5068c1ecab6f383b374f779f11d4a90; preceding names preserve the historical step ordinal.",
+  "name": "${{ matrix.check_name || 'check-additional-shard' }}",
+  "needs": [
+    "preflight"
+  ],
+  "timeout-minutes": 20,
+  "strategy": {
+    "fail-fast": false,
+    "max-parallel": 12,
+    "matrix": "${{ fromJSON(needs.preflight.outputs.check_additional_matrix) }}"
+  },
+  "steps": [
+    {
+      "name": "Checkout"
+    },
+    {
+      "name": "Ensure additional check comparison base"
+    },
+    {
+      "name": "Ensure Plugin SDK API diff head commit"
+    },
+    {
+      "name": "Setup Node environment"
+    },
+    {
+      "name": "Compute extension boundary input fingerprint"
+    },
+    {
+      "name": "Mount extension boundary sticky disk"
+    },
+    {
+      "name": "Restore extension boundary artifacts from sticky disk"
+    },
+    {
+      "name": "Cache extension package boundary artifacts"
+    },
+    {
+      "name": "Run additional check shard",
+      "if": "matrix.group != 'dependencies'",
+      "env": {
+        "ADDITIONAL_CHECK_GROUP": "${{ matrix.group }}",
+        "TYPE_GRAPH_BOUNDARY_OWNER": "${{ needs.preflight.outputs.type_graph_boundary_owner }}",
+        "CHANGED_CORE_TEST_PATHS_JSON": "${{ needs.preflight.outputs.changed_core_test_paths_json }}",
+        "COMPATIBILITY_TARGET": "${{ needs.preflight.outputs.compatibility_target }}",
+        "RUN_PROMPT_SNAPSHOTS": "${{ needs.preflight.outputs.run_prompt_snapshots }}",
+        "OPENCLAW_ADDITIONAL_BOUNDARY_SHARD": "",
+        "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY": 4,
+        "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY": 16,
+        "OPENCLAW_CI_EXTENSION_BOUNDARY_BASE": "${{ needs.preflight.outputs.diff_base_revision }}",
+        "OPENCLAW_CI_EXTENSION_BOUNDARY_FULL": "${{ vars.OPENCLAW_CI_EXTENSION_BOUNDARY_FULL }}"
+      },
+      "shell": "bash",
+      "run": "set -euo pipefail\n\nfailures=0\n\nrun_check() {\n  local label=\"$1\"\n  shift\n\n  echo \"::group::${label}\"\n  if \"$@\"; then\n    echo \"[ok] ${label}\"\n  else\n    echo \"::error title=${label} failed::${label} failed\"\n    failures=1\n  fi\n  echo \"::endgroup::\"\n}\n\ncheck_groups=(\"$ADDITIONAL_CHECK_GROUP\")\nif [[ \"$ADDITIONAL_CHECK_GROUP\" == \"source-contracts\" ]]; then\n  check_groups=(export-name-collisions session-accessor-boundary sqlite-session-schema-baseline)\nfi\n# Keep fresh, serial child processes and collect every command failure.\nfor check_group in \"${check_groups[@]}\"; do\n  case \"$check_group\" in\n    boundaries)\n      boundary_runner=(node --import tsx scripts/run-additional-boundary-checks.mts)\n      if [[ ! -f scripts/run-additional-boundary-checks.mts ]]; then\n        boundary_runner=(node scripts/run-additional-boundary-checks.mjs)\n      fi\n      if [[ \"$TYPE_GRAPH_BOUNDARY_OWNER\" == \"check-plan\" || ( -z \"$TYPE_GRAPH_BOUNDARY_OWNER\" && -n \"${CHANGED_CORE_TEST_PATHS_JSON:-}\" ) ]]; then\n        boundary_runner+=(--core-test-boundary-owner=test-types)\n      fi\n      \"${boundary_runner[@]}\"\n      ;;\n    prompt-snapshots)\n      # No presence fallback: the boundary runner previously invoked\n      # this unconditionally, and silent success would drop snapshot\n      # drift coverage. The manifest gates the lane on the generator's\n      # import graph and fixtures; diffs outside both cannot change\n      # generated snapshots.\n      if [ \"$RUN_PROMPT_SNAPSHOTS\" != \"true\" ]; then\n        echo \"[skip] changed scope cannot affect generated prompt snapshots\"\n      else\n        run_check \"prompt:snapshots:check\" pnpm prompt:snapshots:check\n      fi\n      ;;\n    export-name-collisions)\n      if [ ! -f scripts/check-export-name-collisions.mts ]; then\n        echo \"[skip] export name collision check is not present in this checkout\"\n      elif ! node -e 'const pkg = require(\"./package.json\"); process.exit(pkg.scripts?.[\"lint:tmp:export-name-collisions\"] ? 0 : 1);'; then\n        echo \"[skip] export name collision script is not present in package.json\"\n      else\n        run_check \"lint:tmp:export-name-collisions\" pnpm run lint:tmp:export-name-collisions\n      fi\n      ;;\n    session-accessor-boundary)\n      if ! node -e 'const pkg = require(\"./package.json\"); process.exit(pkg.scripts?.[\"lint:tmp:session-accessor-boundary\"] ? 0 : 1);'; then\n        echo \"[skip] session accessor boundary script is not present in package.json\"\n      else\n        run_check \"lint:tmp:session-accessor-boundary\" pnpm run lint:tmp:session-accessor-boundary\n      fi\n      if ! node -e 'const pkg = require(\"./package.json\"); process.exit(pkg.scripts?.[\"lint:tmp:sqlite-transaction-boundary\"] ? 0 : 1);'; then\n        echo \"[skip] SQLite transaction boundary script is not present in package.json\"\n      else\n        run_check \"lint:tmp:sqlite-transaction-boundary\" pnpm run lint:tmp:sqlite-transaction-boundary\n      fi\n      if ! node -e 'const pkg = require(\"./package.json\"); process.exit(pkg.scripts?.[\"lint:tmp:session-transcript-reader-boundary\"] ? 0 : 1);'; then\n        echo \"[skip] session transcript reader boundary script is not present in package.json\"\n      else\n        run_check \"lint:tmp:session-transcript-reader-boundary\" pnpm run lint:tmp:session-transcript-reader-boundary\n      fi\n      ;;\n    sqlite-session-schema-baseline)\n      if ! node -e 'const pkg = require(\"./package.json\"); process.exit(pkg.scripts?.[\"sqlite:sessions-schema:check\"] ? 0 : 1);'; then\n        echo \"[skip] SQLite sessions/transcripts schema baseline script is not present in package.json\"\n      else\n        run_check \"sqlite:sessions-schema:check\" pnpm run sqlite:sessions-schema:check\n      fi\n      ;;\n    plugin-sdk-api-diff)\n      # Pure reporting: no caller passes --require-acknowledgement, so\n      # this can only surface an artifact/summary. Keep it off the\n      # push/PR critical path; dispatch (incl. release validation)\n      # still produces the report.\n      if [[ \"${GITHUB_EVENT_NAME:-}\" != \"workflow_dispatch\" ]]; then\n        echo \"[skip] plugin SDK API diff reports on manual and release dispatches only\"\n      elif node -e 'const pkg = require(\"./package.json\"); process.exit(pkg.scripts?.[\"plugin-sdk:api:diff\"] ? 0 : 1);'; then\n        mkdir -p .artifacts\n        run_check \"plugin-sdk:api:diff\" pnpm run plugin-sdk:api:diff -- \\\n          --base \"${{ needs.preflight.outputs.diff_base_revision }}\" \\\n          --head \"${{ needs.preflight.outputs.diff_head_revision }}\" \\\n          --json .artifacts/plugin-sdk-api-diff.json \\\n          --summary \"$GITHUB_STEP_SUMMARY\"\n      elif [[ \"$COMPATIBILITY_TARGET\" == \"true\" ]] && node -e 'const pkg = require(\"./package.json\"); process.exit(pkg.scripts?.[\"plugin-sdk:api:check\"] ? 0 : 1);'; then\n        run_check \"plugin-sdk:api:check (historical compatibility)\" pnpm run plugin-sdk:api:check\n      elif [[ \"$COMPATIBILITY_TARGET\" == \"true\" ]]; then\n        echo \"::error title=Plugin SDK API check unavailable::Compatibility target provides neither plugin-sdk:api:diff nor plugin-sdk:api:check.\"\n        failures=1\n      else\n        echo \"::error title=Plugin SDK API diff unavailable::Current CI targets must provide plugin-sdk:api:diff.\"\n        failures=1\n      fi\n      ;;\n    extension-package-boundary)\n      run_check \"test:extensions:package-boundary:compile\" pnpm run test:extensions:package-boundary:compile\n      run_check \"test:extensions:package-boundary:canary\" pnpm run test:extensions:package-boundary:canary\n      ;;\n    runtime-topology-architecture)\n      GOGC=\"${GOGC:-30}\" GOMEMLIMIT=\"${GOMEMLIMIT:-3GiB}\" \\\n        run_check \"check:architecture\" pnpm check:architecture\n      ;;\n    *)\n      echo \"Unsupported additional check group: $ADDITIONAL_CHECK_GROUP\" >&2\n      exit 1\n      ;;\n  esac\ndone\n\nexit \"$failures\"\n"
+    }
+  ]
+}

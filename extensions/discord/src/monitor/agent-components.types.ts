@@ -1,27 +1,13 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  ButtonInteraction,
-  ChannelSelectMenuInteraction,
-  MentionableSelectMenuInteraction,
-  ModalInteraction,
-  RoleSelectMenuInteraction,
-  StringSelectMenuInteraction,
-  UserSelectMenuInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, ModalInteraction } from "../internal/discord.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import type { formatDiscordUserTag } from "./format.js";
 import type { DiscordLivePolicyReader } from "./live-policy.js";
 
 export type DiscordUser = Parameters<typeof formatDiscordUserTag>[0];
 
-export type AgentComponentMessageInteraction =
-  | ButtonInteraction
-  | StringSelectMenuInteraction
-  | RoleSelectMenuInteraction
-  | UserSelectMenuInteraction
-  | MentionableSelectMenuInteraction
-  | ChannelSelectMenuInteraction;
+export type AgentComponentMessageInteraction = BaseComponentInteraction;
 
 export type AgentComponentInteraction = AgentComponentMessageInteraction | ModalInteraction;
 
@@ -55,7 +41,6 @@ export type ComponentInteractionContext = {
   user: DiscordUser;
   username: string;
   userId: string;
-  replyOpts: { ephemeral?: boolean };
   rawGuildId: string | undefined;
   isDirectMessage: boolean;
   isGroupDm: boolean;

@@ -17,18 +17,53 @@ export function safeNormalizeMessage(message: unknown): NormalizedMessage | null
   }
 }
 
+export function readAutomationRun(message: unknown) {
+  const provenance = asRecord(asRecord(message)?.provenance);
+  if (provenance?.kind !== "internal_system" || provenance.sourceTool !== "cron") {
+    return undefined;
+  }
+  const { jobId, runId, sourceSessionKey } = provenance;
+  return typeof jobId === "string" &&
+    jobId &&
+    typeof runId === "string" &&
+    runId &&
+    typeof sourceSessionKey === "string" &&
+    sourceSessionKey
+    ? { jobId, runId, sourceSessionKey }
+    : undefined;
+}
+
 function messageIsForwardedBoundary(message: unknown): boolean {
   const provenance = asRecord(asRecord(message)?.provenance);
   return (
     (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
-    (provenance?.kind === "internal_system" &&
-      provenance.sourceTool === "cron" &&
-      Boolean(provenance.jobId && provenance.runId && provenance.sourceSessionKey))
+    Boolean(readAutomationRun(message))
   );
 }
 
-export function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
+function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => messageIsForwardedBoundary(message));
+}
+
+// Background result publication owns this identity independently of the foreground run.
+export function assistantMessageIsAutomationResult(message: unknown): boolean {
+  const record = asRecord(message);
+  const automation = asRecord(record?.openclawAutomation);
+  return (
+    record?.role === "assistant" &&
+    automation?.kind === "cron" &&
+    typeof automation.jobId === "string" &&
+    Boolean(automation.jobId.trim()) &&
+    typeof automation.runId === "string" &&
+    Boolean(automation.runId.trim())
+  );
+}
+
+export function assistantGroupIsIndependentBoundary(group: MessageGroup): boolean {
+  return (
+    assistantGroupIsForwardedBoundary(group) ||
+    group.messages.some(({ message }) => assistantMessageIsAutomationResult(message))
+  );
 }
 
 export function isInterSessionMessage(message: unknown): boolean {
@@ -36,12 +71,14 @@ export function isInterSessionMessage(message: unknown): boolean {
   return provenance?.kind === "inter_session";
 }
 
-export function isInterSessionGroup(group: MessageGroup): boolean {
+export function isSessionActivityGroup(group: MessageGroup): boolean {
   return (
     group.role === "assistant" &&
     !group.isStreaming &&
     group.messages.length > 0 &&
-    group.messages.every(({ message }) => isInterSessionMessage(message))
+    group.messages.every(
+      ({ message }) => isInterSessionMessage(message) || readAutomationRun(message),
+    )
   );
 }
 
@@ -51,8 +88,22 @@ export function hasForwardedSource(group: MessageGroup): boolean {
   return Boolean(group.senderSession) || assistantGroupIsForwardedBoundary(group);
 }
 
-function messageStartsProjectedTurnBoundary(message: unknown): boolean {
-  return asRecord(asRecord(message)?.["__openclaw"])?.turnBoundary === true;
+export type ProjectedContinuationSource = "exec" | "restart" | "subagent";
+
+/** What woke a row that resumes this session's own work after a hidden wake. */
+export function readProjectedContinuation(
+  message: unknown,
+): ProjectedContinuationSource | undefined {
+  const source = asRecord(asRecord(asRecord(message)?.["__openclaw"])?.continuation)?.source;
+  return source === "exec" || source === "restart" || source === "subagent" ? source : undefined;
+}
+
+/** A continuation keeps the turn it resumes, even where the row also carries `turnBoundary`. */
+export function messageStartsProjectedTurnBoundary(message: unknown): boolean {
+  return (
+    asRecord(asRecord(message)?.["__openclaw"])?.turnBoundary === true &&
+    !readProjectedContinuation(message)
+  );
 }
 
 /** Canonical user-turn boundary shared by insertion, outcome, and collapse projections. */
@@ -66,7 +117,9 @@ export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
       item.startsTurn === true ||
       role === "user" ||
       messageStartsProjectedTurnBoundary(item.message) ||
-      (role === "assistant" && messageIsForwardedBoundary(item.message))
+      (role === "assistant" &&
+        (messageIsForwardedBoundary(item.message) ||
+          assistantMessageIsAutomationResult(item.message)))
     );
   }
   if (item.kind !== "group") {
@@ -76,7 +129,7 @@ export function chatItemStartsUserTurn(item: ChatItem | MessageGroup): boolean {
   return (
     role === "user" ||
     messageStartsProjectedTurnBoundary(item.messages[0]?.message) ||
-    (role === "assistant" && assistantGroupIsForwardedBoundary(item))
+    (role === "assistant" && assistantGroupIsIndependentBoundary(item))
   );
 }
 

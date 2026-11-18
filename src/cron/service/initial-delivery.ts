@@ -11,7 +11,7 @@ import type { CronDelivery, CronJobCreate } from "../types.js";
  * read-time, and service-bypass paths.
  */
 export function resolveInitialCronDelivery(input: CronJobCreate): CronDelivery | undefined {
-  if (input.delivery) {
+  if (input.delivery !== undefined) {
     return input.delivery;
   }
   if (

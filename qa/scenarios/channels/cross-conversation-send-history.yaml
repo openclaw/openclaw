@@ -1,0 +1,222 @@
+title: Cross-conversation send enters destination history
+
+scenario:
+  id: cross-conversation-send-history
+  surface: channel
+  coverage:
+    primary:
+      - session-memory.transcript-persistence
+    secondary:
+      - plugins.outbound-delivery
+  gatewayConfigPatch:
+    messages:
+      groupChat:
+        visibleReplies: message_tool
+  objective: Verify a message-tool send from one qa-channel room to another is written once into the destination room's model history, not the sender's, and that the destination's next model turn sees it.
+  successCriteria:
+    - The source room turn calls message(action=send) with the destination room as its target.
+    - The source room receives its own reply and the source turn settles.
+    - The destination room receives the marker exactly once.
+    - The destination session history holds exactly one automation-result row with the marker.
+    - The source session history holds no automation-result row for the marker.
+    - The destination room's next model request replays the marker once as assistant history.
+    - The destination turn settles after one visible recall reply.
+  docsRefs:
+    - docs/refactor/conversation-transcript-ownership.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/sessions/confirmed-visible-message.ts
+    - src/infra/outbound/deliver-core.ts
+    - src/infra/outbound/outbound-send-service.ts
+  execution:
+    kind: flow
+    retryCount: 0
+    channel: qa-channel
+    summary: Run a real QA Gateway/qa-channel message-tool send into another room and assert one destination history row that the destination's next model turn replays.
+    config:
+      requiredProviderMode: mock-openai
+      sourceConversationId: qa-xchat-source
+      destinationConversationId: qa-xchat-dest
+      sendPromptSnippet: qa msteams thread message-tool final dedupe
+      recallPromptSnippet: qa cross conversation recall check
+      expectedMarker: QA-CROSS-CONVERSATION-HISTORY-OK
+      recallMarker: QA-CROSS-CONVERSATION-RECALL-OK
+      duplicateWindowMs: 5000
+
+flow:
+  steps:
+    - name: records a cross-room send once in the destination history
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: startIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: sessionKeyFor
+          value:
+            lambda:
+              params: [conversationId]
+              expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: 'default', peer: { kind: 'group', id: `group:${conversationId}` }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: sourceSessionKey
+          value:
+            expr: sessionKeyFor(config.sourceConversationId)
+        - set: destinationSessionKey
+          value:
+            expr: sessionKeyFor(config.destinationConversationId)
+        - set: markerRows
+          value:
+            lambda:
+              params: [sessionKey]
+              async: true
+              expr: "((await env.gateway.call('chat.history', { agentId: 'qa', sessionKey, limit: 100, maxChars: 20000 }, { timeoutMs: 10000 })).messages ?? []).filter((message) => message.role === 'assistant' && message.provider === 'openclaw' && message.model === 'automation-result' && JSON.stringify(message.content ?? '').includes(config.expectedMarker))"
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - call: state.addInboundMessage
+          args:
+            - conversation:
+                id:
+                  expr: config.sourceConversationId
+                kind: group
+                title: QA Cross Source
+              senderId: alice
+              senderName: Alice
+              text:
+                expr: "`@openclaw ${config.sendPromptSnippet}. msteams message target: \\`group:${config.destinationConversationId}\\`. Send exact marker: \\`${config.expectedMarker}\\``"
+        - call: waitForCondition
+          saveAs: sendToolRequest
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.target === `group:${config.destinationConversationId}` && request.plannedToolArgs?.message === config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 500
+        - call: waitForOutboundMessage
+          saveAs: destinationOutbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === config.destinationConversationId && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - sinceIndex:
+                ref: startIndex
+        - call: waitForCondition
+          saveAs: destinationRows
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(async () => { const rows = await markerRows(destinationSessionKey); return rows.length > 0 ? rows : undefined; })()"
+            - 30000
+            - 500
+        - call: waitForOutboundMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.sourceConversationId && String(candidate.text ?? '').includes(config.expectedMarker)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - sinceIndex:
+                ref: startIndex
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sourceSessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+        - call: sleep
+          args:
+            - expr: config.duplicateWindowMs
+        - set: destinationDeliveries
+          value:
+            expr: "state.getSnapshot().messages.slice(startIndex).filter((message) => message.direction === 'outbound' && message.conversation.id === config.destinationConversationId && String(message.text ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: destinationDeliveries.length === 1
+            message:
+              expr: "`expected one destination delivery, saw ${destinationDeliveries.length}; transcript=${formatTransportTranscript(state, { conversationId: config.destinationConversationId })}`"
+        - set: settledDestinationRows
+          value:
+            expr: await markerRows(destinationSessionKey)
+        - assert:
+            expr: settledDestinationRows.length === 1
+            message:
+              expr: "`expected one destination history row, saw ${settledDestinationRows.length}: ${JSON.stringify(settledDestinationRows).slice(0, 1600)}`"
+        - set: sourceRows
+          value:
+            expr: await markerRows(sourceSessionKey)
+        - assert:
+            expr: sourceRows.length === 0
+            message:
+              expr: "`the sender's own history must not gain a destination row: ${JSON.stringify(sourceRows).slice(0, 1600)}`"
+      detailsExpr: "`target=${sendToolRequest.plannedToolArgs.target}; destinationSession=${destinationSessionKey}; destinationRows=${settledDestinationRows.length}; sourceRows=${sourceRows.length}; idempotencyKey=${settledDestinationRows[0]?.__openclaw?.idempotencyKey ?? 'n/a'}`"
+    - name: replays the destination row in the destination's next model turn
+      actions:
+        - set: recallCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - call: state.addInboundMessage
+          args:
+            - conversation:
+                id:
+                  expr: config.destinationConversationId
+                kind: group
+                title: QA Cross Destination
+              senderId: bob
+              senderName: Bob
+              text:
+                # Keep the history marker out of this prompt so the replay assertion cannot match echoed input.
+                expr: "`@openclaw ${config.recallPromptSnippet}: what did you post here earlier? qa group visible reply tool check. Use the visible room reply path. exact marker: \\`${config.recallMarker}\\``"
+        - call: waitForCondition
+          saveAs: recallRequest
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${recallCursorBefore}`)).find((request) => String(request.allInputText ?? '').includes(config.recallPromptSnippet))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 500
+        - set: replayedMarkerItems
+          value:
+            expr: "(Array.isArray(recallRequest.body?.input) ? recallRequest.body.input : []).filter((item) => item?.role === 'assistant' && JSON.stringify(item.content ?? '').includes(config.expectedMarker))"
+        - assert:
+            expr: replayedMarkerItems.length === 1
+            message:
+              expr: "`the destination model turn must replay the earlier send once as assistant history; roles=${JSON.stringify((recallRequest.body?.input ?? []).map((item) => item?.role ?? item?.type))}`"
+        - assert:
+            expr: "!String(recallRequest.raw ?? '').includes(config.sendPromptSnippet)"
+            message: the destination turn must not inherit the sender room's prompt
+        - call: waitForOutboundMessage
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.conversation.id === config.destinationConversationId && String(candidate.text ?? '').includes(config.recallMarker)"
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === destinationSessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+        - set: recallDeliveries
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.destinationConversationId && String(message.text ?? '').includes(config.recallMarker))"
+        - assert:
+            expr: recallDeliveries.length === 1
+            message:
+              expr: "`expected one visible recall reply, saw ${recallDeliveries.length}`"
+      detailsExpr: "`replayedAssistantMarkerItems=${replayedMarkerItems.length}; item=${JSON.stringify(replayedMarkerItems[0]).slice(0, 300)}`"

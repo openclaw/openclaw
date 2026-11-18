@@ -13,6 +13,9 @@ export const loadDiscordResolveUsersModule = createLazyRuntimeModule(
 export const loadDiscordThreadBindingsManagerModule = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.manager.js"),
 );
+export const loadDiscordConversationForkModule = createLazyRuntimeModule(
+  () => import("./conversation-fork.js"),
+);
 export const loadDiscordTargetResolverModule = createLazyRuntimeModule(
   () => import("./target-resolver.js"),
 );

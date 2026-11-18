@@ -4,8 +4,12 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
+extension TalkBufferedAudioPlaying {
+    func setLevelHandler(_: (@MainActor (Double?) -> Void)?) {}
+}
+
 @MainActor
-private final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
+final class RecordingGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesizing {
     let audio: TalkGatewaySpeechAudio
     private(set) var requests: [TalkGatewaySpeechRequest] = []
 
@@ -43,7 +47,7 @@ private final class SuspendedGatewaySpeechSynthesizer: TalkGatewaySpeechSynthesi
 }
 
 @MainActor
-private final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
+final class RecordingBufferedAudioPlayer: TalkBufferedAudioPlaying {
     private(set) var payloads: [Data] = []
 
     func play(data: Data) async -> StreamingPlaybackResult {
@@ -168,11 +172,8 @@ struct TalkGatewaySpeechClientTests {
 
     @Test func `gateway speech provider stays native and uses talk speak`() async {
         let parsed = Self.parseSpeechProvider("xiaomi")
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            defaultProvider: "elevenlabs")
-        #expect(routing.activeProvider == "xiaomi")
-        #expect(routing.route == .gatewayTalkSpeak)
+        #expect(parsed.snapshot.activeProvider == "xiaomi")
+        #expect(parsed.route == .gatewayTalkSpeak)
 
         let expectedAudio = Data([4, 5, 6])
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
@@ -187,7 +188,6 @@ struct TalkGatewaySpeechClientTests {
         manager._test_applyLoadedTalkConfig(parsed)
 
         #expect(manager._test_runtimeRoute() == .gatewayTalkSpeak)
-        #expect(!manager.gatewayTalkUsesRealtime)
         #expect(manager.gatewayTalkTransportLabel == "Native")
 
         await manager._test_playAssistant(text: "Gateway voice")
@@ -232,7 +232,45 @@ struct TalkGatewaySpeechClientTests {
 
         #expect(synthesizer.requests.count == 1)
         #expect(synthesizer.requests[0].modelId == nil)
-        #expect(manager.gatewayTalkDefaultModelId == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `repeated start and microphone mute preserve an active continuous speech turn`(muted: Bool) async {
+        let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
+            data: Data([1, 2, 3]), provider: "xiaomi", outputFormat: "mp3"))
+        let audioPlayer = InterruptibleBufferedAudioPlayer()
+        let manager = TalkModeManager(
+            allowSimulatorCapture: true,
+            gatewaySpeechSynthesizer: synthesizer)
+        manager.bufferedPlayer = audioPlayer
+        manager.updateGatewayConnected(true)
+        manager.isEnabled = true
+        manager._test_applyLoadedTalkConfig(Self.parseSpeechProvider("xiaomi", interruptOnSpeech: true))
+        manager._test_setContinuousTranscriptProcessingActive(true)
+        defer {
+            manager._test_setContinuousTranscriptProcessingActive(false)
+            manager.stop()
+        }
+
+        let playback = Task { await manager._test_playAssistant(text: "Continue speaking") }
+        while !audioPlayer.isPlaying {
+            await Task.yield()
+        }
+
+        await manager.setMicrophoneMuted(muted)
+        await manager.start()
+
+        #expect(manager._test_hasRecognitionRequest() == !muted)
+        #expect(manager.canKeepContinuousTalkActiveInBackground)
+        #expect(manager.phase == .speaking)
+        #expect(manager.isSpeaking)
+        #expect(!manager.isListening)
+        #expect(audioPlayer.isPlaying)
+        await manager.setMicrophoneMuted(false)
+        #expect(manager._test_hasRecognitionRequest())
+        #expect(audioPlayer.isPlaying)
+        manager.stop()
+        await playback.value
     }
 
     @Test func `stopped talk does not play completed gateway synthesis`() async {
@@ -285,12 +323,8 @@ struct TalkGatewaySpeechClientTests {
     @Test func `open AI speech provider without realtime config uses talk speak`() {
         let parsed = Self.parseSpeechProvider("openai")
 
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            defaultProvider: "elevenlabs")
-
-        #expect(routing.activeProvider == "openai")
-        #expect(routing.route == .gatewayTalkSpeak)
+        #expect(parsed.snapshot.activeProvider == "openai")
+        #expect(parsed.route == .gatewayTalkSpeak)
     }
 
     @Test func `system voice keeps BCP 47 locale separate from provider language`() {
@@ -348,13 +382,9 @@ struct TalkGatewaySpeechClientTests {
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
 
-        let routing = TalkModeRoutingResolver.resolve(
-            parsed: parsed,
-            defaultProvider: "elevenlabs")
-
-        #expect(routing.route == .realtimeRelay)
-        #expect(!routing.route.usesGatewayTalkSpeak)
-        #expect(routing.route.gatewayOwnsCredentials)
+        #expect(parsed.route == .realtimeRelay)
+        #expect(!parsed.route.usesGatewayTalkSpeak)
+        #expect(parsed.route.gatewayOwnsCredentials)
     }
 
     private static func parseSpeechProvider(

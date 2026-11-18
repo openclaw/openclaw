@@ -7,11 +7,10 @@ import {
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
-  getOpenClawStateRuntimeSchema,
   isOpenClawStateFirstUseSchemaIssue,
   isOpenClawStateStartupRepairableSchemaIssue,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
-  STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
 } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
@@ -45,8 +44,8 @@ export function inspectCurrentStateStartupSchema(
     ),
     ...collectSqliteSchemaIssues(
       database,
-      getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false }),
-      STATE_PERSISTENT_SCHEMA_COMPATIBILITY,
+      OPENCLAW_STATE_SCHEMA_SQL,
+      STATE_RUNTIME_SCHEMA_COMPATIBILITY,
       readTable,
     ),
   ]);

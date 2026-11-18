@@ -6,13 +6,14 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { createWhisperExecutable } from "../media-understanding/local-audio.test-support.js";
 import { createSafeAudioFixtureBuffer } from "../media-understanding/runner.test-utils.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 // The synthetic executable uses /bin/sh; Windows suffix lookup has owner coverage.
 describe.skipIf(process.platform === "win32")("infer local audio executable selection", () => {
-  it("transcribes with the home-relative executable before a later PATH decoy", async () => {
+  it("transcribes through a home-relative symlink parent before lexical and later PATH decoys", async () => {
     const root = tempDirs.make("openclaw-infer-local-audio-");
     const binDir = path.join(root, "qa-stt-bin");
     const decoyDir = path.join(root, "decoy-bin");
@@ -22,18 +23,19 @@ describe.skipIf(process.platform === "win32")("infer local audio executable sele
     const transcript = "preferred synthetic transcript";
     await createWhisperExecutable(binDir, transcript);
     await createWhisperExecutable(decoyDir, "wrong executable transcript");
+    const nestedDir = path.join(binDir, "nested");
+    await fs.mkdir(nestedDir);
+    await fs.symlink(nestedDir, path.join(root, "audio-link"));
+    await createWhisperExecutable(root, "lexically normalized decoy transcript");
     const mediaPath = path.join(root, "input.wav");
     await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer(2048, 0x52));
     const configPath = path.join(root, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        agents: { defaults: { workspace }, entries: { main: {} } },
-        plugins: { enabled: false },
-        tools: { media: { audio: { enabled: true } } },
-        logging: { level: "silent", consoleLevel: "silent" },
-      }),
-    );
+    await writeFixtureJson(configPath, {
+      agents: { defaults: { workspace }, entries: { main: {} } },
+      plugins: { enabled: false },
+      tools: { media: { audio: { enabled: true } } },
+      logging: { level: "silent", consoleLevel: "silent" },
+    });
     const result = await runCliProcessChild({
       nodeArgs: [
         ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
@@ -46,7 +48,7 @@ describe.skipIf(process.platform === "win32")("infer local audio executable sele
       ],
       cwd: root,
       env: {
-        PATH: ["~/qa-stt-bin", decoyDir].join(path.delimiter),
+        PATH: ["~/audio-link/..", decoyDir].join(path.delimiter),
         ESBUILD_WORKER_THREADS: process.env.ESBUILD_WORKER_THREADS,
         HOME: root,
         USERPROFILE: root,

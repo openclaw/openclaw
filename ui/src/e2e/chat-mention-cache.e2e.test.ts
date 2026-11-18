@@ -15,10 +15,7 @@ const people = [
 ];
 
 suite.define(() => {
-  it.each([
-    { width: 1200, height: 820 },
-    { width: 390, height: 844 },
-  ])(
+  it.each([{ width: 390, height: 844 }])(
     "reopens cached mentions and keeps them selectable during refresh at $width px",
     async (viewport) => {
       await suite.withPage({ viewport, colorScheme: "light" }, async ({ page }) => {

@@ -1,4 +1,5 @@
-/** Builds platform-specific log and start hints for daemon status output. */
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveGatewaySystemdServiceName, resolveGatewayWindowsTaskName } from "./constants.js";
 import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -14,25 +15,25 @@ export function buildPlatformRuntimeLogHints(params: {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
   if (platform === "darwin") {
-    const logs = resolveGatewaySupervisorLogPaths(env, { platform });
-    // Preserve the writer's path bytes; backslashes can be literal POSIX filename characters.
+    const logs = resolveGatewaySupervisorLogPaths(env);
+    // Keep path spelling intact apart from terminal-control escaping.
     return [
-      `Launchd stdout and stderr (if installed): ${logs.stdoutPath}`,
-      `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
+      terminalText`Launchd stdout and stderr (if installed): ${logs.stdoutPath}`,
+      terminalText`Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }
   if (platform === "linux") {
     const scope = params.systemd?.scope === "system" ? "--system" : "--user";
     const unit = params.systemd?.unit ?? `${params.systemdServiceName}.service`;
     return [
-      `Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`,
-      `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
+      terminalText`Logs: journalctl ${scope} -u ${quoteCliArg(unit)} -n 200 --no-pager`,
+      terminalText`Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }
   if (platform === "win32") {
     return [
-      `Logs: schtasks /Query /TN "${params.windowsTaskName}" /V /FO LIST`,
-      `Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
+      terminalText`Logs: schtasks /Query /TN "${params.windowsTaskName}" /V /FO LIST`,
+      terminalText`Restart attempts: ${resolveGatewayRestartLogPath(env)}`,
     ];
   }
   return [];
@@ -40,32 +41,40 @@ export function buildPlatformRuntimeLogHints(params: {
 
 /** Build recovery details after the caller selects its applicable runtime state. */
 export function buildGatewayRuntimeRecoveryHints(params: {
-  kind: "gui-session" | "stopped";
+  kind: "gui-session" | "stopped" | "disabled-task";
   restartCommand: string;
   logFile?: string | null;
   platform?: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   systemd?: GatewayServiceRuntime["systemd"];
 }): string[] {
+  const windowsTaskName =
+    params.env.OPENCLAW_WINDOWS_TASK_NAME?.trim() ||
+    resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE);
   const hints =
     params.kind === "gui-session"
       ? [
           "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
-          `Sign in to the macOS desktop as this user, then run: ${params.restartCommand}`,
+          terminalText`Sign in to the macOS desktop as this user, then run: ${params.restartCommand}`,
           "For headless VM setups, enable auto-login for the target user or use a custom LaunchDaemon (not shipped).",
         ]
       : [];
-  if (params.logFile) {
-    hints.push(`File logs: ${params.logFile}`);
+  if (params.kind === "disabled-task") {
+    hints.push(
+      terminalText`Scheduled Task '${windowsTaskName}' is registered but DISABLED; run \`${formatCliCommand("openclaw gateway start", params.env)}\` (or \`${formatCliCommand("openclaw doctor --fix", params.env)}\`) to re-enable it.`,
+    );
   }
-  if (params.kind === "stopped") {
+  if (params.logFile) {
+    hints.push(terminalText`File logs: ${params.logFile}`);
+  }
+  if (params.kind !== "gui-session") {
     hints.push(
       ...buildPlatformRuntimeLogHints({
         platform: params.platform,
         env: params.env,
         systemdServiceName: resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE),
         systemd: params.systemd,
-        windowsTaskName: resolveGatewayWindowsTaskName(params.env.OPENCLAW_PROFILE),
+        windowsTaskName,
       }),
     );
   }
@@ -73,18 +82,16 @@ export function buildGatewayRuntimeRecoveryHints(params: {
 }
 
 export function buildPlatformServiceStartHints(params: {
-  platform?: NodeJS.Platform;
   installHint: string;
   startCommand: string;
   launchAgentPlistPath: string;
   systemdServiceName: string;
   windowsTaskName: string;
 }): string[] {
-  const platform = params.platform ?? process.platform;
   const base = [params.installHint, params.startCommand];
   // Install guidance and the OpenClaw start command stay first; native manager
   // commands are supplemental because they do not resolve profile/env paths.
-  switch (platform) {
+  switch (process.platform) {
     case "darwin":
       return [...base, `launchctl bootstrap gui/$UID ${params.launchAgentPlistPath}`];
     case "linux":

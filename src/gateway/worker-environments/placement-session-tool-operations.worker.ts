@@ -1,61 +1,66 @@
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import type {
+  WorkerWriteOperationContext,
+  WorkerOperationHandlers,
+} from "../../state/worker-operation-registry.js";
 import { createPlacementSessionToolOperationKernel } from "./placement-session-tool-operations.kernel.js";
 import type { PlacementSessionToolReceipt } from "./placement-session-tool-operations.receipt.js";
-import type { PlacementSessionToolWorkerOperations } from "./placement-session-tool-operations.worker-contract.js";
 
-export function executePlacementSessionToolCommand(
-  command: SqliteWorkerCommand<PlacementSessionToolWorkerOperations>,
-  database: OpenClawStateDatabase,
-): PlacementSessionToolReceipt {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const tools = createPlacementSessionToolOperationKernel({
-        db,
-        instanceId: command.input.instanceId,
-        now: () => command.input.nowMs ?? Date.now(),
-      });
-      const receipt: PlacementSessionToolReceipt = {};
-      switch (command.type) {
-        case "placementTools.authorize":
-          receipt.toolNames = tools.authorize(...command.input.args);
-          break;
-        case "placementTools.seal":
-          tools.seal(...command.input.args);
-          receipt.toolNames = null;
-          break;
-        case "placementTools.clear":
-          receipt.changed = tools.clear(...command.input.args);
-          receipt.toolNames = null;
-          break;
-        case "placementTools.begin":
-          receipt.result = tools.begin(...command.input.args);
-          break;
-        case "placementTools.bindChild":
-          receipt.changed = tools.bindChild(...command.input.args);
-          break;
-        case "placementTools.complete":
-          receipt.changed = tools.complete(...command.input.args);
-          break;
-        case "placementTools.abandon":
-          receipt.changed = tools.abandon(...command.input.args);
-          break;
-        case "placementTools.recover":
-          receipt.recovered = tools.recover();
-      }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
-      deferSqliteWorkerCommitReceipt(db, receipt);
-      return receipt;
-    },
-    { database },
-    { operationLabel: command.type },
-  );
+type Kernel = ReturnType<typeof createPlacementSessionToolOperationKernel>;
+type KernelArgs<Method extends keyof Kernel> = Parameters<Kernel[Method]>;
+
+function operation<Args extends unknown[]>(
+  type: string,
+  execute: (tools: Kernel, args: Args) => PlacementSessionToolReceipt,
+) {
+  return (
+    input: { args: Args; instanceId: string; nowMs?: number },
+    { writeAdmitted }: WorkerWriteOperationContext,
+  ): PlacementSessionToolReceipt =>
+    writeAdmitted(
+      ({ db }) => {
+        const tools = createPlacementSessionToolOperationKernel({
+          db,
+          instanceId: input.instanceId,
+          now: () => input.nowMs ?? Date.now(),
+        });
+        return execute(tools, input.args);
+      },
+      { operationLabel: type, receipt: "result", transactionEnvironment: "process" },
+    );
 }
+
+export const placementSessionToolOperations = {
+  "placementTools.authorize": operation(
+    "placementTools.authorize",
+    (tools, args: KernelArgs<"authorize">) => ({ toolNames: tools.authorize(...args) }),
+  ),
+  "placementTools.seal": operation("placementTools.seal", (tools, args: KernelArgs<"seal">) => {
+    tools.seal(...args);
+    return { toolNames: null };
+  }),
+  "placementTools.clear": operation("placementTools.clear", (tools, args: KernelArgs<"clear">) => ({
+    changed: tools.clear(...args),
+    toolNames: null,
+  })),
+  "placementTools.begin": operation("placementTools.begin", (tools, args: KernelArgs<"begin">) => ({
+    result: tools.begin(...args),
+  })),
+  "placementTools.bindChild": operation(
+    "placementTools.bindChild",
+    (tools, args: KernelArgs<"bindChild">) => ({ changed: tools.bindChild(...args) }),
+  ),
+  "placementTools.complete": operation(
+    "placementTools.complete",
+    (tools, args: KernelArgs<"complete">) => ({ changed: tools.complete(...args) }),
+  ),
+  "placementTools.abandon": operation(
+    "placementTools.abandon",
+    (tools, args: KernelArgs<"abandon">) => ({
+      changed: tools.abandon(...args),
+    }),
+  ),
+  "placementTools.recover": operation(
+    "placementTools.recover",
+    (tools, _args: KernelArgs<"recover">) => ({ recovered: tools.recover() }),
+  ),
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

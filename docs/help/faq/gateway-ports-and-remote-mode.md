@@ -13,13 +13,17 @@ read_when:
     `gateway.port` controls the single multiplexed port for WebSocket + HTTP (Control UI, hooks, etc.). Precedence:
 
     ```text
-    --port > OPENCLAW_GATEWAY_PORT > gateway.port > default 18789
+    --port > OPENCLAW_GATEWAY_PORT > gateway.port > named-profile default > 18789
     ```
+
+    The named-profile default is `19001` for `dev` and a port derived from the profile name for other named profiles (`--profile <name>` or `OPENCLAW_PROFILE`). When `--profile dev` selects the profile and `OPENCLAW_GATEWAY_PORT` is unset, the CLI sets `OPENCLAW_GATEWAY_PORT=19001`, so `19001` takes precedence over `gateway.port`.
 
   </Accordion>
 
-  <Accordion title='Why does openclaw gateway status say "Runtime: running" but "Connectivity probe: failed"?'>
-    "Running" is the **supervisor's** view (launchd/systemd/schtasks); the connectivity probe is the CLI actually connecting to the gateway WebSocket. Trust these lines from `openclaw gateway status`: `Probe target:` (the URL the probe used), `Listening:` (what is actually bound on the port), `Last gateway error:` (common root cause when the process is alive but the port is not listening).
+  <a id="why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed" />
+
+  <Accordion title='Why does openclaw gateway status report a running process but a failed connection?'>
+    "Running" is the **supervisor's** view (launchd/systemd/schtasks); the connectivity check is the CLI actually connecting to the gateway WebSocket. In `openclaw gateway status`, compare the connection target URL with `Listening:` (what is actually bound on the port), and inspect `Last gateway error:` for the failure cause when the process is alive but the port is not listening.
   </Accordion>
 
   <Accordion title='Why does openclaw gateway status show "Config (cli)" and "Config (service)" different?'>
@@ -101,7 +105,7 @@ read_when:
   </Accordion>
 
   <Accordion title="Can I run multiple Gateways on the same host?">
-    Usually no - one Gateway can run multiple messaging channels and agents. Use multiple Gateways only for redundancy (for example a rescue bot) or hard isolation, and isolate each with its own `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `agents.defaults.workspace`, and unique `gateway.port`.
+    Usually no - one Gateway can run multiple messaging channels and agents. Use multiple Gateways only for redundancy (for example a rescue bot) or hard isolation, and isolate each with its own `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`, `agents.defaults.workspace`, and unique `gateway.port`, with base ports at least 120 apart for the normal derived-port ranges. Explicit sandbox/browser/CDP port overrides and high-base-port fallbacks can still overlap, so check those ports separately.
 
     Recommended: `openclaw --profile <name> ...` per instance (auto-creates `~/.openclaw-<name>`), a unique `gateway.port` per profile config (or `--port` for manual runs), and a per-profile service with `openclaw --profile <name> gateway install`.
 

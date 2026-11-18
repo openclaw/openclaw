@@ -2,12 +2,7 @@ import {
   MeetingPlatformAdapter,
   type MeetingBrowserJoinSession,
 } from "openclaw/plugin-sdk/meeting-runtime";
-import {
-  teamsMeetingAudioCaptureScript,
-  teamsMeetingLeaveScript,
-  teamsMeetingStatusScript,
-  teamsMeetingTranscriptScript,
-} from "./teams-meetings-page-scripts.js";
+import { teamsMeetingPageScripts } from "./teams-meetings-page-scripts.js";
 import {
   isRecoverableTeamsMeetingTab,
   isSameTeamsMeetingUrl,
@@ -19,17 +14,6 @@ import type {
   TeamsMeetingsMode,
   TeamsMeetingsTranscriptSnapshot,
 } from "./types.js";
-
-function teamsMeetingOrigin(meetingUrl: string): string | undefined {
-  try {
-    const origin = new URL(meetingUrl).origin;
-    return origin === "https://teams.microsoft.com" || origin === "https://teams.live.com"
-      ? origin
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<TeamsMeetingsMode>,
@@ -81,12 +65,16 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     retryCaptions: true,
     unavailableMessage:
       "Open the OpenClaw browser profile, finish the Teams sign-in, admission, or permission prompt, then retry.",
-    origin: teamsMeetingOrigin,
-    scripts: {
-      audioCapture: teamsMeetingAudioCaptureScript,
-      status: teamsMeetingStatusScript,
-      leave: teamsMeetingLeaveScript,
-      transcript: teamsMeetingTranscriptScript,
+    origin: (meetingUrl) => {
+      try {
+        const origin = new URL(meetingUrl).origin;
+        return origin === "https://teams.microsoft.com" || origin === "https://teams.live.com"
+          ? origin
+          : undefined;
+      } catch {
+        return undefined;
+      }
     },
+    scripts: teamsMeetingPageScripts,
   }),
 });

@@ -5,12 +5,14 @@ import {
   type ChatCompletionRequest,
   type Fixture,
   getTextContent,
+  isChatCompletionBody,
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
+import { countImageInputs } from "../shared/image-inputs.js";
 import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
 import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import type { QaMockRequestSnapshot } from "../shared/types.js";
@@ -30,73 +32,23 @@ type AimockToolFacts = Pick<
   AimockRequestFacts,
   "plannedToolName" | "plannedToolCallId" | "toolOutputCallId"
 >;
-type AimockRequestObservation =
-  | { kind: "retained-body"; tools: AimockToolFacts }
-  | { kind: "projected"; projection: AimockRequestProjection };
+type AimockChatJournalEntry = Pick<JournalEntry, "response"> & {
+  body: ChatCompletionRequest;
+};
+type AimockJournalAdd = (
+  entry: Omit<JournalEntry, "id" | "timestamp">,
+  matchedFixture?: Fixture,
+) => JournalEntry;
+type AimockRequestObservation = { cursor: number } & (
+  | { kind: "retained-body"; body: ChatCompletionRequest; tools: AimockToolFacts }
+  | { kind: "projected"; projection: AimockRequestProjection }
+);
 
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
 }
 
-function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
-  const messages = requestMessages(body);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "user") {
-      const text = getTextContent(message.content) ?? "";
-      if (!isInternalRuntimeContextCarrierText(text)) {
-        return text;
-      }
-    }
-  }
-  return "";
-}
-
-function extractAllInputText(body: ChatCompletionRequest | null | undefined) {
-  return requestMessages(body)
-    .map((message) => getTextContent(message.content) ?? "")
-    .filter(Boolean)
-    .join("\n");
-}
-
-function extractToolOutput(body: ChatCompletionRequest | null | undefined) {
-  const message = requestMessages(body).findLast((entry) => entry?.role === "tool");
-  return message ? (getTextContent(message.content) ?? "") : "";
-}
-
-function extractToolOutputCallId(body: ChatCompletionRequest | null | undefined) {
-  const message = requestMessages(body).findLast(
-    (entry) => entry?.role === "tool" && typeof entry.tool_call_id === "string",
-  );
-  return message?.tool_call_id ?? "";
-}
-
-function extractToolOutputStructuredError(body: ChatCompletionRequest | null | undefined) {
-  const message = asOptionalObjectRecord(
-    requestMessages(body).findLast((entry) => entry?.role === "tool"),
-  );
-  return message?.isError === true || message?.is_error === true;
-}
-
-function countImageInputs(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.reduce((sum, entry) => sum + countImageInputs(entry), 0);
-  }
-  if (!value || typeof value !== "object") {
-    return 0;
-  }
-  const record = value as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type : "";
-  const imageLikeType =
-    type === "input_image" || type === "image" || type === "image_url" || type === "media";
-  const nested =
-    countImageInputs(record.content) +
-    countImageInputs(record.image_url) +
-    countImageInputs(record.source);
-  return (imageLikeType ? 1 : 0) + nested;
-}
-
-function extractToolFacts(entry: Pick<JournalEntry, "response" | "body">): AimockToolFacts {
+function extractToolFacts(entry: AimockChatJournalEntry): AimockToolFacts {
   const response = entry.response.fixture?.response as
     | {
         toolCalls?: Array<{ name?: unknown; id?: unknown; callId?: unknown; toolCallId?: unknown }>;
@@ -104,27 +56,43 @@ function extractToolFacts(entry: Pick<JournalEntry, "response" | "body">): Aimoc
     | undefined;
   const call = response?.toolCalls?.[0];
   const callId = call?.id ?? call?.callId ?? call?.toolCallId;
+  const output = requestMessages(entry.body).findLast(
+    (message) => message?.role === "tool" && typeof message.tool_call_id === "string",
+  );
   return {
     plannedToolName: typeof call?.name === "string" && call.name.length > 0 ? call.name : undefined,
     plannedToolCallId: typeof callId === "string" && callId.length > 0 ? callId : undefined,
-    toolOutputCallId: extractToolOutputCallId(entry.body) || undefined,
+    toolOutputCallId: output?.tool_call_id || undefined,
   };
 }
 
 function extractRequestFacts(
-  body: JournalEntry["body"],
+  body: ChatCompletionRequest,
   tools: AimockToolFacts,
 ): AimockRequestFacts {
   const model = typeof body?.model === "string" ? body.model : "";
+  const messages = requestMessages(body);
+  const user = messages.findLast(
+    (message) =>
+      message?.role === "user" &&
+      !isInternalRuntimeContextCarrierText(getTextContent(message.content) ?? ""),
+  );
+  const output = messages.findLast((message) => message?.role === "tool");
+  const outputRecord = asOptionalObjectRecord(output);
   return {
     ...tools,
     model,
-    prompt: extractLastUserText(body),
+    prompt: user ? (getTextContent(user.content) ?? "") : "",
     providerVariant: resolveMockProviderVariant(model, "aimock"),
-    imageInputCount: countImageInputs(requestMessages(body)),
-    ...(extractToolOutputStructuredError(body) ? { toolOutputStructuredError: true } : {}),
-    toolOutput: extractToolOutput(body),
-    allInputText: extractAllInputText(body),
+    imageInputCount: countImageInputs(messages, Infinity),
+    ...(outputRecord?.isError === true || outputRecord?.is_error === true
+      ? { toolOutputStructuredError: true }
+      : {}),
+    toolOutput: output ? (getTextContent(output.content) ?? "") : "",
+    allInputText: messages
+      .map((message) => getTextContent(message.content) ?? "")
+      .filter(Boolean)
+      .join("\n"),
   };
 }
 
@@ -176,45 +144,35 @@ function resolvePlannedToolCallIds(snapshots: AimockToolFacts[]): Map<number, st
 function createDebugMount(): Mountable {
   let journal: Journal | undefined;
   let nextRequestCursor = 1;
-  const requestCursors = new Map<string, number>();
   const observations = new WeakMap<JournalEntry, AimockRequestObservation>();
 
   return {
     setJournal(nextJournal) {
-      if (journal === nextJournal) {
-        return;
-      }
-      if (journal) {
-        throw new Error("AIMock debug request cursor journal changed unexpectedly");
-      }
       journal = nextJournal;
-      const addJournalEntry = journal.add.bind(journal);
+      const addJournalEntry: AimockJournalAdd = journal.add.bind(journal);
       // AIMock evicts its request journal FIFO. Assign cursors at insertion time
       // so the debug boundary remains monotonic after retained entries rotate.
-      journal.add = (entry) => {
-        const tools = extractToolFacts(entry);
-        const recorded = addJournalEntry(entry);
+      journal.add = (entry, matchedFixture?: Fixture) => {
+        const recorded = addJournalEntry(entry, matchedFixture);
+        const body = entry.body;
+        if (!isChatCompletionBody(body)) {
+          return recorded;
+        }
+        const tools = extractToolFacts({ response: entry.response, body });
         // Upstream keeps <=64 KiB bodies intact; only discarded bodies need an
         // extra bounded projection. Weak entry ownership follows eviction/reset.
-        observations.set(
-          recorded,
-          recorded.body === entry.body
-            ? { kind: "retained-body", tools }
+        observations.set(recorded, {
+          cursor: nextRequestCursor++,
+          ...(recorded.body === entry.body
+            ? { kind: "retained-body", body, tools }
             : {
                 kind: "projected",
                 projection: boundRequestFacts({
                   complete: true,
-                  facts: extractRequestFacts(entry.body, tools),
+                  facts: extractRequestFacts(body, tools),
                 }),
-              },
-        );
-        requestCursors.set(recorded.id, nextRequestCursor++);
-        if (requestCursors.size > AIMOCK_DEBUG_REQUEST_LIMIT) {
-          const oldestRequestId = requestCursors.keys().next().value;
-          if (oldestRequestId !== undefined) {
-            requestCursors.delete(oldestRequestId);
-          }
-        }
+              }),
+        });
         return recorded;
       };
     },
@@ -237,14 +195,12 @@ function createDebugMount(): Mountable {
       if (pathname !== "/last-request" && pathname !== "/requests") {
         return false;
       }
-      let selected = entries.map((entry, index) => {
-        const cursor = requestCursors.get(entry.id);
-        const observation = observations.get(entry);
-        if (cursor === undefined || observation === undefined) {
-          throw new Error(`AIMock debug request observation missing for ${entry.id}`);
-        }
-        return { cursor, entry, observation, index };
-      });
+      let selected = entries
+        .flatMap((entry) => {
+          const observation = observations.get(entry);
+          return observation ? [{ cursor: observation.cursor, entry, observation }] : [];
+        })
+        .map((request, index) => Object.assign(request, { index }));
       // Pair against retained tool facts before selecting a window: a result
       // inside the window may belong to a plan before its cursor.
       const plannedToolCallIds = resolvePlannedToolCallIds(
@@ -278,7 +234,7 @@ function createDebugMount(): Mountable {
         const plannedToolCallId = plannedToolCallIds.get(index);
         let projection: AimockRequestProjection =
           observation.kind === "retained-body"
-            ? { complete: true, facts: extractRequestFacts(entry.body, observation.tools) }
+            ? { complete: true, facts: extractRequestFacts(observation.body, observation.tools) }
             : observation.projection;
         if (plannedToolCallId) {
           projection = projection.complete
@@ -292,7 +248,7 @@ function createDebugMount(): Mountable {
           incomplete.push({ cursor, ...projection });
           continue;
         }
-        const body = entry.body ?? {};
+        const body = observation.kind === "retained-body" ? observation.body : (entry.body ?? {});
         snapshots.push({ raw: JSON.stringify(body), body, ...projection.facts });
       }
       if (incomplete.length > 0) {

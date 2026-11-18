@@ -20,16 +20,6 @@ export function registerServiceInspectionHintTests(params: {
       ],
     },
     {
-      platform: "linux",
-      scope: "system",
-      label: "openclaw.service",
-      detail: "unit: /etc/systemd/system/openclaw.service",
-      hints: [
-        "systemctl --system status -- openclaw.service",
-        "systemctl --system cat -- openclaw.service",
-      ],
-    },
-    {
       platform: "win32",
       scope: "system",
       label: "\\OpenClaw Node",

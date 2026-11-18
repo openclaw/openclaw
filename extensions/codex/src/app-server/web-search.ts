@@ -13,32 +13,22 @@ export type CodexWebSearchPlan = {
   webFetchHostnameAllowlist?: string[];
 };
 
-export type CodexNativeWebSearchSupport = "supported" | "unsupported" | "unknown";
+export type CodexNativeWebSearchSupport = "supported" | "standalone" | "unsupported" | "unknown";
 
 const CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG: JsonObject = {
   "features.standalone_web_search": false,
   web_search: "disabled",
 };
 
-function hasManagedSearchProvider(config: OpenClawConfig | undefined): boolean {
-  return normalizeOptionalString(config?.tools?.web?.search?.provider) !== undefined;
-}
-
-function hasNativeDomainRestrictions(config: OpenClawConfig | undefined): boolean {
-  return (
-    normalizeUniqueTrimmedStringList(config?.tools?.web?.search?.openaiCodex?.allowedDomains)
-      .length > 0
-  );
-}
-
 export function buildCodexNativeWebSearchThreadConfig(
   config: OpenClawConfig | undefined,
+  standalone = false,
 ): JsonObject {
   const nativeConfig = config?.tools?.web?.search?.openaiCodex;
   const threadConfig: JsonObject = {
-    // Production app-server traffic rejects standalone web.run's user-defined
-    // `web` namespace. Hosted web_search emits the same native search items.
-    "features.standalone_web_search": false,
+    // Custom providers explicitly declaring the standalone endpoint use web.run;
+    // ordinary OpenAI traffic keeps hosted web_search.
+    "features.standalone_web_search": standalone,
     // Codex treats cached as a preference and resolves it to live for
     // unrestricted permission profiles.
     web_search: nativeConfig?.mode === "live" ? "live" : "cached",
@@ -66,48 +56,45 @@ export function resolveCodexWebSearchPlan(params: {
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   webSearchAllowed?: boolean;
 }): CodexWebSearchPlan {
+  const managedPlan = (suppressManagedWebSearch: boolean): CodexWebSearchPlan => ({
+    kind: suppressManagedWebSearch ? "disabled" : "managed",
+    suppressManagedWebSearch,
+    threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
+  });
   if (
     params.disableTools === true ||
     params.webSearchAllowed === false ||
     params.config?.tools?.web?.search?.enabled === false
   ) {
-    return {
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
-    };
+    return managedPlan(true);
   }
   const nativeConfig = params.config?.tools?.web?.search?.openaiCodex;
   const managedSearchExplicit =
-    hasManagedSearchProvider(params.config) || nativeConfig?.enabled === false;
+    normalizeOptionalString(params.config?.tools?.web?.search?.provider) !== undefined ||
+    nativeConfig?.enabled === false;
   const nativeProviderSupportsSearch =
     params.nativeProviderWebSearchSupport === undefined ||
-    params.nativeProviderWebSearchSupport === "supported";
+    params.nativeProviderWebSearchSupport === "supported" ||
+    params.nativeProviderWebSearchSupport === "standalone";
   const nativeSearchEnabled =
     params.nativeToolSurfaceEnabled !== false &&
     nativeProviderSupportsSearch &&
-    nativeConfig?.enabled !== false &&
-    !hasManagedSearchProvider(params.config);
+    !managedSearchExplicit;
   if (!nativeSearchEnabled) {
-    if (!managedSearchExplicit && hasNativeDomainRestrictions(params.config)) {
-      return {
-        kind: "disabled",
-        suppressManagedWebSearch: true,
-        threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
-      };
-    }
-    return {
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: CODEX_NATIVE_WEB_SEARCH_DISABLED_CONFIG,
-    };
+    const suppressManagedWebSearch =
+      !managedSearchExplicit &&
+      normalizeUniqueTrimmedStringList(nativeConfig?.allowedDomains).length > 0;
+    return managedPlan(suppressManagedWebSearch);
   }
   return {
     kind: "native-hosted",
     // Native and managed search must stay mutually exclusive. In particular,
     // exposing managed web_search here could bypass native allowed_domains.
     suppressManagedWebSearch: true,
-    threadConfig: buildCodexNativeWebSearchThreadConfig(params.config),
+    threadConfig: buildCodexNativeWebSearchThreadConfig(
+      params.config,
+      params.nativeProviderWebSearchSupport === "standalone",
+    ),
     webFetchHostnameAllowlist: buildHostnameAllowlistPolicyFromSuffixAllowlist(
       nativeConfig?.allowedDomains,
     )?.hostnameAllowlist,

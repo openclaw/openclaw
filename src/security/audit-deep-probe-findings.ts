@@ -16,7 +16,7 @@ export function collectDeepProbeFindings(params: {
     findings.push({
       checkId: "gateway.probe_failed",
       severity: "warn",
-      title: "Gateway probe failed (deep)",
+      title: "Gateway check failed (deep)",
       detail: params.deep.gateway.error ?? "gateway unreachable",
       remediation: `Run "${formatCliCommand("openclaw status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("openclaw security audit --deep")}".`,
     });
@@ -25,7 +25,7 @@ export function collectDeepProbeFindings(params: {
     findings.push({
       checkId: "gateway.probe_auth_secretref_unavailable",
       severity: "warn",
-      title: "Gateway probe auth SecretRef is unavailable",
+      title: "Gateway check auth SecretRef is unavailable",
       detail: params.authWarning,
       remediation: `Set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD in this shell or resolve the external secret provider, then re-run "${formatCliCommand("openclaw security audit --deep")}".`,
     });

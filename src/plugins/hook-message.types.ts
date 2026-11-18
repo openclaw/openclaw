@@ -1,6 +1,19 @@
 import type { MessageHookMediaFact } from "../hooks/message-hook-media.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { PluginConversationBinding } from "./conversation-binding.types.js";
+import type { AsyncPluginHook } from "./hook-handler.types.js";
+
+/** Provider-owned event before any durable channel ingress payload is written. */
+export type PluginHookBeforeChannelIngressEvent = { event: unknown };
+
+export type PluginHookBeforeChannelIngressResult = { event?: unknown };
+
+export type PluginHookBeforeChannelIngressContext = {
+  channelId: string;
+  accountId?: string;
+  /** Admission and participating plugin lifetimes; propagate through awaited policy I/O. */
+  signal: AbortSignal;
+};
 
 /** Ordered media fact exposed by inbound message hooks. */
 export type PluginHookMediaFact = MessageHookMediaFact;
@@ -177,7 +190,7 @@ export type PluginHookMessageSendingEvent = {
   metadata?: Record<string, unknown>;
 };
 
-export type PluginHookMessageSendingResult = {
+type PluginHookMessageSendingResult = {
   content?: string;
   cancel?: boolean;
   cancelReason?: string;
@@ -196,4 +209,20 @@ export type PluginHookMessageSentEvent = {
   spanId?: string;
   parentSpanId?: string;
   error?: string;
+};
+
+/** Message operation contracts share their provider-event and delivery types. */
+export type PluginMessageHookHandlerMap = {
+  before_channel_ingress: AsyncPluginHook<
+    PluginHookBeforeChannelIngressEvent,
+    PluginHookBeforeChannelIngressContext,
+    PluginHookBeforeChannelIngressResult
+  >;
+  message_received: AsyncPluginHook<PluginHookMessageReceivedEvent, PluginHookMessageContext>;
+  message_sending: AsyncPluginHook<
+    PluginHookMessageSendingEvent,
+    PluginHookMessageContext,
+    PluginHookMessageSendingResult
+  >;
+  message_sent: AsyncPluginHook<PluginHookMessageSentEvent, PluginHookMessageContext>;
 };

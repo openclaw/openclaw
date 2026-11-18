@@ -37,35 +37,27 @@ it("pages cloud profile summaries and returns the selected OS/machine catalog", 
   expect(missing.details).toMatchObject({ status: "error", profileId: "removed" });
 });
 
-it("round-trips a listed maximum-length profile ID through argument validation", async () => {
+it.each([256, 257])("validates a listed profile ID with %s characters", async (length) => {
   const profile = {
-    id: "p".repeat(256),
+    id: "p".repeat(length),
     providerId: "fixture",
     operatingSystems: [{ id: "linux", label: "Linux", default: true }],
     machines: [{ id: "tiny", label: "Tiny", os: "linux", cpu: 2 }],
   };
   const callGateway = vi.fn().mockResolvedValue({ profiles: [profile] });
   const tool = createSessionsTool({ senderIsOwner: true, callGateway });
-  const listed = await tool.execute("catalog", { action: "cloud_profiles" });
-  expect(listed.details).toMatchObject({ profiles: [{ id: profile.id }] });
-  const args = validateToolArguments(tool, {
-    type: "toolCall",
-    id: "selected-profile",
-    name: tool.name,
-    arguments: { action: "cloud_profiles", profileId: profile.id },
-  });
-  const selected = await tool.execute("selected-profile", args);
-  expect(selected.details).toEqual({ profile });
-});
-
-it("rejects profile IDs beyond the placement identifier limit", () => {
-  const tool = createSessionsTool({ senderIsOwner: true, callGateway: vi.fn() });
-  expect(() =>
+  const validate = () =>
     validateToolArguments(tool, {
       type: "toolCall",
-      id: "oversized-profile",
+      id: "selected-profile",
       name: tool.name,
-      arguments: { action: "cloud_profiles", profileId: "p".repeat(257) },
-    }),
-  ).toThrow(/profileId/);
+      arguments: { action: "cloud_profiles", profileId: profile.id },
+    });
+  if (length === 257) {
+    expect(validate).toThrow(/profileId/);
+  } else {
+    const listed = await tool.execute("catalog", { action: "cloud_profiles" });
+    expect(listed.details).toMatchObject({ profiles: [{ id: profile.id }] });
+    expect((await tool.execute("selected-profile", validate())).details).toEqual({ profile });
+  }
 });

@@ -1,5 +1,4 @@
-/** Windows cmd argument quoting and parser mirror used by service tests. */
-import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { parseWindowsNativeArguments } from "../process/windows-command-line.js";
 import { assertNoCmdLineBreak } from "./cmd-set.js";
 
 export function quoteCmdScriptArg(
@@ -7,26 +6,18 @@ export function quoteCmdScriptArg(
   options: { delayedExpansion?: boolean } = {},
 ): string {
   assertNoCmdLineBreak(value, "Command argument");
-  if (!value) {
-    return '""';
-  }
-  const quoted = value.replace(/"/g, '\\"').replace(/%/g, "%%");
+  const quoted = value.replace(/%/g, "%%");
   const escaped = options.delayedExpansion === false ? quoted : quoted.replace(/!/g, "^!");
-  if (!/[ \t"&|<>^()%!]/g.test(value)) {
+  if (value && !/[ \t"&|<>^()%!]/g.test(value)) {
     return escaped;
   }
-  return `"${escaped}"`;
-}
-
-function unescapeCmdScriptArg(value: string): string {
-  return value.replace(/\^!/g, "!").replace(/%%/g, "%");
+  // CRT consumes backslash pairs before quotes, including the closing quote.
+  return `"${escaped.replace(/(\\*)"/g, '$1$1\\"').replace(/\\+$/g, "$&$&")}"`;
 }
 
 export function parseCmdScriptCommandLine(value: string): string[] {
-  // Script renderer escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
-  // Keep all other backslashes literal so Windows drive/UNC paths survive.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map(
-    unescapeCmdScriptArg,
+  return parseWindowsNativeArguments(value).map((argument) =>
+    argument.replace(/\^!/g, "!").replace(/%%/g, "%"),
   );
 }
 
@@ -34,6 +25,10 @@ export function stripTrailingCmdRedirections(commandLine: string): string | null
   const tokens: { start: number; end: number; redirect?: string }[] = [];
   // Validate the entire command before removing anything. A compound command or
   // uncertain cmd/argv quote boundary must never become exact process-ownership proof.
+  // Odd backslash runs escape a quote for CRT but not cmd.exe; even runs agree.
+  if (/[\r\n]|(?:^|[^\\])(?:\\\\)*\\"/.test(commandLine)) {
+    return null;
+  }
   for (let index = 0; index < commandLine.length;) {
     if (/[ \t]/.test(commandLine.charAt(index))) {
       index++;
@@ -74,12 +69,7 @@ export function stripTrailingCmdRedirections(commandLine: string): string | null
     let quoted = false;
     while (index < commandLine.length) {
       const char = commandLine.charAt(index);
-      if (
-        char === "\r" ||
-        char === "\n" ||
-        (char === "\\" && commandLine[index + 1] === '"') ||
-        (char === "^" && (!quoted || commandLine[index + 1] === '"'))
-      ) {
+      if (char === "^" && (!quoted || commandLine[index + 1] === '"')) {
         return null;
       }
       if (char === '"') {

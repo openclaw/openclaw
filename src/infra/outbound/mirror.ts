@@ -1,9 +1,10 @@
-import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
 
 /**
- * Transcript append data emitted after an outbound send completes.
+ * @deprecated Confirmed sends record destination history automatically; removed in the next
+ * Plugin SDK major. Accepted for source compatibility and otherwise ignored.
  */
-export type OutboundMirror = {
+export type DeliveryMirror = {
   sessionKey: string;
   agentId?: string;
   text?: string;
@@ -11,14 +12,6 @@ export type OutboundMirror = {
   idempotencyKey?: string;
   expectedSessionId?: string;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
-};
-
-/**
- * Delivery-layer mirror data with optional group/channel correlation metadata.
- */
-export type DeliveryMirror = OutboundMirror & {
-  /** Whether this message is being sent in a group/channel context */
   isGroup?: boolean;
-  /** Group or channel identifier for correlation with received events */
   groupId?: string;
 };

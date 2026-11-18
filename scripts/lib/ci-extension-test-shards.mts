@@ -1,13 +1,4 @@
-import { existsSync } from "node:fs";
-import path from "node:path";
-import { isPluginControlUiPath } from "../../test/vitest/vitest.ui-paths.mjs";
-import { isTestFileTarget } from "../test-projects.test-support.mts";
-import {
-  isRuntimeTestFileIncluded,
-  packNodeTestGroups,
-  type NodeTestShard,
-  type RuntimeTestSelection,
-} from "./ci-node-test-plan.mts";
+import { packNodeTestGroups, type NodeTestShard } from "./ci-node-test-plan.mts";
 import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
 import { readCompactGroupTimings } from "./ci-test-timings.mts";
 import {
@@ -18,7 +9,6 @@ import {
   estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
-  shouldSplitExtensionTestProcesses,
   splitExtensionTestJobTargets,
 } from "./extension-test-plan.mts";
 import {
@@ -28,7 +18,6 @@ import {
 } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
-type CwdOptions = { cwd?: string };
 type ChangedExtensionConfigShard = NodeTestShard & {
   predictedSeconds: number;
   predictedTestSeconds: number;
@@ -50,8 +39,7 @@ export function resolveChangedExtensionRoots(changedPaths: string[]) {
 
 export function createChangedExtensionConfigShards(
   extensionRoots: string[],
-  options: CwdOptions &
-    RuntimeTestSelection & { fullConfigInventory?: boolean; targets?: ReadonlySet<string> } = {},
+  options: { cwd?: string; targets: ReadonlySet<string> },
 ): ChangedExtensionConfigShard[] {
   const selectedRoots = new Set(extensionRoots);
   const rootsByConfig = new Map<string, string[]>();
@@ -76,42 +64,25 @@ export function createChangedExtensionConfigShards(
   const plans: Array<{
     config: string;
     env?: Record<string, string>;
-    includePatterns?: string[];
+    includePatterns: string[];
     pretestBuildMode?: VitestPretestBuildMode;
     predictedSeconds: number;
   }> = [...rootsByConfig].flatMap(([config, roots]) => {
-    const splitProcesses =
-      options.targets !== undefined || shouldSplitExtensionTestProcesses(config);
     const configFiles = filesByConfig.get(config) ?? [];
-    const runtimeFiltered = configFiles.some(
-      (file) => !isRuntimeTestFileIncluded(file, options, options.cwd),
-    );
     const testFiles = configFiles.filter(
       (file) =>
         !isCiProofTestFile(file) &&
-        isRuntimeTestFileIncluded(file, options, options.cwd) &&
-        (!options.targets || options.targets.has(file)) &&
-        (!splitProcesses ||
-          options.fullConfigInventory ||
-          roots.some((root) => file.startsWith(`${root}/`))),
+        options.targets.has(file) &&
+        roots.some((root) => file.startsWith(`${root}/`)),
     );
-    if ((options.targets || runtimeFiltered) && testFiles.length === 0) {
+    if (testFiles.length === 0) {
       return [];
     }
     const buildModes = new Map(
-      (splitProcesses ? testFiles : []).map((file) => [
-        file,
-        resolveVitestPretestBuildMode([{ includePatterns: [file] }]),
-      ]),
+      testFiles.map((file) => [file, resolveVitestPretestBuildMode([{ includePatterns: [file] }])]),
     );
-    const configBuildMode = splitProcesses
-      ? undefined
-      : resolveVitestPretestBuildMode([{ configs: [config] }]);
-    let chunks = testFiles.length > 0 ? splitExtensionTestJobTargets(config, testFiles) : [roots];
-    if (
-      splitProcesses &&
-      chunks.filter((files) => files.some((file) => buildModes.get(file))).length > 1
-    ) {
+    let chunks = splitExtensionTestJobTargets(config, testFiles);
+    if (chunks.filter((files) => files.some((file) => buildModes.get(file))).length > 1) {
       // Explicit scopes follow the prerequisite owner even after files migrate configs.
       // Keep build consumers together before reapplying every job/process file bound.
       const runtimeFiles: string[] = [];
@@ -140,40 +111,24 @@ export function createChangedExtensionConfigShards(
         return [files.slice(0, midpoint), files.slice(midpoint)];
       });
     }
-    const partitionSeconds = Math.ceil(
-      estimateExtensionTestCost(config, testFiles.length, testFiles) / chunks.length,
-    );
-    return chunks.map((includePatterns, index) => {
+    return chunks.map((includePatterns) => {
       const env = canOverlapTelegramSingletonProcesses(config, includePatterns)
         ? { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" }
         : undefined;
-      return Object.assign(
-        {
+      return {
+        config,
+        includePatterns,
+        env,
+        pretestBuildMode: mergeVitestPretestBuildModes(
+          includePatterns.map((file) => buildModes.get(file)),
+        ),
+        predictedSeconds: estimateExtensionTestCost(
           config,
-          pretestBuildMode: splitProcesses
-            ? mergeVitestPretestBuildModes(includePatterns.map((file) => buildModes.get(file)))
-            : configBuildMode,
-          predictedSeconds: splitProcesses
-            ? estimateExtensionTestCost(config, includePatterns.length, includePatterns, env)
-            : partitionSeconds,
-        },
-        splitProcesses
-          ? { includePatterns, ...(env ? { env } : {}) }
-          : chunks.length > 1
-            ? {
-                // Counts size jobs only. Vitest owns the complete config inventory,
-                // including unrelated plugin roots, excludes and untracked tests.
-                env: {
-                  OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
-                    `--shard=${index + 1}/${chunks.length}`,
-                  ]),
-                },
-              }
-            : {},
-        // Native-sharded configs keep their process contract while every shard
-        // consumes the same selected inventory before Vitest partitions it.
-        !splitProcesses && runtimeFiltered ? { includePatterns: testFiles } : {},
-      );
+          includePatterns.length,
+          includePatterns,
+          env,
+        ),
+      };
     });
   });
   return plans.map(
@@ -194,34 +149,13 @@ export function createChangedExtensionConfigShards(
         shard.pretestBuildMode = pretestBuildMode;
         shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
       }
-      if (includePatterns) {
-        shard.includePatterns = includePatterns;
-      }
+      shard.includePatterns = includePatterns;
       if (env) {
         shard.env = env;
       }
       return shard;
     },
   );
-}
-
-export function createChangedExtensionConfigShardsForPaths(
-  changedPaths: string[],
-  cwd: string,
-  options: RuntimeTestSelection = {},
-) {
-  const relevantPaths = changedPaths.filter(
-    (changedPath) =>
-      changedPath.startsWith("extensions/") &&
-      !isPluginControlUiPath(changedPath) &&
-      (existsSync(path.join(cwd, changedPath)) || !isTestFileTarget(changedPath)),
-  );
-  const roots = resolveChangedExtensionRoots(relevantPaths);
-  return createChangedExtensionConfigShards(roots, {
-    ...options,
-    cwd,
-    targets: new Set(listExtensionTestFilesForRoots(roots, cwd)),
-  });
 }
 
 export function packChangedExtensionConfigShards(

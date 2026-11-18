@@ -7,8 +7,7 @@ read_when:
   - You are parsing a sandbox bind specification
 ---
 
-The synchronous policy and sandbox parsing primitives that
-`openclaw/plugin-sdk/agent-harness-runtime` exposes to plugins. Part of the
+Shared policy and sandbox parsing primitives for plugins. Part of the
 [Plugin entry points](/plugins/sdk-entrypoints) reference.
 
 ## Tool policy vocabulary
@@ -43,6 +42,18 @@ matching. A harness that exposes a tool under another name can supply
 can match the original name or an alias; the result retains the original tool
 objects and their execution wrappers.
 
+## Exec policy layering
+
+`openclaw/plugin-sdk/agent-harness-runtime` exposes
+`execPolicy.resolveExecModePolicy({ mode?, security, ask })` to resolve an exec
+policy before projecting it into a backend's permission flags.
+
+Layer global and per-agent exec policy before calling the resolver. An explicit
+`mode` supplies its corresponding security and approval settings.
+Otherwise, explicitly supplied `security` or `ask` fields replace those fields
+and clear the inherited mode; unspecified fields retain their inherited values.
+An empty or absent layer preserves the base policy.
+
 ## Sandbox bind parsing
 
 `openclaw/plugin-sdk/agent-harness-runtime` exports
@@ -71,6 +82,14 @@ to host-root admission. Older external bridges that omit the property retain
 the host-root compatibility exposed in v2026.9.4. New implementations should
 supply the mappings; removal of that compatibility requires a breaking SDK
 contract that makes the property required.
+
+Host-backed bridges can additionally expose `resolveReadPolicyPath()` to map
+an existing read target into that caller-facing mount namespace. When present,
+`readFile()` and `stat()` must reject an `expectedPolicyPath` that no longer
+names their final opened target. This keeps
+the bridge, not its caller, responsible for physical alias resolution.
+Expected-policy metadata comes from the admitted descriptor; bridges can keep
+their existing pathname metadata behavior when this optional contract is unused.
 
 ## Directory listing metadata
 

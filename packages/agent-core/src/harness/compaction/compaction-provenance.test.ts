@@ -1,57 +1,61 @@
 import { describe, expect, it } from "vitest";
-import { createAssistantMessageEventStream } from "../../llm.js";
-import type { AssistantMessage, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import { buildSessionContext } from "../session/session.js";
-import { compact, generateSummary, prepareCompaction } from "./compaction.js";
+import {
+  estimateTokens,
+  generateSummary,
+  prepareCompaction,
+  serializeConversation,
+} from "./compaction.js";
 import {
   createCompactionModel as createSummaryModel,
   createContextUsage,
   createMessageEntry as messageEntry,
 } from "./compaction.test-support.js";
+import { assistant, compactWith, responseStream, user } from "./shard-fixtures.test-support.js";
 
-function assistantText(text: string, timestamp: number): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "test-api",
-    provider: "test-provider",
-    model: "summary-model",
-    usage: createContextUsage(1),
-    stopReason: "stop",
-    timestamp,
-  };
-}
-
-function createCapturingSummaryStream() {
-  let systemPrompt = "";
-  const streamFn: StreamFn = (_model, context) => {
-    systemPrompt = context.systemPrompt ?? "";
-    const stream = createAssistantMessageEventStream();
-    stream.push({ type: "done", reason: "stop", message: assistantText("summary", 1) });
-    stream.end();
-    return stream;
-  };
-  return { streamFn, capture: () => ({ systemPrompt }) };
-}
+const assistantText = (text: string, timestamp: number) =>
+  assistant(text, { model: "summary-model", timestamp, usage: createContextUsage(1) });
 
 describe("compaction sender provenance", () => {
+  it.each([
+    { metadata: { provenance: { kind: "external_user" } }, label: "User" },
+    { metadata: { provenance: { kind: "realtime_voice", sourceChannel: "talk" } }, label: "User" },
+    { metadata: { provenance: null }, label: "Unknown-origin input" },
+    { metadata: { provenance: {} }, label: "Unknown-origin input" },
+    { metadata: { provenance: "unparsed" }, label: "Unknown-origin input" },
+    { metadata: { provenance: { kind: "realtime_voice" } }, label: "Unknown-origin input" },
+    {
+      metadata: { provenance: { kind: "realtime_voice", sourceChannel: "other" } },
+      label: "Unknown-origin input",
+    },
+    {
+      metadata: { provenance: { kind: "external_user" }, synthetic: true as const },
+      label: "Synthetic input",
+    },
+    {
+      metadata: { provenance: { kind: "external_user" }, operatorMessage: { turnScoped: true } },
+      label: "Operator input",
+    },
+  ])("labels and budgets recorded source $metadata", ({ metadata, label }) => {
+    const message = Object.assign(
+      { role: "user" as const, content: "data", timestamp: 1 },
+      metadata,
+    );
+    expect(serializeConversation([message])).toBe(`[${label}]: data`);
+    // Ordinary User text is already the estimator's baseline; charge the added label.
+    expect(estimateTokens(message)).toBe(Math.ceil((4 + label.length - "User".length) / 4));
+  });
+
   it.each([
     { name: "custom", summaryPrompt: { kind: "custom" as const, instructions: "Custom format." } },
     { name: "turn-prefix", summaryPrompt: { kind: "turn-prefix" as const } },
   ])("applies attribution instructions to a $name summary prompt", async ({ summaryPrompt }) => {
     const model = createSummaryModel();
-    const summaryStream = createCapturingSummaryStream();
+    let systemPrompt = "";
 
     const result = await generateSummary(
-      [
-        {
-          role: "user",
-          content: "Alice owns this decision.",
-          timestamp: 1,
-          __openclaw: { senderId: "alice" },
-        } as unknown as AgentMessage,
-      ],
+      [user("Alice owns this decision.", 1, { senderId: "alice" })],
       model,
       1_000,
       undefined,
@@ -60,13 +64,15 @@ describe("compaction sender provenance", () => {
       undefined,
       undefined,
       undefined,
-      summaryStream.streamFn,
+      (_model, context) => {
+        systemPrompt = context.systemPrompt ?? "";
+        return responseStream(assistantText("summary", 1));
+      },
       undefined,
       summaryPrompt,
     );
 
     expect(result.ok).toBe(true);
-    const { systemPrompt } = summaryStream.capture();
     expect(systemPrompt).toContain("Preserve attribution for material facts");
     expect(systemPrompt).toContain("A user line without sender={...} is unattributed");
   });
@@ -74,21 +80,11 @@ describe("compaction sender provenance", () => {
   it("carries sender provenance through prepareCompaction and compact into the session tree", async () => {
     const model = createSummaryModel();
     const messages: AgentMessage[] = [
-      {
-        role: "user",
-        content: "Approve the rollout.",
-        timestamp: 1,
-        __openclaw: { senderId: "alex-id", senderName: "Alex" },
-      } as unknown as AgentMessage,
+      user("Approve the rollout.", 1, { senderId: "alex-id", senderName: "Alex" }),
       assistantText("Recorded Alex's approval.", 2),
-      {
-        role: "user",
-        content: "Do not deploy until I review it.",
-        timestamp: 3,
-        __openclaw: { senderId: "bea-id", senderName: "Bea" },
-      } as unknown as AgentMessage,
-      { role: "user", content: "A legacy note with no known speaker.", timestamp: 4 },
-      { role: "user", content: "What remains?", timestamp: 5 },
+      user("Do not deploy until I review it.", 3, { senderId: "bea-id", senderName: "Bea" }),
+      user("A legacy note with no known speaker.", 4),
+      user("What remains?", 5),
     ];
     const entries = messages.map(messageEntry);
     const preparation = prepareCompaction(entries, {
@@ -102,16 +98,9 @@ describe("compaction sender provenance", () => {
 
     let prompt = "";
     let systemPrompt = "";
-    const result = await compact(
-      preparation.value,
-      model,
-      undefined,
-      undefined,
-      "Ignore speaker attribution.",
-      undefined,
-      undefined,
-      undefined,
-      {
+    const result = await compactWith(preparation.value, model, {
+      customInstructions: "Ignore speaker attribution.",
+      runtime: {
         completeSimple: async (_model, context) => {
           const content = context.messages[0]?.content;
           if (!Array.isArray(content) || content[0]?.type !== "text") {
@@ -125,7 +114,7 @@ describe("compaction sender provenance", () => {
           );
         },
       },
-    );
+    });
     if (!result.ok) {
       throw result.error;
     }

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import childProcess from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { accountGithubRequest } from "./lib/plain-gh.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
@@ -70,6 +72,8 @@ function parseIdentityJson(value) {
 }
 
 export function resolveReleaseToolingIdentity({
+  qualificationAdmission,
+  candidateSha,
   requestedIdentityJson = "",
   workflowContract,
   workflowFullRef,
@@ -114,6 +118,19 @@ export function resolveReleaseToolingIdentity({
   if (directRoute || protectedTagMatch) {
     if (requested.ref !== ref || requested.fullRef !== fullRef || requested.sha !== sha) {
       fail("direct workflow identity must match the executing workflow ref and SHA.");
+    }
+    return requested;
+  }
+
+  if (qualificationAdmission !== undefined) {
+    if (
+      !isRecord(qualificationAdmission) ||
+      !SHA_PATTERN.test(candidateSha) ||
+      requested.ref !== ref ||
+      requested.fullRef !== fullRef ||
+      requested.sha !== sha
+    ) {
+      fail("candidate qualification must bind valid C and the exact executing Q identity");
     }
     return requested;
   }
@@ -302,7 +319,8 @@ function parseJson(raw, label) {
 }
 
 export function runReleaseToolingGh(args) {
-  return execFileSync("gh", args, {
+  accountGithubRequest(args);
+  return childProcess.execFileSync("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
     maxBuffer: 1024 * 1024,
@@ -540,6 +558,9 @@ function validateParentRunIfRequested({
 function parseArgs(argv) {
   const options = {
     allowPrevalidatedRef: false,
+    qualificationAdmission: undefined,
+    qualificationInputs: undefined,
+    candidateSha: "",
     command: "",
     releasePublishRunAttempt: "",
     releasePublishRunId: "",
@@ -572,7 +593,13 @@ function parseArgs(argv) {
     if (arg.startsWith("--writer-")) {
       writerRequested = true;
     }
-    if (arg === "--release-publish-run-id") {
+    if (arg === "--qualification-admission-json") {
+      options.qualificationAdmission = JSON.parse(value);
+    } else if (arg === "--qualification-inputs-json") {
+      options.qualificationInputs = JSON.parse(value);
+    } else if (arg === "--candidate-sha") {
+      options.candidateSha = value;
+    } else if (arg === "--release-publish-run-id") {
       options.releasePublishRunId = value;
     } else if (arg === "--release-publish-run-attempt") {
       options.releasePublishRunAttempt = value;
@@ -620,24 +647,68 @@ function parseArgs(argv) {
   return options;
 }
 
-function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const options = parseArgs([...argv]);
+  if (
+    options.command === "verify" &&
+    (options.qualificationAdmission !== undefined ||
+      options.qualificationInputs !== undefined ||
+      options.candidateSha)
+  ) {
+    fail(
+      "qualification admission belongs to the resolve route, not publication tooling verification",
+    );
+  }
   let identity;
   if (options.command === "resolve") {
     identity = resolveReleaseToolingIdentity(options);
     const protectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(identity.ref);
-    verifyReleaseToolingIdentity({
-      allowPrevalidatedRef: identity.ref !== "main" && !protectedMatch,
-      releasePublishFullRef: options.releasePublishFullRef,
-      releasePublishParentStatePolicy: options.releasePublishParentStatePolicy,
-      releasePublishRef: options.releasePublishRef,
-      releasePublishRunAttempt: options.releasePublishRunAttempt,
-      releasePublishRunId: options.releasePublishRunId,
-      repository: options.repository,
-      workflowFullRef: identity.fullRef,
-      workflowRef: identity.ref,
-      workflowSha: identity.sha,
-    });
+    if (options.qualificationAdmission !== undefined) {
+      if (
+        !RELEASE_CI_REF_PATTERN.test(identity.ref) ||
+        options.releasePublishRunId ||
+        options.releasePublishRef
+      ) {
+        fail("candidate qualification identity cannot authorize publication tooling");
+      }
+      // Keep the publisher-only identity closure shallow for sparse native workflows.
+      // Only the candidate route acquires independently authenticated P evidence.
+      const { verifyQualificationAdmission } =
+        await import("./release-qualification-admission.mjs");
+      const admission = verifyQualificationAdmission({
+        descriptor: options.qualificationAdmission,
+        repository: options.repository,
+        candidateSha: options.candidateSha,
+        qualificationSha: identity.sha,
+        workflowRef: identity.ref,
+        inputs: options.qualificationInputs,
+      });
+      if (process.env.GITHUB_OUTPUT) {
+        appendFileSync(
+          process.env.GITHUB_OUTPUT,
+          "performance_exempt=" +
+            String(
+              admission.coverage.exemptions?.some(
+                (entry) => entry.childRole === "productPerformance",
+              ) ?? false,
+            ) +
+            "\n",
+        );
+      }
+    } else {
+      verifyReleaseToolingIdentity({
+        allowPrevalidatedRef: identity.ref !== "main" && !protectedMatch,
+        releasePublishFullRef: options.releasePublishFullRef,
+        releasePublishParentStatePolicy: options.releasePublishParentStatePolicy,
+        releasePublishRef: options.releasePublishRef,
+        releasePublishRunAttempt: options.releasePublishRunAttempt,
+        releasePublishRunId: options.releasePublishRunId,
+        repository: options.repository,
+        workflowFullRef: identity.fullRef,
+        workflowRef: identity.ref,
+        workflowSha: identity.sha,
+      });
+    }
   } else {
     identity = verifyReleaseToolingIdentity(options);
   }
@@ -657,11 +728,11 @@ function main(argv = process.argv.slice(2)) {
   process.stdout.write(`${JSON.stringify(identity)}\n`);
 }
 
+function handleMainError(error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  try {
-    main();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  }
+  void main().catch(handleMainError);
 }

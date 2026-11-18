@@ -1,7 +1,7 @@
 import {
-  ComponentType,
   InteractionResponseType,
   InteractionType,
+  MessageFlags,
   Routes,
   type APIApplicationCommandAutocompleteInteraction,
   type APIApplicationCommandInteraction,
@@ -14,11 +14,6 @@ import {
   type APIUser,
 } from "discord-api-types/v10";
 import { OptionsHandler } from "./interaction-options.js";
-import {
-  InteractionResponseController,
-  needsComponentsV2Query,
-  type InteractionResponseState,
-} from "./interaction-response.js";
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
@@ -30,6 +25,12 @@ import {
   type DiscordChannel,
   type StructureClient,
 } from "./structures.js";
+
+type InteractionResponseState = "unacknowledged" | "deferred" | "deferred-update" | "replied";
+
+function needsComponentsV2Query(body: ReturnType<typeof serializePayload>): boolean {
+  return "flags" in body && ((body.flags ?? 0) & MessageFlags.IsComponentsV2) !== 0;
+}
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };
@@ -68,7 +69,7 @@ function readInteractionUser(rawData: RawInteraction, client: InteractionClient)
   }
   const memberUser = rawData.member?.user;
   if (memberUser && typeof memberUser === "object" && typeof memberUser.id === "string") {
-    const user = { ...memberUser } as APIUser;
+    const user = { ...memberUser };
     if (typeof user.username !== "string") {
       user.username = "";
     }
@@ -85,7 +86,7 @@ class BaseInteraction {
   readonly guild: Guild | null;
   readonly channel: DiscordChannel | null;
   message: Message | null = null;
-  private readonly response = new InteractionResponseController();
+  responseState: InteractionResponseState = "unacknowledged";
   private pendingResponse: Promise<void> = Promise.resolve();
   private sentFollowUp = false;
 
@@ -105,15 +106,7 @@ class BaseInteraction {
   }
 
   get acknowledged(): boolean {
-    return this.response.acknowledged;
-  }
-
-  get responseState(): InteractionResponseState {
-    return this.response.state;
-  }
-
-  set responseState(nextState: InteractionResponseState) {
-    this.response.state = nextState;
+    return this.responseState !== "unacknowledged";
   }
 
   // Follow-ups produce visible output without advancing responseState.
@@ -132,13 +125,18 @@ class BaseInteraction {
   }
 
   private async performCallback(type: InteractionResponseType, data?: unknown) {
-    if (this.response.acknowledged) {
+    if (this.responseState !== "unacknowledged") {
       throw new Error("Discord interaction has already been acknowledged.");
     }
     const result = await this.client.rest.post(Routes.interactionCallback(this.id, this.token), {
       body: data === undefined ? { type } : { type, data },
     });
-    this.response.recordCallback(type);
+    this.responseState =
+      type === InteractionResponseType.DeferredChannelMessageWithSource
+        ? "deferred"
+        : type === InteractionResponseType.DeferredMessageUpdate
+          ? "deferred-update"
+          : "replied";
     return result;
   }
 
@@ -148,11 +146,10 @@ class BaseInteraction {
 
   async reply(payload: MessagePayload): Promise<unknown> {
     return await this.enqueueResponse(async () => {
-      const action = this.response.nextReplyAction();
-      if (action === "edit") {
+      if (this.responseState === "deferred" || this.responseState === "deferred-update") {
         return await this.performReplyEdit(payload);
       }
-      if (action === "follow-up") {
+      if (this.responseState !== "unacknowledged") {
         return await this.performFollowUp(payload);
       }
       return await this.performCallback(
@@ -195,14 +192,14 @@ class BaseInteraction {
     const result = query
       ? await this.client.rest.patch(this.originalReplyRoute, { body }, query)
       : await this.client.rest.patch(this.originalReplyRoute, { body });
-    this.response.recordReplyEdit();
+    this.responseState = "replied";
     return result;
   }
 
   async deleteReply(): Promise<unknown> {
     return await this.enqueueResponse(async () => {
       const result = await this.client.rest.delete(this.originalReplyRoute);
-      this.response.recordReplyDelete();
+      this.responseState = "replied";
       return result;
     });
   }
@@ -281,13 +278,6 @@ export class BaseComponentInteraction extends BaseInteraction {
   }
 }
 
-export class ButtonInteraction extends BaseComponentInteraction {}
-export class StringSelectMenuInteraction extends BaseComponentInteraction {}
-export class UserSelectMenuInteraction extends BaseComponentInteraction {}
-export class RoleSelectMenuInteraction extends BaseComponentInteraction {}
-export class MentionableSelectMenuInteraction extends BaseComponentInteraction {}
-export class ChannelSelectMenuInteraction extends BaseComponentInteraction {}
-
 export class ModalInteraction extends BaseInteraction {
   readonly fields: ModalFields;
   constructor(client: InteractionClient, rawData: APIModalSubmitInteraction & RawInteraction) {
@@ -315,23 +305,7 @@ export function createInteraction(client: InteractionClient, rawData: RawInterac
     return new ModalInteraction(client, rawData);
   }
   if (rawData.type === InteractionType.MessageComponent) {
-    const componentRawData = rawData;
-    switch (rawData.data?.component_type) {
-      case ComponentType.Button:
-        return new ButtonInteraction(client, componentRawData);
-      case ComponentType.StringSelect:
-        return new StringSelectMenuInteraction(client, componentRawData);
-      case ComponentType.UserSelect:
-        return new UserSelectMenuInteraction(client, componentRawData);
-      case ComponentType.RoleSelect:
-        return new RoleSelectMenuInteraction(client, componentRawData);
-      case ComponentType.MentionableSelect:
-        return new MentionableSelectMenuInteraction(client, componentRawData);
-      case ComponentType.ChannelSelect:
-        return new ChannelSelectMenuInteraction(client, componentRawData);
-      default:
-        return new BaseComponentInteraction(client, componentRawData);
-    }
+    return new BaseComponentInteraction(client, rawData);
   }
   return new BaseInteraction(client, rawData);
 }

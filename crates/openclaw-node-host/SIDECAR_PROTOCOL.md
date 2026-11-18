@@ -194,7 +194,7 @@ timeout, disconnect, or shutdown.
 The configured command list is an offered connection manifest, not an approval
 or policy grant. The Gateway decides whether a declared command is invocable;
 only a Gateway-delivered invocation reaches the bridge's additional
-fail-closed local admission. Surface widening requires a newly configured
+local checks, which reject requests when authorization is missing. Adding commands requires a newly configured
 bridge and a new Gateway connection manifest. Committed policy revocation or a
 pairing-generation transition can preserve the physical Gateway connection
 while cancelling generation-bound work; that cancellation reaches the adapter
@@ -226,4 +226,4 @@ hosting, workspace transfer, plugins, host statistics, `system.run`, PTY, MCP,
 and skills. The typed runtime messages and adapter boundary do not by
 themselves claim production sidecar readiness. Those remaining concerns must
 not weaken authentication, bounds, generation, sequencing, cancellation, or
-fail-closed behavior.
+rejection of requests when authorization is missing.

@@ -1,4 +1,8 @@
-import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
+import {
+  renderSystemNodeWarning,
+  resolveNodeRuntimeInfo,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 export type DaemonInstallWarnFn = (message: string, title?: string) => void;
@@ -16,7 +20,12 @@ export async function emitNodeRuntimeWarning(params: {
   }
   const systemNode = await resolveSystemNodeInfo({ env: params.env });
   const warning = renderSystemNodeWarning(systemNode, params.nodeProgram);
-  if (warning) {
+  if (
+    warning &&
+    (!params.nodeProgram ||
+      params.nodeProgram === systemNode?.path ||
+      (await resolveNodeRuntimeInfo(params.nodeProgram, params.env)).status !== "supported")
+  ) {
     params.warn?.(warning, params.title);
   }
 }

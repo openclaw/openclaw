@@ -5,6 +5,65 @@ import Foundation
 // of truth and replace cached rows wholesale.
 
 extension OpenClawChatViewModel {
+    /// The presenter must prove the same Gateway/account before calling. The old transport must
+    /// already be detached. Only display rows cross the handoff; fresh history owns all live state.
+    public func inheritTranscriptPresentation(from previous: OpenClawChatViewModel) {
+        guard previous.isTransportDetached, !self.isTransportDetached,
+              self.messages.isEmpty, !self.hasAppliedLiveHistory,
+              previous.canRetainTranscriptPresentation(
+                  sessionKey: self.sessionKey,
+                  agentID: self.activeAgentId,
+                  routingContract: self.sessionRoutingContract)
+        else { return }
+        self.replaceMessages(previous.retainedTranscriptPresentation)
+        self.transcriptPresentationTarget = previous.transcriptPresentationTarget
+        self.isShowingCachedTranscript = !self.messages.isEmpty
+    }
+
+    func recordTranscriptPresentationTarget(from payload: OpenClawChatHistoryPayload, isDelta: Bool) {
+        if let key = ChatPayloadDecoding.trimmedNonEmptyString(payload.sessionInfo?.key),
+           let agentID = ChatPayloadDecoding.trimmedNonEmptyString(payload.sessionInfo?.agentId)
+        {
+            self.transcriptPresentationTarget = OpenClawChatSessionTarget(
+                sessionKey: OpenClawChatSessionKey.comparisonKey(key), agentID: agentID.lowercased())
+        } else if !isDelta {
+            self.transcriptPresentationTarget = nil
+        }
+    }
+
+    var retainedTranscriptPresentation: [OpenClawChatMessage] {
+        // Queued rows need their durable outbox status, which the new owner restores itself.
+        self.transcriptMessages.filter { self.outboxCommandIDsByMessageID[$0.id] == nil }
+    }
+
+    func canRetainTranscriptPresentation(
+        sessionKey: String, agentID: String?, routingContract: String?) -> Bool
+    {
+        guard let previous = self.transcriptPresentationTarget,
+              let routing = OpenClawChatSessionRoutingContract.parse(routingContract)
+        else { return false }
+        let target = OpenClawChatSendOwnership.Scope(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            scope: routing.scope,
+            mainKey: routing.mainKey,
+            defaultAgentID: routing.defaultAgentID)
+        return previous.sessionKey == target.sessionKey && previous.agentID == target.agentID
+    }
+
+    func appendMessage(_ message: OpenClawChatMessage) {
+        self.messages.append(message)
+        self.markTimelineChanged()
+    }
+
+    func removeMessage(id: UUID) {
+        let previousCount = self.messages.count
+        self.messages.removeAll { $0.id == id }
+        if self.messages.count != previousCount {
+            self.markTimelineChanged()
+        }
+    }
+
     struct SessionSnapshot: Equatable {
         var key: String
         var generation: UInt64
@@ -14,11 +73,83 @@ extension OpenClawChatViewModel {
     }
 
     func replaceMessages(_ messages: [OpenClawChatMessage], narrationSettled: Bool = false) {
-        let reconciled = self.narration.reconcile(messages, settled: narrationSettled)
+        // Do not publish a narration mutation for an unchanged history response.
+        var narration = self.narration
+        let reconciled = narration.reconcile(messages, settled: narrationSettled)
+        if reconciled.changed { self.narration = narration }
         guard self.messages != reconciled.messages || reconciled.changed else { return }
+        self.retireStreamingSource(for: reconciled.messages)
         self.messages = reconciled.messages
         self.seedInputHistory(from: reconciled.messages)
-        markTimelineChanged()
+        self.flushPendingStreamingAssistantDisplay()
+        self.markTimelineChanged()
+    }
+
+    /// Consume each fresh owned final once: a history refresh must not retire a later follow-up.
+    func retireStreamingSource(for messages: [OpenClawChatMessage]) {
+        guard let runID = self.streamingAssistantRunID, let raw = self.streamingAssistantText else { return }
+        let boundary = messages.lastIndex { self.streamingPriorMessageIDs.contains($0.id) }
+        guard self.streamingPriorMessageIDs.isEmpty || boundary != nil else { return }
+        let start = boundary.map { messages.index(after: $0) } ?? messages.startIndex
+        for message in messages[start...] where message.isCompletedReply &&
+            (message.workRunID == runID || self.provisionalFinalMessagesByID[message.id]?.runId == runID)
+        {
+            guard self.streamingRetiredFinalIDs.insert(message.id).inserted else { continue }
+            self.streamingRetiredSource = (message.id, raw, self.displayedStreamingAssistantTextUntracked)
+        }
+    }
+
+    /// A structural read must not subscribe the whole transcript to every new word.
+    var liveAssistantTextShape: String? {
+        _ = self.liveTextShape
+        return self.liveText(self.displayedStreamingAssistantTextUntracked)
+    }
+
+    var hasStreamingAssistantText: Bool {
+        _ = self.liveTextShape
+        return self.displayedStreamingAssistantTextUntracked != nil
+    }
+
+    func streamingTextShape(_ text: String?) -> [Bool] {
+        let live = self.liveText(text)
+        return [text != nil] + [true, false].map { thinking in
+            live.map { AssistantTextParser.hasVisibleContent(in: $0, includeThinking: thinking) } ?? false
+        }
+    }
+
+    func liveText(_ streaming: String?) -> String? {
+        guard let text = streaming else { return nil }
+        let live = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !live.isEmpty else { return text }
+        // Exact recorded text also covers narration and durable-before-stream delivery.
+        // Only the partial-prefix case below needs a newly arrived completed reply.
+        let exact = self.transcriptMessages.reversed().prefix { $0.role.lowercased() != "user" }.contains {
+            $0.role.lowercased() == "assistant" && $0.rawText == live &&
+                (self.streamingAssistantRunID == nil || $0.workRunID == nil ||
+                    $0.workRunID == self.streamingAssistantRunID)
+        }
+        if exact { return nil }
+        if let retired = self.streamingRetiredSource,
+           self.messages.contains(where: { $0.id == retired.finalID && $0.isCompletedReply }),
+           retired.raw.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(live) ||
+           retired.displayed?.trimmingCharacters(in: .whitespacesAndNewlines) == live
+        {
+            return nil
+        }
+        if let runID = self.streamingAssistantRunID {
+            // Durable output may overtake the display pacer. Run ownership, not
+            // equality with its partial string, identifies the superseded copy.
+            // Exclude existing rows so a reused run ID cannot hide a new answer.
+            let boundary = self.messages.lastIndex { self.streamingPriorMessageIDs.contains($0.id) }
+            guard self.streamingPriorMessageIDs.isEmpty || boundary != nil else { return text }
+            let start = boundary.map { self.messages.index(after: $0) } ?? self.messages.startIndex
+            let recorded = self.messages[start...].contains { message in
+                message.isCompletedReply && message.rawText.hasPrefix(live) &&
+                    (message.workRunID == runID || self.provisionalFinalMessagesByID[message.id]?.runId == runID)
+            }
+            return recorded ? nil : text
+        }
+        return text
     }
 
     nonisolated static func durableSessionCacheProjection(
@@ -48,9 +179,8 @@ extension OpenClawChatViewModel {
         let transcriptCache = self.transcriptCache
         let outbox = self.outbox
         let scope = self.outboxBranchScope(for: session)
-        let tip = messages.reversed().compactMap { message -> String? in
-            let entryID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return entryID?.isEmpty == false ? entryID : nil
+        let tip = messages.reversed().compactMap {
+            ChatPayloadDecoding.trimmedNonEmptyString($0.transcriptMessageID)
         }.first
         guard transcriptCache != nil || (outbox != nil && scope != nil && tip != nil) else { return }
         let branchStateTask: Task<OpenClawChatOutboxBranchState?, Never>? = if let outbox, let scope {
@@ -151,7 +281,6 @@ extension OpenClawChatViewModel {
 
     static func transcriptCacheAgentID(sessionKey: String, agentID: String?) -> String? {
         guard OpenClawChatSessionKey.agentID(from: sessionKey) == nil else { return nil }
-        let normalized = agentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
     }
 }

@@ -8,6 +8,8 @@ export type ProtectionScanState = {
   fenceLength: number;
   /** Unmodeled paragraph syntax; cleared by a blank line. */
   paragraphAmbiguous: boolean;
+  /** Paragraph syntax that may own block code; inline backticks alone do not. */
+  blockAmbiguous: boolean;
   /** An unclassified delimiter makes fence parity permanently unknown. */
   structuralUnknown: boolean;
   /** Trailing partial line; block structure is only decidable on whole lines. */
@@ -19,6 +21,7 @@ export function createProtectionScanState(): ProtectionScanState {
     fenceChar: undefined,
     fenceLength: 0,
     paragraphAmbiguous: false,
+    blockAmbiguous: false,
     structuralUnknown: false,
     partialLine: "",
   };
@@ -51,6 +54,7 @@ function applyLine(state: ProtectionScanState, line: string): void {
   }
   if (BLANK_LINE.test(line)) {
     state.paragraphAmbiguous = false;
+    state.blockAmbiguous = false;
     return;
   }
   const open = FENCE_OPEN.exec(line);
@@ -74,7 +78,11 @@ function applyLine(state: ProtectionScanState, line: string): void {
     state.structuralUnknown = true;
     return;
   }
-  if (line.includes("`") || UNMODELED_BLOCK_START.test(line)) {
+  if (UNMODELED_BLOCK_START.test(line)) {
+    state.paragraphAmbiguous = true;
+    state.blockAmbiguous ||= / {4}|\t/.test(line);
+  }
+  if (line.includes("`") || state.blockAmbiguous) {
     state.paragraphAmbiguous = true;
   }
 }
@@ -107,12 +115,13 @@ export function advanceProtectionScanState(state: ProtectionScanState, text: str
   state.partialLine = text.slice(cursor);
 }
 
-/** Resolves candidate protection relative to incoming without mutating carried state. */
+/** Resolves protection at/after `from` in incoming; earlier blank lines can settle carried state. */
 export function resolveProtectionFastPath(
   carried: ProtectionScanState,
   incoming: string,
+  from = 0,
 ): ((offset: number) => boolean) | undefined {
-  if (carried.paragraphAmbiguous || carried.structuralUnknown) {
+  if (carried.structuralUnknown) {
     return undefined;
   }
   if (BARE_CARRIAGE_RETURN.test(incoming)) {
@@ -138,32 +147,19 @@ export function resolveProtectionFastPath(
     if (state.fenceChar) {
       // Fences own their delimiter lines even before the line completes.
       lineStarts.push([lineStartAbsolute, true]);
-    } else if (!complete) {
-      // An unfinished line can still acquire code ownership.
-      return undefined;
     } else {
+      // Probe the current bytes even before newline; ambiguous syntax still needs the parser.
       const probe = { ...state };
       applyLine(probe, line);
-      if (probe.paragraphAmbiguous || probe.structuralUnknown) {
+      if ((probe.paragraphAmbiguous || probe.structuralUnknown) && (!complete || newline >= from)) {
         return undefined;
       }
-      const opened = probe.fenceChar ? FENCE_OPEN.exec(line) : null;
-      if (opened?.[1]) {
-        // The region starts at the delimiter run, so an indented fence leaves its own
-        // leading whitespace outside the region.
-        lineStarts.push([lineStartAbsolute, false]);
-        lineStarts.push([lineStartAbsolute + (opened[0].length - opened[1].length), true]);
-      } else {
-        lineStarts.push([lineStartAbsolute, false]);
-      }
+      lineStarts.push([lineStartAbsolute, Boolean(probe.fenceChar)]);
     }
     if (!complete) {
       break;
     }
     applyLine(state, line);
-    if (state.paragraphAmbiguous || state.structuralUnknown) {
-      return undefined;
-    }
     state.partialLine = "";
     index = newline + 1;
   }

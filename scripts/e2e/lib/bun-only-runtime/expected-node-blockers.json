@@ -1,22 +1,3 @@
 {
-  "blockers": [
-    {
-      "id": "terminal-pty",
-      "origin": "known-blocker",
-      "feature": "Terminals",
-      "owner": "Terminals on Bun task (src/process/terminal-pty.ts)",
-      "callSite": "src/process/terminal-pty-node.ts spawnNodeTerminalPty",
-      "step": "terminals",
-      "evidence": [
-        "spawn",
-        "failure"
-      ],
-      "failure": "A Node executable is required for terminals on Bun",
-      "match": {
-        "stack": [
-          "spawnNodeTerminalPty"
-        ]
-      }
-    }
-  ]
+  "blockers": []
 }

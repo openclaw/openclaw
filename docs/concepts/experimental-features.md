@@ -1,6 +1,7 @@
 ---
 summary: "What experimental flags mean in OpenClaw and which ones are currently documented"
 title: "Experimental features"
+doc-schema-version: 1
 read_when:
   - You see an `.experimental` config key and want to know whether it is stable
   - You want to try preview runtime features without confusing them with normal defaults
@@ -15,54 +16,189 @@ Experimental features are preview surfaces controlled by config flags. They need
 - Roll out broadly only after testing in a smaller environment first.
 
 All [plugin APIs](/plugins/sdk-overview#api-stability) are also experimental.
-That stability label does not require a Labs switch for ordinary plugins; the
-Custom plugin UI flag below controls user-installed native browser code only.
+That stability label does not require a Labs switch. Native plugin UI is
+available by default for enabled plugins; the existing config-only
+[advanced opt-out](/plugins/feature-plugins#enable-custom-plugin-ui) remains
+available for user-installed browser code.
 
 ## Currently documented flags
 
-| Surface          | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
-| ---------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| Codex harness    | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
-| Code Mode        | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
-| Cloud workers    | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud Worker Desktop](/gateway/cloud-workers#desktop-interactive)                     |
-| Custom plugin UI | `gateway.controlUi.experimental.customPlugins`                          | You want trusted user-installed plugins to add native Control UI views or replace built-in views                                  | [Feature plugins](/plugins/feature-plugins#enable-custom-plugin-ui)                    |
-| Host Desktop     | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
-| Tool Search      | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
+| Surface                 | Key                                                                     | Use it when                                                                                                                       | More                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| Codex harness           | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
+| Code Mode               | `tools.codeMode.enabled`                                                | You want compact code-orchestrated access to a hidden OpenClaw tool catalog                                                       | [Code Mode](/tools/code-mode)                                                          |
+| Cloud workers           | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud device desktop](/gateway/cloud-workers#desktop-interactive)                     |
+| Templates               | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
+| This computer’s desktop | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
+| OpenClaw ID             | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
+| Speech bubbles          | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
+| Tool Search             | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
+| Usage-ranked tool index | `agents.defaults.experimental.usageRankedToolIndex`                     | You want frequently and recently used tools to take priority in bounded prompt indexes                                            | [Usage-ranked tool index](#usage-ranked-tool-index)                                    |
 
 ## Control UI Labs
 
 Open **Settings → Labs** to manage experiments that have a
-Control UI switch. Enabling or disabling a lab patches the canonical Gateway
+Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
-Labs includes Decision assistance, Code Mode, Tool Search for all models, Custom
-plugin UI, Host Desktop, and Cloud Worker Desktop. Under the default reload mode, custom
-plugin views and desktop availability update in connected Control UI pages.
-Code Mode and Tool Search changes take effect for future agent runs.
-Reload browser tabs after disabling Custom plugin UI to clear plugin JavaScript
-that already ran. The Cloud Worker Desktop lab controls access to existing
-desktop-capable workers; changing a profile's `settings.desktop` affects only
-newly provisioned workers.
+Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models,
+Usage-ranked tool index,
+Templates, This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
+desktop availability updates in connected Control UI pages. Code Mode and Tool
+Search changes take effect for future agent runs. The Cloud device desktop lab
+controls access to existing desktop-capable workers; changing a profile’s
+`settings.desktop` affects only newly provisioned workers.
 
-Custom plugin UI is off by default. Enabled bundled plugins, including
-Workboard, retain their native UI with the setting off. Backend APIs and
-ordinary plugins remain available, and installing or approving a plugin
-artifact does not enable the lab.
+<a id="advisor" />Advisor has graduated from Labs. It stays off by default;
+turn it on in **Settings → Plugins → Advisor**. See
+[Advisor](/plugins/reference/advisor).
 
-Code Mode remains disabled until you turn on its Labs switch or explicitly set
-`tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
-engages only for models marked as preferred Code Mode performers; it does not
-force Code Mode on for every model.
+Custom plugin UI has graduated from Labs. Enabled plugins can load native UI
+by default, while an existing explicit
+`gateway.controlUi.experimental.customPlugins: false` stays off. The historical
+config path remains an advanced opt-out, not a Labs requirement. It does not
+disable bundled views or backend operations.
+
+Templates is off by default. Turning it on permits official starter discovery and
+Add in Agents, Gateway catalog/Add methods, and local CLI Add. Add creates an
+ordinary agent and installs its requirements; repeating Add creates another
+agent. Turning the switch off blocks new Add operations, but existing agents
+continue running. Local project authoring and inspection do not require the
+switch. An Add already admitted before the switch changes can finish safely.
+
+When `tools.codeMode` is absent, Code Mode uses `"auto"`: it engages only for
+models marked as preferred Code Mode performers. The Labs switch writes `"auto"`
+when on and `false` when off; it does not force Code Mode on for every model.
+An explicitly authored object without `enabled` stays off. Agent and model
+overrides take precedence.
 
 Tool Search is enabled by default when `tools.toolSearch` is unset.
 Turning its Labs switch off disables the global default; turning it on restores
 that default.
 
+## Usage-ranked tool index
+
+This opt-in prefers frequently and recently used tools when a bounded prompt
+index cannot show every tool. Enable **Settings → Labs → Usage-ranked tool
+index**, or set the Boolean in config:
+
+```json5
+{
+  agents: {
+    defaults: {
+      experimental: { usageRankedToolIndex: true },
+    },
+  },
+}
+```
+
+The default is **off**; only explicit `true` enables it. The embedded OpenClaw
+runtime ranks the [Code Mode index](/tools/code-mode), the
+[Tool Search deferred-schema directory](/tools/tool-search), and the
+[MCP tool directory](/tools/tool-search#mcp-tool-directory) in the `tool_search`
+description, including MCP servers installed as plugins. Codex-native surfaces
+are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
+does not enable Code Mode or Tool Search, authorize any tool, or change search
+results. Core coding tools retain their pinned places. Each surface reserves part
+of its existing budget for new tools, and selected entries render in canonical
+order.
+
+Successful calls contribute to a score with a 14-day half-life. Failed,
+cancelled, pending, client-delegated, and incognito calls do not count. Nested
+calls count the target tool rather than the Tool Search or Code Mode wrapper.
+MCP calls, including Code Mode `MCP` namespace calls, count under their exact
+catalog ID, such as `mcp:granola:granola__list_meetings`, never under a
+same-named OpenClaw or client tool. Scores follow that ID, so renaming an MCP
+server produces new IDs that start without history; the old IDs expire with
+normal retention.
+Subagents inherit the parent's frozen preference, filtered to their own
+available catalog; calls contribute to the agent that executes them.
+
+Rankings stay frozen during a prompt series. Calls update stored scores without
+rewriting the prompt prefix. A new session or reset, committed compaction, model
+or route change, or harness/surface switch can refresh the snapshot. Config and
+catalog refreshes still enforce current tool policy without re-ranking surviving
+tools. Toggling the lab affects ranking at the next such boundary. Turning it
+off does not erase saved scores; use reset below to clear them.
+
+### Inspect, import, or reset
+
+These commands require a running Gateway and `operator.admin` access. The agent
+defaults to `main`; use `--agent <id>` for another configured agent. Import and
+inspection are available even while the lab is off, so you can preview past
+usage before opting in.
+
+```bash
+openclaw tools usage status --agent main
+openclaw tools usage import --agent main --since 90 --dry-run --json
+openclaw tools usage import --agent main --since 90
+openclaw tools usage status --agent main --session agent:main:example --limit 20 --json
+openclaw tools usage reset --agent main
+```
+
+- `status` reports the row count, current decayed top scores, retention, and last
+  import time. `--limit` accepts 1–100 (default 20). `--session` additionally
+  reports that session's frozen snapshot, which can differ from current scores.
+- `import` scans retained transcripts from the last `--since` days (1–90,
+  default 90), resolves names against the current authorized agent catalog, and
+  imports only history not already covered by live recording or an earlier
+  import. MCP calls are counted when history names their exact catalog ID, or
+  when their recorded result identifies the MCP server that owns the name.
+  Calls whose name also belongs to an OpenClaw tool, or to a server whose safe
+  name needed a collision suffix, are reported as unknown tools. Repeating the same import does not count the same history twice.
+  The report includes scanned and counted calls, exclusions, errors,
+  cancellations, pending calls, wrappers, and top scores. Missing or archived
+  history that cannot be scanned is reported rather than inferred. Nested results
+  omitted by transcript size limits are reported as unknown outcomes, not guessed
+  to be successful. `--dry-run` previews the import without writing scores or import metadata.
+- `reset` clears learned scores and invalidates pending counts. It does not
+  rewrite active frozen prompts, delete transcripts, or turn off the lab. New
+  successful calls can start learning again while the lab remains enabled.
+- `--json` returns the complete report. Standard Gateway connection flags such
+  as `--url`, `--token`, and `--timeout` are available on every subcommand.
+
+The corresponding admin-only Gateway methods are `toolUsage.status`
+(`agentId?`, `limit?`, `sessionKey?`), `toolUsage.import` (`agentId?`,
+`sinceDays?`, `dryRun?`), and `toolUsage.reset` (`agentId?`). There is no
+model-facing management tool.
+
+### Storage and privacy
+
+Usage rows contain only tool IDs, decayed scores, and timestamps. They contain
+no arguments, results, session IDs, or per-call history. Import bookkeeping
+stores import coverage boundaries and a 90-day participation receipt for each
+live-recorded run, using the run ID already stamped on transcript messages.
+Receipts contain no calls or payloads. Imports fill gaps while recording was disabled
+without adding live-recorded runs again. Unstamped results after live recording began
+are reported as unknown provenance rather than guessed.
+Rows expire 90 days after their last counted successful call, and agent removal
+removes that agent's usage. Expired rows never affect ranking or status; physical
+pruning happens on usage writes and the Gateway’s hourly maintenance sweep, even
+while the lab is disabled. Calls accumulate in a run-local map; existing transcript
+commits persist batches without a separate writer request. A custom/shared
+transcript store cannot write another database's counters, so those runs and late
+completions use the existing run-settlement writer. Orderly shutdown waits for it.
+Selecting a new ranking snapshot still reads stored scores at the prompt-series
+boundary. A crash or failed commit may lose unflushed counts. Imports exclude
+active runs and committed live-run receipts; a foreign-store run that crashes
+before its receipt commits can remain eligible for historical import.
+Import reads existing transcripts from the configured session store, including
+custom/shared stores, while counting only the selected agent’s sessions. It does
+not retain another copy of their content.
+
+This is **operator-owned storage**, not a promise of device-local storage: the
+agent database may use operator-managed PostgreSQL. No usage data is sent to
+Foundation telemetry or added to OpenTelemetry attributes. Selected tool names
+still reach the model provider as part of the prompt.
+
 ## Decision assistance
 
-**Foundation only:** this Labs entry saves intent but connects no automatic
-Decision consumers. Turning it on does not start inference, enable consumer
-modes, select a provider, provision credentials, or download models.
+This opt-in enables experimental conversational tool filtering in the built-in
+OpenClaw runtime. Before an eligible user turn, the configured Decision provider
+judges whether the request needs tools. A conversational result can omit optional
+tools for that turn. Other harnesses keep their normal tools and perform no
+automatic prefilter inference. The switch does not select a provider, provision
+credentials, download models, or enable unrelated consumer modes.
 
 The switch and manually authored config use the same global Boolean:
 
@@ -82,7 +218,7 @@ unrelated experimental options do not. Objects such as
 removes its override and restores off, preserving model selections and sibling
 settings. There is no browser-local preference.
 
-Saved opt-in is not per-agent eligibility. Future automatic consumers also need
+Saved opt-in is not per-agent eligibility. Automatic consumers also need
 an effective [Decision model](/concepts/decision-models) for their owning agent.
 An unset agent model inherits `agents.defaults.decisionModel`; an explicit empty
 `agents.entries.<id>.decisionModel` disables eligibility for that agent. A model
@@ -101,11 +237,11 @@ Core implementations can import
 from `src/agents/decision-assistance.ts`. Supply prepared config and the trusted
 owning agent ID, not a model-provided ID. The helper returns exactly
 `decisionAssistance === true && resolveDecisionModelSetting(config, agentId) !== undefined`.
-It performs no provider probes, secret resolution, file reads, network requests,
+It performs no provider checks, secret resolution, file reads, network requests,
 model loading, or inference, and returns no provider-readiness diagnostics.
 This is an internal foundation boundary, not a new plugin SDK surface.
 
-For example, at a future automatic consumer boundary:
+For example, at an automatic consumer boundary:
 
 ```ts
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
@@ -117,15 +253,414 @@ if (!isDecisionAssistanceEligible(preparedConfig, owningAgentId)) {
 // before loading its optional implementation or preparing evaluation evidence.
 ```
 
-Use the existing config publication/refresh lifecycle, not file polling. Future
-consumers must stop admitting automatic work after opt-out takes effect and
-revalidate current config, model selection, and live authority before applying
-awaited results. This helper is not an authority token or a cancellation owner.
+Use the existing config publication/refresh lifecycle, not file polling.
+Consumers check opt-in again at Decision provider dispatch, after awaited
+preparation. Disabling assistance stops subsequent evaluations from starting;
+already-dispatched evaluations may finish, including provider preparation and
+network I/O, and their results may still be used. Model selection, live authority,
+cancellation, deadlines, and provider/credential validity remain independently
+checked. This helper is not an authority token or a cancellation owner.
 
-Any future consumer must document its evidence transfer, costs, latency, and
-failure behavior. Hosted evaluations send selected evidence to the configured
-provider and can incur charges; this foundation sends no evidence and makes no
-performance or quality claims.
+### Conversational tool filtering
+
+**Upgrade behavior:** the existing saved `decisionAssistance: true` is opt-in
+intent for future automatic Decision experiments. When this consumer is installed,
+it can run on eligible turns for an agent with an effective Decision model; the
+preference does not select a new provider or grant tool authority. Operators who
+do not want automatic evaluation can turn the preference off or clear that
+agent’s Decision model. The transferred evidence and costs are described below.
+
+The prefilter sends the complete current request and a rule-based, bounded
+projection of recent conversation to the owning agent’s configured Decision
+provider. It retains the nearest complete user/assistant exchange and, when it
+fits, one additional exchange in chronological order. Resolved output from
+ordinary `before_prompt_build` hooks is also sent verbatim in labeled fields when
+present: `prependContext`, `appendContext`, `systemPrompt`,
+`prependSystemContext`, and `appendSystemContext`. Two internal text bounds apply:
+
+- The latest request plus retained user/assistant exchange text is limited to
+  **6,000 UTF-16 code units**. Only whole older exchanges may be omitted.
+- That conversation text plus all five verbatim hook-field values must fit
+  **8,000 UTF-16 code units** in total. Oversized hook fields are not truncated.
+
+These are JavaScript string-length bounds on the evidence text, not a bound on
+serialized JSON, UTF-8 wire bytes, or tokens. Field names, JSON escaping, omission
+facts, tool-result counts, and the fixed rubric add serialization overhead.
+The current request and essential context are never cut to force classification;
+oversized, malformed, missing, or otherwise unsuitable essential context retains
+normal tools. A genuinely fresh session is
+evaluated using the current request alone. Existing incomplete history is not
+treated as a fresh session; missing referents and uncertainty must retain tools.
+
+Only user-visible text, counts of returned/failed tool calls, and the listed
+resolved ordinary hook fields are secondary evidence. Other system/developer
+instructions, hidden reasoning, raw tool arguments or results, internal-event
+envelopes, and media are not sent. Tool return counts do not assert that an
+action succeeded. Hosted providers receive this bounded evidence and can incur
+charges; local providers keep inference local.
+Classification adds work before the primary model request and is not a guaranteed
+latency improvement.
+
+The current internal budget is 500 ms, not a configuration option. One existing
+Decision batch asks two independent Boolean questions: whether the latest request
+has an unresolved contextual reference, and whether fulfilling it requires tools
+in the next response. Both probabilities must be below 0.35 to omit optional tools. The context question
+checks for a referent needed to fulfill the current request, not merely for
+additional background. A conversational acknowledgment of completed work that
+requests nothing further does not itself require a missing referent.
+Missing, affirmative, or uncertain answers preserve tools. These are probabilities
+of yes, not degrees of tool use or separate confidence values.
+
+The structured state names the latest request, chronological recent exchanges,
+and facts about omitted older conversation and raw tool payloads. Each question
+references those fields explicitly. Earlier mentions of tools do not by themselves
+request new actions, and omitted older history alone does not veto filtering.
+This follows [TypeSafe atomic Noul guidance](https://docs.typesafe.ai/primitives/noul)
+while using the provider-neutral Decision contract; it makes no provider-specific
+requests or calibrated-correctness guarantees. There is
+no model-aware input estimator, automatic trimming retry, or second provider.
+Ordinary unavailable results, including a deadline or actual provider input
+rejection, keep the normal tool surface. A caller-budget deadline does not count
+as a provider outage or open the shared health circuit, so repeated optional
+prefilter timeouts do not disable explicit `decision_evaluate` requests. Genuine
+provider transport, authentication, and rate-limit failures retain their shared
+health handling; in-flight work still owns its concurrency slot until it settles.
+Cancellation, closed authority, and contract errors
+remain errors rather than starting fallback work. Cold model loading may exceed
+the budget. Classifier estimates are not guarantees that every action request
+will retain its optional tools.
+
+Filtering skips raw checks, continuations, internal events, queued steering,
+orphan repair, pending tool work, hook-set `toolsAllow` restrictions, and
+authority-dependent prompt-build hooks that require finalized tools. Ordinary
+prompt-build hooks run normally and their resolved fields can inform the Decision
+evaluation without changing the public hook contract. It no longer rejects a
+turn merely because prior assistant or tool messages exist. Complete contextual
+approvals remain action requests, while a conversational acknowledgment can omit
+optional tools on later turns. It uses the existing host tool policy, preserves
+already-required tools without granting denied tools, and keeps submitted schemas,
+discovery, and callability aligned.
+Each subsequent turn starts from its own normal tool baseline. Opt-out or a changed
+Decision model does not withdraw a restriction from an already-dispatched
+evaluation. Those settings apply to the next evaluation; live permissions still
+govern the current turn. No historical transcript is rewritten and no native
+thread is recreated.
+
+With DEBUG logging enabled for the embedded runner, a safe record at the first
+foreground primary dispatch reports decision status/reason, decision latency,
+context counts and omission flags, visible tool counts, required tools retained,
+and the before/after normalized tool-definition JSON UTF-16 character difference
+(`name`, `description`, and `parameters`). Tool Search and Code Mode count only
+the actually exposed controls/direct tools, including their descriptions—not
+every hidden catalog schema. This schema-only metric is not provider wire bytes,
+full prompt savings, tokens, cost, or proof that a provider accepted the request.
+Tool-related prompt guidance is reported as unmeasured. Unknown measurements
+remain unknown, not zero. DEBUG-off avoids the extra definition serialization.
+No conversation, tool payloads, full schemas, or credentials are logged by this
+record; existing logging and trace-correlation controls apply.
+
+## OpenClaw ID remote access
+
+OpenClaw ID remote access is off by default (`gateway.openclawId.enabled`).
+While it is off the Gateway starts no tunnel child, opens no tunnel sockets and
+makes no calls to OpenClaw ID, Discovery or relays, and the `openclawId.*`
+methods refuse every request. Turning it off also stops any Discovery request
+that was still being prepared. Turn it on in **Settings → Labs → OpenClaw ID
+remote access**, or in config:
+
+```json5
+{
+  gateway: {
+    openclawId: {
+      enabled: true,
+      relayUrl: "https://relay.example.com/",
+      // Needed to turn on remote access for a claw from the account menu
+      // (you sign in with OpenClaw ID first, which needs clientId):
+      issuerUrl: "https://id.example.com/api/auth",
+      clientId: "<public PKCE client id>",
+      discoveryUrl: "https://discovery.example.com",
+      loaderDomain: "claws.example.com",
+    },
+  },
+}
+```
+
+No service URL has a production default yet; the Gateway reports
+`unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
+[`openclawId` configuration keys](/gateway/config-gateway) for the full list.
+
+### Member roles
+
+OpenClaw ID members use their membership role's definition in
+`gateway.roles.definitions`, not a named role assigned to their Gateway profile.
+When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
+writes any missing presets without overwriting owner-edited definitions. Installing
+presets uses the standard config writer: it rewrites the config file as JSON and
+removes JSON5 comments.
+
+The presets are:
+
+- `operator`: other people's sessions are writable, all agents are allowed, and
+  scopes are `operator.read`, `operator.write`, `operator.approvals`,
+  `operator.questions`, and `operator.talk`.
+- `guest`: other people's sessions are viewable, all agents are allowed, and
+  `operator.sessions.write` allows starting and continuing their own work.
+  `sandbox: "required"` runs their sessions' exec and file tools in a per-person
+  sandbox.
+- `viewer`: other people's sessions are viewable, all agents are allowed, and the
+  only scope is `operator.sessions.read`. Viewers can read visible conversations,
+  but not logs, the private user directory, or Gateway-wide diagnostic catalogs.
+
+Operator remains the default invite role. A sandbox-required member's new sessions,
+forks, checkpoint branches, delegated children, and authorized scheduled or
+recovered work retain the sandbox requirement even without named-role enforcement.
+For those sessions' exec and file tools, an unavailable sandbox backend or failed
+provisioning is an error, not a fallback to a host or node target. The **Access**
+invite form warns when the selected role requires a sandbox and the configured
+Docker or Podman backend is unavailable. See [Sandboxing](/gateway/sandboxing)
+for setup.
+
+The sandbox requirement does not contain every execution path. Before inviting
+someone you do not trust with the machine, review the
+[sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions):
+
+- Select the [QuickJS Code Mode executor](/tools/code-mode/executors#choose-an-executor);
+  the default Node executor runs cells in the Gateway process.
+- Exclude [CLI backends](/gateway/cli-backends) with the role's
+  [modelPolicy](/gateway/operator-scopes#model-policy); their native tools and
+  sandboxing are separate from session exec and file tools.
+- Keep such roles off worker profiles, which can receive the agent's shared
+  GitHub identity independently of the session sandbox setting.
+- Do not add `operator.write` or `operator.admin` if the person must not invoke
+  commands directly on paired nodes outside a session. The stock guest preset
+  has neither scope; node command policy and approvals still apply.
+
+Also review shared transcripts and Gateway-brokered GitHub publication in that
+exclusions list: a session sandbox does not limit what shared conversations reveal
+or what the shared publication account can do.
+
+Presets are ordinary editable definitions, not reserved names or a hardcoded
+permission ceiling. Custom definitions may include `operator.admin`. A member
+whose role has no definition cannot connect or start retained/recovered work.
+Editing a definition reconnects affected members with current permissions;
+removing one denies that role. Missing presets are installed again on the next
+activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
+clearing a stored profile role with `null` remains allowed.
+
+On **Access**, choose an invite's role from the claw's defined roles. **Operator**
+is selected when it is defined; otherwise the first role alphabetically is selected.
+Each option describes access to other people's sessions, sandbox requirements, and
+administrator access. Roles with `operator.admin` are marked **Administrator access**
+and require confirmation before creating an invite. With no roles defined, add a
+definition in config before inviting anyone; there is no role-definition editor here.
+Member role names use 1–64 lowercase letters, digits, `-`, or `_`, starting with a
+letter. Other configured names are shown as unavailable rather than renamed.
+Approving a request grants exactly the role named in its invite.
+
+From an approved owner browser, choose **Change role** on a member, select a defined
+role, and save. The browser signs the membership change with its owner device key.
+The member's devices disconnect and reconnect with the new limits. Members whose
+role was deleted are marked **Blocked** with the missing role's name; choose another
+role to restore access. Members who can load the Access plugin see their own role,
+not other people's access or owner controls. The plugin currently requires
+`operator.read`; session-read-only members, including the Viewer preset, cannot
+open it.
+
+Preset installation never sets or changes `gateway.roles.default` or
+`gateway.roles.assignments`. Without a default, other sign-in methods keep their
+existing behavior, including device-token-only reconnects. Existing team Gateways
+keep their default and enforcement. Owner devices and nodes are unchanged.
+A preset-write failure is logged and reported in OpenClaw ID service status;
+undefined member roles remain refused and owners retain access. Nothing is written
+while OpenClaw ID is off. Startup finishes installing presets before publishing
+its runtime policy, including when `gateway.reload.mode` is `"off"`. If runtime
+reload policy prevents a saved activation from applying, service status asks you
+to restart the Gateway to finish turning on member roles. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+
+### Managing remote access
+
+Labs only switches the feature on or off. Everything else lives outside Labs:
+
+- **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
+  OpenClaw ID**, **Turn on remote access**, **Your devices**, **Copy claw link**
+  and **Sign out of OpenClaw ID**, depending on your connection and setup state.
+- **Access**, under **Pages**: the **Remote access** page from the bundled
+  `openclaw-id-access` plugin (enabled by default). It shows who may reach this
+  claw through OpenClaw ID; its **People** section lets you invite someone,
+  approve or deny their request, change a member's role, and remove members. Use an approved owner
+  browser to change access. Devices paired with this Gateway are in
+  **Settings → Devices**.
+- **Member names**: an approved member is named from their OpenClaw ID account,
+  or from the part of their email before the `@` when the account reports no
+  name. Their first visit opens a new session, which asks for a name and photo
+  before it offers a composer; they can skip it and set both later in
+  **Settings → Profile**. Both are stored only in this Gateway's profile.
+- **Your devices**, in the account menu: view approved owner browsers and choose
+  **Remove access** for a browser. The confirmation lists any other devices that
+  will also lose access. They disconnect immediately; use another approved owner
+  browser or your recovery kit to restore access.
+- **Sign out of OpenClaw ID** on a remote browser ends its account session and
+  revokes the Gateway tokens issued to it, but the browser stays approved.
+  Signing back in on the same browser reconnects with the access it was
+  approved for, without a new device approval. Asking for more access than
+  that still needs approval.
+- **Settings → Devices** and `openclaw devices list` mark browsers that connect
+  through OpenClaw ID and link to **Access**. They can't be removed or have
+  their tokens revoked as devices. To end someone's access, remove them on
+  **Access**; to remove one of your own owner browsers, use **Your devices** in
+  the account menu. Nodes and other devices are managed as before.
+- There is no owner reset in this version: a claw keeps the recovery kit it was
+  linked with, so store the kit safely.
+- To move a claw to new connection keys (a lost or leaked key file, a new computer
+  without the key files, or routine rotation), run `openclaw id rebind` on the
+  computer that runs it, with its recovery kit. Devices, people, nodes and invites
+  stay ([CLI](/cli/id)).
+
+### Sign in with OpenClaw ID
+
+Sign-in uses the public client `clientId`. Where it works depends on how the
+Control UI reaches the Gateway:
+
+- **On the Gateway machine (direct loopback):** an OpenID Connect authorization
+  code flow with PKCE, in a popup. The Gateway builds the authorization URL and
+  redeems the code, because the issuer does not serve CORS; it keeps nothing but
+  the short-lived pending sign-in. The popup returns to
+  `<Control UI origin>/openclaw-id/callback`, so register that redirect for the
+  client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port).
+- **Through a personal sign-in** (Tailscale Serve, Cloudflare Access or another
+  trusted proxy, an enterprise principal: any connection whose profile comes from
+  a verified identity of its own): the issuer cannot redirect to that origin, so the
+  Gateway runs a device sign-in (RFC 8628). The Control UI shows a code; you open
+  OpenClaw ID, sign in and confirm it, and the Gateway polls until you do. The
+  issuer must offer the device grant to the client.
+- Shared token or password connections, members and owner devices over the
+  OpenClaw ID tunnel, and connections without a personal profile cannot sign in.
+
+The browser keeps the account and its ID token until the token expires or you sign
+out. Signing in only proves which OpenClaw ID account the browser holds; on its own
+it grants nothing.
+
+### Link OpenClaw ID to your profile
+
+Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
+runs the same device sign-in and records the account on your profile. Both sides are
+proven on one connection, so there is no "who are you?" picker. Owner devices of the
+claw's OpenClaw ID owner account then arrive as you (your name, sessions, personal
+instructions and My GitHub) instead of the shared owner. Their owner authority still
+comes from each device's certificate, and linking grants or removes nothing.
+
+If this browser already signed in with OpenClaw ID through the same personal sign-in,
+**Link** uses that sign-in and asks for no second code. The Gateway reuses only an ID
+token it received from the issuer itself for your profile and that has not expired.
+Without one, for example after the sign-in expired or the Gateway restarted, **Link**
+shows one device code as before.
+
+- One profile per account: linking an account already linked to another profile, or to
+  a member's profile, is refused. Merging profiles in **Users** carries the link.
+- **Unlink** returns owner devices to the shared owner on their next connection.
+  Sessions they already created are not rewritten. While signed in, **Turn on remote access**
+  gets its link code from your account instead of asking you to paste one.
+
+### Invite someone who already has a profile
+
+On **Access → Invite someone**, optionally choose **Existing person on this claw**.
+The picker lists personal profiles that have no OpenClaw ID linked yet, such as a
+teammate's Tailscale profile. It never offers the shared owner profile.
+
+The approval card says **Will join as** the selected person. Your selection and
+approval are enough: the member does not need to confirm the profile or match its
+email. Approval links their OpenClaw ID to that profile, so their name and existing
+conversations stay together. The selection alone gives no access, and the member's
+permissions still come from their approved membership role.
+
+The selection stays on this Gateway; it is not in the invite link or signed invite.
+If the selected profile was deleted, merged away, or linked to another account
+before approval, the Gateway uses the normal member-profile path and shows why on
+Access. Leave **Create a new person** selected for the usual invite behavior.
+This option is hidden while the OpenClaw ID lab is off.
+
+### How the tunnel reaches the Gateway
+
+- The Gateway supervises one **tunnel child** process. The child owns the iroh
+  endpoint key (`<state dir>/openclaw-id/endpoint.key`, mode 0600, created on
+  first start). It runs
+  at a lower CPU priority, restarts with a 1 to 30 second backoff, is restarted
+  gracefully above 512 MB RSS, and stops with SIGTERM then SIGKILL after 2
+  seconds. If the iroh binding cannot load on this platform, the Gateway reports
+  remote access unavailable and keeps running.
+- Once a claw is linked, its server binding names the endpoint key and the
+  Gateway key (`<state dir>/openclaw-id/gateway.key`), and neither is ever
+  created again. If either file is missing or holds another key, for example
+  after a restore that skipped the key files, remote access is off and status
+  reports `keys_missing` or `key_mismatch`. Nothing is published or dialed with
+  another key. The Gateway itself keeps running, so everything on this computer
+  works as before. To bring remote access back, restore the original key files,
+  then restart the Gateway, or move the claw to new keys with its recovery kit
+  on this computer: `openclaw id rebind` ([CLI](/cli/id)).
+- The child admits a device only if the Gateway's membership lists the
+  device's endpoint key, and checks that before accepting any stream. Until a
+  claw is linked, nobody is admitted.
+- The child proxies each stream to a private Gateway ingress: a Unix socket
+  only the Gateway's user can open, plus a per-boot proxy token it receives over
+  the supervisor's IPC channel. It strips client forwarding and identity headers
+  and passes the device key it authenticated in the QUIC handshake.
+- Requests that come through this ingress are always treated as relayed, never
+  as direct loopback, even though they arrive on the local host. Root
+  ceremonies never run over the tunnel: linking a claw needs direct loopback or
+  an admin's personal sign-in, and moving to new keys needs direct loopback.
+
+<a id="make-a-claw-reachable" />
+
+### Turn on remote access
+
+With the lab on, sign in with OpenClaw ID from the account menu, then choose
+**Turn on remote access**. It works in OpenClaw on the computer that runs this
+claw (direct loopback), or for an **admin** signed in through a personal sign-in
+(Tailscale Serve, Cloudflare Access or another trusted proxy, an enterprise
+principal), so a remote claw needs no SSH tunnel. It is refused for shared token
+or password connections over the network, members, people whose role is not an
+administrator, and anything over the OpenClaw ID tunnel. If setup asks for a
+**Link code**, get one from the **Add a claw** page at
+`https://claws.<loaderDomain>/link` and paste it into setup:
+
+1. The Gateway creates the claw id and its signing key, and reports the tunnel's
+   endpoint key.
+2. The browser creates a recovery kit (`OCK1-…`) and derives the owner root key
+   from it. You must confirm that you saved the kit before you can continue.
+3. The browser creates an owner device key for this origin, and the owner root
+   signs that device's certificate and the server binding (claw id, hostname
+   `<name>-<account tag>.<loaderDomain>` as Discovery assigned it, endpoint key,
+   Gateway key).
+4. The Gateway pins the owner root's fingerprint and admits the owner device.
+   The kit secret and root key never leave the browser and are dropped as soon
+   as the statements are signed.
+5. With a link code, the Gateway registers the claw with
+   Discovery and publishes its descriptor and membership snapshot. Without one,
+   the claw is linked locally and can be published later.
+
+Through a personal sign-in, setup also links the OpenClaw ID you signed in with to
+your profile, as **Link OpenClaw ID to your profile** does, so your owner devices
+arrive as you. If that link is refused (for example, the account is already linked
+to another profile), remote access stays on and you can link from
+**Settings → Profile**. The Gateway log records who ran each step and over which
+identity (`openclaw-id: remote access …` with the route, auth method, profile and
+verified user), and emits a matching `security.event`.
+
+**Move to new keys** (`openclaw id rebind`) stays on the computer that runs the
+claw: it is a recovery path, including after remote access was misused, and it
+works with remote access off.
+
+### Membership
+
+The Gateway is the membership authority. It stores the pinned owner root, the allowlist
+of owner devices and members, invites and a sequence number in its state
+database. Owner devices send membership changes directly to the Gateway
+(over the tunnel or loopback); Discovery only mirrors signed snapshots and
+carries invite redemption requests, root-signed statements and revocations.
+When a member or device is removed, the tunnel child closes its connections,
+the Gateway closes its sessions and invalidates device tokens bound to its key,
+cancels its active runs (transcripts are kept up to the cut), and publishes a
+new snapshot.
 
 ## Local model lean mode
 

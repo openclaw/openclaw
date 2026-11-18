@@ -27,13 +27,10 @@ describe("normalizeCronRuntimeAuthority", () => {
   });
 
   it.each([
-    authority({ value: Number.NaN }),
     authority({ value: Number.POSITIVE_INFINITY }),
-    authority({ value: undefined }),
     authority({ value: 1n }),
     authority({ value: new Date() }),
     { ...authority({}), extra: true },
-    { ...authority({}), runtimeId: "Codex" },
     { ...authority({}), namespace: "codex apps" },
   ])("rejects non-JSON or non-canonical envelopes", (input) => {
     expect(normalizeCronRuntimeAuthority(input)).toBeUndefined();

@@ -79,8 +79,8 @@ function requestRefresh(
   if (state.refreshSessionPullRequests?.({ refresh: true, automatic: true }) !== true) {
     return;
   }
-  // Content identities can contain a whole reply. Oversized and evicted receipts
-  // may refresh again; truncating them could suppress a genuinely different final.
+  // Persisted IDs and run keys can still be oversized. Never truncate a receipt:
+  // doing so could suppress a genuinely different final.
   if (!remember) {
     return;
   }

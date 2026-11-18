@@ -22,10 +22,12 @@ import {
   type QuicksilverSocketMediaOptions,
   type QuicksilverSocketMessage,
 } from "./realtime-quicksilver-socket.shared.js";
+import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
 
 /** Worker-only media owner. Admission and agent delegation never enter this module. */
 export class OpenAIQuicksilverSocketRuntime {
   private readonly audio: OpenAIQuicksilverAudioAdapter;
+  private readonly paceInputAudio: boolean;
   private readonly pending = new OpenAIQuicksilverPendingAudio();
   private output: ReturnType<typeof createRealtimeVoiceAudioPortSender> | undefined;
   private readonly clock = new OpenAIQuicksilverAudioClock(() => {
@@ -50,6 +52,16 @@ export class OpenAIQuicksilverSocketRuntime {
     private readonly dispose: () => void,
     private readonly bufferedAmount: () => number,
   ) {
+    // Carrier G.711 already arrives in real time, including silence. A second
+    // clock would keep pre-ready capture queued behind every subsequent frame.
+    this.paceInputAudio =
+      media.paced &&
+      !(
+        isOpenAIGptLiveApiModel(media.model) &&
+        media.audioFormat?.encoding === "g711_ulaw" &&
+        media.audioFormat.sampleRateHz === 8_000 &&
+        media.audioFormat.channels === 1
+      );
     this.audio = new OpenAIQuicksilverAudioAdapter({
       audioFormat: media.audioFormat,
       onAudio: (audio) => this.enqueue({ type: "audio", audio }),
@@ -83,37 +95,29 @@ export class OpenAIQuicksilverSocketRuntime {
       this.output = output;
       return;
     }
-    if (command.type === "close") {
+    if (command.type === "close" || command.type === "stop-audio") {
       this.stopAudio();
-      this.socket.close(command.code, command.reason);
+      if (command.type === "close") {
+        this.socket.close(command.code, command.reason);
+      }
       return;
     }
-    if (command.type === "stop-audio") {
-      this.stopAudio();
-      return;
-    }
-    if (command.type === "audio") {
+    if (command.type === "audio" || command.type === "send") {
       try {
-        if (!this.mediaStopped && !this.closed && !this.failed) {
+        if (command.type === "send") {
+          this.send(command.payload);
+        } else if (!this.mediaStopped && !this.closed && !this.failed) {
           const pcm = this.audio.decodeInput(
             Buffer.from(command.audio.buffer, command.audio.byteOffset, command.audio.byteLength),
           );
-          if (this.media.paced || !this.started) {
+          if (this.paceInputAudio || !this.started) {
             this.pending.append(pcm);
           } else {
             this.sendPcm(pcm);
           }
         }
       } finally {
-        this.post({ type: "input-ack" });
-      }
-      return;
-    }
-    if (command.type === "send") {
-      try {
-        this.send(command.payload);
-      } finally {
-        this.post({ type: "send-ack" });
+        this.post({ type: command.type === "audio" ? "input-ack" : "send-ack" });
       }
       return;
     }
@@ -121,7 +125,7 @@ export class OpenAIQuicksilverSocketRuntime {
       return;
     }
     this.started = true;
-    if (this.media.paced) {
+    if (this.paceInputAudio) {
       this.clock.start();
     } else if (this.pending.length) {
       this.sendPcm(this.pending.take());

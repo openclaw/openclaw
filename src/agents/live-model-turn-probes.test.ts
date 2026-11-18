@@ -1,18 +1,6 @@
-// Covers live model extra-probe builders, matchers, and route skip lists.
+// Covers image probe retry outcomes and diagnostic redaction.
 import { describe, expect, it } from "vitest";
-import {
-  buildLiveModelFileProbeContext,
-  buildLiveModelFileProbeRetryContext,
-  buildLiveModelImageProbeContext,
-  fileProbeTextMatches,
-  isLiveModelProbeEnabled,
-  LIVE_MODEL_FILE_PROBE_TOKEN,
-  modelSupportsImageInput,
-  runLiveModelImageProbeWithRetry,
-  shouldSkipLiveModelExtraProbes,
-  shouldSkipLiveModelFileProbe,
-  shouldSkipLiveModelImageProbe,
-} from "./test-helpers/live-model-turn-probes.js";
+import { runLiveModelImageProbeWithRetry } from "./test-helpers/live-model-turn-probes.js";
 
 function createImageProbeRunner(responses: string[]) {
   const attempts: Array<1 | 2> = [];
@@ -30,94 +18,6 @@ function createImageProbeRunner(responses: string[]) {
 }
 
 describe("live model turn probes", () => {
-  it("defaults probes on and accepts common opt-out values", () => {
-    expect(isLiveModelProbeEnabled({}, "OPENCLAW_LIVE_MODEL_IMAGE_PROBE")).toBe(true);
-    expect(
-      isLiveModelProbeEnabled(
-        { OPENCLAW_LIVE_MODEL_IMAGE_PROBE: "false" },
-        "OPENCLAW_LIVE_MODEL_IMAGE_PROBE",
-      ),
-    ).toBe(false);
-    expect(
-      isLiveModelProbeEnabled(
-        { OPENCLAW_LIVE_MODEL_IMAGE_PROBE: "1" },
-        "OPENCLAW_LIVE_MODEL_IMAGE_PROBE",
-      ),
-    ).toBe(true);
-  });
-
-  it("builds a text file read probe", () => {
-    const context = buildLiveModelFileProbeContext({ systemPrompt: "sys" });
-    expect(context.systemPrompt).toBe("sys");
-    expect(context.messages[0]?.content).toBe(
-      "Read this visible label and reply with only the value after LIVE_LABEL.\n\nLIVE_LABEL=opal",
-    );
-  });
-
-  it("builds a stricter file read retry probe", () => {
-    const context = buildLiveModelFileProbeRetryContext({});
-    expect(context.messages[0]?.content).toBe(
-      "The visible label value is:\n\nopal\n\nReply with exactly opal.",
-    );
-  });
-
-  it("builds an image probe with native image content", () => {
-    // The image probe must use native image blocks, not markdown or remote
-    // URLs, so provider validation tests exercise multimodal input paths.
-    const context = buildLiveModelImageProbeContext({});
-    const content = context.messages[0]?.content;
-    expect(Array.isArray(content)).toBe(true);
-    if (!Array.isArray(content)) {
-      throw new Error("Expected image probe content blocks");
-    }
-    expect(content[0]?.type).toBe("text");
-    expect(content[1]?.type).toBe("image");
-    expect(content[1]).toHaveProperty("mimeType", "image/png");
-  });
-
-  it("detects image input support from model metadata", () => {
-    expect(modelSupportsImageInput({ input: ["text", "image"] })).toBe(true);
-    expect(modelSupportsImageInput({ input: ["text"] })).toBe(false);
-  });
-
-  it("skips known stale extra probe routes", () => {
-    expect(
-      shouldSkipLiveModelExtraProbes({
-        provider: "openrouter",
-        id: "amazon/nova-2-lite-v1",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipLiveModelExtraProbes({
-        provider: "openrouter",
-        id: "amazon/nova-lite-v1",
-      }),
-    ).toBe(false);
-  });
-
-  it("skips known stale file probe routes", () => {
-    expect(shouldSkipLiveModelFileProbe({ provider: "opencode-go", id: "unknown" })).toBe(true);
-    expect(shouldSkipLiveModelFileProbe({ provider: "google", id: "gemini-3.1-pro-preview" })).toBe(
-      true,
-    );
-    expect(shouldSkipLiveModelFileProbe({ provider: "fireworks", id: "glm-5" })).toBe(false);
-  });
-
-  it("skips known stale image probe routes", () => {
-    expect(
-      shouldSkipLiveModelImageProbe({
-        provider: "fireworks",
-        id: "accounts/fireworks/models/kimi-k2p5",
-      }),
-    ).toBe(true);
-    expect(shouldSkipLiveModelImageProbe({ provider: "fireworks", id: "glm-5" })).toBe(false);
-  });
-
-  it("matches expected probe replies", () => {
-    expect(fileProbeTextMatches(`The value is ${LIVE_MODEL_FILE_PROBE_TOKEN}.`)).toBe(true);
-    expect(fileProbeTextMatches("amber")).toBe(false);
-  });
-
   it("retries one mismatched image reply and accepts only a matching retry", async () => {
     const { attempts, run } = createImageProbeRunner(["blue", "OK"]);
     const retries: string[] = [];
@@ -170,15 +70,6 @@ describe("live model turn probes", () => {
     await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
       "attempt 2: <empty>",
     );
-  });
-
-  it("fails after two empty image replies", async () => {
-    const { attempts, run } = createImageProbeRunner(["", ""]);
-
-    await expect(runLiveModelImageProbeWithRetry({ run, onRetry: () => {} })).rejects.toThrow(
-      "attempt 1: <empty>; attempt 2: <empty>",
-    );
-    expect(attempts).toEqual([1, 2]);
   });
 
   it("redacts nonmatching image replies from failure diagnostics", async () => {

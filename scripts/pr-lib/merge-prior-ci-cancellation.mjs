@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
-import { execPrGhJson } from "./github.mjs";
+import { execPrGhJsonAsync } from "./github.mjs";
 
 const oid = /^[0-9a-f]{40}$/;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const badSteps = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
+// Historical pre-removal receipts still require these exact monitor identities.
 const monitorNames = new Set([
   "Cancel remaining PR work after a failure",
   "Classify PR failures and cancel eligible same-repository work",
@@ -92,10 +93,10 @@ function qualifyBoundaryDeadline(context, job, seconds, cancelledAnnotationCount
 }
 
 /** A cancelled job can retain a failed execution step or an exhausted deadline. */
-export function qualifyPriorCiCancelledRoots(context) {
+export async function qualifyPriorCiCancelledRoots(context) {
   const { evidence, run, jobs, gate, requireEvidence } = context;
   const readJson = (endpoint, paginate = false) =>
-    execPrGhJson([
+    execPrGhJsonAsync([
       "api",
       "--hostname",
       "github.com",
@@ -105,105 +106,120 @@ export function qualifyPriorCiCancelledRoots(context) {
       ...(paginate ? ["--paginate", "--slurp"] : []),
     ]);
   const roots = new Map();
-  for (const job of jobs) {
-    if (
-      job === gate ||
-      job.conclusion !== "cancelled" ||
-      !Array.isArray(evidence.failures) ||
-      !evidence.failures.some((entry) => entry.jobId === job.id)
-    ) {
-      continue;
+  const value = (result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
     }
-    const prefix = `https://api.github.com/repos/${evidence.repository}/check-runs/`;
-    const checkRunId = Number(
-      job.check_run_url?.startsWith(prefix) && job.check_run_url.slice(prefix.length),
-    );
-    requireEvidence(
-      positiveInteger(checkRunId),
-      "deadline root requires its canonical check-run identity",
-    );
-    const endpoint = `repos/${evidence.repository}/check-runs/${checkRunId}`;
-    const check = readJson(endpoint);
-    requireEvidence(
-      check.id === checkRunId &&
-        check.name === job.name &&
-        check.head_sha === evidence.head &&
-        check.check_suite?.id === run.check_suite_id &&
-        check.app?.id === 15368 &&
-        check.app.slug === "github-actions" &&
-        check.status === "completed" &&
-        check.conclusion === "cancelled" &&
-        check.started_at === job.started_at &&
-        check.completed_at === job.completed_at,
-      "cancelled root requires a matching live GitHub Actions check-run",
-    );
-    const attribution = evidence.failures.find((value) => value.jobId === job.id);
-    if (attribution.failedStep !== undefined) {
+    return result.value;
+  };
+  const candidates = jobs.filter(
+    (job) =>
+      job !== gate &&
+      job.conclusion === "cancelled" &&
+      Array.isArray(evidence.failures) &&
+      evidence.failures.some((entry) => entry.jobId === job.id),
+  );
+  const results = await Promise.allSettled(
+    candidates.map(async (job) => {
+      const prefix = `https://api.github.com/repos/${evidence.repository}/check-runs/`;
+      const checkRunId = Number(
+        job.check_run_url?.startsWith(prefix) && job.check_run_url.slice(prefix.length),
+      );
+      requireEvidence(
+        positiveInteger(checkRunId),
+        "deadline root requires its canonical check-run identity",
+      );
+      const endpoint = `repos/${evidence.repository}/check-runs/${checkRunId}`;
+      const attribution = evidence.failures.find((entry) => entry.jobId === job.id);
+      const [checkResult, annotationResult] = await Promise.allSettled([
+        readJson(endpoint),
+        attribution.failedStep === undefined
+          ? readJson(`${endpoint}/annotations?per_page=100`, true)
+          : Promise.resolve(undefined),
+      ]);
+      const check = value(checkResult);
+      requireEvidence(
+        check.id === checkRunId &&
+          check.name === job.name &&
+          check.head_sha === evidence.head &&
+          check.check_suite?.id === run.check_suite_id &&
+          check.app?.id === 15368 &&
+          check.app.slug === "github-actions" &&
+          check.status === "completed" &&
+          check.conclusion === "cancelled" &&
+          check.started_at === job.started_at &&
+          check.completed_at === job.completed_at,
+        "cancelled deadline/failed-step root requires a matching live GitHub Actions check-run",
+      );
+      if (attribution.failedStep !== undefined) {
+        roots.set(job.id, {
+          failedStep: qualifyFailedStep(context, attribution, job, checkRunId),
+        });
+        return;
+      }
+      const pages = value(annotationResult);
+      requireEvidence(
+        Array.isArray(pages) && pages.every(Array.isArray),
+        "deadline annotations are incomplete",
+      );
+      const annotations = pages.flat();
+      const timeout = annotations.filter(
+        (entry) =>
+          entry.annotation_level === "failure" &&
+          entry.title === "" &&
+          entry.path === ".github" &&
+          entry.start_line === 1 &&
+          /^The job has exceeded the maximum execution time of (?:\d+h)?\d+m\d+s$/u.test(
+            entry.message,
+          ),
+      );
+      const cancelled = annotations.filter(
+        (entry) =>
+          entry.annotation_level === "failure" &&
+          entry.title === "" &&
+          entry.path === ".github" &&
+          positiveInteger(entry.start_line) &&
+          entry.message === "The operation was canceled.",
+      );
+      const boundary = job.name === "check-additional-extension-package-boundary";
+      requireEvidence(
+        check.output?.annotations_count === annotations.length &&
+          timeout.length === 1 &&
+          cancelled.length <= 1 &&
+          annotations.length === 1 + cancelled.length &&
+          (boundary || (cancelled.length === 1 && /\d+h\d+m\d+s$/u.test(timeout[0].message))),
+        "deadline root requires complete matching GitHub Actions timeout annotations",
+      );
+      const parts = /(?:(\d+)h)?(\d+)m(\d+)s$/u.exec(timeout[0].message);
+      const seconds = Number(parts[1] ?? 0) * 3600 + Number(parts[2]) * 60 + Number(parts[3]);
+      requireEvidence(
+        positiveInteger(seconds) &&
+          Number(parts[2]) < 60 &&
+          Number(parts[3]) < 60 &&
+          Date.parse(job.completed_at) - Date.parse(job.started_at) >= seconds * 1000 &&
+          Array.isArray(job.steps) &&
+          job.steps.every(
+            (step) =>
+              step.status === "completed" &&
+              ["success", "skipped", "cancelled"].includes(step.conclusion),
+          ) &&
+          (boundary ||
+            (job.steps.filter((step) => step.conclusion === "cancelled").length === 1 &&
+              job.steps.some(
+                (step) => step.name === "Run Node test shard" && step.conclusion === "cancelled",
+              ))),
+        "deadline root has contradictory duration or additional failed steps",
+      );
+      const binding = boundary
+        ? qualifyBoundaryDeadline(context, job, seconds, cancelled.length)
+        : { workflowBlob: readWorkflow(context).workflowBlob };
       roots.set(job.id, {
-        failedStep: qualifyFailedStep(context, attribution, job, checkRunId),
+        deadline: { checkRunId, conclusion: job.conclusion, seconds, ...binding, annotations },
       });
-      continue;
-    }
-    const pages = readJson(`${endpoint}/annotations?per_page=100`, true);
-    requireEvidence(
-      Array.isArray(pages) && pages.every(Array.isArray),
-      "deadline annotations are incomplete",
-    );
-    const annotations = pages.flat();
-    const timeout = annotations.filter(
-      (entry) =>
-        entry.annotation_level === "failure" &&
-        entry.title === "" &&
-        entry.path === ".github" &&
-        entry.start_line === 1 &&
-        /^The job has exceeded the maximum execution time of (?:\d+h)?\d+m\d+s$/u.test(
-          entry.message,
-        ),
-    );
-    const cancelled = annotations.filter(
-      (entry) =>
-        entry.annotation_level === "failure" &&
-        entry.title === "" &&
-        entry.path === ".github" &&
-        positiveInteger(entry.start_line) &&
-        entry.message === "The operation was canceled.",
-    );
-    const boundary = job.name === "check-additional-extension-package-boundary";
-    requireEvidence(
-      check.output?.annotations_count === annotations.length &&
-        timeout.length === 1 &&
-        cancelled.length <= 1 &&
-        annotations.length === 1 + cancelled.length &&
-        (boundary || (cancelled.length === 1 && /\d+h\d+m\d+s$/u.test(timeout[0].message))),
-      "deadline root requires complete matching GitHub Actions timeout annotations",
-    );
-    const parts = /(?:(\d+)h)?(\d+)m(\d+)s$/u.exec(timeout[0].message);
-    const seconds = Number(parts[1] ?? 0) * 3600 + Number(parts[2]) * 60 + Number(parts[3]);
-    requireEvidence(
-      positiveInteger(seconds) &&
-        Number(parts[2]) < 60 &&
-        Number(parts[3]) < 60 &&
-        Date.parse(job.completed_at) - Date.parse(job.started_at) >= seconds * 1000 &&
-        Array.isArray(job.steps) &&
-        job.steps.every(
-          (step) =>
-            step.status === "completed" &&
-            ["success", "skipped", "cancelled"].includes(step.conclusion),
-        ) &&
-        (boundary ||
-          (job.steps.filter((step) => step.conclusion === "cancelled").length === 1 &&
-            job.steps.some(
-              (step) => step.name === "Run Node test shard" && step.conclusion === "cancelled",
-            ))),
-      "deadline root has contradictory duration or additional failed steps",
-    );
-    const binding = boundary
-      ? qualifyBoundaryDeadline(context, job, seconds, cancelled.length)
-      : { workflowBlob: readWorkflow(context).workflowBlob };
-    roots.set(job.id, {
-      deadline: { checkRunId, conclusion: job.conclusion, seconds, ...binding, annotations },
-    });
-  }
+    }),
+  );
+  // Join all reads before surfacing a refusal; the shared transport caps fan-out.
+  results.forEach(value);
   return roots;
 }
 
@@ -211,8 +227,17 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
   const { requireEvidence } = context;
   const binding = entry.failedStep;
   const productionTypes = binding?.workflowJob === "check-shard";
-  const workflowJob = productionTypes ? "check-shard" : "checks-node-core-test-nondist-shard";
-  const stepName = productionTypes ? "Run check shard" : "Run Node test shard";
+  const realGateway = binding?.workflowJob === "checks-ui-e2e-real-gateway";
+  const workflowJob = realGateway
+    ? "checks-ui-e2e-real-gateway"
+    : productionTypes
+      ? "check-shard"
+      : "checks-node-core-test-nondist-shard";
+  const stepName = realGateway
+    ? "Test Control UI suites with a real Gateway"
+    : productionTypes
+      ? "Run check shard"
+      : "Run Node test shard";
   const steps = job.steps;
   requireEvidence(
     binding?.workflowJob === workflowJob &&
@@ -247,47 +272,83 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
   const owner = workflow?.jobs?.[workflowJob];
   const sourceSteps = owner?.steps?.filter((value) => value.name === step.name);
   const source = sourceSteps?.[0];
+  const build =
+    realGateway &&
+    owner?.steps?.find(
+      (value) => value.name === "Build runtime and Control UI artifacts for real-Gateway tests",
+    );
   requireEvidence(
     owner?.name ===
-      (productionTypes
-        ? "${{ matrix.check_name || 'check-shard' }}"
-        : "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}") &&
+      (realGateway
+        ? "${{ matrix.shard_count == 1 && 'checks-ui-e2e-real-gateway' || format('checks-ui-e2e-real-gateway ({0}/{1})', matrix.shard, matrix.shard_count) }}"
+        : productionTypes
+          ? "${{ matrix.check_name || 'check-shard' }}"
+          : "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}") &&
       Array.isArray(owner.needs) &&
       owner.needs.includes("preflight") &&
       owner.strategy?.matrix ===
-        (productionTypes
-          ? "${{ fromJSON((needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.check_matrix || needs.preflight.outputs.check_matrix)) }}"
-          : "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}") &&
+        (realGateway
+          ? "${{ fromJson(needs.preflight.outputs.ui_real_gateway_matrix) }}"
+          : productionTypes
+            ? "${{ fromJSON((needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.check_matrix || needs.preflight.outputs.check_matrix)) }}"
+            : "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}") &&
       (!productionTypes ||
         (owner.needs.includes("check-plan") &&
           owner.strategy["fail-fast"] === false &&
           source?.env?.TASK === "${{ matrix.task }}" &&
           source.if ===
             "matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)")) &&
+      (!realGateway ||
+        (owner.strategy["fail-fast"] === false &&
+          owner.strategy["max-parallel"] === 2 &&
+          source?.if === "matrix.run_tests" &&
+          source.env?.FROZEN_TARGET === "${{ needs.preflight.outputs.frozen_target }}" &&
+          source.env?.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64 ===
+            "${{ matrix.test_groups_gzip_base64 }}" &&
+          build?.run === "pnpm build" &&
+          build.env?.OPENCLAW_BUILD_PRIVATE_QA === "1" &&
+          [undefined, false].includes(build["continue-on-error"]) &&
+          steps.some((value) => value.name === build.name && value.conclusion === "success"))) &&
       [undefined, false].includes(owner["continue-on-error"]) &&
       sourceSteps?.length === 1 &&
-      source.shell === "bash" &&
+      source.shell === (realGateway ? undefined : "bash") &&
       source.uses === undefined &&
       [undefined, false].includes(source["continue-on-error"]) &&
       typeof source.run === "string" &&
       // Recognize audited entrypoints, not arbitrary workflow commands.
       digest(source.run) ===
-        (productionTypes
-          ? "bcaa8c10327d52a2964e7b14a085554c34e969eb4c23621198c57800f3a7cc2d"
-          : "43a70550e9537ea675a8052ebd4821200d24ffa6a48ccd3b44c047f667490691"),
-    `cancelled root requires the unchanged canonical ${productionTypes ? "production-type" : "Node shard"} workflow owner`,
+        (realGateway
+          ? "29353781c0f1a64854dd3183b13949d5b4581b091ca95ad5a99e0bb9f10279e2"
+          : productionTypes
+            ? "bcaa8c10327d52a2964e7b14a085554c34e969eb4c23621198c57800f3a7cc2d"
+            : "43a70550e9537ea675a8052ebd4821200d24ffa6a48ccd3b44c047f667490691"),
+    `cancelled root requires the unchanged canonical ${realGateway ? "real-Gateway UI" : productionTypes ? "production-type" : "Node shard"} workflow owner`,
   );
-  if (productionTypes) {
+  if (productionTypes || realGateway) {
     const jobStart = Date.parse(job.started_at);
     const jobEnd = Date.parse(job.completed_at);
+    const runnerPrelude = realGateway && steps[1]?.name === "Set up runner";
+    const offset = runnerPrelude ? 3 : 2;
     requireEvidence(
-      job.name === "check-prod-types" &&
+      (realGateway
+        ? /^checks-ui-e2e-real-gateway(?: \([12]\/2\))?$/u.test(job.name)
+        : job.name === "check-prod-types") &&
         context.jobs.filter((candidate) => candidate.name === job.name).length === 1 &&
-        step.number === owner.steps.indexOf(source) + 2 &&
+        step.number === owner.steps.indexOf(source) + offset &&
         steps[0].number === 1 &&
         steps[0].name === "Set up job" &&
+        (!realGateway ||
+          (steps[0].conclusion === "success" &&
+            steps.length === owner.steps.length + (runnerPrelude ? 5 : 3) &&
+            (!runnerPrelude ||
+              (steps[1].number === 2 &&
+                steps[1].conclusion === "success" &&
+                steps.at(-2).name === "Complete runner" &&
+                steps.at(-2).conclusion === "success")) &&
+            steps.at(runnerPrelude ? -3 : -2).name === "Post Setup Node environment" &&
+            steps.at(runnerPrelude ? -3 : -2).conclusion === "success")) &&
         owner.steps.every((expected, index) =>
-          steps.some((actual) => actual.number === index + 2 && actual.name === expected.name),
+          steps.some((actual) => actual.number === index + offset && actual.name === expected.name),
         ) &&
         steps.every((current, index) => {
           const start = Date.parse(current.started_at);
@@ -303,7 +364,7 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
                 Date.parse(steps[index - 1].completed_at) <= start))
           );
         }),
-      "cancelled production-type root requires complete ordered source-matching steps",
+      "cancelled root requires complete ordered source-matching steps",
     );
   }
   // Matrix membership and causal baseline qualification remain inspected evidence.
@@ -313,7 +374,7 @@ function qualifyFailedStep(context, entry, job, checkRunId) {
     conclusion: job.conclusion,
     workflowBlob,
     step,
-    ...(productionTypes ? { steps } : {}),
+    ...(productionTypes || realGateway ? { steps } : {}),
   };
 }
 
@@ -331,22 +392,27 @@ function verifyMatrixCancellation(context, cancellation, members) {
   const owner = workflow?.jobs?.[workflowJob];
   const failFast = owner?.strategy?.["fail-fast"];
   const repository = run.repository?.full_name;
-  const attemptAwareFailFast =
+  // Historical runs retain the cancellation policy from their tested workflow.
+  const historicalAttemptAware =
     failFast ===
-      "${{ github.event_name == 'pull_request' && (github.run_attempt != 1 || github.repository != 'openclaw/openclaw') }}" &&
+    "${{ github.event_name == 'pull_request' && (github.run_attempt != 1 || github.repository != 'openclaw/openclaw') }}";
+  const scopedFailFast =
+    (historicalAttemptAware ||
+      failFast ===
+        "${{ github.event_name == 'pull_request' && github.repository != 'openclaw/openclaw' }}") &&
     positiveInteger(run.run_attempt) &&
     typeof repository === "string" &&
     /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/u.test(repository) &&
     // Actions compares strings without case; github.repository is the workflow owner, not the fork.
-    (run.run_attempt > 1 || repository.toLowerCase() !== "openclaw/openclaw");
+    ((historicalAttemptAware && run.run_attempt > 1) ||
+      repository.toLowerCase() !== "openclaw/openclaw");
   requireEvidence(
     owner?.name === "${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}" &&
       Array.isArray(owner.needs) &&
       owner.needs.includes("preflight") &&
       owner.strategy?.matrix ===
         "${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}" &&
-      ([true, "${{ github.event_name == 'pull_request' }}"].includes(failFast) ||
-        attemptAwareFailFast) &&
+      ([true, "${{ github.event_name == 'pull_request' }}"].includes(failFast) || scopedFailFast) &&
       [undefined, false].includes(owner["continue-on-error"]),
     "the tested workflow must enable the existing PR matrix fail-fast contract",
   );
@@ -605,6 +671,7 @@ export function verifyPriorCiCancellation(context) {
     ]);
   } else {
     const owner = jobs.find((job) => job.id === cancellation.jobId);
+    // Retained pre-removal run receipts must match their historical job name exactly.
     requireEvidence(
       [undefined, "pr-fail-fast"].includes(cancellation.kind) &&
         owner?.name === "pr-fail-fast" &&

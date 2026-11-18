@@ -27,17 +27,16 @@ export function createDiscordSendReceiptFromResults(params: {
     results: attachChannelToResults("discord", params.results),
     threadId: params.threadId,
   });
-  return {
-    ...receipt,
-    parts: receipt.parts.map(({ platformMessageId, kind, threadId, replyToId, raw }, index) => ({
-      platformMessageId,
-      kind,
+  // The SDK returns fresh parts; aggregate indexing belongs to Discord.
+  receipt.parts.forEach((part, index) => {
+    Object.assign(part, {
       index,
-      threadId,
-      replyToId,
-      raw,
-    })),
-  };
+      threadId: part.threadId,
+      replyToId: part.replyToId,
+      raw: part.raw,
+    });
+  });
+  return receipt;
 }
 
 export function createDiscordSendReceipt(params: {
@@ -89,22 +88,17 @@ export function createDiscordSendResult(params: {
   // so shared delivery custody cannot mistake a placeholder for platform evidence.
   const messageId = params.result.id ?? "";
   const channelId = params.result.channel_id ?? params.fallbackChannelId;
-  const receiptParams: Parameters<typeof createDiscordSendReceipt>[0] = {
-    platformMessageIds: params.result.platformMessageIds?.length
-      ? params.result.platformMessageIds
-      : [messageId],
-    channelId,
-    kind: params.kind,
-  };
-  if (params.threadId != null) {
-    receiptParams.threadId = String(params.threadId);
-  }
-  if (params.reply) {
-    receiptParams.reply = params.reply;
-  }
   return {
     messageId,
     channelId,
-    receipt: createDiscordSendReceipt(receiptParams),
+    receipt: createDiscordSendReceipt({
+      platformMessageIds: params.result.platformMessageIds?.length
+        ? params.result.platformMessageIds
+        : [messageId],
+      channelId,
+      kind: params.kind,
+      threadId: params.threadId == null ? undefined : String(params.threadId),
+      reply: params.reply,
+    }),
   };
 }

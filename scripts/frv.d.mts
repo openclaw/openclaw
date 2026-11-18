@@ -26,7 +26,6 @@ interface FrvReadOptions {
 
 export interface FrvClient {
   repository?: string;
-  loadFlakeClassifications: typeof import("./full-release-flake-classification.mjs").loadFlakeClassifications;
   getReleaseEvidenceClient: () => ReturnType<
     typeof import("./release-ci-summary.mjs").createReleaseEvidenceClient
   >;
@@ -43,10 +42,10 @@ export interface FrvClient {
     runAttempt: number,
     options?: FrvReadOptions,
   ) => Promise<Record<string, unknown>>;
+  cancelRun?: (runId: string, force: boolean) => Promise<unknown>;
   rerunFailed?: (runId: string) => Promise<unknown>;
   rerunJob?: (jobId: number) => Promise<unknown>;
   rerunParent?: (runId: string) => Promise<unknown>;
-  cancelRun?: (runId: string) => Promise<unknown>;
   rerunRun?: (runId: string) => Promise<unknown>;
   listRuns?: (query: string) => Promise<Record<string, unknown>[]>;
   getVariable?: (name: string) => Promise<string>;
@@ -65,11 +64,12 @@ export interface FrvClient {
   ) => Promise<boolean>;
 }
 
-export type FrvConcreteClient = FrvClient &
-  Required<
+export type FrvConcreteClient = FrvClient & {
+  getRef: (fullRef: string, options?: FrvReadOptions) => Promise<Record<string, unknown>>;
+} & Required<
     Pick<
       FrvClient,
-      "rerunFailed" | "rerunJob" | "rerunParent" | "listRuns" | "verify" | "verifySeal"
+      "cancelRun" | "rerunJob" | "rerunParent" | "rerunRun" | "listRuns" | "verify" | "verifySeal"
     >
   >;
 
@@ -85,11 +85,26 @@ export function clearReleasePriority(
 export function watchRelease(
   parentRunId: string,
   client: Pick<
-    FrvClient,
-    "getAttemptJobs" | "getJobLog" | "getParentJobs" | "getRun" | "repository"
+    FrvConcreteClient,
+    | "getAttemptJobs"
+    | "getJobLog"
+    | "getParentJobs"
+    | "getRun"
+    | "repository"
+    | "getRef"
+    | "getReleaseEvidenceClient"
   >,
   options?: {
-    emit?: (event: { message: string; url?: string }) => void;
+    emit?: (event: {
+      message: string;
+      url?: string;
+      candidate?: {
+        sha: string | null;
+        ref: string | null;
+        tipSha: string | null;
+        state: "current" | "superseded" | "unknown";
+      };
+    }) => void;
     intervalMs?: number;
     once?: boolean;
     operationDeadline?: number;
@@ -98,7 +113,7 @@ export function watchRelease(
 ): Promise<{ complete: boolean; statePath: string }>;
 export function inspectContinuation(
   plan: Record<string, unknown>,
-  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository" | "loadFlakeClassifications">,
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun" | "repository">,
   options?: FrvReadOptions,
 ): Promise<FrvContinuationStatus>;
 export function createClient(
@@ -119,6 +134,24 @@ export function loadPlan(
   options: Record<string, unknown>,
   loadExecutionPlan?: (...args: unknown[]) => Promise<unknown>,
 ): Promise<Record<string, unknown>>;
+export function inspectUnsealedPlan(
+  options: { repository: string; runId: string },
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun">,
+): Promise<Record<string, unknown>>;
+export function loadPlanForCommand(
+  options: {
+    command: string;
+    operationDeadline?: number;
+    repository: string;
+    runId: string;
+    waitForSeal?: boolean;
+  },
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun">,
+  loadExecutionPlan?: (...args: unknown[]) => Promise<unknown>,
+): Promise<
+  | { plan: Record<string, unknown>; pending?: never }
+  | { plan?: never; pending: Record<string, unknown> }
+>;
 export function continueFailed(
   plan: Record<string, unknown>,
   rootRunId: string,
@@ -126,7 +159,19 @@ export function continueFailed(
   options?: Record<string, unknown>,
 ): Promise<{
   action: string;
+  continueCommand?: string;
   finalRunId?: string;
+  nextCommand?: string;
+  receipt?: {
+    acceptedRunAttempt: number;
+    child: string;
+    jobId: number;
+    jobName: string;
+    parentRunId: string;
+    runAttempt: number;
+    runId: string;
+    sourceRunAttempt: number;
+  };
   reruns?: Record<string, unknown>[];
   status: FrvContinuationStatus;
 }>;

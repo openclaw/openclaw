@@ -1,11 +1,14 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.i18n.nativeString
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.ModalBottomSheetProperties
 import androidx.compose.material3.SheetState
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
@@ -38,8 +41,7 @@ internal fun AppDialog(
   properties: DialogProperties = DialogProperties(),
   content: @Composable () -> Unit,
 ) {
-  val density = LocalDensity.current
-  PlatformDialog(onDismissRequest, properties, windowContent(density, content))
+  PlatformDialog(onDismissRequest, properties, windowContent(LocalDensity.current, content))
 }
 
 @Composable
@@ -77,6 +79,29 @@ internal fun AppAlertDialog(
 }
 
 @Composable
+internal fun AppConfirmationDialog(
+  title: String,
+  confirmLabel: String,
+  onConfirm: () -> Unit,
+  onDismiss: () -> Unit,
+  confirmEnabled: Boolean = true,
+  dismissLabel: String = nativeString("Cancel"),
+  text: @Composable () -> Unit,
+) {
+  AppAlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text(title) },
+    text = text,
+    confirmButton = {
+      TextButton(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmLabel) }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) { Text(dismissLabel) }
+    },
+  )
+}
+
+@Composable
 internal fun AppPopup(
   alignment: Alignment,
   offset: IntOffset,
@@ -84,8 +109,7 @@ internal fun AppPopup(
   properties: PopupProperties,
   content: @Composable () -> Unit,
 ) {
-  val density = LocalDensity.current
-  PlatformPopup(alignment, offset, onDismissRequest, properties, windowContent(density, content))
+  PlatformPopup(alignment, offset, onDismissRequest, properties, windowContent(LocalDensity.current, content))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

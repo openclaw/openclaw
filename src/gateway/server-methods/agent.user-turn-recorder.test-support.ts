@@ -1,20 +1,18 @@
 import path from "node:path";
-import { expect, onTestFinished } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, onTestFinished } from "vitest";
 import type { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-handler-");
 let fallbackStorePath: string | undefined;
 
-function getFallbackStorePath(): string {
+export function getAgentTestStorePath(): string {
   if (!fallbackStorePath) {
-    // Recorders in one test share an identity; release it after the teardown hooks drain.
-    const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-      onTestFinished(() => {
-        fallbackStorePath = undefined;
-        cleanup();
-      }),
-    );
-    fallbackStorePath = path.join(dirs.make("openclaw-agent-user-turn-"), "sessions.json");
+    // Cases share one locator until teardown; the suite retires database workers before removal.
+    fallbackStorePath = path.join(sessionDirs.make(), "sessions.json");
+    onTestFinished(() => {
+      fallbackStorePath = undefined;
+    });
   }
   return fallbackStorePath;
 }
@@ -41,7 +39,7 @@ export function createAgentTestUserTurnRecorder(
           expectedSessionId: "test-session-id",
           sessionKey: "agent:main:main",
           sessionEntry: { sessionId: "test-session-id", updatedAt: Date.now() },
-          storePath: getFallbackStorePath(),
+          storePath: getAgentTestStorePath(),
           agentId: "main",
         },
   });

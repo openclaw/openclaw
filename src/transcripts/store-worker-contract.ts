@@ -1,5 +1,3 @@
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
 import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
   queryTranscriptReadEntries,
@@ -24,67 +22,11 @@ import type {
   readTranscriptJsonlDigest,
 } from "./store-sqlite-read.js";
 import type {
-  writeMeetingTranscriptSessionInDatabase,
-  writeMeetingTranscriptSummaryInDatabase,
-} from "./store-sqlite-write.js";
-import type {
-  appendMeetingTranscriptUtterance,
   readRecentStoppedTranscriptSession,
   readTranscriptSummaryInputRevision,
 } from "./store-sqlite.js";
 
 type SessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-
-/** Host-only capture scheduling; functions never cross the worker boundary. */
-export type TranscriptAppendScheduler = (
-  write: (assertCurrent: () => void) => Promise<void>,
-) => Promise<void>;
-
-export type TranscriptWriteOperations = {
-  "transcripts.writeSession": {
-    input: Parameters<typeof writeMeetingTranscriptSessionInDatabase>[1] & { readOnly?: boolean };
-    output: { ok: true } | { ok: false; reason: "changed" | "conflict" };
-  };
-  "transcripts.markPendingExports": {
-    input: {
-      session: SessionIdentity;
-      fileNames: string[];
-      readOnly?: boolean;
-      lease?: OpenClawStateLeaseIdentity;
-    };
-    output: void;
-  };
-  "transcripts.recordExportManifest": {
-    input: {
-      session: SessionIdentity;
-      exportedHashes: Record<string, string>;
-      removedExports: string[];
-      readOnly?: boolean;
-      lease?: OpenClawStateLeaseIdentity;
-    };
-    output: void;
-  };
-  "transcripts.append": {
-    input: Omit<Parameters<typeof appendMeetingTranscriptUtterance>[0], "database"> & {
-      readOnly?: boolean;
-    };
-    output: void;
-  };
-  "transcripts.writeSummary": {
-    input: {
-      session: SessionIdentity;
-      summaryValues: Parameters<typeof writeMeetingTranscriptSummaryInDatabase>[2];
-      guard?: Parameters<typeof writeMeetingTranscriptSummaryInDatabase>[3];
-      readOnly?: boolean;
-    };
-    output: { ok: true } | { ok: false; reason: "changed" };
-  };
-};
-
-export type TranscriptWriteCommand = SqliteWorkerCommand<TranscriptWriteOperations>;
-export type TranscriptExportWriteKey =
-  | "transcripts.markPendingExports"
-  | "transcripts.recordExportManifest";
 
 export type TranscriptReadRequests = {
   "transcripts.canonicalSessionRow": {
@@ -129,7 +71,7 @@ export type TranscriptReadRequests = {
   };
   "transcripts.latest": { input: undefined; output: ReturnType<typeof readLatestTranscriptEntry> };
   "transcripts.notes": {
-    input: { session: SessionIdentity; purpose: TranscriptReadPurpose };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readStoredTranscriptNotes>;
   };
   "transcripts.libraryEntry": {
@@ -145,7 +87,7 @@ export type TranscriptReadRequests = {
     output: ReturnType<typeof readTranscriptSummaryInputRevision>;
   };
   "transcripts.utterances": {
-    input: { session: SessionIdentity; maxUtterances?: number };
+    input: { session: SessionIdentity };
     output: ReturnType<typeof readTranscriptUtterances>;
   };
   "transcripts.summary": {
@@ -168,5 +110,3 @@ export type TranscriptReadOperations = {
     output: TranscriptReadResult<TranscriptReadRequests[Key]["output"]>;
   };
 };
-
-export type TranscriptReadCommand = SqliteWorkerCommand<TranscriptReadOperations>;

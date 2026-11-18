@@ -1,9 +1,6 @@
-import fs from "node:fs/promises";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { BundleMcpConfig } from "../../plugins/bundle-mcp.js";
+import type { BundleMcpConfig } from "../../plugins/bundle-mcp.types.js";
 import { resolveQuestionTimeoutMs } from "../tools/ask-user-tool-normalization.js";
-import { withOpenClawMcpCaptureHeader } from "./bundle-mcp-runtime.js";
 
 export const CLAUDE_MANAGED_MCP_TIMEOUT_MS = resolveQuestionTimeoutMs(3_600);
 
@@ -91,28 +88,4 @@ export function injectClaudeMcpConfigArgs(
     deniedTools.push("WebSearch");
   }
   return mergeClaudeDisallowedTools(next, deniedTools.toSorted());
-}
-
-/** Writes the active per-attempt capture token into OpenClaw's generated Claude MCP config. */
-export async function writeClaudeMcpCaptureConfig(params: {
-  mcpConfigPath: string;
-  captureKey: string;
-}): Promise<void> {
-  const raw = JSON.parse(await fs.readFile(params.mcpConfigPath, "utf-8")) as unknown;
-  if (!isRecord(raw)) {
-    throw new Error("Claude MCP capture requires an object config");
-  }
-  await fs.writeFile(
-    params.mcpConfigPath,
-    `${JSON.stringify(
-      withOpenClawMcpCaptureHeader(
-        raw,
-        params.captureKey,
-        "Claude MCP capture requires an openclaw server config",
-      ),
-      null,
-      2,
-    )}\n`,
-    "utf-8",
-  );
 }

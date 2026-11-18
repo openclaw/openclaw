@@ -9,7 +9,9 @@ import {
   renderAndroidReleaseNotes,
   renderAndroidVersionProperties,
 } from "./lib/android-version.ts";
+import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { parseReleaseVersion } from "./lib/release-version.mjs";
+import { versionValueFlag } from "./lib/version-script-args.ts";
 
 const MACOS_INFO_PLIST = "apps/macos/Sources/OpenClaw/Resources/Info.plist";
 const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
@@ -27,16 +29,7 @@ type ReleaseVersionArgs = {
   version: string | null;
 };
 
-type ReleaseVersionChange = {
-  currentContent: string;
-  nextContent: string;
-  path: string;
-};
-
-type ReleaseVersionPlan = {
-  changes: ReleaseVersionChange[];
-  version: string;
-};
+type ReleaseVersionPlan = ReturnType<typeof planReleaseVersion>;
 
 type AndroidVersionManifest = {
   version?: unknown;
@@ -44,59 +37,38 @@ type AndroidVersionManifest = {
 };
 
 export function parseReleaseVersionArgs(argv: string[]): ReleaseVersionArgs {
-  let android = false;
-  let help = false;
-  let mode: ReleaseVersionMode = "check";
-  let rootDir = path.resolve(".");
-  let version: string | null = null;
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--": {
-        break;
-      }
-      case "--android": {
-        android = true;
-        break;
-      }
-      case "--check": {
-        mode = "check";
-        break;
-      }
-      case "--root": {
-        rootDir = path.resolve(readOptionValue(argv, index, arg));
-        index += 1;
-        break;
-      }
-      case "--version": {
-        version = readOptionValue(argv, index, arg);
-        index += 1;
-        break;
-      }
-      case "--write": {
-        mode = "write";
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
+  const args: ReleaseVersionArgs = {
+    android: false,
+    help: false,
+    mode: "check",
+    rootDir: path.resolve("."),
+    version: null,
+  };
+  return parseFlagArgs(
+    argv,
+    args,
+    [
+      booleanFlag("--android", "android", true, { repeatable: true }),
+      booleanFlag("--check", "mode", "check", { repeatable: true }),
+      booleanFlag("--write", "mode", "write", { repeatable: true }),
+      booleanFlag("-h", "help", true, { repeatable: true }),
+      booleanFlag("--help", "help", true, { repeatable: true }),
+      versionValueFlag("--root", "rootDir", path.resolve),
+      versionValueFlag("--version", "version"),
+    ],
+    {
+      onUnhandledArg(arg) {
         throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { android, help, mode, rootDir, version };
+      },
+    },
+  );
 }
 
 export function planReleaseVersion(params: {
   android?: boolean;
   rootDir?: string;
   version: string;
-}): ReleaseVersionPlan {
+}) {
   const rootDir = path.resolve(params.rootDir ?? ".");
   const parsedVersion = parseReleaseVersion(params.version);
   if (!parsedVersion) {
@@ -183,7 +155,7 @@ export function main(argv = process.argv.slice(2)): number {
   return 0;
 }
 
-function planPackageJson(rootDir: string, version: string): ReleaseVersionChange {
+function planPackageJson(rootDir: string, version: string) {
   const filePath = path.join(rootDir, "package.json");
   const currentContent = fs.readFileSync(filePath, "utf8");
   const packageJson = JSON.parse(currentContent) as Record<string, unknown>;
@@ -201,7 +173,7 @@ function planPackageJson(rootDir: string, version: string): ReleaseVersionChange
 function planMacosInfoPlist(
   rootDir: string,
   releaseVersion: NonNullable<ReturnType<typeof parseReleaseVersion>>,
-): ReleaseVersionChange {
+) {
   const filePath = path.join(rootDir, MACOS_INFO_PLIST);
   const currentContent = fs.readFileSync(filePath, "utf8");
   const buildVersion = [
@@ -225,7 +197,7 @@ function planMacosInfoPlist(
   return { currentContent, nextContent, path: filePath };
 }
 
-function planAndroidVersion(rootDir: string, baseVersion: string): ReleaseVersionChange[] {
+function planAndroidVersion(rootDir: string, baseVersion: string) {
   const versionPath = path.join(rootDir, ANDROID_VERSION_FILE);
   const propertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
   const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);
@@ -283,14 +255,6 @@ function replacePlistString(content: string, key: string, value: string, filePat
     throw new Error(`${filePath} must contain exactly one string value for ${key}.`);
   }
   return content.replace(pattern, `$1${value}$3`);
-}
-
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
 }
 
 function printUsage(): void {

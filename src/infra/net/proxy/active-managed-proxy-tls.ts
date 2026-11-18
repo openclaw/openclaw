@@ -1,4 +1,3 @@
-// Resolves OpenClaw-managed proxy TLS trust for non-Undici transports.
 import { resolveEnvHttpProxyUrl } from "../proxy-env.js";
 import { getActiveManagedProxyTlsOptions, getActiveManagedProxyUrl } from "./active-proxy-state.js";
 import {
@@ -12,19 +11,8 @@ type ResolveActiveManagedProxyTlsOptionsParams = {
   env?: NodeJS.ProcessEnv;
 };
 
-const MANAGED_PROXY_ENV_PREFIX = ["OPENCLAW", "PROXY"].join("_");
-const MANAGED_PROXY_ACTIVE_ENV_KEY = `${MANAGED_PROXY_ENV_PREFIX}_ACTIVE`;
-const MANAGED_PROXY_CA_FILE_ENV_KEY = `${MANAGED_PROXY_ENV_PREFIX}_CA_FILE`;
-
 function normalizeProxyUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    return new URL(value).href;
-  } catch {
-    return undefined;
-  }
+  return value ? URL.parse(value)?.href : undefined;
 }
 
 function resolveManagedProxyUrl(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -32,7 +20,7 @@ function resolveManagedProxyUrl(env: NodeJS.ProcessEnv = process.env): string | 
   if (activeProxyUrl) {
     return activeProxyUrl.href;
   }
-  if (env[MANAGED_PROXY_ACTIVE_ENV_KEY] !== "1") {
+  if (env.OPENCLAW_PROXY_ACTIVE !== "1") {
     return undefined;
   }
   // Child processes inherit only env, so recover the managed proxy URL from
@@ -58,7 +46,7 @@ export function resolveActiveManagedProxyTlsOptions(
   }
   const proxyCaFile = resolveManagedProxyCaFileForUrl({
     proxyUrl: managedProxyUrl,
-    caFileOverride: env[MANAGED_PROXY_CA_FILE_ENV_KEY],
+    caFileOverride: env.OPENCLAW_PROXY_CA_FILE,
   });
   try {
     return loadManagedProxyTlsOptionsSync(proxyCaFile);

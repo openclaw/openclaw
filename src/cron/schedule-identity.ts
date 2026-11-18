@@ -1,12 +1,18 @@
 /** Builds stable identities for cron scheduling inputs. */
+import { stableStringify } from "@openclaw/normalization-core";
 import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
+import { isCronEventSchedule } from "./source-schedule.js";
 import { normalizeCronStaggerMs } from "./stagger.js";
+import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronSchedule } from "./types.js";
 
 type CronScheduleIdentityInput = { schedule?: unknown; enabled?: unknown } & Record<
@@ -37,7 +43,8 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     rawKind === "every" ||
     rawKind === "cron" ||
     rawKind === "on-exit" ||
-    rawKind === "stream"
+    rawKind === "stream" ||
+    rawKind === "event"
       ? rawKind
       : at
         ? "at"
@@ -47,6 +54,9 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
             ? "cron"
             : undefined;
 
+  if (kind === "event") {
+    return isCronEventSchedule(schedule) ? schedule : undefined;
+  }
   if (kind === "at") {
     return at ? { kind: "at", at } : undefined;
   }
@@ -57,9 +67,9 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     return { kind: "cron", expr, tz, staggerMs };
   }
   if (kind === "on-exit") {
-    const command = normalizeOptionalString(schedule.command);
+    const command = readNonBlankString(schedule.command);
     return command
-      ? { kind: "on-exit", command, cwd: normalizeOptionalString(schedule.cwd) }
+      ? { kind: "on-exit", command, cwd: readNonBlankString(schedule.cwd) }
       : undefined;
   }
   if (kind === "stream") {
@@ -75,7 +85,7 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     return {
       kind: "stream",
       command: [...command],
-      cwd: normalizeOptionalString(schedule.cwd),
+      cwd: readNonBlankString(schedule.cwd),
       mode: mode === "line" || mode === "match" ? mode : undefined,
       match: typeof schedule.match === "string" ? schedule.match : undefined,
       batchMs: readScheduleInteger(schedule, "batchMs"),
@@ -111,15 +121,21 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
       ? schedulePayloadFromRecord(job.schedule as Record<string, unknown>)
       : undefined;
   const pacing = resolvePacingPayload(job);
-  if (!schedule || pacing === null) {
+  const streamSandbox = parseCronStreamSandboxTarget(job.streamSandbox);
+  if (
+    !schedule ||
+    pacing === null ||
+    (job.streamSandbox !== undefined && (!streamSandbox || schedule.kind !== "stream"))
+  ) {
     return undefined;
   }
   return JSON.stringify({
     version: 2,
     enabled: typeof job.enabled === "boolean" ? job.enabled : true,
-    schedule,
+    schedule: schedule.kind === "event" ? JSON.parse(stableStringify(schedule)) : schedule,
     pacing,
     hasTrigger: job.trigger !== undefined && job.trigger !== null,
+    ...(streamSandbox ? { streamSandbox } : {}),
   });
 }
 

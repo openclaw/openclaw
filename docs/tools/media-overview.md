@@ -62,10 +62,11 @@ running in a Git worktree can read media from that worktree even when the agent'
 default workspace is elsewhere.
 
 Workspace-only access follows the session's approved filesystem root, which can
-include parent directories of the current working directory. Paths and symlinks
-that escape that root are rejected. Sandboxed tools read through the sandbox
-filesystem; selecting a host worktree does not grant access outside the sandbox.
-OpenClaw-managed inbound attachments retain their existing access rules.
+include parent directories of the current working directory. Host tools can also
+read the Gateway's media store, including browser screenshots and staged inbound
+attachments. Paths and symlinks outside these roots are rejected. Sandboxed tools
+read through the sandbox filesystem; selecting a host worktree does not grant
+access outside the sandbox.
 
 ## Provider capability matrix
 
@@ -134,7 +135,8 @@ user through the session's normal visible-reply mode: automatic final reply
 delivery when configured, or `message(action="send")` when the session requires
 the message tool. If the requester session is inactive or its active wake
 fails, and some generated media is still missing from the completion reply,
-OpenClaw sends an idempotent direct fallback with only the missing media. Media
+OpenClaw sends a direct fallback with only the missing media, without duplicate
+sends on retries. Media
 already delivered by the completion reply is not posted again.
 
 If completion delivery cannot be confirmed and the original session still exists,

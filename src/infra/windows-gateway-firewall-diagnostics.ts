@@ -1,6 +1,5 @@
-// Read-only diagnostics for Windows LAN Gateway reachability.
 import { safeParseJson } from "@openclaw/normalization-core";
-import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
 const WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
@@ -143,26 +142,9 @@ export type WindowsGatewayFirewallDiagnostic = {
   details: string[];
 };
 
-type WindowsGatewayFirewallCommandResult = {
-  code: number | null;
-  stdout: string;
-  stderr?: string;
-  stdoutTruncatedBytes?: number;
-  stderrTruncatedBytes?: number;
-};
-
-type WindowsGatewayFirewallCommandRunner = (
-  argv: string[],
-  opts: { timeoutMs: number; maxOutputBytes?: number },
-) => Promise<WindowsGatewayFirewallCommandResult>;
-
 type InspectWindowsGatewayFirewallParams = {
   bind: string | undefined;
   port: number;
-  mode?: "quick";
-  platform?: NodeJS.Platform;
-  runCommandWithTimeout?: WindowsGatewayFirewallCommandRunner;
-  timeoutMs?: number;
 };
 
 type FirewallStatePayload = {
@@ -203,25 +185,10 @@ type QuickFirewallPayload = {
   LocalRules?: unknown;
 };
 
-function powershell(command: string): string[] {
-  return [
-    getWindowsPowerShellExePath(),
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-Command",
-    command,
-  ];
-}
-
-async function runBestEffortCommand(
-  runCommandWithTimeout: WindowsGatewayFirewallCommandRunner,
-  argv: string[],
-  timeoutMs: number,
-): Promise<string | null> {
+async function runBestEffortCommand(argv: string[]): Promise<string | null> {
   try {
     const result = await runCommandWithTimeout(argv, {
-      timeoutMs,
+      timeoutMs: WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS,
       maxOutputBytes: DEFAULT_OUTPUT_BYTES,
     });
     if ((result.stdoutTruncatedBytes ?? 0) > 0 || (result.stderrTruncatedBytes ?? 0) > 0) {
@@ -233,11 +200,10 @@ async function runBestEffortCommand(
   }
 }
 
-function parseJsonRows(value: unknown): unknown[] {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  return value && typeof value === "object" ? [value] : [];
+function parseJsonRows(value: unknown): Record<string, unknown>[] {
+  return (Array.isArray(value) ? value : [value]).filter(
+    (row): row is Record<string, unknown> => Boolean(row) && typeof row === "object",
+  );
 }
 
 function stringField(row: Record<string, unknown>, ...keys: string[]): string {
@@ -259,7 +225,7 @@ function stringField(row: Record<string, unknown>, ...keys: string[]): string {
 }
 
 function normalizeProfileName(value: string): string {
-  const normalized = value.trim().toLowerCase();
+  const normalized = value.toLowerCase();
   if (normalized === "domainauthenticated") {
     return "domain";
   }
@@ -268,7 +234,6 @@ function normalizeProfileName(value: string): string {
 
 function parseFirewallProfiles(value: unknown): FirewallProfile[] {
   return parseJsonRows(value)
-    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
     .map((row) => ({
       name: normalizeProfileName(stringField(row, "Name")),
       enabled: stringField(row, "Enabled").toLowerCase(),
@@ -279,42 +244,20 @@ function parseFirewallProfiles(value: unknown): FirewallProfile[] {
     .filter((profile) => profile.name.length > 0);
 }
 
-function parseConnectionProfileNames(value: unknown): string[] {
-  const names = parseJsonRows(value)
-    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
-    .map((row) => normalizeProfileName(stringField(row, "NetworkCategory")))
-    .filter(Boolean);
-  return [...new Set(names)];
-}
-
 function parseFirewallRules(value: unknown): FirewallRule[] {
-  return parseJsonRows(value)
-    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
-    .map((row) => ({
-      displayName: stringField(row, "DisplayName", "displayName", "Name") || "unnamed rule",
-      profile: stringField(row, "Profile", "profile").toLowerCase(),
-      policyStoreSource: stringField(row, "PolicyStoreSource", "policyStoreSource").toLowerCase(),
-      policyStoreSourceType: stringField(
-        row,
-        "PolicyStoreSourceType",
-        "policyStoreSourceType",
-      ).toLowerCase(),
-      program: stringField(row, "Program", "program").toLowerCase(),
-      localAddress: stringField(row, "LocalAddress", "localAddress").toLowerCase(),
-      remoteAddress: stringField(row, "RemoteAddress", "remoteAddress").toLowerCase(),
-    }));
-}
-
-function isTruthyFirewallValue(value: string): boolean {
-  return value === "true" || value === "allow" || value === "1";
-}
-
-function isBlockingInbound(profile: FirewallProfile): boolean {
-  return profile.enabled !== "false" && profile.defaultInboundAction !== "allow";
-}
-
-function inboundRulesAreAllowed(profiles: FirewallProfile[]): boolean {
-  return profiles.every((profile) => profile.allowInboundRules !== "false");
+  return parseJsonRows(value).map((row) => ({
+    displayName: stringField(row, "DisplayName", "displayName", "Name") || "unnamed rule",
+    profile: stringField(row, "Profile", "profile").toLowerCase(),
+    policyStoreSource: stringField(row, "PolicyStoreSource", "policyStoreSource").toLowerCase(),
+    policyStoreSourceType: stringField(
+      row,
+      "PolicyStoreSourceType",
+      "policyStoreSourceType",
+    ).toLowerCase(),
+    program: stringField(row, "Program", "program").toLowerCase(),
+    localAddress: stringField(row, "LocalAddress", "localAddress").toLowerCase(),
+    remoteAddress: stringField(row, "RemoteAddress", "remoteAddress").toLowerCase(),
+  }));
 }
 
 function findProfileSettings(
@@ -327,15 +270,6 @@ function findProfileSettings(
   return profiles.filter((profile) => activeProfileNames.includes(profile.name));
 }
 
-function profileMaskMatches(value: number, activeProfileNames: string[]): boolean {
-  const masks: Record<string, number> = {
-    domain: 1,
-    private: 2,
-    public: 4,
-  };
-  return activeProfileNames.some((name) => (value & (masks[name] ?? 0)) !== 0);
-}
-
 function ruleMatchesActiveProfile(rule: FirewallRule, activeProfileNames: string[]): boolean {
   if (activeProfileNames.length === 0) {
     return true;
@@ -346,18 +280,14 @@ function ruleMatchesActiveProfile(rule: FirewallRule, activeProfileNames: string
   }
   const numeric = Number.parseInt(profile, 10);
   if (Number.isFinite(numeric)) {
-    return profileMaskMatches(numeric, activeProfileNames);
+    const masks: Record<string, number> = {
+      domain: 1,
+      private: 2,
+      public: 4,
+    };
+    return activeProfileNames.some((name) => (numeric & (masks[name] ?? 0)) !== 0);
   }
   return activeProfileNames.some((name) => profile.includes(name));
-}
-
-function isLocalRule(rule: FirewallRule): boolean {
-  return (
-    !rule.policyStoreSourceType ||
-    rule.policyStoreSourceType === "local" ||
-    rule.policyStoreSourceType === "persistentstore" ||
-    rule.policyStoreSource === "persistentstore"
-  );
 }
 
 function isProgramAgnosticRule(rule: FirewallRule): boolean {
@@ -383,8 +313,11 @@ function localRulesAreAllowed(params: {
         profile.allowLocalFirewallRules && profile.allowLocalFirewallRules !== "notconfigured",
     );
     if (explicitProfiles.length > 0) {
-      return explicitProfiles.every((profile) =>
-        isTruthyFirewallValue(profile.allowLocalFirewallRules),
+      return explicitProfiles.every(
+        (profile) =>
+          profile.allowLocalFirewallRules === "true" ||
+          profile.allowLocalFirewallRules === "allow" ||
+          profile.allowLocalFirewallRules === "1",
       );
     }
   }
@@ -392,22 +325,17 @@ function localRulesAreAllowed(params: {
   return true;
 }
 
-function formatProfiles(activeProfileNames: string[]): string {
-  return activeProfileNames.length > 0 ? activeProfileNames.join(", ") : "unknown";
-}
-
 function formatRuleNames(rules: FirewallRule[]): string {
-  return rules
-    .map((rule) => rule.displayName)
-    .filter(Boolean)
-    .join(", ");
+  return rules.map((rule) => rule.displayName).join(", ");
 }
 
 function classifyWindowsGatewayFirewallState(
   state: ClassifiedFirewallState,
 ): WindowsGatewayFirewallDiagnostic {
   const activeProfiles = findProfileSettings(state.activeProfiles, state.activeProfileNames);
-  const blockingProfiles = activeProfiles.filter(isBlockingInbound);
+  const blockingProfiles = activeProfiles.filter(
+    (profile) => profile.enabled !== "false" && profile.defaultInboundAction !== "allow",
+  );
   const matchingActiveRules = state.matchingRules.filter((rule) =>
     ruleMatchesActiveProfile(rule, state.activeProfileNames),
   );
@@ -429,98 +357,99 @@ function classifyWindowsGatewayFirewallState(
   const mismatchedRules = state.matchingRules.filter(
     (rule) => !ruleMatchesActiveProfile(rule, state.activeProfileNames),
   );
-  const activeProfileText = formatProfiles(state.activeProfileNames);
+  const activeProfileNames = state.activeProfileNames;
+  const activeProfileText =
+    activeProfileNames.length > 0 ? activeProfileNames.join(", ") : "unknown";
+  const diagnostic = (
+    code: WindowsGatewayFirewallDiagnosticCode,
+    message: string,
+    details: string[],
+    severity: WindowsGatewayFirewallDiagnostic["severity"] = "warning",
+  ): WindowsGatewayFirewallDiagnostic => ({
+    applies: true,
+    severity,
+    code,
+    message,
+    details: [`Active network profile: ${activeProfileText}.`, ...details],
+  });
   const localRulesIgnored = (
     ruleDetail: string,
     policyDetail = "Local firewall rules are disabled for the active profile.",
-  ): WindowsGatewayFirewallDiagnostic => ({
-    applies: true,
-    severity: "warning",
-    code: "windows_firewall_local_rules_ignored",
-    message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
-    details: [
-      `Active network profile: ${activeProfileText}.`,
-      ruleDetail,
-      policyDetail,
-      "Use a Group Policy/administrator-managed inbound TCP allow rule for the Gateway port, or switch to a network path such as loopback, Tailscale, or an SSH tunnel.",
-    ],
-  });
+  ) =>
+    diagnostic(
+      "windows_firewall_local_rules_ignored",
+      "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+      [
+        ruleDetail,
+        policyDetail,
+        "Use a Group Policy/administrator-managed inbound TCP allow rule for the Gateway port, or switch to a network path such as loopback, Tailscale, or an SSH tunnel.",
+      ],
+    );
 
   if (activeProfiles.length > 0 && blockingProfiles.length === 0) {
-    return {
-      applies: true,
-      severity: "info",
-      code: "windows_firewall_unrestricted",
-      message:
-        "Windows Firewall is not blocking unsolicited inbound traffic on the active profile.",
-      details: [`Active network profile: ${activeProfileText}.`],
-    };
+    return diagnostic(
+      "windows_firewall_unrestricted",
+      "Windows Firewall is not blocking unsolicited inbound traffic on the active profile.",
+      [],
+      "info",
+    );
   }
 
   if (programAgnosticMatchingRules.length > 0) {
-    if (!inboundRulesAreAllowed(activeProfiles)) {
-      return {
-        applies: true,
-        severity: "warning",
-        code: "windows_firewall_inbound_rules_disabled",
-        message:
-          "Windows Firewall is configured to block inbound connections even when allow rules exist.",
-        details: [
-          `Active network profile: ${activeProfileText}.`,
+    if (!activeProfiles.every((profile) => profile.allowInboundRules !== "false")) {
+      return diagnostic(
+        "windows_firewall_inbound_rules_disabled",
+        "Windows Firewall is configured to block inbound connections even when allow rules exist.",
+        [
           `Matching allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
           "Enable inbound rules for the active Windows Firewall profile, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
         ],
-      };
+      );
     }
-    const onlyLocalRules = programAgnosticMatchingRules.every(isLocalRule);
+    const onlyLocalRules = programAgnosticMatchingRules.every(
+      (rule) =>
+        !rule.policyStoreSourceType ||
+        rule.policyStoreSourceType === "local" ||
+        rule.policyStoreSourceType === "persistentstore" ||
+        rule.policyStoreSource === "persistentstore",
+    );
     if (onlyLocalRules && !localRulesAreAllowed(state)) {
       return localRulesIgnored(
         `Matching local allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
         "Local firewall rules are not explicitly enabled for the active profile.",
       );
     }
-    return {
-      applies: true,
-      severity: "info",
-      code: "windows_firewall_rule_present",
-      message:
-        "Windows Firewall has an inbound TCP allow rule for the Gateway port on the active profile.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_rule_present",
+      "Windows Firewall has an inbound TCP allow rule for the Gateway port on the active profile.",
+      [
         `Matching allow rule(s): ${formatRuleNames(programAgnosticMatchingRules)}.`,
         "If another device still cannot connect, verify the advertised LAN URL from that device.",
       ],
-    };
+      "info",
+    );
   }
 
   if (programScopedMatchingRules.length > 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_program_scoped_rule_unverified",
-      message:
-        "Windows Firewall has a matching port allow rule, but it is scoped to a specific program.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_program_scoped_rule_unverified",
+      "Windows Firewall has a matching port allow rule, but it is scoped to a specific program.",
+      [
         `Program-scoped allow rule(s): ${formatRuleNames(programScopedMatchingRules)}.`,
         "Create an inbound TCP allow rule for the Gateway port that is not scoped to another executable, or verify the advertised LAN URL from another device.",
       ],
-    };
+    );
   }
 
   if (addressScopedMatchingRules.length > 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_address_scoped_rule_unverified",
-      message:
-        "Windows Firewall has a matching port allow rule, but it is scoped to specific addresses.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_address_scoped_rule_unverified",
+      "Windows Firewall has a matching port allow rule, but it is scoped to specific addresses.",
+      [
         `Address-scoped allow rule(s): ${formatRuleNames(addressScopedMatchingRules)}.`,
         "Create an inbound TCP allow rule for the Gateway port that covers LAN clients, or verify the advertised LAN URL from another device.",
       ],
-    };
+    );
   }
 
   if (programAgnosticLocalRules.length > 0 && !localRulesAreAllowed(state)) {
@@ -530,34 +459,28 @@ function classifyWindowsGatewayFirewallState(
   }
 
   if (mismatchedRules.length > 0) {
-    return {
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_rule_profile_mismatch",
-      message: "Windows Firewall has a Gateway allow rule, but not for the active network profile.",
-      details: [
-        `Active network profile: ${activeProfileText}.`,
+    return diagnostic(
+      "windows_firewall_rule_profile_mismatch",
+      "Windows Firewall has a Gateway allow rule, but not for the active network profile.",
+      [
         `Mismatched allow rule(s): ${formatRuleNames(mismatchedRules)}.`,
         "Create or update an inbound TCP allow rule for the active profile, or change the Windows network profile intentionally.",
       ],
-    };
+    );
   }
 
   if (!localRulesAreAllowed(state) && state.localMatchingRules.length === 0) {
     return localRulesIgnored("No active inbound TCP allow rule for the Gateway port was found.");
   }
 
-  return {
-    applies: true,
-    severity: "warning",
-    code: "windows_firewall_no_allow_rule",
-    message: "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
-    details: [
-      `Active network profile: ${activeProfileText}.`,
+  return diagnostic(
+    "windows_firewall_no_allow_rule",
+    "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
+    [
       "No enabled inbound TCP allow rule for the Gateway port was found in the active firewall policy.",
       "Allow the Gateway port in Windows Firewall, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
     ],
-  };
+  );
 }
 
 function firewallInspectionFailed(message: string): WindowsGatewayFirewallDiagnostic {
@@ -575,8 +498,7 @@ function firewallInspectionFailed(message: string): WindowsGatewayFirewallDiagno
 export async function inspectWindowsGatewayFirewall(
   params: InspectWindowsGatewayFirewallParams,
 ): Promise<WindowsGatewayFirewallDiagnostic> {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32" || params.bind !== "lan") {
+  if (process.platform !== "win32" || params.bind !== "lan") {
     return {
       applies: false,
       severity: "info",
@@ -586,13 +508,14 @@ export async function inspectWindowsGatewayFirewall(
     };
   }
 
-  const runCommandWithTimeout = params.runCommandWithTimeout ?? defaultRunCommandWithTimeout;
-  const timeoutMs = params.timeoutMs ?? WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS;
-  const quickJson = await runBestEffortCommand(
-    runCommandWithTimeout,
-    powershell(buildWindowsQuickFirewallCommand(params.port)),
-    timeoutMs,
-  );
+  const quickJson = await runBestEffortCommand([
+    getWindowsPowerShellExePath(),
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    buildWindowsQuickFirewallCommand(params.port),
+  ]);
   if (quickJson === null) {
     return firewallInspectionFailed(
       "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
@@ -612,8 +535,11 @@ export async function inspectWindowsGatewayFirewall(
   const state = quickPayload.State as FirewallStatePayload;
   const managedActiveRules = parseFirewallRules(quickPayload.ActiveRules);
   const localRules = parseFirewallRules(quickPayload.LocalRules);
+  const names = parseJsonRows(state.ConnectionProfiles)
+    .map((row) => normalizeProfileName(stringField(row, "NetworkCategory")))
+    .filter(Boolean);
   const policyState: ClassifiedFirewallState = {
-    activeProfileNames: parseConnectionProfileNames(state.ConnectionProfiles),
+    activeProfileNames: [...new Set(names)],
     activeProfiles: parseFirewallProfiles(state.ActiveFirewallProfiles),
     localProfiles: parseFirewallProfiles(state.LocalFirewallProfiles),
     matchingRules: [],
@@ -628,10 +554,8 @@ export async function inspectWindowsGatewayFirewall(
 
 export function formatWindowsGatewayFirewallGuidance(params: {
   bind: string | undefined;
-  platform?: NodeJS.Platform;
 }): string[] {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32" || params.bind !== "lan") {
+  if (process.platform !== "win32" || params.bind !== "lan") {
     return [];
   }
   return [

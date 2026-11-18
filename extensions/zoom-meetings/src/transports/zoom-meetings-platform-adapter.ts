@@ -7,22 +7,13 @@ import type {
   ZoomMeetingsMode,
   ZoomMeetingsTranscriptSnapshot,
 } from "./types.js";
-import {
-  zoomMeetingAudioCaptureScript,
-  zoomMeetingLeaveScript,
-  zoomMeetingStatusScript,
-  zoomMeetingTranscriptScript,
-} from "./zoom-meetings-page-scripts.js";
+import { zoomMeetingPageScripts } from "./zoom-meetings-page-scripts.js";
 import {
   isRecoverableZoomMeetingTab,
   isSameZoomMeetingUrl,
   normalizeZoomMeetingUrl,
   normalizeZoomMeetingUrlForReuse,
 } from "./zoom-meetings-urls.js";
-
-function zoomMeetingOrigin(meetingUrl: string): string | undefined {
-  return normalizeZoomMeetingUrlForReuse(meetingUrl) ? "https://app.zoom.us" : undefined;
-}
 
 export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<ZoomMeetingsMode>,
@@ -78,13 +69,9 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     retryCaptions: true,
     unavailableMessage:
       "Open the OpenClaw browser profile, finish the Zoom sign-in, admission, or permission prompt, then retry.",
-    origin: zoomMeetingOrigin,
-    scripts: {
-      audioCapture: zoomMeetingAudioCaptureScript,
-      status: zoomMeetingStatusScript,
-      leave: zoomMeetingLeaveScript,
-      transcript: zoomMeetingTranscriptScript,
-    },
+    origin: (meetingUrl) =>
+      normalizeZoomMeetingUrlForReuse(meetingUrl) ? "https://app.zoom.us" : undefined,
+    scripts: zoomMeetingPageScripts,
     statusFields: (parsed) => ({
       meetingEnded: typeof parsed.meetingEnded === "boolean" ? parsed.meetingEnded : undefined,
     }),

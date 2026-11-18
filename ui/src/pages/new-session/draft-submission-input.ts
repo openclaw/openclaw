@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatChatSelectionQuote } from "../../lib/chat/chat-selection-quote.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -7,37 +8,33 @@ import { showToast } from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { attachmentBatchRejection } from "../chat/components/chat-attachment-admission.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
-import type { NewSessionCapabilityController } from "./capability-controller.ts";
-import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
+import type { NewSessionVisibility } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
-import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
-import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
-import type { NewSessionPermissionSelection } from "./permission-selection.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
-/** Project the draft's explicit choices through the existing session-create parameter owner. */
-export function buildDraftSubmissionCreateParams(
-  place: DraftPlaceState,
-  gateway: DraftGatewayState,
-  draft: {
-    capabilities: Pick<NewSessionCapabilityController, "toolOverrides">;
-    permission: Pick<NewSessionPermissionSelection, "value">;
-    visibility: NewSessionVisibility;
-  },
-  snapshot: DraftSubmissionSnapshot,
-  options: DraftSessionCreateOverrides = {},
+/** Transcript excerpts travel as quoted message text, like chat; only real files upload. */
+function quoteSelectionAttachments(
+  submitted: { text: string; mentions?: readonly HumanMention[] },
+  attachments: readonly ChatAttachment[],
 ) {
-  return buildSelectedSessionCreateParams(place, {
-    ...options,
-    message: options.message ?? "",
-    toolOverrides: draft.capabilities.toolOverrides,
-    permissionMode: draft.permission.value,
-    visibility: options.visibility ?? draft.visibility,
-    catalogId: snapshot.data?.catalogId,
-    category: gateway.resolvedGroupCategory(),
-  });
+  const quotes = attachments.flatMap((item) =>
+    item.selectionAnnotation ? [formatChatSelectionQuote(item.selectionAnnotation)] : [],
+  );
+  if (!quotes.length) {
+    return submitted;
+  }
+  const text = [...quotes, submitted.text].filter(Boolean).join("\n\n");
+  const offset = text.length - submitted.text.length;
+  return {
+    text,
+    mentions: submitted.mentions?.map((mention) => ({
+      ...mention,
+      start: mention.start + offset,
+      end: mention.end + offset,
+    })),
+  };
 }
 
 /** Freeze the selected or recovered input before creation can yield to another draft. */
@@ -56,16 +53,19 @@ export function prepareDraftSubmission(
 ) {
   const pending = draft.pendingPlacement;
   const pendingPlacement = !startup && Boolean(pending.sessionKey);
-  const submitted = trimHumanMentions(draft.message, draft.mentions);
+  const submitted = quoteSelectionAttachments(
+    trimHumanMentions(draft.message, draft.mentions),
+    draft.attachmentDraft.attachments,
+  );
   const message = startup?.params.message ?? (pendingPlacement ? pending.message : submitted.text);
   const mentions = (
     startup ? startup.params.mentions : pendingPlacement ? pending.mentions : submitted.mentions
   )?.map(({ profileId, start, end }) => ({ profileId, start, end }));
-  const attachments = draft.attachmentDraft.attachments;
+  const attachments = draft.attachmentDraft.attachments.filter((item) => !item.selectionAnnotation);
   if (!startup && !pendingPlacement) {
     const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);
     if (error !== undefined) {
-      showToast({ message: error });
+      showToast({ severity: "error", message: error });
       return null;
     }
   }
@@ -83,6 +83,9 @@ export function prepareDraftSubmission(
   if (!client || !context.gateway.snapshot.hello) {
     return null;
   }
+  if (!startup && !pendingPlacement) {
+    place.modelControl.initializeAccessProgram();
+  }
   const completeInBackground = prepareBackgroundSessionCompletion({
     enabled: background,
     agentId: submissionAgentId,
@@ -95,7 +98,15 @@ export function prepareDraftSubmission(
     (pendingPlacement
       ? pending.createParams
       : buildSelectedSessionCreateParams(place, { message, visibility: draft.visibility }));
+  const { hello, selfUser } = context.gateway.snapshot;
   return {
+    turn: {
+      text: message,
+      mentions,
+      attachments,
+      createdAt: startup?.startedAt ?? Date.now(),
+      sender: resolveCurrentUserIdentity(hello, client.instanceId, selfUser) ?? undefined,
+    },
     consumeWorktreeName:
       submittedPlacement &&
       place.captureSubmittedWorktreeName(
@@ -115,21 +126,5 @@ export function prepareDraftSubmission(
     recoveryScope,
     completeInBackground,
     hasInitialTurn: Boolean(message || apiAttachments?.length),
-  };
-}
-
-export function prepareDraftSubmissionTurn(
-  context: ApplicationContext,
-  input: NonNullable<ReturnType<typeof prepareDraftSubmission>>,
-  createdAt: number,
-) {
-  const { hello, selfUser } = context.gateway.snapshot;
-  const sender = resolveCurrentUserIdentity(hello, input.client.instanceId, selfUser) ?? undefined;
-  return {
-    text: input.message,
-    mentions: input.mentions,
-    attachments: input.attachments,
-    createdAt,
-    sender,
   };
 }

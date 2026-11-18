@@ -3,10 +3,8 @@ import { resolveCurrentOpenClawCliInvocation } from "../../infra/openclaw-cli-in
 const TEST_RUNNER_ENV_PREFIXES = ["VITEST_", "OPENCLAW_VITEST_"];
 
 function quoteShellArg(value: string): string {
-  if (process.platform === "win32") {
-    return `'${value.replaceAll("'", "''")}'`;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
+  const escapedQuote = process.platform === "win32" ? "''" : "'\\''";
+  return `'${value.replaceAll("'", escapedQuote)}'`;
 }
 
 /** Prepares one CLI command and its source context before exec approval or dispatch. */

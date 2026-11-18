@@ -6,8 +6,8 @@ import {
 import { markCronJobActive } from "../active-jobs.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { createCronServiceState } from "./state.js";
+import { authorCronRunCompletion } from "./timer-job-runner.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
-import { authorCronRunCompletion } from "./timer.js";
 
 export type SendCronFailureAlert = NonNullable<
   Parameters<typeof createCronServiceState>[0]["sendCronFailureAlert"]
@@ -59,7 +59,7 @@ export async function finalizeAlertOutcome(params: {
       jobId: params.job.id,
       job: structuredClone(params.job),
       activeJobMarker: markCronJobActive(params.job.id),
-      ...authorCronRunCompletion(params.state, params.job, {
+      ...authorCronRunCompletion(params.job, {
         status: params.status,
         error: params.error,
       }),

@@ -46,14 +46,7 @@ function normalizeFeishuAllowlist(entries: Array<string | number> | undefined): 
   return (entries ?? []).map((entry) => normalizeFeishuAllowEntry(String(entry))).filter(Boolean);
 }
 
-function readContextFields(ctx: FeishuReadContext): {
-  accountId?: string;
-  currentChannelId?: string;
-  currentProvider?: string;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
-  directOperator: boolean;
-} {
+function readContextFields(ctx: FeishuReadContext) {
   if (isActionContext(ctx)) {
     return {
       accountId: normalizeOptionalString(ctx.accountId),
@@ -132,10 +125,7 @@ export function isFeishuGroupReadEnabled(
   account: ResolvedFeishuAccount,
   chatId: string,
 ): boolean {
-  if (resolveFeishuReadGroupPolicy(cfg, account) === "disabled") {
-    return false;
-  }
-  return resolveFeishuGroupConfig({ cfg: account.config, groupId: chatId })?.enabled !== false;
+  return isFeishuGroupReadAllowed(cfg, account, chatId, true);
 }
 
 export function canEnumerateAllFeishuPeers(account: ResolvedFeishuAccount): boolean {
@@ -213,20 +203,16 @@ export async function readFeishuChatInfoWithAuthorization<
   } catch (error) {
     if (params.preliminary.decision === "needs-metadata") {
       assertFeishuChatReadAllowed({
-        cfg: params.cfg,
-        account: params.account,
+        ...params,
         chatId: params.preliminary.chatId,
-        ctx: params.ctx,
       });
     }
     throw error;
   }
   assertFeishuChatReadAllowed({
-    cfg: params.cfg,
-    account: params.account,
+    ...params,
     chatId: params.preliminary.chatId,
     chatType: resolveFeishuChatType(chat),
-    ctx: params.ctx,
   });
   return chat;
 }

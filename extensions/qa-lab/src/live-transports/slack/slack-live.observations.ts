@@ -94,27 +94,30 @@ export async function listSlackThreadMessages(params: {
   return replies.messages ?? [];
 }
 
-function collectSlackBlockStringFields(
+function visitSlackBlockValues(
   value: unknown,
-  fieldName: string,
-  values: string[] = [],
-): string[] {
+  visit: (value: unknown, key?: string) => void,
+  key?: string,
+) {
+  visit(value, key);
   if (Array.isArray(value)) {
     for (const entry of value) {
-      collectSlackBlockStringFields(entry, fieldName, values);
+      visitSlackBlockValues(entry, visit);
     }
-    return values;
+  } else if (value && typeof value === "object") {
+    for (const [childKey, entry] of Object.entries(value)) {
+      visitSlackBlockValues(entry, visit, childKey);
+    }
   }
-  if (!value || typeof value !== "object") {
-    return values;
-  }
-  for (const [key, entry] of Object.entries(value)) {
+}
+
+function collectSlackBlockStringFields(value: unknown, fieldName: string): string[] {
+  const values: string[] = [];
+  visitSlackBlockValues(value, (entry, key) => {
     if (key === fieldName && typeof entry === "string" && entry.trim().length > 0) {
       values.push(entry);
-      continue;
     }
-    collectSlackBlockStringFields(entry, fieldName, values);
-  }
+  });
   return values;
 }
 
@@ -128,27 +131,17 @@ export function collectSlackActionValues(blocks?: unknown[]) {
 
 export function recordSlackObservedMessage(params: {
   channelId: string;
-  matchedScenario: boolean;
   message: SlackMessage;
   observedMessages: SlackObservedMessage[];
-  scenarioId: string;
-  scenarioTitle: string;
 }) {
   if (!params.message.ts) {
     return;
   }
   params.observedMessages.push({
-    actionValues: collectSlackActionValues(params.message.blocks),
     blockText: collectSlackBlockText(params.message.blocks),
-    botId: params.message.bot_id,
     channelId: params.channelId,
-    matchedScenario: params.matchedScenario,
-    scenarioId: params.scenarioId,
-    scenarioTitle: params.scenarioTitle,
     text: params.message.text ?? "",
-    threadTs: params.message.thread_ts,
     ts: params.message.ts,
-    userId: params.message.user,
   });
 }
 
@@ -167,17 +160,8 @@ export function parseSlackNativeApprovalAction(value: string) {
 
 function collectSlackButtonLabels(blocks?: unknown[]) {
   const labels: string[] = [];
-  function visit(value: unknown) {
-    if (Array.isArray(value)) {
-      for (const entry of value) {
-        visit(entry);
-      }
-      return;
-    }
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    const candidate = value as Record<string, unknown>;
+  visitSlackBlockValues(blocks ?? [], (value) => {
+    const candidate = asNonArrayRecord(value);
     if (candidate.type === "button") {
       const text = candidate.text;
       if (text && typeof text === "object") {
@@ -187,11 +171,7 @@ function collectSlackButtonLabels(blocks?: unknown[]) {
         }
       }
     }
-    for (const entry of Object.values(candidate)) {
-      visit(entry);
-    }
-  }
-  visit(blocks ?? []);
+  });
   return labels;
 }
 
@@ -256,9 +236,10 @@ function describeSlackObservedText(value: string) {
   }`;
 }
 
-export function isExpectedSlackNativeChartMessage(
+export function isExpectedSlackNativeDataMessage(
   message: SlackMessage,
   expectedAccessibleText: string,
+  kind: "chart" | "table",
 ) {
   if (
     normalizeSlackAccessibleText(message.text ?? "") !==
@@ -268,10 +249,20 @@ export function isExpectedSlackNativeChartMessage(
   }
   return (message.blocks ?? []).some((value) => {
     const block = asNonArrayRecord(value);
-    return isDeepStrictEqual(
-      { type: block.type, title: block.title, chart: block.chart },
-      SLACK_QA_NATIVE_CHART,
-    );
+    return kind === "chart"
+      ? isDeepStrictEqual(
+          { type: block.type, title: block.title, chart: block.chart },
+          SLACK_QA_NATIVE_CHART,
+        )
+      : isDeepStrictEqual(
+          {
+            type: block.type,
+            caption: block.caption,
+            rows: block.rows,
+            row_header_column_index: block.row_header_column_index,
+          },
+          SLACK_QA_NATIVE_TABLE,
+        );
   });
 }
 
@@ -313,59 +304,6 @@ export async function waitForSlackStoredMessage(params: {
     await sleep(Math.min(1_000, remainingMs));
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
-}
-
-async function waitForSlackStoredMessages(params: {
-  channelId: string;
-  client: WebClient;
-  description: string;
-  messageIds: readonly string[];
-  oldestTs: string;
-  sutIdentity: SlackAuthIdentity;
-  timeoutMs: number;
-}) {
-  const startedAt = Date.now();
-  while (true) {
-    const messages = await listSlackMessages(params);
-    const messagesById = new Map(
-      messages
-        .filter((message) => message.ts && isSutSlackMessage(message, params.sutIdentity))
-        .map((message) => [message.ts as string, message]),
-    );
-    if (params.messageIds.every((messageId) => messagesById.has(messageId))) {
-      return params.messageIds.map((messageId) => messagesById.get(messageId) as SlackMessage);
-    }
-    const remainingMs = params.timeoutMs - (Date.now() - startedAt);
-    if (remainingMs <= 0) {
-      break;
-    }
-    await sleep(Math.min(1_000, remainingMs));
-  }
-  throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack ${params.description}`);
-}
-
-export function isExpectedSlackNativeTableMessage(
-  message: SlackMessage,
-  expectedAccessibleText: string,
-) {
-  if (
-    normalizeSlackAccessibleText(message.text ?? "") !==
-    normalizeSlackAccessibleText(expectedAccessibleText)
-  ) {
-    return false;
-  }
-  return (message.blocks ?? []).some((value) => {
-    const block = asNonArrayRecord(value);
-    return isDeepStrictEqual(
-      {
-        type: block.type,
-        caption: block.caption,
-        rows: block.rows,
-        row_header_column_index: block.row_header_column_index,
-      },
-      SLACK_QA_NATIVE_TABLE,
-    );
-  });
 }
 
 export async function runSlackTableInvalidBlocksFallbackScenario(
@@ -463,15 +401,30 @@ export async function runSlackTableInvalidBlocksFallbackScenario(
     );
   }
 
-  const messages = await waitForSlackStoredMessages({
-    channelId: context.channelId,
-    client: context.sutReadClient,
-    description: "stored invalid_blocks fallback messages",
-    messageIds: receiptMessageIds,
-    oldestTs,
-    sutIdentity: context.sutIdentity,
-    timeoutMs: context.timeoutMs,
-  });
+  const { channelId, sutReadClient: client, sutIdentity, timeoutMs } = context;
+  async function waitForSlackStoredMessages() {
+    const startedAt = Date.now();
+    while (true) {
+      const messages = await listSlackMessages({ channelId, client, oldestTs });
+      const messagesById = new Map(
+        messages
+          .filter((message) => message.ts && isSutSlackMessage(message, sutIdentity))
+          .map((message) => [message.ts as string, message]),
+      );
+      if (receiptMessageIds.every((messageId) => messagesById.has(messageId))) {
+        return receiptMessageIds.map((messageId) => messagesById.get(messageId) as SlackMessage);
+      }
+      const remainingMs = timeoutMs - (Date.now() - startedAt);
+      if (remainingMs <= 0) {
+        break;
+      }
+      await sleep(Math.min(1_000, remainingMs));
+    }
+    throw new Error(
+      `timed out after ${timeoutMs}ms waiting for Slack stored invalid_blocks fallback messages`,
+    );
+  }
+  const messages = await waitForSlackStoredMessages();
   if (messages.some((message) => countSlackNativeDataBlocks(message.blocks) !== 0)) {
     throw new Error("stored Slack fallback retained a native data block");
   }

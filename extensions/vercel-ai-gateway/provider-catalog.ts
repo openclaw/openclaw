@@ -49,7 +49,7 @@ export function buildStaticVercelAiGatewayProvider(): ModelProviderConfig {
 }
 
 export async function buildVercelAiGatewayProvider(
-  options: { discoveryMode?: "strict" } = {},
+  options: { discoveryMode?: "strict"; discoveryApiKey?: string } = {},
 ): Promise<ModelProviderConfig> {
   return {
     baseUrl: VERCEL_AI_GATEWAY_BASE_URL,

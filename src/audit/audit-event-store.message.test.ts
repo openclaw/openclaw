@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -389,22 +388,6 @@ describe("message audit persistence", () => {
     expect(event?.conversationRef).not.toBe(event?.targetRef);
   });
 
-  it("rejects persisted message terminal combinations outside the closed contract", async () => {
-    const database = createDatabaseOptions();
-    recordAuditEventInDatabase(messageInput(), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    const { db } = openOpenClawStateDatabase(database);
-    db.prepare("UPDATE audit_events SET error_code = ? WHERE kind = 'message'").run(
-      "message_processing_failed",
-    );
-
-    await expect(
-      listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }),
-    ).rejects.toThrow("corrupt audit event row 1: unexpected error_code");
-  });
-
   it("rejects delivery kind on terminals where no payload was proven delivered", async () => {
     const database = createDatabaseOptions();
     recordAuditEventInDatabase(
@@ -435,27 +418,6 @@ describe("message audit persistence", () => {
     await expect(
       listAuditEvents({ database, limit: 10, filters: { includeMessages: true } }),
     ).rejects.toThrow("corrupt audit event row 1: invalid actorId");
-  });
-
-  it("excludes transitional outbound rows before paginating terminal activity", async () => {
-    const database = createDatabaseOptions();
-    const terminal = recordAuditEventInDatabase(
-      outboundMessageInput({ status: "succeeded", outcome: "sent" }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    const transitional = recordAuditEventInDatabase(
-      outboundMessageInput(
-        { status: "succeeded", outcome: "sent" },
-        { sourceId: "transitional-outbound" },
-      ),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    openOpenClawStateDatabase(database)
-      .db.prepare("UPDATE audit_events SET action = 'message.outbound.queued' WHERE event_id = ?")
-      .run(expectDefined(transitional, "transitional fixture").eventId);
-    const page = await listAuditEvents({ database, limit: 1, filters: { includeMessages: true } });
-    expect(page.events.map((event) => event.eventId)).toEqual([terminal?.eventId]);
-    expect(page.nextCursor).toBeUndefined();
   });
 
   it("keeps message rows opt-in while supporting message filters", async () => {

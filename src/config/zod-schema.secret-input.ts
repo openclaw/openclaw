@@ -15,7 +15,7 @@ const SecretRefProviderSchema = z
   );
 
 function createSecretRefSchema<const TSource extends string>(source: TSource, id: z.ZodString) {
-  return z.object({ source: z.literal(source), provider: SecretRefProviderSchema, id }).strict();
+  return z.strictObject({ source: z.literal(source), provider: SecretRefProviderSchema, id });
 }
 
 /** Config-level secret reference schema shared by model/provider/plugin credential fields. */

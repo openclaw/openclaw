@@ -17,13 +17,7 @@ class WearProxyListenerService : WearableListenerService() {
         },
       )
     val proxyClient = (application as? WearApplication)?.proxyClient ?: return
-    if (preferredNodeId == null) {
-      // Capability callbacks contain reachable nodes. Multiple routes remain
-      // ambiguous, so force the next request through fresh discovery.
-      proxyClient.invalidatePreferredPhoneNode()
-    } else {
-      proxyClient.updatePreferredPhoneNodeId(preferredNodeId)
-    }
+    proxyClient.updatePreferredPhoneNodeId(preferredNodeId)
   }
 
   override fun onMessageReceived(messageEvent: MessageEvent) {

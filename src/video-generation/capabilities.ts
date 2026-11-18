@@ -1,31 +1,13 @@
 import type {
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
-  VideoGenerationProvider,
+  VideoGenerationProviderCapabilities,
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
-function resolveVideoGenerationMode(params: {
-  inputImageCount?: number;
-  inputVideoCount?: number;
-}): VideoGenerationMode | null {
-  const inputImageCount = params.inputImageCount ?? 0;
-  const inputVideoCount = params.inputVideoCount ?? 0;
-  if (inputImageCount > 0 && inputVideoCount > 0) {
-    return null;
-  }
-  if (inputVideoCount > 0) {
-    return "videoToVideo";
-  }
-  if (inputImageCount > 0) {
-    return "imageToVideo";
-  }
-  return "generate";
-}
-
-export function listSupportedVideoGenerationModes(
-  provider: Pick<VideoGenerationProvider, "capabilities">,
-): VideoGenerationMode[] {
+export function listSupportedVideoGenerationModes(provider: {
+  capabilities: VideoGenerationProviderCapabilities;
+}): VideoGenerationMode[] {
   const modes: VideoGenerationMode[] = ["generate"];
   const imageToVideo = provider.capabilities.imageToVideo;
   if (imageToVideo?.enabled) {
@@ -39,7 +21,7 @@ export function listSupportedVideoGenerationModes(
 }
 
 export function resolveVideoGenerationModeCapabilities(params: {
-  provider?: Pick<VideoGenerationProvider, "capabilities">;
+  provider?: { capabilities: VideoGenerationProviderCapabilities };
   model?: string;
   inputImageCount?: number;
   inputVideoCount?: number;
@@ -49,7 +31,14 @@ export function resolveVideoGenerationModeCapabilities(params: {
 } {
   const inputImageCount = params.inputImageCount ?? 0;
   const inputVideoCount = params.inputVideoCount ?? 0;
-  const mode = resolveVideoGenerationMode(params);
+  let mode: VideoGenerationMode | null = "generate";
+  if (inputImageCount > 0 && inputVideoCount > 0) {
+    mode = null;
+  } else if (inputVideoCount > 0) {
+    mode = "videoToVideo";
+  } else if (inputImageCount > 0) {
+    mode = "imageToVideo";
+  }
   const capabilities = params.provider?.capabilities;
   const withModelLimits = <
     T extends VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,

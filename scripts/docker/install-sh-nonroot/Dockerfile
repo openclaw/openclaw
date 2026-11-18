@@ -1,6 +1,6 @@
-# syntax=docker/dockerfile:1.27.0
+# syntax=docker/dockerfile:1.28.0@sha256:bb22d9815c728170f72750f4e5b0d672e06176142e1d602c7e66c050100b7e5b
 
-FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 
 # Smoke images are pinned and short-lived, so skip distro upgrades here and
 # spend the time budget on installer coverage instead.
@@ -8,7 +8,7 @@ RUN --mount=type=cache,id=openclaw-install-sh-nonroot-apt-cache,target=/var/cach
   --mount=type=cache,id=openclaw-install-sh-nonroot-apt-lists,target=/var/lib/apt,sharing=locked \
   set -eux; \
   for attempt in 1 2 3; do \
-    if apt-get update -o Acquire::Retries=3; then break; fi; \
+    if apt-get update -o Acquire::Retries=3 -o APT::Update::Error-Mode=any; then break; fi; \
     echo "apt-get update failed (attempt ${attempt})" >&2; \
     if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
     sleep 3; \

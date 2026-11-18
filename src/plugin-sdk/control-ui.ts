@@ -6,6 +6,8 @@ import type {
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
+export { createSessionHeaderLink } from "./control-ui-session-link.js";
+export { translateControlUiMessage } from "./control-ui-translation.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -13,7 +15,19 @@ export type {
   ControlUiDashboardProps,
   ControlUiDialogProps,
 } from "./control-ui-components.js";
+export type { AgentsWorkspaceGetResult } from "@openclaw/gateway-protocol";
+export type { MemorySearchResponse } from "../../packages/memory-host-sdk/src/host/types.js";
 export type ControlUiDisposer = () => void;
+
+/** Tab-local recovery data bound to this authenticated Gateway account and plugin. */
+export type ControlUiRecoveryStorageV1 = {
+  readonly version: 1;
+  /** Throws after account, connection, activation, or view retirement. */
+  assertCurrent: () => void;
+  getItem: (key: string) => string | null;
+  setItem: (key: string, value: string) => void;
+  removeItem: (key: string) => void;
+};
 
 export type ControlUiConnection = {
   connected: boolean;
@@ -41,6 +55,7 @@ export type ControlUiSessionListQuery = Readonly<
     | "configuredAgentsOnly"
     | "includeGlobal"
     | "includeUnknown"
+    | "excludeDock"
     | "includeDerivedTitles"
     | "includeLastMessage"
   >
@@ -98,6 +113,12 @@ export type ControlUiSurfaceProps = {
     stream: string | null;
     loading: boolean;
   };
+  /** Only the feedback action/receipt beside a terminal run failure, not its details or recovery. */
+  "run-failure-feedback": BoardGetParams & {
+    /** The exact displayed failure, including when adjacent failures are grouped. */
+    runId: string;
+    repeatCount: number;
+  };
   "tool-result": BoardGetParams & {
     toolName: string;
     toolCallId: string;
@@ -113,6 +134,8 @@ export type ControlUiViewContext<T = Readonly<Record<string, string>>> = {
   readonly host: ControlUiHost;
   readonly signal: AbortSignal;
   readonly props: T;
+  /** Report a fatal mount failure; the host disposes this instance and offers Retry. */
+  reportError?: (error: unknown) => void;
   /** Presentation can pause a retained view without ending its host lifetime. */
   readonly presented: boolean;
   /** Mount the host's built-in view inside a replacement; it keeps receiving host updates. */
@@ -134,19 +157,47 @@ export type ControlUiPage = {
   mount: ControlUiView;
 };
 
+type ControlUiNavigationAction = {
+  id: string;
+  label: string;
+  icon?: string;
+  destructive?: boolean;
+  run: () => void | Promise<void>;
+};
+
 export type ControlUiNavigationItem = {
   id: string;
+  /** Navigation item ID in this plugin whose active section displays this child. */
+  parent?: string;
   label: string;
   page: ControlUiPageTarget;
   icon?: string;
   order?: number;
   /** False offers the destination in the pin editor without adding it to the sidebar. */
   defaultVisible?: boolean;
+  /** Context menu actions, available by right-click or the keyboard menu shortcut. */
+  actions?: ControlUiNavigationAction[];
+};
+
+/** A predefined installed renderer. Payload is data, never a generated template. */
+type ControlUiInlineView = {
+  id: string;
+  /** Exact component/payload interface version (1–65535), not the package version. */
+  version: number;
+  mount: ControlUiView<
+    BoardGetParams & {
+      payload: import("../plugins/host-hook-json.js").PluginJsonValue;
+      toolCallId: string;
+      toolName: string;
+    }
+  >;
 };
 
 export type ControlUiPanel = {
   id: string;
   label: string;
+  /** Fixed host icon-registry name; unknown/omitted names fall back to plug. Manifest SVG artwork takes precedence. */
+  icon?: string;
   mount: ControlUiView<BoardGetParams>;
 };
 
@@ -164,6 +215,8 @@ export type ControlUiAction = {
       session?: ControlUiSession;
       host: ControlUiHost;
       signal: AbortSignal;
+      /** Composer placement only: the invoking pane's live draft; retires with `signal`. */
+      composer?: { readonly draft: string; setDraft: (text: string) => void };
     },
   ) => void | Promise<void>;
 };
@@ -203,12 +256,20 @@ export type ControlUiHost = {
   readonly locale: string;
   redact: (text: string) => string;
   readonly connection: ControlUiConnection;
+  /** Absent or null until the authenticated recovery owner is available. Storage errors throw. */
+  readonly recoveryStorage?: ControlUiRecoveryStorageV1 | null;
   readonly components: ControlUiComponents;
   /**
    * Native modules share the operator's authenticated Gateway authority.
    * The Gateway enforces connection scopes, not a per-plugin RPC allowlist.
    */
   request: <T = unknown>(method: string, params?: Record<string, unknown>) => Promise<T>;
+  /**
+   * `session.message` listeners receive complete message bodies. Registration is
+   * synchronous, but delivery starts after the Gateway acknowledges full-body
+   * interest. In-flight roster events without bodies are skipped during admission;
+   * the host never delivers a bodyless `session.message` to a plugin listener.
+   */
   onEvent: (event: string, listener: (payload: unknown) => void) => ControlUiDisposer;
   subscribe: (listener: () => void) => ControlUiDisposer;
   sessions: {
@@ -223,7 +284,14 @@ export type ControlUiHost = {
       listener: (snapshot: ControlUiSessionListSnapshot) => void,
     ) => ControlUiSessionListSubscription;
     open: (session: BoardGetParams) => void;
-    create: (params?: { agentId?: string; label?: string }) => Promise<string | null>;
+    create: (params?: {
+      agentId?: string;
+      label?: string;
+      /** Presentation title without a unique label claim. */
+      displayName?: string;
+      /** Immutable dock surface; preserves the authenticated operator's creator identity. */
+      surface?: "plugin-dock";
+    }) => Promise<string | null>;
     patch: (
       session: BoardGetParams,
       patch: { label?: string; model?: string | null },
@@ -238,6 +306,19 @@ export type ControlUiHost = {
     setScope: (agentId: string | null) => void;
     refresh: () => Promise<void>;
   };
+  dock?: {
+    /** Dock a conversation beside the current page; replaces a conversation dock already open. */
+    openSession: (params: {
+      sessionKey: string;
+      agentId: string;
+      /** Dock tab title. */
+      label: string;
+      /** Untrusted ambient reference data, never instructions or access authority. */
+      context?: { page: string; detail?: Readonly<Record<string, string>> };
+    }) => void;
+    close: () => void;
+    readonly openSessionKey: string | null;
+  };
   navigation: {
     openPage: (target: ControlUiPageTarget, options?: ControlUiPageNavigationOptions) => void;
     pageHref: (
@@ -250,10 +331,19 @@ export type ControlUiHost = {
     invalidate: () => void;
     registerPage: (page: ControlUiPage) => ControlUiDisposer;
     registerNavigation: (item: ControlUiNavigationItem) => ControlUiDisposer;
+    /** Pin an already registered navigation item once; unknown or pinned IDs are a no-op. */
+    pinNavigation: (id: string) => void;
+    /** Remove this plugin's saved navigation pin; an absent pin is a no-op. */
+    unpinNavigation: (id: string) => void;
+    /** Whether this plugin's navigation ID is in the saved sidebar entries. */
+    isNavigationPinned: (id: string) => boolean;
     registerPanel: (panel: ControlUiPanel) => ControlUiDisposer;
+    /** Open an owned registered panel beside the supplied or currently selected session. */
+    openPanel: (id: string, session?: BoardGetParams) => void;
     registerAction: (action: ControlUiAction) => ControlUiDisposer;
     registerAccessory: (accessory: ControlUiAccessory) => ControlUiDisposer;
     registerWidget: (widget: ControlUiWidget) => ControlUiDisposer;
+    registerInlineView: (view: ControlUiInlineView) => ControlUiDisposer;
     registerReplacement: (replacement: ControlUiReplacement) => ControlUiDisposer;
     /** Select an owned replacement, or restore the built-in view for this surface. */
     selectReplacement: (surface: ControlUiSurface, id: string | null) => void;
@@ -268,3 +358,14 @@ export type ControlUiPlugin = {
 export function defineControlUiPlugin(plugin: ControlUiPlugin): ControlUiPlugin {
   return plugin;
 }
+export type { DoctorMemoryStatusPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
+export type {
+  ControlUiSettingsPlacement,
+  ControlUiSettingsSnapshot,
+  ControlUiSettingsComponents,
+  ControlUiSettingsContext,
+  ControlUiSettingsView,
+  ControlUiChannelSettingsSnapshot,
+  ControlUiChannelSettingsContext,
+  ControlUiChannelSettingsView,
+} from "./control-ui-settings.js";

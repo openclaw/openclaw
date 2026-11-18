@@ -4,7 +4,6 @@ type MinimalTheme = {
   accentSoft: (s: string) => string;
 };
 
-/** Default phrase cycle for animated waiting status. */
 export const defaultWaitingPhrases = [
   "flibbertigibbeting",
   "kerfuffling",
@@ -18,13 +17,6 @@ export const defaultWaitingPhrases = [
   "conjuring",
 ];
 
-/** Picks a stable phrase for a timer tick. */
-function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases) {
-  const idx = Math.floor(tick / 10) % phrases.length;
-  return phrases[idx] ?? phrases[0] ?? "waiting";
-}
-
-/** Applies a moving highlight window to status text. */
 function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   const width = 6;
   const hi = (ch: string) => theme.bold(theme.accentSoft(ch));
@@ -41,7 +33,6 @@ function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   return out;
 }
 
-/** Builds the single-line waiting status shown while a TUI run is active. */
 export function buildWaitingStatusMessage(params: {
   theme: MinimalTheme;
   tick: number;
@@ -49,7 +40,8 @@ export function buildWaitingStatusMessage(params: {
   connectionStatus: string;
   phrases?: string[];
 }) {
-  const phrase = pickWaitingPhrase(params.tick, params.phrases);
+  const phrases = params.phrases ?? defaultWaitingPhrases;
+  const phrase = phrases[Math.floor(params.tick / 10) % phrases.length] ?? phrases[0] ?? "waiting";
   const cute = shimmerText(params.theme, `${phrase}…`, params.tick);
   return `${cute} • ${params.elapsed} | ${params.connectionStatus}`;
 }

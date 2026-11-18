@@ -49,7 +49,7 @@ final class IOSDeviceSettingsPermissions {
             }
         case .speechRecognition:
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
-                SFSpeechRecognizer.requestAuthorization { completion($0 == .authorized) }
+                SFSpeechRecognizer.requestAuthorization { @Sendable in completion($0 == .authorized) }
             }
         case .contacts:
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
@@ -63,7 +63,7 @@ final class IOSDeviceSettingsPermissions {
             _ = await PermissionRequestBridge.awaitRequest(isCurrent: isCurrent) { completion in
                 PHPhotoLibrary.requestAuthorization(for: .readWrite) { completion(PhotoLibraryAccess.canRead($0)) }
             }
-        case .notifications, .location, .accessibility, .screenRecording:
+        case .notifications, .location, .accessibility, .screenRecording, .eventPosting:
             break
         }
         try Task.checkCancellation()

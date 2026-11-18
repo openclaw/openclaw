@@ -8,6 +8,7 @@ import {
   previewForDevToolLog,
   redactJsonValueForDevToolLog,
 } from "../lib/dev-tooling-safety.ts";
+import { CliArgumentError } from "../lib/error-format.mts";
 import { sleep as delay } from "../lib/sleep.mjs";
 
 const OPENAI_REALTIME_MODEL =
@@ -29,12 +30,6 @@ const GOOGLE_REALTIME_MODEL =
 const GOOGLE_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_GOOGLE_VOICE?.trim() || "Kore";
 const GOOGLE_LIVE_WS_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
-
-type RealtimeSmokeCliOptions = {
-  help: boolean;
-  openAIAudioCycles: number;
-  openAIOnly: boolean;
-};
 
 // Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
 type Browser = import("playwright").Browser;
@@ -58,19 +53,9 @@ type OpenAIHttpOptions = {
   timeoutMs?: number;
 };
 
-type OpenAIRealtimeBrowserResponseReader = (
-  response: Response,
-  label: string,
-  maxBytes: number,
-) => Promise<string>;
-
 type OpenAIWebRtcSmokeGlobal = typeof globalThis & {
-  openclawReadBoundedRealtimeResponseText?: OpenAIRealtimeBrowserResponseReader;
+  openclawReadBoundedRealtimeResponseText?: typeof readOpenAIRealtimeBrowserResponseText;
 };
-
-class CliArgumentError extends Error {
-  override name = "CliArgumentError";
-}
 
 function usage(): string {
   return [
@@ -87,7 +72,7 @@ function usage(): string {
   ].join("\n");
 }
 
-function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
+function parseRealtimeSmokeArgs(argv = process.argv.slice(2)) {
   let openAIAudioCycles = DEFAULT_OPENAI_AUDIO_CYCLES;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];

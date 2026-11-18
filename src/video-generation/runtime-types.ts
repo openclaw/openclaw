@@ -1,8 +1,8 @@
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import type { VideoGenerationRequest } from "./provider-types.js";
 import type {
   VideoGenerationIgnoredOverride,
   VideoGenerationNormalization,
-  VideoGenerationRequest,
   VideoGenerationResult,
 } from "./types.js";
 

@@ -235,8 +235,8 @@ class WearGatewayRepositoryTest {
           capabilities = capabilities,
         )
 
-      assertEquals("Main", agents.agents.single().name)
-      assertTrue(agents.agents.single().selected)
+      assertEquals("Main", agents.single().name)
+      assertTrue(agents.single().selected)
       assertFalse(status.connected)
       assertEquals("main", status.activeAgentId)
       assertEquals("openai/gpt-test", status.selectedModelRef)
@@ -463,7 +463,7 @@ class WearGatewayRepositoryTest {
         )
       for ((ack, controlCompleted) in acknowledgments) {
         val requester = RecordingRequester { _, _ -> json.parseToJsonElement(ack) }
-        assertEquals(ack, controlCompleted, WearGatewayRepository(requester).send(attempt, requirePreferredPhone = true))
+        assertEquals(ack, controlCompleted, WearGatewayRepository(requester).send(attempt))
         assertEquals(WearRpcMethod.ChatSend, requester.calls.single().first)
         assertEquals("phone-a", requester.expectedNodeIds.single())
         assertTrue(requester.requirePreferredNodes.single())

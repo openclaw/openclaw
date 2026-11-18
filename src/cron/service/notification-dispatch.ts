@@ -1,9 +1,9 @@
 /** Sends committed cron notifications through the live host and records delivery. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { DEFAULT_AGENT_TIMEOUT_MS } from "../../agents/timeout.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { noteCronJobsStoreCommit } from "../store.js";
-import { cronStoreKey } from "../store/key.js";
 import type { CronFailureNotificationDelivery } from "../types.js";
 import { locked } from "./locked.js";
 import {
@@ -17,10 +17,14 @@ import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
 import { enqueueCronNotification } from "./wake.js";
 
-export function dispatchCronNotification(
+export async function dispatchCronNotification(
   state: CronServiceState,
   notification: CronNotificationIntent,
-): void {
+): Promise<void> {
+  if (notification.kind === "failure-repair") {
+    await requestFailureRepair(state, notification);
+    return;
+  }
   let routing = notification.routing ? { ...notification.routing } : undefined;
   if (!routing) {
     const hasOwner =
@@ -35,10 +39,61 @@ export function dispatchCronNotification(
         );
   }
   if (notification.kind === "auto-disabled") {
-    enqueueCronNotification(state, notification.job, notification.text, notification.kind, routing);
+    await enqueueCronNotification(
+      state,
+      notification.job,
+      notification.text,
+      notification.kind,
+      routing,
+    );
   } else {
-    transportFailureAlert(state, notification, routing);
+    await transportFailureAlert(state, notification, routing);
   }
+}
+
+/**
+ * Sends the failure notice to the agent in the conversation that owns the job. If that turn
+ * cannot start, the plain alert goes to the job's route instead.
+ */
+async function requestFailureRepair(
+  state: CronServiceState,
+  notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
+): Promise<void> {
+  const jobId = notification.job.id;
+  const owner = state.store?.jobs.find((candidate) => candidate.id === jobId)?.owner;
+  const sessionKey = owner?.sessionKey?.trim();
+  const cycle: FailureAlertCycle = {
+    jobId,
+    alertAtMs: notification.job.state.lastFailureAlertAtMs,
+    runAtMs: notification.job.state.lastRunAtMs,
+    notificationId: notification.job.state.lastFailureNotificationId,
+    lifecycleGeneration: state.lifecycleGeneration,
+  };
+  const failed = async (err: unknown) => {
+    state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
+    await dispatchCronNotification(state, {
+      ...notification.fallback,
+      routing: notification.routing,
+    });
+  };
+  if (!sessionKey || !cycle.notificationId || !state.deps.runCronFailureRepair) {
+    await failed(new Error("Missing failure repair runner, owner session, or notice ID"));
+    return;
+  }
+  void state.deps
+    .runCronFailureRepair({
+      jobId,
+      repairId: cycle.notificationId,
+      timeoutMs: state.deps.failureRepairTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
+      agentId: owner?.agentId,
+      sessionKey,
+      message: notification.text,
+    })
+    .then(() => recordFailureAlertOutcome(state, cycle, { delivered: true, status: "delivered" }))
+    .catch(failed)
+    .catch((err: unknown) =>
+      state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair fallback failed"),
+    );
 }
 
 type FailureAlertCycle = {
@@ -58,14 +113,14 @@ async function recordFailureAlertOutcome(
   cycle: FailureAlertCycle,
   outcome: CronFailureNotificationDelivery,
 ): Promise<FailureAlertRecordResult> {
-  let ownsCycle = false;
+  let ownsCycle: boolean | undefined;
   try {
     return await locked(state, async () => {
       if (state.stopped || state.lifecycleGeneration !== cycle.lifecycleGeneration) {
         return "stale";
       }
       const context = captureOpenClawStateWorkerContext();
-      const storeKey = cronStoreKey(state.deps.storePath);
+      const storeKey = state.deps.storeKey;
       let result: FailureAlertRecordResult = "stale";
       await runCronRuntimeMutation({
         context,
@@ -89,11 +144,10 @@ async function recordFailureAlertOutcome(
             throw new Error("Cron failure-alert owner retired");
           }
         },
-        prepare(facts) {
-          ownsCycle = facts.ownsCycle;
-          return { value: {}, assertCurrent() {} };
-        },
+        // A replacement alert may race dispatch; the worker checks its persisted cycle.
+        snapshot: {},
         publish(committed) {
+          ownsCycle = committed.job !== undefined;
           if (committed.job) {
             noteCronJobsStoreCommit(storeKey);
             applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });
@@ -108,15 +162,15 @@ async function recordFailureAlertOutcome(
       { jobId: cycle.jobId, err: formatErrorMessage(err) },
       "cron: failed to record failure-alert outcome",
     );
-    return ownsCycle ? "persistence-failed" : "stale";
+    return ownsCycle === false ? "stale" : "persistence-failed";
   }
 }
 
-function transportFailureAlert(
+async function transportFailureAlert(
   state: CronServiceState,
   params: Extract<CronNotificationIntent, { kind: "failure-alert" }>,
   routing: CronNotificationRouting,
-): void {
+): Promise<void> {
   const jobId = params.job.id;
   const alertAtMs = params.job.state.lastFailureAlertAtMs;
   const lifecycleGeneration = state.lifecycleGeneration;
@@ -126,7 +180,13 @@ function transportFailureAlert(
     // No transport means no send whose outcome could be recorded: the alert
     // goes straight to the in-app fallback queue and the intent stays
     // "unknown", matching the pre-existing contract for transport-less setups.
-    enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert", routing);
+    await enqueueCronNotification(
+      state,
+      params.job,
+      params.payload.text ?? "",
+      "failure-alert",
+      routing,
+    );
     return;
   }
   void state.deps
@@ -148,7 +208,7 @@ function transportFailureAlert(
           outcome,
         );
         if (recordResult !== "stale" && outcome.status === "not-delivered") {
-          enqueueCronNotification(
+          await enqueueCronNotification(
             state,
             params.job,
             params.payload.text ?? "",

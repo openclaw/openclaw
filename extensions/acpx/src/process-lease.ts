@@ -3,7 +3,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { asOptionalObjectRecord, asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./state.js";
 
@@ -63,11 +63,6 @@ export type AcpxProcessLeaseStore = {
   markState(leaseId: string, state: AcpxProcessLeaseState): Promise<void>;
 };
 
-type AcpxProcessLeaseFile = {
-  version: 1;
-  leases: AcpxProcessLease[];
-};
-
 export function normalizeAcpxProcessLease(value: unknown): AcpxProcessLease | undefined {
   const record = asOptionalObjectRecord(value);
   if (
@@ -96,16 +91,6 @@ export function normalizeAcpxProcessLease(value: unknown): AcpxProcessLease | un
     startedAt: record.startedAt,
     state: record.state as AcpxProcessLeaseState,
   };
-}
-
-export function normalizeAcpxProcessLeaseFile(value: unknown): AcpxProcessLeaseFile {
-  const root = asRecord(value);
-  const leases = Array.isArray(root.leases)
-    ? root.leases
-        .map(normalizeAcpxProcessLease)
-        .filter((lease): lease is AcpxProcessLease => Boolean(lease))
-    : [];
-  return { version: 1, leases };
 }
 
 export function openAcpxProcessLeaseStateStore(

@@ -16,25 +16,20 @@ import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-sessio
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalProviderContractPluginIds,
-  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
 } from "../../../plugins/official-external-plugin-catalog.js";
-import {
-  resolveWebSearchInstallCatalogEntriesForEnv,
-  resolveWebSearchInstallCatalogEntry,
-} from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import {
+  collectConfiguredWebFetchPluginIds,
+  collectConfiguredWebSearchPluginIds,
+} from "./configured-provider-plugin-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
+import { acpxRuntimeIsConfigured } from "./configured-runtime-plugin-installs.js";
 import { collectBlockedPluginIds as collectBlockedPluginIdSet } from "./missing-configured-plugin-install.ids.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
-
-const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
-  // Codex can be selected as a harness for OpenAI models without a plugin entry.
-  codex: "codex",
-};
 
 type ReleaseConfiguredPluginIds = {
   pluginIds: string[];
@@ -80,11 +75,7 @@ function hasMaterialPluginEntry(entry: unknown): boolean {
 }
 
 function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
-  const entries = asNullableRecord(cfg.plugins?.entries);
-  if (!entries) {
-    return [];
-  }
-  return Object.entries(entries)
+  return Object.entries(asNullableRecord(cfg.plugins?.entries) ?? {})
     .filter(
       ([pluginId, entry]) =>
         !isNativeSessionCatalogOptOutOnly(pluginId, entry) && hasMaterialPluginEntry(entry),
@@ -114,72 +105,6 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
       !isChannelDisabled(cfg, channelId) && isChannelConfigured(cfg, channelId, env),
     sort: "locale",
   });
-}
-
-function collectAgentHarnessRuntimePluginIds(
-  cfg: OpenClawConfig,
-  _env: NodeJS.ProcessEnv,
-): string[] {
-  return collectConfiguredAgentHarnessRuntimes(cfg)
-    .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
-    .filter((pluginId): pluginId is string => Boolean(pluginId))
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function collectWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  if (cfg.tools?.web?.search?.enabled === false) {
-    return [];
-  }
-  const providerId = cfg.tools?.web?.search?.provider;
-  const entry =
-    typeof providerId === "string"
-      ? resolveWebSearchInstallCatalogEntry({ providerId })
-      : undefined;
-  return [
-    ...(entry?.pluginId ? [entry.pluginId] : []),
-    ...resolveWebSearchInstallCatalogEntriesForEnv(env).map((candidate) => candidate.pluginId),
-  ];
-}
-
-function collectWebFetchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const webFetch = cfg.tools?.web?.fetch;
-  if (webFetch?.enabled === false) {
-    return [];
-  }
-  const providerId = normalizeId(webFetch?.provider)?.toLowerCase();
-  return [
-    ...(providerId
-      ? resolveOfficialExternalProviderContractPluginIds({
-          contract: "webFetchProviders",
-          providerIds: new Set([providerId]),
-        })
-      : []),
-    ...resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-      contract: "webFetchProviders",
-      env,
-    }),
-  ];
-}
-
-function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
-  return resolveOfficialExternalProviderContractPluginIds({
-    contract: "speechProviders",
-    providerIds: collectConfiguredSpeechProviderIds(cfg),
-  });
-}
-
-function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
-  const acp = asNullableRecord(cfg.acp);
-  if (!acp) {
-    return [];
-  }
-  const backend = normalizeId(acp.backend)?.toLowerCase() ?? "";
-  const configured =
-    acp.enabled === true || asNullableRecord(acp.dispatch)?.enabled === true || backend === "acpx";
-  if (!configured || (backend && backend !== "acpx")) {
-    return [];
-  }
-  return ["acpx"];
 }
 
 function collectAllowOnlyOfficialPluginIds(cfg: OpenClawConfig): string[] {
@@ -215,17 +140,18 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
 function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
-  releaseVersion?: string;
 }): boolean {
-  const releaseVersion = params.releaseVersion ?? CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION;
   const currentComparedToRelease = compareOpenClawVersions(
     params.currentVersion ?? VERSION,
-    releaseVersion,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
   );
   if (currentComparedToRelease === null || currentComparedToRelease < 0) {
     return false;
   }
-  const touchedComparedToRelease = compareOpenClawVersions(params.touchedVersion, releaseVersion);
+  const touchedComparedToRelease = compareOpenClawVersions(
+    params.touchedVersion,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
+  );
   return touchedComparedToRelease === null || touchedComparedToRelease < 0;
 }
 
@@ -236,7 +162,6 @@ function collectReleaseConfiguredPluginIds(params: {
 }): ReleaseConfiguredPluginIds {
   const env = params.env ?? process.env;
   const pluginIds = new Set<string>();
-  const channelIds = new Set<string>();
   if (params.cfg.plugins?.enabled === false) {
     return { pluginIds: [], channelIds: [] };
   }
@@ -251,28 +176,28 @@ function collectReleaseConfiguredPluginIds(params: {
     ...collectMaterialPluginEntryIds(params.cfg),
     ...collectSlotPluginIds(params.cfg),
     ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
-    ...collectAgentHarnessRuntimePluginIds(params.cfg, env),
-    ...collectWebSearchPluginIds(params.cfg, env),
-    ...collectWebFetchPluginIds(params.cfg, env),
-    ...collectSpeechPluginIds(params.cfg),
-    ...collectAcpRuntimePluginIds(params.cfg),
+    ...collectConfiguredAgentHarnessRuntimes(params.cfg).filter((id) => id === "codex"),
+    ...collectConfiguredWebSearchPluginIds(params.cfg, env, "backfill"),
+    ...collectConfiguredWebFetchPluginIds(params.cfg, env),
+    ...resolveOfficialExternalProviderContractPluginIds({
+      contract: "speechProviders",
+      providerIds: collectConfiguredSpeechProviderIds(params.cfg),
+    }),
+    ...(acpxRuntimeIsConfigured(params.cfg) ? ["acpx"] : []),
     ...collectAllowOnlyOfficialPluginIds(params.cfg),
   ]) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
-  for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {
-    if (
+  const channelIds = collectConfiguredChannelIds(params.cfg, env).filter(
+    (channelId) =>
       !isChannelDisabled(params.cfg, channelId) &&
       !isDenied(params.cfg, channelId) &&
-      !isPluginEntryDisabled(params.cfg, channelId)
-    ) {
-      channelIds.add(channelId);
-    }
-  }
+      !isPluginEntryDisabled(params.cfg, channelId),
+  );
 
   return {
     pluginIds: [...pluginIds].toSorted((left, right) => left.localeCompare(right)),
-    channelIds: [...channelIds].toSorted((left, right) => left.localeCompare(right)),
+    channelIds,
   };
 }
 

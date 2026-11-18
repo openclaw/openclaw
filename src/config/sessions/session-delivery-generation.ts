@@ -1,88 +1,128 @@
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { isCronRunSessionKey, isCronSessionKey } from "../../sessions/session-key-utils.js";
-import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import {
+  canShareSqliteDatabaseAdmissions,
+  retainSqliteDatabaseAdmissionForPath,
+} from "../../infra/sqlite-database-admission.js";
+import { hasPendingSqliteNativeExecution } from "../../infra/sqlite-native-observer.js";
+import {
+  readSqliteNativeMutationRevision,
+  registerSqliteSchemaMutationListener,
+} from "../../infra/sqlite-schema-facts.js";
+import {
+  assertDatabasePathIdentity,
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
+import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
 import {
   isSessionStoreTopologyChange,
+  sessionChangeScopeAffectsStoredRows,
   sessionChanges,
   type SessionRowChange,
 } from "../../sessions/session-row-changes.js";
-import { getOpenIncognitoAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
-import {
-  registerOpenClawAgentDatabaseAsyncResource,
-  registerOpenClawAgentDatabaseReadCandidateResource,
-} from "../../state/openclaw-agent-db-resources.js";
+import { agentDatabaseBorrowers } from "../../state/openclaw-agent-db-borrower.js";
+import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
+import { readSessionEntryCreatedEntry } from "./session-accessor.sqlite-entry-cache-publication-state.js";
+import { assertSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   isPreparedSessionSharingChange,
   projectSessionSharingEntry,
   retainPreparedSessionGenerationFacts,
 } from "./session-accessor.sqlite-entry-cache.js";
-import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
-import { readCommittedIncognitoSessionSharing } from "./session-accessor.sqlite-incognito-sharing.js";
-import type { SessionDeliveryGeneration } from "./session-delivery-generation.types.js";
+import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
+import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { createLeaseDiagnostics } from "./session-delivery-generation-diagnostics.js";
+import {
+  SessionDeliveryGenerationRevokedError,
+  SessionDeliveryGenerationUnavailableError,
+} from "./session-delivery-generation-errors.js";
+import {
+  matchesSessionGeneration,
+  prepareMemorySessionGeneration,
+} from "./session-delivery-generation-memory.js";
+import {
+  createSessionGenerationReadBatch,
+  type GenerationRead,
+} from "./session-delivery-generation-read-batch.js";
+import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  createDynamicSessionSourceAssertion,
+  type PreparedSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "./session-source-authority.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import { prepareSessionStoreCandidatesInWorker } from "./session-transcript-worker-resources.js";
+import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-class SessionDeliveryGenerationRevokedError extends Error {
-  readonly code = "SESSION_DELIVERY_GENERATION_REVOKED";
-  constructor() {
-    super("The original session generation no longer accepts this delivery.");
-    this.name = "SessionDeliveryGenerationRevokedError";
-  }
-}
+export { isSessionDeliveryGenerationRevokedError } from "./session-delivery-generation-errors.js";
 
-class SessionDeliveryGenerationUnavailableError extends Error {
-  readonly code = "SESSION_DELIVERY_GENERATION_UNAVAILABLE";
-  constructor(options?: ErrorOptions) {
-    super(
-      "Session delivery generation is unavailable; retry after session storage is ready.",
-      options,
-    );
-    this.name = "SessionDeliveryGenerationUnavailableError";
-  }
-}
-
-export const isSessionDeliveryGenerationRevokedError = (error: unknown) =>
-  isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_REVOKED";
-const isSessionDeliveryGenerationUnavailableError = (error: unknown) =>
-  isRecord(error) && error.code === "SESSION_DELIVERY_GENERATION_UNAVAILABLE";
-
-type SessionGenerationFacts = Omit<SessionDeliveryGeneration, "sessionId"> & {
-  sessionId: string | null;
-};
-
-function isSessionGenerationFacts(value: unknown): value is SessionGenerationFacts {
+function isLeaseFacts(value: unknown): value is LeaseFacts {
   return (
     isRecord(value) &&
     [value.agentId, value.storePath, value.sessionKey].every(
       (field) => typeof field === "string" && field.length > 0 && field === field.trim(),
     ) &&
-    (value.sessionId === null ||
+    (value.sessionId == null ||
       (typeof value.sessionId === "string" &&
         value.sessionId.length > 0 &&
         value.sessionId === value.sessionId.trim())) &&
     typeof value.storePath === "string" &&
     path.isAbsolute(value.storePath) &&
-    (value.lifecycleRevision === null ||
+    (value.lifecycleRevision == null ||
       (typeof value.lifecycleRevision === "string" && value.lifecycleRevision.length > 0))
   );
 }
 
 /** Prepare once per delivery attempt; committed entry publications keep final I/O checks live. */
 async function prepareSessionGenerationLease(
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
+  initialRead: GenerationRead = withSessionEntriesFromStoresInWorker,
 ): Promise<{
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
+  assertNativeTransactionCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
+  readSessionSettings: () => Readonly<SessionGenerationEntry> | undefined;
+  prepareRead: () => Promise<void> | undefined;
   release: () => void;
+  bindCreation: (
+    operation: SessionEntryCreationOperation,
+    publishBinding?: (
+      binding: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision">,
+    ) => void,
+  ) => SessionSourceAssertion;
+  isCreationAdopted: () => boolean;
 }> {
-  if (!isSessionGenerationFacts(input)) {
+  if (!isLeaseFacts(input)) {
     throw new SessionDeliveryGenerationUnavailableError();
   }
+  const memory = captureSessionActorStorageOwner(
+    {
+      agentId: input.agentId,
+      storePath: input.storePath,
+      sessionKey: input.sessionKey,
+      env: input.env,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
+  if (memory) {
+    const prepared = await prepareMemorySessionGeneration(memory, input, onRevoked);
+    Object.assign(prepared.assertCurrent, {
+      prepareSessionSourceEffect: async () => ({ assertCurrent: prepared.assertCurrent }),
+    });
+    return prepared;
+  }
+  let readGeneration = initialRead;
   const generation = { ...input };
   const releases: Array<() => void> = [];
   const paths = new Set([path.resolve(generation.storePath)]);
@@ -90,18 +130,26 @@ async function prepareSessionGenerationLease(
   let invalidated = false;
   let revoked = false;
   let publications = 0;
+  let creation: SessionEntryCreationOperation | undefined;
+  let creationAdopted = false;
+  let publishCreatedBinding:
+    | ((binding: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision">) => void)
+    | undefined;
+  let databaseIdentity: string | undefined;
   let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
-  let observeIncognito: (() => void) | undefined;
+  const diag = createLeaseDiagnostics(() => ({ active, invalidated, revoked }));
   const release = () => {
     if (!active) {
       return;
     }
+    diag.flip("released");
     active = false;
     for (const stop of releases.splice(0).toReversed()) {
       stop();
     }
   };
   const revoke = () => {
+    diag.flip("resource-revoked");
     release();
     onRevoked?.(new SessionDeliveryGenerationUnavailableError());
   };
@@ -109,28 +157,42 @@ async function prepareSessionGenerationLease(
     if (revoked) {
       throw new SessionDeliveryGenerationRevokedError();
     }
-    if (!active || invalidated) {
-      throw new SessionDeliveryGenerationUnavailableError();
+    if (!active) {
+      throw diag.unavailable("active-closed");
+    }
+    if (invalidated) {
+      throw diag.unavailable("active-invalidated");
     }
   };
-  const checkEntry = (
-    entry: { sessionId: string; lifecycleRevision?: string } | null | undefined,
-  ) => {
+  const refuseCurrent = (error: unknown): never => {
+    const failure = diag.fallback("current-fallback", error);
+    onRevoked?.(failure);
+    throw failure;
+  };
+  const checkEntry = (entry: SessionGenerationEntry | null | undefined, committed = true) => {
     if (entry === undefined) {
-      throw new SessionDeliveryGenerationUnavailableError();
+      throw diag.unavailable("entry-missing");
     }
-    if (
-      (entry?.sessionId ?? null) !== generation.sessionId ||
-      (entry?.lifecycleRevision ?? null) !== generation.lifecycleRevision
-    ) {
+    if (!matchesSessionGeneration(generation, entry)) {
+      if (!committed) {
+        throw diag.unavailable("entry-tentative");
+      }
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
     }
+    if (entry && committed) {
+      generation.sessionId = entry.sessionId;
+    }
+    return entry;
   };
   const changed = (change: SessionRowChange) => {
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
+      return;
+    }
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
-        invalidated = true;
+        // Registration changes do not retarget an in-flight delivery. Its selected
+        // store, current permissions, and actual closure remain checked below.
         return;
       }
       if (typeof change.scope === "object") {
@@ -140,27 +202,12 @@ async function prepareSessionGenerationLease(
         if (change.scope.storePath && !paths.has(path.resolve(change.scope.storePath))) {
           return;
         }
-      } else if (
-        [
-          "profiles",
-          "catalog",
-          "acp",
-          "agent-runs",
-          "subagent-runs",
-          "worker-placements",
-          "worker-environments",
-          "config",
-          "config-presentation",
-          "config-profiles",
-        ].includes(change.scope)
-      ) {
-        return;
       }
+      diag.flip("row-invalidated");
       invalidated = true;
       return;
     }
     if (
-      change.scope === "automation" ||
       change.sessionKey !== generation.sessionKey ||
       (change.agentId && change.agentId !== generation.agentId) ||
       !change.storePath ||
@@ -175,150 +222,316 @@ async function prepareSessionGenerationLease(
     ) {
       return;
     }
-    if (!isPreparedSessionSharingChange(change)) {
-      invalidated = true;
-    } else if (observeIncognito && change.facts?.kind === "removed") {
-      revoked = true;
-    } else if (observeIncognito) {
-      // Observe each committed transition, even if another write restores the old values.
-      try {
-        observeIncognito();
-      } catch (error) {
-        if (!isSessionDeliveryGenerationRevokedError(error)) {
-          invalidated = true;
-        }
+    if (creation && !creationAdopted) {
+      const created = readSessionEntryCreatedEntry(change, creation);
+      if (created && retained?.adoptCreatedEntry(created)) {
+        generation.sessionId = created.sessionId;
+        generation.lifecycleRevision = created.lifecycleRevision ?? null;
+        creationAdopted = true;
+        publishCreatedBinding?.({
+          sessionId: created.sessionId,
+          lifecycleRevision: created.lifecycleRevision,
+        });
+      } else {
+        revoked = true;
       }
+    }
+    if (!isPreparedSessionSharingChange(change)) {
+      diag.flip("row-invalidated");
+      invalidated = true;
     }
   };
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
-    let readCurrent: () => void;
-    if (isIncognitoSessionKey(generation.sessionKey)) {
-      const database = getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath);
-      if (!database && generation.sessionId !== null) {
-        throw new SessionDeliveryGenerationRevokedError();
-      }
-      releases.push(
-        registerOpenClawAgentDatabaseAsyncResource({
-          agentId: generation.agentId,
-          path: generation.storePath,
-          revoke,
-          close: async () => revoke(),
-        }),
-      );
-      readCurrent = () => {
-        if (getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath) !== database) {
-          throw new SessionDeliveryGenerationUnavailableError();
-        }
-        if (!database) {
-          checkEntry(null);
-          return;
-        }
-        const committed = readCommittedIncognitoSessionSharing(database.db, generation.sessionKey);
-        if (committed === undefined && generation.sessionId === null) {
-          // Temporary process-held compatibility: only its existing native reader can
-          // prove rowless absence. An unavailable/pending projection still throws above.
-          const read = loadSessionEntryReadOnlyResultInScope({
-            agentId: generation.agentId,
-            storePath: generation.storePath,
-            sessionKey: generation.sessionKey,
-          });
-          if (!read.ok) {
-            throw read.error;
-          }
-          checkEntry(read.value ?? null);
-        } else {
-          checkEntry(committed?.entry ?? (committed ? null : undefined));
-        }
-      };
-      observeIncognito = readCurrent;
-    } else {
-      const candidates = captureSessionStoreReadCandidates(generation.storePath);
-      const originalSources = new Map(
-        candidates.map((candidate) => [
-          path.resolve(candidate.physicalPath),
-          readDatabasePathIdentitySync(candidate.physicalPath),
-        ]),
-      );
-      for (const candidate of candidates) {
-        paths.add(path.resolve(candidate.path));
-        paths.add(path.resolve(candidate.physicalPath));
-        for (const pathname of new Set([candidate.path, candidate.physicalPath])) {
-          releases.push(
-            registerOpenClawAgentDatabaseReadCandidateResource({
-              ...candidate,
-              path: pathname,
-              revoke,
-              close: async () => revoke(),
-            }),
-          );
-        }
-      }
-      let source: { path: string; identity: string } | undefined;
-      while (!retained) {
-        assertActive();
-        const before = publications;
-        retained = await withSessionEntriesFromStoresInWorker(
-          [{ ...generation, sessionKeys: [generation.sessionKey], projection: "sharing" }],
-          ([read]) => {
-            assertActive();
-            if (before !== publications) {
-              return undefined;
-            }
-            const entry = read!.result.entries.find(
-              (row) => row.sessionKey === generation.sessionKey,
-            )?.entry;
-            checkEntry(entry ?? null);
-            const sharing = read!.result.sharing;
-            if (sharing) {
-              source = { path: sharing.source.path, identity: sharing.databaseIdentity };
-            } else {
-              const pathname = path.resolve(read!.database.path);
-              const original = originalSources.get(pathname);
-              // The existing-only worker returns no sharing metadata for a missing file.
-              // Retain that exact absent source; creation can never inherit this selection.
-              if (
-                generation.sessionId !== null ||
-                !original?.key.startsWith("path:") ||
-                readDatabasePathIdentitySync(pathname).key !== original.key
-              ) {
-                throw new SessionDeliveryGenerationUnavailableError();
-              }
-              source = { path: pathname, identity: original.key };
-            }
-            paths.add(path.resolve(source.path));
-            const prepared = retainPreparedSessionGenerationFacts({
-              databaseIdentity: source.identity,
-              sessionKey: generation.sessionKey,
-              entry: entry ? projectSessionSharingEntry(entry) : undefined,
-            });
-            releases.push(prepared.release);
-            return prepared;
-          },
+    let workerSource: SessionSourceAssertion | undefined;
+    const candidates = captureSessionStoreReadCandidates(generation.storePath);
+    const originalSources = new Map(
+      candidates.map((candidate) => [
+        path.resolve(candidate.physicalPath),
+        readDatabasePathIdentitySync(candidate.physicalPath),
+      ]),
+    );
+    for (const candidate of candidates) {
+      paths.add(path.resolve(candidate.path));
+      paths.add(path.resolve(candidate.physicalPath));
+      for (const pathname of new Set([candidate.path, candidate.physicalPath])) {
+        releases.push(
+          registerOpenClawAgentDatabaseReadCandidateResource({
+            ...candidate,
+            path: pathname,
+            revoke,
+            close: async () => revoke(),
+          }),
         );
       }
-      readCurrent = () => {
-        for (const candidate of candidates) {
-          if (
-            captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-            candidate.physicalPath
-          ) {
-            throw new SessionDeliveryGenerationUnavailableError();
-          }
-        }
-        if (!source || readDatabasePathIdentitySync(source.path).key !== source.identity) {
-          throw new SessionDeliveryGenerationUnavailableError();
-        }
-        checkEntry(retained?.readCurrent());
-      };
     }
-    const assertCurrent = (delivery = false) => {
+    let source: { path: string; identity: DatabasePathIdentity } | undefined;
+    let assertNativeCurrent: (entry: SessionGenerationEntry | null) => void = () => {};
+    let prepareNativeEffect: (
+      entry: SessionGenerationEntry | null,
+    ) => Promise<PreparedSessionSourceEffect> = async () => ({ assertCurrent: assertActive });
+    while (!retained) {
+      assertActive();
+      const before = publications;
+      const readInitialGeneration = readGeneration;
+      readGeneration = withSessionEntriesFromStoresInWorker;
+      retained = await readInitialGeneration(
+        [
+          {
+            ...generation,
+            sessionKeys: [generation.sessionKey],
+            projection: "sharing",
+            includeAuthorization: true,
+          },
+        ],
+        ([read]) => {
+          assertActive();
+          if (before !== publications) {
+            return undefined;
+          }
+          const entry = read!.result.entries.find(
+            (row) => row.sessionKey === generation.sessionKey,
+          )?.entry;
+          checkEntry(entry ?? null);
+          const sharing = read!.result.sharing;
+          if (sharing) {
+            const identity = readDatabasePathIdentitySync(sharing.source.path);
+            const workerIdentity = read!.result.databaseIdentity;
+            if (
+              !workerIdentity?.incarnation ||
+              workerIdentity.filename !== sharing.source.path ||
+              "file:" + workerIdentity.identity !== sharing.databaseIdentity ||
+              identity.key !== sharing.databaseIdentity ||
+              identity.birthtime === undefined ||
+              identity.birthtime !== workerIdentity.birthtime
+            ) {
+              throw diag.unavailable("initial-identity");
+            }
+            source = { path: sharing.source.path, identity };
+          } else {
+            const pathname = path.resolve(read!.database.path);
+            const original = originalSources.get(pathname);
+            // The existing-only worker returns no sharing metadata for a missing file.
+            // Retain that exact absent source; creation can never inherit this selection.
+            if (
+              generation.sessionId !== null ||
+              !original?.key.startsWith("path:") ||
+              readDatabasePathIdentitySync(pathname).key !== original.key
+            ) {
+              throw diag.unavailable("initial-absence");
+            }
+            source = { path: pathname, identity: original };
+          }
+          paths.add(path.resolve(source.path));
+          databaseIdentity = source.identity.key;
+          const prepared = retainPreparedSessionGenerationFacts({
+            databaseIdentity: source.identity.key,
+            sessionKey: generation.sessionKey,
+            entry: entry ? projectSessionSharingEntry(entry) : undefined,
+          });
+          releases.push(prepared.release);
+          const nativeOptions = { ...read!.database, path: source.path };
+          let native = getOpenClawAgentDatabaseIfOpen(nativeOptions);
+          let nativeRevision = native && readSqliteNativeMutationRevision(native.db);
+          const schemaChanged = () => {
+            diag.flip("schema-invalidated");
+            invalidated = true;
+          };
+          if (native && !isPostgresSqlConnection(native.db)) {
+            releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+          }
+          const observeNativeHandle = (opened: typeof native) => {
+            if (!native && opened) {
+              native = opened;
+              nativeRevision = undefined;
+              if (!isPostgresSqlConnection(native.db)) {
+                releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
+              }
+            } else if (opened !== native) {
+              diag.flip("check-detected");
+              invalidated = true;
+              throw diag.unavailable("native-handle");
+            }
+            return native;
+          };
+          assertNativeCurrent = (current) => {
+            observeNativeHandle(getOpenClawAgentDatabaseIfOpen(nativeOptions));
+            if (!native) {
+              return;
+            }
+            // Native callbacks and unfinished cursors cannot certify a committed write set.
+            if (!isPostgresSqlConnection(native.db) && hasPendingSqliteNativeExecution(native.db)) {
+              throw diag.unavailable("native-pending");
+            }
+            const revision = readSqliteNativeMutationRevision(native.db);
+            if (revision === undefined) {
+              throw diag.unavailable("native-revision");
+            }
+            if (revision === nativeRevision) {
+              return;
+            }
+            const committed = !native.db.isTransaction;
+            // Raw same-handle commits do not publish complete entry facts.
+            // Keep their final native guard until managed raw settlement is complete.
+            try {
+              const observed = checkEntry(
+                readSessionEntryGenerationInDatabase(native, generation.sessionKey) ?? null,
+                committed,
+              );
+              if (
+                observed?.permissionMode !== current?.permissionMode ||
+                !isDeepStrictEqual(observed?.toolOverrides, current?.toolOverrides) ||
+                readSqliteNativeMutationRevision(native.db) !== revision
+              ) {
+                throw diag.unavailable("native-policy");
+              }
+              assertActive();
+              nativeRevision = revision;
+            } catch (error) {
+              // Tentative native changes may roll back; committed revocation stays permanent.
+              if (committed) {
+                diag.flip("check-detected");
+                invalidated = true;
+              }
+              throw error;
+            }
+          };
+          prepareNativeEffect = async (current) => {
+            // This is only a handle witness. The retained generation and reader own admission.
+            const readHandle = () => {
+              const opened = agentDatabaseBorrowers.databases.get(nativeOptions.path);
+              return opened?.db.isOpen ? opened : undefined;
+            };
+            const opened = observeNativeHandle(readHandle());
+            // A separate reader cannot observe an uncommitted same-connection transaction.
+            if (opened?.db.isTransaction) {
+              return { assertCurrent: () => assertNativeCurrent(current) };
+            }
+            const revision = opened && readSqliteNativeMutationRevision(opened.db);
+            const assertCurrent = () => {
+              assertActive();
+              if (
+                readHandle() !== opened ||
+                (opened &&
+                  (opened.db.isTransaction ||
+                    revision === undefined ||
+                    readSqliteNativeMutationRevision(opened.db) !== revision ||
+                    (!isPostgresSqlConnection(opened.db) &&
+                      hasPendingSqliteNativeExecution(opened.db))))
+              ) {
+                throw diag.unavailable("effect-native");
+              }
+            };
+            assertCurrent();
+            if (!opened || revision === nativeRevision) {
+              return { assertCurrent };
+            }
+            const reader = retainSessionHistoryWorkerDatabase(nativeOptions);
+            try {
+              const result = await reader.owner.readExactEntries({
+                sessionKeys: [generation.sessionKey],
+                projection: "full",
+                includeAuthorization: true,
+                env: generation.env ?? process.env,
+              });
+              assertCurrent();
+              reader.owner.assertCurrent();
+              if (
+                `file:${result.databaseIdentity?.identity}` !== source?.identity.key ||
+                result.databaseIdentity?.birthtime !== source.identity.birthtime
+              ) {
+                throw diag.unavailable("effect-identity");
+              }
+              const observed = checkEntry(
+                result.entries.find((row) => row.sessionKey === generation.sessionKey)?.entry ??
+                  null,
+              );
+              if (
+                observed?.permissionMode !== current?.permissionMode ||
+                !isDeepStrictEqual(observed?.toolOverrides, current?.toolOverrides)
+              ) {
+                diag.flip("check-detected");
+                invalidated = true;
+                throw diag.unavailable("effect-policy");
+              }
+              nativeRevision = revision;
+              return {
+                assertCurrent: () => {
+                  assertCurrent();
+                  reader.owner.assertCurrent();
+                },
+                release: reader.release,
+              };
+            } catch (error) {
+              if (
+                readHandle() === opened &&
+                !opened.db.isTransaction &&
+                readSqliteNativeMutationRevision(opened.db) === revision
+              ) {
+                diag.flip("check-detected");
+                invalidated = true;
+              }
+              reader.release();
+              throw error;
+            }
+          };
+          return prepared;
+        },
+      );
+    }
+    const sharedAdmission = canShareSqliteDatabaseAdmissions();
+    const admission =
+      sharedAdmission && source && retainSqliteDatabaseAdmissionForPath(source.path);
+    if (admission) {
+      releases.push(admission.release);
+    } else if (sharedAdmission && source?.identity.key.startsWith("file:")) {
+      throw diag.unavailable("admission-missing");
+    }
+    const readCurrent = () => {
+      assertActive();
+      if (!source || (admission && !admission.isCurrent())) {
+        throw diag.unavailable("source-admission");
+      }
+      // Unhosted workers cannot share admission and retain their native source checks.
+      if (!sharedAdmission) {
+        assertDatabasePathIdentity(source.path, source.identity);
+      }
+      const entry = checkEntry(retained?.readCurrent());
+      assertNativeCurrent(entry);
+      return entry;
+    };
+    const prepareRead = () => {
+      assertActive();
+      return retained?.prepareRead()?.then(assertActive);
+    };
+    if (generation.sessionId != null && source) {
+      workerSource = captureSessionEntrySourceAssertion({
+        scope: { ...generation, storePath: source.path },
+        expected: {
+          sessionId: generation.sessionId,
+          lifecycleRevision: generation.lifecycleRevision ?? undefined,
+        },
+        fields:
+          generation.exact === "transcript"
+            ? ["sessionId", "lifecycleRevision"]
+            : generation.exact === "lifecycle"
+              ? ["lifecycleRevision"]
+              : [],
+        assertCurrent: () => readCurrent(),
+        assertHostCurrent: assertActive,
+        refuse: () => {
+          revoked = true;
+          throw new SessionDeliveryGenerationRevokedError();
+        },
+      });
+    }
+    const assertCurrent = (delivery = false): void => {
       try {
         assertActive();
         if (
           delivery &&
           [...paths].some((scope) =>
-            isSessionLifecycleMutationActive(
+            isSessionMutationActive(
               scope,
               generation.sessionId
                 ? [generation.sessionKey, generation.sessionId]
@@ -326,19 +539,16 @@ async function prepareSessionGenerationLease(
             ),
           )
         ) {
-          throw new SessionDeliveryGenerationUnavailableError();
+          throw diag.unavailable("delivery-mutation");
         }
         readCurrent();
       } catch (error) {
-        const failure =
-          isSessionDeliveryGenerationRevokedError(error) ||
-          isSessionDeliveryGenerationUnavailableError(error)
-            ? error
-            : new SessionDeliveryGenerationUnavailableError({ cause: error });
-        onRevoked?.(failure);
-        throw failure;
+        refuseCurrent(error);
       }
     };
+    for (let pending = prepareRead(); pending; pending = prepareRead()) {
+      await pending;
+    }
     assertCurrent();
     if (onRevoked) {
       let checkedPublications = publications;
@@ -357,49 +567,143 @@ async function prepareSessionGenerationLease(
         }),
       );
     }
-    return { assertCurrent, assertDeliveryCurrent: () => assertCurrent(true), release };
+    const checkGenerationCurrent = (assertSource: () => void) => {
+      try {
+        assertActive();
+        assertSource();
+      } catch (error) {
+        refuseCurrent(error);
+      }
+    };
+    const assertGenerationCurrent = composeSessionSourceAssertion(
+      [workerSource ?? assertCurrent],
+      checkGenerationCurrent,
+    );
+    assertGenerationCurrent.prepareSessionSourceEffect = async () => {
+      let releaseEffect: PreparedSessionSourceEffect["release"];
+      try {
+        for (let pending = prepareRead(); pending; pending = prepareRead()) {
+          await pending;
+        }
+        const current = checkEntry(retained?.readCurrent());
+        const prepared = await prepareNativeEffect(current);
+        releaseEffect = prepared.release;
+        if (!source) {
+          throw diag.unavailable("effect-source");
+        }
+        await prepareSessionStoreCandidatesInWorker({
+          validate: { candidates, sources: [source] },
+        });
+        const assertEffectCurrent = () =>
+          checkGenerationCurrent(() => {
+            prepared.assertCurrent();
+            if (checkEntry(retained?.readCurrent()) !== current) {
+              throw diag.unavailable("effect-entry");
+            }
+          });
+        assertEffectCurrent();
+        return { assertCurrent: assertEffectCurrent, release: prepared.release };
+      } catch (error) {
+        await releaseEffect?.();
+        return refuseCurrent(error);
+      }
+    };
+    return {
+      assertCurrent: assertGenerationCurrent,
+      // Opaque host guards retain native atomicity and the same tentative-row checks.
+      assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
+      assertDeliveryCurrent: () => assertCurrent(true),
+      readSessionSettings: () => {
+        assertGenerationCurrent();
+        // Identity-preserving writes may bypass generation readiness, but a pending
+        // policy publication cannot donate stale permissions to retained work.
+        return checkEntry(retained?.readSessionSettings()) ?? undefined;
+      },
+      prepareRead,
+      release,
+      bindCreation: (operation, publishBinding) => {
+        assertCurrent();
+        if (creation) {
+          throw new Error("Session creation admission changed; retry against the current session");
+        }
+        if (generation.sessionId !== null || !retained || !databaseIdentity) {
+          throw diag.unavailable("creation-binding");
+        }
+        const target = {
+          agentId: generation.agentId,
+          sessionKey: generation.sessionKey,
+          paths,
+          databaseIdentity,
+        };
+        assertSessionEntryCreationPublication(operation, target);
+        creation = operation;
+        publishCreatedBinding = publishBinding;
+        const assertCreationCurrent = () => {
+          assertActive();
+          assertSessionEntryCreationPublication(operation, target);
+        };
+        return createDynamicSessionSourceAssertion(
+          () => (creationAdopted ? assertGenerationCurrent : assertCreationCurrent),
+          () => {
+            throw diag.unavailable("creation-fallback");
+          },
+        );
+      },
+      isCreationAdopted: () => creationAdopted,
+    };
   } catch (error) {
+    const failure = diag.fallback("prepare-fallback", error);
     release();
-    if (
-      isSessionDeliveryGenerationRevokedError(error) ||
-      isSessionDeliveryGenerationUnavailableError(error)
-    ) {
-      throw error;
-    }
-    throw new SessionDeliveryGenerationUnavailableError({ cause: error });
+    throw failure;
   }
 }
 
-/** Session lifecycle owners compose these facts with their own admitted mutation authority. */
-export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertCurrent, release } = await prepareSessionGenerationLease(input);
-  return { assertCurrent, release };
-}
-
-/** Stable cron roots retain their admitted run; exact-run keys already name one generation. */
-export async function prepareCronRootSessionGeneration(
-  input: Omit<SessionDeliveryGeneration, "lifecycleRevision"> & { lifecycleRevision?: string },
-  onRevoked?: (reason: unknown) => void,
-) {
-  if (!isCronSessionKey(input.sessionKey) || isCronRunSessionKey(input.sessionKey)) {
-    return undefined;
-  }
-  const { assertCurrent, release } = await prepareSessionGenerationLease(
-    {
-      ...input,
-      lifecycleRevision: input.lifecycleRevision ?? null,
-    },
+/** Only the chat and transcript lease owners pass raw facts. */
+export async function prepareLeaseFacts(input: LeaseFacts, onRevoked?: (reason: unknown) => void) {
+  const { assertDeliveryCurrent: _delivery, ...facts } = await prepareSessionGenerationLease(
+    input,
     onRevoked,
   );
-  return { assertCurrent, release };
+  return facts;
 }
 
-/** Delivery remains unavailable while any lifecycle mutation owns the session. */
-export async function prepareSessionDeliveryGeneration(input: SessionDeliveryGeneration) {
-  if (!isSessionGenerationFacts(input) || input.sessionId === null) {
-    throw new SessionDeliveryGenerationUnavailableError();
-  }
-  const lease = await prepareSessionGenerationLease(input);
+const chatFacts = (chat: ChatRef, options: ChatLeaseOptions = {}): LeaseFacts => ({
+  agentId: chat.agentId,
+  storePath: chat.storePath,
+  sessionKey: chat.sessionKey,
+  env: options.env,
+  ...(options.absent ? { sessionId: null } : {}),
+});
+
+type ChatLeaseOptions = { absent?: true; env?: NodeJS.ProcessEnv };
+
+/**
+ * Follows a chat by key to its current transcript. Session lifecycle owners compose it with
+ * their own admitted mutation authority. `absent` leases a chat that does not exist yet.
+ */
+export async function prepareChatLease(chat: ChatRef, options?: ChatLeaseOptions) {
+  return await prepareLeaseFacts(chatFacts(chat, options));
+}
+
+export type ChatLease = Awaited<ReturnType<typeof prepareChatLease>>;
+
+/** Share initial worker reads while each chat retains its own live lease and checks. */
+export async function prepareChatLeaseBatch(chats: readonly ChatRef[]) {
+  const batch = createSessionGenerationReadBatch();
+  // File leases register publication listeners synchronously before queuing the first read.
+  const prepared = chats.map((chat) =>
+    prepareSessionGenerationLease(chatFacts(chat), undefined, batch.read).then(
+      ({ assertDeliveryCurrent: _delivery, ...facts }): Result<ChatLease, unknown> => ok(facts),
+      (error: unknown): Result<ChatLease, unknown> => err(error),
+    ),
+  );
+  await batch.flush();
+  return Promise.all(prepared);
+}
+
+/** Delivery remains unavailable while any lifecycle mutation owns the chat. */
+export async function prepareChatDeliveryLease(chat: ChatRef) {
+  const lease = await prepareSessionGenerationLease(chatFacts(chat));
   try {
     lease.assertDeliveryCurrent();
     return { assertCurrent: lease.assertDeliveryCurrent, release: lease.release };

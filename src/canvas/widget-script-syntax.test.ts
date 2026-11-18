@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { findWidgetScriptSyntaxError } from "./widget-script-syntax.js";
 
 describe("widget script syntax", () => {
-  it("maps a raw newline in a single-quoted string to the original widget line", () => {
+  it("maps a raw newline in a single-quoted string to the original widget line", async () => {
     const widgetCode = "\n<section>\n  <script>const a='x\n'+b;</script>\n</section>";
-    expect(findWidgetScriptSyntaxError(widgetCode)).toEqual({
+    expect(await findWidgetScriptSyntaxError(widgetCode)).toEqual({
       message: "Unterminated string constant",
       line: 3,
       column: 18,
@@ -31,8 +31,8 @@ describe("widget script syntax", () => {
     '<script type=" Text/JavaScript ">const value = 1;</script>',
     '<script data-label="src=ignored > type=application/json">const value = 1;</SCRIPT>',
     '<button onclick="const =">Handlers are not parsed</button>',
-  ])("accepts valid scripts or markup: %s", (widgetCode) => {
-    expect(findWidgetScriptSyntaxError(widgetCode)).toBeUndefined();
+  ])("accepts valid scripts or markup: %s", async (widgetCode) => {
+    expect(await findWidgetScriptSyntaxError(widgetCode)).toBeUndefined();
   });
 
   it.each([
@@ -41,28 +41,30 @@ describe("widget script syntax", () => {
     "type='text/javascript'",
     "type=application/javascript",
     'TYPE=" TEXT/ECMASCRIPT "',
-  ])("rejects top-level await in classic scripts: %s", (attributes) => {
+  ])("rejects top-level await in classic scripts: %s", async (attributes) => {
     expect(
-      findWidgetScriptSyntaxError(`<script ${attributes}>await Promise.resolve();</script>`),
+      await findWidgetScriptSyntaxError(`<script ${attributes}>await Promise.resolve();</script>`),
     ).toMatchObject({ scriptIndex: 1 });
   });
 
-  it("does not allow wrapped-function grammar", () => {
-    expect(findWidgetScriptSyntaxError("<script>return 1;</script>")).toBeDefined();
+  it("does not allow wrapped-function grammar", async () => {
+    expect(await findWidgetScriptSyntaxError("<script>return 1;</script>")).toBeDefined();
   });
 
   it.each(['type="application/json"', "SRC=script.js", "src"])(
     "skips non-JavaScript and external scripts: %s",
-    (attributes) => {
-      expect(findWidgetScriptSyntaxError(`<script ${attributes}>const =</script>`)).toBeUndefined();
+    async (attributes) => {
+      expect(
+        await findWidgetScriptSyntaxError(`<script ${attributes}>const =</script>`),
+      ).toBeUndefined();
     },
   );
 
   it.each(["<script>const a = 1;</script>", '<script type="application/json">invalid JS</script>'])(
     "maps the second script after %s and stops at a case-insensitive raw-text close",
-    (first) => {
+    async (first) => {
       const widgetCode = `${first}\r\n<p>Text</p>\r\n<script>const a = "</SCRIPT>";</script>`;
-      expect(findWidgetScriptSyntaxError(widgetCode)).toEqual({
+      expect(await findWidgetScriptSyntaxError(widgetCode)).toEqual({
         message: "Unterminated string constant",
         line: 3,
         column: 18,
@@ -72,9 +74,9 @@ describe("widget script syntax", () => {
     },
   );
 
-  it("reports only the first error across multiple scripts", () => {
+  it("reports only the first error across multiple scripts", async () => {
     expect(
-      findWidgetScriptSyntaxError("<script>const =</script><script>let =</script>"),
+      await findWidgetScriptSyntaxError("<script>const =</script><script>let =</script>"),
     ).toMatchObject({ scriptIndex: 1, line: 1, column: 14 });
   });
 
@@ -83,29 +85,34 @@ describe("widget script syntax", () => {
     "<div title='<script>const =</script>'>Text</div>",
     "<plaintext></plaintext><script>const =</script>",
     '<div title="<script>const =</script>',
-  ])("ignores script-looking text outside script elements: %s", (widgetCode) => {
-    expect(findWidgetScriptSyntaxError(widgetCode)).toBeUndefined();
+  ])("ignores script-looking text outside script elements: %s", async (widgetCode) => {
+    expect(await findWidgetScriptSyntaxError(widgetCode)).toBeUndefined();
   });
 
-  it.each(["style", "textarea"])("skips %s content and resumes at its actual end tag", (tag) => {
-    const prefix = `<${tag}>ignored </${tag}x><script>const =</script></${tag.toUpperCase()} >`;
-    expect(findWidgetScriptSyntaxError(prefix)).toBeUndefined();
-    expect(findWidgetScriptSyntaxError(`${prefix}\n<script>const =</script>`)).toMatchObject({
-      scriptIndex: 1,
-      line: 2,
-      column: 14,
-    });
-    expect(findWidgetScriptSyntaxError(`<${tag}><script>const =</script>`)).toBeUndefined();
-  });
+  it.each(["style", "textarea"])(
+    "skips %s content and resumes at its actual end tag",
+    async (tag) => {
+      const prefix = `<${tag}>ignored </${tag}x><script>const =</script></${tag.toUpperCase()} >`;
+      expect(await findWidgetScriptSyntaxError(prefix)).toBeUndefined();
+      expect(
+        await findWidgetScriptSyntaxError(`${prefix}\n<script>const =</script>`),
+      ).toMatchObject({
+        scriptIndex: 1,
+        line: 2,
+        column: 14,
+      });
+      expect(await findWidgetScriptSyntaxError(`<${tag}><script>const =</script>`)).toBeUndefined();
+    },
+  );
 
-  it("preserves offsets and script indexes after skipping inert HTML contexts", () => {
+  it("preserves offsets and script indexes after skipping inert HTML contexts", async () => {
     const widgetCode = [
       "<!-- <script>const =</script> -->",
       "<textarea><script>const =</script></textarea>",
       '<div title="İ <script>const =</script>"></div>',
       "  <script>const =</script>",
     ].join("\n");
-    expect(findWidgetScriptSyntaxError(widgetCode)).toEqual({
+    expect(await findWidgetScriptSyntaxError(widgetCode)).toEqual({
       message: "Unexpected token",
       scriptIndex: 1,
       line: 4,
@@ -116,16 +123,18 @@ describe("widget script syntax", () => {
 
   it.each(["</script/>", '</script foo="bar">', "</SCRIPT >", ""])(
     "parses the script body through its terminator or EOF: %s",
-    (endTag) => {
-      expect(findWidgetScriptSyntaxError(`<script>const =${endTag}`)).toMatchObject({
+    async (endTag) => {
+      expect(await findWidgetScriptSyntaxError(`<script>const =${endTag}`)).toMatchObject({
         scriptIndex: 1,
         line: 1,
         column: 14,
       });
-      expect(findWidgetScriptSyntaxError(`<script>const value = 1;${endTag}`)).toBeUndefined();
+      expect(
+        await findWidgetScriptSyntaxError(`<script>const value = 1;${endTag}`),
+      ).toBeUndefined();
       if (endTag) {
         expect(
-          findWidgetScriptSyntaxError(
+          await findWidgetScriptSyntaxError(
             `<script>const value = 1;${endTag}\n<script>const =</script>`,
           ),
         ).toMatchObject({ scriptIndex: 2, line: 2, column: 14 });
@@ -136,8 +145,10 @@ describe("widget script syntax", () => {
   it.each([
     '<script>const html = "<script></script>";</script>',
     '<script>const html = "<!--<scripture></script>";</script>',
-  ])("ends script data unless the exact script token double-escapes it: %s", (widgetCode) => {
-    expect(findWidgetScriptSyntaxError(widgetCode)?.message).toBe("Unterminated string constant");
+  ])("ends script data unless the exact script token double-escapes it: %s", async (widgetCode) => {
+    expect((await findWidgetScriptSyntaxError(widgetCode))?.message).toBe(
+      "Unterminated string constant",
+    );
   });
 
   it.each([
@@ -147,8 +158,8 @@ describe("widget script syntax", () => {
     '<div><svg><foreignObject><script>const text = "<![CDATA[";</script></foreignObject></svg></div>',
     "<svg><foreignObject/><script><![CDATA[const value = 1;]]></script></svg>",
     '<SVG xmlns="http://www.w3.org/2000/svg"><script> \n<![CDATA[const value = 1;]]> \n</script></SVG>',
-  ])("parses CDATA-wrapped scripts in SVG: %s", (widgetCode) => {
-    expect(findWidgetScriptSyntaxError(widgetCode)).toBeUndefined();
+  ])("parses CDATA-wrapped scripts in SVG: %s", async (widgetCode) => {
+    expect(await findWidgetScriptSyntaxError(widgetCode)).toBeUndefined();
   });
 
   it.each([
@@ -166,8 +177,8 @@ describe("widget script syntax", () => {
     },
   ])(
     "maps CDATA errors to the original widget: $widgetCode",
-    ({ widgetCode, line, column, snippet }) => {
-      expect(findWidgetScriptSyntaxError(widgetCode)).toEqual({
+    async ({ widgetCode, line, column, snippet }) => {
+      expect(await findWidgetScriptSyntaxError(widgetCode)).toEqual({
         message: "Unexpected token",
         scriptIndex: 1,
         line,
@@ -184,31 +195,49 @@ describe("widget script syntax", () => {
     "<svg><text><![CDATA[text]]></text></svg><script>const =</script>",
     "<svg><foreignObject><script>const =</script></foreignObject></svg>",
     "<svg><foreignObject><script><![CDATA[const value = 1;]]></script></foreignObject></svg>",
-  ])("still reaches scripts after self-closing or CDATA foreign content: %s", (widgetCode) => {
-    expect(findWidgetScriptSyntaxError(widgetCode)).toMatchObject({ line: 1 });
-  });
+  ])(
+    "still reaches scripts after self-closing or CDATA foreign content: %s",
+    async (widgetCode) => {
+      expect(await findWidgetScriptSyntaxError(widgetCode)).toMatchObject({ line: 1 });
+    },
+  );
 
   it.each(["", "<svg/>", "<svg></svg>", "<svg><svg/></svg>"])(
     "leaves CDATA markers outside SVG untouched after %s",
-    (prefix) => {
+    async (prefix) => {
       expect(
-        findWidgetScriptSyntaxError(`${prefix}<script><![CDATA[const value = 1;]]></script>`),
+        await findWidgetScriptSyntaxError(`${prefix}<script><![CDATA[const value = 1;]]></script>`),
       ).toMatchObject({ message: "Unexpected token", scriptIndex: 1 });
     },
   );
 
   it.each(["text&#47;javascript", "text&sol;javascript", "&#109;odule"])(
     "validates scripts whose type contains character references: %s",
-    (type) => {
-      expect(findWidgetScriptSyntaxError(`<script type="${type}">const =</script>`)).toMatchObject({
+    async (type) => {
+      expect(
+        await findWidgetScriptSyntaxError(`<script type="${type}">const =</script>`),
+      ).toMatchObject({
         message: "Unexpected token",
         scriptIndex: 1,
       });
     },
   );
 
-  it("bounds the offending line snippet", () => {
+  it("bounds the offending line snippet", async () => {
     const widgetCode = `<script>const = ${"x".repeat(1_000)}</script>`;
-    expect(findWidgetScriptSyntaxError(widgetCode)?.snippet).toBe(widgetCode.slice(0, 160));
+    expect((await findWidgetScriptSyntaxError(widgetCode))?.snippet).toBe(widgetCode.slice(0, 160));
+  });
+
+  it("keeps an emoji whole when the offending line hits the snippet cap", async () => {
+    const prefix = `<script>${"a".repeat(151)}`;
+    const widgetCode = `${prefix}😀 const =</script>`;
+    expect((await findWidgetScriptSyntaxError(widgetCode))?.snippet).toBe(prefix);
+  });
+
+  it("keeps an astral identifier whole when the parser message hits its cap", async () => {
+    const prefix = "a".repeat(187);
+    const identifier = `${prefix}\u{1D400}`;
+    const widgetCode = `<script>let ${identifier}=1;let ${identifier}=2;</script>`;
+    expect((await findWidgetScriptSyntaxError(widgetCode))?.message).toBe(`Identifier '${prefix}`);
   });
 });

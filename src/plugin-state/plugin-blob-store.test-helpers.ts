@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -13,16 +13,19 @@ import {
   pluginBlobRegisterInDatabase,
   pluginBlobRegisterIfAbsentInDatabase,
 } from "./plugin-blob-store.sqlite.js";
-import type { OpenBlobStoreOptions, PluginBlobStore } from "./plugin-blob-store.types.js";
+import type {
+  OpenBlobStoreOptions,
+  PluginBlobStoreWithReceipts,
+} from "./plugin-blob-store.types.js";
 
 /** Deterministic clocks and query budgets exercise the same kernels the worker consumes. */
 export function createPluginBlobKernelStore<TMetadata>(
   pluginId: string,
   options: OpenBlobStoreOptions & { env: NodeJS.ProcessEnv },
-): PluginBlobStore<TMetadata> {
+): PluginBlobStoreWithReceipts<TMetadata> {
   const { namespace, env } = options;
   const scope = { pluginId, namespace, env };
-  const write = <T>(operation: (db: DatabaseSync) => T): T =>
+  const write = <T>(operation: (db: EngineConnection) => T): T =>
     runOpenClawStateWriteTransaction(({ db }) => operation(db), { env });
   const prepared = (
     key: string,
@@ -44,6 +47,13 @@ export function createPluginBlobKernelStore<TMetadata>(
       write((db) => pluginBlobRegisterInDatabase(db, prepared(key, bytes, metadata, opts)));
     },
     async registerIfAbsent(key, bytes, metadata, opts) {
+      return (
+        write((db) =>
+          pluginBlobRegisterIfAbsentInDatabase(db, prepared(key, bytes, metadata, opts)),
+        ) !== undefined
+      );
+    },
+    async registerIfAbsentWithReceipt(key, bytes, metadata, opts) {
       return write((db) =>
         pluginBlobRegisterIfAbsentInDatabase(db, prepared(key, bytes, metadata, opts)),
       );

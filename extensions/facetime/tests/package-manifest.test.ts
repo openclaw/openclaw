@@ -4,30 +4,24 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { resolveNpmJsonEntries } from "../../../scripts/lib/npm-json-output.mts";
 import { resolveNpmRunner } from "../../../scripts/npm-runner.mts";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const packageDir = fileURLToPath(new URL("..", import.meta.url));
+const readManifest = (name: string) => JSON.parse(readFileSync(join(packageDir, name), "utf8"));
 
 it("packs the complete source runtime without native binaries or test fixtures", async () => {
-  const packageDir = fileURLToPath(new URL("..", import.meta.url));
-  const invocation = resolveNpmRunner({
+  const { command, args, ...options } = resolveNpmRunner({
     npmArgs: ["pack", "--dry-run", "--json", "--ignore-scripts"],
   });
-  const result = spawnSync(invocation.command, invocation.args, {
-    cwd: packageDir,
-    encoding: "utf8",
-    env: invocation.env,
-    shell: invocation.shell,
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  });
-  expect(result.error).toBeUndefined();
-  expect(result.status, result.stderr).toBe(0);
-  const [packed] = JSON.parse(result.stdout) as Array<{ files: Array<{ path: string }> }>;
-  const files = packed!.files.map((file) => file.path);
-  expect(
-    files.filter((file) => /(?:\.test\.ts$|\.dylib$|^native\/|^helper\/)/u.test(file)),
-  ).toEqual([]);
+  const result = spawnSync(command, args, { ...options, cwd: packageDir, encoding: "utf8" });
+  expect([result.error, result.status], result.stderr).toEqual([undefined, 0]);
+  const packs = resolveNpmJsonEntries(JSON.parse(result.stdout)) as { files: { path: string }[] }[];
+  const files = packs[0]!.files.map((file) => file.path);
+  const excluded = /(?:\.test\.ts$|\.dylib$|^native\/|^helper\/)/u;
+  expect(files.filter((file) => excluded.test(file))).toEqual([]);
   const staged = tempDirs.make("openclaw-facetime-source-package-");
   for (const file of files) {
     const target = join(staged, file);
@@ -42,64 +36,47 @@ it("packs the complete source runtime without native binaries or test fixtures",
     format: "esm",
     outdir: join(staged, "compiled"),
     write: false,
-    logLevel: "silent",
   });
 });
 
-describe("FaceTime plugin manifest", () => {
-  it("declares an installed-native Apple Silicon plugin at the current host contract", () => {
-    const packageManifest = JSON.parse(
-      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
-    );
-    const pluginManifest = JSON.parse(
-      readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-    );
-    // Release preparation bumps the package version and host contract together.
-    const hostVersion = packageManifest.version;
-    expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}$/u);
-
-    expect(packageManifest.openclaw.extensions).toEqual(["./index.ts"]);
-    expect(packageManifest.openclaw.runtimeExtensions).toBeUndefined();
-    expect(packageManifest.license).toBe("MIT");
-    expect(packageManifest.os).toEqual(["darwin"]);
-    expect(packageManifest.cpu).toEqual(["arm64"]);
-    expect(packageManifest.files).not.toContain("scripts/build-capture.sh");
-    expect(packageManifest.files).not.toContain("scripts/build-helper-macabi.sh");
-    expect(packageManifest.files).toContain("scripts/stage-helper.sh");
-    expect(packageManifest.files).toContain("scripts/verify-native-helper.sh");
-    expect(packageManifest.files).toContain("doctor-contract-api.ts");
-    expect(packageManifest.files).toContain("LICENSE");
-    expect(packageManifest.files).toContain("THIRD_PARTY_NOTICES.md");
-    expect(packageManifest.files).toContain("skills/facetime/SKILL.md");
-    expect(packageManifest.devDependencies.openclaw).toBe("workspace:*");
-    expect(packageManifest.private).toBeUndefined();
-    expect(packageManifest.peerDependencies.openclaw).toBe(`>=${hostVersion}`);
-    expect(packageManifest.openclaw.install).toEqual({
-      clawhubSpec: "clawhub:@openclaw/facetime",
-      npmSpec: "@openclaw/facetime",
-      defaultChoice: "npm",
-      minHostVersion: ">=2026.9.4",
-      allowInvalidConfigRecovery: true,
-    });
-    expect(packageManifest.openclaw.compat.pluginApi).toBe(`>=${hostVersion}`);
-    expect(packageManifest.openclaw.build).toEqual({
-      bundledDist: false,
-      openclawVersion: hostVersion,
-    });
-    expect(packageManifest.openclaw.release).toEqual({
-      publishToClawHub: true,
-      publishToNpm: true,
-    });
-    expect(pluginManifest.enabledByDefault).toBe(false);
-    expect(pluginManifest.skills).toEqual(["./skills"]);
-    expect(pluginManifest.contracts.tools).toEqual(["facetime_call"]);
-    expect(pluginManifest.doctorContract).toEqual({ configRepair: true });
-    expect(pluginManifest.configSchema.properties.helperPort).toBeUndefined();
-    expect(pluginManifest.configSchema.properties.helperHost).toBeUndefined();
-    expect(pluginManifest.configSchema.properties.realtime.properties.toolPolicy.enum).toEqual([
-      "safe-read-only",
-      "owner",
-      "none",
-    ]);
+it("declares an installed-native Apple Silicon plugin at the current host contract", () => {
+  const [pkg, plugin] = ["package.json", "openclaw.plugin.json"].map(readManifest);
+  const props = plugin.configSchema.properties;
+  const { version: hostVersion, openclaw } = pkg;
+  expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
+  expect(pkg).toMatchObject({ license: "MIT", os: ["darwin"], cpu: ["arm64"] });
+  for (const [actual, expected] of [
+    [openclaw.extensions, ["./index.ts"]],
+    [openclaw.runtimeExtensions, undefined],
+    [pkg.devDependencies.openclaw, "workspace:*"],
+    [pkg.private, undefined],
+    [pkg.peerDependencies.openclaw, `>=${hostVersion}`],
+    [openclaw.compat.pluginApi, `>=${hostVersion}`],
+    [openclaw.build, { bundledDist: false, openclawVersion: hostVersion }],
+    [openclaw.release, { publishToClawHub: true, publishToNpm: true }],
+    [plugin.enabledByDefault, false],
+    [plugin.skills, ["./skills"]],
+    [plugin.contracts.tools, ["facetime_call"]],
+    [plugin.doctorContract, { configRepair: true }],
+    [props.helperPort, undefined],
+    [props.helperHost, undefined],
+    [props.realtime.properties.toolPolicy.enum, ["safe-read-only", "owner", "none"]],
+  ]) {
+    expect(actual).toEqual(expected);
+  }
+  expect(openclaw.install).toEqual({
+    clawhubSpec: "clawhub:@openclaw/facetime",
+    npmSpec: "@openclaw/facetime",
+    defaultChoice: "npm",
+    minHostVersion: ">=2026.10.3",
+    allowInvalidConfigRecovery: true,
   });
+  for (const file of ["scripts/build-capture.sh", "scripts/build-helper-macabi.sh"]) {
+    expect(pkg.files).not.toContain(file);
+  }
+  const required = [
+    "scripts/stage-helper.sh scripts/verify-native-helper.sh doctor-contract-api.ts",
+    "LICENSE THIRD_PARTY_NOTICES.md skills/facetime/SKILL.md",
+  ].flatMap((group) => group.split(" "));
+  expect(pkg.files).toEqual(expect.arrayContaining(required));
 });

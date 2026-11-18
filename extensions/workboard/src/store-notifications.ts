@@ -2,13 +2,8 @@ import type {
   WorkboardNotification,
   WorkboardNotificationSubscription,
 } from "@openclaw/workboard-contract";
-import type { PersistedWorkboardNotificationSubscription } from "./persistence-types.js";
-import {
-  cardRunId,
-  cardSessionKey,
-  compareNotifications,
-  notificationSequence,
-} from "./store-card-helpers.js";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { cardRunId, cardSessionKey, compareNotifications } from "./store-card-helpers.js";
 import type {
   WorkboardNotificationEventsInput,
   WorkboardNotificationListOptions,
@@ -38,13 +33,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     const boardId = normalizeBoardId(input.boardId);
     const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
     const subscriptions = (await this.subscriptionStore.entries({ boardId, cardId }))
-      .map((entry) => entry.value)
-      .filter(
-        (entry): entry is PersistedWorkboardNotificationSubscription =>
-          entry?.version === 1 && Boolean(entry.subscription?.id),
-      )
-      .map((entry) => entry.subscription)
-      .filter((subscription) => !boardId || subscription.boardId === boardId)
+      .map(({ value }) => value.subscription)
       .filter((subscription) => !cardId || subscription.cardId === cardId)
       .toSorted((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
     return { subscriptions };
@@ -68,10 +57,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     );
     const boardId = normalizeBoardId(input.boardId);
     const cardId = normalizeBoundedString(input.cardId, undefined, 120, "card id");
-    const limit =
-      typeof input.limit === "number" && Number.isFinite(input.limit)
-        ? Math.max(1, Math.min(200, Math.trunc(input.limit)))
-        : 50;
+    const limit = resolveIntegerOption(input.limit, 50, { min: 1, max: 200 });
     const subscriptionEntry = subscriptionId
       ? await this.subscriptionStore.lookup(subscriptionId)
       : undefined;
@@ -165,7 +151,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
         return result;
       }
       const last = result.events.at(-1)!;
-      const lastSequence = notificationSequence(last);
+      const lastSequence = last.sequence;
       const subscription: WorkboardNotificationSubscription = {
         ...result.subscription,
         lastEventAt: last.createdAt,

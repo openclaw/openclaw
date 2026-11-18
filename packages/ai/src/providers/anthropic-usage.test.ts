@@ -7,18 +7,27 @@ import {
   readLastAnthropicIterationUsage,
 } from "./anthropic-usage.js";
 
-describe("readAnthropicCacheWriteUsage", () => {
-  it("reads independent 5-minute and 1-hour cache-write buckets", () => {
-    expect(
-      readAnthropicCacheWriteUsage({
-        cache_creation: {
-          ephemeral_5m_input_tokens: 600_000,
-          ephemeral_1h_input_tokens: 400_000,
-        },
-      }),
-    ).toEqual({ cacheWrite5m: 600_000, cacheWrite1h: 400_000 });
-  });
+const buckets = (values?: readonly [number?, number?]) =>
+  values && {
+    ephemeral_5m_input_tokens: values[0],
+    ephemeral_1h_input_tokens: values[1],
+  };
+const iteration = (
+  type: string,
+  input: number,
+  output: number,
+  write: number,
+  cache?: unknown,
+) => ({
+  type,
+  input_tokens: input,
+  output_tokens: output,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: write,
+  cache_creation: cache,
+});
 
+describe("Anthropic usage", () => {
   it("keeps a valid bucket when its sibling is absent or malformed", () => {
     expect(
       readAnthropicCacheWriteUsage({
@@ -30,227 +39,96 @@ describe("readAnthropicCacheWriteUsage", () => {
     ).toEqual({ cacheWrite1h: 12 });
     expect(readAnthropicCacheWriteUsage({})).toEqual({});
   });
-});
-
-describe("readLastAnthropicIterationUsage", () => {
-  it.each(["message", "compaction", "advisor_message"])(
-    "reads the final %s iteration as the context snapshot",
-    (type) => {
-      expect(
-        readLastAnthropicIterationUsage({
-          iterations: [
-            {
-              type: "message",
-              input_tokens: 1,
-              output_tokens: 2,
-              cache_read_input_tokens: 3,
-              cache_creation_input_tokens: 4,
-            },
-            {
-              type,
-              input_tokens: 12,
-              output_tokens: 15_104,
-              cache_read_input_tokens: 148_862,
-              cache_creation_input_tokens: 0,
-            },
-          ],
-        }),
-      ).toEqual({
-        state: "valid",
-        usage: {
-          contextPromptTokens: 148_874,
-          totalTokens: 163_978,
-        },
-      });
-    },
-  );
-
-  it("reports absent iterations separately from malformed iterations", () => {
-    expect(readLastAnthropicIterationUsage({ input_tokens: 1 })).toEqual({ state: "absent" });
-  });
-
-  it("does not reuse an earlier iteration when the final iteration is malformed", () => {
-    expect(
-      readLastAnthropicIterationUsage({
-        iterations: [
-          {
-            type: "message",
-            input_tokens: 12,
-            output_tokens: 15_104,
-            cache_read_input_tokens: 148_862,
-            cache_creation_input_tokens: 0,
-          },
-          {
-            type: "message",
-            input_tokens: "malformed",
-            output_tokens: 1,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
-          },
-        ],
-      }),
-    ).toEqual({ state: "invalid" });
-  });
-
   it("rejects a final iteration with incomplete cache usage", () => {
     expect(
       readLastAnthropicIterationUsage({
-        iterations: [
-          {
-            type: "message",
-            input_tokens: 12,
-            output_tokens: 15_104,
-          },
-        ],
+        iterations: [{ type: "message", input_tokens: 12, output_tokens: 15_104 }],
       }),
     ).toEqual({ state: "invalid" });
   });
-});
-
-describe("applyAnthropicMessageDeltaUsage", () => {
-  it.each([{ cache_read_input_tokens: 128 }, { cache_creation_input_tokens: 128 }])(
-    "settles usage after a zero-placeholder start with one cache counter: %j",
-    (cacheUsage) => {
-      const usage = createZeroUsage();
-      const start = applyAnthropicMessageStartUsage(usage, { input_tokens: 0, output_tokens: 0 });
-
-      applyAnthropicMessageDeltaUsage(
-        usage,
-        { input_tokens: 1635, output_tokens: 2, ...cacheUsage },
-        start,
-      );
-
-      expect(usage).toMatchObject({
-        totalTokens: 1765,
-        contextUsage: { state: "available", promptTokens: 1763, totalTokens: 1765 },
-      });
-    },
-  );
-
-  it.each([
-    {},
-    { cache_read_input_tokens: 128, cache_creation_input_tokens: "malformed" },
-    { cache_read_input_tokens: "malformed", cache_creation_input_tokens: 128 },
-    { cache_read_input_tokens: "malformed" },
-    { cache_creation_input_tokens: "malformed" },
-  ])("keeps context unavailable for missing or malformed cache evidence: %j", (cacheUsage) => {
+  it("settles usage after zero placeholders when the provider never writes cache", () => {
     const usage = createZeroUsage();
     const start = applyAnthropicMessageStartUsage(usage, { input_tokens: 0, output_tokens: 0 });
 
     applyAnthropicMessageDeltaUsage(
       usage,
-      { input_tokens: 1635, output_tokens: 2, ...cacheUsage },
+      { input_tokens: 1635, output_tokens: 2, cache_read_input_tokens: 128 },
       start,
     );
 
-    expect(usage).toHaveProperty("contextUsage", { state: "unavailable" });
+    expect(usage).toMatchObject({
+      totalTokens: 1765,
+      contextUsage: { state: "available", promptTokens: 1763, totalTokens: 1765 },
+    });
   });
-
-  it("sums compaction and message iterations for billed usage", () => {
+  it("carries both reported buckets through start and delta while omitted breakdowns preserve them", () => {
     const usage = createZeroUsage();
-
+    const start = applyAnthropicMessageStartUsage(usage, {
+      input_tokens: 10,
+      output_tokens: 0,
+      cache_creation_input_tokens: 10,
+      cache_creation: buckets([6, 4]),
+    });
+    expect(usage).toMatchObject({ cacheWrite5m: 6, cacheWrite1h: 4 });
     applyAnthropicMessageDeltaUsage(
       usage,
       {
-        input_tokens: 5,
-        output_tokens: 7,
-        cache_read_input_tokens: 11,
-        cache_creation_input_tokens: 13,
-        iterations: [
-          {
-            type: "compaction",
-            input_tokens: 17,
-            output_tokens: 19,
-            cache_read_input_tokens: 23,
-            cache_creation_input_tokens: 29,
-          },
-          {
-            type: "message",
-            input_tokens: 31,
-            output_tokens: 37,
-            cache_read_input_tokens: 41,
-            cache_creation_input_tokens: 43,
-          },
-        ],
+        cache_creation_input_tokens: 20,
+        cache_creation: buckets([12, 8]),
       },
-      undefined,
+      start,
     );
-
-    expect(usage).toMatchObject({
-      input: 48,
-      output: 56,
-      cacheRead: 64,
-      cacheWrite: 72,
-      totalTokens: 240,
-      contextUsage: { state: "available", promptTokens: 115, totalTokens: 152 },
-    });
+    applyAnthropicMessageDeltaUsage(usage, { output_tokens: 2 }, start);
+    expect(usage).toMatchObject({ cacheWrite: 20, cacheWrite5m: 12, cacheWrite1h: 8 });
+    const unreported = createZeroUsage();
+    applyAnthropicMessageStartUsage(unreported, { input_tokens: 10, output_tokens: 0 });
+    applyAnthropicMessageDeltaUsage(unreported, { output_tokens: 2 }, undefined);
+    expect(unreported).not.toHaveProperty("cacheWrite5m");
+    expect(unreported).not.toHaveProperty("cacheWrite1h");
   });
 
-  it("keeps top-level billing when compaction iterations are malformed", () => {
-    const usage = createZeroUsage();
-
-    applyAnthropicMessageDeltaUsage(
-      usage,
-      {
-        input_tokens: 5,
-        output_tokens: 7,
-        cache_read_input_tokens: 11,
-        cache_creation_input_tokens: 13,
-        iterations: [
-          {
-            type: "compaction",
-            input_tokens: "invalid",
-            output_tokens: 19,
-            cache_read_input_tokens: 23,
-            cache_creation_input_tokens: 29,
-          },
-        ],
-      },
-      undefined,
-    );
-
-    expect(usage).toMatchObject({
-      input: 5,
-      output: 7,
-      cacheRead: 11,
-      cacheWrite: 13,
-      totalTokens: 36,
-      contextUsage: { state: "unavailable" },
-    });
-  });
-
-  it("keeps the message-start snapshot when the delta reports no usage", () => {
-    const usage = createZeroUsage();
-    const messageStartPromptUsage = applyAnthropicMessageStartUsage(usage, {
-      input_tokens: 12,
-      output_tokens: 0,
-      cache_read_input_tokens: 3,
-      cache_creation_input_tokens: 4,
-    });
-
-    applyAnthropicMessageDeltaUsage(usage, undefined, messageStartPromptUsage);
-
-    expect(usage).toMatchObject({
-      input: 12,
-      output: 0,
-      cacheRead: 3,
-      cacheWrite: 4,
-      totalTokens: 19,
-      contextUsage: { state: "available", promptTokens: 19, totalTokens: 19 },
-    });
-  });
-
-  it("still reports unavailable context for an empty delta usage object", () => {
-    const usage = createZeroUsage();
-    const messageStartPromptUsage = applyAnthropicMessageStartUsage(usage, {
-      input_tokens: 12,
-      output_tokens: 0,
-      cache_read_input_tokens: 3,
-      cache_creation_input_tokens: 4,
-    });
-
-    applyAnthropicMessageDeltaUsage(usage, {}, messageStartPromptUsage);
-
-    expect(usage).toMatchObject({ contextUsage: { state: "unavailable" } });
-  });
+  it.each([
+    ["start fallback", [6, 4], undefined, undefined, undefined, [6, 4]],
+    ["top-level fallback", undefined, [6, 4], undefined, undefined, [6, 4]],
+    ["summed buckets", undefined, undefined, [6, 4], [12, 8], [18, 12]],
+    ["zero overrides one", undefined, [6, 4], [0], undefined, [0, 4]],
+    ["absent stays absent", undefined, undefined, undefined, [undefined, 0], [undefined, 0]],
+  ] as const)(
+    "%s across compaction iterations",
+    (_name, startTopLevel, topLevel, first, second, expected) => {
+      const usage = createZeroUsage();
+      const start = applyAnthropicMessageStartUsage(usage, {
+        input_tokens: 10,
+        output_tokens: 0,
+        cache_creation_input_tokens: 10,
+        cache_creation: buckets(startTopLevel),
+      });
+      applyAnthropicMessageDeltaUsage(
+        usage,
+        {
+          cache_creation: buckets(topLevel),
+          iterations: [
+            iteration("compaction", 10, 2, 10, buckets(first)),
+            iteration("message", 5, 3, 20, buckets(second)),
+          ],
+        },
+        start,
+      );
+      expect(usage).toMatchObject({
+        input: 15,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 30,
+        totalTokens: 50,
+        contextUsage: { state: "available", promptTokens: 25, totalTokens: 28 },
+      });
+      for (const [index, key] of ["cacheWrite5m", "cacheWrite1h"].entries()) {
+        if (expected[index] === undefined) {
+          expect(usage).not.toHaveProperty(key);
+        } else {
+          expect(usage).toHaveProperty(key, expected[index]);
+        }
+      }
+    },
+  );
 });
