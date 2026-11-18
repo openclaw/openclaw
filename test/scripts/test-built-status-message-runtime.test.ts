@@ -6,13 +6,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { findBuiltStatusMessageRuntimePath } from "../../scripts/test-built-status-message-runtime.mts";
 import { withEnv } from "../../src/test-utils/env.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupTempDirs(tempDirs);
 });
 
 function makeDistDir(): string {

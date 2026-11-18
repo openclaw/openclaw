@@ -356,20 +356,25 @@ export abstract class ChatPaneHistory extends ChatPaneSnapshotHydration {
   protected handleTranscriptHistoryIntent(event: Event): void {
     const root = this.transcript.scrollElement;
     const upward = this.historyInput.isUpward(event, root);
+    // Initial placement may not emit a scroll; native input establishes the jump's origin.
+    if (root && upward) {
+      this.transcriptScrollTop = root.scrollTop;
+    }
     if (
       !root ||
       !this.presented ||
       !this.visuallyPresented ||
-      !this.transcript.isPositionSettled ||
       !upward ||
       root.scrollTop > CHAT_HISTORY_PREFETCH_EDGE_PX ||
       this.history.loadingOlder ||
-      !this.hasOlderMessages() ||
-      !this.consumeHistoryIntent()
+      !this.hasOlderMessages()
     ) {
       return;
     }
     this.transcript.cancelScroll();
+    if (!this.transcript.isPositionSettled || !this.consumeHistoryIntent()) {
+      return;
+    }
     this.historyAutoLoadBlocked = false;
     this.historyObserverArmed = true;
     this.syncHistoryObserver();

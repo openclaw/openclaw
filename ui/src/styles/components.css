@@ -3466,18 +3466,16 @@ select.data-table-pagination__size {
   pointer-events: auto;
 }
 
-/* Touch devices need tappable actions, including a menu without right-click. */
+/* Touch rows keep management in one tappable menu, leaving room for titles at
+   every depth. Fine pointers retain the direct pin/archive hover actions. */
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.session-row-host {
-    --session-row-actions-reserve: 92px;
-  }
-
-  .sidebar-recent-session.session-row-host[data-session-row-action-count="1"] {
     --session-row-actions-reserve: 48px;
   }
 
-  .sidebar-recent-session:has(.session-action--touch-menu):has([data-sidebar-session-pin]) {
-    --session-row-actions-reserve: 136px;
+  .sidebar-recent-session [data-sidebar-session-pin],
+  .sidebar-recent-session [data-sidebar-session-archive] {
+    display: none;
   }
 
   .session-action--touch-menu {
@@ -3591,7 +3589,6 @@ select.data-table-pagination__size {
   }
 
   .settings-status__dot,
-  .cron-table__state-dot,
   .activity-pulse__running,
   .activity-feed__presence-dot {
     forced-color-adjust: none;

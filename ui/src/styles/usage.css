@@ -210,9 +210,7 @@
 
 .usage-date-input,
 .usage-select,
-.usage-query-input,
-.usage-filters-inline select,
-.usage-filters-inline input[type="text"] {
+.usage-query-input {
   min-height: var(--settings-control-height);
   border: 1px solid var(--field-border);
   border-radius: var(--field-radius);
@@ -224,10 +222,6 @@
 .usage-select {
   height: var(--settings-control-height);
   padding: 0 var(--field-padding-inline);
-}
-
-select.usage-select {
-  width: auto;
 }
 
 .usage-separator,
@@ -707,34 +701,9 @@ select.usage-select {
   background: var(--bg-hover);
 }
 
-.usage-filter-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 8px;
-  align-items: center;
-  padding: 6px 8px;
-  min-height: var(--menu-item-height);
-  border-radius: var(--menu-item-radius);
-  background: transparent;
-  font-size: 12px;
-}
-
-.usage-filter-option .oc-menu-item__check,
 .usage-value-picker__option .oc-menu-item__check {
   order: 0;
   margin-inline-start: 0;
-}
-
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option {
-  margin-block-start: 9px;
-}
-
-.usage-filter-select [data-value="command:clear"] + .usage-filter-option::before {
-  position: absolute;
-  inset-inline: 8px;
-  top: -5px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  content: "";
 }
 
 .usage-query-chips,
@@ -1021,12 +990,6 @@ select.usage-select {
   transition:
     border-color 0.18s var(--ease-out),
     box-shadow 0.18s var(--ease-out);
-}
-
-/* Fixed width: identity names arrive with the data and must not move the controls beside it. */
-select.usage-creator-filter {
-  width: 260px;
-  max-width: 100%;
 }
 
 .usage-creator-row--unrecorded :is(th, td) {
@@ -1889,24 +1852,6 @@ select.usage-creator-filter {
   background: var(--bg);
 }
 
-.usage-filters-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-}
-
-.usage-filters-inline select[multiple] {
-  min-width: 150px;
-  min-height: 112px;
-  padding: 8px;
-}
-
-.usage-filters-inline input[type="text"] {
-  flex: 1 1 220px;
-  padding: 0 var(--field-padding-inline);
-}
-
 :root[data-theme-mode="light"] .session-bar-row,
 :root[data-theme-mode="light"] .usage-insight-card,
 :root[data-theme-mode="light"] .session-timeseries-compact,
@@ -2000,8 +1945,7 @@ select.usage-creator-filter {
     border-top: 0;
   }
 
-  .usage-controls,
-  .usage-filters-inline {
+  .usage-controls {
     align-items: stretch;
   }
 

@@ -136,7 +136,11 @@ suite.define(() => {
         await star.click();
         await polledAttribute(star, "aria-pressed").toBe("true");
         const favorites = picker.locator('[data-chat-model-provider-toggle="$favorites"]');
+        const favoriteIconFill = () =>
+          favorites.locator("svg").evaluate((icon) => getComputedStyle(icon).fill);
+        await expect.poll(favoriteIconFill).not.toBe("none");
         await favorites.click();
+        await expect.poll(favoriteIconFill).not.toBe("none");
         await search.press("Escape");
         await polledAttribute(picker, "open").toBeNull();
         await trigger.click();

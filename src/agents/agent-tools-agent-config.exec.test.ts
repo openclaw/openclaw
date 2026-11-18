@@ -247,7 +247,7 @@ describe("Agent-specific exec tool defaults", () => {
       ).rejects.toThrow("exec denied");
       const other = await requireExecTool(toolsForModel(config, "anthropic", "big")).execute(
         "uncapped",
-        { command: "echo uncapped" },
+        { command: "echo uncapped", awaitResults: true },
       );
       expect(other.details).toMatchObject({ status: "completed" });
     });
@@ -266,6 +266,7 @@ describe("Agent-specific exec tool defaults", () => {
       const uncapped = marker("uncapped");
       await requireExecTool(toolsForModel(config, "anthropic", "big")).execute("uncapped-run", {
         command: `touch ${uncapped}`,
+        awaitResults: true,
       });
       expect(reviewer).toHaveBeenCalledTimes(1);
       expect(fs.existsSync(uncapped)).toBe(true);

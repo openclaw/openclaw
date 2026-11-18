@@ -321,7 +321,7 @@ describe("buildOpenAIProvider", () => {
       );
       expect(result.providers.openai?.apiKey).toBe("secretref-managed");
       expect(JSON.stringify(result)).not.toContain(runtimeKey);
-      expect(result.outcomes).toEqual([{ provider: "openai", profileId, status: "ready" }]);
+      expect(result.outcomes).toMatchObject([{ provider: "openai", profileId, status: "ready" }]);
     } finally {
       fetchSpy.mockRestore();
     }

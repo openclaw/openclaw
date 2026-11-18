@@ -13,6 +13,12 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Plugin model catalog publication uses the agent database writer queue. Credential
+cleanup joins those same queues before inspecting candidate catalogs, so an earlier
+publication settles before a clean-catalog decision. Later publications revalidate
+credentials in their transaction. No catalog sidecar lock is needed under Gateway
+database custody; catalog refresh never creates or removes one on the event loop.
+
 Retained session-generation and prepared entry-source guards keep the SQLite
 admission owner's lifetime and check its recorded generation without filesystem
 polling. Database retirement or a replacement observed at admission invalidates
@@ -92,6 +98,13 @@ context while preserving the selected database engine. Each reclamation request
 keeps its own current-source and commit-authority checks.
 
 ## Choose the execution owner
+
+Transcript-facts backfill discovery and covered-window probes use the session-store
+read worker, independently of writer admission. Only bounded fact-publication
+batches reserve the writer, at background priority after queued foreground work.
+Read delays scale with their own elapsed request time; write delays include
+preparation, commit and reply delivery, with the existing bounded contention backoff.
+The in-memory position cursor and transactional coverage checks preserve resumability.
 
 Shared-state worker contexts carry installed-service migration restrictions only
 for the admitted database. An unrelated older global installation does not change

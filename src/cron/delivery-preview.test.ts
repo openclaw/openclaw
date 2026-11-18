@@ -459,18 +459,16 @@ it.each(["file", "memory"] as const)(
         ),
       );
       const releases: Array<() => void> = [];
-      const prepare = sessionGenerations.prepareSessionGenerationFactsBatch;
-      vi.spyOn(sessionGenerations, "prepareSessionGenerationFactsBatch").mockImplementation(
-        async (inputs) => {
-          const generations = await prepare(inputs);
-          for (const generation of generations) {
-            if (generation.ok) {
-              releases.push(vi.spyOn(generation.value, "release"));
-            }
+      const prepare = sessionGenerations.prepareChatLeaseBatch;
+      vi.spyOn(sessionGenerations, "prepareChatLeaseBatch").mockImplementation(async (inputs) => {
+        const generations = await prepare(inputs);
+        for (const generation of generations) {
+          if (generation.ok) {
+            releases.push(vi.spyOn(generation.value, "release"));
           }
-          return generations;
-        },
-      );
+        }
+        return generations;
+      });
       try {
         expect(await resolveCronDeliveryPreviews({ cfg, jobs })).toEqual({
           first: conversationPreview("creating conversation"),

@@ -794,6 +794,7 @@ const startupEnglish = {
     deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
+    openSessionsPage: "Open Sessions",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level",
@@ -820,6 +821,7 @@ const startupEnglish = {
       notSet: {},
       inheritDefault: {},
       inheritDefaultModel: {},
+      inheritDefaultThinking: {},
       fallbacks: {},
       addFallback: {},
     },
@@ -1024,6 +1026,7 @@ const startupEnglish = {
     cron: "Automations",
     skills: "Skills",
     plugins: "Plugins",
+    customize: "Customize",
     skillWorkshop: "Skill workshop",
     devices: "Devices",
     templates: "Templates",
@@ -1194,6 +1197,7 @@ const startupEnglish = {
     },
     rosterTitle: "Online",
     usersTitle: "Users",
+    peopleTitle: "People",
     allUsers: "All users",
     directoryFailed: "Could not load all users. Retry",
     filters: {
@@ -1421,21 +1425,13 @@ const startupEnglish = {
   usage: {
     common: {
       emptyValue: "—",
-      unknown: "unknown",
     },
-    loading: {
-      badge: "Loading usage…",
-    },
-    metrics: {
-      tokens: "Tokens",
-      cost: "Cost",
-    },
+    loading: {},
+    metrics: {},
+    // Settings search uses these headings before the Usage route loads.
     heatmap: {
       title: "Token activity",
       subtitle: "Daily token intensity in this range, up to one year.",
-      cellTokens: "{tokens} tokens",
-      less: "Less",
-      more: "More",
     },
     providerUsage: {},
     presets: {},
@@ -1452,9 +1448,6 @@ const startupEnglish = {
       input: "Input",
       cacheWrite: "Cache write",
       cacheRead: "Cache read",
-      total: "Total",
-      tokensByType: "Tokens by type",
-      costByType: "Cost by type",
     },
     overview: {
       title: "Usage overview",
@@ -1586,6 +1579,11 @@ const startupEnglish = {
     sessionPausedNote: "{name} is paused",
     sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
+    continuationSource: {
+      exec: "Background command finished",
+      restart: "Gateway restarted",
+      subagent: "Agent finished",
+    },
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {
@@ -1787,6 +1785,7 @@ const startupEnglish = {
       menuDisplay: "Display",
       sortSessions: "Filter & sort",
       sessionSources: "Session sources",
+      viewAllSessions: "View all sessions",
       noActiveSessionsForFilter: "No active sessions match this filter",
       sortUpdated: "Last updated",
       sessionMenu: "Actions for {session}",
@@ -1940,8 +1939,6 @@ const startupEnglish = {
     workRun: {
       workedFor: "Worked for {duration}",
       worked: "Worked",
-      toolCallsOne: "1 tool call",
-      toolCallsMany: "{count} tool calls",
     },
     sessionDiff: {
       title: "Changes",

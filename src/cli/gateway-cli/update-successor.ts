@@ -186,8 +186,9 @@ export class GatewayUpdateSuccessor {
     if (!pending) {
       throw new Error("foreground update settlement owner is unavailable; remaining draining");
     }
-    await this.cancelHandoff(() => identity);
+    // Retain settlement's lease worker before cancellation can finish and close it.
     this.joinForegroundStop();
+    await this.cancelHandoff(() => identity);
     await pending.confirmed.promise;
     return { respawn: false };
   }

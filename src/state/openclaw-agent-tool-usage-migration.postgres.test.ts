@@ -10,6 +10,7 @@ import {
 } from "../config/sessions/tool-usage.kernel.js";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { createPostgresEngineTestFixture } from "../infra/database-engine/engine-store.test-support.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
@@ -42,7 +43,7 @@ describe.skipIf(!connection)("PostgreSQL tool usage migration", () => {
       fixture.invalidate();
       const upgraded = fixture.open(agentEngineSchema);
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 42,
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
       expect(readAgentToolUsageInDatabase(upgraded, 100).rows).toEqual([]);
       upgraded.runTransaction(() => {
@@ -76,7 +77,9 @@ describe.skipIf(!connection)("PostgreSQL tool usage migration", () => {
         expect(readAgentToolUsageInDatabase(upgraded, later).rows).toEqual([]);
       });
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*42/iu);
+      expect(() => fixture.open(source)).toThrow(
+        new RegExp(`newer|version.*${OPENCLAW_AGENT_SCHEMA_VERSION}`, "iu"),
+      );
     });
   });
 });

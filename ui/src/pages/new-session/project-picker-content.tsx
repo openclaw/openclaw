@@ -4,6 +4,7 @@ import {
   affects,
   createMemo,
   createOptimistic,
+  createSignal,
   Errored,
   For,
   Loading,
@@ -20,6 +21,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
@@ -31,6 +33,33 @@ import { PlaceBrowser } from "./place-browser.tsx";
 import { disambiguate } from "./place-labels.ts";
 import { projectCloneInput } from "./project-chip.ts";
 import type { ProjectChipProps } from "./project-chip.tsx";
+import { ProjectFolderIcon } from "./project-folder-icon.tsx";
+import { ProjectIcon } from "./project-icon.tsx";
+
+function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
+  const [visible, setVisible] = createSignal(typeof IntersectionObserver === "undefined");
+  let glyph!: HTMLSpanElement;
+  createIntersectionObserver(
+    () => (visible() ? [] : [glyph]),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        setVisible(true);
+      }
+    },
+  );
+  return (
+    <span
+      class="project-picker-icon"
+      ref={(element) => {
+        glyph = element;
+      }}
+    >
+      <Show when={visible()} fallback={<ProjectFolderIcon />}>
+        <ProjectIcon context={props.context} projectId={props.projectId} />
+      </Show>
+    </span>
+  );
+}
 
 export function ProjectPickerContent(props: ProjectChipProps) {
   const navigation = useContext(PickerNavigation);
@@ -394,7 +423,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   }
                 >
                   {(recent, index) => {
-                    const icon = <Icon name={recent().kind === "folder" ? "folder" : "book"} />;
+                    const icon = <Icon name={recent().kind === "folder" ? "folder" : "github"} />;
                     const item = createMemo(() => {
                       const row = recent();
                       return {
@@ -470,7 +499,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                   }
                 >
                   {(project) => {
-                    const icon = <Icon name="book" />;
+                    const icon = (
+                      <ProjectRowIcon context={props.params.context} projectId={project().id} />
+                    );
                     return (
                       <SessionMenuItem
                         item={{
@@ -534,7 +565,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                         }
                       >
                         {(project) => {
-                          const icon = <Icon name="book" />;
+                          const icon = <Icon name="github" />;
                           return (
                             <SessionMenuItem
                               item={{

@@ -165,8 +165,8 @@ export interface ProcessSession {
     finalize: () => Promise<void>;
     drain: () => Promise<void>;
   };
-  /** Run whose exec call started this process; completion provenance only, never authority. */
-  originRunId?: string;
+  /** Run whose exec call started this process. A provenance fact for plugins; it routes nothing. */
+  startedByRunId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;

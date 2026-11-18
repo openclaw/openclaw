@@ -18,7 +18,9 @@ Template again creates another agent.
 After Add, manage the agent with [agent commands](/cli/agents), its automations
 with [cron commands](/automation/cron-jobs), and shared dependencies with their
 ordinary plugin or MCP controls. There are no Template status, update, remove, or
-export commands. To use a newer release, Add it as another agent.
+export commands. To use a newer release, Add it as another agent. Agents enrolled
+by the earlier installed-Template lifecycle can be
+[released to ordinary agents](#agents-from-the-earlier-lifecycle).
 
 Enable **Templates** in **Settings → Labs** before adding one. On a headless installation, set
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
@@ -38,6 +40,62 @@ Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
 surface. The Control UI can browse official and community Templates from **Pages → Templates** at `/templates`
 when **Templates** is enabled in **Settings → Labs**.
+
+## Add an unpublished local project to a running Gateway
+
+```bash
+openclaw templates add ./incident-triage --json
+```
+
+When a local Gateway owns the state directory, Add forwards the canonical local
+project directory to that Gateway's existing installation owner. No publication
+or Gateway restart is required. The path must be accessible on the Gateway host;
+this is not a browser upload or a remote file transfer. Online Add requires
+operator-admin authority and a canonical project accepted by `templates validate`.
+Online Add selects the workspace on the Gateway and rejects `--workspace`.
+Offline Add retains its existing local-source behavior.
+
+The Gateway builds a snapshot containing only declared project files, reviews its
+exact artifact integrity, and retains that artifact before installation. A project
+changed between preview and apply must be reviewed again. Local content is not
+published to or scanned by ClawHub; dependencies still use their existing registry
+verification and consent checks. Online plugin installation requires
+`--accept-capabilities`; dependency trust warnings additionally require
+`--acknowledge-clawhub-risk`. Review dependencies before passing these flags.
+
+API clients can preview with `templates.add.plan` and apply with
+`templates.add.apply`, using `source: { kind: "local", path: "/absolute/project" }`.
+Pass the returned `planIntegrity` and any required dependency acknowledgements to
+apply. Paths refer to directories on the Gateway host, not the caller's machine.
+
+## Import a Template archive in the Control UI
+
+With Templates enabled, open **Pages → Templates**, click **+ Import** (the Import
+icon in the header on mobile), and select a `.tgz` built with
+`openclaw templates build`. The file is read from your
+browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
+compressed, 8 MiB extracted, and 4,096 archive entries. Unsafe paths, links,
+malformed archives, and invalid projects are rejected before installation.
+
+The native file picker opens on your computer. After selecting an archive,
+review its proposed agent, workspace files, skills, plugins, MCP servers,
+automations, and required dependency consent in the shared Template card, then
+confirm **Import**. Use Back to return from an item, or Cancel to choose another
+archive. Choosing a file
+does not install it. The exact archive bytes bind the review to installation
+through the existing live Add owner; no publication or restart is needed. The
+origin and ClawHub scan status of a local file are unverified. Current operator-admin authority is required. Canceling,
+leaving the page, or changing the connection drops the browser's pending archive.
+After an uncertain installation result, inspect the agent before uploading again.
+
+For API clients, the same `templates.add.plan` and `templates.add.apply` methods
+accept `source: { kind: "upload", archiveBase64: "..." }`. Reuse the exact payload
+and the returned `planIntegrity`, with the normal dependency acknowledgements,
+for apply. No permanent upload registry is created.
+
+Template Add logs record a correlation ID, operation stage, outcome, and duration
+without archive bytes or Template contents. Use the correlation ID when
+investigating an unsuccessful import.
 
 ## Create with an agent
 
@@ -287,7 +345,23 @@ Native settings under `agent` include `groupChat`, `sandbox`, `tools`,
 `memory`, `heartbeat`, and `humanDelay`. The native `tools.profile` field
 selects a built-in tool policy; its grants are bounded and frozen when Add
 creates the agent. Host policy still constrains every grant. A Template cannot
-set a model, provider, credentials, or named delegate agents.
+configure a provider, credentials, or named delegate agents.
+
+Authors may optionally set `agent.model` to a preferred, fully qualified model:
+
+```yaml
+agent:
+  id: incident-triage
+  model: anthropic/claude-sonnet-4-5
+```
+
+At Add time, the receiving Gateway checks its ordinary model picker. If that
+exact model is available and permitted, the new agent uses it. Otherwise Add
+continues using the Gateway's default model; it does not install a provider,
+request credentials, or change the Gateway default. Omitting `model` keeps the
+existing default-inheritance behavior. Use `provider/model`, not a host-local
+alias or account pin. This is a one-time creation preference, not an ongoing
+Template-managed model selection; users can change the agent's model normally.
 
 ```yaml
 agent:
@@ -300,6 +374,10 @@ agent:
   memory: { search: { enabled: false } }
 ```
 
+Exec mode (`tools.exec`) and cross-provider messaging (`tools.message`) are
+operator decisions, so a Template cannot set them either; after Add, set them on
+the new agent with `openclaw config set agents.entries.<id>.tools.exec ...`.
+
 Set `enabled: false` on an automation to install it disabled; omitting the field
 keeps the enabled default. Jobs belong to the new agent. First-run instructions
 in `BOOTSTRAP.md` should find that agent's declared job, including disabled jobs,
@@ -311,6 +389,35 @@ Package and workspace paths must stay inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace files have
 per-file and aggregate limits. Selected files become package content, so
 review them for secrets before building or publishing.
+
+### Welcome description and conversation starters
+
+A Template may set optional `agent.description` and `agent.recommendedPrompts`
+metadata for the installed agent’s main/new-chat welcome page:
+
+```yaml
+agent:
+  id: project-briefing
+  description: Follows your repositories and briefs you on meaningful changes.
+  recommendedPrompts:
+    - Set up a repository
+    - Brief me on recent changes
+    - Show my tracked projects
+```
+
+When no recent chats are available, a nonempty list replaces the default welcome
+prompts. An unset or empty list keeps the defaults. Recent chats, incognito,
+phone layout, and model setup keep their existing display rules. The Template
+page, Add flow, and bootstrap instructions are unchanged.
+
+Prompts use the shared metadata limits: at most three nonempty strings, each at
+most 128 Unicode code points after whitespace normalization. Declare them in
+`CLAW.md`, not in `profiles/openclaw.yml`.
+
+**Compatibility:** this field requires a build with agent welcome prompt support.
+OpenClaw 2026.11.4 and older reject it because Template agent schemas are strict.
+Keep `schemaVersion: 1`; omit `recommendedPrompts` when supporting those versions.
+See [agent welcome settings](/gateway/config-agents/entries-and-multi-agent#chat-welcome).
 
 <a id="inspect-and-preview"></a>
 
@@ -489,6 +596,28 @@ Shared plugins, MCP servers, and other host-level integrations remain installed;
 remove them separately through their ordinary controls when no longer needed.
 There is no Template ownership record or reverse-install operation.
 
+## Agents from the earlier lifecycle
+
+Agents created by the earlier `claws add` or `claws migrate` commands still carry
+a Template consent record. OpenClaw refuses to run such an agent after its
+configuration changes, for example after
+`openclaw config set agents.entries.<id>.tools.exec '{"mode":"full"}'`, and the
+error names the agent. Undo the change, or release the agent with the Gateway
+stopped:
+
+```bash
+openclaw gateway stop
+openclaw templates release <agent-id>
+openclaw gateway start
+```
+
+Release shows the agent's tool settings and asks for confirmation; pass `--yes`
+in scripts. It removes the Template consent and ownership records only. The
+agent, its workspace, sessions, plugins, MCP servers, and automations stay, and
+from then on it is an ordinary agent whose settings you manage with
+`openclaw config` and the agent commands. Release refuses to run while the
+Gateway is running.
+
 ## Command reference
 
 | Command                              | Purpose                                           |
@@ -500,6 +629,7 @@ There is no Template ownership record or reverse-install operation.
 | `templates build [path] --out <tgz>` | Build a deterministic package artifact.           |
 | `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.         |
 | `templates add <source>`             | Create a new agent and install its requirements.  |
+| `templates release <agent-id>`       | Make an earlier Template-managed agent ordinary.  |
 
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.

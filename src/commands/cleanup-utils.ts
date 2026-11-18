@@ -17,12 +17,14 @@ import {
 import { removeCompletionRegistrations } from "../cli/completion-runtime.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage, isMissingPathError } from "../infra/errors.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { realpathViaExistingPrefix } from "../infra/path-containment.js";
-import { pathEntryExists as pathExists } from "../infra/path-existence.js";
+import {
+  pathEntryExists as pathExists,
+  resolveIdentityPathViaExistingAncestorSync,
+} from "../infra/path-existence.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { prepareOpenClawStateDatabaseRemoval } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -577,16 +579,36 @@ export async function removeStateAndLinkedPaths(
   }
 }
 
+type WorkspaceRemovalOptions = {
+  dryRun?: boolean;
+  preserveWorkspace?: boolean;
+  removeStateRows?: boolean;
+  removeWorkspace?: (workspace: string) => Promise<boolean>;
+  retainedState?: Pick<CleanupResolvedPaths, "configPath" | "stateDir">;
+};
+
 /** Remove all workspace directories selected by the cleanup plan. */
 export async function removeWorkspaceDirs(
   workspaceDirs: readonly string[],
   runtime: RuntimeEnv,
-  opts?: {
-    dryRun?: boolean;
-    preserveWorkspace?: boolean;
-    removeStateRows?: boolean;
-    removeWorkspace?: (workspace: string) => Promise<boolean>;
-  },
+  opts?: WorkspaceRemovalOptions,
+): Promise<string[]> {
+  if (!opts?.retainedState || opts.dryRun) {
+    return removeWorkspaceEntries(workspaceDirs, runtime, opts);
+  }
+  // A missing service is not proof that the workspace's Gateway has stopped.
+  const lock = await acquireStateCleanupOwnership(opts.retainedState);
+  try {
+    return await lock.run(() => removeWorkspaceEntries(workspaceDirs, runtime, opts));
+  } finally {
+    await lock.release();
+  }
+}
+
+async function removeWorkspaceEntries(
+  workspaceDirs: readonly string[],
+  runtime: RuntimeEnv,
+  opts?: WorkspaceRemovalOptions,
 ): Promise<string[]> {
   const failures = new Set<string>();
   const attempt = async <T>(label: string, action: () => T | Promise<T>) => {

@@ -118,7 +118,7 @@ export const EXEC_TIMEOUT_RETRY_GUIDANCE =
   "The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun commands unless repeating them is safe. Use a higher timeout only when the command is known to be safe to retry.";
 
 // Irreversible loss leads model-visible output so later head-preserving caps retain it.
-export const EXEC_RETENTION_CAP_NOTE =
+const EXEC_RETENTION_CAP_NOTE =
   "[earlier output was discarded at the retention cap and cannot be recovered]\n\n";
 
 /** Hard limit for one exec output file. Later output is discarded and the file says so. */

@@ -17,7 +17,13 @@ Session-list failures appear in the sidebar while that list is active and clear
 when it recovers or you change filters. A failed session action, such as a
 rename, keeps its error with that action instead of adding a list error.
 
-On phones, swipe right across the chat to open navigation. A deliberate swipe opens the full drawer while your finger is still down, rather than holding a partly clipped sidebar over the conversation. Short drags and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+On phones, swipe right starting within 32 CSS pixels of the chat’s left edge to
+open navigation, or tap **Expand sidebar** in the header. The opening strip starts
+after any device safe-area inset, including in landscape. Swipes farther inside
+the content stay with that content, such as a 3D viewer’s orbit controls.
+A deliberate edge swipe opens the full drawer while your finger is still down,
+rather than holding a partly clipped sidebar over the conversation. Short drags
+and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on** _device_ in the workspace picker. Admins
@@ -504,6 +510,12 @@ Persistent child conversations and forks stay nested after their turns finish,
 including after a reload or Gateway restart. Archiving hides them from the
 **Active** list; restoring them brings them back under their parent.
 
+GitHub publication keeps internal records for its checkout, retries, and recovery.
+These stay out of the conversation tree and child counts by default, including
+records created before an update. Enable **Show system sessions** to inspect them.
+Publication results and pull requests remain attached to the original conversation;
+this display filter does not change permissions or publication authority.
+
 Choose **Show all** in the agent switcher to open the **Sessions** page across all agents and expand the compact agent roster. This clears any agent filter, even when the roster is already selected. The browser remembers the roster mode. Selecting an agent row opens its main conversation; use **Sessions** in that agent's options menu to browse only its conversations.
 
 Session-row owner avatars appear automatically when the signed-in user and session roster identify more than one human. With only one human, owner avatars stay hidden even when agents own or participate in sessions. Agent participants and undisplayed participant counts do not enable attribution. Session icons, channel avatars, and activity indicators keep their usual behavior.
@@ -687,7 +699,7 @@ the search; Arrow Down and Enter let you select a matching owner.
 
 1. Open the saved session and select **Session sharing** in the chat header. In the compact header menu, select **Session sharing** there instead.
 2. Under **Link sharing**, enable **Anyone with the link**, review **Make this session public?**, then select **Make public**.
-3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The mobile sharing page also shows the code. Select **Use claw QR** for the image-styled version, **Download claw QR** to save its full-size PNG, or **Use standard QR** if scanning is difficult. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
+3. Select **Copy public link** to copy the normal thread URL, or scan the QR code in the sharing menu to open that same URL on another device. The sharing menu and mobile sharing page show the claw QR automatically. If the panel is too narrow or the artwork can’t load, a plain QR appears instead. The **Public** badge in the chat header remains visible while the transcript is published and updates when another window changes public access.
 4. Open that same URL in a signed-out browser to verify the read-only conversation and **Log in** button. Signing in returns to the thread with your existing permissions. New user and assistant text, including progress updates, becomes visible to public readers automatically.
 5. Return to **Session sharing** and select **Disable public access** to stop anonymous reads. The same URL then returns an unavailable page to signed-out readers. Enabling access again makes that URL public again; disabling access cannot recall saved copies.
 
@@ -777,13 +789,15 @@ accompany text. There is no attachment picker in the palette.
 Type **@** to search eligible people by name or verified GitHub handle, just as
 in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
 select a person; **Escape** dismisses the people picker before the palette.
-The compact **Will notify** row shows selected people once each, with **+N**
+The compact **Notify or invite** row shows selected people once each, with **+N**
 when space is tight. You can select up to ten mention references. Editing or
 deleting a selected name removes that reference; **Remove mention** clears all
 recipient selections without deleting the text. Pasted names and email addresses
 remain ordinary text. The picker replaces search results while open, and selected
 mentions keep the palette in composer mode. Mentions travel with the first message
-of the new session; they never share a session, invite people, or grant access.
+of the new session. For roles with `sessions.others: "invited"`, a selected
+mention from the creator or an admin grants membership when that message commits.
+It does not change session visibility or the recipient's operator scopes.
 
 - **Enter** selects a person while the people picker is open; otherwise it opens
   or runs the selected search result. With no result, Enter does not send.

@@ -55,7 +55,7 @@ export class ProviderBrowserSignInError extends Error {
   }
 }
 
-export function resolveBrowserAuthOrigin(
+function resolveBrowserAuthOrigin(
   browser: GatewayWsBrowserOrigin | undefined,
   {
     signal = getGatewayRestartDrainSignal(),

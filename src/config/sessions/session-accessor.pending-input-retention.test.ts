@@ -85,7 +85,7 @@ it.each([
         ? bindSessionPendingInputSources([receipt], message("collected-retention"))!
         : receipt;
       const timer = execution.run(makeTimer);
-      execution.finish("cancelled");
+      execution.finish("cancelled", "failed");
       await execution.settled?.();
       expect(() => execution.run(() => {})).toThrow(SessionPendingInputCustodyError);
       return { reference, timer };

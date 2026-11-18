@@ -2,6 +2,7 @@ import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
+import { decideContextPressure } from "../../context-pressure.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
@@ -17,6 +18,7 @@ import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
+  contextPressureSignal,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
@@ -24,7 +26,8 @@ import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types
 type AttemptPromptPreflightParams = Pick<
   EmbeddedRunAttemptParams,
   "config" | "modelId" | "provider" | "sessionFile" | "sessionId" | "sessionKey"
->;
+> &
+  Partial<Pick<EmbeddedRunAttemptParams, "runId">>;
 
 type AttemptPromptPreflightState = {
   contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
@@ -65,13 +68,14 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
   const { attempt, request } = input;
   const preflightRecovery = {
     route: request.route,
+    pressure: request.pressure,
     source: "mid-turn" as const,
     ...buildPreflightRecoveryBudgetSnapshot(request),
   };
   const logMidTurnPrecheck = (route: string, extra?: string) => {
     log.warn(
       `[context-overflow-midturn-precheck] sessionKey=${attempt.sessionKey ?? attempt.sessionId} ` +
-        `provider=${attempt.provider}/${attempt.modelId} route=${route} ` +
+        `provider=${attempt.provider}/${attempt.modelId} pressure=${request.pressure} route=${route} ` +
         `estimatedPromptTokens=${request.estimatedPromptTokens} ` +
         `promptBudgetBeforeReserve=${request.promptBudgetBeforeReserve} ` +
         `overflowTokens=${request.overflowTokens} ` +
@@ -117,7 +121,7 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
   }
   return {
     preflightRecovery,
-    promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+    promptError: contextPressureSignal(request.pressure),
   };
 }
 
@@ -167,7 +171,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     }
     return {
       ...input.state,
-      preflightRecovery: { route: "compact_only" },
+      preflightRecovery: { route: "compact_only", pressure: "overflow" },
       promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
       promptErrorSource: "precheck",
       skipPromptSubmission: true,
@@ -190,7 +194,6 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
       replay: {
         model: attempt.model,
         sessionId: attempt.sessionId,
-        authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
         enabled: input.compactionReplayEnabled,
       },
     });
@@ -217,21 +220,29 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
   };
   const contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
   const checkpointPressure = preemptiveCompaction.compactionReplay;
-  if (
-    checkpointPressure &&
-    checkpointPressure.route !== "fits" &&
-    !input.providerCompactionAtRequestBoundary
-  ) {
-    // Only the actual canonical window can require recovery; the raw-history
-    // maximum above remains diagnostic even when it exceeds this window.
+  // Only the actual canonical window can require recovery; the raw-history
+  // maximum above remains diagnostic even when it exceeds this window.
+  // No tool batch is open before the prompt, so this boundary is always safe.
+  const pressure =
+    checkpointPressure && !input.providerCompactionAtRequestBoundary
+      ? decideContextPressure({
+          estimatedPromptTokens: checkpointPressure.estimatedPromptTokens,
+          windowTokens: input.contextTokenBudget,
+          maintenanceDue: checkpointPressure.route !== "fits",
+          boundarySafe: true,
+          runId: attempt.runId,
+        })
+      : undefined;
+  if (checkpointPressure && checkpointPressure.route !== "fits" && pressure) {
     return {
       ...input.state,
       contextBudgetStatus,
       preflightRecovery: {
         route: checkpointPressure.route,
+        pressure,
         ...buildPreflightRecoveryBudgetSnapshot(checkpointPressure),
       },
-      promptError: new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT),
+      promptError: contextPressureSignal(pressure),
       promptErrorSource: "precheck",
       skipPromptSubmission: true,
     };

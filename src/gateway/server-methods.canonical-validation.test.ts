@@ -258,7 +258,10 @@ it("authorizes exact rows independently of bulk validation and fences corrupt su
       unavailableGatewayMethods.add("sessions.describe");
       releaseRow.resolve();
       expect(await Promise.race([dirty, joinedBulk.promise])).toMatchObject({ error: null });
-      expect(await revoked).toMatchObject({ error: { code: "FORBIDDEN" } });
+      expect(await revoked).toMatchObject({ error: null });
+      expect(await authorize(dirtyKey, revokedClient)).toMatchObject({
+        error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+      });
       expect(await unavailable).toMatchObject({ error: { code: "UNAVAILABLE" } });
       expect(resumeBulk).toBeDefined();
 
