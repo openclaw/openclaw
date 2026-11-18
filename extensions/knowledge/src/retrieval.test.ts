@@ -529,3 +529,34 @@ it.each(["keyword_rows_v1_%", "keyword_fts_v1_%"])(
     expect(await f.total({ query: "lanternword" })).toBe(1);
   },
 );
+
+it("matches canonical keyword spellings without changing record bytes", async () => {
+  const f = await fixture();
+  const nfc = "άλφα";
+  const nfd = nfc.normalize("NFD");
+  const first = await f.put("canonical_nfc", "Greek", nfc);
+  const second = await f.put("canonical_nfd", "Greek", nfd);
+  const before = await Promise.all([readFile(first, "utf8"), readFile(second, "utf8")]);
+  for (const mode of ["all", "any", "phrase"] as const) {
+    for (const query of [nfc, nfd]) {
+      expect(ids(await f.service.grep({ query, mode }, f.owner)).toSorted()).toEqual([
+        "canonical_nfc",
+        "canonical_nfd",
+      ]);
+    }
+  }
+  const hits = await f.service.grep({ query: nfc }, f.owner);
+  for (const hit of hits.hits) {
+    const body = hit.record.id === "canonical_nfc" ? nfc : nfd;
+    expect(hit.snippet.text).toBe(body.slice(hit.snippet.start, hit.snippet.end));
+  }
+  expect(await Promise.all([readFile(first, "utf8"), readFile(second, "utf8")])).toEqual(before);
+  const beta = "βήτα";
+  await f.put("canonical_mixed", "Greek", nfc + " " + beta.normalize("NFD"));
+  for (const mode of ["all", "any"] as const) {
+    expect(ids(await f.service.grep({ query: nfd + " " + beta, mode }, f.owner))).toContain(
+      "canonical_mixed",
+    );
+  }
+  expect(ids(await f.service.grep({ query: "αλφα" }, f.owner))).not.toContain("canonical_nfc");
+});
