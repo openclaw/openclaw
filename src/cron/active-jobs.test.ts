@@ -19,7 +19,7 @@ import {
   isCronActiveJobMarkerCurrent,
   isCronJobActive,
   markCronJobActive,
-  noteActiveCronJobMessageActionAuthorityMutation,
+  noteActiveCronJobMessageSourceAuthorityMutation,
   noteActiveCronJobRemoval,
   noteActiveCronJobScheduleMutation,
   noteActiveCronJobTriggerMutation,
@@ -152,7 +152,7 @@ describe("cron message action authority", () => {
   });
 
   it.each(["source observation", "committed mutation"] as const)(
-    "keeps %s revocation through a new prompt without cancelling the run",
+    "keeps a captured occurrence grant after %s and checks the next capture",
     async (source) => {
       let sourceCurrent = true;
       const { jobId, marker, controller, admission, context } = await activeRun(
@@ -161,11 +161,14 @@ describe("cron message action authority", () => {
       const assertCurrent = capture(jobId, context.operationalRunInstance);
       expect(assertCurrent).not.toThrow();
       if (source === "committed mutation") {
-        noteActiveCronJobMessageActionAuthorityMutation(jobId);
+        noteActiveCronJobMessageSourceAuthorityMutation(jobId);
       } else {
         sourceCurrent = false;
       }
-      expect(assertCurrent).toThrow();
+      expect(assertCurrent).not.toThrow();
+      if (source === "source observation") {
+        expect(() => capture(jobId, context.operationalRunInstance)).toThrow();
+      }
       expect(resolveAdmittedRunActiveAssertion(context, controller.signal)).not.toThrow();
       expect(controller.signal.aborted).toBe(false);
       sourceCurrent = true;
@@ -173,7 +176,7 @@ describe("cron message action authority", () => {
       const next = await prepareAdmission("run").admit("embedded");
       bindCronJobAdmittedRun(marker, next, controller.signal);
       const assertReplacementCurrent = capture(jobId, next.operationalRunInstance);
-      expect(assertReplacementCurrent).toThrow();
+      expect(assertReplacementCurrent).not.toThrow();
       expect(getActiveCronJobCount()).toBeGreaterThan(0);
     },
   );

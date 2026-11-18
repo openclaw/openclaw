@@ -5,7 +5,6 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import {
   markCronJobActive,
-  noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobMessageSourceAuthorityMutation,
   noteActiveCronJobScheduleMutation,
   type CronActiveJobMarker,
@@ -130,13 +129,9 @@ export function markServiceCronJobActive(
 
 export function publishCronRunReceiptMutation(params: {
   jobId: string;
-  messageActionAuthorityChanged?: boolean;
   messageSourceAuthorityChanged?: boolean;
   scheduleChanged: boolean;
 }): void {
-  if (params.messageActionAuthorityChanged) {
-    noteActiveCronJobMessageActionAuthorityMutation(params.jobId);
-  }
   if (params.messageSourceAuthorityChanged) {
     noteActiveCronJobMessageSourceAuthorityMutation(params.jobId);
   }

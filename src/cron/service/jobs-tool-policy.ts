@@ -69,16 +69,6 @@ export function resolveCronJobMessageActionAuthorityInputs(job: CronStoredJob) {
   };
 }
 
-export function cronJobMessageToolAuthorityInputsEqual(
-  previous: CronStoredJob,
-  next: CronStoredJob,
-): boolean {
-  return isDeepStrictEqual(
-    resolveCronJobMessageToolAuthorityInputs(previous),
-    resolveCronJobMessageToolAuthorityInputs(next),
-  );
-}
-
 export function cronJobMessageActionAuthorityInputsEqual(
   previous: CronStoredJob,
   next: CronStoredJob,

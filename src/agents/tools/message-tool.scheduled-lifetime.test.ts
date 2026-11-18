@@ -72,7 +72,7 @@ it.for([
   ["poll-partial", "poll", "direct", "partial", partiallyDelivered("poll-partial")],
   ["poll-partial", "poll", "gateway", "partial", partiallyDelivered("poll-partial")],
 ] as const)(
-  "settles %s revocation during %s via %s as %s",
+  "settles %s scope closure during %s via %s as %s",
   async ([revokeAt, action, deliveryMode, outcome, expected], { signal }) => {
     const accepted = outcome !== "rejected";
     const at = (...stages: string[]) => stages.includes(revokeAt);
@@ -365,7 +365,7 @@ it.for([
       if (revokeAt === "action") {
         activeJobs.requestActiveCronJobCancellation(jobId, "Cron job removed by operator.");
       } else {
-        activeJobs.noteActiveCronJobMessageActionAuthorityMutation(jobId);
+        admission.close();
       }
       releaseBoundary.resolve();
 
