@@ -436,6 +436,24 @@ export function resolveSettledToolTerminalContinuation(
 }
 
 /**
+ * A pre-dispatch rejection ran nothing. Error turns are never silent replies,
+ * so inspect model output directly rather than the host's failure notice.
+ * Visible progress text from the rejected turn does not make the replay
+ * unsafe: the call never ran. Callers still veto a delivered final answer.
+ */
+export function isRejectedBeforeDispatch(attempt: IncompleteTurnAttempt): boolean {
+  const assistant = resolveCurrentAttemptAssistant(attempt);
+  return (
+    attempt.itemLifecycle.completedCount > 0 &&
+    !attempt.hasToolMediaBlockReply &&
+    assistant?.stopReason === "error" &&
+    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
+    readSettledToolCalls(assistant).length === 0
+  );
+}
+
+/**
  * Builds the retry instruction for empty assistant turns when the provider/model
  * is eligible for non-visible turn recovery.
  */
@@ -447,21 +465,10 @@ function resolveEmptyResponseRetryInstruction(
 ): string | null {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant ?? null;
-  // A pre-dispatch rejection ran nothing. Error turns are never silent replies,
-  // so inspect model output directly rather than the host's failure notice.
-  // Visible progress text from the rejected turn does not make the replay
-  // unsafe: the call never ran, and replyDeliveryState still vetoes a delivered
-  // final answer.
   const rejectedBeforeDispatch =
-    params.attempt.itemLifecycle.completedCount > 0 &&
-    !params.attempt.hasToolMediaBlockReply &&
-    params.replyDeliveryState === "missing" &&
-    assistant?.stopReason === "error" &&
-    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
-      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
-    readSettledToolCalls(assistant).length === 0;
+    params.replyDeliveryState === "missing" && isRejectedBeforeDispatch(params.attempt);
   let consumedToolFailure = false;
-  if (rejectedBeforeDispatch && params.attempt.lastToolError) {
+  if (rejectedBeforeDispatch && assistant && params.attempt.lastToolError) {
     const messages = params.attempt.messagesSnapshot;
     const failureIndex = messages.findLastIndex(
       (message) => message.role === "toolResult" && message.isError,
