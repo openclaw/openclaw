@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { observeAsyncIterator } from "@openclaw/llm-core";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
@@ -42,6 +43,7 @@ function observeModelCallIterator<T>(
   observeSharedResult: () => Promise<unknown>,
 ): AsyncIterableIterator<T> {
   const trackCleanup = captureAsyncWorkTracker();
+  const runInTransportContext = lifecycle.runInTransportContext(() => AsyncLocalStorage.snapshot());
   const observed = observeAsyncIterator({
     iterator: () => iterator,
     onEvent: (chunk) => lifecycle.observeChunk(chunk),
@@ -79,14 +81,14 @@ function observeModelCallIterator<T>(
       if (returning) {
         return returning.then(() => ({ done: true as const, value: undefined }));
       }
-      return lifecycle.runInTransportContext(advance);
+      return runInTransportContext(advance);
     },
     return(value) {
-      returning ??= lifecycle.runInTransportContext(() => observed.return(value));
+      returning ??= runInTransportContext(() => observed.return(value));
       return returning;
     },
     throw(error) {
-      return lifecycle.runInTransportContext(() => observed.throw(error));
+      return runInTransportContext(() => observed.throw(error));
     },
   };
 }

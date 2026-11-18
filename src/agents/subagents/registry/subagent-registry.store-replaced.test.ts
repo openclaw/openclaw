@@ -76,8 +76,6 @@ function expectNoSystemEvents(database: ReturnType<typeof openOpenClawStateDatab
   ).toEqual([]);
 }
 
-const SUBAGENT_RESTART_INTERRUPTED_ERROR =
-  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
 const retiredDelivery = {
   status: "suspended",
   disposition: "permanent_failure",
@@ -323,9 +321,9 @@ it.each([false, true])(
   },
 );
 
-it("settles a running child restored from an earlier Gateway as interrupted", async () => {
+it("retains a restored running child until fresh requester admission can deliver its notice", async () => {
   using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
-  const startedBeforeThisProcess = performance.timeOrigin - 60_000;
+  const startedBeforeThisProcess = Math.floor(performance.timeOrigin) - 60_000;
   const subagent = createSubagentRunRecord({
     runId: "restored-running-child",
     requesterAgentId: "main",
@@ -342,16 +340,10 @@ it("settles a running child restored from an earlier Gateway as interrupted", as
 
   await testing.sweepOnceForTests();
 
-  const settled = loadSubagentRegistryFromSqlite().get(subagent.runId);
-  expect(warning).toHaveBeenCalledWith(
-    "Settling subagent interrupted by Gateway restart",
-    expect.objectContaining({ runId: subagent.runId }),
-  );
-  expect(settled?.execution).toMatchObject({
-    status: "terminal",
-    outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
-  });
-  expect(settled?.endedReason).toBe(SUBAGENT_ENDED_REASON_ERROR);
+  const pending = loadSubagentRegistryFromSqlite().get(subagent.runId);
+  expect(warning).not.toHaveBeenCalled();
+  expect(pending?.execution.status).toBe("running");
+  expect(pending?.delivery?.status).toBe("pending");
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
