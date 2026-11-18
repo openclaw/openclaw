@@ -33,12 +33,7 @@ import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import {
-  createSkillReadFixture,
-  expectReadWriteEditTools,
-  registerSkillReadDeduplicationTest,
-  getTextContent as extractToolText,
-} from "./test-helpers/agent-tools-fs-helpers.js";
+import * as fsHelpers from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import {
@@ -55,7 +50,7 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant
 const openClawOnlyPlan = toolConstruction.createOpenClawOnlyToolConstructionPlan();
 const pluginOnlyPlan = toolConstruction.createPluginOnlyToolConstructionPlan();
 const baseOnlyPlan = toolConstruction.createBaseOnlyToolConstructionPlan();
-const { skillLocator, fullSkillResult, skillReadTool } = createSkillReadFixture();
+const { skillLocator, fullSkillResult, skillReadTool } = fsHelpers.createSkillReadFixture();
 
 function sandboxReadTool(root: string) {
   return createSandboxedReadTool({ root, bridge: createHostSandboxFsBridge(root) });
@@ -216,12 +211,16 @@ describe("createOpenClawCodingTools", () => {
       });
 
       if (oversized) {
-        expect(extractToolText(result)).toMatch(/^# Pond\n[\s\S]*Use offset=2 to continue\.\]$/);
-        expect(Buffer.byteLength(extractToolText(result), "utf8")).toBeLessThanOrEqual(32 * 1024);
+        expect(fsHelpers.getTextContent(result)).toMatch(
+          /^# Pond\n[\s\S]*Use offset=2 to continue\.\]$/,
+        );
+        expect(Buffer.byteLength(fsHelpers.getTextContent(result), "utf8")).toBeLessThanOrEqual(
+          32 * 1024,
+        );
         return;
       }
 
-      expect(extractToolText(result)).toBe(content);
+      expect(fsHelpers.getTextContent(result)).toBe(content);
     },
   );
 
@@ -554,11 +553,11 @@ describe("createOpenClawCodingTools", () => {
       sandbox,
     });
 
-    const { readTool, writeTool, editTool } = expectReadWriteEditTools(tools);
+    const { readTool, writeTool, editTool } = fsHelpers.expectReadWriteEditTools(tools);
     const result = await readTool.execute("read-declared-bind", {
       path: "/cache/repos/example/tree-index.json",
     });
-    expect(extractToolText(result)).toContain('{"ready":true}');
+    expect(fsHelpers.getTextContent(result)).toContain('{"ready":true}');
     await expect(
       writeTool.execute("write-declared-bind", {
         path: "/cache/repos/example/tree-index.json",
@@ -587,7 +586,7 @@ describe("createOpenClawCodingTools", () => {
     expect(read.description).not.toMatch(/\b(?:bash|sed|head)\b/);
 
     const result = await read.execute("read-no-shell", { path: "generated.json" });
-    const text = extractToolText(result);
+    const text = fsHelpers.getTextContent(result);
     const continuation = (result.details as { continuation?: { cursor?: number } }).continuation;
     expect(text).not.toMatch(/\b(?:bash|sed|head)\b/);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(32 * 1024);
@@ -597,7 +596,7 @@ describe("createOpenClawCodingTools", () => {
       path: "generated.json",
       cursor: continuation?.cursor,
     });
-    expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
+    expect(fsHelpers.getTextContent(next)).toBe(original.slice(continuation?.cursor));
   });
 
   toolConstruction.registerManifestProfileToolConstructionTest(
@@ -960,7 +959,8 @@ describe("createOpenClawCodingTools", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("createOpenClawCodingTools read behavior", () => {
-  registerSkillReadDeduplicationTest(skillReadTool, skillLocator, fullSkillResult);
+  fsHelpers.registerSandboxReadTests(fileFixture, sandboxReadFixture, createHostSandboxFsBridge);
+  fsHelpers.registerSkillReadDeduplicationTest(skillReadTool, skillLocator, fullSkillResult);
   it("protects materialized sandbox skill identities when no skill snapshot exists", async () => {
     const relativePath = "skills/demo/SKILL.md";
     const { root, filePath } = await fileFixture(relativePath, "# Demo\ncomplete instructions");
@@ -981,15 +981,15 @@ describe("createOpenClawCodingTools read behavior", () => {
     });
     const read = requireTool(tools, "read");
 
-    expect(extractToolText(await read.execute("sandbox-skill", { path: relativePath }))).toBe(
-      "# Demo\ncomplete instructions",
-    );
+    expect(
+      fsHelpers.getTextContent(await read.execute("sandbox-skill", { path: relativePath })),
+    ).toBe("# Demo\ncomplete instructions");
     for (const window of [{ offset: 2 }, { limit: 1 }, { cursor: 0 }]) {
       const windowed = await read.execute("sandbox-skill-window", {
         path: `/workspace/${relativePath}`,
         ...window,
       });
-      expect(extractToolText(windowed)).toBe("# Demo\ncomplete instructions");
+      expect(fsHelpers.getTextContent(windowed)).toBe("# Demo\ncomplete instructions");
     }
   });
 
@@ -1030,17 +1030,17 @@ describe("createOpenClawCodingTools read behavior", () => {
     await expect(tool.execute("failed-skill-read", { path: locator })).rejects.toThrow(
       "transient read failure",
     );
-    expect(extractToolText(await tool.execute("oversized-skill-read", { path: locator }))).toBe(
-      "partial",
-    );
     expect(
-      extractToolText(
+      fsHelpers.getTextContent(await tool.execute("oversized-skill-read", { path: locator })),
+    ).toBe("partial");
+    expect(
+      fsHelpers.getTextContent(
         await tool.execute("optional-missing-skill-read", { path: locator, optional: true }),
       ),
     ).toContain("Optional file not found");
-    expect(extractToolText(await tool.execute("retried-skill-read", { path: locator }))).toBe(
-      "# Pond\ncomplete instructions",
-    );
+    expect(
+      fsHelpers.getTextContent(await tool.execute("retried-skill-read", { path: locator })),
+    ).toBe("# Pond\ncomplete instructions");
     expect(execute).toHaveBeenCalledTimes(4);
   });
 
@@ -1078,14 +1078,14 @@ describe("createOpenClawCodingTools read behavior", () => {
     const result = await read.execute("sandbox-unicode", {
       path: "r\u00e9sum\u00e9 3.04 PM d'accord.txt",
     });
-    expect(extractToolText(result)).toContain("Resolved filename");
-    expect(extractToolText(result)).toContain("sandbox match");
+    expect(fsHelpers.getTextContent(result)).toContain("Resolved filename");
+    expect(fsHelpers.getTextContent(result)).toContain("sandbox match");
   });
 
   it("maps inbound media refs to sandbox-staged media for reads", async () => {
     const { read } = await sandboxReadFixture("media/inbound/upload.txt", "sandbox media");
     const result = await read.execute("read-media-sbx", { path: "media://inbound/upload.txt" });
-    expect(extractToolText(result)).toContain("sandbox media");
+    expect(fsHelpers.getTextContent(result)).toContain("sandbox media");
   });
 
   it("auto-pages read output across chunks when context window budget allows", async () => {
@@ -1100,7 +1100,7 @@ describe("createOpenClawCodingTools read behavior", () => {
       modelContextWindowTokens: 200_000,
     });
     const result = await readTool.execute("read-autopage-1", { path: "big.txt" });
-    const text = extractToolText(result);
+    const text = fsHelpers.getTextContent(result);
     expect(text).toContain("line-0001");
     expect(text).toContain("line-5000");
     expect(text).not.toContain("Read output capped at");
@@ -1112,7 +1112,7 @@ describe("createOpenClawCodingTools read behavior", () => {
     const { read } = await sandboxReadFixture("unicode.txt", original);
 
     const result = await read.execute("read-first-page-cap", { path: "unicode.txt", limit: 1 });
-    const text = extractToolText(result);
+    const text = fsHelpers.getTextContent(result);
     const details = result.details as {
       continuation?: { kind: string; offset: number; cursor: number };
     };

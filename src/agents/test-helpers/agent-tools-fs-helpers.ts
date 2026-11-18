@@ -5,9 +5,10 @@
  */
 import { Type } from "typebox";
 import { expect, it, vi } from "vitest";
-import { wrapReadToolWithSkillContent } from "../agent-tools.read.js";
+import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "../agent-tools.read.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { ReadToolDetails } from "../sessions/tools/tool-contracts.js";
+import type { createHostSandboxFsBridge } from "./host-sandbox-fs-bridge.js";
 
 type TextResultBlock = { type: string; text?: string };
 
@@ -98,5 +99,44 @@ export function registerSkillReadDeduplicationTest(
       getTextContent(await tool.execute("sequential-skill-read", { path: locator })),
     ).toContain("already served whole");
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+}
+
+export function registerSandboxReadTests(
+  fileFixture: (file: string, content: string | Uint8Array) => Promise<{ root: string }>,
+  sandboxReadFixture: (
+    file: string,
+    content: string | Uint8Array,
+  ) => Promise<{
+    read: ReturnType<typeof createSandboxedReadTool>;
+  }>,
+  makeBridge: typeof createHostSandboxFsBridge,
+) {
+  const avifHeaderBuffer = Buffer.from("00000018667479706176696600000000617669666d696631", "hex");
+  it("classifies sandbox AVIF reads from the already-read buffer", async () => {
+    const { root: tmpDir } = await fileFixture("photo.bin", avifHeaderBuffer);
+    const hostBridge = makeBridge(tmpDir);
+    const readFile = vi.fn(hostBridge.readFile.bind(hostBridge));
+    const readTool = createSandboxedReadTool({
+      root: tmpDir,
+      bridge: { ...hostBridge, readFile },
+    });
+
+    const result = await readTool.execute("sandbox-avif", { path: "photo.bin" });
+
+    expect(getTextContent(result)).toContain("Read image file [image/avif]");
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores a trailing newline when describing offsets beyond EOF", async () => {
+    const { read } = await sandboxReadFixture("notes.txt", "one\ntwo\nthree\n");
+    const result = await read.execute("read-offset-adaptive", {
+      path: "notes.txt",
+      offset: 99,
+    });
+
+    expect(getTextContent(result)).toBe(
+      "Offset 99 is beyond end of file (3 lines total). Retry with offset <= 3.",
+    );
   });
 }
