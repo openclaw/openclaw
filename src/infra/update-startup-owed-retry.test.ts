@@ -1,6 +1,7 @@
 // A current core that still owes plugin convergence retries it once through a same-version campaign.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { computeNextRunAtMs } from "../cron/schedule.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeUpdateFixtureDatabases,
@@ -140,6 +141,23 @@ function owedUpdate(
 }
 
 const owed = () => ledger.readOwedUpdateSteps().map(({ id, runId }) => ({ id, runId }));
+
+const daily: OpenClawConfig = {
+  update: { channel: "stable", auto: { enabled: true, schedule: "0 3 * * *" } },
+};
+
+/** The start of the first schedule window at or after `atMs`. */
+function nextWindow(cfg: OpenClawConfig, atMs: number): number {
+  return computeNextRunAtMs({ kind: "cron", expr: cfg.update!.auto!.schedule! }, atMs - 1)!;
+}
+
+/** The Gateway that handed off the update installing this version recorded its attempt then. */
+function recordInstallingAttempt(atMs: number) {
+  writeConfigMachineState("update.checkState", {
+    autoLastAttemptVersion: "2.0.0",
+    autoLastAttemptAt: new Date(atMs).toISOString(),
+  });
+}
 
 /**
  * What the handed-off `openclaw update` leaves in history: the already-current update retries
@@ -291,11 +309,7 @@ describe("automatic retry of owed plugin steps", () => {
 
   it("waits an hour after the automatic update that installed this version", async () => {
     owedUpdate();
-    // The Gateway that handed off that update recorded its attempt just before.
-    writeConfigMachineState("update.checkState", {
-      autoLastAttemptVersion: "2.0.0",
-      autoLastAttemptAt: new Date(Date.now() - 30 * 60_000).toISOString(),
-    });
+    recordInstallingAttempt(Date.now() - 30 * 60_000);
 
     await hourlyCheck();
     expect(runAuto).not.toHaveBeenCalled();
@@ -303,6 +317,97 @@ describe("automatic retry of owed plugin steps", () => {
     clock.setTime(Date.now() + HOUR_MS);
     await hourlyCheck();
     expect(runAuto).toHaveBeenCalledOnce();
+  });
+
+  it("waits an hour after the installing automatic update on a five-minute cron schedule", async () => {
+    const cron: OpenClawConfig = {
+      update: { channel: "stable", auto: { enabled: true, schedule: "*/5 * * * *" } },
+    };
+    owedUpdate();
+    const window = nextWindow(cron, Date.now());
+    // The installing update started at the previous window, five minutes before this one.
+    recordInstallingAttempt(window - 5 * 60_000);
+
+    clock.setTime(window);
+    await hourlyCheck(cron);
+    expect(runAuto).not.toHaveBeenCalled();
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
+
+    // The first window a full hour after that attempt starts the retry.
+    clock.setTime(nextWindow(cron, window - 5 * 60_000 + HOUR_MS));
+    await hourlyCheck(cron);
+    expect(runAuto).toHaveBeenCalledOnce();
+  });
+
+  it("resumes a held retry when the hold ends outside its cron window, once", async () => {
+    const owner = owedUpdate();
+    const window = nextWindow(daily, Date.now());
+    // The update that installed this version ran at yesterday's window.
+    recordInstallingAttempt(window - 24 * HOUR_MS);
+    clock.setTime(window);
+    await check(daily);
+    await clock.advanceBy(30_000);
+    expect(lifecycle.campaign?.hold()).toBe(true);
+    const { holdUntilMs } = getUpdateSchedule()!.campaign!;
+
+    // The next hourly check lands outside the window while the hold is active.
+    clock.setTime(window + HOUR_MS);
+    await check(daily);
+    expect(getUpdateSchedule()?.campaign).toMatchObject({ holdUntilMs });
+
+    await clock.advanceTo(holdUntilMs!);
+    expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "countdown" });
+    await clock.advanceBy(60_000);
+    expect(runAuto).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ packageTargetVersion: "2.0.0" }),
+      expect.anything(),
+    );
+    const [retry] = ledger.listUpdateRuns();
+    finishHandoff(retry!.runId, owner, "owed");
+
+    // Neither later checks nor the next day's window start another campaign.
+    await hourlyCheck(daily);
+    clock.setTime(nextWindow(daily, Date.now()));
+    await hourlyCheck(daily);
+    expect(runAuto).toHaveBeenCalledOnce();
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
+  });
+
+  it("drops a held retry for a new release", async () => {
+    owedUpdate();
+    await check();
+    expect(lifecycle.campaign?.hold()).toBe(true);
+
+    registry("latest", "2.0.1");
+    clock.setTime(Date.now() + HOUR_MS);
+    await check();
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
+    expect(getUpdateSchedule()?.target).toEqual({ kind: "package", version: "2.0.1" });
+    await clock.advanceBy(16 * 60_000);
+    expect(runAuto).not.toHaveBeenCalled();
+  });
+
+  it("drops a held retry after a manual update settles the row", async () => {
+    const owner = owedUpdate();
+    await check();
+    expect(lifecycle.campaign?.hold()).toBe(true);
+
+    // A person runs `openclaw update` on the current core, and convergence completes.
+    vi.mocked(Date.now).mockImplementationOnce(realDateNow);
+    const manual = ledger.createUpdateRun({
+      trigger: "cli",
+      target: { channel: "stable", kind: "package", version: "2.0.0" },
+      before: { version: "2.0.0" },
+    });
+    ledger.settleUpdateRunOwedStep(owner, "plugin-convergence");
+    ledger.finishUpdateRun(manual.runId, { status: "skipped", reason: "already-current" });
+    clock.setTime(Date.now() + HOUR_MS);
+    await check();
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
+
+    await clock.advanceBy(16 * 60_000);
+    expect(runAuto).not.toHaveBeenCalled();
+    expect(owed()).toEqual([]);
   });
 
   it.each([
