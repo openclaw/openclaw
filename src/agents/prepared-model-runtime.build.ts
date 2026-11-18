@@ -12,7 +12,13 @@ import {
 import { settlePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import { prepareOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import {
+  resolveAuthProfileDatabasePath,
+  resolveAuthProfileDatabaseOwnerIdAsync,
+} from "./auth-profiles/sqlite.js";
 import { collectConfiguredAgentHarnessRuntimes } from "./harness-runtimes.js";
 import {
   createFullModelCatalogAccess,
@@ -67,6 +73,7 @@ export type PreparedModelRuntimeBuildCandidate = Readonly<{
   inventoryOwner?: Parameters<typeof createFullModelCatalogAccess>[0]["inventoryOwner"];
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   prepareInboundPluginRegistry?: boolean;
+  prepareCatalogDatabase?: boolean;
   isGenerationCurrent?: () => boolean;
   retirementSignal: AbortSignal;
   isBuildCurrent?: () => boolean;
@@ -243,6 +250,26 @@ async function buildSnapshotBatch(
         }
         return runtimes;
       };
+      for (const candidate of groupCandidates) {
+        const { input } = candidate;
+        if (!candidate.prepareCatalogDatabase) {
+          continue;
+        }
+        const agentId = await resolveAuthProfileDatabaseOwnerIdAsync(input.agentDir);
+        // Startup recovery owns refused stores. Read-ready owners may publish static facts,
+        // but neither this preparation nor later catalog saves may borrow its write authority.
+        if (readAgentDatabaseAdmissionRefusal(agentId, { env: input.env })) {
+          continue;
+        }
+        // Establish the catalog's local database before publishing request-visible facts.
+        // Discovery remains advisory; its first save cannot invalidate a retained absent store.
+        onStage?.("catalog database readiness");
+        await prepareOpenClawAgentDatabaseExecution(
+          { agentId, path: resolveAuthProfileDatabasePath(input.agentDir), env: input.env },
+          () => assertBuildCurrent(input),
+          signal,
+        );
+      }
       const prepared = await prepareWorkspaceBuildGroup(
         groupCandidates.map(({ input }) => input),
         catalogMode,

@@ -45,7 +45,7 @@ it(
     const root = tempDirs.make("openclaw-message-buffer-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
-    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory)));
+    await Promise.all([state, workspace].map((directory) => fs.mkdir(directory, { mode: 0o700 })));
     const explicitBytes = Buffer.from("explicit source wins");
     const explicitMedia = path.join(workspace, "explicit.txt");
     const deniedMedia = path.join(root, "private.txt");
@@ -112,7 +112,12 @@ it(
       },
     ];
     const configPath = path.join(state, "openclaw.json");
-    const environment = createGatewayArtifactTestEnv(root, state, configPath);
+    const noProxy = process.env.no_proxy ?? process.env.NO_PROXY;
+    const environment = {
+      ...createGatewayArtifactTestEnv(root, state, configPath),
+      // The synthetic provider is owned by this process, not an ambient HTTP proxy.
+      no_proxy: noProxy === "*" ? "*" : [noProxy, "127.0.0.1"].filter(Boolean).join(","),
+    };
     const snapshot = captureEnv(Object.keys(environment));
     for (const [key, value] of Object.entries(environment)) {
       setTestEnvValue(key, value);
@@ -218,6 +223,10 @@ it(
           });
         const started = await send();
         const completed = await waitForRun(started.runId);
+        expect(
+          completed.status,
+          JSON.stringify({ ...completed, providerRequests: requests.length }),
+        ).toBe("ok");
         const history = await gateway.client.request<{ messages: Array<Record<string, unknown>> }>(
           "chat.history",
           { sessionKey, limit: 20 },

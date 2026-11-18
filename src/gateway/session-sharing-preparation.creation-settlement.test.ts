@@ -7,6 +7,7 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { readAgentDeleteDatabaseRegistry } from "../agents/agent-delete-databases.js";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   prepareSessionEntryMutationDatabases,
@@ -584,3 +585,30 @@ it.for(["unchanged", "replaced"] as const)(
     }
   },
 );
+
+it("follows cold creation published through the logical default store", async ({ state }) => {
+  const cfg = { agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const sessionKey = "agent:main:cold-logical-store";
+  const storePath = resolveDefaultSessionStorePath("main");
+  const prepared = await prepareMissing(cfg, sessionKey);
+  try {
+    expect(prepared.readCurrent(cfg).target).toBeNull();
+    const created = await createSessionEntryWithTranscript(
+      { agentId: "main", storePath, sessionKey },
+      () => ({ ok: true, entry: { sessionId: "cold-logical-created", updatedAt: 1 } }),
+      {
+        bindCreation: prepared.bindCreation,
+        followRegistration: prepared.followRegistration,
+        commitGuard: () => {
+          prepared.readCurrent(cfg);
+        },
+      },
+    );
+    expect(created).toMatchObject({ ok: true });
+    expect(prepared.readCurrent(cfg).target?.entry.sessionId).toBe("cold-logical-created");
+  } finally {
+    prepared.release();
+  }
+});
