@@ -271,7 +271,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       if (
         expectedGenerations &&
         ((alternate !== undefined && expectedGenerations[pathname] === alternate) ||
-          (generation !== null && generation === rebuiltIndexes[pathname]))
+          generation === rebuiltIndexes[pathname])
       ) {
         expectedGenerations[pathname] = generation;
       }
@@ -312,7 +312,6 @@ export function createUpdateDoctorDatabaseWriteCapture(
               return;
             }
             expected[pathname] = after;
-            delete rebuiltIndexes[pathname];
           },
           refuse(message) {
             unchanged = false;

@@ -228,7 +228,7 @@ function* updateSqliteMigrationSteps<T>(
                 ? observed
                 : observed === expected ||
                     pair.emptyReaderAlternates[pathname] === expected ||
-                    (rebuilt !== undefined && observed === rebuilt)
+                    observed === rebuilt
                   ? (observed ?? undefined)
                   : undefined;
           },

@@ -446,7 +446,7 @@ export function readMatchingUpdateDatabaseGeneration(
   const observed = readUpdateDatabaseGeneration(pathname);
   return observed.generation === expected ||
     observed.emptyReaderAlternate === expected ||
-    (rebuiltIndex !== undefined && observed.generation === rebuiltIndex)
+    observed.generation === rebuiltIndex
     ? (observed.generation ?? undefined)
     : undefined;
 }
