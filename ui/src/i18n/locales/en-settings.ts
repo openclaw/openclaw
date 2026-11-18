@@ -1051,7 +1051,6 @@ const enSettings = {
       repositoryProfile:
         "Choose an existing cloud device profile. Add a profile first if none are configured.",
       preparedPool: "Enter a non-negative whole number or leave the field empty.",
-      settingsSaveFailed: "Couldn’t save these settings. Reload the config and try again.",
       setupEnvRequiresSetup: "Enter a setup command or clear the setup environment names.",
       readyWorkers: "Enter a whole number of zero or more, or leave ready cloud devices empty.",
       suspendAfter:

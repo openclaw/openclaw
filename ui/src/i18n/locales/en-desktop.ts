@@ -95,8 +95,6 @@ const enDesktop = {
     match: "Match",
     sizing: "Desktop size",
     matchRequirement: "Match requires a VNC server that supports desktop resizing.",
-    fitScreen: "Fit screen",
-    actualSize: "Use actual size",
     back: "Back",
     disconnect: "Disconnect",
     reconnect: en.desktop.reconnect,
