@@ -27,6 +27,7 @@ import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
+import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
@@ -534,6 +535,7 @@ export async function createUpdateDatabaseBackupInProcess(
 export async function createUpdateDatabaseBackup({
   acquisition,
   purpose,
+  additionalFiles: candidateFiles,
   nodeRunner = process.execPath,
   timeoutMs,
   signal: callerSignal,
@@ -575,6 +577,7 @@ export async function createUpdateDatabaseBackup({
         const backup = await createUpdateDatabaseBackup({
           ...input,
           purpose,
+          additionalFiles: candidateFiles,
           acquisition: { mode: "maintenance-owner" },
           nodeRunner,
           timeoutMs,
@@ -608,7 +611,6 @@ export async function createUpdateDatabaseBackup({
   const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>
     path.resolve(file),
   );
-  const additionalFiles = input.additionalFiles?.map((file) => path.resolve(file));
   const signal = callerSignal
     ? AbortSignal.any([callerSignal, controller.signal])
     : controller.signal;
@@ -627,7 +629,6 @@ export async function createUpdateDatabaseBackup({
         ...(prepared.pluginOwners ? { pluginOwners: prepared.pluginOwners } : {}),
         preserveSourceArtifacts: input.stopped || input.preserveSourceArtifacts,
         additionalPaths,
-        additionalFiles,
         backupRoot,
         stagingRoot: directory,
       };
@@ -662,25 +663,37 @@ export async function createUpdateDatabaseBackup({
               UpdateStateSchemaInspectionPlanSchema,
             );
       rehearsal?.assertCurrent();
-      const excludedDatabasePaths = rehearsal?.admit(
-        inspectionPlan.files.flatMap(([, database]) => database.spellings),
+      const discoveredFiles = inspectionPlan.files.flatMap(([, database]) => database.spellings);
+      const excludedDatabasePaths = rehearsal?.admit(discoveredFiles);
+      const files = new Set([...discoveredFiles, ...additionalPaths]);
+      const unclassified = (candidateFiles ?? [])
+        .map((file) => path.resolve(file))
+        .filter((file) => !files.has(file) && !rehearsal?.excludes(file));
+      signal.throwIfAborted();
+      // Classify protected payload files in a separate process to preserve the updater's POSIX locks.
+      const headers = probeSqliteDatabaseHeaders(
+        unclassified.filter((file) => !file.endsWith(".sqlite")),
       );
+      signal.throwIfAborted();
+      const additionalFiles = unclassified.filter(
+        (file) => file.endsWith(".sqlite") || headers.get(file),
+      );
+      for (const file of additionalFiles) {
+        files.add(file);
+      }
+      const databaseFiles = [...files].filter((file) => !rehearsal?.excludes(file));
       const capturedInput = {
         ...workerInput,
         ...(purpose === "original-state" ? { originalState: true } : {}),
+        additionalFiles,
         excludedDatabasePaths,
         postgresOffline: input.postgresOffline || custody,
       };
-      const files = [
-        ...inspectionPlan.files.flatMap(([, database]) => database.spellings),
-        ...(additionalPaths ?? []),
-        ...(additionalFiles ?? []),
-      ].filter((file) => !rehearsal?.excludes(file));
       let originalCaptureSourcePaths: string[] | undefined;
       if (purpose === "original-state" && custody) {
         const { isOpenClawAgentDatabaseOpen } = await import("../state/openclaw-agent-db.js");
         originalCaptureSourcePaths = [
-          ...new Set(files.map(resolvePathViaExistingAncestorSync)),
+          ...new Set(databaseFiles.map(resolvePathViaExistingAncestorSync)),
         ].filter(
           (file) =>
             maintenanceOwnerHasSourceCustody(scope, file) &&
@@ -690,8 +703,8 @@ export async function createUpdateDatabaseBackup({
       }
       rehearsal?.assertCurrent();
       const databases = custody
-        ? await readUpdateStateDatabaseSizesInProcess(files, signal)
-        : await readUpdateStateDatabaseSizes(files, worker);
+        ? await readUpdateStateDatabaseSizesInProcess(databaseFiles, signal)
+        : await readUpdateStateDatabaseSizes(databaseFiles, worker);
       if (postgres) {
         scope!.assertAdmission();
       }
