@@ -81,6 +81,8 @@ function eligibility(
 
 it("binds all immutable review fields while treating artifact and scope lists as sets", () => {
   const original = request();
+  // Existing v1 approval records bind these exact field-order bytes.
+  expect(serializeFastTrackRequest(original)).toBe(JSON.stringify(original));
   const identity = fastTrackRequestDigest(original);
   expect(identity).toMatch(/^sha256:[a-f0-9]{64}$/u);
   const changes = [

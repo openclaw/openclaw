@@ -162,9 +162,14 @@ export function parseFastTrackRequest(value: unknown): FastTrackRequest {
 /** Canonical review contents. Serialization and its digest do not confer approval authority. */
 export function serializeFastTrackRequest(value: unknown): string {
   const request = parseFastTrackRequest(value);
-  // Zod emits schema key order. Arrays representing sets use explicit ASCII ordering.
+  // Preserve existing v1 header/key order: persisted decisions bind exact bytes.
+  // Arrays representing sets use explicit ASCII ordering.
+  const { schemaVersion, policy, action, ...fields } = request;
   const canonical = {
-    ...request,
+    schemaVersion,
+    policy,
+    action,
+    ...fields,
     artifacts: request.artifacts.toSorted((a, b) =>
       a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
     ),
