@@ -1,6 +1,12 @@
 import path from "node:path";
 import { gitReleaseSlot, resolveGitReleasePrefix } from "./git-release-paths.js";
-import { collectGitReleases, createGitReleaseDirs, publishGitRelease } from "./git-release.js";
+import {
+  collectGitReleases,
+  createGitReleaseDirs,
+  discardUnservedGitRelease,
+  publishGitRelease,
+  readGitReleasePlacement,
+} from "./git-release.js";
 import { readPackageVersion } from "./package-json.js";
 import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
@@ -28,6 +34,8 @@ import type {
 } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
+const releaseId = (releaseRoot: string) => path.basename(path.resolve(releaseRoot, "../../.."));
+
 /**
  * Update a Git checkout install by building the target as a new release (a
  * detached worktree of the checkout) and switching the release link to it. The
@@ -49,7 +57,10 @@ export async function updateGitRelease(params: {
   const steps: UpdateStepResult[] = [];
   const prefix = resolveGitReleasePrefix();
   const slot = gitReleaseSlot(prefix);
-  const converting = !readPackageReleaseSlotSync(slot);
+  const selected = readPackageReleaseSlotSync(slot);
+  const converting = !selected;
+  const placement = selected ? await readGitReleasePlacement(selected) : null;
+  const unserved = placement?.unserved;
   let stepIndex = 0;
   const forRunner =
     (deadline: number | undefined) =>
@@ -68,8 +79,9 @@ export async function updateGitRelease(params: {
   const step = forRunner(timeoutMs);
   const workStep = forRunner(opts.timeoutMs);
   // A release is a worktree of the developer's checkout; Git work happens there.
-  // The selected release serves, even when this CLI runs from the preserved checkout.
-  const running = converting ? params.gitRoot : slot;
+  // The release that last passed its trial serves, even when this CLI runs from the
+  // preserved checkout or the link names a release an interrupted update never started.
+  const running = placement?.serving ?? params.gitRoot;
   const git = (root: string, ...args: string[]) =>
     runCommand(["git", "-C", root, ...args], { cwd: root, timeoutMs });
   const commonDir = (
@@ -177,14 +189,18 @@ export async function updateGitRelease(params: {
       return built;
     }
     // Replayed local commits get new IDs on every rebuild; the same tree is the same release.
-    const [builtTree, runningTree] = await Promise.all(
-      [built.candidateSha, runningSha].map(
-        async (sha) => (await git(gitRoot, "rev-parse", `${sha}^{tree}`)).stdout.trim() || sha,
-      ),
-    );
-    if (!converting && recovery.serviceRestartSafe && builtTree === runningTree) {
+    const treeOf = async (sha: string) =>
+      (await git(gitRoot, "rev-parse", `${sha}^{tree}`)).stdout.trim() || sha;
+    const builtTree = await treeOf(built.candidateSha);
+    if (!converting && recovery.serviceRestartSafe && builtTree === (await treeOf(runningSha))) {
       await cleanup?.();
       return { status: "skipped" as const, reason: "already-current" as const };
+    }
+    // An interrupted update already placed this tree: finish activating that release.
+    const placedSha = unserved ? (await git(unserved.root, "rev-parse", "HEAD")).stdout.trim() : "";
+    if (placedSha && builtTree === (await treeOf(placedSha))) {
+      await cleanup?.();
+      return { ...built, candidateSha: placedSha, releaseRoot: unserved!.root };
     }
     const moved = await runStep(
       step(
@@ -246,6 +262,47 @@ export async function updateGitRelease(params: {
         }),
     }),
   );
+  const prune = () =>
+    runCommand(["git", "-C", gitRoot, "worktree", "prune"], { cwd: gitRoot, timeoutMs });
+  // States what serves and what this update did with a release an interrupted update placed.
+  const reportPlacement = async (message: string) => {
+    const note: UpdateStepResult = {
+      name: "git-release-placement",
+      command: "reconcile release link",
+      cwd: prefix,
+      durationMs: 0,
+      exitCode: 0,
+      advisory: {
+        kind: "recoverable-maintenance",
+        message: `Release ${releaseId(unserved!.root)} was placed by an earlier update but never passed its trial; release ${releaseId(placement!.serving)} serves. ${message}`,
+      },
+    };
+    steps.push(note);
+    const { progress, stepIndex: index, totalSteps: total } = step(note.name, [], prefix);
+    await progress?.onStepComplete?.({ ...note, index, total });
+  };
+  // The link goes back to the release that serves, so it stays the trial's fallback, and
+  // the placed release is discarded if it never started. A failure keeps the files.
+  const supersedeUnserved = async () => {
+    if (!unserved || !placement) {
+      return;
+    }
+    try {
+      // Also clears a deferred trial, so no start selects the release being removed.
+      await publishGitRelease({ prefix, releaseRoot: placement.serving, trial: false });
+      const discarded = await discardUnservedGitRelease({ prefix, placement, prune });
+      await reportPlacement(
+        discarded
+          ? "It never started, so this update removed it."
+          : "It may have started, so release collection keeps it for now.",
+      );
+    } catch (error) {
+      await reportPlacement(`Superseding it failed; its files are kept: ${String(error)}`);
+    }
+  };
+  if (target.status === "skipped" && target.reason === "already-current" && !previousRelease) {
+    await supersedeUnserved();
+  }
   if (target.status !== "ok" && (!previousRelease || target.reason !== "already-current")) {
     return result(target.status, target.reason);
   }
@@ -273,18 +330,26 @@ export async function updateGitRelease(params: {
     beforeGitMutation: opts.beforeGitMutation,
   });
   if (target.status === "ok") {
-    await publishGitRelease({
-      prefix,
-      releaseRoot,
-      trial: true,
-      pending: opts.deferReleaseActivation,
-    });
+    if (releaseRoot !== unserved?.root) {
+      await supersedeUnserved();
+    } else {
+      await reportPlacement("It is the target, so this update finishes activating it.");
+    }
+    // A placed release the link already names keeps its armed trial and fallback.
+    if (releaseRoot !== unserved?.root || !unserved.selected) {
+      await publishGitRelease({
+        prefix,
+        releaseRoot,
+        trial: true,
+        pending: opts.deferReleaseActivation,
+      });
+    }
   }
   const collected = await collectGitReleases({
     prefix,
-    keep: [releaseRoot, ...(previousRelease ? [previousRelease] : [])],
-    prune: () =>
-      runCommand(["git", "-C", gitRoot, "worktree", "prune"], { cwd: gitRoot, timeoutMs }),
+    // The serving release is the trial's fallback, however long ago the link left it.
+    keep: [releaseRoot, previousRelease ?? placement?.serving].filter((root) => root !== undefined),
+    prune,
   }).catch((error: unknown) => ({ removed: [], warnings: [String(error)] }));
   if (collected.warnings.length > 0) {
     steps.push({

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath } from "../config/paths.js";
@@ -8,11 +9,13 @@ import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
 import { readPackageVersion } from "./package-json.js";
+import { packageReleaseLeaseDir, readPackageReleaseLeases } from "./package-release-lease.js";
 import { collectPackageReleases } from "./package-release-retention.js";
 import {
   PACKAGE_RELEASES_DIR,
   packageReleaseGlobalRoot,
   readPackageReleaseSlotSync,
+  type PackageReleaseSlot,
 } from "./package-release-slot-path.js";
 import {
   capturePackageReleaseSlot,
@@ -38,6 +41,12 @@ export async function createGitReleaseDirs(prefix: string) {
   };
 }
 
+const gitReleaseTrialFile = (prefix: string) =>
+  path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
+
+const gitReleaseId = (prefix: string, root: string) =>
+  path.relative(path.join(prefix, PACKAGE_RELEASES_DIR), root).split(path.sep)[0]!;
+
 /**
  * Select `releaseRoot` with one rename. With `trial`, the launcher switches back
  * after two failed starts and the Gateway clears the record once it is ready.
@@ -52,7 +61,7 @@ export async function publishGitRelease(params: {
 }): Promise<{ previous: string | null; target: string }> {
   const slot = gitReleaseSlot(params.prefix);
   const target = packageReleaseLinkTarget(slot, params.releaseRoot);
-  const trialFile = path.join(params.prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
+  const trialFile = gitReleaseTrialFile(params.prefix);
   await writeGitReleaseLauncher(params.prefix);
   const existing = await fs.lstat(slot).catch(ignoreMissingPath);
   let previous: string | null = null;
@@ -102,19 +111,102 @@ export async function publishGitRelease(params: {
   return { previous, target };
 }
 
+async function readGitReleaseTrial(prefix: string): Promise<GitReleaseTrial | null> {
+  const raw = await fs.readFile(gitReleaseTrialFile(prefix), "utf8").catch(ignoreMissingPath);
+  // SAFETY: publishGitRelease and the launcher are the only writers of the trial record.
+  return raw ? (JSON.parse(raw) as GitReleaseTrial) : null;
+}
+
 /** A ready Gateway ends the trial of the release it runs. */
 export async function settleGitReleaseTrial(runningRoot: string | null): Promise<void> {
   const slot = runningRoot ? readPackageReleaseSlotSync(runningRoot) : null;
   if (!slot) {
     return;
   }
-  const trialFile = path.join(slot.prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL);
-  const raw = await fs.readFile(trialFile, "utf8").catch(ignoreMissingPath);
-  // SAFETY: publishGitRelease and the launcher are the only writers of the trial record.
-  const trial = raw ? (JSON.parse(raw) as GitReleaseTrial) : null;
+  const trial = await readGitReleaseTrial(slot.prefix);
   if (trial?.target === slot.target) {
-    await fs.rm(trialFile, { force: true });
+    await fs.rm(gitReleaseTrialFile(slot.prefix), { force: true });
   }
+}
+
+export type GitReleasePlacement = {
+  /** The release that last served and passed its trial: the trial fallback for the next switch. */
+  serving: string;
+  /** A release an earlier update placed whose trial never passed. */
+  unserved?: {
+    root: string;
+    /** The link names it (the update failed after the switch), rather than a deferred trial. */
+    selected: boolean;
+    /** The launcher started it or a process holds it, so it may have served: never removed here. */
+    mayHaveServed: boolean;
+  };
+};
+
+/**
+ * What the trial record says about the link. The link alone is not evidence of what
+ * serves: an update that fails after the switch but before any Gateway starts the new
+ * release leaves the link on a release that never served, with its trial still armed.
+ * That trial's `previous` is the release that serves, and the next update builds on it.
+ */
+export async function readGitReleasePlacement(
+  slot: PackageReleaseSlot,
+): Promise<GitReleasePlacement> {
+  const trial = await readGitReleaseTrial(slot.prefix).catch(() => null);
+  const resolve = (target: string) =>
+    fs.realpath(path.resolve(path.dirname(slot.slot), target)).catch(() => null);
+  // The launcher counts every start of the release the link names on trial.
+  const placed = (root: string, selected: boolean) => ({
+    root,
+    selected,
+    mayHaveServed:
+      (selected && trial!.attempts !== 0) ||
+      readPackageReleaseLeases(slot.prefix, gitReleaseId(slot.prefix, root)).live > 0,
+  });
+  if (!trial) {
+    return { serving: slot.releaseRoot };
+  }
+  if (trial.pending && trial.previous === slot.target) {
+    const root = await resolve(trial.target);
+    return root && root !== slot.releaseRoot
+      ? { serving: slot.releaseRoot, unserved: placed(root, false) }
+      : { serving: slot.releaseRoot };
+  }
+  const previous =
+    !trial.pending && trial.target === slot.target ? await resolve(trial.previous) : null;
+  return previous && previous !== slot.releaseRoot
+    ? { serving: previous, unserved: placed(slot.releaseRoot, true) }
+    : { serving: slot.releaseRoot };
+}
+
+/**
+ * Remove a release this update superseded before it ever served: the link no longer
+ * names it, the launcher never started it, and no process holds it. Anything else is
+ * left to `collectGitReleases`.
+ */
+export async function discardUnservedGitRelease(params: {
+  prefix: string;
+  placement: GitReleasePlacement;
+  prune: () => Promise<unknown>;
+}): Promise<string | null> {
+  const unserved = params.placement.unserved;
+  const selected = readPackageReleaseSlotSync(gitReleaseSlot(params.prefix));
+  if (!unserved || unserved.mayHaveServed || !selected || selected.releaseRoot === unserved.root) {
+    return null;
+  }
+  const releasesDir = path.join(params.prefix, PACKAGE_RELEASES_DIR);
+  const id = gitReleaseId(params.prefix, unserved.root);
+  // Recheck at removal: a process may have started it since the placement was read.
+  if (readPackageReleaseLeases(params.prefix, id).live > 0) {
+    return null;
+  }
+  const releasePrefix = path.join(releasesDir, id);
+  // Out of the release namespace first, so a partial removal is never a release.
+  const doomed = path.join(releasesDir, `.collecting-${id}-${randomBytes(4).toString("hex")}`);
+  await fs.rename(releasePrefix, doomed);
+  await fs.rm(doomed, { recursive: true, force: true });
+  await fs.rm(packageReleaseLeaseDir(releasesDir, id), { recursive: true, force: true });
+  await params.prune();
+  return releasePrefix;
 }
 
 /**
