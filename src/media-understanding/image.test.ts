@@ -20,7 +20,6 @@ import {
 const {
   completeMock,
   acquireAgentRunPreparedModelRuntimeMock,
-  shouldPreferProviderRuntimeResolvedModelMock,
   prepareProviderRuntimeAuthMock,
   releasePreparedModelRuntimeMock,
   getApiKeyForModelMock,
@@ -34,6 +33,12 @@ const {
   registerProviderStreamForModelMock,
 } = imageRuntimeMocks;
 
+vi.mock("../agents/auth-profiles/store-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/auth-profiles/store-runtime.js")>(
+    "../agents/auth-profiles/store-runtime.js",
+  )),
+  ensureAuthProfileStoreAsync: async () => ({ version: 1, profiles: {} }),
+}));
 const {
   describeImageWithModelCore,
   describeImagesWithModelCore,
@@ -41,21 +46,21 @@ const {
 } = await import("./image.js");
 const imageModelRuntime = await import("./image-model-runtime.js");
 type ImageRequest = Parameters<typeof describeImageWithModelCore>[0];
-const openai = { provider: "openai", model: "gpt-5.4-mini" };
+const acme = { provider: "acme", model: "gpt-5.4-mini" };
 const minimax = { provider: "minimax-portal", model: "MiniMax-VL-01" };
-function request(ref = openai, overrides: Partial<ImageRequest> = {}): ImageRequest {
+function request(ref = acme, overrides: Partial<ImageRequest> = {}): ImageRequest {
   return { ...imageRequestDefaults(), ...ref, ...overrides };
 }
-function mockOpenAi() {
+function mockAcme() {
   mockImageModel({
-    provider: openai.provider,
-    id: openai.model,
+    provider: acme.provider,
+    id: acme.model,
     api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
+    baseUrl: "https://llm.example.com/v1",
   });
 }
-function openAiCompletion(text: string) {
-  return imageCompletion("openai-responses", openai.provider, openai.model, text);
+function acmeCompletion(text: string) {
+  return imageCompletion("openai-responses", acme.provider, acme.model, text);
 }
 const opencode = {
   provider: "opencode-go",
@@ -113,9 +118,9 @@ describe("describeImageWithModelCore", () => {
   installImageRuntimeTestHooks({ apiKey: "test-api-key" });
 
   it("surfaces provider errors from image-model responses", async () => {
-    mockOpenAi();
+    mockAcme();
     completeMock.mockResolvedValue({
-      ...openAiCompletion(""),
+      ...acmeCompletion(""),
       stopReason: "error",
       errorMessage: "boom",
     });
@@ -153,8 +158,8 @@ describe("describeImageWithModelCore", () => {
   ] as const)(
     "retries image reasoning-only responses: %s",
     async (_name, signature, retry, precedingBlocks) => {
-      mockOpenAi();
-      const completion = openAiCompletion("retry ok");
+      mockAcme();
+      const completion = acmeCompletion("retry ok");
       completeMock
         .mockResolvedValueOnce({
           ...completion,
@@ -173,7 +178,7 @@ describe("describeImageWithModelCore", () => {
         .mockResolvedValueOnce(completion);
       const result = describeImageWithModelCore(request());
       if (retry) {
-        await expect(result).resolves.toEqual({ text: "retry ok", model: openai.model });
+        await expect(result).resolves.toEqual({ text: "retry ok", model: acme.model });
       } else {
         await expect(result).rejects.toThrow(/returned no text/i);
       }
@@ -190,13 +195,13 @@ describe("describeImageWithModelCore", () => {
     "preserves image completion token caps %#",
     async ({ modelMaxTokens, requested, expected }) => {
       mockImageModel({
-        provider: openai.provider,
-        id: openai.model,
+        provider: acme.provider,
+        id: acme.model,
         api: "openai-responses",
         maxTokens: modelMaxTokens,
       });
-      completeMock.mockResolvedValue(openAiCompletion("ok"));
-      await describeImageWithModelCore(request(openai, { maxTokens: requested }));
+      completeMock.mockResolvedValue(acmeCompletion("ok"));
+      await describeImageWithModelCore(request(acme, { maxTokens: requested }));
       expect(completeMock).toHaveBeenCalledOnce();
       const options = expectDefined(completeMock.mock.calls[0], "image cap completion")[2];
       expect(options.maxTokens).toBe(expected);
@@ -384,8 +389,20 @@ describe("image runtime cancellation and retries", () => {
   ])(
     "applies caller transforms after retry stripping ($asyncTransform, $replace)",
     async ({ asyncTransform, replace }) => {
-      mockOpenAi();
-      const completion = openAiCompletion("retry ok");
+      // The retry stripping is OpenAI-specific, and OpenAI needs a Platform key to pick its route.
+      vi.stubEnv("OPENAI_API_KEY", "test-token");
+      getApiKeyForModelMock.mockResolvedValue({
+        apiKey: "test-token",
+        source: "test",
+        mode: "api-key",
+      });
+      mockImageModel({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      });
+      const completion = imageCompletion("openai-responses", "openai", "gpt-5.4-mini", "retry ok");
       const stripped = { reasoning: { effort: "none" } };
       const replacement = { custom: "provider option" };
       const transform = vi.fn((payload: unknown) => {
@@ -410,7 +427,10 @@ describe("image runtime cancellation and retries", () => {
         });
 
       await expect(
-        describeImageWithModelPayloadTransformCore(request(), transform),
+        describeImageWithModelPayloadTransformCore(
+          request({ provider: "openai", model: "gpt-5.4-mini" }),
+          transform,
+        ),
       ).resolves.toEqual({ text: "retry ok", model: "gpt-5.4-mini" });
       expect(transform).toHaveBeenCalledOnce();
     },
@@ -418,17 +438,17 @@ describe("image runtime cancellation and retries", () => {
 
   it("does not start the reasoning-only retry after caller cancellation", async () => {
     const controller = new AbortController();
-    mockOpenAi();
+    mockAcme();
     completeMock.mockImplementationOnce(async () => {
       controller.abort(new Error("caller cancelled image description"));
       return {
-        ...openAiCompletion(""),
+        ...acmeCompletion(""),
         content: [{ type: "thinking", thinking: "internal", thinkingSignature: "reasoning" }],
       };
     });
 
     await expect(
-      describeImageWithModelCore(request(openai, { signal: controller.signal })),
+      describeImageWithModelCore(request(acme, { signal: controller.signal })),
     ).rejects.toThrow("caller cancelled image description");
 
     expect(completeMock).toHaveBeenCalledOnce();
@@ -440,7 +460,7 @@ describe("image runtime cancellation and retries", () => {
   });
 
   it("retains the prepared runtime until an aborted provider actually settles", async () => {
-    mockOpenAi();
+    mockAcme();
     const completion = createDeferred();
     completeMock.mockImplementation(async () => {
       await completion.promise;
@@ -448,7 +468,7 @@ describe("image runtime cancellation and retries", () => {
     });
     const controller = new AbortController();
     const result = describeImageWithModelCore(
-      request(openai, { timeoutMs: 60_000, signal: controller.signal }),
+      request(acme, { timeoutMs: 60_000, signal: controller.signal }),
     );
 
     try {
@@ -467,7 +487,7 @@ describe("image runtime cancellation and retries", () => {
   it("keeps the full configured timeout for provider requests after slow setup", async () => {
     vi.useFakeTimers();
     const slowSetupMs = 400;
-    mockOpenAi();
+    mockAcme();
     const resolveModel = expectDefined(
       resolveModelAsyncMock.getMockImplementation(),
       "model resolver",
@@ -501,7 +521,7 @@ describe("image runtime cancellation and retries", () => {
     { mode: "cancellation", stage: "admission", cleanupFails: false },
     { mode: "cancellation", stage: "model", cleanupFails: false },
     { mode: "cancellation", stage: "credential", cleanupFails: false },
-    { mode: "timeout", stage: "credential-model", cleanupFails: true },
+    { mode: "timeout", stage: "prepared-model", cleanupFails: true },
     { mode: "cancellation", stage: "runtime-auth", cleanupFails: false },
   ] as const)(
     "stops image setup after $mode during $stage (cleanup failure: $cleanupFails)",
@@ -528,7 +548,7 @@ describe("image runtime cancellation and retries", () => {
       const resolved = {
         authStorage: preparedAuthStorage,
         model: {
-          provider: "openai",
+          provider: "acme",
           id: "gpt-5.4-mini",
           api: "openai-responses",
           input: ["text", "image"],
@@ -536,7 +556,6 @@ describe("image runtime cancellation and retries", () => {
         modelRegistry: {},
       };
       resolveModelAsyncMock.mockResolvedValue(resolved);
-      shouldPreferProviderRuntimeResolvedModelMock.mockReturnValue(stage === "credential-model");
       if (stage === "admission") {
         acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(() =>
           delay({
@@ -555,7 +574,7 @@ describe("image runtime cancellation and retries", () => {
         getApiKeyForModelMock.mockImplementationOnce(() =>
           delay({ apiKey: "test-token", source: "test", mode: "oauth" }),
         );
-      } else if (stage === "credential-model") {
+      } else if (stage === "prepared-model") {
         resolveModelAsyncMock
           .mockResolvedValueOnce(resolved)
           .mockImplementationOnce(() => delay(resolved));
@@ -567,7 +586,7 @@ describe("image runtime cancellation and retries", () => {
       const controller = new AbortController();
       const work = new AsyncWorkScope();
       const pending = work.track(() =>
-        describeImageWithModelCore(request(openai, { timeoutMs: 25, signal: controller.signal })),
+        describeImageWithModelCore(request(acme, { timeoutMs: 25, signal: controller.signal })),
       );
       const rejected = expect(pending).rejects.toThrow(
         mode === "timeout"
@@ -614,10 +633,10 @@ describe("image runtime cancellation and retries", () => {
         await work.drain();
       }
       expect(resolveModelAsyncMock).toHaveBeenCalledTimes(
-        stage === "admission" ? 0 : stage === "credential-model" ? 2 : 1,
+        { admission: 0, model: 1, credential: 2, "prepared-model": 2, "runtime-auth": 2 }[stage],
       );
       expect(getApiKeyForModelMock).toHaveBeenCalledTimes(
-        stage === "admission" || stage === "model" ? 0 : 1,
+        stage === "admission" || stage === "model" || stage === "prepared-model" ? 0 : 1,
       );
       expect(prepareProviderRuntimeAuthMock).toHaveBeenCalledTimes(
         stage === "runtime-auth" ? 1 : 0,
