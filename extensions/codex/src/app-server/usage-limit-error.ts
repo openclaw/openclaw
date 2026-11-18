@@ -9,7 +9,7 @@ import { markAuthProfileBlockedUntil } from "openclaw/plugin-sdk/agent-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import type { CodexAppServerClient } from "./client.js";
-import { isManagedCodexDesktopCommand } from "./managed-binary.js";
+import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 import { isJsonObject, type CodexServerNotification, type JsonValue } from "./protocol.js";
 import {
   readCodexRateLimitsRevision,
@@ -28,6 +28,7 @@ import { getSharedCodexAppServerClientState } from "./shared-client-lifecycle.js
 export type CodexRuntimeUpdateFacts = {
   serverVersion?: string;
   source?: "global" | "desktop" | "config" | "env" | "remote";
+  /** Configured command path, or the desktop app that supplied Codex. */
   command?: string;
 };
 
@@ -42,8 +43,14 @@ export function readCodexRuntimeUpdateFacts(client: CodexAppServerClient): Codex
     return { serverVersion, source: start.commandSource, command: start.command };
   }
   // Desktop-first selection never consults PATH Codex while the desktop app is present.
-  if (start?.commandSource === "resolved-managed" && isManagedCodexDesktopCommand(start.command)) {
-    return { serverVersion, source: "desktop" };
+  const desktopApp =
+    start?.commandSource === "resolved-managed"
+      ? resolveMacOSDesktopCodexAppPathCandidates().find(
+          (candidate) => candidate.appServerCommandPath === start.command,
+        )
+      : undefined;
+  if (desktopApp) {
+    return { serverVersion, source: "desktop", command: desktopApp.appName.replace(/\.app$/, "") };
   }
   return { serverVersion, source: "global" };
 }
@@ -53,7 +60,7 @@ function formatCodexUpdateInstruction(facts: CodexRuntimeUpdateFacts): string {
     case "remote":
       return "Update the Codex app-server this Gateway connects to, then restart it.";
     case "desktop":
-      return "Update the ChatGPT desktop app, which provides this Codex, then restart the Gateway.";
+      return `Update the ${facts.command} desktop app, which provides this Codex, then restart the Gateway.`;
     case "config":
       return `Update the Codex at ${facts.command} (set by plugins.entries.codex.config.appServer.command), then restart the Gateway.`;
     case "env":

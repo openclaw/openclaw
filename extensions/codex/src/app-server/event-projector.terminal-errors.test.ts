@@ -265,10 +265,13 @@ describe("CodexAppServerEventProjector terminal errors", () => {
         { source: "remote" },
         "Update the Codex app-server this Gateway connects to, then restart it.",
       ],
-      [
-        { source: "desktop" },
-        "Update the ChatGPT desktop app, which provides this Codex, then restart the Gateway.",
-      ],
+      ...(["ChatGPT", "Codex"] as const).map(
+        (app) =>
+          [
+            { source: "desktop", command: app },
+            `Update the ${app} desktop app, which provides this Codex, then restart the Gateway.`,
+          ] as const,
+      ),
     ] as const) {
       expect(
         resolveCodexPromptError(source, {
@@ -393,6 +396,33 @@ describe("CodexAppServerEventProjector terminal errors", () => {
       } else {
         expect(error).toMatchObject({ status: 401, message: "ordinary refusal" });
       }
+    },
+  );
+
+  it.each([
+    undefined,
+    {
+      message: "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.",
+    },
+  ])(
+    "keeps the update-required error when the failed snapshot adds nothing: %j",
+    async (laterError) => {
+      const params = { ...(await createParams()), modelId: "gpt-6.2-sol" };
+      const projector = await createProjector(params, {
+        codexRuntime: { serverVersion: "0.164.0" },
+      });
+      await fail(projector, {
+        message:
+          "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.",
+        codexErrorInfo: "modelNotFound",
+      });
+      await fixture.notify(projector, "turn/completed", {
+        turn: { id: TURN_ID, status: "failed", items: [], error: laterError },
+      });
+      // Losing the code would drop Control UI's "Start a new session" action.
+      expect(readAttemptTerminal(fixture.result(projector)).promptError).toMatchObject({
+        code: "harness_update_required",
+      });
     },
   );
 
