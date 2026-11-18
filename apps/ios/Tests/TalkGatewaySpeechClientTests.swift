@@ -387,64 +387,6 @@ struct TalkGatewaySpeechClientTests {
         #expect(parsed.route.gatewayOwnsCredentials)
     }
 
-    @Test func `switching to a realtime route retires the native silence monitor`() async {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        manager.attachGateway(GatewayNodeSession())
-        manager.updateGatewayConnected(true)
-        manager._test_applyLoadedTalkConfig(Self.parseSpeechProvider("elevenlabs"))
-        manager.isEnabled = true
-        defer { manager.stop() }
-
-        await manager.start()
-        #expect(manager._test_hasSilenceMonitor())
-
-        // The route changes while a native turn is being answered, then the next resume starts.
-        manager._test_endNativeListeningAfterSubmittedTurn()
-        manager._test_applyLoadedTalkConfig(Self.parseRealtimeWebRTC())
-        #expect(manager._test_runtimeRoute() == .realtimeWebRTC)
-        await manager.start()
-
-        #expect(!manager._test_hasSilenceMonitor())
-    }
-
-    @Test func `failed realtime start still resumes native capture with a silence monitor`() async {
-        let manager = TalkModeManager(allowSimulatorCapture: true)
-        manager.updateGatewayConnected(true)
-        manager._test_applyLoadedTalkConfig(Self.parseRealtimeWebRTC())
-        manager.isEnabled = true
-        defer { manager.stop() }
-
-        await manager.start()
-
-        #expect(manager.isListening)
-        #expect(manager._test_hasRecognitionRequest())
-        #expect(manager._test_hasSilenceMonitor())
-    }
-
-    private static func parseRealtimeWebRTC() -> TalkModeGatewayConfigState {
-        TalkModeGatewayConfigParser.parse(
-            config: [
-                "talk": [
-                    "provider": "elevenlabs",
-                    "providers": ["elevenlabs": ["modelId": "eleven_v3"]],
-                    "resolved": [
-                        "provider": "elevenlabs",
-                        "config": ["modelId": "eleven_v3"],
-                    ],
-                    "realtime": [
-                        "provider": "openai",
-                        "mode": "realtime",
-                        "transport": "webrtc",
-                        "model": "gpt-realtime-2",
-                    ],
-                ],
-            ],
-            defaultProvider: "elevenlabs",
-            defaultModelIdFallback: "eleven_v3",
-            defaultRealtimeModelIdFallback: "gpt-realtime-2",
-            defaultSilenceTimeoutMs: 900)
-    }
-
     private static func parseSpeechProvider(
         _ provider: String,
         model: String? = "speech-model",

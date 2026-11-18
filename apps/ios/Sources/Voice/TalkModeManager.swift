@@ -4507,14 +4507,6 @@ extension TalkModeManager {
         self.silenceTask != nil
     }
 
-    /// Mirrors the state `runTranscriptProcessing` leaves before it schedules the next resume.
-    func _test_endNativeListeningAfterSubmittedTurn() {
-        self.isListening = false
-        self.isUserSpeechDetected = false
-        self.captureMode = .idle
-        self.stopRecognition()
-    }
-
     func _test_activePushToTalkCaptureId() -> String? {
         self.activePTTCaptureId
     }

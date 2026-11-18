@@ -1239,6 +1239,71 @@ struct TalkConfigRefreshTests {
         await gateway.disconnect()
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func `a native turn resuming on a realtime route retires its silence monitor first`() async throws {
+        let served = ServedTalkConfig(Self.json([:]))
+        let monitorAtRealtimeStart = AsyncStream<Bool>.makeStream()
+        defer { monitorAtRealtimeStart.continuation.finish() }
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
+            let method = GatewayWebSocketTestSupport.requestMethod(from: message)
+            guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            if method == "talk.config" {
+                try await socket.emitReceiveSuccess(.data(served.response(id: id)))
+            } else if method == "chat.send" {
+                let data: Data = switch message {
+                case let .data(value): value
+                case let .string(value): Data(value.utf8)
+                @unknown default: throw URLError(.badServerResponse)
+                }
+                let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+                let params = try #require(frame["params"] as? [String: Any])
+                let runID = try #require(params["idempotencyKey"] as? String)
+                // The turn only has to reach the real send boundary; a terminal error ends it at once.
+                socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(
+                    id: id, payload: "{\"runId\":\"\(runID)\",\"status\":\"error\"}")))
+            } else if method == "talk.session.create" {
+                // Observe the monitor when realtime startup begins, then fail it to exercise the native fallback.
+                let monitorIsRunning = await manager?._test_hasSilenceMonitor() ?? true
+                monitorAtRealtimeStart.continuation.yield(monitorIsRunning)
+                try socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.errorResponseData(
+                    id: id, code: "UNAVAILABLE", message: "Synthetic realtime failure", details: [:])))
+            }
+        })
+        let gateway = GatewayNodeSession()
+        defer { manager.stop() }
+        do {
+            _ = try await connectTalkCleanupTestGateway(gateway, socket: socket)
+            manager.attachGateway(gateway)
+            manager.updateGatewayConnected(true)
+            manager.isEnabled = true
+            await manager.start()
+            try #require(manager.isListening)
+            try #require(manager._test_hasSilenceMonitor())
+
+            // The Gateway switches to realtime while the native turn is answered; its resume then starts realtime.
+            await served.set(Self.relayTalkConfig(provider: "xai", voice: "ara"))
+            await manager._test_handleTranscript(
+                "What time is it?",
+                isFinal: true,
+                pttCaptureId: nil,
+                recognitionGeneration: manager._test_recognitionGeneration())
+
+            var observed = monitorAtRealtimeStart.stream.makeAsyncIterator()
+            let monitorWasRunning = await observed.next()
+            #expect(monitorWasRunning == false)
+            // The failed realtime start falls back to native capture with its own monitor.
+            while !(manager.isListening && manager._test_hasSilenceMonitor()) {
+                await Task.yield()
+            }
+            #expect(manager._test_hasRecognitionRequest())
+        } catch {
+            await gateway.disconnect()
+            throw error
+        }
+        await gateway.disconnect()
+    }
+
     private static func relayTalkConfig(provider: String, voice: String) -> Data {
         self.json(["talk": ["realtime": [
             "provider": provider, "mode": "realtime", "transport": "gateway-relay", "brain": "agent-consult",
