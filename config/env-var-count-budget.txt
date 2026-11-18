@@ -23,5 +23,5 @@
 # Ordinary Git updates now consume the existing, documented source-build declaration flag.
 # OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS (#187962) is the owner-approved launch-only bundled plugin development reload opt-in.
 # Approved Gmail child-only push and hook credential environment sources.
-# OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE lets a supervisor end restart resume at a deployment generation boundary.
+# OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE is an opaque supervisor-chosen token that ends restart resume at the supervisor's boundary.
 462
