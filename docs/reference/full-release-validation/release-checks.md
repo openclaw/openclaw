@@ -115,8 +115,12 @@ so independent non-live checks also report their results. Setup failures and
 cancellation do not start that pool.
 
 Expanded published-upgrade survivor and update-migration coverage runs in
-baseline-specific, isolated scenario jobs, with up to 32 targeted Docker jobs
-active per matrix. Long standalone restart/auth, plugin-update, and root-managed
+baseline-specific, isolated scenario jobs. The targeted matrix admits up to 48
+jobs only for GitHub-hosted runs without a custom `runner_group`, with a validated
+package artifact, `published-upgrade-survivor` selected, a nonempty scenario list,
+and no `update-migration` selection. Other targeted matrices retain 32 jobs.
+This increases peak demand, not scenario coverage; wall-time gains depend on
+hosted and registry capacity. Long standalone restart/auth, plugin-update, and root-managed
 upgrade jobs are admitted before the scenario expansion; pinned baseline cohorts
 start newest first. The grouping and execution planners share the
 same baseline compatibility rules; package identities, fresh scenario
