@@ -22,6 +22,8 @@ export type PrepareModelWithCredentialsParams = {
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
   modelResolver?: SimpleCompletionModelResolver;
+  /** Internal authorization wrappers around resolveModelAsync may keep single-row stores. */
+  selectedModelStores?: boolean;
   signal?: AbortSignal;
   /** Internal caller-owned generation. Public plugin callers use the agent helper below. */
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
