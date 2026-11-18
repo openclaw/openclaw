@@ -54,6 +54,8 @@ Tool discovery reads declared capabilities and recorded runtime health without s
 
 Hosted agent turns reuse the Gateway's prepared node catalog and computer-provider declarations. Pairing and connection changes, command-policy updates, and provider/configuration changes update those owner-held facts before the next turn assembles its tool surface. Discovery remains bound to the agent's Gateway; a retired Gateway binding cannot borrow another Gateway's inventory.
 
+A fresh hosted session omits the tool only when those facts show no configured Gateway computer, supported paired node, or configured or attached desktop route. A known offline route keeps the tool available for readiness and reconnect guidance; unreadable inventory is not treated as an empty inventory. A missing local display or an empty paired-node list does not rule out a Gateway, attached, or cloud-session desktop. These runtime omissions do not narrow the tool policy inherited by a child or scheduled run on another host.
+
 For RPC clients, `computer.status` with `probe: false` performs this passive read. `probe: true` prepares the computer and waits for readiness; omitting `probe` preserves that behavior for existing clients. Concurrent probes share preparation, and helper startup remains bounded by its one-minute timeout. Passive reads never extend the desktop's idle lifetime or retry a failed startup.
 
 ### Linux Gateway live proof

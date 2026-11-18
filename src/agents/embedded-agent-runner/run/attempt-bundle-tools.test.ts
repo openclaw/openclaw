@@ -180,6 +180,29 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
   );
 
   const clients = ["client_read", "client_write", "other_read"];
+  it("keeps host-runtime omissions out of child and cron authority, including refresh", async () => {
+    const inherited = ["nodes", "computer", "mobile_ui"];
+    const input = createInput(
+      inherited,
+      inherited.map((name) => createStubTool(name)),
+    );
+    input.preparedToolBase.nodeToolAvailability = {
+      cacheKey: "no-supported-targets",
+      unsupportedTools: ["computer", "mobile_ui"],
+    };
+    const result = await prepare(input);
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["nodes"]);
+    expect(inherited).toEqual(["nodes", "computer", "mobile_ui"]);
+    expect(input.preparedToolBase.cronCreatorToolAllowlist).toEqual([
+      { name: "nodes" },
+      { name: "computer" },
+      { name: "mobile_ui" },
+    ]);
+    input.preparedToolBase.nodeToolAvailability = undefined;
+    result.refreshTools(() => {});
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["nodes", "computer", "mobile_ui"]);
+    expect(inherited).toEqual(["nodes", "computer", "mobile_ui"]);
+  });
   it.each<[string, string[], string[], boolean]>([
     ["empty", [], [], false],
     [

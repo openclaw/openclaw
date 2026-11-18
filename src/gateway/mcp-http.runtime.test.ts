@@ -359,4 +359,21 @@ describe("MCP loopback Computer Use schema", () => {
     );
     expect(listNodes).toHaveBeenCalledTimes(2);
   });
+
+  it("captures eligible desktop authority before omitting an unsupported loopback surface", async () => {
+    const capture = vi.fn();
+    resolveGatewayScopedTools.mockImplementation(({ pairedNodeComputerUse }) => ({
+      agentId: "main",
+      tools: [createComputerTool({ pairedNodeComputerUse })],
+      captureFinalCronCreatorTools: capture,
+    }));
+    const scope = scopeParams({ toolsAllow: ["computer"], modelHasVision: true });
+    const absent = await resolveExact(scope);
+    expect(toolNames(absent)).toEqual([]);
+    expect(capture).toHaveBeenLastCalledWith(new Set(["computer"]));
+    listNodes.mockResolvedValue([
+      { ...computerNode("offline-desktop", ["screenshot"]), connected: false, paired: true },
+    ]);
+    expect(toolNames(await resolveExact(scope))).toEqual(["computer"]);
+  });
 });

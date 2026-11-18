@@ -7,6 +7,7 @@ import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   loadPairedComputerUseAvailabilityForSurface,
+  omitUnsupportedNodeTools,
   type PairedComputerUseAvailability,
 } from "../agents/computer-use-node-capabilities.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -193,18 +194,19 @@ async function resolveNodeExecScope(
   return { ...params, nodeExecAvailability };
 }
 
-function isComputerAllowedByMcpScope(
+function isNodeToolAllowedByMcpScope(
   params: McpLoopbackScopeParams,
   mode: LoopbackToolsAllowMode,
+  toolName: "computer" | "mobile_ui",
 ): boolean {
   const { toolsAllow } = params.context;
   if (mode === "exact") {
     return (
       toolsAllow === undefined ||
-      toolsAllow.some((name) => normalizeToolPolicyName(name) === "computer")
+      toolsAllow.some((name) => normalizeToolPolicyName(name) === toolName)
     );
   }
-  return applyEmbeddedAttemptToolsAllow([{ name: "computer" }], toolsAllow).length === 1;
+  return applyEmbeddedAttemptToolsAllow([{ name: toolName }], toolsAllow).length === 1;
 }
 
 type ResolvedNodeScope = {
@@ -218,8 +220,10 @@ async function resolvePairedComputerNodeScope(
 ): Promise<ResolvedNodeScope> {
   params.assertCurrent();
   const canReachOrdinaryComputerSurface =
-    isComputerAllowedByMcpScope(params, mode) && params.context.modelHasVision !== false;
-  if (!canReachOrdinaryComputerSurface) {
+    isNodeToolAllowedByMcpScope(params, mode, "computer") &&
+    params.context.modelHasVision !== false;
+  const canReachMobileUi = isNodeToolAllowedByMcpScope(params, mode, "mobile_ui");
+  if (!canReachOrdinaryComputerSurface && !canReachMobileUi) {
     return { params };
   }
   // Resolve the actual configured surface before contacting Gateway. Grant policy
@@ -231,7 +235,11 @@ async function resolvePairedComputerNodeScope(
     (tool) => readMcpLoopbackToolName(tool) === "computer",
   );
   const pairedComputerUseAvailability = await loadPairedComputerUseAvailabilityForSurface({
+    config: params.cfg,
     computerAllowed,
+    mobileUiAllowed: policyResolved.tools.some(
+      (tool) => readMcpLoopbackToolName(tool) === "mobile_ui",
+    ),
     modelHasVision: params.context.modelHasVision,
     signal: params.signal,
   });
@@ -246,7 +254,8 @@ async function resolvePairedComputerNodeScope(
     },
   };
   // Rebuild computer with the prepared host/node action projection and target status.
-  return pairedComputerUseAvailability.prepared
+  return pairedComputerUseAvailability.prepared ||
+    pairedComputerUseAvailability.unsupportedTools?.length
     ? resolvedParams
     : { ...resolvedParams, policyResolved };
 }
@@ -361,12 +370,17 @@ async function constructMcpLoopbackTools(
   };
   const scoped = await resolveGatewayScopedTools(scopeOptions, params.assertCurrent);
   params.assertCurrent();
-  const tools =
+  const eligibleTools =
     mode === "exact"
       ? applyGrantToolsAllow(scoped.tools, toolsAllow)
       : applyPolicyToolsAllow(scoped.tools, toolsAllow);
-  const toolSchema = buildMcpToolSchema(tools);
-  scoped.captureFinalCronCreatorTools?.(new Set(toolSchema.map((tool) => tool.name)));
+  const eligibleSchema = buildMcpToolSchema(eligibleTools);
+  scoped.captureFinalCronCreatorTools?.(new Set(eligibleSchema.map((tool) => tool.name)));
+  // A later child or cron run owns different targets. Capture policy/schema
+  // eligibility above; current-host runtime omissions affect only this catalog.
+  const tools = omitUnsupportedNodeTools(eligibleTools, params.pairedComputerUseAvailability);
+  const offeredNames = new Set(tools.map((tool) => tool.name));
+  const toolSchema = eligibleSchema.filter((tool) => offeredNames.has(tool.name));
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
