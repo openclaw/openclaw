@@ -17,6 +17,7 @@ import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { saveCronStore } from "../cron/store.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { isMissingPathError } from "../infra/errors.js";
 import {
   bindGatewayContextResolver,
@@ -189,6 +190,7 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         void pendingWrite.catch(beforeWrite.reject);
         await beforeWrite.promise;
         if (change === "device revocation") {
+          await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" });
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
         } else {
           const other = ensureProfileForEmail("other@example.test");
@@ -306,6 +308,7 @@ it.each(["device revocation", "email reassignment", "email restoration"] as cons
         void pendingWrite.catch(beforeWrite.reject);
         await beforeWrite.promise;
         if (change === "device revocation") {
+          await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" });
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
         } else {
           const other = ensureProfileForEmail("other@example.test");

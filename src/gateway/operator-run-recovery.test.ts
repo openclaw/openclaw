@@ -194,7 +194,7 @@ describe("scheduled authenticated operator source", () => {
     }));
 
   it.each(["pending", "uncertain"] as const)(
-    "refuses cached profile facts while their mutation is %s",
+    "keeps admitted profile facts but refuses a new start while mutation is %s",
     (outcome) =>
       withRecovery(async (fixture, _stateDir, profile) => {
         using restored = await restoreFixture(fixture);
@@ -207,7 +207,9 @@ describe("scheduled authenticated operator source", () => {
           if (outcome === "uncertain") {
             mutation.settle(false);
           }
-          expectRevoked(restored.authority);
+          expectCurrent(restored.authority);
+          expect(restored.authority.reauthorize).toThrow();
+          expectCurrent(restored.authority);
         } finally {
           mutation.settle(true);
         }
@@ -351,7 +353,7 @@ describe("scheduled authenticated operator source", () => {
         expect(first.assertCurrent).not.toThrow();
         expect(second.assertCurrent).not.toThrow();
         invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
-        expect(first.assertCurrent).toThrow();
+        expect(first.assertCurrent).not.toThrow();
       } finally {
         first.release();
         second.release();
@@ -384,7 +386,7 @@ describe("scheduled authenticated operator source", () => {
             },
           });
           if (change !== "current") {
-            await expect(restore).rejects.toThrow(/owner closed|authority changed/);
+            await expect(restore).rejects.toThrow(/owner closed|source policy changed/);
             return;
           }
           const restored = await restore;
@@ -777,6 +779,8 @@ describe("scheduled authenticated operator source", () => {
           await expect(fixture.restore()).rejects.toThrow(
             GatewayOperatorRecoveryAuthorizationError,
           );
+          expect(restored.authority.reauthorize).toThrow("source policy changed");
+          expectCurrent(restored.authority);
           owner.publish({ current: generation, required: null });
           expectCurrent(restored.authority);
         } else {
@@ -864,6 +868,7 @@ describe("scheduled authenticated operator source", () => {
           fixture.retire();
         }
         if (change === "device revoked") {
+          await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" });
           invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
         }
         if (change === "role changed") {
@@ -987,7 +992,10 @@ describe("scheduled authenticated operator source", () => {
       );
       expectCurrent(restored.authority);
       const next = expectDefined(await fixture.restore(), "fresh model-policy admission");
-      using _next = { [Symbol.dispose]: next.release };
-      expect(next.authority.modelPolicy?.models).toEqual([modelRef("a"), modelRef("b")]);
+      try {
+        expect(next.authority.modelPolicy?.models).toEqual([modelRef("a"), modelRef("b")]);
+      } finally {
+        next.release();
+      }
     }));
 });

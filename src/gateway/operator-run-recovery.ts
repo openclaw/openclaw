@@ -206,7 +206,8 @@ async function restoreGatewayOperatorSnapshot(params: {
         (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) ||
         !device.isCurrent() ||
         (snapshot.sharedGeneration !== undefined &&
-          context.sharedGatewaySessionGenerationState !== generationOwner)
+          (context.sharedGatewaySessionGenerationState !== generationOwner ||
+            generationOwner?.requiredGeneration !== snapshot.sharedGeneration))
       ) {
         throw new GatewayOperatorRecoveryAuthorizationError(
           "Restart recovery operator source policy changed.",
@@ -568,7 +569,8 @@ export async function captureGatewayOperatorContinuation(
     // A source without saved facts keeps its live authority.
     return await captureGatewayOperatorRunAuthority(input);
   }
-  // Other holders of the inherited object keep it until this work ends; its checks do not gate it.
+  // A distinct continuation re-admits before retaining its origin's fixed restriction.
+  inherited.reauthorize?.();
   const releaseInherited = inherited.retain?.();
   const restored = await restoreGatewayQueuedOperatorRecovery({
     source: facts,

@@ -379,7 +379,7 @@ export function noteActiveCronJobTriggerMutation(jobId: string): void {
   }
 }
 
-/** A queued on-exit launch must not execute a source changed before its own admission. */
+/** A queued on-exit launch checks its executable source at its own admission. */
 export function noteActiveCronJobMessageSourceAuthorityMutation(jobId: string): void {
   const marker = getCurrentCronActiveJobMarker(jobId);
   if (marker) {
