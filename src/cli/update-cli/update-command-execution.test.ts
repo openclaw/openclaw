@@ -651,11 +651,13 @@ describe("mutable update execution", () => {
             const transaction = {
               backupRoot: root,
               ...(checkout ? { readGitActivation: async () => activation } : {}),
-              rollback: async () => Promise.reject(new Error("unused")),
+              rollback: async () => {
+                throw new Error("unused");
+              },
               complete: async () => undefined,
             };
             // The fixture admitted no core identities, so the cohort reservation refuses.
-            reservation = await options.onTransaction?.(transaction).catch(String);
+            reservation = await Promise.resolve(options.onTransaction?.(transaction)).catch(String);
             return { ...successfulUpdate, mode: "git" };
           },
         );

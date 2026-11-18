@@ -242,7 +242,7 @@ export const UpdateRunPackageReleaseSchema = z.object({
 });
 
 /** What an in-place Git checkout activation made live, recorded before its plugin cohort. */
-export const UpdateRunGitActivationSchema = z.object({
+const UpdateRunGitActivationSchema = z.object({
   sha: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u),
   buildId: z.string().min(1).max(96),
   previousBuildId: z.string().min(1).max(96).nullable(),
