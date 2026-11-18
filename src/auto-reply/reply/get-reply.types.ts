@@ -52,6 +52,8 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Normalize a machine-selected thinking preference against the execution model. */
+  normalizeThinkingLevelOverride?: boolean;
   /** Dispatch-owned command requester binding; never part of the public plugin API. */
   withCommandNativeSubagents?: <T>(
     binding: {

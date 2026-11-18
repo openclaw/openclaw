@@ -62,6 +62,11 @@ export type CostUsageTotals = {
   cacheReadCost: number;
   cacheWriteCost: number;
   missingCostEntries: number;
+  /**
+   * Input tokens of calls whose provider reported no cache read/write split. Their
+   * cache use is unknown, so cache hit rates leave them out instead of counting misses.
+   */
+  cacheUnmeasuredInput: number;
   /** Missing-cost entry counts keyed by the raw `provider/model` attribution. */
   missingCostByModel?: Record<string, number>;
 };

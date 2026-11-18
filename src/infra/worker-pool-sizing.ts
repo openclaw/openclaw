@@ -1,5 +1,6 @@
 import { availableParallelism } from "node:os";
 import type { DatabaseEngineSelection } from "./database-engine/types.js";
+import { readProcessAvailableMemoryBytes } from "./host-memory.js";
 
 export type WorkerPoolClass = "reader" | "file-reader" | "compute" | "writer" | "singleton";
 
@@ -45,7 +46,7 @@ export function resolveUpdateHashWorkerCount(): number {
   if (process.versions.bun && process.platform === "linux") {
     return 0;
   }
-  const available = process.availableMemory();
+  const available = readProcessAvailableMemoryBytes();
   if (!Number.isSafeInteger(available) || available <= 0) {
     return 0;
   }

@@ -210,7 +210,7 @@ it.each(["registry", "resume-marker"] as const)(
       replaceSessionEntrySync(fixture.scope, {
         sessionId: currentId,
         updatedAt: 1,
-        resumeAfterRestart: { queuedInputIds: [] },
+        resumeAfterRestart: {},
       });
     }
     const before = fixture.snapshot();

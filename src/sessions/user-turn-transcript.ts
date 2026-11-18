@@ -38,6 +38,7 @@ import {
   preparePersistedModelPromptProjection,
 } from "./user-turn-transcript-updates.js";
 import {
+  applyUserTurnReplacementText,
   buildLateResolvedMediaMessage,
   resolvePersistedUserTurnMessage,
 } from "./user-turn-transcript.message.js";
@@ -113,11 +114,20 @@ export function createUserTurnTranscriptRecorder(
   let replacementText: string | undefined;
   let confirmedSteerTargetRunId: string | undefined;
   let pendingInput: Awaited<ReturnType<typeof stageUserTurnPendingInput>>;
+  // The committed input keeps its run identity across later preparation attempts.
+  let acceptedPendingInputRunId: string | undefined;
+  let acceptedPendingInputId: string | undefined;
+  let staging: Promise<boolean> | undefined;
   const processing = createUserTurnProcessingCompletion(
     () => pendingInput,
     params.pendingInputSources,
+    (receipt) => {
+      if (pendingInput === receipt) {
+        pendingInput = undefined;
+        staging = undefined;
+      }
+    },
   );
-  let staging: Promise<boolean> | undefined;
 
   const adoptPendingInput = (receipt: NonNullable<typeof pendingInput>) => {
     pendingInput = receipt;
@@ -129,24 +139,10 @@ export function createUserTurnTranscriptRecorder(
     resolvedMessagePromise = Promise.resolve(message);
   };
 
-  const applyReplacementText = (candidate: PersistedUserTurnMessage | undefined) => {
-    if (!candidate || replacementText === undefined) {
-      return candidate;
-    }
-    const metadata = { ...candidate["__openclaw"] };
-    if (candidate.content !== replacementText) {
-      delete metadata.humanMentions;
-      delete metadata.workContext;
-      delete metadata.appContext;
-    }
-    const next = { ...candidate, content: replacementText };
-    delete next["__openclaw"];
-    return Object.keys(metadata).length > 0 ? { ...next, __openclaw: metadata } : next;
-  };
-
   const applyMessageOverrides = (candidate: PersistedUserTurnMessage | undefined) => {
+    const replacement = applyUserTurnReplacementText(candidate, replacementText);
     const next = rewritePersistedSteerTargetRunId(
-      projectUserTurnRequesterOrigin(applyReplacementText(candidate), requesterOrigin),
+      projectUserTurnRequesterOrigin(replacement, requesterOrigin),
       confirmedSteerTargetRunId,
     );
     // Native mirrors must reuse this admission even when no transport supplied a key.
@@ -561,15 +557,24 @@ export function createUserTurnTranscriptRecorder(
             return false;
           }
           const stagedOrigin = requesterOrigin;
+          const runId = acceptedPendingInputRunId ?? options.runId;
+          const adopt = (receipt: NonNullable<typeof pendingInput>) => {
+            acceptedPendingInputRunId ??= runId;
+            acceptedPendingInputId ??= receipt.inputId;
+            adoptPendingInput(receipt);
+          };
           pendingInput = await stageUserTurnPendingInput(recorder, target, {
             ...options,
+            runId,
+            // A retained ID without a receipt means this recorder confirmed relinquishment.
+            reattachInputId: acceptedPendingInputId,
             requestFingerprint: params.pendingInputRequestFingerprint,
             reclaimCancelledSourceTurn: params.reclaimCancelledSourceTurn,
             trackCompletion: params.trackInputCompletion,
             retryCancelled: options.retryCancelled || params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
-            onCommitted: adoptPendingInput,
+            onCommitted: adopt,
             prepareMessageAfterIdempotencyCheck: (next) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
                 projectUserTurnRequesterOrigin(next, stagedOrigin),
@@ -582,7 +587,7 @@ export function createUserTurnTranscriptRecorder(
           if (!pendingInput) {
             return false;
           }
-          adoptPendingInput(pendingInput);
+          adopt(pendingInput);
           return pendingInput.state !== "consumed";
         })();
         return staging;

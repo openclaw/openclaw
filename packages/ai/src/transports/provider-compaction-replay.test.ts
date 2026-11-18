@@ -197,7 +197,7 @@ describe("bounded compaction replay projection", () => {
     if (kind === "malformed") {
       barrier.providerReplay = { ...barrier.providerReplay, data: "" };
     } else if (kind === "mismatched") {
-      barrier.providerReplay = { ...barrier.providerReplay, model: "different-model" };
+      barrier.providerReplay = { ...barrier.providerReplay, sessionHash: "different-session" };
     } else {
       suppressCompaction(barrier, model, replayIdentity);
     }

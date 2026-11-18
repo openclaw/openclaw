@@ -107,7 +107,6 @@ export function createPdfTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   cwd?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -177,7 +176,6 @@ export function createPdfTool(options?: {
     const password = typeof record.password === "string" ? record.password : undefined;
 
     let pdfModelConfig = registrationPdfModelConfig;
-    const authProfileStoreSource = options?.authProfileStoreSource;
     if (!pdfModelConfig) {
       const authStore = await prepareToolAuthProfileStore(options);
       signal?.throwIfAborted();
@@ -340,7 +338,6 @@ export function createPdfTool(options?: {
         : await prepareToolAuthProfileStore({
             agentDir: runtimeAgentDir,
             authProfileStore,
-            authProfileStoreSource,
           });
       signal?.throwIfAborted();
       assertResourcesOpen?.();

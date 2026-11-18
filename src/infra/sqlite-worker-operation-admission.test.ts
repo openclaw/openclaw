@@ -17,11 +17,11 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { forceFullGc } from "../test-utils/retention.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireGatewayStateOwner,
   assertStateDatabaseAccessAllowed,
 } from "./gateway-state-owner.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { createSqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import {
   deferSqlitePostCommitPublication,

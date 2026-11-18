@@ -122,7 +122,7 @@ suite.define(() => {
           await list.evaluate((node) => {
             node.scrollTop = 0;
           });
-          await page.locator('.sidebar-rail [data-navigation-view="pages"]').click();
+          await page.locator('.sidebar-rail [data-navigation-view="online"]').click();
           await close.waitFor();
           const sessionsRail = page.locator('.sidebar-rail [data-navigation-view="sessions"]');
           await sessionsRail.click();

@@ -76,12 +76,12 @@ describe("session-store-runtime", () => {
     );
     await patchInternalSessionEntry(
       { agentId: "main", sessionKey, storePath: targetStorePath },
-      () => ({ resumeAfterRestart: { queuedInputIds: [] } }),
+      () => ({ resumeAfterRestart: {} }),
       { skipMaintenance: true },
     );
     expect(
       loadInternalSessionEntry({ sessionKey, storePath: targetStorePath })?.resumeAfterRestart,
-    ).toEqual({ queuedInputIds: [] });
+    ).toEqual({});
   }
 
   function assignOwner(sessionKey: string): void {
@@ -207,7 +207,7 @@ describe("session-store-runtime", () => {
     for (const mutate of [patchSessionEntry, updateSessionStoreEntry]) {
       await mutate({ sessionKey, storePath, update: () => attemptedMarkerClear });
       expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
-        resumeAfterRestart: { queuedInputIds: [] },
+        resumeAfterRestart: {},
         model: "gpt-5.6",
       });
     }
@@ -218,7 +218,7 @@ describe("session-store-runtime", () => {
       entry: { sessionId: "session-resume", updatedAt: 20 },
     });
     expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
-      resumeAfterRestart: { queuedInputIds: [] },
+      resumeAfterRestart: {},
       sessionId: "session-resume",
       updatedAt: 20,
     });

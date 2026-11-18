@@ -8,12 +8,26 @@ import { describe, expect, it, vi } from "vitest";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import * as sourceIntegration from "./github-publication-base-refresh.js";
+import * as publicationTransport from "./github-publication-git-transport.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
 import * as checkout from "./worker-environments/local-workspace-checkout.js";
 import * as workspaceWorker from "./worker-environments/workspace-manifest-worker.js";
+
+const pauseLog = vi.hoisted(() => vi.fn<(message: string) => void>());
+// mock-isolation: Observe the unpause record while retaining real workspace owners.
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => ({
+      ...actual.createSubsystemLogger(name),
+      ...(name === "sandbox/quiescence" ? { info: pauseLog } : {}),
+    }),
+  };
+});
 
 describe("PR source acquisition", () => {
   installGitHubPublicationTestHarness({
@@ -28,6 +42,23 @@ describe("PR source acquisition", () => {
       const f = await fixture({ empty, fork: true });
       const runtime = await bindFixtureRuntime(f);
       using _ = runtime.projection;
+      pauseLog.mockClear();
+      const now = performance.now.bind(performance);
+      let snapshotDelay = 0;
+      using clock = vi.spyOn(performance, "now");
+      clock.mockImplementation(() => now() + snapshotDelay);
+      const capture = publicationTransport.captureSettledGitHubPublicationWorkspaceSnapshot;
+      using captureSpy = vi.spyOn(
+        publicationTransport,
+        "captureSettledGitHubPublicationWorkspaceSnapshot",
+      );
+      captureSpy.mockImplementation(async (...args) => {
+        const result = await capture(...args);
+        if (runtime.isPaused()) {
+          snapshotDelay += 1_200;
+        }
+        return result;
+      });
       const prepareCheckout = checkout.prepareLocalWorkspaceCheckout;
       using checkoutSpy = vi.spyOn(checkout, "prepareLocalWorkspaceCheckout");
       checkoutSpy.mockImplementation(async (params) => {
@@ -88,6 +119,11 @@ describe("PR source acquisition", () => {
         headCommit: head,
         review: { mode: "local", base: f.commonAncestor },
       });
+      const pauses = pauseLog.mock.calls
+        .map(([line]) => line)
+        .filter((line) => line.startsWith("Local workspace unpause:"));
+      expect(snapshotDelay).toBeGreaterThan(0);
+      expect(pauses.some((line) => /"operation.pristine":\d+/u.test(line))).toBe(true);
       expect(cleanupPaused.length).toBeGreaterThan(0);
       expect(cleanupPaused, "Accepted result cleanup must leave the guest running").not.toContain(
         true,

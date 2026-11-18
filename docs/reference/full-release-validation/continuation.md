@@ -34,6 +34,11 @@ pnpm frv prioritize --restore <record> [--dry-run]
 | `continue --failed`    | Retries each child once as it becomes terminal, while siblings/parent may run; adopts active attempts and leaves green children untouched. A repeated failure exits immediately with attempt/budget. Ghost duplicate attempts require fresh all-group FRV. After green child evidence and original parent completion, reruns parent once to restore the same plan and reseal; early Decision/Drain disagreement does not waive plan/attempt checks. |
 | `prioritize --restore` | Recovers former priority-gate deferrals; see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery). Active validation no longer pauses CI/supporting workflows.                                                                                                                                                                                                       |
 
+For active child jobs, `status` shows the running step and its elapsed seconds (or
+`unknown` when GitHub has not supplied a step start time). JSON exposes this
+read-only progress as `activeJobs`, separately from the accepted job evidence and
+its digest. Progress does not establish that a job is healthy or qualified.
+
 Retry selection for `rerun --child` and continuation:
 
 | Condition                                                                                                                                  | Mode / action                                                                                                                                                                                                            |
@@ -84,6 +89,15 @@ receipt** selects only qualification; GitHub reruns its seal, not a second reque
 Multiple independent npm failures are recovery errors, not broader retries. Collect
 the new attempt and require final verification. A failed producer is retryable;
 local controller upgrades cannot retrofit receipt adoption into frozen workflows.
+
+**Plugin npm artifact recovery:** continuation authenticates the original
+`plugin-npm-release.yml` preflight by its repository, workflow SHA/ref, target,
+dist-tag, dispatch identity, and run attempt. It reruns `preview_plugins_npm`
+and its dependents on that same run, not just a failed package: plugin packs,
+readback, and the prepared roster must belong to one attempt. Green diagnostic
+children remain untouched. The parent then adopts the original producer’s new
+prepared descriptor and must reseal and pass strict verification. No replacement
+producer or publication is dispatched.
 
 Send each child/parent mutation once. On ambiguous transient errors, reconcile
 read-only until a newer attempt appears or the bounded deadline expires; never

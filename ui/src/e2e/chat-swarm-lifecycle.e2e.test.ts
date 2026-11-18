@@ -7,7 +7,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Delegated work history" });
 const sessionKey = "agent:main:dashboard:11111111-2222-4333-8444-555555555555";
-const groupId = "release-review";
+const groupId = `swarm:${sessionKey}:review`;
 const labels = [
   "Check release notes",
   "Review API contracts",
@@ -21,11 +21,11 @@ const message = (
   role: string,
   content: unknown,
   timestamp: number,
-  runId = "review",
+  runId: string | null = "review",
 ) => ({
   role,
   content,
-  __openclaw: { id, runId },
+  __openclaw: { id, ...(runId ? { runId } : {}) },
   timestamp,
 });
 
@@ -62,6 +62,7 @@ suite.define(() => {
         const initial = [
           message("request", "user", "Review the change and publish the PR.", 1),
           message("intro", "assistant", "I’ll review the change before publishing it.", 2),
+          message("peer", "user", "Please flag anything that blocks release.", 2, null),
           message(
             "launch",
             "assistant",
@@ -100,11 +101,23 @@ suite.define(() => {
           historyMessages: initial,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const pane = page.locator(".chat-pane-cache__pane--active");
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
         await pane
           .getByText("I’ll review the change before publishing it.", { exact: true })
           .waitFor();
-        await selectChatLayoutAction(pane, "Subagents");
+        const swarm = pane.locator('.chat-thread [data-test-id="chat-inline-swarm"]');
+        await expect.poll(() => swarm.locator("[data-state]").count()).toBe(viewport.count);
+        expect(await swarm.count()).toBe(1);
+        expect(await swarm.locator('[data-state="running"]').count()).toBe(
+          Math.max(0, viewport.count - 4),
+        );
+        if (viewport.failure) {
+          await selectChatLayoutAction(pane, "Subagents");
+        } else {
+          await swarm
+            .getByRole("button", { name: "Check release notes: Completed" })
+            .press("Enter");
+        }
         const panel = pane.locator("openclaw-chat-subagents-panel");
         await expect.poll(() => panel.locator("[data-session-key]").count()).toBe(viewport.count);
         await pane.getByRole("button", { name: "Close Subagents", exact: true }).click();
@@ -167,14 +180,37 @@ suite.define(() => {
           label: "Review and publish",
           sessionId: "parent",
         };
+        const completedSwarm = swarmSnapshot(
+          groupId,
+          1,
+          children.map((child) => ({ ...child, status: "done" })),
+        );
+        if (viewport.failure) {
+          const group = completedSwarm.groups[0]!;
+          group.done = 0;
+          group.failed = 1;
+          completedSwarm.groups[0] = { ...group, children: [] };
+        }
         await gateway.setMethodResponse("chat.history", {
           messages: completed,
           sessionId: "parent",
         });
-        await gateway.setMethodResponse("sessions.describe", { session: retiredParent });
+        await gateway.setMethodResponse("sessions.describe", {
+          session: { ...retiredParent, swarm: completedSwarm },
+        });
         await gateway.setMethodResponse("sessions.list", chatSessionListResponse([retiredParent]));
         await page.reload();
         await pane.getByText("Now look at the next change.", { exact: true }).waitFor();
+        await expect.poll(() => swarm.count()).toBe(1);
+        expect(await swarm.getByRole("status").textContent()).toContain(
+          `${viewport.count} of ${viewport.count} settled`,
+        );
+        if (viewport.failure) {
+          expect(await swarm.getByText("1 failed or stopped", { exact: true }).count()).toBe(1);
+        } else {
+          expect(await swarm.locator('[data-state="done"]').count()).toBe(viewport.count);
+          expect(await swarm.getByRole("button").count()).toBe(0);
+        }
         // Open retained work, then any aggregates; standalone launches need no second group.
         await pane.locator(".chat-work-group .chat-activity-group__summary").click();
         const closedGroups = pane.locator(
@@ -186,13 +222,16 @@ suite.define(() => {
         // Launches share one lifecycle row; the hidden wait becomes a row per outcome.
         const tools = pane.locator(".chat-tool-msg-summary");
         await expect.poll(() => tools.count()).toBe(2);
-        await tools.first().click();
+        await tools
+          .first()
+          .locator(".chat-tool-row__toggle")
+          .click({ position: { x: 4, y: 4 } });
         if (viewport.count > 1) {
           // The shared row opens to one row per launch; each keeps its own receipt.
-          await pane
-            .locator(".chat-tool-msg-collapse--lifecycle button.chat-tool-msg-summary")
-            .first()
-            .click();
+          await tools
+            .nth(1)
+            .locator(".chat-tool-row__toggle")
+            .click({ position: { x: 4, y: 4 } });
         }
         const launchResult = pane.locator(".chat-tool-msg-body").first();
         await expect.poll(() => launchResult.textContent()).toContain("accepted");

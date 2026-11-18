@@ -217,11 +217,16 @@ export async function prepareEmbeddedAttemptHistory(
         heartbeatFiltered,
         limitHistoryTurns(
           heartbeatFiltered,
-          getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config, {
-            accountId: attempt.agentAccountId,
-            peerId: attempt.conversationRoutePeerId,
-            chatType: attempt.chatType,
-          }),
+          // A fork runs under its own key but keeps its source conversation's history window.
+          getHistoryLimitFromSessionKey(
+            attempt.sandboxSessionKey ?? attempt.sessionKey,
+            attempt.config,
+            {
+              accountId: attempt.agentAccountId,
+              peerId: attempt.conversationRoutePeerId,
+              chatType: attempt.chatType,
+            },
+          ),
           {
             groupConsecutiveUserTurns:
               transcriptPolicy.validateAnthropicTurns &&

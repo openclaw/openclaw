@@ -826,11 +826,11 @@ describe("sessions_send dispatch admission", () => {
           .soft(requestParams(callGateway, "send"))
           .toEqual([expect.objectContaining({ ...originalRoute, message: "Task complete" })]);
         const [sendParams] = requestParams(callGateway, "send");
-        expect(readInProcessSessionDeliveryGeneration(sendParams)).toMatchObject({
+        // The send follows the chat by key; it carries no transcript id to compare later.
+        expect(readInProcessSessionDeliveryGeneration(sendParams)).toEqual({
           agentId: "main",
+          storePath: expect.any(String),
           sessionKey: sourceKey,
-          sessionId: sourceId,
-          lifecycleRevision: entry.lifecycleRevision,
         });
         expect(sendParams).toHaveProperty("idempotencyKey", `sessions-send:${runId}`);
         expect(sendParams).not.toHaveProperty("sessionGeneration");

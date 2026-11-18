@@ -109,6 +109,14 @@ function reader<Input extends object, Request extends SessionHistoryWorkerPrepar
   };
 }
 const readers: Readers & ThisType<ReaderContext> = {
+  discoverTranscriptFacts: reader(
+    (input) => ({ kind: "transcript-facts-discover", ...input }),
+    (value) => value.result,
+  ),
+  probeTranscriptFacts: reader(
+    (input) => ({ kind: "transcript-facts-probe", ...input }),
+    (value) => value.result,
+  ),
   readAgentToolUsage: reader(
     (input) => ({ kind: "agent-tool-usage", ...input }),
     (value) => value.status,
@@ -293,13 +301,21 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "cold-storage-inventory", ...input }),
     (value) => value,
   ),
-  searchTranscripts(params, readIndexStatus) {
+  searchTranscripts(params, readIndexStatus, filterCandidates) {
     return this.runRequest(
       () => ({ kind: "transcript-search", params }),
       JSON.stringify(params).length * 2,
       (value) => value.result,
       undefined,
       async (request, signal) => {
+        if (
+          filterCandidates &&
+          Array.isArray(request) &&
+          request.length <= 26 &&
+          request.every((key): key is string => typeof key === "string")
+        ) {
+          return { input: await filterCandidates(request), timeoutMs: 60_000 };
+        }
         if (request !== "transcript-index-status") {
           throw new Error("Unexpected transcript search status request");
         }

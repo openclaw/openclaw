@@ -167,6 +167,12 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     width: 32px;
     height: 32px;
   }
+  & img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    border-radius: inherit;
+  }
 }
 .template-package-row {
   display: flex;
@@ -221,6 +227,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 }
 
 .template-creator__row {
+  border-radius: 0;
   border-bottom: 1px solid var(--border);
 }
 .template-creator__status-anchor {
@@ -262,15 +269,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   & svg {
     width: 22px;
     height: 22px;
-  }
-}
-.template-creator__scope {
-  margin-top: 12px;
-  color: var(--muted);
-  font-size: 12px;
-  & dd {
-    margin: 4px 0 12px;
-    color: var(--text);
   }
 }
 .template-creator__category,
@@ -468,6 +466,12 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   border: 1px solid var(--border);
   border-radius: 14px;
 
+  .template-import-dialog > & {
+    max-height: var(--openclaw-modal-height-limit);
+    border: 0;
+    border-radius: inherit;
+  }
+
   & > header {
     & h2 {
       overflow-wrap: anywhere;
@@ -494,7 +498,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     & .template-creator__body {
       padding: 24px;
     }
-    background: var(--bg-elevated);
     border-radius: 20px;
 
     & > :where(header) {

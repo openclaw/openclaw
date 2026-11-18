@@ -172,7 +172,8 @@ An `all` run without soak for an actual beta package on its matching canonical r
 ### Parent ownership and cancellation
 
 - At most one active parent per C + Q + rerun group + release profile + effective soak coverage. Stable/full always include soak. Distinct coverage profiles may run independently; concurrency never automatically cancels an older exact child.
-- Parent cancellation/timeout does not settle independent descendants. Preview `pnpm frv cancel --run <parent> --dry-run`; omit `--dry-run` only for explicitly requested cancellation.
+- Parent cancellation/timeout does not settle independent descendants. Preview `pnpm frv cancel --run <parent> --dry-run`; omit `--dry-run` for explicitly requested cancellation or the proactive supersession rule below within authorized release work.
+- When deterministic failures require a repaired candidate or qualification run, proactively cancel the superseded FRV if every remaining job passed in the previous run and the intervening changes are unlikely to affect it. Record the prior run/attempt, changed-path assessment, failures, and cancellation reason; settle the owned tree, finish known repairs, then start fresh FRV. Prior passes justify stopping redundant diagnostics, not claiming the new candidate passed. Otherwise let useful diagnostics drain.
 - The cancellation owner authenticates the sealed plan, exact dispatch logs, current attempts, artifact producers, and recorded Telegram descendants. Borrowed/reused children stay untouched.
 - Repeat an incomplete cancellation's next command; use `--force` only when earlier cancellation is not settling. Never infer ownership from branches, title prefixes, or latest-run order. Settle the owned tree before dispatching a replacement.
 
@@ -180,7 +181,8 @@ An `all` run without soak for an actual beta package on its matching canonical r
 
 - Recover one failed surface with one diagnosis, one fix if needed, and one narrow retry; then reassess. Never automatically dispatch `rerun_group=all`.
 - Before rerunning a failed/timed-out test, the lead records blocker versus flake (maintainer skill's shared release boundaries). Read its diagnostics, inspect same-SHA attempts, and compare failing paths with candidate changes and recent main history. A main fix is absent from the frozen candidate until ancestry or patch equivalence proves otherwise.
-- A flake requires the same job or signature to have passed on the same Release SHA. Repetition on this or another candidate is deterministic until a named mechanism and fix prove otherwise.
+- If a job passed in the previous run and intervening code or qualification changes are unlikely to affect it, treat the new failure as a flake unless evidence points to a race that could harm production users. Record the previous run/attempt and why its inputs remain relevant; an exact-same-SHA pass is useful evidence, not a prerequisite.
+- Apparent infrastructure failures and test flakes are eligible for the full bounded retry budget unless evidence proves a deterministic defect or a production-impacting race. Repetition alone does not prove determinism. Reassess each failure using its signature and mechanism; a production race is a real defect even if a retry passes.
 - Flakes get at most **two recorded reruns on the same Release SHA**, plus a fix-in-parallel issue/PR on main; never a re-cut, tooling change, or new FRV. New dispatches reject `known_flaky_jobs_json`.
 
 ### Controller recovery
@@ -195,7 +197,7 @@ An `all` run without soak for an actual beta package on its matching canonical r
 
 - Waits for completion; requires exactly one blocking failed job. Requests its accepted Actions job ID once; returns when the new attempt exists without duplicates.
 - Before requesting, prints failed-job runner labels/current `OPENCLAW_CI_RUNNER_BACKEND`. Afterward, appends an audit line to `$TMPDIR/openclaw-frv/<repo>-<parent>-reruns.jsonl`.
-- Refuses passed children, artifact producers (use `continue --failed`), multiple blockers, and exhausted budgets. Default **2** permits one rerun; `--max-attempts 3` only for confirmed flakes.
+- Refuses passed children, artifact producers (use `continue --failed`), multiple blockers, and exhausted budgets. Default **2** permits one rerun; use `--max-attempts 3` for failures classified as flakes under the policy above, including apparent infrastructure/test flakes, to allow the second bounded rerun. Controller identity and recovery-shape restrictions still apply; classification does not override them.
 - Multiple blocking jobs require fresh all-group FRV. Reseal with `continue --failed`.
 
 **Failed children/producers:** `pnpm frv continue --failed --run <parent-run-id>`
@@ -205,7 +207,7 @@ An `all` run without soak for an actual beta package on its matching canonical r
 - Early retry can invalidate original Decision/Drain pairing; final reseal and strict verification own completion.
 
 - GitHub ghost jobs—runnerless queued copies of a job name—can follow single-job or batched requests and make attempts unsealable. Send at most one request per child, after it is terminal; never stack separate job reruns. Duplicates may settle within the controller's **60-second** reconciliation window. Once reported as persistent ghost jobs, stop rerunning that FRV: cancel the attempt and start fresh all-group FRV.
-- `continue --failed` reruns each failed child once per invocation. If that child fails again, it exits immediately with attempt/remaining budget, without waiting for siblings. Invoke again only for a confirmed flake within budget.
+- `continue --failed` reruns each failed child once per invocation. If that child fails again, it exits immediately with attempt/remaining budget, without waiting for siblings. Invoke again for a failure still classified as an infrastructure/test flake within budget; proof of a deterministic defect or production-impacting race stops flake retries.
 - Each child/parent mutation is sent once per invocation. Ambiguous transport failure triggers bounded read-only reconciliation. After interruption/timeout, inspect exact attempts before repeating. Targeted JSON records job ID, accepted source attempt, and observed retry attempt. Keep the command in a long-running shell for its default **12-hour** operation budget.
 - Inspect without mutation:
 
@@ -263,7 +265,8 @@ git rev-parse HEAD
 - Regular beta/stable protected publication: after evidence validation, run `pnpm release:publish-preflight` with intended tag, exact FRV run/attempt, npm dist-tag, plugin scope, and protected tooling ref. `pnpm release:candidate` supplies its downloaded manifests; do not redownload or replace the attempt. Resolve every `FAIL` and owner-action `WARN` before using the report's exact route-specific dispatch command. Extended-stable has separate owner workflows, outside this preflight; alpha is retired.
 - Checklist `--workflow-ref`/`--workflow-sha` selects P, not candidate harness. Reuse authenticated stable Telegram proof from the exact qualified tarball; beta remains deferred. Supplemental Telegram requires the retained qualification ref verified at admitted Q, harness pinned to Q, and package source pinned to C—never moving main. Parallels uses isolated Q checkout/dependencies against exact C tarballs. Supplemental Telegram run IDs belong in candidate evidence, not the optional publisher diagnostic input.
 - Before retrying publication, inspect the report: preserve verified `openclaw_npm_resume_run_id` for published core bytes; inspect matching draft/published release; identify exact orphan plugin/ClawHub children before cancellation.
-- Preflight is read-only: no publish/cancel authority and no proof of repository secrets from local credentials. Bootstrap requires read-only `npm whoami` with actual repository `NPM_TOKEN` via [bootstrap token probe](../release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token); retain run URL. Never rotate credentials during diagnosis.
+- Preflight is read-only: no publish/cancel authority and no proof of repository secrets from local credentials.
+- Bootstrap candidates need the release credential owner to confirm `NPM_TOKEN` readiness; follow [bootstrap credential readiness](../release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token). Do not publish or rotate credentials during preflight.
 
 ## Dispatch
 
@@ -281,7 +284,7 @@ With `reuse_evidence=true`:
 
 - Within **two minutes**, scan at most **100** recent runs, probe at most **40** target receipt inventories, and fully validate at most **five** matching receipts per role. Nonmatching inventories do not spend full-validation budget.
 - Empty-string inputs equal absent inputs (GitHub omits them from `github.event.inputs`); nonempty defaults and candidate descriptor bytes match exactly.
-- Green children may come from failed, cancelled, or active parents at the same Q, or across Q only with authenticated Git-tree proof of identical workload closure. Independent Q requires verified main ancestry; missing/unsupported/changed closure fails closed.
+- Successful children, or failed children accepted by current P policy, may come from failed, cancelled, or active parents at the same Q, or across Q only with authenticated Git-tree proof of identical workload closure. Independent Q requires verified main ancestry; missing/unsupported/changed closure fails closed.
 
 | Closure     | Exact contents                                                                                                                                                                                                                                                        |
 | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -290,9 +293,10 @@ With `reuse_evidence=true`:
 | Other roles | Conservatively all workflows and full root tree.                                                                                                                                                                                                                      |
 
 - Logs identify reuse, evaluated rejections, skipped runs, and fresh dispatches. Current-parent adoption witness/immutable plan bind each selection.
+- Admitted P evaluates retained failures using the current candidate version; a matching waiver avoids redispatch after the required initial run. Frozen Q still supplies dispatch-input defaults.
 - Collectors/final verification recheck live attempt/conclusion, closure, main ancestry, inputs, artifact identity/digest/expiry, and successful trusted seal/upload. A newer attempt invalidates reuse; never rerun an adopted child to repair collection.
 - Current-parent source/publication admission, successful-parent changelog reuse, and artifact producers' sealed receipts are unchanged.
-- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q/P contract. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
+- Cross-Q reuse retains original producer Q, exact C/role/effective inputs/defaults/candidate descriptor/receipt/artifact/live attempt. Green jobs or parent-only fixes do not establish eligibility; changed closure needs fresh children. Whole-parent authenticated reuse has a separate exact-Q contract with independently authenticated P. Never relabel failed FRV; tooling recovery requires a fresh successful parent.
 
 ### Optional beta performance
 
@@ -512,7 +516,7 @@ Read actual conclusions for every selected lane. `passed` requires pinned P's po
 6. Before edits, decide blocker/flake per failed test. Preserve diagnostics, inspect **every same-SHA attempt**, and run:
    - `git log <previous-release-tag>..<release-sha> -- <failing paths>` (candidate delta).
    - `git log <release-sha>..origin/main -- <failing paths>` (main-only changes).
-   - A repair on main but absent from the frozen candidate means blocker: backport/supersede, never rerun as inherited success. Same job/signature must have passed on exact Release SHA to call flake; repetition on another candidate stays deterministic until named mechanism/fix. Track genuine-flake fix on main; every unwaived selected job must pass pinned P's publication policy.
+   - An applicable deterministic repair on main but absent from the frozen candidate means blocker: backport/supersede, never rerun as inherited success. Apply [the flake presumption and bounded retry policy](#diagnose-before-retrying), including prior-run passes with unaffected inputs and apparent infrastructure/test flakes. Investigate production-impacting races as defects. Track flake fixes on main; every unwaived selected job must pass pinned P's publication policy.
 
 | Blocker                                                                                  | Recovery                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

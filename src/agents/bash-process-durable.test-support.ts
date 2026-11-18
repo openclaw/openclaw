@@ -388,7 +388,7 @@ void it("recovers a memory-limit completion before its notification settles", as
       cursorKeyMode: "normal",
       notifyOnExit: true,
     });
-    const run = await startDurableExecProcess(session, sessionId, {
+    const run = await startDurableExecProcess(session, {
       mode: "child",
       argv: ["/bin/sh", "-c", session.command],
       cwd: state.workspaceDir,
@@ -487,9 +487,9 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
       assert.partialDeepStrictEqual(
         (await store.list()).toSorted((a, b) => a.startedAt - b.startedAt),
         [
-          { id: crashed.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
-          { id: stopped.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
-          { id: sandboxed.id, kind: "ordinary", sandboxed: true, sessionKey, sessionId },
+          { id: crashed.id, kind: "ordinary", sessionKey, command: "Background exec" },
+          { id: stopped.id, kind: "ordinary", sessionKey, command: "Background exec" },
+          { id: sandboxed.id, kind: "ordinary", sandboxed: true, sessionKey },
         ],
       );
       assert.equal((await store.list()).length, 3);

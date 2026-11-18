@@ -4,17 +4,7 @@ import type {
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { assertCurrentSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
-import {
-  resolveOpaqueSessionFirstKeptEntryId,
-  SessionEntryNavigation,
-} from "../../config/sessions/session-entry-navigation.js";
-import type { SessionEntryCohortRequest } from "../../config/sessions/session-entry-read.types.js";
-import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
-import {
-  captureSessionTranscriptTargetBinding,
-  sameSessionTranscriptTargetBinding,
-} from "../../config/sessions/transcript-target-binding.js";
-import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
   buildSessionTree,
@@ -36,13 +26,11 @@ import {
   captureSessionManagerIncognitoBinding,
   installSessionManagerIncognitoBinding,
 } from "./session-manager-incognito-scope.js";
-import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
-import { consumeSessionManagerReload } from "./session-manager-reload.js";
+import { SessionManagerNavigation } from "./session-manager-navigation.js";
 import { readSessionManagerReload } from "./session-manager-reload.kernel.js";
 import type {
   FileEntry,
   NewSessionOptions,
-  PreservedOpaqueFileEntry,
   SessionEntry,
   SessionHeader,
   SessionInfoEntry,
@@ -55,7 +43,6 @@ import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContext,
   SessionManagerBoundedView,
-  SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
 import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 
@@ -77,20 +64,15 @@ export const sessionManagerReleaseTranscript = Symbol.for(
   "openclaw.session-manager.release-transcript",
 );
 
-export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
-  migrated = false;
+export class SessionManagerCore extends SessionManagerNavigation {
   protected sessionId = "";
   protected transcriptVersion: SessionTranscriptContextVersion | undefined;
   private transcriptViewFailure: Error | undefined;
-  private hydrationRevision = 0;
+  protected hydrationRevision = 0;
   protected cwd: string;
-  protected fileEntries: FileEntry[] = [];
   protected pendingWritableTranscriptEntries = new Set<object>();
-  protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   protected boundedParentIds = new Map<string, string | null>();
-  private boundedFirstKeptById = new Map<string, string>();
   protected cacheTtlProjectionPrefixes: SessionTranscriptBoundedActiveContext["cacheTtlProjectionPrefixes"];
-  protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
   protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
@@ -159,104 +141,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     }
   }
 
-  /** Prepare off-thread and publish the entire view only while this manager is unchanged. */
-  async setSessionTargetAsync(
-    target: SessionTranscriptRuntimeTarget,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    await this.hydrateSessionTarget(target, false, signal);
-  }
-
-  private async hydrateSessionTarget(
-    target: SessionTranscriptRuntimeTarget,
-    preserveCwd: boolean,
-    signal?: AbortSignal,
-    complete = false,
-    cohort?: SessionManagerTranscriptCohort,
-  ): Promise<boolean> {
-    this.assertTranscriptViewAvailable();
-    const capturedTarget = captureSessionTranscriptTargetBinding(target);
-    const hydration = prepareSessionManagerHydration(capturedTarget, {
-      caller: complete ? "model-complete" : "model-reload",
-      limits: complete ? undefined : this.boundedContextLimits,
-      signal,
-      manager: this,
-      retarget:
-        !preserveCwd && !sameSessionTranscriptTargetBinding(capturedTarget, this.persistenceTarget),
-      lane: preserveCwd ? sessionStoreLane : undefined,
-    });
-    if (cohort && !hydration.readCohort) {
-      return false;
-    }
-    const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
-    const revision = ++this.hydrationRevision;
-    const prior = this.captureTranscriptView();
-    const entryCount = this.fileEntries.length;
-    const opaqueCount = this.opaqueFileEntries.length;
-    assertOwned();
-    const publish = (prepared: PreparedSessionTranscriptReload) => {
-      signal?.throwIfAborted();
-      assertOwned();
-      hydration.assertCurrent();
-      const current = this.captureTranscriptView();
-      if (
-        revision !== this.hydrationRevision ||
-        this.fileEntries.length !== entryCount ||
-        this.opaqueFileEntries.length !== opaqueCount ||
-        Object.keys(prior).some((key) => Reflect.get(prior, key) !== Reflect.get(current, key))
-      ) {
-        throw new Error("Session manager changed during transcript hydration");
-      }
-      this.adoptPreparedTranscriptReload(prepared, undefined, hydration.target);
-      installSessionManagerIncognitoBinding(this, hydration.incognitoBinding);
-      if (!preserveCwd) {
-        this.cwd = this.fileEntries.find((entry) => entry.type === "session")?.cwd ?? this.cwd;
-      }
-      this.hydrationRevision++;
-      consumeSessionManagerReload(
-        prepared,
-        cohort?.consume,
-        () => this.captureTranscriptView(),
-        () => {
-          assertOwned();
-          hydration.assertCurrent();
-        },
-      );
-    };
-    if (cohort && hydration.readCohort) {
-      await hydration.readCohort(cohort.selection, publish);
-    } else {
-      publish(
-        await hydration.read().catch((error: unknown) => {
-          assertOwned();
-          throw error;
-        }),
-      );
-    }
-    return true;
-  }
-
-  [sessionManagerReloadTranscriptCohort](
-    selection: NonNullable<SessionEntryCohortRequest["transcript"]>,
-    consume: (prepared: PreparedSessionTranscriptReload, assertView: () => void) => void,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
-    return this.persistenceTarget && this.boundedContextLimits
-      ? this.hydrateSessionTarget(this.persistenceTarget, true, signal, false, {
-          selection,
-          consume,
-        })
-      : Promise.resolve(false);
-  }
-
-  /** Reload an existing view without changing the runtime working directory. */
-  async reloadPersistedTranscriptAsync(signal?: AbortSignal): Promise<void> {
-    if (!this.persistenceTarget) {
-      return;
-    }
-    await this.hydrateSessionTarget(this.persistenceTarget, true, signal);
-  }
-
   /** Active-only loads can omit sibling rows even when they fit the context limits. */
   protected ensureCompletePersistedHistory(): void {
     this.assertTranscriptViewAvailable();
@@ -267,13 +151,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.boundedContextLimits = undefined;
     this.setSessionTargetSync(this.persistenceTarget);
     this.boundedContextLimits = limits;
-  }
-
-  protected async ensureCompletePersistedHistoryAsync(): Promise<void> {
-    this.assertTranscriptViewAvailable();
-    if (this.persistenceTarget && this.boundedContextIncomplete) {
-      await this.hydrateSessionTarget(this.persistenceTarget, true, undefined, true);
-    }
   }
 
   protected setLoadedSessionTarget(
@@ -327,21 +204,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
         ),
       );
     }
-  }
-
-  protected adoptSelectedTranscriptPath(
-    appendParentId: string | null,
-    parents: Iterable<readonly [string, string | null]>,
-  ): void {
-    // Selected payloads omit navigation controls. Use their resolved ancestry,
-    // not the side-append parent guesses made while indexing those payloads.
-    this.logicalParentsById.clear();
-    for (const [id, parentId] of parents) {
-      this.logicalParentsById.set(id, this.resolveCanonicalParentId(parentId));
-    }
-    this.appendParentId = appendParentId;
-    this.leafId = this.resolveOpaqueLeafTargetId(appendParentId);
-    this.appendMode = undefined;
   }
 
   /** The loaded view only: bounded managers must never hydrate inactive history for a rewrite. */
@@ -482,56 +344,6 @@ export class SessionManagerCore extends SessionEntryNavigation<SessionEntry> {
     this.boundedParentIds.clear();
     this.pendingDeliberateAppend = false;
     return this.persistenceTarget ? this.sessionId : undefined;
-  }
-
-  protected buildIndex(): void {
-    this.clearNavigation();
-    this.pendingDeliberateAppend = false;
-    let opaqueIndex = 0;
-    for (let index = 0; index <= this.fileEntries.length; index += 1) {
-      while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
-        this.appendOpaqueNavigationRecord(this.opaqueFileEntries[opaqueIndex]?.record);
-        opaqueIndex += 1;
-      }
-      const entry = this.fileEntries[index];
-      // Current entries were validated by partition/append. Legacy imports retain readable rows
-      // through migration, so only those need the final shape check before indexing.
-      if (!entry || entry.type === "session" || (this.migrated && !isIndexedSessionEntry(entry))) {
-        continue;
-      }
-      this.appendCanonicalNavigationEntry(entry);
-    }
-    this.finishNavigation();
-  }
-
-  protected override normalizeEntryParent(entry: SessionEntry): SessionEntry {
-    let normalized = super.normalizeEntryParent(entry);
-    const boundedFirstKept = this.boundedFirstKeptById.get(normalized.id);
-    if (
-      boundedFirstKept !== undefined &&
-      (normalized.type === "compaction" || normalized.type === "reset")
-    ) {
-      normalized = { ...normalized, firstKeptEntryId: boundedFirstKept };
-    }
-    if (
-      (normalized.type === "compaction" || normalized.type === "reset") &&
-      normalized.firstKeptEntryId !== undefined &&
-      !this.byId.has(normalized.firstKeptEntryId) &&
-      this.opaqueParentsById.has(normalized.firstKeptEntryId)
-    ) {
-      const firstKeptEntryId = resolveOpaqueSessionFirstKeptEntryId({
-        firstKeptEntryId: normalized.firstKeptEntryId,
-        parentId: normalized.parentId,
-        fallbackParentId: this.resolveEntryParentId(entry),
-        byId: this.byId,
-        opaqueParentsById: this.opaqueParentsById,
-        entries: () => this.fileEntries.filter(isIndexedSessionEntry),
-      });
-      if (firstKeptEntryId && firstKeptEntryId !== normalized.firstKeptEntryId) {
-        normalized = { ...normalized, firstKeptEntryId };
-      }
-    }
-    return normalized;
   }
 
   protected resolveBranchTargetId(branchFromId: string): string | null | undefined {

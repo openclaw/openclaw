@@ -97,8 +97,8 @@ export {
   buildSessionContext,
   getLatestCompactionEntry,
   migrateSessionEntries,
-  parseSessionEntries,
 } from "./session-manager-codec.js";
+export { parseSessionEntries } from "./session-manager-jsonl.js";
 export type {
   BranchSummaryEntry,
   CompactionEntry,

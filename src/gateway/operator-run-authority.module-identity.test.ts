@@ -47,7 +47,7 @@ it.each(["assertion", "abort"] as const)(
       expect(narrowed?.authority).not.toBe(original);
       expect(narrowed?.authority.scopes).toEqual(["operator.read"]);
       expect(narrowed?.authority.source).toBe(original.source);
-      expect(narrowed?.authority.signal).toBe(controller.signal);
+      expect(narrowed?.authority.signal?.aborted).toBe(false);
       expect(holds).toBe(2);
       expect(() => narrowed?.authority.assertCurrent()).not.toThrow();
 
@@ -61,6 +61,10 @@ it.each(["assertion", "abort"] as const)(
         current = false;
       }
       expect(() => narrowed?.authority.assertCurrent()).toThrow(failure);
+      expect(original.signal?.aborted).toBe(true);
+      expect(narrowed?.authority.signal?.aborted).toBe(true);
+      expect(narrowed?.authority.signal?.reason).toBe(failure);
+      expect(controller.signal.aborted).toBe(revocation === "abort");
       current = true;
       await expect(inherit(original, ["operator.read"])).rejects.toBe(failure);
       expect(() => reloadedIssuer.assertAdmittedRunOperatorAuthority(original)).not.toThrow();

@@ -31,10 +31,8 @@ import {
 import { summaryFacts, transcriptTurnCommand } from "./session-actor-transcript.test-support.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
-import {
-  mutateSessionColdTranscriptInWorker,
-  prepareSessionColdRestoreInWorker,
-} from "./session-cold-storage-worker.js";
+import { restoreSessionColdTranscriptInWorker } from "./session-cold-storage-restore.js";
+import { mutateSessionColdTranscriptInWorker } from "./session-cold-storage-worker.js";
 import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
 import type { PreparedSessionTranscriptHydration } from "./session-history-read.types.js";
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
@@ -664,8 +662,13 @@ it("drops retained context on cold archival and leaves restoration to a fresh bo
       sessionId: f.scope.sessionId,
       archive: prepared.prepared[0]!.archive,
     };
-    const records = await prepareSessionColdRestoreInWorker(plan);
-    expect(mutateSessionColdTranscriptInWorker(plan, records, () => {})).toMatchObject({
+    expect(
+      await restoreSessionColdTranscriptInWorker(
+        plan,
+        async (run) => run(),
+        () => {},
+      ),
+    ).toMatchObject({
       restored: true,
     });
     expectInvalidated(context);

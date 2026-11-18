@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import {
   admitModelTurn,
   completionConfig,
@@ -17,6 +18,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../../config/sessions/session-accessor.sqlite-read.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
 import { resolveAdmittedCronCompletionStatus } from "../../cron/completion-status.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { resolveCronRunErrorReason } from "../../cron/run-error-reason.js";
@@ -42,6 +44,11 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
+import * as agentExecution from "./agent-runner-execution.js";
+import {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+} from "./session-event-handoff.js";
 
 // mock-isolation: Only model decisions are synthetic; tool, controller and storage owners stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -55,6 +62,59 @@ await Promise.all([
     runtime.prewarmConfigDrivenReplyRuntime(),
   ),
 ]);
+
+it("records operation-only Stop for a staged event before execution", async ({ signal }) => {
+  await withOpenClawTestState(
+    { label: "session-event-operation-stop", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const config = completionConfig(state.workspaceDir);
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const target = { agentId: "main", sessionKey: "agent:main:event-operation-stop" };
+      await replaceSessionEntry(target, {
+        sessionId: "event-operation-stop",
+        permissionMode: "full",
+        updatedAt: 1,
+      });
+      using execution = vi
+        .spyOn(agentExecution, "executeAgentTurn")
+        .mockImplementationOnce(async (params) => {
+          expect(
+            params.followupRun.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+          ).toBeDefined();
+          expect(expectDefined(params.replyOperation, "event operation").abortByUser()).toBe(true);
+          throw new Error("execution refused after user Stop");
+        });
+      try {
+        const expectedTarget = await captureSessionEventTargetForHost(
+          target.agentId,
+          target.sessionKey,
+        );
+        const receipt = enqueueSessionEventForHost("Stop this queued event", {
+          ...target,
+          source: "restart",
+          expectedTarget,
+          abortSignal: signal,
+          deliver: false,
+        });
+        await withinTest(receipt.settled, signal);
+        expect(execution).toHaveBeenCalledOnce();
+        expect(signal.aborted).toBe(false);
+        expect(
+          await listSessionPendingInputs({
+            ...target,
+            sessionId: expectedTarget.sessionId,
+            storePath: expectedTarget.storePath,
+          }),
+        ).toMatchObject({ items: [{ state: "cancelled", endCause: "user-stop" }] });
+      } finally {
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
 
 // Queue/readmission is covered by session-event-config-readmission.test.ts's
 // queued Gmail and scheduled destination cases; result settlement is admission-independent.

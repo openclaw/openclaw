@@ -9,6 +9,12 @@
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
           - "docs/tools/tts/**"
+"plugin: gbrain":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gbrain/**"
+          - "docs/plugins/gbrain.md"
+          - "docs/plugins/reference/gbrain.md"
 "plugin: geolocation":
   - changed-files:
       - any-glob-to-any-file:

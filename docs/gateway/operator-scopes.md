@@ -57,6 +57,11 @@ is committed. Other people's automations remain read-only; global creation and
 administration still require `operator.admin`. Global scheduler status requires
 `operator.read`.
 
+Fresh authenticated admin chat turns from the Control UI or a native app UI can
+manage automations across conversations. Native UI identity alone is insufficient:
+the connection must hold `operator.admin`. The deployment-level
+`tools.gatewayPolicy.automations.scope: "caller"` restriction still takes precedence.
+
 The **Owner** field under **Agent** shows the human responsible for an automation.
 Its current human owner or an administrator can select another existing profile.
 Transferring ownership pauses the automation, cancels any active occurrence, and
@@ -101,8 +106,11 @@ and session access are checked on every request. Publication always resolves the
 current Git remote again. Unavailable targets do not hide existing shared receipts.
 Reopen the chat or reconnect after the managed workspace changes to refresh its
 options. Personal account discovery and personal receipts still
-require `operator.read` and the authenticated owner. Identity, role, access grant,
-connection, and session visibility are rechecked before returning awaited reads.
+require `operator.read` and the authenticated owner. The request fixes that profile
+and its role and scope ceiling at admission. A reconnect or permission change does
+not revoke an admitted read; the next request uses the new authority. Personal reads
+never follow a profile merge into another person's credentials. Credential-generation,
+session lifecycle, and workspace identity fences still protect the selected target.
 
 With `operator.sessions.write`, a requester can publish ordinary changes from
 sessions they created through the shared GitHub account. Workflow definition
@@ -278,7 +286,7 @@ an access policy supplied by a plugin.
           scopes: ["operator.read", "operator.write", "operator.approvals"],
         },
         guest: {
-          sessions: { others: "view" },
+          sessions: { others: "invited" },
           agents: ["roboclaw"],
           scopes: ["operator.sessions.read", "operator.sessions.write"],
           sandbox: "required",
@@ -380,6 +388,11 @@ For sessions created by other people, `sessions.others` supports these values:
 - `"none"`: hides foreign sessions from lists and targeted access, filters
   session-level usage to visible sessions, and denies Gateway-wide `usage.cost`
   because its aggregate can include hidden sessions.
+- `"invited"`: shows foreign sessions only while the person is a session member.
+  This applies to lists, direct links, search, history, and live session events,
+  even with broad `operator.read` or `operator.write` scopes. Gateway-wide cost
+  and meeting transcript archives remain unavailable because they can include
+  hidden sessions.
 - `"view"`: allows reading but does not allow mutation, even when a session is
   otherwise shared.
 - `"suggest"`: allows viewing and the existing suggestion flow.
@@ -387,10 +400,23 @@ For sessions created by other people, `sessions.others` supports these values:
   restrictions remain in force.
 
 A person always owns their own sessions. At `"none"`, explicit session membership
-does not grant access to another person's sessions. Membership can raise `"view"`
+does not grant access to another person's sessions. Membership can raise `"invited"` or `"view"`
 or `"suggest"` access for a specific session; `"write"` already permits participation
 without membership. Connections holding `operator.admin` retain their
 administrative session access.
+
+Connection scopes and draft/incognito restrictions remain in force.
+
+To enable invitation-only discovery, set the guest role's `sessions.others` to
+`"invited"` after upgrading. Existing role definitions keep their current behavior.
+Assign the intended profiles to that role, then reconnect them. The creator or an
+admin can add members directly or select a human @mention in an ordinary chat.
+The committed message grants membership to recipients with `"invited"` access.
+Removing a member revokes access; replaying the old message cannot regrant it.
+
+Explicitly published sessions remain readable through their sanitized public
+transcript links. Public access does not grant membership or expose raw history,
+tools, or files. **Shared** visibility alone does not make a session public.
 
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
@@ -429,6 +455,37 @@ Gateway diagnostics. The guest preset grants `operator.sessions.write`, all agen
 viewable shared sessions, and `sandbox: "required"`. Operator remains the default
 invite role. These are editable definitions; custom member roles may
 include `operator.admin` and pairing scopes with no built-in ceiling.
+
+A member granted `operator.admin` is a Gateway administrator, not the shared Gateway
+owner. Through that member connection they can edit Gateway config, role definitions,
+and the OpenClaw ID enable/disable switch; manage profiles, model accounts, devices,
+nodes, plugins, secrets, approvals, automations, sessions, and environments; and use
+the administrator update and restart APIs. A separate named-role profile assignment
+is not required. Their own profile remains the actor, and the Control UI does not
+show a limited-access notice for an administrator grant. Existing per-feature
+requirements, including agent and sandbox restrictions, still apply.
+
+Membership changes, invitations, approvals of members or owner devices, and node
+admission still require an authorized owner-device signature. The owner roster and
+Discovery publication remain owner-device surfaces. Root/recovery ceremonies remain
+local-owner operations: editing the OpenClaw ID config switch does not implement
+remote linking or the remote **Make reachable** flow. Administrator scope is not an
+owner signing key.
+
+Queued GitHub publication retains the initiating member device's attested membership
+source and checks it again before later writes, including after recovery. Removal,
+role changes, or a definition that no longer permits the request stop later writes;
+a new access-policy requirement cannot replace the original grant. Every member uses
+the membership role before the profile or default role, including nonadministrator members.
+
+After upgrading, historical publication requests with neither a recorded membership
+principal nor an authentication source are refused if the requester's profile has
+an OpenClaw ID identity. This includes linked owners and people who queued the
+request through another sign-in: the original sign-in cannot be inferred from the
+profile. This one-time refusal affects requests in flight across the upgrade;
+request publication again. A recorded membership principal attests the request even
+without an authentication source. Retries retain the accepted principal and source
+rather than adopting the later invocation's authority.
 
 A member's sandbox requirement comes from the membership definition, even when
 `gateway.roles.default` is absent or their profile has a different named role
@@ -989,3 +1046,22 @@ callbacks.
 - [Trusted proxy auth](/gateway/trusted-proxy-auth) — how a trusted proxy supplies the operator identity these scopes attach to
 - [Gateway protocol](/gateway/protocol) — the methods these scopes authorize
 - [Cloud Workers](/gateway/cloud-workers) — worker dispatch, whose environment and session calls are authorized against these scopes
+
+### Automation administrator delegation across UI clients
+
+Browser and native UI administrator turns use the same automation delegation
+policy. Authenticated macOS, Linux, iOS, and Android UI administrators retain
+this delegation when their recorded operator source is restored for scheduled
+runs, repair notices, and continuations. Restoration still revalidates the
+original device, profile, scopes, and live authority. Timing-only edits cannot
+upgrade a job's standing delegation. Historical browser grants remain valid;
+historical native sources without recorded delegation are not upgraded.
+
+This does not make native clients browser clients, grant direct-local command
+execution, or equate distinct personal administrators. Authenticated shared-owner native UI
+turns use the same continuation rules as shared-owner browser turns. Native UI
+also retains signed-in requester identity, can acknowledge provider reviews and
+submit human mentions, and can use task suggestions when advertising the required
+capability. Device-backed native reconnects use the same exact-identity custody
+checks. Explicit caller-only automation
+policy and tool restrictions still apply.

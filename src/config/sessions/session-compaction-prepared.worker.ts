@@ -4,9 +4,8 @@ import {
   renderPreparedCompactionRows,
 } from "../../agents/embedded-agent-runner/prepared-compaction-plan.js";
 import { prepareCompactionReplay } from "../../agents/embedded-agent-runner/prepared-compaction-replay.js";
-import { SessionManagerCore } from "../../agents/sessions/session-manager-core.js";
+import { SessionManagerNavigation } from "../../agents/sessions/session-manager-navigation.js";
 import type { SessionEntry } from "../../agents/sessions/session-manager-types.js";
-import { sessionManagerReadTranscriptBranch } from "../../agents/sessions/session-manager-view-types.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { bindCacheTtlProjectionPrefixes } from "./session-cache-ttl-prefix.js";
 import type {
@@ -95,11 +94,10 @@ async function readPreparedSessionCompactionBody(
   }
   // Adopt the native reader's exclusive graph without a public clone or a writer.
   // The same codec, opaque ancestry, bounded indexes and migrations own this view.
-  const manager = new SessionManagerCore(header.cwd, undefined, snapshot.events, {
-    ...snapshot,
-    limits: { compaction: true },
-  });
-  const branch = manager[sessionManagerReadTranscriptBranch]();
+  const branch = new SessionManagerNavigation({
+    events: snapshot.events,
+    bounded: snapshot,
+  }).getBranch();
   if (snapshot.activeLeafEntryId !== branch.at(-1)?.id) {
     return { status: "unsupported", reason: "prepared compaction requires its indexed leaf" };
   }
