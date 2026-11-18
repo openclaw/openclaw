@@ -74,12 +74,12 @@ it.each([false, true])(
   async (wal) => {
     const f = await fixture(false, wal);
     const statfs = fsSync.statfsSync;
-    // The candidate needs about 72 MiB; activation fits within 82 MiB. The old
-    // shared-history charge for this agent required more than 84 MiB.
+    // The candidate needs about 72 MiB; activation fits within 74 MiB. The old
+    // stacked scratch allowances for this agent required more than 80 MiB.
     vi.spyOn(fsSync, "statfsSync").mockImplementation((...args) =>
       Object.assign(statfs(...args), {
         bsize: 1,
-        bavail: 82 * 1024 ** 2,
+        bavail: 74 * 1024 ** 2,
       }),
     );
     const preflight = await assessInitialUpdateSnapshotCapacity({
@@ -102,7 +102,7 @@ it.each([false, true])(
 );
 
 it.each([
-  { freeMiB: 79, sharedLargest: false, postgres: false },
+  { freeMiB: 71, sharedLargest: false, postgres: false },
   { freeMiB: 82, sharedLargest: true, postgres: false },
   { freeMiB: 82, sharedLargest: false, postgres: true },
 ])(
@@ -123,7 +123,7 @@ it.each([
       backupDirectory: f.directory,
     });
     expect(preflight.exitCode).toBe(1);
-    expect(preflight.stderrTail).toContain("Update database backup");
+    expect(preflight.stderrTail).toContain("snapshot-capacity-insufficient");
     await expect(
       createUpdateDatabaseBackupInProcess({ ...f, config, stopped: true }),
     ).rejects.toMatchObject({ name: "UpdateCaptureSpaceError" });

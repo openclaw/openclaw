@@ -17,7 +17,8 @@ export async function checkUpdateDatabaseBackupSpace(
 ) {
   const warnings: string[] = [];
   const diagnostics: string[] = [];
-  const check = (target: string, requiredBytes: number, purpose: string) => {
+  const check = (target: string, requiredBytes: number, volume: "backup" | "rollback") => {
+    const purpose = `Update database ${volume}`;
     const space = tryReadDiskSpace(target);
     diagnostics.push(
       `${purpose} near ${target}: ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) needed; ${space ? `${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) free` : "free space unknown"}.`,
@@ -25,7 +26,7 @@ export async function checkUpdateDatabaseBackupSpace(
     if (space && space.availableBytes < requiredBytes) {
       throw new UpdateCaptureSpaceError(
         `${purpose} needs ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) near ${target}, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available. Free disk space before retrying; the databases have not been migrated.`,
-        { requiredBytes, availableBytes: space.availableBytes },
+        { requiredBytes, availableBytes: space.availableBytes, volume },
       );
     }
     if (!space) {
@@ -43,18 +44,13 @@ export async function checkUpdateDatabaseBackupSpace(
   )
     ? families.find((family) => family.path === sharedPath)?.bytes
     : undefined;
-  // S retains the backups and another S prepares independent writable rollback
-  // outputs. Only shared state overlays current update history: its prepared
-  // image can contain baseline H plus current history up to L. Keeping that
-  // image alongside all outputs costs at most 2S - H + 2(H + L).
-  // Capture's sequential S + L scratch also fits. Preserve the old allowance
-  // when shared ownership or a SQLite-only configuration is not established.
+  // Keep one backup S and independent writable rollback outputs S. Only shared
+  // state H needs a current-history image and merge/journal scratch; a large
+  // agent is never history scratch. Capture/publication fits within 2S and does
+  // not overlap rollback preparation. Restore rechecks actual output space if
+  // history grows after capture. Unknown/mixed ownership retains the old bound.
   const historyBytes = sharedBytes || largest;
-  check(
-    directory,
-    bytes === 0 ? 0 : 2 * bytes + 2 * largest + historyBytes + reserve,
-    "Update database backup",
-  );
+  check(directory, bytes === 0 ? 0 : 2 * bytes + 3 * historyBytes + reserve, "backup");
   // Preflight runs before the backup directory exists; inspect its existing ancestor.
   let ancestor = directory;
   let backupDevice: bigint;
@@ -96,7 +92,7 @@ export async function checkUpdateDatabaseBackupSpace(
   }
   for (const source of sources.values()) {
     // Migrated files remain in place during rollback: reserve S + largest publication scratch + headroom.
-    check(source.directory, source.bytes + source.largest + reserve, "Update database rollback");
+    check(source.directory, source.bytes + source.largest + reserve, "rollback");
   }
   return { warnings, diagnostics };
 }

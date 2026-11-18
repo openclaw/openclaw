@@ -168,7 +168,7 @@ export function createPackageSwapResults(
               : error instanceof Error
                 ? error.name
                 : "swap-failed",
-          baselineError,
+          baselineError ?? (error instanceof Error ? error : undefined),
         ),
         postVerifyStep: null,
         packageRollbackVerified,
