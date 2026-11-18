@@ -118,9 +118,11 @@ export function hasCronChannelRequester(scope: CronCreatorAuthorityRunScope): bo
   return channelRequestersByScope.has(scope);
 }
 
-function hasCronAuthenticatedRequester(scope: CronCreatorAuthorityRunScope): boolean {
+export function hasCronAuthenticatedRequester(scope: CronCreatorAuthorityRunScope): boolean {
   return (
     scope.callerOrigin.kind === "local" ||
+    (scope.callerOrigin.kind === "external" &&
+      scope.managementEntitlement?.source === "channel-owner") ||
     hasCronChannelRequester(scope) ||
     scope.callerScopedCreation === true
   );
@@ -236,7 +238,9 @@ export function resolveCronCreatorAuthorityGrantProvenance(
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
     ...(scope.callerScopedCreation ? { callerScopedCreation: true as const } : {}),
     ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
-    ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
+    ...(scope.callerOrigin.kind !== "unknown" && hasCronAuthenticatedRequester(scope)
+      ? { callerOrigin: { ...scope.callerOrigin } }
+      : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
   };
 }

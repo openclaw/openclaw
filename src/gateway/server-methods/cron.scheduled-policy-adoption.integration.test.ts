@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import {
   bindCronManagementGrant,
   createCronCreatorAuthorityCapability,
@@ -274,6 +275,76 @@ it.each([
       owned ? [runtimeAuthority, undefined] : [undefined, true],
     );
   }
+});
+
+it("records a Telegram owner's origin when creating a job within the visible tool cap", async () => {
+  await persistAuthProfileBatch({
+    stateDir: expectDefined(stateDir, "test state"),
+    profiles: [
+      {
+        profileId: "openai:automation-test",
+        credential: { type: "api_key", provider: "openai", key: "synthetic-automation-test-key" },
+      },
+    ],
+  });
+  const parentSessionKey = "agent:main:main:thread:creator-origin";
+  replaceSessionEntrySync(
+    { sessionKey: parentSessionKey },
+    { sessionId, updatedAt: 1, lifecycleRevision: "creator-origin" },
+  );
+  const { storePath, context } = createFixture();
+  await withAgentManagement(
+    async (identity) => {
+      vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+        async <T>(method: string, _options: unknown, params: unknown) => {
+          const client = createSyntheticPluginRuntimeClient();
+          client.internal = {
+            ...client.internal,
+            agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
+          };
+          const respond = await callCron(context, method, requireRecord(params, "Cron request"), {
+            client,
+          });
+          const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+          if (!ok) {
+            throw new Error(error?.message);
+          }
+          return result as T;
+        },
+      );
+      const tool = createCronTool({
+        runId: identity.operationalRunInstance.runId,
+        agentSessionKey: parentSessionKey,
+        agentAccountId: accountId,
+        creatorToolAllowlist: ["read"],
+      });
+      await tool.execute("create", {
+        action: "add",
+        job: {
+          name: "Creator origin",
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionKey: parentSessionKey,
+          sessionTarget: `session:${parentSessionKey}`,
+          payload: { kind: "agentTurn", message: "Read checkpoint", toolsAllow: ["read"] },
+        },
+      });
+    },
+    {
+      origin: { kind: "external", channel: "telegram" },
+      channel: "telegram",
+      sessionKey: parentSessionKey,
+    },
+  );
+  expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+    owner: { agentId: "main", sessionKey: parentSessionKey, accountId },
+    scheduledToolPolicy: cronAccountPolicy(parentSessionKey, accountId),
+    payload: { toolsAllow: ["read"] },
+    toolsAllowProvenance: {
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "external", channel: "telegram" },
+    },
+  });
 });
 
 it("reauthorizes a Telegram owner's unchanged tool cap without widening its account policy", async () => {
