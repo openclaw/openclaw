@@ -19,7 +19,7 @@ import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import type { WizardPrompter } from "./prompts.js";
+import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 import {
   expectSavedSetupCredential,
   modelConfigWithApiKey,
@@ -27,6 +27,7 @@ import {
 } from "./setup.credentials.test-support.js";
 import { createGatewayPasswordRefConfig } from "./setup.finalize.fixtures.test-support.js";
 import { runSetupWizard } from "./setup.js";
+import { SetupMigrationTargetChangedError } from "./setup.migration-snapshot.js";
 
 type ResolveProviderPluginChoice =
   typeof import("../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
@@ -630,6 +631,50 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it.each(["target change", "back"] as const)(
+    "returns to setup mode after import %s",
+    async (outcome) => {
+      listSetupMigrationOptions.mockResolvedValueOnce([
+        { providerId: "hermes", label: "Import from Hermes" },
+      ]);
+      if (outcome === "back") {
+        runSetupMigrationImport.mockResolvedValueOnce({ kind: "back" });
+      } else {
+        runSetupMigrationImport.mockRejectedValueOnce(
+          new SetupMigrationTargetChangedError(
+            "Migration target changed before promotion. Review it and retry.",
+          ),
+        );
+      }
+      const setupChoices: Array<"import" | "quickstart"> = ["import", "quickstart"];
+      const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+        if (params.message === "Setup mode") {
+          return setupChoices.shift();
+        }
+        return "__skip__";
+      });
+      const prompter = buildWizardPrompter({
+        select: select as unknown as WizardPrompter["select"],
+      });
+
+      await runWizard({ flow: undefined }, createRuntime(), prompter);
+
+      expect(select.mock.calls.filter(([params]) => params.message === "Setup mode")).toHaveLength(
+        2,
+      );
+      expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+      if (outcome === "target change") {
+        expect(prompter.note).toHaveBeenCalledWith(
+          expect.stringContaining("Migration target changed before promotion"),
+          "Existing config detected",
+        );
+      } else {
+        expect(detectSetupMigrationSources).toHaveBeenCalledOnce();
+      }
+      expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rejects an agent name when the import supplies an authored roster", async () => {
     const workspaceDir = await fs.realpath(await makeCaseDir("import-naming-"));
     const configPath = path.join(workspaceDir, "openclaw.json");
@@ -707,6 +752,22 @@ describe("runSetupWizard", () => {
       }
     },
   );
+
+  it("persists the optional memory choice before classic setup finalization", async () => {
+    runMemorySetupFlow.mockImplementationOnce(async (config) => ({
+      ...config,
+      memory: { search: { provider: "openai", model: "embedding-model" } },
+    }));
+    await runWizard();
+    expect(runMemorySetupFlow).toHaveBeenCalledOnce();
+    expect(persistedWizardConfigs().at(-1)?.memory?.search).toEqual({
+      provider: "openai",
+      model: "embedding-model",
+    });
+    expect(runMemorySetupFlow.mock.invocationCallOrder[0]).toBeLessThan(
+      finalizeSetupWizard.mock.invocationCallOrder[0]!,
+    );
+  });
 
   it("persists classic channel setup before hooks and Gateway finalization", async () => {
     const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
