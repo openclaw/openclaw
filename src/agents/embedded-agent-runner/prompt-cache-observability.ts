@@ -380,8 +380,20 @@ export function beginPromptCacheObservation(
   const restarted = immediate.some(
     ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
   );
+  // Compare fingerprint identity (content + non-omitted envelope fields) instead of
+  // object references. When messages are reloaded from the transcript database,
+  // fresh message objects are created with different references even though their
+  // content is identical. The reference comparison caused false-positive history
+  // rewrite detections that dropped the prompt cache from ~90k tokens to ~3k,
+  // forcing full recomputation. The fingerprint identity (packed string prefix)
+  // is byte-stable across reloads for content-identical messages.
   const divergence = previous
-    ? previous.history.findIndex((message, index) => message !== history[index])
+    ? previous.history.findIndex(
+        (message, index) =>
+          message !== history[index] &&
+          message.packed.slice(0, message.identityLength) !==
+            history[index]?.packed.slice(0, history[index]?.identityLength),
+      )
     : -1;
   const violation =
     divergence < 0 || restarted || previous?.declaredRewrites?.size
