@@ -96,9 +96,9 @@ describe("AppSidebar agent roster pins", () => {
     expect(sessionKeys(sidebar)).toEqual(pinned);
     expect(dom.query("[data-agent-collapse]")).toBeNull();
     await mode(sidebar, "chip");
-    // Other agents' pins resolve through descriptors; the loaded row is listed once, first.
+    // Saved pins remain intact, but chip mode shows only the selected agent.
     const chipPins = pinnedKeys(sidebar);
-    expect(chipPins).toContain("agent:main:pinned");
+    expect(chipPins).toEqual(["agent:main:pinned"]);
     expect(sessionKeys(sidebar)).toEqual([...chipPins, "agent:main:recent"]);
     expectChipPin(sidebar);
     expect(sidebar.sidebarEntries).toEqual(entries);

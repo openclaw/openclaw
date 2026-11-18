@@ -36,6 +36,8 @@ type PersonalNavigationHost = Parameters<typeof projectSidebarSessionReference>[
   readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  expandedAgentId(): string;
   readonly sessionDataContext:
     | Pick<
         ApplicationContext,
@@ -356,6 +358,13 @@ function resolvePersonalSidebarSession(
     : host.pinnedSessions.get(key);
 }
 
+function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string): boolean {
+  return (
+    host.sidebarAgentsMode === "roster" ||
+    host.sessionNavigationAgentId({ key }) === host.expandedAgentId()
+  );
+}
+
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
   let navigationState: SidebarSessionNavigationState | undefined;
   const groupKeys = new Set(
@@ -389,7 +398,7 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
     // Visible references bridge query replacement until their owner observations settle.
     host.pinnedSessions.seed(pins);
   }
-  return buildReconciledSidebarZone({
+  const zone = buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
     rows: [...pins, ...rows],
     pluginNavigation: host.pluginNavigation(),
@@ -399,6 +408,12 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
         ? host.sidebarPluginSnapshot
         : null,
   });
+  // Scope sidebar pins without removing saved references or global rail shortcuts.
+  zone.entries = zone.entries.filter(
+    (entry) =>
+      entry.type !== "session" || entry.rail || personalSessionMatchesAgent(host, entry.key),
+  );
+  return zone;
 }
 
 /** Group occurrences share the canonical tree and its child observation metadata. */
@@ -415,6 +430,7 @@ export function personalSidebarGroupRows(
   const members = group.sessionKeys.flatMap((key) => {
     const row = rows.get(key);
     return row?.pinnable &&
+      personalSessionMatchesAgent(host, key) &&
       !row.archived &&
       !host.sessionDataContext?.sessions.archiveVisibility(key)
       ? [{ ...row, selectionKey: `personal:${JSON.stringify([group.id, key])}` }]
@@ -464,9 +480,7 @@ export function projectUnpinnedSessionRows(
 
 export function personalSidebarOwnerFilterId(
   host: PersonalNavigationHost & {
-    readonly sidebarAgentsMode: "chip" | "roster";
     readonly sessionOwnerFilter: SessionOwnerFilter;
-    expandedAgentId(): string;
   },
 ): string | null {
   if (host.sidebarSnapshot) {

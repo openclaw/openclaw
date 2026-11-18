@@ -10,10 +10,57 @@ import {
   mountSidebarContext,
   createSessionsHarness,
   mountSidebar,
+  TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { disposeRoster, mountRoster } from "./app-sidebar-freshness.test-support.ts";
+
+it("scopes personal sections without removing saved members or global rail shortcuts", async () => {
+  const keys = ["agent:main:release", "agent:research:interviews"];
+  const rows = keys.map((key) => ({
+    key,
+    sessionId: key,
+    agentId: key.split(":")[1],
+    kind: "direct",
+    label: key,
+    updatedAt: 10,
+  }));
+  const mounted = await mountRoster((method, params) => {
+    if (method === "sessions.subscribe") {
+      return { subscribed: true };
+    }
+    if (method === "sessions.list") {
+      return sessionsResult([]);
+    }
+    if (method === "sessions.describe") {
+      return { session: rows.find((row) => row.key === (params as { key: string }).key) };
+    }
+    return {};
+  }, TWO_AGENTS);
+  const { sidebar, context } = mounted;
+  const group = { id: "focus", label: "Focus", sessionKeys: keys };
+  try {
+    sidebar.connected = true;
+    sidebar.sidebarAgentsMode = "chip";
+    sidebar.sidebarEntries = [`session-rail:${keys[1]}`];
+    context.navigation.update({ personalSessionGroups: [group] });
+    const visibleKeys = () => sidebar.personalGroupSessionRows(group).map((row) => row.key);
+    await waitForFast(() => expect(visibleKeys()).toEqual([keys[0]]));
+    context.agentSelection.set("research");
+    await waitForFast(() => expect(visibleKeys()).toEqual([keys[1]]));
+    sidebar.sidebarAgentsMode = "roster";
+    await waitForFast(() => expect(visibleKeys()).toEqual(keys));
+    expect(context.navigation.snapshot.personalSessionGroups).toEqual([group]);
+    expect(sidebar.reconciledSidebarZone().entries).toContainEqual({
+      type: "session",
+      key: keys[1],
+      rail: true,
+    });
+  } finally {
+    disposeRoster(mounted);
+  }
+});
 
 it.each(["pin", "group"] as const)(
   "keeps an off-page personal %s current and releases its observations",
