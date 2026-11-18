@@ -536,6 +536,15 @@ The event is `{ runtime, requestKind, payload, provider, model, messages }`:
   turn's (or steered input's) user message last. Editing it does not change the
   request. Use that metadata, not text inside a message, to decide sender
   trust.
+- Some requests resend history as text, so `messages` does not map one to one
+  onto `payload`. A `"compaction"` summary request is the summary call itself:
+  the older history is serialized into one user message inside `payload`, and
+  `messages` holds only that request, with no per-message sender metadata. A CLI
+  `"side_question"` carries the conversation as text inside `payload.prompt`;
+  `messages` holds that history with its metadata, followed by the side question.
+  A handler that decides trust from metadata must locate that text in the
+  payload itself, and cannot tell outside content apart inside a compaction
+  summary request.
 
 The hook context carries the usual agent fields (`agentId`, `sessionKey`,
 `sessionId`, `runId`, channel and sender fields when known) plus
