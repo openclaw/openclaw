@@ -153,6 +153,26 @@ const schemaCases: Array<[string, unknown, boolean]> = [
     true,
   ],
   ["mcp.apps.sandboxPort", 65536, false],
+  // A released diagnostics.otel block keeps loading after this change adds an
+  // optional key; the new control is not required for existing configurations.
+  [
+    "diagnostics.otel",
+    {
+      enabled: true,
+      endpoint: "http://fixture.invalid:4318",
+      protocol: "http/protobuf",
+      traces: true,
+      metrics: false,
+      logs: false,
+      logsExporter: "otlp",
+      sampleRate: 1,
+      flushIntervalMs: 60000,
+      captureContent: false,
+    },
+    true,
+  ],
+  ["diagnostics.otel.captureMessageOrigin", true, true],
+  ["diagnostics.otel.captureMessageOrigin", "yes", false],
   ...[
     "https://mcp-apps.example.com/path",
     "https://mcp-apps.example.com?query=1",

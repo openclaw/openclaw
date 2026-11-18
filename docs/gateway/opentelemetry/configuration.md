@@ -57,20 +57,17 @@ paths.
       logsExporter: "otlp", // otlp | stdout | both
       sampleRate: 0.2, // root-span sampler, 0.0..1.0
       flushIntervalMs: 60000, // metric export interval (min 1000ms)
-      captureContent: false, // opt in to raw model/tool content
-      captureMessageOrigin: false, // opt in to native message origin on spans
-      captureSessionIdentity: true, // optional; omit to follow captureContent
+      captureContent: false, // raw model/tool content + session identity (gen_ai.conversation.id, openclaw.session.id) on spans
+      captureMessageOrigin: false, // opt in to native Slack message origin on spans
     },
   },
 }
 ```
 
-The example enables session identity without content capture. If
-`captureSessionIdentity` is unset, it follows `captureContent` for compatibility.
-Set it to `false` to disable session identity even when content capture is on.
-`captureMessageOrigin` requires explicit `true`, independently of both settings.
-See [privacy and trace context](/gateway/opentelemetry/privacy-and-trace-context#session-identity)
-for the identifiers and their privacy limits.
+`captureMessageOrigin` requires explicit `true` and is independent of
+`captureContent`. It adds the native Slack origin to eligible message and run
+spans. See [message origin](/gateway/opentelemetry/privacy-and-trace-context#message-origin)
+for the identifier and its privacy limits.
 
 `metricNamePrefix` replaces the default `openclaw.` prefix only on
 OpenClaw-owned metrics. For example, `"acme."` exports `openclaw.tokens` as

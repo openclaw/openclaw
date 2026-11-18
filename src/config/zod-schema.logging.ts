@@ -39,8 +39,6 @@ export const DiagnosticsConfigSchema = z
         captureContent: z.boolean().optional(),
         /** Opt in to native message origin identifiers on spans. */
         captureMessageOrigin: z.boolean().optional(),
-        /** Export session identity on spans; unset follows captureContent. */
-        captureSessionIdentity: z.boolean().optional(),
       })
       .optional(),
     cacheTrace: z
