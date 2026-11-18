@@ -114,29 +114,6 @@ function runtimeDependencies(root, seen = new Set()) {
   return seen;
 }
 
-// codex-voice-host serves only the Codex TUI's realtime voice (codex-rs/tui ->
-// codex-realtime-webrtc -> VoiceHost); the app-server OpenClaw runs never starts
-// it. Its published copies also carry LC_RPATHs into the Bazel build tree, so the
-// staged runtime leaves the whole voice payload out instead of shipping it.
-function removeStagedCodexVoiceHelper(packageRoot) {
-  const codex = dependencyRoot(path.join(packageRoot, "dist/extensions/codex"), "@openai/codex");
-  if (!codex) {
-    return;
-  }
-  for (const [architecture, target] of [
-    ["arm64", "aarch64-apple-darwin"],
-    ["x64", "x86_64-apple-darwin"],
-  ]) {
-    const platform = dependencyRoot(codex, `@openai/codex-darwin-${architecture}`);
-    if (platform) {
-      fs.rmSync(path.join(platform, "vendor", target, "codex-resources/voice"), {
-        recursive: true,
-        force: true,
-      });
-    }
-  }
-}
-
 /** Select all official source plugins unless their additional installed payload exceeds 300 MiB. */
 export function planDesktopRuntimePlugins(root, { pluginIds: selectedIds } = {}) {
   const manifest = readJson(path.join(root, "package.json"));
@@ -212,9 +189,6 @@ export function stampDesktopRuntimePlugins(packageRoot, plan) {
         throw new Error(`Staged official plugin ${id} is missing ${entry}.`);
       }
     }
-  }
-  if (plan.pluginIds.includes("codex")) {
-    removeStagedCodexVoiceHelper(packageRoot);
   }
   build.stagedOfficialPlugins = { commit: plan.commit, pluginIds: plan.pluginIds };
   fs.writeFileSync(file, `${JSON.stringify(build, null, 2)}\n`);
