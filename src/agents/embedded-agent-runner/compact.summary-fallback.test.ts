@@ -2,7 +2,7 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, expect, it, onTestFinished } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createCompactionNoticePayload,
@@ -244,11 +244,33 @@ async function createFixture(
   return { ...fixture, seeded: appendToolTurns(fixture, 0, 8) };
 }
 
-function compactSession(
+async function compactSession(
   fixture: Fixture,
   abortSignal?: AbortSignal,
   trigger: "manual" | "budget" = "budget",
+  preflight = false,
 ) {
+  let preparedSession:
+    | import("./run/compaction-accounting-bridge.js").PreparedCompactionSession
+    | undefined;
+  if (preflight) {
+    const { prepareGatewaySessionCompaction } =
+      await import("../../gateway/server-methods/sessions-compaction-runner.js");
+    const { readSessionEntryReadOnlyInWorker } =
+      await import("../../config/sessions/session-entry-read-runtime.js");
+    const entry = await readSessionEntryReadOnlyInWorker(fixture.target);
+    if (!entry) {
+      throw new Error("Missing fixture entry");
+    }
+    const prepared = await prepareGatewaySessionCompaction({
+      ...fixture.target,
+      sessionStoreKey: fixture.target.sessionKey,
+      cfg: fixture.config,
+      entry,
+    });
+    preparedSession = prepared.preparedSession;
+    expect(preparedSession?.source).toBeDefined();
+  }
   return compactEmbeddedAgentSession(
     {
       ...fixture.target,
@@ -264,7 +286,7 @@ function compactSession(
       abortSignal,
       enqueue: async (task) => await task(),
     },
-    { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+    { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined }, preparedSession },
   );
 }
 
@@ -305,7 +327,7 @@ it.each([
     const seeded = [...fixture.seeded, ...appendToolTurns(fixture, 8, 43)];
     summaryMode = "refusal";
 
-    const result = await compactSession(fixture, undefined, trigger);
+    const result = await compactSession(fixture, undefined, trigger, true);
 
     expect(result).toMatchObject({
       ok: true,
@@ -319,6 +341,7 @@ it.each([
     expect(result.result?.tokensAfter).toBeLessThan(24_000);
     expect(result.result?.tokensBefore).toBeGreaterThan(24_000);
     expectFallbackSummary(fixture);
+    expect(getCompactions(fixture)[0]?.fromHook).toBe(safeguard && !modelFallback);
     const session = openSession(fixture);
     expect(
       session
@@ -345,7 +368,7 @@ it.each([false, true])(
     const fixture = await createFixture({ safeguard, refusal: true, modelFallback: true });
     summaryMode = "refusal-primary";
 
-    const result = await compactSession(fixture);
+    const result = await compactSession(fixture, undefined, "manual", true);
 
     expect(result).toMatchObject({
       ok: true,
@@ -358,6 +381,7 @@ it.each([false, true])(
     expect(getCompactions(fixture).map((entry) => entry.summary)).toEqual([
       expect.stringContaining("Fallback route summary."),
     ]);
+    expect(Boolean(getCompactions(fixture)[0]?.fromHook)).toBe(safeguard);
   },
 );
 
@@ -528,4 +552,78 @@ it.each([
   expect(await pending).toMatchObject({ ok: false, compacted: false });
   expect(summaryRequests.length).toBeGreaterThan(0);
   expect(getCompactions(fixture)).toHaveLength(0);
+});
+
+it("constructs raised manual summary budgets after native sent-tool checkpoint selection", async () => {
+  summaryMode = "ok";
+  const fixture = await createFixture();
+  fixture.config.agents!.defaults!.compaction!.maxSummaryChars = 20000;
+  await fixture.state.writeConfig(fixture.config);
+  const manager = await SessionManager.openAsync(fixture.target, fixture.state.workspaceDir);
+  await manager.appendCustomEntryAsync("openclaw.system-prompt", {
+    tools: [
+      {
+        name: "prior_tool",
+        description: "retained tool wording ".repeat(1200),
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+  });
+  const reader = await import("../../config/sessions/session-compaction-prepared.js");
+  const read = reader.readPreparedSessionCompactionInWorker;
+  let observed = false;
+  const plan = vi
+    .spyOn(reader, "readPreparedSessionCompactionInWorker")
+    .mockImplementation(async (target, operation, signal) => {
+      const value = await read(target, operation, signal);
+      if (operation.kind === "plan" && value.status === "prepared") {
+        observed = true;
+        expect(operation.options.work.requestBudget).toBeUndefined();
+        expect(value.plan.requestBudget?.fixedTokens).toBeGreaterThan(10000);
+      }
+      return value;
+    });
+  onTestFinished(() => plan.mockRestore());
+  expect(await compactSession(fixture, undefined, "manual", true)).toMatchObject({
+    ok: true,
+    compacted: true,
+  });
+  expect(observed).toBe(true);
+});
+
+it("keeps required cancellation-settlement floors outside the hook anti-loop boundary", async () => {
+  const fixture = await createFixture({ safeguard: true });
+  summaryMode = "server-error";
+  const { attachCompactionAccountingRecorder } =
+    await import("./run/compaction-accounting-bridge.js");
+  const contextEngineRuntimeContext = {};
+  attachCompactionAccountingRecorder(contextEngineRuntimeContext, {
+    requestRequiresCompaction: true,
+  });
+  const scope = new AsyncWorkScope();
+  try {
+    const result = await scope.run(() =>
+      compactEmbeddedAgentSessionDirect({
+        ...fixture.target,
+        sessionTarget: fixture.target,
+        sessionFile: fixture.target.sessionKey,
+        workspaceDir: fixture.state.workspaceDir,
+        agentDir: fixture.state.agentDir(),
+        config: fixture.config,
+        provider: "fixture",
+        model: "model",
+        trigger: "budget",
+        force: true,
+        contextEngineRuntimeContext,
+      }),
+    );
+    expect(result).toMatchObject({ ok: true, compacted: true });
+    expect(getCompactions(fixture)[0]?.fromHook).toBe(false);
+    expect(getCompactions(fixture)[0]?.details).toMatchObject({ qualityDegraded: true });
+  } finally {
+    await AsyncWorkScope.runWhenAllIdle(
+      () => [scope],
+      () => scope.drain(),
+    );
+  }
 });

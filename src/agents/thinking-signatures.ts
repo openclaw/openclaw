@@ -42,15 +42,20 @@ function stripThinkingSignaturesFromMessage(message: AssistantMessage): Assistan
  * Strip signatures from assistant messages generated before the latest compaction.
  * Their signatures are bound to the replaced prompt prefix and cannot be replayed.
  */
-export function stripStaleThinkingSignaturesForCompactionReplay(
-  messages: AgentMessage[],
-): AgentMessage[] {
+export function stripStaleThinkingSignatures<T>(
+  messages: T[],
+  adapter: {
+    role(message: T): string | undefined;
+    timestamp(message: T): number | undefined;
+    strip(message: T): T;
+  },
+): T[] {
   let latestCompactionTimestamp: number | null = null;
   for (const message of messages) {
-    if (message.role !== "compactionSummary") {
+    if (adapter.role(message) !== "compactionSummary") {
       continue;
     }
-    const timestamp = parseDateFirstTimestampMs(message.timestamp);
+    const timestamp = adapter.timestamp(message);
     if (timestamp !== undefined) {
       latestCompactionTimestamp =
         latestCompactionTimestamp === null
@@ -61,19 +66,30 @@ export function stripStaleThinkingSignaturesForCompactionReplay(
   if (latestCompactionTimestamp === null) {
     return messages;
   }
-
   let touched = false;
   const out = messages.map((message) => {
-    if (!isAssistantMessageWithContent(message)) {
-      return message;
-    }
-    const timestamp = parseDateFirstTimestampMs(message.timestamp);
-    if (timestamp === undefined || timestamp >= latestCompactionTimestamp) {
-      return message;
-    }
-    const stripped = stripThinkingSignaturesFromMessage(message);
-    touched ||= stripped !== message;
-    return stripped;
+    const timestamp = adapter.timestamp(message);
+    const next =
+      adapter.role(message) !== "assistant" ||
+      timestamp === undefined ||
+      timestamp >= latestCompactionTimestamp
+        ? message
+        : adapter.strip(message);
+    touched ||= next !== message;
+    return next;
   });
   return touched ? out : messages;
+}
+
+export function stripStaleThinkingSignaturesForCompactionReplay(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  return stripStaleThinkingSignatures(messages, {
+    role: (message) => message.role,
+    timestamp: (message) => parseDateFirstTimestampMs(message.timestamp),
+    strip: (message) =>
+      isAssistantMessageWithContent(message)
+        ? stripThinkingSignaturesFromMessage(message)
+        : message,
+  });
 }

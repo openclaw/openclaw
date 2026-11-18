@@ -13,8 +13,10 @@ import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
+import type { SessionPreparedCompactionInput } from "../../config/sessions/session-compaction-prepared.types.js";
 import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -43,10 +45,16 @@ import {
   prepareCompactionSafeguardSummary,
 } from "../agent-hooks/compaction-safeguard-preparation.js";
 import { sanitizeCompactionMessages } from "../compaction-planning.js";
+import { prepareCompactionReplay } from "../embedded-agent-runner/prepared-compaction-replay.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { prepareAgentCompactionWork } from "./compaction/preparation.js";
+import {
+  createCompactionReplacementProjector,
+  prepareAgentCompactionWork,
+} from "./compaction/preparation.js";
+import { estimateCompactedRequestTokens } from "./compaction/request-budget.js";
+import { createSessionCompactionEntry } from "./session-compaction-persistence.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
 
@@ -57,8 +65,8 @@ it("prepares and rerenders captured rows without hydrating summarized history on
     const source = await SessionManager.openAsync(target);
     const model = makeProviderModelFixture({
       id: "fixture",
-      provider: "openai",
-      api: "openai-responses",
+      provider: "fixture",
+      api: "openai-completions",
       baseUrl: "https://example.invalid/v1",
     });
     for (let index = 0; index < 20; index += 1) {
@@ -96,65 +104,53 @@ it("prepares and rerenders captured rows without hydrating summarized history on
       splitTurnContextChars: 8000,
     });
     const operations: string[] = [];
-    let retainedBytes = 0;
-    let abortRetainedStream: AbortController | undefined;
+    let hydrationFrames = 0;
+    let abortPlan: AbortController | undefined;
     const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
       const run = pool.run.bind(pool);
-      return vi.spyOn(pool, "run").mockImplementation((input, options) => {
-        let planRequest = false;
-        const receive = options.onRequest;
-        return run(
-          async () => {
-            const request = typeof input === "function" ? await input() : input;
-            if (request.kind === "compaction-preparation") {
-              operations.push(request.operation.kind);
-              planRequest = request.operation.kind === "plan";
+      return vi.spyOn(pool, "run").mockImplementation((input, options) =>
+        run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          if (request.kind === "compaction-preparation") {
+            operations.push(request.operation.kind);
+            if (request.operation.kind === "plan") {
+              abortPlan?.abort(new Error("fixture plan cancelled"));
             }
-            return request;
-          },
-          {
-            ...options,
-            ...(receive
-              ? {
-                  onRequest: async (value, context) => {
-                    if (planRequest) {
-                      // The paired native producer owns this hydration envelope.
-                      const chunk =
-                        value as import("../../config/sessions/session-transcript-hydration.types.js").SessionTranscriptHydrationChunk;
-                      retainedBytes += chunk.frames.reduce(
-                        (total, frame) => total + frame.data.byteLength,
-                        0,
-                      );
-                      abortRetainedStream?.abort(new Error("fixture retained stream cancelled"));
-                    }
-                    return await receive(value, context);
-                  },
-                }
-              : {}),
-          },
-        );
-      });
+            if (options.onRequest) {
+              hydrationFrames += 1;
+            }
+          }
+          return request;
+        }, options),
+      );
     });
     try {
+      const preflight = await readPreparedSessionCompactionInWorker(target, { kind: "preflight" });
+      if (preflight.status !== "preflight") {
+        throw new Error("Expected native preflight");
+      }
+      expect(preflight.reads.extractedRows).toBe(before.length);
+      const replayOptions = {
+        model,
+        policy: resolveTranscriptPolicy({
+          model,
+          modelApi: model.api,
+          provider: model.provider,
+          modelId: model.id,
+        }),
+        imageLimits: resolveImageSanitizationLimits(),
+        allowedToolNames: [],
+        signedThinkingProvider: false,
+        allowProviderOwnedThinkingReplay: false,
+        isOpenAIResponsesApi: false,
+        sessionId: target.sessionId,
+        replayEnabled: true,
+      };
       const prepared = await readPreparedSessionCompactionInWorker(target, {
+        source: preflight.source,
         kind: "plan",
         options: { work, qualityGuardEnabled: true },
-        replay: {
-          model,
-          policy: resolveTranscriptPolicy({
-            model,
-            modelApi: model.api,
-            provider: model.provider,
-            modelId: model.id,
-          }),
-          imageLimits: resolveImageSanitizationLimits(),
-          allowedToolNames: [],
-          signedThinkingProvider: false,
-          allowProviderOwnedThinkingReplay: false,
-          isOpenAIResponsesApi: true,
-          sessionId: target.sessionId,
-          replayEnabled: true,
-        },
+        replay: replayOptions,
       });
       if (prepared.status !== "prepared") {
         throw new Error(
@@ -164,10 +160,13 @@ it("prepares and rerenders captured rows without hydrating summarized history on
       expect(prepared.plan.preparation.firstKeptEntryId).toBe(
         expected.preparation.firstKeptEntryId,
       );
-      expect(prepared.plan.retained.map((entry) => entry.id)).not.toContain(branch[0]!.id);
-      expect(prepared.beforeHookMetrics.messageCountOriginal).toBe(20);
-      expect(retainedBytes).toBeGreaterThan(0);
-      expect(retainedBytes).toBeLessThan(16 * 1024);
+      expect(prepared.plan.retainedSequences.length).toBeLessThan(branch.length);
+      expect(prepared.plan).not.toHaveProperty("retained");
+      expect(prepared.reads.extractedRows).toBe(0);
+      expect(prepared.beforeHookMetrics).toEqual(
+        (await prepareCompactionReplay(branch, replayOptions)).beforeHookMetrics,
+      );
+      expect(hydrationFrames).toBe(0);
       const expectedMessages = convertToLlm(
         sanitizeCompactionMessages(summary.reconciliationMessages),
       );
@@ -178,14 +177,14 @@ it("prepares and rerenders captured rows without hydrating summarized history on
           version: prepared.version,
           maxChars,
         });
-        expect(rendered).toEqual({
+        expect(rendered).toMatchObject({
           kind: "compaction-preparation",
           status: "rendered",
           conversation: serializeConversationWithinBudget(expectedMessages, maxChars),
         });
       }
-      expect(operations).toEqual(["plan", "render", "render", "render"]);
-      abortRetainedStream = new AbortController();
+      expect(operations).toEqual(["preflight", "plan", "render", "render", "render"]);
+      abortPlan = new AbortController();
       await expect(
         readPreparedSessionCompactionInWorker(
           target,
@@ -204,16 +203,92 @@ it("prepares and rerenders captured rows without hydrating summarized history on
               allowedToolNames: [],
               signedThinkingProvider: false,
               allowProviderOwnedThinkingReplay: false,
-              isOpenAIResponsesApi: true,
+              isOpenAIResponsesApi: false,
               sessionId: target.sessionId,
               replayEnabled: true,
             },
           },
-          abortRetainedStream.signal,
+          abortPlan.signal,
         ),
       ).rejects.toThrow();
-      abortRetainedStream = undefined;
+      abortPlan = undefined;
       expect(source.getPersistedEntries()).toEqual(before);
+      const finalizedSummary = prepared.plan.deterministic!;
+      const finalizeOperation: Extract<
+        SessionPreparedCompactionInput["operation"],
+        { kind: "finalize" }
+      > = {
+        kind: "finalize",
+        version: prepared.version,
+        retainedSequences: prepared.plan.retainedSequences,
+        preparation: prepared.plan.preparation,
+        summary: finalizedSummary,
+        work: { itemId: work.itemId },
+        replay: replayOptions,
+      };
+      const originalReplacement = createCompactionReplacementProjector(branch, work.itemId)(
+        finalizedSummary,
+        finalizedSummary.summary,
+      );
+      const budget = {
+        contextWindow: 1_000_000,
+        reserveTokens: 0,
+        fixedTokens: 0,
+        pendingTokens: 0,
+      };
+      await source.appendMessageAsync(
+        makeUserMessage("Accepted after planning ".repeat(3000), 100),
+      );
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          ...finalizeOperation,
+          work: {
+            itemId: work.itemId,
+            requestBudget: budget,
+            requestTokenLimit: estimateCompactedRequestTokens(originalReplacement, budget) + 1,
+          },
+        }),
+      ).rejects.toThrow("finalized compaction exceeds");
+      const finalized = await readPreparedSessionCompactionInWorker(target, finalizeOperation);
+      if (finalized.status !== "finalized") {
+        throw new Error("Expected native finalization");
+      }
+      const event = createSessionCompactionEntry(
+        prepared.leafEntryId,
+        finalizedSummary.summary,
+        finalizedSummary.firstKeptEntryId,
+        finalizedSummary.tokensBefore,
+        finalizedSummary.details,
+        true,
+        { itemId: work.itemId },
+        finalized.tokensAfter,
+      );
+      await persistCompactionBoundaryWithSessionEntryAsync(
+        target,
+        {
+          prepared: {
+            scope: target,
+            event,
+            appendIntent: "active-branch",
+            expectedMutationAt: finalized.transcriptMutationAt,
+          },
+          tokensAfter: finalized.tokensAfter,
+          transcriptByteCompactionLatch: null,
+        },
+        () => {},
+      );
+      const actual = (await SessionManager.openModelContextAsync(target)).buildSessionContext()
+        .messages;
+      const expectedKept = createCompactionReplacementProjector(source.getBranch(), work.itemId)(
+        finalizedSummary,
+        finalizedSummary.summary,
+      );
+      const withoutTime = (messages: unknown) =>
+        JSON.parse(
+          JSON.stringify(messages, (key, value) => (key === "timestamp" ? undefined : value)),
+        );
+      expect(withoutTime(actual)).toEqual(withoutTime(expectedKept));
+      expect(actual).toHaveLength(finalized.messageCountAfter);
       expect(replaceTranscriptEventsSync(target, before)).toBe(true);
       await expect(
         readPreparedSessionCompactionInWorker(target, {
@@ -260,46 +335,49 @@ it("streams oversized compaction history without first materializing it in the r
     const writePayload = database.db.prepare(
       "UPDATE transcript_events SET event_json = ?, event_zstd = NULL WHERE session_id = ? AND seq = ?",
     );
-    // Keep admitted byte/navigation facts, but make payload acquisition observably fail.
-    // A budget refusal must precede decoding, not arrive after allocating the full graph.
-    writePayload.run("{malformed", target.sessionId, last);
     const model = makeProviderModelFixture({
       id: "fixture",
       provider: "openai",
       api: "openai-responses",
       baseUrl: "https://example.invalid/v1",
     });
-    try {
-      await expect(
-        readPreparedSessionCompactionInWorker(target, {
-          kind: "plan",
-          options: {
-            work: {
-              itemId: "oversized-plan",
-              mode: "manual",
-              summaryOutputPolicy: "none",
-              settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
-            },
-            qualityGuardEnabled: true,
-          },
-          replay: {
-            model,
-            policy: resolveTranscriptPolicy({
-              model,
-              modelApi: model.api,
-              provider: model.provider,
-              modelId: model.id,
-            }),
-            imageLimits: resolveImageSanitizationLimits(),
-            allowedToolNames: [],
-            signedThinkingProvider: false,
-            allowProviderOwnedThinkingReplay: false,
-            isOpenAIResponsesApi: true,
-            sessionId: target.sessionId,
-            replayEnabled: true,
-          },
+    const planOperation = {
+      kind: "plan",
+      options: {
+        work: {
+          itemId: "oversized-plan",
+          mode: "manual",
+          summaryOutputPolicy: "none",
+          settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+        },
+        qualityGuardEnabled: true,
+      },
+      replay: {
+        model,
+        policy: resolveTranscriptPolicy({
+          model,
+          modelApi: model.api,
+          provider: model.provider,
+          modelId: model.id,
         }),
-      ).rejects.toThrow("materialized preparation byte limit");
+        imageLimits: resolveImageSanitizationLimits(),
+        allowedToolNames: [],
+        signedThinkingProvider: false,
+        allowProviderOwnedThinkingReplay: false,
+        isOpenAIResponsesApi: true,
+        sessionId: target.sessionId,
+        replayEnabled: true,
+      },
+    } satisfies import("../../config/sessions/session-compaction-prepared.types.js").SessionPreparedCompactionInput["operation"];
+    const prepared = await readPreparedSessionCompactionInWorker(target, planOperation);
+    expect(prepared.status).toBe("prepared");
+    expect(prepared.reads.extractedBytes).toBeGreaterThan(16 * 1024 * 1024);
+    // Preserve navigation facts while making selected payload acquisition observably fail.
+    writePayload.run("{malformed", target.sessionId, last);
+    try {
+      await expect(readPreparedSessionCompactionInWorker(target, planOperation)).rejects.toThrow(
+        /JSON|Unexpected|property/i,
+      );
       await expect(
         readPreparedSessionCompactionInWorker(target, {
           kind: "render",
@@ -317,7 +395,7 @@ it("streams oversized compaction history without first materializing it in the r
       version: before.snapshot.version,
       maxChars: 4000,
     });
-    expect(rendered).toEqual({
+    expect(rendered).toMatchObject({
       kind: "compaction-preparation",
       status: "rendered",
       conversation: serializeConversationWithinBudget(
@@ -353,7 +431,7 @@ it("streams oversized compaction history without first materializing it in the r
         skipped,
       );
     }
-    // Declining optimization must leave the complete existing streamed host path usable.
+    // The explicit full-history adapter remains usable by public SDK consumers.
     const hydrated = await prepareSessionTranscriptHydration(target, { compaction: true }).read();
     const events = hydrated.snapshot.events.slice(1);
     expect(events).toHaveLength(messages.length);
@@ -789,3 +867,115 @@ it.each([
     }
   });
 });
+
+it("renders placed background context from its captured projection source in the worker", () =>
+  withOpenClawTestState({ label: "prepared-background-context" }, async (state) => {
+    const target = makeTarget(state, "background-context");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    const tool = {
+      role: "toolResult" as const,
+      toolCallId: "read-1",
+      toolName: "read",
+      content: [{ type: "text" as const, text: "read output" }],
+      isError: false,
+      timestamp: 0,
+    };
+    const earlier = await manager.appendMessageAsync(tool);
+    if (!earlier) {
+      throw new Error("Tool fixture did not append");
+    }
+    await manager.appendCompactionAsync("Prior accepted work", earlier, 1000);
+    const backgroundMessage: Parameters<typeof manager.appendMessageAsync>[0] & {
+      excludeFromContext: true;
+      openclawModelPlacement: "pending";
+    } = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Background result complete: keep this finding.",
+        },
+      ],
+      api: "test",
+      provider: "openclaw",
+      model: "automation-result",
+      stopReason: "stop",
+      timestamp: 0,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      excludeFromContext: true,
+      openclawModelPlacement: "pending",
+    };
+    const pending = await manager.appendMessageAsync(backgroundMessage);
+    await manager.appendCustomEntryAsync("openclaw.background-result-placement", {
+      afterEntryId: pending,
+      resultEntryIds: [pending],
+    });
+    await manager.appendMessageAsync(tool);
+    await manager.appendMessageAsync(makeUserMessage("Latest request", 1));
+    const model = makeProviderModelFixture({
+      id: "fixture",
+      provider: "fixture",
+      api: "openai-completions",
+      baseUrl: "https://example.invalid/v1",
+    });
+    const prepared = await readPreparedSessionCompactionInWorker(target, {
+      kind: "plan",
+      options: {
+        work: {
+          itemId: "background",
+          mode: "manual",
+          summaryOutputPolicy: "none",
+          settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 0 },
+        },
+        qualityGuardEnabled: true,
+      },
+      replay: {
+        model,
+        policy: resolveTranscriptPolicy({
+          model,
+          modelApi: model.api,
+          provider: model.provider,
+          modelId: model.id,
+        }),
+        imageLimits: resolveImageSanitizationLimits(),
+        allowedToolNames: [],
+        signedThinkingProvider: false,
+        allowProviderOwnedThinkingReplay: false,
+        isOpenAIResponsesApi: false,
+        sessionId: target.sessionId,
+        replayEnabled: true,
+      },
+    });
+    if (prepared.status !== "prepared") {
+      throw new Error("Expected prepared background context");
+    }
+    expect(prepared.plan.facts.history.usedPreparationRange).toBe(true);
+    const rendered = await readPreparedSessionCompactionInWorker(target, {
+      kind: "render",
+      entries: prepared.plan.selections.history,
+      version: prepared.version,
+      maxChars: 4000,
+    });
+    expect(rendered).toMatchObject({
+      status: "rendered",
+      conversation: {
+        text: "[Tool result]: read output\n\n[Assistant]: Background result complete: keep this finding.\n\n[Tool result]: read output",
+        omittedEntries: 0,
+        trimmedEntries: 0,
+      },
+    });
+  }));

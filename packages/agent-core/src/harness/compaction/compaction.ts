@@ -201,15 +201,47 @@ export async function compact(
   streamFn?: StreamFn,
   runtime?: AgentCoreCompletionRuntimeDeps,
 ): Promise<Result<CompactionResult, CompactionError>> {
-  const {
-    firstKeptEntryId,
-    messagesToSummarize,
-    turnPrefixMessages,
-    isSplitTurn,
-    previousSummary,
-    settings,
-  } = preparation;
-  if (!firstKeptEntryId) {
+  return compactFromSource(
+    preparation,
+    {
+      history: preparation.messagesToSummarize.length,
+      turnPrefix: preparation.turnPrefixMessages.length,
+    },
+    (source, previous, summaryPrompt) =>
+      generateSummary(
+        source === "history" ? preparation.messagesToSummarize : preparation.turnPrefixMessages,
+        model,
+        preparation.settings.reserveTokens,
+        apiKey,
+        headers,
+        signal,
+        customInstructions,
+        previous,
+        thinkingLevel,
+        streamFn,
+        runtime,
+        summaryPrompt,
+      ),
+  );
+}
+
+/** Scalar preparation shared by the eager SDK and dedicated transcript view. */
+export type CompactionPreparationMetadata = Omit<
+  CompactionPreparation,
+  "messagesToSummarize" | "turnPrefixMessages"
+>;
+
+/** Summary assembly has one owner regardless of how bounded request text is rendered. */
+export async function compactFromSource(
+  preparation: CompactionPreparationMetadata,
+  counts: { history: number; turnPrefix: number },
+  summarize: (
+    source: "history" | "turnPrefix",
+    previous?: string,
+    prompt?: CompactionSummaryPrompt,
+  ) => Promise<Result<string, CompactionError>>,
+): Promise<Result<CompactionResult, CompactionError>> {
+  if (!preparation.firstKeptEntryId) {
     return err(
       new CompactionError(
         "invalid_session",
@@ -217,46 +249,23 @@ export async function compact(
       ),
     );
   }
-
-  const summarize = (
-    messages: AgentMessage[],
-    previous?: string,
-    summaryPrompt?: CompactionSummaryPrompt,
-  ) =>
-    generateSummary(
-      messages,
-      model,
-      settings.reserveTokens,
-      apiKey,
-      headers,
-      signal,
-      customInstructions,
-      previous,
-      thinkingLevel,
-      streamFn,
-      runtime,
-      summaryPrompt,
-    );
-  const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
+  const summarizeTurnPrefix = preparation.isSplitTurn && counts.turnPrefix > 0;
   const historyResult =
-    messagesToSummarize.length > 0 || !summarizeTurnPrefix
-      ? await summarize(messagesToSummarize, previousSummary)
+    counts.history > 0 || !summarizeTurnPrefix
+      ? await summarize("history", preparation.previousSummary)
       : ok<string, CompactionError>(
           previousSummaryWithoutFileOperations(preparation) ?? "No prior history.",
         );
   if (!historyResult.ok) {
     return err(historyResult.error);
   }
-
   let latestContext = "";
   if (summarizeTurnPrefix) {
-    const turnPrefixResult = await summarize(turnPrefixMessages, undefined, {
-      kind: "turn-prefix",
-    });
-    if (!turnPrefixResult.ok) {
-      return err(turnPrefixResult.error);
+    const prefix = await summarize("turnPrefix", undefined, { kind: "turn-prefix" });
+    if (!prefix.ok) {
+      return err(prefix.error);
     }
-    latestContext = `${TURN_CONTEXT_PREFIX}${turnPrefixResult.value}`;
+    latestContext = `${TURN_CONTEXT_PREFIX}${prefix.value}`;
   }
   return finalizeCompaction(preparation, historyResult.value, latestContext);
 }
@@ -270,8 +279,6 @@ export async function compact(
 export function compactWithoutSummary(
   preparation: CompactionPreparation,
 ): Result<CompactionResult<CompactionDetails>, CompactionError> {
-  const droppedCount =
-    preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length;
   const sourceMessage = preparation.isSplitTurn
     ? preparation.turnPrefixMessages.findLast(
         (message): message is Extract<AgentMessage, { role: "user" }> =>
@@ -285,15 +292,26 @@ export function compactWithoutSummary(
         sourceLabel === "User" ? sourceText : `[${sourceLabel}]: ${sourceText}`,
       )
     : "";
+  return compactWithoutSummaryFromFacts(preparation, {
+    droppedCount: preparation.messagesToSummarize.length + preparation.turnPrefixMessages.length,
+    sourceAsk,
+    floor: buildCompactionFloor([
+      ...preparation.messagesToSummarize,
+      ...preparation.turnPrefixMessages,
+    ]),
+  });
+}
+
+/** A native view supplies the selected ask, exact dropped count, and canonical floor. */
+export function compactWithoutSummaryFromFacts(
+  preparation: CompactionPreparationMetadata,
+  { droppedCount, sourceAsk, floor }: { droppedCount: number; sourceAsk: string; floor: string },
+): Result<CompactionResult<CompactionDetails>, CompactionError> {
   // Keep the notice and bounded source ask; shrink only the carried summary.
   const requiredContext =
     `[${droppedCount} earlier message(s) were removed without a summary because summarization failed. The messages after this summary are verbatim; the removed messages remain in this session's stored transcript. When session history tools are available, read them there before asking the user to repeat earlier details.]\n\n` +
     (sourceAsk ? `## Original request of the current turn\n${JSON.stringify(sourceAsk)}\n\n` : "");
   // The floor leads the shrinkable body, so a constrained budget trims the carried summary first.
-  const floor = buildCompactionFloor([
-    ...preparation.messagesToSummarize,
-    ...preparation.turnPrefixMessages,
-  ]);
   const carriedSummary = previousSummaryWithoutFileOperations(preparation) ?? "";
   return finalizeCompaction(
     preparation,
@@ -305,7 +323,7 @@ export function compactWithoutSummary(
 
 // File metadata is re-merged by finalizeCompaction, so the carried summary drops its old copy.
 function previousSummaryWithoutFileOperations(
-  preparation: CompactionPreparation,
+  preparation: CompactionPreparationMetadata,
 ): string | undefined {
   const { previousSummary, previousSummaryDetails } = preparation;
   const previousRequest = previousSummaryDetails?.latestUnresolvedUserRequest;
@@ -329,7 +347,7 @@ function previousSummaryWithoutFileOperations(
 }
 
 function finalizeCompaction(
-  preparation: CompactionPreparation,
+  preparation: CompactionPreparationMetadata,
   historySummary: string,
   latestContext: string,
   requiredContext = "",

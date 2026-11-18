@@ -103,43 +103,53 @@ function truncateForSummary(text: string, maxChars: number): string {
   return `${head}\n\n[... ${truncatedChars} more characters truncated]${tail ? `\n\n${tail}` : ""}`;
 }
 
+/** One block projection shared by payload serialization and detached token facts. */
+export function projectCompactionContentBlock(block: {
+  type: string;
+  content?: unknown;
+  text?: string;
+}): { text: string; omission?: string } {
+  let text = "";
+  if (
+    (block.type === "text" || block.type === "toolResult" || block.type === "tool_result") &&
+    block.text
+  ) {
+    text = block.text;
+  } else if (
+    (block.type === "toolResult" || block.type === "tool_result") &&
+    typeof block.content === "string"
+  ) {
+    text = block.content;
+  }
+  return {
+    text,
+    ...(block.type !== "text" && !text
+      ? {
+          omission:
+            block.type === "image"
+              ? "[image data omitted from summary input]"
+              : "[non-text data omitted from summary input]",
+        }
+      : {}),
+  };
+}
+
 /** Project summary content once so rendering and token accounting share omission facts. */
 export function getCompactionContent(
   content: string | Array<{ type: string; content?: unknown; text?: string }>,
 ): { text: string; omissionText: string } {
+  if (typeof content === "string") {
+    return { text: content, omissionText: "" };
+  }
   const omissions = new Set<string>();
-  const text =
-    typeof content === "string"
-      ? content
-      : content
-          .map((block) => {
-            let blockText = "";
-            if (
-              (block.type === "text" ||
-                block.type === "toolResult" ||
-                block.type === "tool_result") &&
-              block.text
-            ) {
-              blockText = block.text;
-            } else if (
-              (block.type === "toolResult" || block.type === "tool_result") &&
-              typeof block.content === "string"
-            ) {
-              blockText = block.content;
-            }
-            if (block.type !== "text" && !blockText) {
-              // This projection knows only what it omits, not whether a model processed it.
-              omissions.add(
-                block.type === "image"
-                  ? "[image data omitted from summary input]"
-                  : "[non-text data omitted from summary input]",
-              );
-            }
-            return blockText;
-          })
-          .filter(Boolean)
-          .join("\n");
-  return { text, omissionText: [...omissions].join("\n") };
+  const parts = content.map((block) => {
+    const projected = projectCompactionContentBlock(block);
+    if (projected.omission) {
+      omissions.add(projected.omission);
+    }
+    return projected.text;
+  });
+  return { text: parts.filter(Boolean).join("\n"), omissionText: [...omissions].join("\n") };
 }
 
 const MAX_OMISSION_MESSAGES = 8;

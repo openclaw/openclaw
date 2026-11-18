@@ -288,10 +288,10 @@ type SummaryFloorReduction = Readonly<{
  */
 export function commitCompactionSummary(
   result: Pick<CompactionResult, "summary" | "details">,
-  preparation: Pick<
-    CompactionPreparation,
-    "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
-  > & { settings: { maxSummaryChars?: number } },
+  preparation: Pick<CompactionPreparation, "summaryTokenBudget"> &
+    Partial<Pick<CompactionPreparation, "messagesToSummarize" | "turnPrefixMessages">> & {
+      settings: { maxSummaryChars?: number };
+    },
   withoutSummary: boolean,
   replayTokenBudget?: () => number | undefined,
   onFloorReduced?: (reduction: SummaryFloorReduction) => void,
@@ -312,7 +312,10 @@ export function commitCompactionSummary(
   const prepared =
     preparedFloor ??
     prepareCompactionFloor(
-      [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages],
+      [
+        ...requireFloorMessages(preparation.messagesToSummarize),
+        ...requireFloorMessages(preparation.turnPrefixMessages),
+      ],
       maxFloorChars,
     );
   const renderFloor = (maxChars: number) =>
@@ -349,4 +352,11 @@ export function commitCompactionSummary(
 export function stripSummaryFloor(summary: string): string {
   const index = summary.lastIndexOf(SUMMARY_FLOOR_HEADING);
   return index < 0 ? summary : summary.slice(0, index);
+}
+
+function requireFloorMessages(messages: CompactionPreparation["messagesToSummarize"] | undefined) {
+  if (!messages) {
+    throw new Error("Transcript-view compaction requires its prepared floor");
+  }
+  return messages;
 }

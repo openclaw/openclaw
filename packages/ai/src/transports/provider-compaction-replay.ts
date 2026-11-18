@@ -1,20 +1,28 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
+import {
+  createAnthropicCompactionSourceReader,
+  resolveNewestAnthropicCompaction,
+} from "./anthropic-compaction-replay.js";
 import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
 import {
   CompactionReplayRefreshRequiredError,
+  createOpenAIResponsesCompactionSourceReader,
   resolveNewestOpenAIResponsesCompactionReplay,
 } from "./openai-responses-compaction-replay.js";
+import { getOpenAIResponsesCompactionWindowReplayBytesAvailable } from "./openai-responses-compaction-window.js";
 import { resolveResponsesContextUsageBoundary } from "./openai-responses-context-usage.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
 import {
   isCompactionReplayCheckpoint,
+  resolveCompactionReplayContentRewrite,
+  resolveNewestCompactionReplaySource,
   stripCompactionReplayCheckpoint,
 } from "./provider-compaction-checkpoint.js";
 
 export {
   isCompactionReplayCheckpoint,
+  resolveCompactionReplayContentRewrite,
   stripCompactionReplayCheckpoint,
   stripCompactionReplayCheckpointInPlace,
 } from "./provider-compaction-checkpoint.js";
@@ -92,6 +100,157 @@ export function requiresCompactionReplayRefresh(
   return checkpoint?.family === "responses" && checkpoint.mode === "refresh-required";
 }
 
+type CompactionReplayWindowMode =
+  | "barrier"
+  | "anthropic"
+  | "compacted-prefix"
+  | "complete-window"
+  | "refresh-required";
+
+/** A payload-free decision for one normalized row, scoped to its collector's model/session. */
+export type CompactionReplayWindowFact = {
+  mode: CompactionReplayWindowMode;
+  rewrite?:
+    | { retained: true }
+    | {
+        retained: false;
+        replayIndex: number;
+        indexIsNumber: boolean;
+        reindexedMode: CompactionReplayWindowMode;
+        /** Bytes available for a replacement index in a validated Responses window. */
+        replayIndexBytes?: number;
+      };
+};
+
+/** Validate while the row is alive; neither the returned fact nor this reader retains payloads. */
+export function createCompactionReplayWindowFactCollector(model: Model, identity: ReplayIdentity) {
+  const responses = OPENAI_RESPONSES_APIS.has(model.api)
+    ? createOpenAIResponsesCompactionSourceReader(model, identity)
+    : undefined;
+  const anthropic =
+    !responses && identity.enabled === true
+      ? createAnthropicCompactionSourceReader(model, identity)
+      : undefined;
+  const readMode = (
+    replay: ProviderReplayState | undefined,
+    contentLength: number,
+  ): CompactionReplayWindowMode | undefined => {
+    if (responses) {
+      const source = responses(replay, contentLength);
+      return source === undefined
+        ? undefined
+        : source === null || source.mode === "item-recovery"
+          ? "barrier"
+          : source.mode;
+    }
+    const source = anthropic?.(replay);
+    return source === undefined ? undefined : source === null ? "barrier" : "anthropic";
+  };
+  return (message: ReplayMessage): CompactionReplayWindowFact | undefined => {
+    if (identity.enabled === false || !isAssistantReplayMessage(message)) {
+      return undefined;
+    }
+    const replay = message.providerReplay;
+    const mode = readMode(replay, message.content.length);
+    if (mode === undefined) {
+      return undefined;
+    }
+    if (!isCompactionReplayCheckpoint(replay)) {
+      return { mode };
+    }
+    if (replay.type === "openai-responses-retained-compaction") {
+      return { mode, rewrite: { retained: true } };
+    }
+    // A content rewrite can repair an invalid index. Resolve that envelope with
+    // the same provider reader now, while its opaque checkpoint is still alive.
+    const reindexed = { ...replay, replayIndex: 0 };
+    const reindexedMode = readMode(reindexed, message.content.length) ?? "barrier";
+    const index: unknown = Reflect.get(replay, "replayIndex") ?? 0;
+    return {
+      mode,
+      rewrite: {
+        retained: false,
+        replayIndex: Number(index),
+        indexIsNumber: typeof index === "number",
+        reindexedMode,
+        ...(responses && reindexedMode === "complete-window"
+          ? {
+              replayIndexBytes:
+                getOpenAIResponsesCompactionWindowReplayBytesAvailable(reindexed) + 1,
+            }
+          : {}),
+      },
+    };
+  };
+}
+
+/** Use payload-free block identities with the same rewrite decision as the message adapter. */
+export function replaceCompactionReplayWindowFactContent<T>(
+  fact: CompactionReplayWindowFact | undefined,
+  source: readonly T[],
+  content: readonly T[],
+): CompactionReplayWindowFact | undefined {
+  const rewrite = fact?.rewrite;
+  if (!rewrite || rewrite.retained) {
+    return fact;
+  }
+  const result = resolveCompactionReplayContentRewrite(
+    source,
+    content,
+    rewrite.replayIndex,
+    rewrite.indexIsNumber,
+  );
+  if (result.type === "strip") {
+    return undefined;
+  }
+  if (result.type === "keep") {
+    return fact;
+  }
+  return {
+    mode:
+      rewrite.replayIndexBytes !== undefined &&
+      String(result.replayIndex).length > rewrite.replayIndexBytes
+        ? "refresh-required"
+        : rewrite.reindexedMode,
+    rewrite: { ...rewrite, replayIndex: result.replayIndex, indexIsNumber: true },
+  };
+}
+
+/** Shared history projection; projectedFact describes the empty-content owner to prepend. */
+export function resolveCompactionReplayWindow<T>(
+  source: readonly T[],
+  windowed: readonly T[],
+  readFact: (message: T) => CompactionReplayWindowFact | undefined,
+): { ownerIndex: number; projectedFact: CompactionReplayWindowFact; suffix: T[] } | undefined {
+  const checkpoint = resolveNewestCompactionReplaySource(source, (message) => {
+    const fact = readFact(message);
+    return fact?.mode === "barrier" ? null : fact;
+  });
+  if (!checkpoint) {
+    return undefined;
+  }
+  const owner = source[checkpoint.ownerIndex];
+  if (owner === undefined || windowed.includes(owner)) {
+    return undefined;
+  }
+  const ownerIndex = source.indexOf(owner);
+  const fact = checkpoint.source;
+  const rewrite = fact.rewrite;
+  // Reference membership intentionally matches history limiters that keep a leading prelude.
+  const suffix = new Set(source.slice(ownerIndex + 1));
+  return {
+    ownerIndex,
+    projectedFact:
+      rewrite && !rewrite.retained
+        ? {
+            mode: rewrite.reindexedMode,
+            rewrite: { ...rewrite, replayIndex: 0, indexIsNumber: true },
+          }
+        : fact,
+    suffix: windowed.filter((message) => suffix.has(message)),
+  };
+}
+
 /** Carry a checkpoint immediately after reference-preserving history limiting, before repair. */
 export function preserveCompactionReplayWindow<T extends ReplayMessage>(
   source: readonly T[],
@@ -99,24 +258,24 @@ export function preserveCompactionReplayWindow<T extends ReplayMessage>(
   model: Model,
   identity: ReplayIdentity,
 ): T[] {
-  const checkpoint = resolveCompactionSource(source, model, identity);
-  if (!checkpoint || windowed.some((message) => message === checkpoint.owner)) {
+  const checkpoint = resolveCompactionReplayWindow(
+    source,
+    windowed,
+    createCompactionReplayWindowFactCollector(model, identity),
+  );
+  if (!checkpoint) {
     return windowed;
   }
-  const owner = checkpoint.owner;
-  const replay = checkpoint.owner.providerReplay;
+  const owner = source[checkpoint.ownerIndex];
+  if (owner === undefined || !isAssistantReplayMessage(owner)) {
+    return windowed;
+  }
+  const replay = owner.providerReplay;
   // Retained-user state has no content index, including its refresh-required barrier.
-  const providerReplay =
-    replay?.type === "openai-responses-retained-compaction"
-      ? replay
-      : { ...replay, replayIndex: 0 };
-  // The limiter can preserve a leading prelude that this checkpoint already
-  // covers. Only the original suffix may follow its projected owner.
-  const suffix = new Set(source.slice(source.indexOf(owner) + 1));
-  return [
-    { ...owner, content: [], providerReplay },
-    ...windowed.filter((message) => suffix.has(message)),
-  ];
+  const providerReplay = checkpoint.projectedFact.rewrite?.retained
+    ? replay
+    : { ...replay, replayIndex: 0 };
+  return [{ ...owner, content: [], providerReplay }, ...checkpoint.suffix];
 }
 
 function estimateResponsesContent(
@@ -275,32 +434,11 @@ export function replaceCompactionReplayOwnerContent(
     return next;
   }
   const replayIndex = replay.replayIndex ?? 0;
-  if (
-    (content.length === 0 && message.content.length > 0) ||
-    replayIndex > message.content.length
-  ) {
+  const rewrite = resolveCompactionReplayContentRewrite(message.content, content, replayIndex);
+  if (rewrite.type === "strip") {
     return stripCompactionReplayCheckpoint(next);
   }
-  // Same-position rewrites after the checkpoint (such as tool-call id repair)
-  // change only the replayed suffix, not the prefix covered by its opaque state.
-  if (
-    content.length === message.content.length &&
-    content.slice(0, replayIndex).every((block, index) => block === message.content[index])
-  ) {
-    return next;
-  }
-  let sourceIndex = 0;
-  let nextReplayIndex = 0;
-  const unambiguous = content.every((block) => {
-    const index = message.content.indexOf(block, sourceIndex);
-    sourceIndex = index + 1;
-    nextReplayIndex += index >= 0 && index < replayIndex ? 1 : 0;
-    return index >= 0;
-  });
-  if (!unambiguous) {
-    return stripCompactionReplayCheckpoint(next);
-  }
-  return nextReplayIndex === replayIndex
+  return rewrite.type === "keep"
     ? next
-    : { ...next, providerReplay: { ...replay, replayIndex: nextReplayIndex } };
+    : { ...next, providerReplay: { ...replay, replayIndex: rewrite.replayIndex } };
 }

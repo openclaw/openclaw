@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import { resolveLinkedDirectPeerId } from "../../routing/session-key.js";
-import type { AgentMessage } from "../runtime/index.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
@@ -24,20 +23,18 @@ function stripThreadSuffix(value: string): string {
  * placed at index 0 by buildSessionContext are always preserved, since they
  * carry summarized pre-compaction context that history limiting must not drop.
  */
-export function limitHistoryTurns(
-  messages: AgentMessage[],
+export function limitHistoryTurns<T extends { role?: string }>(
+  messages: T[],
   limit: number | undefined,
   options: { groupConsecutiveUserTurns?: boolean } = {},
-): AgentMessage[] {
+): T[] {
   if (!limit || limit <= 0 || messages.length === 0) {
     return messages;
   }
 
   const conversationStart = messages.findIndex(
     (message) =>
-      !(message as AgentMessage & { [SESSION_HISTORY_PRELUDE]?: true })?.[
-        SESSION_HISTORY_PRELUDE
-      ] &&
+      !(message as T & { [SESSION_HISTORY_PRELUDE]?: true })?.[SESSION_HISTORY_PRELUDE] &&
       (message?.role === "user" || message?.role === "assistant"),
   );
   if (conversationStart < 0) {

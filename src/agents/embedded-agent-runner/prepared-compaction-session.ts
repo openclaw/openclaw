@@ -1,15 +1,40 @@
-import { randomUUID } from "node:crypto";
-import {
-  resolveCompactionReplayEligibility,
-  resolveOpenAIResponsesCompactEndpointPlan,
-} from "@openclaw/ai/transports";
+import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import { resolveOpenAIResponsesCompactEndpointPlan } from "@openclaw/ai/transports";
 import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  compactFromSource,
+  type CompactionResult,
+} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { runSummarizationCompletionFromSource } from "../../../packages/agent-core/src/harness/compaction/summarization-completion.js";
+import { prepareCompactionSummaryRequest } from "../../../packages/agent-core/src/harness/compaction/summary-checkpoint-prompt.js";
+import {
+  CompactionError,
+  InvalidSummaryOutputError,
+} from "../../../packages/agent-core/src/harness/types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
-import type { SessionPreparedCompactionValue } from "../../config/sessions/session-compaction-prepared.types.js";
+import {
+  getOwnedSessionTranscriptInitialWriter,
+  withSessionTranscriptWriteAssertion,
+} from "../../config/sessions/transcript-write-context.js";
 import type { Model } from "../../llm/types.js";
+import { getCompactionProvider } from "../../plugins/compaction-provider.js";
 import { resolveProviderRuntimePlugin } from "../../plugins/provider-hook-runtime.js";
-import { recoverCompactionSafeguardFailure } from "../compaction-summary-refusal.js";
+import {
+  sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
+} from "../../plugins/provider-replay-helpers.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
+import { buildCoreCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
+import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
+import { executeCompactionSafeguard } from "../agent-hooks/compaction-safeguard.js";
+import {
+  compactWithoutNewSummary,
+  recoverCompactionSafeguardFailure,
+  settleCompactionSafeguardCancellation,
+  settleCompactionSummary,
+  withCompactionSummaryRoute,
+} from "../compaction-summary-refusal.js";
 import { summarizePreparedCompactionHistory } from "../compaction.js";
 import {
   providerRequiresSignedThinking,
@@ -17,98 +42,85 @@ import {
 } from "../embedded-agent-helpers/turns.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
-import type { PreparedSessionCompactionWork } from "../sessions/compaction/prepared-work.js";
+import type { StreamFn, ThinkingLevel } from "../runtime/index.js";
+import type { CompactionSummaryOutputPolicy } from "../sessions/compaction/preparation.types.js";
+import { commitSessionCompactionSummary } from "../sessions/compaction/request-budget.js";
+import { createCompactionRuntime } from "../sessions/compaction/runtime.js";
+import {
+  appendSessionMetadataInWorker,
+  createSessionCompactionEntry,
+} from "../sessions/session-compaction-persistence.js";
+import { generateSessionEntryId } from "../sessions/session-manager-id.js";
+import type { SessionEntry } from "../sessions/session-manager-types.js";
+import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import type { SettingsManager } from "../sessions/settings-manager.js";
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import { resolveEmbeddedCompactionSafeguard } from "./extensions.js";
-import { resolveExtraParams } from "./extra-params.js";
 import { getHistoryLimitFromSessionKey } from "./history.js";
-import { log } from "./logger.js";
 import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
+import { isSameModelSnapshot, MODEL_SNAPSHOT_CUSTOM_TYPE } from "./replay-model-snapshot.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
+import { mapThinkingLevel, mapThinkingLevelForProvider } from "./utils.js";
 
-export type PreparedEmbeddedCompaction = {
-  value: Extract<SessionPreparedCompactionValue, { status: "prepared" }>;
-  replayEnabled: boolean;
-  canUse: (extraParams: Record<string, unknown>, replayEnabled: boolean) => boolean;
-  work: PreparedSessionCompactionWork;
-};
+/** Select only genuine full-array contracts, never a size or preparation-failure fallback. */
+export function needsCompactionSessionAdapter(
+  runtime: PreparedCompactionRuntime,
+  extraParams: Record<string, unknown>,
+) {
+  const { params, provider, effectiveWorkspace, effectiveModel } = runtime;
+  const plugin = resolveProviderRuntimePlugin({
+    provider,
+    config: params.config,
+    workspaceDir: effectiveWorkspace,
+    env: process.env,
+  });
+  return Boolean(
+    readCompactionAccountingRecorder(params.contextEngineRuntimeContext)?.memoryTranscript ||
+    (params.config?.agents?.defaults?.compaction?.provider &&
+      getCompactionProvider(params.config.agents.defaults.compaction.provider)) ||
+    (plugin?.sanitizeReplayHistoryAsync &&
+      plugin.sanitizeReplayHistoryAsync !== sanitizeGoogleGeminiReplayHistoryAsync) ||
+    (plugin?.sanitizeReplayHistory &&
+      plugin.sanitizeReplayHistory !== sanitizeGoogleGeminiReplayHistory) ||
+    plugin?.validateReplayTurns ||
+    resolveOpenAIResponsesCompactEndpointPlan(effectiveModel, extraParams).enabled,
+  );
+}
 
-/**
- * Only the private builtin loader can consume these facts. Provider-owned replay,
- * endpoint and public mutable extension behavior stay on the ordinary full view.
- */
+/** The dedicated owner retains facts and bounded request text, not a session/manager graph. */
 export async function prepareEmbeddedCompactionSession(
   runtime: PreparedCompactionRuntime,
   target: SessionTranscriptRuntimeTarget,
   settingsManager: SettingsManager,
   policy: TranscriptPolicy,
   assertActive: () => void,
-): Promise<{ systemPromptText?: string; prepared?: PreparedEmbeddedCompaction }> {
-  const { params, effectiveModel: model, provider, modelId } = runtime;
+  systemPromptText: string,
+  replayEnabled: boolean,
+) {
+  const { params, effectiveModel: model, provider } = runtime;
   const accounting = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
-  const responsesApi =
-    model.api === "openai-responses" ||
-    model.api === "openai-chatgpt-responses" ||
-    model.api === "azure-openai-responses";
-  const endpoint = URL.parse(model.baseUrl);
-
   const safeguard = resolveEmbeddedCompactionSafeguard({
     cfg: params.config,
     workspaceDir: runtime.effectiveWorkspace,
     model,
   });
-  if (
-    runtime.trigger !== "budget" ||
-    !responsesApi ||
-    !endpoint ||
-    Boolean(endpoint.username || endpoint.password || endpoint.search) ||
-    accounting?.memoryTranscript ||
-    accounting?.preparedSession ||
-    params.seedCompaction ||
-    params.summaryRefusal ||
-    !safeguard ||
-    safeguard.runtime.provider ||
-    provider === "github-copilot"
-  ) {
-    return {};
-  }
-  const extraParams = resolveExtraParams({
-    cfg: params.config,
-    provider,
-    modelId,
-    agentId: runtime.sessionAgentId,
-  });
-  const replayEnabled = resolveCompactionReplayEligibility(model, { extraParams });
-  const canUse = (actualExtraParams: Record<string, unknown>, actualReplayEnabled: boolean) => {
-    const plugin = resolveProviderRuntimePlugin({
-      provider,
-      config: params.config,
-      workspaceDir: runtime.effectiveWorkspace,
-      env: process.env,
-    });
-    return (
-      !(
-        plugin?.sanitizeReplayHistoryAsync ||
-        plugin?.sanitizeReplayHistory ||
-        plugin?.validateReplayTurns ||
-        policy.applyGoogleTurnOrdering ||
-        policy.validateGeminiTurns ||
-        policy.validateAnthropicTurns ||
-        resolveOpenAIResponsesCompactEndpointPlan(model, actualExtraParams).enabled
-      ) && actualReplayEnabled === replayEnabled
-    );
+  const settings = settingsManager.getCompactionSettings();
+  const work = {
+    itemId: runtime.diagId,
+    settings,
+    mode: "manual" as const,
+    summaryOutputPolicy: "none" as const,
+    requestState:
+      accounting?.pendingRequestState ??
+      (runtime.trigger === "overflow" ? ("unresolved" as const) : undefined),
+    requestBudget: runtime.trigger === "manual" ? undefined : accounting?.requestBudget,
+    requestFromEntryId: accounting?.requestFromEntryId,
+    pendingUserEntryId: accounting?.pendingUserEntryId,
+    requestRequiresCompaction: accounting?.requestRequiresCompaction,
+    contextWindow: runtime.trigger === "manual" ? runtime.contextTokenBudget : model.contextWindow,
+    systemPrompt: systemPromptText.trim(),
+    tools: runtime.effectiveTools.map(projectAgentToolDefinition),
   };
-  if (!canUse(extraParams ?? {}, replayEnabled)) {
-    return {};
-  }
-  assertActive();
-  params.abortSignal?.throwIfAborted();
-  const systemPromptText = await runtime.buildSystemPromptText();
-  assertActive();
-  params.abortSignal?.throwIfAborted();
-  // No registry handles, credential headers, transport params or callbacks enter
-  // the read worker. Replay needs this route identity, not its execution model.
   const replayModel: Model = {
     id: model.id,
     name: model.name,
@@ -121,107 +133,179 @@ export async function prepareEmbeddedCompactionSession(
     contextWindow: model.contextWindow,
     maxTokens: model.maxTokens,
   };
-  let value: SessionPreparedCompactionValue;
-  try {
-    value = await readPreparedSessionCompactionInWorker(
-      target,
-      {
-        kind: "plan",
-        options: {
-          work: {
-            itemId: randomUUID(),
-            settings: settingsManager.getCompactionSettings(),
-            mode: "manual",
-            summaryOutputPolicy: "none",
-            requestState: accounting?.pendingRequestState,
-            requestBudget: accounting?.requestBudget,
-            requestFromEntryId: accounting?.requestFromEntryId,
-            pendingUserEntryId: accounting?.pendingUserEntryId,
-            requestRequiresCompaction: accounting?.requestRequiresCompaction,
-            contextWindow: model.contextWindow,
-            systemPrompt: systemPromptText.trim(),
-            tools: runtime.effectiveTools.map(projectAgentToolDefinition),
-          },
-          recentTurnsPreserve: safeguard.runtime.recentTurnsPreserve,
-          qualityGuardEnabled: safeguard.runtime.qualityGuardEnabled,
-        },
-        replay: {
-          model: replayModel,
-          policy,
-          imageLimits: resolveImageSanitizationLimits(params.config),
-          allowedToolNames: [...runtime.allowedToolNames],
-          signedThinkingProvider: providerRequiresSignedThinking(provider),
-          allowProviderOwnedThinkingReplay: shouldAllowProviderOwnedThinkingReplay({
-            provider,
-            modelApi: model.api,
-            policy,
-          }),
-          isOpenAIResponsesApi: responsesApi,
-          sessionId: params.sessionId,
-          replayEnabled,
-          historyLimit: getHistoryLimitFromSessionKey(params.sessionKey, params.config, {
-            accountId: params.agentAccountId,
-            peerId: params.conversationRoutePeerId,
-            chatType: params.chatType,
-          }),
-          observedTokenCount: floorPositiveFiniteNumber(params.currentTokenCount),
-        },
+  const plugin = resolveProviderRuntimePlugin({
+    provider,
+    config: params.config,
+    workspaceDir: runtime.effectiveWorkspace,
+    env: process.env,
+  });
+  const replay = {
+    builtinGoogleReplay:
+      plugin?.sanitizeReplayHistoryAsync === sanitizeGoogleGeminiReplayHistoryAsync ||
+      plugin?.sanitizeReplayHistory === sanitizeGoogleGeminiReplayHistory,
+    model: replayModel,
+    policy,
+    imageLimits: resolveImageSanitizationLimits(params.config),
+    allowedToolNames: [...runtime.allowedToolNames],
+    signedThinkingProvider: providerRequiresSignedThinking(provider),
+    allowProviderOwnedThinkingReplay: shouldAllowProviderOwnedThinkingReplay({
+      provider,
+      modelApi: model.api,
+      policy,
+    }),
+    isOpenAIResponsesApi: [
+      "openai-responses",
+      "openai-chatgpt-responses",
+      "azure-openai-responses",
+    ].includes(model.api),
+    sessionId: params.sessionId,
+    replayEnabled,
+    historyLimit: getHistoryLimitFromSessionKey(params.sessionKey, params.config, {
+      accountId: params.agentAccountId,
+      peerId: params.conversationRoutePeerId,
+      chatType: params.chatType,
+    }),
+    observedTokenCount: floorPositiveFiniteNumber(params.currentTokenCount),
+  };
+  assertActive();
+  const preflightSource = accounting?.preparedSession?.source;
+  if (accounting?.preparedSession) {
+    // Only the first attempt can reuse eligibility facts; later attempts own fresh metadata.
+    accounting.preparedSession.source = undefined;
+  }
+  const value = await readPreparedSessionCompactionInWorker(
+    target,
+    {
+      kind: "plan",
+      source: preflightSource,
+      options: {
+        work,
+        safeguard: Boolean(safeguard),
+        recentTurnsPreserve: safeguard?.runtime.recentTurnsPreserve,
+        qualityGuardEnabled: safeguard?.runtime.qualityGuardEnabled ?? false,
       },
-      params.abortSignal,
+      replay,
+    },
+    params.abortSignal,
+  );
+  assertActive();
+  if (value.status !== "prepared" && value.status !== "skipped") {
+    throw new Error("Compaction transcript view could not prepare its source");
+  }
+  let leafEntryId = value.status === "prepared" ? value.leafEntryId : null;
+  const appendMetadata = async (
+    event: Extract<SessionEntry, { type: "custom" | "thinking_level_change" }>,
+  ) => {
+    await appendSessionMetadataInWorker(
+      { scope: target, event, appendIntent: "active-branch" },
+      assertActive,
     );
-  } catch {
-    // Preparation has no effects. The original owner retains skip/error/hook
-    // ordering, and a source/custody failure never admits a model request here.
-    assertActive();
-    params.abortSignal?.throwIfAborted();
-    log.debug("[compaction] worker preparation unavailable; using full context");
-    return { systemPromptText };
+    leafEntryId = event.id;
+    return event.id;
+  };
+  const metadataIdentity = () => ({
+    id: generateSessionEntryId(),
+    parentId: leafEntryId,
+    timestamp: new Date().toISOString(),
+  });
+  const effects = {
+    appendCustomEntryAsync: (customType: string, data: unknown) =>
+      appendMetadata({ type: "custom", ...metadataIdentity(), customType, data }),
+  };
+  if (!value.hasThinkingEntry) {
+    await appendMetadata({
+      type: "thinking_level_change",
+      ...metadataIdentity(),
+      thinkingLevel: clampThinkingLevel(
+        model,
+        mapThinkingLevel(mapThinkingLevelForProvider(runtime.thinkLevel, model)),
+      ),
+    });
+  }
+  if (value.needsGoogleTurnOrderingMarker) {
+    await effects.appendCustomEntryAsync("google-turn-ordering-bootstrap", {
+      timestamp: Date.now(),
+    });
+  }
+  const snapshot = {
+    timestamp: Date.now(),
+    provider,
+    modelApi: model.api,
+    modelId: runtime.modelId,
+  };
+  try {
+    if (!value.modelSnapshot || !isSameModelSnapshot(value.modelSnapshot, snapshot)) {
+      await effects.appendCustomEntryAsync(MODEL_SNAPSHOT_CUSTOM_TYPE, snapshot);
+    }
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
   }
   assertActive();
-  params.abortSignal?.throwIfAborted();
-  // Otherwise SDK initialization would append a marker after this captured plan.
-  if (value.status !== "prepared") {
-    const reason = value.status === "rendered" ? "unexpected render response" : value.reason;
-    log.debug(`[compaction] worker preparation declined: ${reason}`);
-    return { systemPromptText };
-  }
-  if (!value.plan.retained.some((entry) => entry.type === "thinking_level_change")) {
-    log.debug(
-      "[compaction] worker preparation requires a recorded thinking marker; using full context",
-    );
-    return { systemPromptText };
-  }
-  const { plan, version } = value;
-  const deterministic: PreparedSessionCompactionWork["deterministic"] = () => ({
-    ok: true,
-    value: plan.deterministic,
-  });
+  setCompactionSafeguardRuntime(effects, safeguard?.runtime ?? null);
   return {
-    systemPromptText,
-    prepared: {
-      value,
-      replayEnabled,
-      canUse,
-      work: {
-        preparation: { ...plan.preparation, messagesToSummarize: [], turnPrefixMessages: [] },
-        pendingEntryId: plan.pendingEntryId,
-        requestBudget: plan.requestBudget,
-        requestTokenLimit: plan.requestTokenLimit,
-        summaryReplayTokenBudget: plan.summaryReplayTokenBudget,
-        floor: plan.floor,
-        deterministic,
-        execute: async (event, context) => {
-          const assertCurrent = () => {
-            event.signal.throwIfAborted();
-            params.abortSignal?.throwIfAborted();
-            assertActive();
-          };
-          assertCurrent();
-          const result = await safeguard.execute(event, context, {
+    value,
+    effects,
+    async execute(options: {
+      signal: AbortSignal;
+      streamFn?: StreamFn;
+      thinkingLevel: ThinkingLevel;
+      summaryOutputPolicy: CompactionSummaryOutputPolicy;
+      onSummaryReady: () => void;
+    }) {
+      if (value.status === "skipped") {
+        return value;
+      }
+      const { plan, version } = value;
+      const preparation = plan.preparation;
+      const deterministic = () =>
+        plan.deterministic
+          ? { ok: true as const, value: plan.deterministic }
+          : {
+              ok: false as const,
+              error: new CompactionError(
+                plan.deterministicError!.code,
+                plan.deterministicError!.message,
+              ),
+            };
+      const assertCurrent = () => {
+        options.signal.throwIfAborted();
+        params.abortSignal?.throwIfAborted();
+        assertActive();
+      };
+      const render = async (source: "history" | "turnPrefix", maxChars: number) => {
+        assertCurrent();
+        const rendered = await readPreparedSessionCompactionInWorker(
+          target,
+          { kind: "render", entries: plan.selections[source], version, maxChars },
+          options.signal,
+        );
+        assertCurrent();
+        if (rendered.status !== "rendered") {
+          throw new Error("Compaction source did not render its captured rows");
+        }
+        return rendered.conversation;
+      };
+      assertCurrent();
+      let withoutSummary = options.summaryOutputPolicy === "deterministic";
+      let result: CompactionResult;
+      let fromHook = false;
+      if (withoutSummary) {
+        result = compactWithoutNewSummary(preparation, effects, deterministic);
+      } else if (safeguard) {
+        const outcome = await executeCompactionSafeguard(
+          {
+            type: "session_before_compact",
+            preparation,
+            customInstructions: params.customInstructions,
+            signal: options.signal,
+            thinkingLevel: options.thinkingLevel,
+            streamFn: options.streamFn,
+          },
+          { model, modelRegistry: runtime.modelRegistry, identity: effects },
+          {
             facts: plan.facts,
-            summarize: async (source, request) => {
-              assertCurrent();
-              return await summarizePreparedCompactionHistory(
+            summarize: (source, request) =>
+              summarizePreparedCompactionHistory(
                 {
                   ...request,
                   messageCount:
@@ -229,41 +313,148 @@ export async function prepareEmbeddedCompactionSession(
                       ? plan.facts.reconciliationCount
                       : plan.facts.turnPrefixCount,
                 },
-                async (maxChars) => {
-                  assertCurrent();
-                  const rendered = await readPreparedSessionCompactionInWorker(
-                    target,
-                    {
-                      kind: "render",
-                      entries: plan.selections[source],
-                      version,
-                      maxChars,
-                    },
-                    event.signal,
-                  );
-                  assertCurrent();
-                  if (rendered.status !== "rendered") {
-                    throw new Error("Prepared compaction source did not render its captured rows");
-                  }
-                  return rendered.conversation;
-                },
-              );
-            },
+                (maxChars) => render(source, maxChars),
+              ),
             recover: (error) => {
               assertCurrent();
               return recoverCompactionSafeguardFailure(
                 error,
-                event.preparation,
-                event.signal,
-                context.sessionManager,
+                preparation,
+                options.signal,
+                effects,
                 deterministic,
               );
             },
-          });
-          assertCurrent();
-          return result;
+          },
+        );
+        if (outcome.cancel) {
+          const floor = await settleCompactionSafeguardCancellation(
+            effects,
+            preparation,
+            { signal: options.signal, requestRequiresCompaction: work.requestRequiresCompaction },
+            deterministic,
+          );
+          if (!floor) {
+            throw new Error("Compaction cancelled");
+          }
+          result = floor;
+          withoutSummary = true;
+        } else {
+          result = outcome.compaction;
+          fromHook = true;
+        }
+      } else {
+        const auth = await runtime.modelRegistry.getApiKeyAndHeaders(model);
+        if (!auth.ok) {
+          throw new Error(auth.error);
+        }
+        const generate = () =>
+          compactFromSource(
+            preparation,
+            { history: plan.facts.reconciliationCount, turnPrefix: plan.facts.turnPrefixCount },
+            (source, previousSummary, summaryPrompt) =>
+              runSummarizationCompletionFromSource(
+                {
+                  ...prepareCompactionSummaryRequest({
+                    model,
+                    reserveTokens: settings.reserveTokens,
+                    previousSummary,
+                    summaryPrompt,
+                  }),
+                  model,
+                  apiKey: auth.apiKey,
+                  headers: auth.headers,
+                  previousSummary,
+                  customInstructions: buildCoreCompactionInstructions(
+                    params.customInstructions,
+                    preparation.latestUnresolvedUserRequest,
+                  ),
+                  signal: options.signal,
+                  thinkingLevel: options.thinkingLevel,
+                  streamFn: options.streamFn,
+                  runtime: createCompactionRuntime((usage) =>
+                    recordSessionModelUsage(effects, usage),
+                  ),
+                },
+                (maxChars) => render(source, maxChars),
+              ),
+          );
+        let generated = await generate();
+        assertCurrent();
+        if (
+          options.summaryOutputPolicy === "retry-invalid-once" &&
+          !generated.ok &&
+          generated.error instanceof InvalidSummaryOutputError
+        ) {
+          generated = await generate();
+        }
+        result = settleCompactionSummary(generated, preparation, effects, deterministic);
+      }
+      options.onSummaryReady();
+      assertCurrent();
+      const completed = {
+        ...withCompactionSummaryRoute(result, effects, model, withoutSummary),
+        summary: commitSessionCompactionSummary(
+          result,
+          preparation,
+          withoutSummary,
+          () => plan.summaryReplayTokenBudget,
+          plan.floor,
+        ),
+      };
+      const finalized = await readPreparedSessionCompactionInWorker(
+        target,
+        {
+          kind: "finalize",
+          version,
+          retainedSequences: plan.retainedSequences,
+          preparation,
+          summary: completed,
+          work: {
+            itemId: work.itemId,
+            requestBudget: plan.requestBudget,
+            requestTokenLimit: plan.requestTokenLimit,
+            pendingEntryId: plan.pendingEntryId,
+          },
+          replay,
         },
-      },
+        options.signal,
+      );
+      assertCurrent();
+      if (finalized.status !== "finalized") {
+        throw new Error("Compaction transcript view could not finalize its replacement");
+      }
+      const initialWriter = getOwnedSessionTranscriptInitialWriter({ sessionTarget: target });
+      const prepared = {
+        scope: target,
+        event: createSessionCompactionEntry(
+          leafEntryId,
+          completed.summary,
+          completed.firstKeptEntryId,
+          completed.tokensBefore,
+          completed.details,
+          fromHook,
+          { itemId: work.itemId },
+          finalized.tokensAfter,
+        ),
+        appendIntent: "active-branch" as const,
+        expectedMutationAt: finalized.transcriptMutationAt,
+        ...(initialWriter && !initialWriter.committedFence ? { initializeEntry: true } : {}),
+      };
+      const persist = params.seedCompaction ?? accounting?.withCompactionPersistenceAsync;
+      await withSessionTranscriptWriteAssertion(target, assertCurrent, () =>
+        persist ? persist(prepared) : appendSessionMetadataInWorker(prepared, assertCurrent),
+      );
+      return {
+        status: "completed" as const,
+        result: completed,
+        tokensAfter: finalized.tokensAfter,
+        messageCountAfter: finalized.messageCountAfter,
+      };
     },
   };
 }
+
+export type PreparedEmbeddedCompaction = Awaited<
+  ReturnType<typeof prepareEmbeddedCompactionSession>
+>;

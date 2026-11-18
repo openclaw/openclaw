@@ -5,7 +5,7 @@ import {
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../agents/delivery-evidence-values.js";
 import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { hasPersistedMedia } from "../sessions/user-turn-media.js";
 
 /** Returns inline string content or the first array text block without scanning later blocks. */
@@ -210,8 +210,37 @@ export function readTerminalSourceReplyDeliveryMirror(
   return { sourceTurnId, ...(toolCallId ? { toolCallId } : {}) };
 }
 
-/** Classifies raw assistant rows after their persisted visibility facts. */
-export function isSilentAssistantTranscriptMessage(message: unknown): boolean {
+export type AssistantSilenceBlockFact = {
+  ignored: boolean;
+  text?: string | null;
+  phase?: AssistantPhase;
+  explicitPhase: boolean;
+};
+
+/** Only a bounded control-token fragment survives; arbitrary reply text does not. */
+export function collectAssistantSilenceBlockFact(value: unknown): AssistantSilenceBlockFact {
+  const block = asOptionalRecord(value);
+  const textType = isAssistantTextContentBlockType(block?.type);
+  const phase = textType && block ? parseAssistantTextSignature(block)?.phase : undefined;
+  const text = textType && typeof block?.text === "string" ? block.text : undefined;
+  const trimmed = text?.trim().toUpperCase();
+  return {
+    ignored:
+      block?.type === "thinking" ||
+      block?.type === "reasoning" ||
+      block?.type === "redacted_thinking",
+    text:
+      text === undefined
+        ? undefined
+        : !SILENT_REPLY_TOKEN.includes(trimmed!)
+          ? null
+          : `${text.trimStart() === text ? "" : " "}${trimmed}${text.trimEnd() === text ? "" : " "}`,
+    phase,
+    explicitPhase: Boolean(phase),
+  };
+}
+
+export function assistantSilenceOverride(message: unknown): boolean | undefined {
   const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant") {
     return false;
@@ -227,34 +256,46 @@ export function isSilentAssistantTranscriptMessage(message: unknown): boolean {
   ) {
     return false;
   }
-  const inlineText = typeof record.text === "string" ? record.text : record.content;
-  if (typeof inlineText === "string") {
-    return isSilentReplyText(inlineText);
+  const inline = typeof record.text === "string" ? record.text : record.content;
+  return typeof inline === "string" ? isSilentReplyText(inline) : undefined;
+}
+
+export function isSilentAssistantFromFacts(
+  override: boolean | undefined,
+  blocks: readonly AssistantSilenceBlockFact[] | undefined,
+  phase?: AssistantPhase,
+): boolean {
+  if (override !== undefined) {
+    return override;
   }
-  if (!Array.isArray(record.content)) {
+  if (!blocks) {
     return false;
   }
-  const text: string[] = [];
-  for (const block of record.content) {
-    const part = asOptionalRecord(block);
-    if (
-      part?.type === "thinking" ||
-      part?.type === "reasoning" ||
-      part?.type === "redacted_thinking"
-    ) {
-      continue;
-    }
-    if (
-      !["text", "input_text", "output_text"].includes(String(part?.type)) ||
-      typeof part?.text !== "string"
-    ) {
-      return false;
-    }
-    text.push(part.text);
+  if (blocks.some((block) => !block.ignored && block.text === undefined)) {
+    return false;
   }
-  const finalBlocks = readAssistantTextBlocksForPhase(message, "final_answer");
-  return isSilentReplyText(
-    finalBlocks.length ? finalBlocks.map((block) => block.text).join("") : text.join(""),
+  const explicit = blocks.some((block) => block.explicitPhase);
+  const final = blocks.filter(
+    (block) =>
+      block.text !== undefined &&
+      (block.phase ?? (explicit ? undefined : phase)) === "final_answer",
+  );
+  const selected = final.length > 0 ? final : blocks.filter((block) => !block.ignored);
+  return (
+    !selected.some((block) => block.text === null) &&
+    isSilentReplyText(selected.map((block) => block.text).join(""))
+  );
+}
+
+/** Classifies raw assistant rows after their persisted visibility facts. */
+export function isSilentAssistantTranscriptMessage(message: unknown): boolean {
+  const record = asOptionalObjectRecord(message);
+  return isSilentAssistantFromFacts(
+    assistantSilenceOverride(message),
+    Array.isArray(record?.content)
+      ? record.content.map(collectAssistantSilenceBlockFact)
+      : undefined,
+    normalizeAssistantPhase(record?.phase),
   );
 }
 

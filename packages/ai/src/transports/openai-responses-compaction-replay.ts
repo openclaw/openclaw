@@ -22,6 +22,7 @@ import {
   type ReplayableResponseCompactionItem,
 } from "./openai-responses-contracts.js";
 import { log } from "./openai-transport-shared.js";
+import { resolveNewestCompactionReplaySource } from "./provider-compaction-checkpoint.js";
 import {
   buildProviderReplayContext,
   isProviderReplayContext,
@@ -210,40 +211,36 @@ export function isSafeResponsesReplayItemId(id: unknown): id is string {
   );
 }
 
-export function resolveNewestOpenAIResponsesCompactionReplay(
-  messages: Context["messages"],
-  model: Model,
-  options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
-):
+type OpenAIResponsesCompactionSource =
   | {
-      owner: AssistantMessage;
       item: ResponseCompactionItemParam;
       mode: "compacted-prefix";
       replayIndex: number;
     }
   | {
-      owner: AssistantMessage;
       item: ResponseCompactionItemParam;
       mode: "complete-window";
       output: OpenAIResponsesCompactionOutput;
       outputTokens?: number;
       replayIndex: number;
     }
-  | { owner: AssistantMessage; mode: "refresh-required" }
-  | { owner: AssistantMessage; mode: "item-recovery"; anchor: string }
-  | undefined {
+  | { mode: "refresh-required" }
+  | { mode: "item-recovery"; anchor: string };
+
+/** Read one live replay envelope; null blocks older checkpoints, undefined skips it. */
+export function createOpenAIResponsesCompactionSourceReader(
+  model: Model,
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
+) {
   const context = buildProviderReplayContext(model, options);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "assistant") {
-      continue;
-    }
-    const replay = readOpenAIResponsesCompactionReplayState(message.providerReplay);
+  return (
+    value: ProviderReplayState | undefined,
+    contentLength: number,
+  ): OpenAIResponsesCompactionSource | null | undefined => {
+    const replay = readOpenAIResponsesCompactionReplayState(value);
     if (replay?.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE) {
-      // A successful encrypted-content fallback records this provider-owned
-      // tombstone so later turns never retry an already rejected compaction.
-      // Item repair belongs to the copied history, including internal-session forks.
-      // Encrypted checkpoints and ordinary suppression remain session-bound.
+      // Item repair belongs to copied history, including internal-session forks;
+      // encrypted checkpoints and ordinary suppression remain session-bound.
       if (
         providerReplayContextMatches(
           replay,
@@ -253,25 +250,22 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
         )
       ) {
         return typeof replay.itemRecovery === "string"
-          ? { owner: message, mode: "item-recovery", anchor: replay.itemRecovery }
-          : undefined;
+          ? { mode: "item-recovery", anchor: replay.itemRecovery }
+          : null;
       }
-      continue;
+      return undefined;
     }
     if (
       replay?.type !== OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE &&
       replay?.type !== OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE
     ) {
-      if (
-        message.providerReplay?.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE ||
-        message.providerReplay?.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE
-      ) {
-        return undefined;
-      }
-      continue;
+      return value?.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE ||
+        value?.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE
+        ? null
+        : undefined;
     }
     if (!providerReplayContextMatches(replay, context)) {
-      return undefined;
+      return null;
     }
     if (
       replay.compactedWindow !== undefined ||
@@ -284,10 +278,9 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       );
       const item = output?.at(-1);
       if (!output || item?.type !== "compaction") {
-        return { owner: message, mode: "refresh-required" };
+        return { mode: "refresh-required" };
       }
       return {
-        owner: message,
         mode: "complete-window",
         output,
         ...(replay.compactedWindow?.state === "ready" &&
@@ -297,7 +290,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
         item,
         replayIndex:
           replay.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE
-            ? message.content.length
+            ? contentLength
             : (replay.replayIndex ?? 0),
       };
     }
@@ -307,14 +300,26 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       encrypted_content: replay.data,
     };
     publishResponsesCompactionInput(replay, [item], getAiTransportHost().immutableData);
-    return {
-      owner: message,
-      item,
-      mode: "compacted-prefix",
-      replayIndex: replay.replayIndex ?? 0,
-    };
+    return { item, mode: "compacted-prefix", replayIndex: replay.replayIndex ?? 0 };
+  };
+}
+
+export function resolveNewestOpenAIResponsesCompactionReplay(
+  messages: Context["messages"],
+  model: Model,
+  options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
+): (OpenAIResponsesCompactionSource & { owner: AssistantMessage }) | undefined {
+  const read = createOpenAIResponsesCompactionSourceReader(model, options);
+  const selected = resolveNewestCompactionReplaySource(messages, (message) =>
+    message?.role === "assistant"
+      ? read(message.providerReplay, message.content.length)
+      : undefined,
+  );
+  if (!selected) {
+    return undefined;
   }
-  return undefined;
+  const owner = messages[selected.ownerIndex];
+  return owner?.role === "assistant" ? { ...selected.source, owner } : undefined;
 }
 
 export type OpenAIResponsesReplayMode = "checkpoint" | "full-history" | { itemRecovery: string };

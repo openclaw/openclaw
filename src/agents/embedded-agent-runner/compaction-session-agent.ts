@@ -1,16 +1,28 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
+import {
+  createDiagnosticEmbeddedRunOwner,
+  markDiagnosticEmbeddedRunStarted,
+} from "../../logging/diagnostic-run-activity.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
+import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
+import { assertSessionControllerOperation } from "../../sessions/session-controller.state.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
+import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
+import { createSessionStreamFn } from "../sessions/session-stream.js";
+import type { SettingsManager } from "../sessions/settings-manager.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 import { wrapStreamFnWithModelRequestGate } from "./model-request-hook.js";
+import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
+import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-diagnostic-events.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -124,5 +136,88 @@ export async function prepareCompactionSessionAgent(params: {
       },
     },
   );
-  return { ...extraParams, transportApiKey };
+  return { ...extraParams, transportApiKey, streamFn: params.session.agent.streamFn };
+}
+
+/** Build transport state without constructing an AgentSession or transcript manager. */
+export async function prepareCompactionSessionStream(
+  runtime: PreparedCompactionRuntime,
+  settingsManager: SettingsManager,
+  assertActive: () => void,
+  thinkLevel: ThinkLevel,
+  providerStreamFn: StreamFn | undefined,
+  existing?: { agent: { streamFn?: StreamFn } },
+) {
+  const { params } = runtime;
+  const session = existing ?? {
+    agent: {
+      streamFn: createSessionStreamFn(
+        runtime.modelRegistry,
+        settingsManager,
+        undefined,
+        assertActive,
+      ),
+    },
+  };
+  const transport = await prepareCompactionSessionAgent({
+    ...runtime,
+    session,
+    llmRuntime: getModelRegistryRuntime(runtime.modelRegistry).llmRuntime,
+    providerStreamFn,
+    sessionId: params.sessionId,
+    resolvedApiKey: runtime.hasRuntimeAuthExchange ? undefined : runtime.apiKeyInfo?.apiKey,
+    config: params.config,
+    thinkLevel,
+    modelCallUrgency:
+      runtime.trigger === "manual" ? "foreground" : (params.modelCallUrgency ?? "background"),
+  });
+  return { session, ...transport };
+}
+
+/** Request/output progress and fallback preparation share the silence watchdog. */
+export function startCompactionDiagnosticStream(
+  runtime: PreparedCompactionRuntime,
+  streamFn: StreamFn,
+  timeoutMs: number,
+  onProgress: () => void,
+  transport: string | undefined,
+) {
+  const { params, diagnosticCompactionRunId: runId } = runtime;
+  const operation = getCurrentSessionControllerOwner();
+  const owner = createDiagnosticEmbeddedRunOwner({
+    watchdogAttempt: operation?.watchdog.attachAttempt({
+      nested: true,
+      assertCurrent: () => {
+        params.abortSignal?.throwIfAborted();
+        assertSessionControllerOperation(operation);
+      },
+    }),
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    runId,
+    workKey: runId,
+  });
+  owner.watchdogAttempt?.setExecutionDeadline(Date.now() + timeoutMs);
+  markDiagnosticEmbeddedRunStarted({ ...owner, owner });
+  return {
+    owner,
+    streamFn: wrapStreamFnWithDiagnosticModelCallEvents(streamFn, {
+      config: params.config,
+      runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      provider: runtime.provider,
+      model: runtime.modelId,
+      api: runtime.effectiveModel.api,
+      transport,
+      requestTimeoutMs: timeoutMs,
+      contextTokenBudget: runtime.contextTokenBudget,
+      trace: runtime.compactionModelCallTrace,
+      contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),
+      nextCallId: runtime.nextDiagnosticModelCallId,
+      ownerGeneration: owner.generation,
+      onStarted: onProgress,
+      onOutputDelta: onProgress,
+    }),
+  };
 }

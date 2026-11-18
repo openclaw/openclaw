@@ -29,20 +29,28 @@ export function getMessageFromEntryForCompaction(
 export const IMAGE_BLOCK_TOKENS = 2_000;
 const IMAGE_BLOCK_CHARS = IMAGE_BLOCK_TOKENS * CHARS_PER_TOKEN_ESTIMATE;
 
-function countContentChars(
+export function countCompactionContentChars(
   content: string | Array<{ type: string; content?: unknown; text?: string }>,
 ): number {
   const { text, omissionText } = getCompactionContent(content);
   const images =
     typeof content === "string" ? 0 : content.filter((block) => block.type === "image").length;
+  return countCompactionContentCharsFromParts(estimateStringChars(text), images, omissionText);
+}
+
+export function countCompactionContentCharsFromParts(
+  textChars: number,
+  images: number,
+  omissionText?: string,
+): number {
   // Charge the largest role/separator even for mixed text. Any suppressed message's
   // minimum 56-character charge also covers the serializer's single 55-character overflow.
   const omissionChars = omissionText ? omissionText.length + "\n\n[Tool result]: ".length : 0;
-  return estimateStringChars(text) + images * IMAGE_BLOCK_CHARS + omissionChars;
+  return textChars + images * IMAGE_BLOCK_CHARS + omissionChars;
 }
 
-/** Estimate token count for one message using a conservative character heuristic. */
-export function estimateTokens(message: AgentMessage): number {
+/** Unrounded contribution; callers merging turns must round only after merging. */
+export function estimateCompactionChars(message: AgentMessage): number {
   if ("excludeFromContext" in message && message.excludeFromContext === true) {
     return 0;
   }
@@ -64,14 +72,14 @@ export function estimateTokens(message: AgentMessage): number {
       break;
     }
     case "user": {
-      chars = countContentChars(message.content);
+      chars = countCompactionContentChars(message.content);
       // User text is the baseline; charge the exact added source and sender label.
       chars += estimateStringChars(formatCompactionUserLabel(message)) - "User".length;
       break;
     }
     case "custom":
     case "toolResult": {
-      chars = countContentChars(message.content);
+      chars = countCompactionContentChars(message.content);
       break;
     }
     case "bashExecution": {
@@ -85,7 +93,12 @@ export function estimateTokens(message: AgentMessage): number {
     }
   }
 
-  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+  return chars;
+}
+
+/** Estimate token count for one message using a conservative character heuristic. */
+export function estimateTokens(message: AgentMessage): number {
+  return Math.ceil(estimateCompactionChars(message) / CHARS_PER_TOKEN_ESTIMATE);
 }
 function isCutPointMessage(message: AgentMessage): boolean {
   return message.role === "assistant" || isTurnStartMessage(message);

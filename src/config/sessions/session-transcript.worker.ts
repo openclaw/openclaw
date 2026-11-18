@@ -616,7 +616,7 @@ serveOwnedWorkerTasks(
           if (request.kind === "compaction-preparation") {
             const { readPreparedSessionCompaction } =
               await import("./session-compaction-prepared.worker.js");
-            return readPreparedSessionCompaction(request, control, channel);
+            return readPreparedSessionCompaction(request, control);
           }
           if (
             request.kind === "transcript-hydration" ||

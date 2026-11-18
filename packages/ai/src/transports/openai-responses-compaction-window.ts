@@ -189,6 +189,11 @@ export function getOpenAIResponsesCompactionOutputError(
   return undefined;
 }
 
+/** Remaining storage allowance for replay metadata rewrites, without retaining checkpoint bytes. */
+export function getOpenAIResponsesCompactionWindowReplayBytesAvailable(replay: unknown): number {
+  return COMPACTION_WINDOW_MAX_BYTES - Buffer.byteLength(JSON.stringify(replay), "utf8");
+}
+
 /** Read the saved canonical window only when it still matches its opaque checkpoint. */
 export function readOpenAIResponsesCompactionWindow(
   replay: {
@@ -218,7 +223,7 @@ export function readOpenAIResponsesCompactionWindow(
     return undefined;
   }
   try {
-    if (Buffer.byteLength(JSON.stringify(replay), "utf8") > COMPACTION_WINDOW_MAX_BYTES) {
+    if (getOpenAIResponsesCompactionWindowReplayBytesAvailable(replay) < 0) {
       return undefined;
     }
     const output: unknown = JSON.parse(window.output);

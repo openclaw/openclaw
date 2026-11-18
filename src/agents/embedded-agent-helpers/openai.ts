@@ -7,18 +7,12 @@ import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-c
 import type { AgentMessage } from "../runtime/index.js";
 import { rewriteToolResultIds } from "../tool-call-id.js";
 
-type OpenAIThinkingBlock = {
-  type?: unknown;
-  thinking?: unknown;
-  thinkingSignature?: unknown;
-};
-
 type OpenAIToolCallBlock = {
   type?: unknown;
   id?: unknown;
 };
 
-function hasOpenAIReasoningSignature(value: unknown): boolean {
+export function hasOpenAIReasoningSignature(value: unknown): boolean {
   if (!value) {
     return false;
   }
@@ -73,7 +67,7 @@ function rewriteReplayMessages(
  * normalizer for same-model replay, then splits persisted `call_id|fc_id`
  * pairs directly into the provider payload, so OpenClaw must normalize here.
  */
-export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
+export function createOpenAIResponsesReplayIdResolver(): (id: string) => string {
   const rewrittenByOriginalId = new Map<string, string>();
   const resolveId = (id: string): string => {
     const rewritten = rewrittenByOriginalId.get(id);
@@ -87,6 +81,11 @@ export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): A
     rewrittenByOriginalId.set(id, normalized);
     return normalized;
   };
+  return resolveId;
+}
+
+export function normalizeOpenAIResponsesToolCallIds(messages: AgentMessage[]): AgentMessage[] {
+  const resolveId = createOpenAIResponsesReplayIdResolver();
   return rewriteReplayMessages(messages, (msg) => {
     if (!msg || typeof msg !== "object") {
       return msg;
@@ -153,78 +152,97 @@ function extractTextSignaturePhase(signature: string): "commentary" | "final_ans
  * Drops reasoning from before a model route switch and clears paired message ids.
  * The transport owns orphan detection after preparing the actual replay payload.
  */
+export function dropStaleOpenAIReasoningWithAdapter<T, B>(
+  messages: T[],
+  dropBefore: number | undefined,
+  adapter: {
+    role(message: T): string | undefined;
+    timestamp(message: T): number | undefined;
+    content(message: T): readonly B[];
+    keep(block: B): boolean;
+    reasoning(block: B): boolean;
+    clearPairedSignature(block: B): B;
+    replace(message: T, content: B[]): T;
+  },
+): T[] {
+  if (dropBefore === undefined) {
+    return messages;
+  }
+  let changed = false;
+  const result: T[] = [];
+  for (const message of messages) {
+    if (adapter.role(message) !== "assistant") {
+      result.push(message);
+      continue;
+    }
+    const timestamp = adapter.timestamp(message);
+    if (timestamp !== undefined && timestamp > dropBefore) {
+      result.push(message);
+      continue;
+    }
+    const original = adapter.content(message);
+    let droppedReasoning = false;
+    const content = original.filter((block) => {
+      if (!adapter.keep(block)) {
+        return false;
+      }
+      if (adapter.reasoning(block)) {
+        droppedReasoning = true;
+        return false;
+      }
+      return true;
+    });
+    if (content.length === original.length) {
+      result.push(message);
+      continue;
+    }
+    changed = true;
+    if (content.length > 0) {
+      result.push(
+        adapter.replace(
+          message,
+          droppedReasoning ? content.map((block) => adapter.clearPairedSignature(block)) : content,
+        ),
+      );
+    }
+  }
+  return changed ? result : messages;
+}
+
 export function dropStaleOpenAIReasoning(
   messages: AgentMessage[],
   dropBefore?: number,
 ): AgentMessage[] {
-  if (dropBefore === undefined) {
-    return messages;
-  }
-  return rewriteReplayMessages(messages, (msg) => {
-    if (!msg || typeof msg !== "object") {
-      return msg;
-    }
-
-    const role = (msg as { role?: unknown }).role;
-    if (role !== "assistant") {
-      return msg;
-    }
-
-    const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
-    const messageTimestamp = parseDateFirstTimestampMs(assistantMsg.timestamp);
-    // Timestamp-less legacy entries cannot prove they belong to the new route;
-    // treat them as pre-switch so stale provider ids never re-enter replay.
-    if (messageTimestamp !== undefined && messageTimestamp > dropBefore) {
-      return msg;
-    }
-
-    let droppedReplayableReasoning = false;
-    const nextContent = assistantMsg.content.filter((block) => {
-      if (!block) {
-        return false;
-      }
-      const record = block as OpenAIThinkingBlock;
+  return dropStaleOpenAIReasoningWithAdapter<
+    AgentMessage,
+    Extract<AgentMessage, { role: "assistant" }>["content"][number]
+  >(messages, dropBefore, {
+    role: (message) => message?.role,
+    timestamp: (message) => parseDateFirstTimestampMs(message.timestamp),
+    content: (message) => (message.role === "assistant" ? message.content : []),
+    keep: (block) => Boolean(block),
+    reasoning: (block) =>
+      typeof block === "object" &&
+      block.type === "thinking" &&
+      hasOpenAIReasoningSignature(block.thinkingSignature),
+    clearPairedSignature: (block) => {
       if (
+        !block ||
         typeof block !== "object" ||
-        record.type !== "thinking" ||
-        !hasOpenAIReasoningSignature(record.thinkingSignature)
+        block.type !== "text" ||
+        block.textSignature === undefined
       ) {
-        return true;
+        return block;
       }
-      droppedReplayableReasoning = true;
-      return false;
-    });
-
-    if (nextContent.length === assistantMsg.content.length) {
-      return msg;
-    }
-
-    if (nextContent.length === 0) {
-      return DROP_REPLAY_MESSAGE;
-    }
-
-    // When a replayable reasoning (rs_*) item is dropped after a model/fallback
-    // switch, its paired assistant message id (msg_*) must be dropped too. The
-    // Responses transport replays msg_* from a text block textSignature, so an
-    // orphaned msg_* without its rs_* makes providers like Azure reject the next
-    // turn (issue #88019). Drop the id from the signature, but keep any phase
-    // metadata (commentary/final_answer) so the Responses phase contract survives.
-    const finalContent = droppedReplayableReasoning
-      ? nextContent.map((contentBlock) => {
-          if (!contentBlock || typeof contentBlock !== "object") {
-            return contentBlock;
-          }
-          if (contentBlock.type !== "text" || contentBlock.textSignature === undefined) {
-            return contentBlock;
-          }
-          const phase = extractTextSignaturePhase(contentBlock.textSignature);
-          const { textSignature: _droppedTextSignature, ...rest } = contentBlock;
-          return phase !== undefined
-            ? { ...rest, textSignature: JSON.stringify({ v: 1, phase }) }
-            : rest;
-        })
-      : nextContent;
-
-    return replaceCompactionReplayOwnerContent(assistantMsg, finalContent);
+      const phase = extractTextSignaturePhase(block.textSignature);
+      const { textSignature: _removed, ...rest } = block;
+      return phase !== undefined
+        ? { ...rest, textSignature: JSON.stringify({ v: 1, phase }) }
+        : rest;
+    },
+    replace: (message, content) =>
+      message.role === "assistant"
+        ? replaceCompactionReplayOwnerContent(message, content)
+        : message,
   });
 }

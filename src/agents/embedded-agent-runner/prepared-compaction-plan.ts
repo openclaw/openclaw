@@ -1,166 +1,453 @@
-import { prepareCompactionFloor } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
+import { getMessageFromEntryForCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import {
-  compactWithoutSummary,
+  collectCompactionFloorMessageFact,
+  prepareCompactionFloorFromFacts,
+  renderCompactionFloor,
+} from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
+import { collectCompactionPreparationEntryFact } from "../../../packages/agent-core/src/harness/compaction/compaction-preparation.js";
+import {
+  compactWithoutSummaryFromFacts,
+  formatRequiredAskContext,
   MAX_COMPACTION_SUMMARY_CHARS,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
-  MAX_SUMMARY_INPUT_CHARS,
   collectConversationMessageFact,
   collectConversationRangeDescriptors,
+  computeFileLists,
+  extractCompactionMessageText,
+  formatCompactionUserLabel,
+  formatFileOperations,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
-import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import { fitBackgroundResultDependencies } from "../../config/sessions/session-background-result-dependencies.js";
 import {
-  prepareCompactionSafeguardHistory,
-  prepareCompactionSafeguardMessages,
-  prepareCompactionSafeguardSections,
-  prepareCompactionSafeguardSummary,
+  iterateSessionContextEntryFacts,
+  projectSessionContextMessage,
+} from "../../../packages/agent-core/src/harness/session/session.js";
+import { classifyToolPairingFacts } from "../../../packages/agent-core/src/harness/session/tool-pairing-facts.js";
+import { copyString } from "../../../packages/agent-core/src/harness/utils/truncate.js";
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
+import { fitBackgroundResultDependencyFacts } from "../../config/sessions/session-background-result-dependencies.js";
+import {
+  buildPreservedTurnsSectionFromFacts,
+  collectCompactionContextMessageFact,
+  resolveRecentTurnsPreserve,
+  selectPreservedRecentTurnIndexes,
+} from "../agent-hooks/compaction-safeguard-context.js";
+import {
+  collectCompactionSafeguardAskFact,
+  prepareCompactionSafeguardSummaryFacts,
+  selectCompactionSafeguardAskIndex,
 } from "../agent-hooks/compaction-safeguard-preparation.js";
+import {
+  extractOpaqueIdentifiers,
+  extractOpaqueIdentifiersFromFacts,
+  normalizeLegacySplitTurnSummary,
+} from "../agent-hooks/compaction-safeguard-quality.js";
+import {
+  collectToolFailureFact,
+  collectToolFailuresFromFacts,
+  formatToolFailuresSection,
+} from "../agent-hooks/compaction-safeguard-tool-failures.js";
 import { sanitizeCompactionMessages } from "../compaction-planning.js";
+import {
+  collectRealConversationMessageFact,
+  createRealConversationFactClassifier,
+} from "../compaction-real-conversation.js";
+import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
 import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
-import { prepareAgentCompactionWork } from "../sessions/compaction/preparation.js";
-import { replayTokenBudget } from "../sessions/compaction/request-budget.js";
+import {
+  createCompactionReplacementProjector,
+  prepareAgentCompactionWorkFromFacts,
+} from "../sessions/compaction/preparation.js";
+import {
+  estimateCompactedRequestTokens,
+  replayTokenBudget,
+} from "../sessions/compaction/request-budget.js";
+import {
+  collectMessageTokenPressureFact,
+  createFixedRequestTokenEstimator,
+} from "../sessions/context-token-pressure.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import { collectExactReplaySourceFact } from "./exact-compaction-replay.js";
 import type {
+  PreparedCompactionEntryFact,
+  PreparedCompactionMessageFact,
+  PreparedCompactionMessageSource,
   PreparedCompactionPlanOptions,
   PreparedCompactionPlanResult,
 } from "./prepared-compaction-plan.types.js";
-import { readToolSurfaceCheckpoint } from "./session-tool-checkpoint.js";
+import type { PreparedCompactionReplayOptions } from "./replay-history.types.js";
+import { readModelSnapshotStateFromEntries } from "./replay-model-snapshot.js";
+import {
+  readToolSurfaceCheckpoint,
+  selectToolSurfaceCheckpoint,
+} from "./session-tool-checkpoint.js";
 
-/**
- * One decoded array serves every preparation consumer. The canonical preparation
- * reports each projection's source while creating it, so identical custom text
- * never requires guessing a row from content or timestamps.
- */
-export function prepareCompactionPlan(
-  entries: SessionEntry[],
-  rowSequence: ReadonlyMap<string, number>,
-  options: PreparedCompactionPlanOptions,
-): PreparedCompactionPlanResult {
-  const tools =
-    readToolSurfaceCheckpoint(entries)?.tools.map((tool) =>
-      projectAgentToolDefinition({ ...tool, label: tool.name }),
-    ) ?? options.work.tools;
-  const sequences = new Map<AgentMessage, number>();
-  const work = prepareAgentCompactionWork(entries, { ...options.work, tools }, (entry, message) => {
-    const seq = rowSequence.get(entry.id);
-    if (seq !== undefined) {
-      sequences.set(message, seq);
-    }
+/** Only bounded excerpts, exact inventories, and scalar projections survive the decoded row. */
+export function collectPreparedCompactionEntryFact(
+  entry: SessionEntry,
+  rawSeq: number,
+  replay?: PreparedCompactionReplayOptions,
+): PreparedCompactionEntryFact {
+  const fact = collectCompactionPreparationEntryFact(entry, rawSeq);
+  const message = getMessageFromEntryForCompaction(entry);
+  const collect = (
+    value: AgentMessage,
+    source: PreparedCompactionMessageSource = rawSeq,
+  ): PreparedCompactionMessageFact => ({
+    source,
+    role: value.role,
+    runtime: isOpenClawRuntimeContextCustomMessage(value),
+    real: collectRealConversationMessageFact(value),
+    context: collectCompactionContextMessageFact(value),
+    floor: collectCompactionFloorMessageFact(value),
+    failure: collectToolFailureFact(value),
+    identifiers: extractOpaqueIdentifiers(extractCompactionMessageText(value)),
+    ask: collectCompactionSafeguardAskFact(value),
+    sourceAsk: value.role === "user" && Boolean(extractCompactionMessageText(value)),
+    conversation: convertToLlm(sanitizeCompactionMessages([value])).map((projected) =>
+      collectConversationMessageFact(projected, source),
+    ),
   });
+  const summary = message ? collect(message) : undefined;
+  const project = (context: "current" | "retained" | "reset-retained") =>
+    projectSessionContextMessage({
+      entry,
+      context,
+      placement: fact.pendingBackground ? entry : undefined,
+    });
+  const current = project("current");
+  const retained = project("retained");
+  const reset = project("reset-retained");
+  const contextSummaries: PreparedCompactionEntryFact["contextSummaries"] = {};
+  const contextReplay: PreparedCompactionEntryFact["contextReplay"] = {};
+  const projectedReplay = new Map<AgentMessage, NonNullable<typeof contextReplay.current>>();
+  for (const [context, projected] of [
+    ["current", current],
+    ["retained", retained],
+    ["reset-retained", reset],
+  ] as const) {
+    if (projected) {
+      let replayFact = projectedReplay.get(projected);
+      if (!replayFact) {
+        replayFact = collectExactReplaySourceFact(
+          projected,
+          { seq: rawSeq, context, placed: fact.pendingBackground },
+          replay,
+        );
+        projectedReplay.set(projected, replayFact);
+      }
+      contextReplay[context] = replayFact;
+      contextSummaries[context] =
+        projected === message
+          ? summary
+          : collect(projected, {
+              seq: rawSeq,
+              context,
+              placed: fact.pendingBackground,
+            });
+    }
+  }
+  const snapshot = readModelSnapshotStateFromEntries([entry]).lastSnapshot;
+  return {
+    ...fact,
+    parentId: entry.parentId,
+    idempotencyKey:
+      entry.type === "message" &&
+      entry.message.role === "user" &&
+      "idempotencyKey" in entry.message &&
+      typeof entry.message.idempotencyKey === "string"
+        ? copyString(entry.message.idempotencyKey)
+        : undefined,
+    summary,
+    contextReplay,
+    contextSummaries,
+    tokenPressure: {
+      message: message ? collectMessageTokenPressureFact(message) : undefined,
+      current: current ? collectMessageTokenPressureFact(current) : undefined,
+      retained: retained ? collectMessageTokenPressureFact(retained) : undefined,
+      "reset-retained": reset ? collectMessageTokenPressureFact(reset) : undefined,
+    },
+    markers: {
+      ...(entry.type === "custom" && entry.customType === "google-turn-ordering-bootstrap"
+        ? { googleTurnOrdering: true as const }
+        : {}),
+      ...(entry.type === "custom" && entry.customType === "openclaw.system-prompt"
+        ? { toolCheckpoint: true as const }
+        : {}),
+      ...(entry.type === "thinking_level_change" ? { thinkingLevel: entry.thinkingLevel } : {}),
+      ...(snapshot
+        ? {
+            modelSnapshot: {
+              timestamp: snapshot.timestamp,
+              provider: snapshot.provider,
+              modelApi: snapshot.modelApi,
+              modelId: snapshot.modelId,
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+/** Pure fact reduction; selected asks and kept-tail payloads never escape this synchronous call. */
+export function prepareCompactionPlan(
+  entries: readonly PreparedCompactionEntryFact[],
+  options: PreparedCompactionPlanOptions,
+  source: { readEntry: (rawSeq: number) => SessionEntry },
+): PreparedCompactionPlanResult {
+  const bySequence = new Map(entries.map((entry) => [entry.sourceIndex, entry]));
+  const fixedTokenPressure = { ...createFixedRequestTokenEstimator()(options.work) };
+  const toolMarker = selectToolSurfaceCheckpoint(entries, (entry) =>
+    Boolean(entry.markers.toolCheckpoint),
+  );
+  if (toolMarker) {
+    const tools = readToolSurfaceCheckpoint([source.readEntry(toolMarker.sourceIndex)])?.tools;
+    if (tools) {
+      fixedTokenPressure.toolTokens = createFixedRequestTokenEstimator()({
+        tools: tools.map((tool) => projectAgentToolDefinition({ ...tool, label: tool.name })),
+      }).toolTokens;
+    }
+  }
+  const retainedSequences = (firstKeptEntryId: string) => {
+    const first = entries.findIndex((entry) => entry.id === firstKeptEntryId);
+    if (first < 0) {
+      throw new Error("Prepared compaction lost its retained boundary");
+    }
+    const candidates = entries.map((entry, seq) => {
+      if (entry.placementResultIds === "invalid") {
+        throw new Error("Invalid background result placement marker");
+      }
+      return {
+        seq,
+        serialized_bytes: 0,
+        type: entry.type,
+        id: entry.id,
+        pending: entry.pendingBackground,
+        placement: entry.placementResultIds,
+      };
+    });
+    const selected = new Set(
+      fitBackgroundResultDependencyFacts(candidates.slice(first), candidates, 0).rows.map(
+        (row) => row.seq,
+      ),
+    );
+    return entries.flatMap((entry, index) => (selected.has(index) ? [entry.sourceIndex] : []));
+  };
+  const replacement = (firstKeptEntryId: string, tokensBefore: number) =>
+    createCompactionReplacementProjector(
+      retainedSequences(firstKeptEntryId).map(source.readEntry),
+      options.work.itemId,
+    )({ firstKeptEntryId, tokensBefore }, "");
+  const work = prepareAgentCompactionWorkFromFacts(
+    entries,
+    { ...options.work, fixedTokenPressure },
+    (preparation, budget) =>
+      estimateCompactedRequestTokens(
+        replacement(preparation.firstKeptEntryId, preparation.tokensBefore),
+        budget,
+      ),
+  );
   if (work.status === "skipped") {
     return work;
   }
-  const { preparation } = work;
-  const history = prepareCompactionSafeguardHistory({
-    messages: prepareCompactionSafeguardMessages(preparation),
-    firstKeptEntryId: preparation.firstKeptEntryId,
-    readBranch: () => entries,
-  });
-  const sections = prepareCompactionSafeguardSections({ fileOps: preparation.fileOps, history });
-  const summary = prepareCompactionSafeguardSummary({
-    history,
-    preparation,
-    recentTurnsPreserve: options.recentTurnsPreserve,
-    splitTurnContextChars: Math.floor(
-      (preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) / 2,
-    ),
+  const { historyEntryIndexes, turnPrefixEntryIndexes, firstKeptEntryIndex, ...preparation } =
+    work.preparation;
+  const select = (sequences: readonly number[]) =>
+    sequences.flatMap((seq) => {
+      const message = bySequence.get(seq)?.summary;
+      return message ? [message] : [];
+    });
+  const rawHistory = select(historyEntryIndexes);
+  const rawPrefix = select(turnPrefixEntryIndexes);
+  const floor = prepareCompactionFloorFromFacts(
+    [...rawHistory, ...rawPrefix].map((message) => message.floor),
+  );
+  const withoutRuntime = (messages: PreparedCompactionMessageFact[]) =>
+    messages.filter((message) => !message.runtime);
+  const real = (messages: readonly PreparedCompactionMessageFact[]) => {
+    const classify = createRealConversationFactClassifier();
+    return messages.some((message) => classify(message.real));
+  };
+  const context = (path: readonly PreparedCompactionEntryFact[]) =>
+    Array.from(iterateSessionContextEntryFacts(path)).flatMap(({ entry, context: projection }) => {
+      const summary = entry.contextSummaries[projection];
+      return summary ? [summary] : [];
+    });
+  let history = withoutRuntime(rawHistory);
+  let prefix = withoutRuntime(rawPrefix);
+  let hasRealConversation = real([...history, ...prefix]);
+  let usedPreparationRange = false;
+  if (!hasRealConversation) {
+    const range = withoutRuntime(
+      context(
+        entries.filter(
+          (entry, index) =>
+            index < firstKeptEntryIndex || entry.type === "compaction" || entry.type === "reset",
+        ),
+      ).filter((message) => message.role !== "compactionSummary"),
+    );
+    if (real(range)) {
+      history = range;
+      prefix = [];
+      hasRealConversation = true;
+      usedPreparationRange = true;
+    }
+  }
+  hasRealConversation ||= real(withoutRuntime(context(entries)));
+  const previousSummary = normalizeLegacySplitTurnSummary(preparation.previousSummary?.trim());
+  const oracle = [...history, ...prefix];
+  const readMessage = (fact: PreparedCompactionMessageFact) => {
+    const message = readPreparedCompactionMessage(fact.source, source.readEntry);
+    if (!message) {
+      throw new Error("Compaction selected ask lost its source message");
+    }
+    return message;
+  };
+  const readAsk = (messages: PreparedCompactionMessageFact[]) => {
+    const index = selectCompactionSafeguardAskIndex(messages.map((message) => message.ask));
+    return index === null ? null : extractCompactionMessageText(readMessage(messages[index]!));
+  };
+  const preservedIndexes = selectPreservedRecentTurnIndexes(
+    history.map((message) => message.context),
+    resolveRecentTurnsPreserve(options.recentTurnsPreserve),
+  );
+  const preservedTurnsSection = buildPreservedTurnsSectionFromFacts(
+    history
+      .filter((_message, index) => preservedIndexes.has(index))
+      .map((message) => message.context),
+    Math.floor((preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) / 2),
+  );
+  const summarizable = history.filter((_message, index) => !preservedIndexes.has(index));
+  // Repair affects only the count consumed by reconciliation, not its raw summary selection.
+  let summarizableMessageCount = summarizable.length;
+  if (
+    resolveRecentTurnsPreserve(options.recentTurnsPreserve) > 0 &&
+    history.some((message) => message.role === "user" || message.role === "assistant")
+  ) {
+    const frames = classifyToolPairingFacts(summarizable.map((message) => message.context.pairing));
+    const selected = new Set<number>();
+    let synthetic = 0;
+    for (const [index, message] of summarizable.entries()) {
+      if (message.role !== "toolResult") {
+        selected.add(index);
+      }
+    }
+    for (const frame of frames) {
+      for (const occurrence of frame.occurrences) {
+        if (occurrence.result) {
+          selected.add(occurrence.result.index);
+        } else if (!frame.failed) {
+          synthetic++;
+        }
+      }
+    }
+    summarizableMessageCount = selected.size + synthetic;
+  }
+  const { reconcile, ...summary } = prepareCompactionSafeguardSummaryFacts({
+    previousSummary,
+    requestSelection: preparation.requestSelection,
+    latestUnresolvedUserRequest: preparation.latestUnresolvedUserRequest,
+    oracleAsk: preparation.requestSelection ? null : readAsk(oracle),
+    splitUserAsk: preparation.isSplitTurn ? readAsk(prefix) : null,
+    latestPreparedAsk: readAsk(history),
+    preservedTurnsText: preservedTurnsSection.text,
+    summarizableMessageCount,
+    turnPrefixMessageCount: prefix.length,
     qualityGuardEnabled: options.qualityGuardEnabled,
   });
-  const select = (messages: AgentMessage[]) => {
-    const selected = [];
-    for (const message of messages) {
-      const seq = sequences.get(message);
-      if (seq === undefined) {
-        return undefined;
-      }
-      for (const projected of convertToLlm(sanitizeCompactionMessages([message]))) {
-        selected.push(collectConversationMessageFact(projected, seq));
-      }
-    }
-    return collectConversationRangeDescriptors(selected);
-  };
-  const selectedHistory = select(summary.reconciliationMessages);
-  const selectedTurnPrefix = select(summary.turnPrefixMessages);
-  if (!selectedHistory || !selectedTurnPrefix) {
-    return { status: "unsupported", reason: "summary source requires projected-entry provenance" };
-  }
-  const deterministic = compactWithoutSummary(preparation);
-  if (!deterministic.ok) {
-    // The normal path retains its own error and summary/floor recovery ordering.
-    return {
-      status: "unsupported",
-      reason: "deterministic fallback requires the full preparation",
-    };
-  }
-  const { messagesToSummarize, turnPrefixMessages, ...metadata } = preparation;
-  const firstKeptIndex = entries.findIndex((entry) => entry.id === preparation.firstKeptEntryId);
-  if (firstKeptIndex < 0) {
-    throw new Error("Prepared compaction lost its retained boundary");
-  }
-  const candidates = entries.map((event, seq) => ({ seq, event, serialized_bytes: 0 }));
-  const selected = new Set(
-    fitBackgroundResultDependencies(candidates.slice(firstKeptIndex), candidates, 0).rows.map(
-      (row) => row.seq,
-    ),
-  );
-  // Session construction must not append initial metadata solely because the cut
-  // omitted its recorded model or thinking marker. Other dropped payloads stay out.
-  for (const type of ["thinking_level_change", "model_change"] as const) {
-    const index = entries.findLastIndex((entry) => entry.type === type);
-    if (index >= 0) {
-      selected.add(index);
-    }
-  }
-  const retained = entries.filter((_entry, index) => selected.has(index));
-  // Match the commit owner: a foreground budget makes its replay fallback unused.
+  const sourceAskFact = preparation.isSplitTurn
+    ? rawPrefix.findLast((message) => message.sourceAsk)
+    : undefined;
+  const sourceAskMessage = sourceAskFact ? readMessage(sourceAskFact) : undefined;
+  const sourceLabel = sourceAskMessage ? formatCompactionUserLabel(sourceAskMessage) : "User";
+  const sourceText = sourceAskMessage ? extractCompactionMessageText(sourceAskMessage) : "";
+  const deterministic = compactWithoutSummaryFromFacts(preparation, {
+    droppedCount: rawHistory.length + rawPrefix.length,
+    sourceAsk: sourceAskMessage
+      ? formatRequiredAskContext(
+          sourceLabel === "User" ? sourceText : `[${sourceLabel}]: ${sourceText}`,
+        )
+      : "",
+    floor: renderCompactionFloor(floor),
+  });
+  const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
+  const selectedHistory = options.safeguard === false ? rawHistory : reconcile ? oracle : [];
+  const selectedPrefix = options.safeguard === false ? rawPrefix : prefix;
   const summaryReplayTokenBudget =
     preparation.summaryTokenBudget === undefined
       ? replayTokenBudget(
-          { agent: { state: { systemPrompt: options.work.systemPrompt, tools } } },
+          { agent: { state: { fixedTokenPressure } } },
           { contextWindow: options.work.contextWindow },
           preparation.settings,
-          work.projectReplacement(preparation, ""),
+          options.work.contextWindow && options.work.contextWindow > 0
+            ? replacement(preparation.firstKeptEntryId, preparation.tokensBefore)
+            : [],
         )
       : undefined;
-  const plan = {
-    preparation: metadata,
-    facts: {
-      previousSummary: history.previousSummary,
-      history: {
-        hasRealConversation: history.hasRealConversation,
-        usedPreparationRange: history.usedPreparationRange,
+  return {
+    status: "prepared",
+    plan: {
+      preparation,
+      facts: {
+        previousSummary,
+        history: { hasRealConversation, usedPreparationRange },
+        sections: {
+          readFiles,
+          modifiedFiles,
+          fileOpsSummary: formatFileOperations(readFiles, modifiedFiles),
+          toolFailureSection: formatToolFailuresSection(
+            collectToolFailuresFromFacts(oracle.map((message) => message.failure)),
+          ),
+        },
+        summary: {
+          ...summary,
+          identifiers: extractOpaqueIdentifiersFromFacts(
+            oracle.slice(-10).map((message) => message.identifiers),
+          ),
+          preservedTurnsSection,
+        },
+        reconciliationCount: selectedHistory.length,
+        turnPrefixCount: selectedPrefix.length,
       },
-      sections,
-      summary: {
-        latestUserAsk: summary.latestUserAsk,
-        latestAskInRetainedTurn: summary.latestAskInRetainedTurn,
-        identifiers: summary.identifiers,
-        requiredAskContext: summary.requiredAskContext,
-        preservedTurnsSection: summary.preservedTurnsSection,
+      floor,
+      ...(deterministic.ok
+        ? { deterministic: deterministic.value }
+        : {
+            deterministicError: {
+              code: deterministic.error.code,
+              message: deterministic.error.message,
+            },
+          }),
+      pendingEntryId: work.pendingEntryId,
+      requestBudget: work.requestBudget,
+      requestTokenLimit: work.requestTokenLimit,
+      selections: {
+        history: collectConversationRangeDescriptors(
+          selectedHistory.flatMap((message) => message.conversation),
+        ),
+        turnPrefix: collectConversationRangeDescriptors(
+          selectedPrefix.flatMap((message) => message.conversation),
+        ),
       },
-      reconciliationCount: summary.reconciliationMessages.length,
-      turnPrefixCount: summary.turnPrefixMessages.length,
+      retainedSequences: retainedSequences(preparation.firstKeptEntryId),
+      summaryReplayTokenBudget,
     },
-    floor: prepareCompactionFloor([...messagesToSummarize, ...turnPrefixMessages]),
-    deterministic: deterministic.value,
-    pendingEntryId: work.pendingEntryId,
-    requestBudget: work.requestBudget,
-    requestTokenLimit: work.requestTokenLimit,
-    selections: { history: selectedHistory, turnPrefix: selectedTurnPrefix },
-    retained,
-    summaryReplayTokenBudget,
   };
-  // Derived facts retain the summary-input bound. The selected retained context
-  // keeps its existing full-fidelity hydration channel; metadata is not summary
-  // input. Serialization descriptors likewise describe source selection, not input text.
-  const replyChars = JSON.stringify(
-    { ...plan, selections: undefined, retained: undefined },
-    (_key, value: unknown) => (value instanceof Set ? [...value] : value),
-  ).length;
-  if (replyChars > MAX_SUMMARY_INPUT_CHARS) {
-    return { status: "unsupported", reason: "prepared compaction facts exceed the bounded reply" };
+}
+
+/** Reconstruct the same canonical projection used when its scalar descriptors were collected. */
+export function readPreparedCompactionMessage(
+  source: PreparedCompactionMessageSource,
+  readEntry: (seq: number) => SessionEntry,
+): AgentMessage | undefined {
+  if (typeof source === "number") {
+    return getMessageFromEntryForCompaction(readEntry(source));
   }
-  return { status: "prepared", plan };
+  const entry = readEntry(source.seq);
+  return projectSessionContextMessage({
+    entry,
+    context: source.context,
+    placement: source.placed ? entry : undefined,
+  });
 }

@@ -310,13 +310,12 @@ export type CompactionFactPreparation = Omit<
 };
 
 /** The array adapter and one-row reader share preparation policy, cut and file-operation reducers. */
-export function prepareCompactionEntryFacts(
-  entries: readonly CompactionPreparationEntryFact[],
+export function prepareCompactionEntryFacts<T extends CompactionPreparationEntryFact>(
+  entries: readonly T[],
   settings: CompactionSettings,
   requestState?: "unresolved",
   constraints?: PreparationConstraints,
-  estimateEntryTokens: (entry: CompactionPreparationEntryFact) => number = (entry) =>
-    entry.message?.tokens ?? 0,
+  estimateEntryTokens: (entry: T) => number = (entry) => entry.message?.tokens ?? 0,
 ): Result<CompactionFactPreparation | undefined, CompactionError> {
   const result = prepareCompactionSource(entries, settings, requestState, constraints, {
     message: (entry) => entry.message,

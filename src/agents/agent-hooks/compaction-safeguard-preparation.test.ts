@@ -22,7 +22,11 @@ import {
   extractOpaqueIdentifiersFromFacts,
 } from "./compaction-safeguard-quality.js";
 
-const user = (content: string): AgentMessage => ({ role: "user", content, timestamp: 1 });
+const user = (content: string): Extract<AgentMessage, { role: "user" }> => ({
+  role: "user",
+  content,
+  timestamp: 1,
+});
 const runtimeContext = castAgentMessage({
   role: "custom",
   customType: "openclaw.runtime-context",

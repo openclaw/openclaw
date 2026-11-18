@@ -79,30 +79,55 @@ function extractToolResultMatchIds(record: object): Set<string> {
   return ids;
 }
 
-function collectFutureToolResults(
-  messages: AgentMessage[],
+/**
+ * Value access and transformations for the shared turn-validation owner. Accessors
+ * preserve the array replay rules: call IDs/names and result aliases are trimmed,
+ * but extractToolCalls recognizes nonempty raw IDs (including whitespace-only IDs).
+ * Content is only an array; absent/non-array content returns undefined.
+ */
+export interface ReplayTurnAdapter<T, B> {
+  /** Distinguish falsy rows, truthy nonobjects, and objects, including roleless rows. */
+  messageKind(message: T): "empty" | "opaque" | "record";
+  role(message: T): string | undefined;
+  content(message: T): readonly B[] | undefined;
+  isPresentBlock(block: B): boolean;
+  isThinking(block: B): boolean;
+  isCall(block: B): boolean;
+  callId(block: B): string | undefined;
+  callName(block: B): string | undefined;
+  extractToolCalls(message: T): readonly { id: string; name?: string }[];
+  isResultBlock(block: B): boolean;
+  resultMatchIds(value: T | B): Iterable<string>;
+  resultCanonicalId(message: T): string | null | undefined;
+  toolName(message: T): string | undefined;
+  stopReason(message: T): string | undefined;
+  /** "omitted" means one text block containing "[tool calls omitted]". */
+  replaceContent(message: T, content: readonly B[] | "omitted"): T;
+  mergeAssistant(previous: T, current: T): T;
+  mergeUser(previous: T, current: T): T;
+  canMergeUser(message: T): boolean;
+}
+
+function collectFutureToolResults<T, B>(
+  messages: T[],
   startIndex: number,
+  adapter: ReplayTurnAdapter<T, B>,
 ): { ids: Set<string>; matches: Map<string, Set<string>> } {
   const ids = new Set<string>();
   const matches = new Map<string, Set<string>>();
   for (let index = startIndex + 1; index < messages.length; index += 1) {
-    const candidate = messages[index];
-    if (!candidate || typeof candidate !== "object") {
+    const candidate = messages[index]!;
+    if (adapter.messageKind(candidate) !== "record") {
       continue;
     }
-    const role = (candidate as { role?: unknown }).role;
+    const role = adapter.role(candidate);
     // Text-only assistant interruptions do not own the following tool results.
-    if (candidate.role === "assistant" && extractToolCallsFromAssistant(candidate).length > 0) {
+    if (role === "assistant" && adapter.extractToolCalls(candidate).length > 0) {
       break;
     }
-    const content = (candidate as { content?: unknown }).content;
-    for (const block of Array.isArray(content) ? content : []) {
-      if (
-        block &&
-        typeof block === "object" &&
-        (block.type === "toolResult" || block.type === "tool")
-      ) {
-        for (const id of extractToolResultMatchIds(block)) {
+    for (const block of adapter.content(candidate) ?? []) {
+      if (adapter.isResultBlock(block)) {
+        for (const id of adapter.resultMatchIds(block)) {
           ids.add(id);
         }
       }
@@ -111,18 +136,14 @@ function collectFutureToolResults(
     if (role !== "toolResult" && role !== "tool") {
       continue;
     }
-    const matchIds = extractToolResultMatchIds(candidate);
+    const matchIds = adapter.resultMatchIds(candidate);
     if (role === "toolResult") {
-      const canonicalId = extractToolResultId(
-        candidate as Extract<AgentMessage, { role: "toolResult" }>,
-      );
+      const canonicalId = adapter.resultCanonicalId(candidate);
       if (canonicalId) {
         ids.add(canonicalId);
       }
     }
-    const toolName =
-      normalizeOptionalString(Reflect.get(candidate, "toolName")) ??
-      normalizeOptionalString(Reflect.get(candidate, "name"));
+    const toolName = adapter.toolName(candidate);
     for (const id of matchIds) {
       if (role === "tool") {
         ids.add(id);
@@ -137,50 +158,45 @@ function collectFutureToolResults(
   return { ids, matches };
 }
 
-/**
- * Strips dangling tool-call blocks from assistant messages when no later
- * tool-result span before the next assistant turn resolves them.
- * This fixes the "tool_use ids found without tool_result blocks" error from Anthropic.
- */
-function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[] {
-  const result: AgentMessage[] = [];
+/** Remove unresolved calls, keeping signed thinking and its calls atomic. */
+function stripDanglingAnthropicToolUses<T, B>(
+  messages: T[],
+  adapter: ReplayTurnAdapter<T, B>,
+): T[] {
+  const result: T[] = [];
 
   for (const [i, msg] of messages.entries()) {
-    if (!msg) {
+    const kind = adapter.messageKind(msg);
+    if (kind === "empty") {
       continue;
     }
-    if (typeof msg !== "object" || msg.role !== "assistant") {
+    if (kind !== "record" || adapter.role(msg) !== "assistant") {
       result.push(msg);
       continue;
     }
 
-    const assistantMsg = msg as {
-      content?: AnthropicContentBlock[];
-    };
-    const originalContent = Array.isArray(assistantMsg.content) ? assistantMsg.content : [];
-    if (originalContent.length === 0 || extractToolCallsFromAssistant(msg).length === 0) {
+    const originalContent = adapter.content(msg) ?? [];
+    if (originalContent.length === 0 || adapter.extractToolCalls(msg).length === 0) {
       result.push(msg);
       continue;
     }
-    const hasThinking = originalContent.some((block) => isThinkingLikeBlock(block));
+    const hasThinking = originalContent.some((block) => adapter.isThinking(block));
     const { matches: validToolResultMatches, ids: validToolUseIds } = collectFutureToolResults(
       messages,
       i,
+      adapter,
     );
-    const stopReason = msg.stopReason;
-    const omittedContent: AnthropicContentBlock[] =
-      stopReason === "aborted" || stopReason === "error"
-        ? []
-        : [{ type: "text", text: "[tool calls omitted]" }];
+    const stopReason = adapter.stopReason(msg);
+    const omittedContent = stopReason === "aborted" || stopReason === "error" ? [] : "omitted";
 
-    let nextContent = originalContent;
+    let nextContent: readonly B[] | "omitted" = originalContent;
     if (hasThinking) {
       const allToolCallsResolvable = originalContent.every((block) => {
-        if (!block || !isToolCallBlock(block)) {
+        if (!adapter.isPresentBlock(block) || !adapter.isCall(block)) {
           return true;
         }
-        const blockId = normalizeOptionalString(block.id);
-        const blockName = normalizeOptionalString(block.name);
+        const blockId = adapter.callId(block);
+        const blockName = adapter.callName(block);
         if (!blockId || !blockName) {
           return false;
         }
@@ -195,13 +211,13 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
       }
     } else {
       const filteredContent = originalContent.filter((block) => {
-        if (!block) {
+        if (!adapter.isPresentBlock(block)) {
           return false;
         }
-        if (!isToolCallBlock(block)) {
+        if (!adapter.isCall(block)) {
           return true;
         }
-        const blockId = normalizeOptionalString(block.id);
+        const blockId = adapter.callId(block);
         return blockId ? validToolUseIds.has(blockId) : false;
       });
 
@@ -209,43 +225,35 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         nextContent = filteredContent.length === 0 ? omittedContent : filteredContent;
       }
     }
-    result.push(
-      nextContent === originalContent
-        ? msg
-        : ({ ...assistantMsg, content: nextContent } as AgentMessage),
-    );
+    result.push(nextContent === originalContent ? msg : adapter.replaceContent(msg, nextContent));
   }
 
   return result;
 }
 
-function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(params: {
-  messages: AgentMessage[];
-  role: TRole;
-  merge: (
-    previous: Extract<AgentMessage, { role: TRole }>,
-    current: Extract<AgentMessage, { role: TRole }>,
-  ) => Extract<AgentMessage, { role: TRole }>;
-  canMerge?: (message: Extract<AgentMessage, { role: TRole }>) => boolean;
-}): AgentMessage[] {
-  const { messages, role, merge } = params;
+function validateTurnsWithConsecutiveMerge<T, B>(params: {
+  messages: T[];
+  role: "assistant" | "user";
+  adapter: ReplayTurnAdapter<T, B>;
+  merge: (previous: T, current: T) => T;
+  canMerge?: (message: T) => boolean;
+}): T[] {
+  const { messages, role, adapter, merge } = params;
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages;
   }
 
-  const result: AgentMessage[] = [];
+  const result: T[] = [];
   let lastRole: string | undefined;
 
   for (const msg of messages) {
-    const msgRole = msg && typeof msg === "object" ? msg.role : undefined;
+    const msgRole = adapter.messageKind(msg) === "record" ? adapter.role(msg) : undefined;
     if (msgRole) {
       if (msgRole === lastRole && lastRole === role) {
-        const lastMsg = result[result.length - 1];
-        const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
-        if (lastMsg && typeof lastMsg === "object") {
-          const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
-          if (!params.canMerge || (params.canMerge(lastTyped) && params.canMerge(currentMsg))) {
-            result[result.length - 1] = merge(lastTyped, currentMsg);
+        const lastMsg = result[result.length - 1]!;
+        if (adapter.messageKind(lastMsg) === "record") {
+          if (!params.canMerge || (params.canMerge(lastMsg) && params.canMerge(msg))) {
+            result[result.length - 1] = merge(lastMsg, msg);
             continue;
           }
         }
@@ -256,6 +264,72 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
   }
 
   return result.length === messages.length ? messages : result;
+}
+
+export function validateGeminiTurnsWithAdapter<T, B>(
+  messages: T[],
+  adapter: ReplayTurnAdapter<T, B>,
+): T[] {
+  return validateTurnsWithConsecutiveMerge({
+    messages,
+    role: "assistant",
+    adapter,
+    merge: (previous, current) => adapter.mergeAssistant(previous, current),
+  });
+}
+
+export function mergeConsecutiveUserMessagesWithAdapter<T, B>(
+  messages: T[],
+  adapter: ReplayTurnAdapter<T, B>,
+  options: { preserveContextBoundaries?: boolean } = {},
+): T[] {
+  return validateTurnsWithConsecutiveMerge({
+    messages,
+    role: "user",
+    adapter,
+    merge: (previous, current) => adapter.mergeUser(previous, current),
+    canMerge: options.preserveContextBoundaries
+      ? (message) => adapter.canMergeUser(message)
+      : undefined,
+  });
+}
+
+export function validateAnthropicTurnsWithAdapter<T, B>(
+  messages: T[],
+  adapter: ReplayTurnAdapter<T, B>,
+  options: { mergeConsecutiveTurns?: boolean; mergeConsecutiveUserTurns?: boolean } = {},
+): T[] {
+  // Direct Messages accepts consecutive roles; merging rewrites signed prefix bytes.
+  if (options.mergeConsecutiveTurns === false) {
+    return stripDanglingAnthropicToolUses(messages, adapter);
+  }
+  const mergedAssistant = validateGeminiTurnsWithAdapter(messages, adapter);
+  const paired = stripDanglingAnthropicToolUses(mergedAssistant, adapter);
+  return options.mergeConsecutiveUserTurns === false
+    ? paired
+    : mergeConsecutiveUserMessagesWithAdapter(paired, adapter);
+}
+
+/** Shared decision owner for payload arrays and payload-free replay facts. */
+export function validateReplayTurnsWithAdapter<T, B>(
+  messages: T[],
+  policy: Pick<
+    TranscriptPolicy,
+    "validateGeminiTurns" | "validateAnthropicTurns" | "appendOnlyRuntimeContext"
+  >,
+  modelApi: string | null | undefined,
+  adapter: ReplayTurnAdapter<T, B>,
+  preserveUserTurns?: boolean,
+): T[] {
+  const gemini = policy.validateGeminiTurns
+    ? validateGeminiTurnsWithAdapter(messages, adapter)
+    : messages;
+  return policy.validateAnthropicTurns
+    ? validateAnthropicTurnsWithAdapter(gemini, adapter, {
+        mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
+        mergeConsecutiveUserTurns: !preserveUserTurns,
+      })
+    : gemini;
 }
 
 function mergeConsecutiveAssistantTurns(
@@ -279,11 +353,7 @@ function mergeConsecutiveAssistantTurns(
 
 /** Merge consecutive assistant turns for Gemini's provider turn-order contract. */
 export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
-  return validateTurnsWithConsecutiveMerge({
-    messages,
-    role: "assistant",
-    merge: mergeConsecutiveAssistantTurns,
-  });
+  return validateGeminiTurnsWithAdapter(messages, agentMessageReplayTurnAdapter);
 }
 
 function mergeConsecutiveUserTurns(
@@ -316,20 +386,59 @@ function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
   return [];
 }
 
+const agentMessageReplayTurnAdapter: ReplayTurnAdapter<AgentMessage, AnthropicContentBlock> = {
+  messageKind: (message) =>
+    !message ? "empty" : typeof message === "object" ? "record" : "opaque",
+  role: (message) => message.role,
+  content: (message) =>
+    "content" in message && Array.isArray(message.content)
+      ? (message.content as AnthropicContentBlock[])
+      : undefined,
+  isPresentBlock: (block) => Boolean(block),
+  isThinking: isThinkingLikeBlock,
+  isCall: isToolCallBlock,
+  callId: (block) => normalizeOptionalString(block.id),
+  callName: (block) => normalizeOptionalString(block.name),
+  extractToolCalls: (message) =>
+    extractToolCallsFromAssistant(message as Extract<AgentMessage, { role: "assistant" }>),
+  isResultBlock: (block) =>
+    Boolean(block) &&
+    typeof block === "object" &&
+    (block.type === "toolResult" || block.type === "tool"),
+  resultMatchIds: extractToolResultMatchIds,
+  resultCanonicalId: (message) =>
+    extractToolResultId(message as Extract<AgentMessage, { role: "toolResult" }>),
+  toolName: (message) =>
+    normalizeOptionalString(Reflect.get(message, "toolName")) ??
+    normalizeOptionalString(Reflect.get(message, "name")),
+  stopReason: (message) => (message as Extract<AgentMessage, { role: "assistant" }>).stopReason,
+  replaceContent: (message, content) =>
+    ({
+      ...message,
+      content: content === "omitted" ? [{ type: "text", text: "[tool calls omitted]" }] : content,
+    }) as AgentMessage,
+  mergeAssistant: (previous, current) =>
+    mergeConsecutiveAssistantTurns(
+      previous as Extract<AgentMessage, { role: "assistant" }>,
+      current as Extract<AgentMessage, { role: "assistant" }>,
+    ),
+  mergeUser: (previous, current) =>
+    mergeConsecutiveUserTurns(
+      previous as PersistedUserTurnMessage,
+      current as PersistedUserTurnMessage,
+    ),
+  // Carriers, operator updates and synthetic context own their authority, cache and media facts.
+  canMergeUser: (message) => {
+    const user = message as PersistedUserTurnMessage;
+    return !hasRuntimeContextMarker(user) && !user.operatorMessage && !user.synthetic;
+  },
+};
+
 export const mergeConsecutiveUserMessages = (
   messages: AgentMessage[],
   options: { preserveContextBoundaries?: boolean } = {},
 ): AgentMessage[] =>
-  validateTurnsWithConsecutiveMerge({
-    messages,
-    role: "user",
-    merge: mergeConsecutiveUserTurns,
-    // Carriers, operator updates and synthetic context own their authority, cache and media facts.
-    canMerge: options.preserveContextBoundaries
-      ? (message) =>
-          !hasRuntimeContextMarker(message) && !message.operatorMessage && !message.synthetic
-      : undefined,
-  });
+  mergeConsecutiveUserMessagesWithAdapter(messages, agentMessageReplayTurnAdapter, options);
 
 /**
  * Repair Anthropic tool-use/result pairing; turn merging stays optional
@@ -339,17 +448,21 @@ export function validateAnthropicTurns(
   messages: AgentMessage[],
   options: { mergeConsecutiveTurns?: boolean; mergeConsecutiveUserTurns?: boolean } = {},
 ): AgentMessage[] {
-  // Direct Messages accepts consecutive roles; merging rewrites signed prefix bytes.
-  if (options.mergeConsecutiveTurns === false) {
-    return stripDanglingAnthropicToolUses(messages);
-  }
-  const mergedAssistant = validateTurnsWithConsecutiveMerge({
+  return validateAnthropicTurnsWithAdapter(messages, agentMessageReplayTurnAdapter, options);
+}
+
+/** Generic validation follows provider-owned rewrites in both ordinary and retained replay. */
+export function validateReplayTurnsForPolicy(
+  messages: AgentMessage[],
+  policy: TranscriptPolicy,
+  modelApi?: string | null,
+  preserveUserTurns?: boolean,
+): AgentMessage[] {
+  return validateReplayTurnsWithAdapter(
     messages,
-    role: "assistant",
-    merge: mergeConsecutiveAssistantTurns,
-  });
-  const paired = stripDanglingAnthropicToolUses(mergedAssistant);
-  return options.mergeConsecutiveUserTurns === false
-    ? paired
-    : mergeConsecutiveUserMessages(paired);
+    policy,
+    modelApi,
+    agentMessageReplayTurnAdapter,
+    preserveUserTurns,
+  );
 }

@@ -1,4 +1,9 @@
+import type { CompactionPreparationEntryFact } from "../../../../packages/agent-core/src/harness/compaction/compaction-preparation.js";
 import type { CompactionSettings } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import type {
+  FixedRequestTokenPressure,
+  MessageTokenPressureFact,
+} from "../context-token-pressure.js";
 
 /** Ephemeral foreground facts; a separately routed summarizer cannot reconstruct these. */
 export type CompactionRequestBudget = Readonly<{
@@ -37,3 +42,19 @@ export type AgentCompactionPreparationOptions = CompactionRequestConstraints & {
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
 };
+
+/** Row-owned projections, collected while the payload is decoded and then released. */
+export type AgentCompactionPreparationEntryFact = CompactionPreparationEntryFact & {
+  idempotencyKey?: string;
+  tokenPressure: {
+    message?: MessageTokenPressureFact;
+    current?: MessageTokenPressureFact;
+    retained?: MessageTokenPressureFact;
+    "reset-retained"?: MessageTokenPressureFact;
+  };
+};
+
+export type AgentCompactionFactPreparationOptions = Omit<
+  AgentCompactionPreparationOptions,
+  "systemPrompt" | "tools"
+> & { fixedTokenPressure?: FixedRequestTokenPressure };

@@ -1,4 +1,10 @@
-# Compaction view: extend existing real-worker fixtures for lazy payload selection,
-# plus end-to-end residency and final-artifact/persisted-context differential regressions.
-# These contracts require source/worker and execution boundaries, not helper-only assertions.
-350
+# #195361 compaction view: 2608 net test/helper lines against 4dbd70ff;
+# the ordinary allowance covers 400. The user lifted diff-size limits to require
+# an actual measured fix rather than a partial refactor.
+# Existing suites cover shared metadata/array policy parity, exact native projections,
+# retained payload selection, cold and incognito adapters, accepted descendants,
+# cancellation and commit accounting, sent-tool budgets, and summary-origin semantics.
+# The release-only real-Gateway residency fixture proves held-payload removal at
+# 8/40 MiB with a blocked local model; helper tests cannot establish this boundary.
+# No timeout, isolation, heap-limit, baseline, or assertion exception is introduced.
+2208

@@ -12,10 +12,6 @@ import {
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
 
-// Private preparation retains decoded/replay graphs inside the fixed 512 MiB reader.
-// Larger windows stay on the complete streamed host path, never a clipped context.
-const MAX_COMPACTION_PREPARATION_BYTES = 16 * 1024 * 1024;
-
 /** Read each hydrated view under the same worker-owned quarantine and snapshot admission. */
 export async function readSessionTranscriptHydrationRequest(
   request: SessionTranscriptHydrationWorkerRequest,
@@ -76,37 +72,6 @@ export async function readSessionTranscriptHydrationRequest(
       }
     : undefined;
   return readTranscriptHydration(request, consume, control);
-}
-
-/** @internal Keep full-fidelity payloads in the admitted worker preparation task. */
-export async function readCompactionTranscriptForPreparation(
-  request: SessionTranscriptHydrationWorkerInput,
-  control: WorkerTaskControl,
-) {
-  const { readSessionTranscriptBoundedActiveContextCore } =
-    await import("./session-accessor.sqlite-active-context.js");
-  const { assertOpenClawAgentDatabaseIdentity } =
-    await import("../../state/openclaw-agent-db-identity.js");
-  return await control.runNativeSection(() => {
-    control.throwIfCancelled();
-    let sequences: number[] = [];
-    // This consumer already lives beside the database. Materialize once at the
-    // selection owner instead of parsing its metadata pass and a byte stream.
-    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
-      compaction: true,
-      maxMaterializedBytes: MAX_COMPACTION_PREPARATION_BYTES,
-      readOnly: true,
-      resolvedScope: request.resolvedScope,
-      onRead: (projection, rows) => {
-        if (request.expectedIdentity) {
-          assertOpenClawAgentDatabaseIdentity(projection.database, request.expectedIdentity);
-        }
-        sequences = rows.map((row) => row.rawSeq);
-      },
-    });
-    control.throwIfCancelled();
-    return { prepared: { kind: "bounded" as const, snapshot }, sequences };
-  });
 }
 
 async function readTranscriptHydration(
