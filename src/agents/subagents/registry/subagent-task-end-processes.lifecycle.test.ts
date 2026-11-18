@@ -27,9 +27,9 @@ beforeEach(async () => captureRuntimeConfigAsyncReader()());
 const parentKey = "agent:main:main";
 const sleeper = `${JSON.stringify(process.execPath)} -e 'setTimeout(() => {}, 60000)'`;
 
-function resetParent() {
+async function resetParent() {
   const respond = vi.fn();
-  return sessionMutationHandlers["sessions.reset"]!({
+  await sessionMutationHandlers["sessions.reset"]!({
     params: { key: parentKey },
     context: createChatAbortContext({
       getRuntimeConfig,
@@ -39,9 +39,8 @@ function resetParent() {
     client: { connect: { scopes: ["operator.admin"] } } as never,
     req: { type: "req", id: "reset", method: "sessions.reset" },
     isWebchatConnect: () => false,
-  }).then(() =>
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined),
-  );
+  });
+  expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
 }
 
 const yieldRun = (runId: string) =>
@@ -100,7 +99,7 @@ async function startChildProcesses(childKey: string): Promise<number[]> {
         ids.push(((await exec.execute("start", args)).details as { sessionId: string }).sessionId);
       }
       await vi.waitFor(() =>
-        expect(ids.map((id) => pidOf(getSession(id)?.aggregated))).not.toContain(NaN),
+        expect(ids.map((id) => pidOf(getSession(id)?.aggregated))).not.toContain(Number.NaN),
       );
       const left = await exec.execute("left", {
         command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
@@ -116,8 +115,15 @@ async function startChildProcesses(childKey: string): Promise<number[]> {
 const liveInScope = (childKey: string) =>
   listRunningSessions().filter((session) => session.scopeKey === childKey);
 
+type EndCause = {
+  cause: string;
+  keeps?: boolean;
+  spawnMode?: "session";
+  end: (runId: string, childKey: string) => unknown;
+};
+
 // One row per way a subagent's task ends; a new end cause is a new row.
-it.each([
+it.each<EndCause>([
   {
     cause: "complete",
     end: (runId: string, key: string) => lifecycle(runId, key, { phase: "end" }),
@@ -154,7 +160,7 @@ it.each([
   {
     cause: "visible session (keeps)",
     keeps: true,
-    spawnMode: "session" as const,
+    spawnMode: "session",
     end: (runId: string, key: string) => lifecycle(runId, key, { phase: "end" }),
   },
 ])(
