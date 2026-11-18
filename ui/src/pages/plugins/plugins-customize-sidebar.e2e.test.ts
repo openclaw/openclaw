@@ -46,6 +46,13 @@ const installed = (id: string, name: string, description: string, installedAt: s
 const bundled = (id: string, name: string, description: string, sidebar?: boolean) =>
   plugin({ id, name, description, origin: "bundled", removable: false, sidebar });
 
+const shopifyPlugin = installed(
+  "shopify",
+  "Shopify AI Toolkit",
+  "Search Shopify docs and manage stores.",
+  "2026-11-17T10:00:00Z",
+);
+
 const plugins = [
   bundled("anthropic", "Anthropic", "Claude models."),
   bundled("memory-core", "OpenClaw Memory", "Default memory search."),
@@ -62,12 +69,7 @@ const plugins = [
     ...installed("lobster-theme", "Lobster Theme", "A warm red theme.", "2026-10-02T10:00:00Z"),
     hasIcon: true,
   },
-  installed(
-    "shopify",
-    "Shopify AI Toolkit",
-    "Search Shopify docs and manage stores.",
-    "2026-11-17T10:00:00Z",
-  ),
+  shopifyPlugin,
 ] satisfies PluginCatalogItem[];
 
 function detail(entry: PluginCatalogItem): PluginDiscoveryDetailResult {
@@ -203,10 +205,11 @@ describeControlUiE2e("Customize sidebar plugins", () => {
     const shortcut = customize(page).getByRole("link", { name: "Shopify AI Toolkit", exact: true });
     await shortcut.waitFor();
 
+    const shopifyWithArtwork = { ...shopifyPlugin, hasIcon: true };
     await gateway.setMethodResponse(
       "plugins.list",
       inventory(
-        plugins.map((entry) => (entry.id === "shopify" ? { ...entry, hasIcon: true } : entry)),
+        plugins.map((entry) => (entry.id === shopifyPlugin.id ? shopifyWithArtwork : entry)),
         2,
       ),
     );
