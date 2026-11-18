@@ -9,7 +9,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 declare global {
   interface Window {
-    composerWidthFrames: number[];
+    composerWidthFrames: { width: number; maxWidth: string }[];
   }
 }
 
@@ -330,7 +330,8 @@ suite.define(() => {
     async (route) => {
       await suite.withPage({ viewport: { width: 1600, height: 900 } }, async ({ page }) => {
         const sessionKey = "agent:main:composer-width-reload";
-        await seedChatSettings(page, suite.server.baseUrl, { chatMessageMaxWidth: "1000px" });
+        const savedWidth = "1000px";
+        await seedChatSettings(page, suite.server.baseUrl, { chatMessageMaxWidth: savedWidth });
         await installMockGateway(page, {
           sessionKey,
           historyMessages: [{ role: "assistant", content: "Reload keeps the composer still." }],
@@ -352,8 +353,11 @@ suite.define(() => {
           const tick = () => {
             const shell = document.querySelector(".agent-chat__composer-shell");
             const rect = shell?.getBoundingClientRect();
-            if (rect && rect.width > 0 && rect.height > 0) {
-              window.composerWidthFrames.push(Math.round(rect.width));
+            if (shell && rect && rect.width > 0 && rect.height > 0) {
+              window.composerWidthFrames.push({
+                width: Math.round(rect.width),
+                maxWidth: getComputedStyle(shell).maxWidth,
+              });
             }
             if (window.composerWidthFrames.length < 30) {
               requestAnimationFrame(tick);
@@ -364,7 +368,9 @@ suite.define(() => {
         await page.reload();
         await expect.poll(() => page.evaluate(() => window.composerWidthFrames.length)).toBe(30);
         const frames = await page.evaluate(() => window.composerWidthFrames);
-        expect(new Set(frames), frames.join(", ")).toEqual(new Set([expectedWidth]));
+        const widths = frames.map(({ width }) => width);
+        expect(new Set(widths), widths.join(", ")).toEqual(new Set([expectedWidth]));
+        expect(new Set(frames.map(({ maxWidth }) => maxWidth))).toEqual(new Set([savedWidth]));
       });
     },
   );
