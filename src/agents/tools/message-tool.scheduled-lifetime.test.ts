@@ -78,13 +78,15 @@ it.for([
     const at = (...stages: string[]) => stages.includes(revokeAt);
     const viaGateway = deliveryMode === "gateway";
     const existingGatewayJob = revokeAt === "provider" && deliveryMode === "gateway";
-    const revokedError = "cron message action authority is no longer active";
+    const revokedError = "message action turn capability is no longer active";
     const laterError =
       revokeAt === "poll-provider"
         ? undefined
         : revokeAt === "action"
           ? "Message send aborted"
-          : revokedError;
+          : viaGateway
+            ? "agent tool caller authority is no longer active"
+            : revokedError;
     const registry = pluginRuntime.captureActivePluginRegistrySnapshot();
     const state = await createOpenClawTestState();
     const source = new AbortController();

@@ -118,6 +118,9 @@ describe("cron message action authority", () => {
         expect(
           resolveMessageActionTurnAuthorization({ ...lookup, runId: "another-invocation" }),
         ).toBeUndefined();
+        advanceCronActiveJobGeneration();
+        expect(grant.assertCurrent).not.toThrow();
+        expect(capture(jobId, owner.preparedRunAdmission.operationalRunInstance)).toBeUndefined();
         if (end === "closure") {
           owner.close();
           expect(resolveMessageActionTurnAuthorization(lookup)).toBeUndefined();
@@ -270,7 +273,11 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
           : await reload("after-guard");
       expect(removalModule.noteActiveCronJobRemoval(jobId, removalGuard)).toBe(currentMarker);
       expect(currentMarker).toMatchObject({ jobRemoved: true, scheduleMutated: true });
-      expect(assertCurrent).toThrow();
+      if (scenario === "replaced marker" || scenario === "retired generation") {
+        expect(assertCurrent).not.toThrow();
+      } else {
+        expect(assertCurrent).toThrow();
+      }
       expect(getActiveCronJobCount()).toBeGreaterThan(0);
       if (scenario === "active owner") {
         expect(cancel).not.toHaveBeenCalled();
