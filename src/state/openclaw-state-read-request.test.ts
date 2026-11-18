@@ -1,6 +1,36 @@
 import { expect, it, vi } from "vitest";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { requestBytes } from "./openclaw-state-read-request.js";
 import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
+
+it("refuses oversized selectors before preparation, including extra fields on type-only commands", async () => {
+  const keys = Array.from({ length: 4096 }, (_, index) => `session-${index}-${"x".repeat(64)}`);
+  const commands = [
+    { type: "sessionRows.sharedFacts" as const, entries: [{ acp: { keys } }] },
+    { type: "subagents.sessionList" as const, keys },
+  ];
+  const pool = new WorkerTaskPool({
+    workerUrl: new URL("file:///synthetic-unstarted-worker.js"),
+    maxPendingBytes: 32 * 1024,
+  });
+  const prepare = vi.fn(() => "must not prepare");
+  try {
+    for (const command of commands) {
+      const inputBytes = requestBytes({
+        context: { environment: { OPENCLAW_STATE_DIR: "/s" } },
+        databasePath: "/s/db",
+        location: "/s/db",
+        checkFreshAdmission: false,
+        command,
+      });
+      expect(inputBytes).toBeGreaterThanOrEqual(4096 * 64);
+      await expect(pool.run(prepare, { inputBytes })).rejects.toMatchObject({ code: "overloaded" });
+    }
+    expect(prepare).not.toHaveBeenCalled();
+  } finally {
+    await pool.close();
+  }
+});
 
 it("preserves admission charges for every UTF-16 code unit and surrogate boundary", () => {
   const request: OpenClawStateReadRequest = {
