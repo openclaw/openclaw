@@ -308,11 +308,28 @@ suite.define(() => {
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();
-        await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
         const rail = sidebar.locator(".sidebar-rail__pins");
         const source = sidebar.locator(`[data-session-key="${rows[0]!.key}"]`).first();
-        await source.waitFor();
+        await gateway.setMethodDelay("users.prefs.get", "forever");
+        try {
+          await gateway.resolveDeferred("connect");
+          await gateway.waitForRequest("users.prefs.get");
+          await source.waitFor();
+          console.info("rail-prefs-probe", {
+            phase: "row-ready-read-held",
+            pins: await rail.locator(".sidebar-rail__pin").count(),
+            sourceVisible: await source.isVisible(),
+          });
+        } finally {
+          await gateway.setMethodDelay("users.prefs.get", null);
+        }
+        await expect.poll(() => rail.locator(".sidebar-rail__pin").count()).toBe(0);
+        console.info("rail-prefs-probe", {
+          phase: "read-released-empty-rail",
+          pins: await rail.locator(".sidebar-rail__pin").count(),
+          sourceVisible: await source.isVisible(),
+        });
         expect(await rail.locator(".sidebar-rail__pin").count()).toBe(0);
         expect(await rail.getAttribute("class")).not.toContain("--drag-active");
         expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
