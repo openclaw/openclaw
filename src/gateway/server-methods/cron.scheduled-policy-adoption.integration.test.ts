@@ -66,7 +66,7 @@ const sessionId = "scheduled-policy-session";
 const accountId = "work";
 const cfg: OpenClawConfig = {
   agents: { entries: { main: {} } },
-  commands: { ownerAllowFrom: ["discord:owner-1", "telegram:owner-1"] },
+  commands: { ownerAllowFrom: ["discord:owner-1", "telegram:owner-1", "slack:owner-1"] },
 };
 const accountPolicy = cronAccountPolicy(sessionKey, accountId);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -307,203 +307,206 @@ it.each([
   }
 });
 
-it("records a Telegram owner's origin when creating a job within the visible tool cap", async () => {
-  await persistAuthProfileBatch({
-    stateDir: expectDefined(stateDir, "test state"),
-    profiles: [
-      {
-        profileId: "openai:automation-test",
-        credential: { type: "api_key", provider: "openai", key: "synthetic-automation-test-key" },
+it.each(["telegram", "discord", "slack"] as const)(
+  "records a %s owner's origin when creating a job within the visible tool cap",
+  async (channel) => {
+    await persistAuthProfileBatch({
+      stateDir: expectDefined(stateDir, "test state"),
+      profiles: [
+        {
+          profileId: "openai:automation-test",
+          credential: { type: "api_key", provider: "openai", key: "synthetic-automation-test-key" },
+        },
+      ],
+    });
+    const parentSessionKey = "agent:main:main:thread:creator-origin";
+    replaceSessionEntrySync(
+      { sessionKey: parentSessionKey },
+      { sessionId, updatedAt: 1, lifecycleRevision: "creator-origin" },
+    );
+    const { storePath, context } = createFixture();
+    context.getRuntimeConfig = getRuntimeConfig;
+    const host = createHostIngressFixture(channel, cfg);
+    const message = ingressMessage(channel, parentSessionKey, "owner-1", { accountId });
+    const channelIngress = await host.ingress.resolveStable(
+      ingressInput(message, { identity: { authentication: "verified" } }),
+    );
+    const ingressContext = host.buildContext({ ...message, channelIngress });
+    const ownerAuthority = expectDefined(getCommandOwnerAuthority(ingressContext), "host owner");
+    const channelRequester = expectDefined(
+      resolveReplyCronChannelRequester(ingressContext, {
+        channel,
+        senderId: "owner-1",
+        accountId,
+      }),
+      "host-bound requester",
+    );
+    await withAgentManagement(
+      async (identity) => {
+        vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+          async <T>(method: string, _options: unknown, params: unknown) => {
+            const client = createSyntheticPluginRuntimeClient();
+            client.internal = {
+              ...client.internal,
+              agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
+            };
+            const respond = await callCron(context, method, requireRecord(params, "Cron request"), {
+              client,
+            });
+            const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+            if (!ok) {
+              throw new Error(error?.message);
+            }
+            return result as T;
+          },
+        );
+        const tool = createCronTool({
+          runId: identity.operationalRunInstance.runId,
+          agentSessionKey: parentSessionKey,
+          agentAccountId: accountId,
+          creatorToolAllowlist: ["read"],
+        });
+        await tool.execute("create", {
+          action: "add",
+          job: {
+            name: "Creator origin",
+            schedule: { kind: "every", everyMs: 3_600_000 },
+            sessionKey: parentSessionKey,
+            sessionTarget: `session:${parentSessionKey}`,
+            payload: { kind: "agentTurn", message: "Read checkpoint", toolsAllow: ["read"] },
+          },
+        });
       },
-    ],
-  });
-  const parentSessionKey = "agent:main:main:thread:creator-origin";
-  replaceSessionEntrySync(
-    { sessionKey: parentSessionKey },
-    { sessionId, updatedAt: 1, lifecycleRevision: "creator-origin" },
-  );
-  const { storePath, context } = createFixture();
-  context.getRuntimeConfig = getRuntimeConfig;
-  const host = createHostIngressFixture("telegram", cfg);
-  const message = ingressMessage("telegram", parentSessionKey, "owner-1", { accountId });
-  const channelIngress = await host.ingress.resolveStable(
-    ingressInput(message, { identity: { authentication: "verified" } }),
-  );
-  const ingressContext = host.buildContext({ ...message, channelIngress });
-  const ownerAuthority = expectDefined(getCommandOwnerAuthority(ingressContext), "host owner");
-  const channelRequester = expectDefined(
-    resolveReplyCronChannelRequester(ingressContext, {
-      channel: "telegram",
-      senderId: "owner-1",
-      accountId,
-    }),
-    "host-bound requester",
-  );
-  await withAgentManagement(
-    async (identity) => {
-      vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
-        async <T>(method: string, _options: unknown, params: unknown) => {
-          const client = createSyntheticPluginRuntimeClient();
-          client.internal = {
-            ...client.internal,
-            agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
-          };
-          const respond = await callCron(context, method, requireRecord(params, "Cron request"), {
-            client,
-          });
-          const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
-          if (!ok) {
-            throw new Error(error?.message);
-          }
-          return result as T;
-        },
-      );
-      const tool = createCronTool({
-        runId: identity.operationalRunInstance.runId,
-        agentSessionKey: parentSessionKey,
-        agentAccountId: accountId,
-        creatorToolAllowlist: ["read"],
-      });
-      await tool.execute("create", {
-        action: "add",
-        job: {
-          name: "Creator origin",
-          schedule: { kind: "every", everyMs: 3_600_000 },
-          sessionKey: parentSessionKey,
-          sessionTarget: `session:${parentSessionKey}`,
-          payload: { kind: "agentTurn", message: "Read checkpoint", toolsAllow: ["read"] },
-        },
-      });
-    },
-    {
-      origin: { kind: "external", channel: "telegram" },
-      channel: "telegram",
-      sessionKey: parentSessionKey,
-      channelRequester,
-      ownerAuthority,
-    },
-  );
-  host.retire();
-  const stored = expectDefined((await loadCronStore(storePath)).jobs[0], "created job");
-  expect(stored).toMatchObject({
-    owner: { agentId: "main", sessionKey: parentSessionKey, accountId },
-    scheduledToolPolicy: cronAccountPolicy(parentSessionKey, accountId),
-    payload: { toolsAllow: ["read"] },
-    toolsAllowProvenance: {
-      version: 1,
-      source: "authenticated-requester",
-      callerOrigin: { kind: "external", channel: "telegram" },
-      channelRequester: { version: 1, channel: "telegram", accountId, senderId: "owner-1" },
-    },
-  });
-  const requester = resolveScheduledRequester(stored);
-  expect(requester).toEqual({ kind: "channel", requester: channelRequester });
-  const captureRepair = async (job = stored) => {
-    const repair = await captureCronJobTurnTarget({
-      job,
-      agentId: "main",
-      sessionKey: parentSessionKey,
-      context,
+      {
+        origin: { kind: "external", channel },
+        channel,
+        sessionKey: parentSessionKey,
+        channelRequester,
+        ownerAuthority,
+      },
+    );
+    host.retire();
+    const stored = expectDefined((await loadCronStore(storePath)).jobs[0], "created job");
+    expect(stored).toMatchObject({
+      owner: { agentId: "main", sessionKey: parentSessionKey, accountId },
+      scheduledToolPolicy: cronAccountPolicy(parentSessionKey, accountId),
+      payload: { toolsAllow: ["read"] },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: { kind: "external", channel },
+        channelRequester: { version: 1, channel, accountId, senderId: "owner-1" },
+      },
     });
-    const event = buildSessionEventContext({
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      sessionKey: parentSessionKey,
-      text: "Repair the scheduled automation.",
-      options: { source: "cron_failure_repair" },
-      occurrenceId: "channel-owner-repair",
-      target: repair.target,
-      assertCurrent: () => {},
-    });
-    return { owner: getCommandOwnerAuthority(event), release: repair.release };
-  };
-  const repair = await captureRepair();
-  try {
-    expect(repair.owner?.isCurrent()).toBe(true);
-    const revoked = { ...cfg, commands: { ownerAllowFrom: ["telegram:other-owner"] } };
-    setRuntimeConfigSnapshot(revoked);
-    expect(() => repair.owner?.isCurrent()).toThrow("no longer an owner");
-    const denied = await captureRepair();
+    const requester = resolveScheduledRequester(stored);
+    expect(requester).toEqual({ kind: "channel", requester: channelRequester });
+    const captureRepair = async (job = stored) => {
+      const repair = await captureCronJobTurnTarget({
+        job,
+        agentId: "main",
+        sessionKey: parentSessionKey,
+        context,
+      });
+      const event = buildSessionEventContext({
+        cfg: getRuntimeConfig(),
+        agentId: "main",
+        sessionKey: parentSessionKey,
+        text: "Repair the scheduled automation.",
+        options: { source: "cron_failure_repair" },
+        occurrenceId: "channel-owner-repair",
+        target: repair.target,
+        assertCurrent: () => {},
+      });
+      return { owner: getCommandOwnerAuthority(event), release: repair.release };
+    };
+    const repair = await captureRepair();
+    try {
+      expect(repair.owner?.isCurrent()).toBe(true);
+      const revoked = { ...cfg, commands: { ownerAllowFrom: [`${channel}:other-owner`] } };
+      setRuntimeConfigSnapshot(revoked);
+      expect(() => repair.owner?.isCurrent()).toThrow("no longer an owner");
+      const denied = await captureRepair();
+      try {
+        expect(denied.owner).toBeUndefined();
+      } finally {
+        denied.release();
+      }
+    } finally {
+      repair.release();
+      setRuntimeConfigSnapshot(cfg);
+    }
+    const nonOwner = structuredClone(stored);
+    expectDefined(nonOwner.toolsAllowProvenance, "persisted provenance").channelRequester = {
+      ...channelRequester,
+      senderId: "not-owner",
+    };
+    const denied = await captureRepair(nonOwner);
     try {
       expect(denied.owner).toBeUndefined();
     } finally {
       denied.release();
     }
-  } finally {
-    repair.release();
-    setRuntimeConfigSnapshot(cfg);
-  }
-  const nonOwner = structuredClone(stored);
-  expectDefined(nonOwner.toolsAllowProvenance, "persisted provenance").channelRequester = {
-    ...channelRequester,
-    senderId: "not-owner",
-  };
-  const denied = await captureRepair(nonOwner);
-  try {
-    expect(denied.owner).toBeUndefined();
-  } finally {
-    denied.release();
-  }
 
-  const config: OpenClawConfig = {
-    ...cfg,
-    agents: { ...cfg.agents, defaults: { workspace: stateDir, skipBootstrap: true } },
-    channels: { telegram: { accounts: { [accountId]: { botToken: "synthetic-token" } } } },
-  };
-  const registry = createTestRegistry([
-    {
-      pluginId: "telegram",
-      source: "test",
-      plugin: createChannelTestPluginBase({
-        id: "telegram",
-        config: {
-          listAccountIds: (current) => Object.keys(current.channels?.telegram?.accounts ?? {}),
-          resolveAccount: (current, id) =>
-            current.channels?.telegram?.accounts?.[id ?? "default"] ?? {},
-        },
-      }),
-    },
-  ]);
-  const previousRegistry = plugins.captureActivePluginRegistrySnapshot();
-  try {
-    plugins.setActivePluginRegistry(registry);
-    setRuntimeConfigSnapshot(config);
-    const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
-    const occurrence = await admitScheduledOccurrence({
-      cfg: config,
-      job: stored,
-      agentId: "main",
-      trigger: "cron",
-    });
-    const evaluate = () =>
-      runtime.evaluateTrigger({
-        occurrence,
-        job: stored,
-        script: "return { fire: false };",
-        state: null,
-        abortSignal: new AbortController().signal,
-        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
-      });
-    // Execute from the reloaded job, with no manual provenance reconstruction.
+    const config: OpenClawConfig = {
+      ...cfg,
+      agents: { ...cfg.agents, defaults: { workspace: stateDir, skipBootstrap: true } },
+      channels: { [channel]: { accounts: { [accountId]: { botToken: "synthetic-token" } } } },
+    };
+    const registry = createTestRegistry([
+      {
+        pluginId: channel,
+        source: "test",
+        plugin: createChannelTestPluginBase({
+          id: channel,
+          config: {
+            listAccountIds: (current) => Object.keys(current.channels?.[channel]?.accounts ?? {}),
+            resolveAccount: (current, id) =>
+              current.channels?.[channel]?.accounts?.[id ?? "default"] ?? {},
+          },
+        }),
+      },
+    ]);
+    const previousRegistry = plugins.captureActivePluginRegistrySnapshot();
     try {
-      const result = await evaluate();
-      expect(result, JSON.stringify(result)).toMatchObject({ kind: "evaluated", fire: false });
-      expect(stored.payload.toolsAllow).toEqual(["read"]);
-      expect(stored.scheduledToolPolicy).toEqual(cronAccountPolicy(parentSessionKey, accountId));
-      setRuntimeConfigSnapshot({ ...config, channels: { telegram: { accounts: {} } } }, config);
-      const missing = await evaluate();
-      expect(missing, JSON.stringify(missing)).toMatchObject({
-        kind: "error",
-        error: expect.stringContaining(`Scheduled account "${accountId}" is unavailable`),
+      plugins.setActivePluginRegistry(registry);
+      setRuntimeConfigSnapshot(config);
+      const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
+      const occurrence = await admitScheduledOccurrence({
+        cfg: config,
+        job: stored,
+        agentId: "main",
+        trigger: "cron",
       });
+      const evaluate = () =>
+        runtime.evaluateTrigger({
+          occurrence,
+          job: stored,
+          script: "return { fire: false };",
+          state: null,
+          abortSignal: new AbortController().signal,
+          deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+        });
+      // Execute from the reloaded job, with no manual provenance reconstruction.
+      try {
+        const result = await evaluate();
+        expect(result, JSON.stringify(result)).toMatchObject({ kind: "evaluated", fire: false });
+        expect(stored.payload.toolsAllow).toEqual(["read"]);
+        expect(stored.scheduledToolPolicy).toEqual(cronAccountPolicy(parentSessionKey, accountId));
+        setRuntimeConfigSnapshot({ ...config, channels: { [channel]: { accounts: {} } } }, config);
+        const missing = await evaluate();
+        expect(missing, JSON.stringify(missing)).toMatchObject({
+          kind: "error",
+          error: expect.stringContaining(`Scheduled account "${accountId}" is unavailable`),
+        });
+      } finally {
+        occurrence.release();
+      }
     } finally {
-      occurrence.release();
+      plugins.restoreActivePluginRegistrySnapshot(previousRegistry);
+      setRuntimeConfigSnapshot(cfg);
     }
-  } finally {
-    plugins.restoreActivePluginRegistrySnapshot(previousRegistry);
-    setRuntimeConfigSnapshot(cfg);
-  }
-});
+  },
+);
 
 it("reauthorizes a Telegram owner's unchanged tool cap without widening its account policy", async () => {
   const parentSessionKey = "agent:main:main:thread:policy-recovery";

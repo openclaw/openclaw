@@ -15,6 +15,7 @@ export type ProjectChipProps = {
   params: NewSessionPlaceControlsOptions;
   state: ReturnType<typeof resolveProjectChip>;
   nativeTerminal: boolean;
+  labelPending?: boolean;
   focus?: ProjectBrowserFocus;
 };
 
@@ -31,8 +32,8 @@ export function ProjectChip(props: ProjectChipProps) {
     <SessionPicker
       lazy
       kind="project"
-      label={`${t("newSession.what")}: ${label()}`}
-      value={label()}
+      label={props.labelPending ? t("newSession.what") : `${t("newSession.what")}: ${label()}`}
+      value={props.labelPending ? undefined : label()}
       icon={
         <Icon
           name={

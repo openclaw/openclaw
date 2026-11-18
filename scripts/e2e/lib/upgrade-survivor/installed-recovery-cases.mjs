@@ -10,7 +10,8 @@ export const retirementCuts = [
 ];
 
 // Explicit cells that run a fixture-managed Gateway service; no retirement cut fan-out.
-export const serviceRecoveryCuts = ["older-runtime", "live-gateway"];
+// `owed-plugin-retry` runs the live-gateway driver for an automatic owed-step retry.
+export const serviceRecoveryCuts = ["older-runtime", "live-gateway", "owed-plugin-retry"];
 
 export const installedRecoveryLaneNames = retirementCuts.map(
   (cut) => `package-installed-recovery-${cut}`,
