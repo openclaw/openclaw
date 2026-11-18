@@ -5612,6 +5612,24 @@ function createCompactNodeTestShardBundles(
 
   const compactJobCap = effectiveJobCap(packedBins);
   if (packsHostedTooling && compactJobs.length > compactJobCap) {
+    console.error(
+      "[hosted-packing-overflow]",
+      JSON.stringify({
+        compactMode,
+        mainValidation: options.mainValidation,
+        compactJobCap,
+        splitHostedToolingTails,
+        tailBudgets: hostedToolingTailBudgets && [...hostedToolingTailBudgets],
+        tailDonation: hostedToolingTailDonation,
+        bins: compactJobs.map((job) => ({
+          name: job.checkName,
+          seconds: job.predictedSeconds,
+          dist: job.requiresDist,
+          build: job.pretestBuildMode,
+          groups: job.groups.map((group) => group.shard_name),
+        })),
+      }),
+    );
     if (!splitHostedToolingTails) {
       // Repartition once at the file owner so timing identities and build costs
       // describe the smaller tails before the same admission checks pack them.
