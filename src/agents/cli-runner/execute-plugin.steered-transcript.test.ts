@@ -12,7 +12,7 @@ it("starts a new input's reply state once native owns the steered input", async 
     }),
     signal: new AbortController().signal,
     assertCurrent: () => {},
-    cwd: process.cwd(),
+    context: { params: { cwd: process.cwd(), workspaceDir: process.cwd() } },
     onInputSubmitted: vi.fn(() => order.push("input-submitted")),
   });
   await injection.queueMessage("follow-up", undefined, () => {}, "run");

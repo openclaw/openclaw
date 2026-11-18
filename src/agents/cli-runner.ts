@@ -54,6 +54,7 @@ import {
 import { createCliFailoverError, readCliStreamRefusalOutput } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
+import { createCliRunModelRequestGate } from "./cli-runner/model-request-hook.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./cli-runner/run-diagnostics.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
@@ -290,6 +291,15 @@ async function runPreparedCliAgentOwned(
     ...buildAgentHookContextIdentityFields(params),
   } as const;
 
+  context.beforeModelRequest = createCliRunModelRequestGate({
+    hookRunner,
+    hookContext: buildAgentHookContext(hookContext),
+    run: params,
+    model: context.modelId,
+    prompt: promptForHooks,
+    history: () => historyMessages,
+  });
+
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>
     buildAgentHookConversationMessages({
       historyMessages,
@@ -521,7 +531,9 @@ async function runPreparedCliAgentOwned(
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
     ({ executePreparedCliRun } = await import("./cli-runner/execute.runtime.js"));
-    historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+    if (needsHookHistory || context.beforeModelRequest) {
+      historyMessages = await loadCliSessionHistoryMessages(params);
+    }
     if (turnSideEffectsDisabled) {
       const reusableCliSessionId = isolatedCompletion
         ? undefined

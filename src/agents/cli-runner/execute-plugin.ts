@@ -473,7 +473,7 @@ export async function executePluginOwnedProcess(params: {
         getInjection: () => messageInjection,
         signal,
         assertCurrent,
-        cwd: run.cwd ?? run.workspaceDir,
+        context: params.context,
         onInputSubmitted: params.mcpCapture?.onInputSubmitted,
       }),
     },
