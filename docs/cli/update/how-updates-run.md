@@ -1636,3 +1636,8 @@ installation.
 This behavior belongs to the updater already running. Back up local edits before
 the first upgrade from an older updater that does not include it. Git checkouts
 continue to use the existing clean-worktree and Git update rules.
+
+When plugin convergence changes no config, the updater publishes its install
+records without rewriting the config file. This preserves its bytes and permits
+a provisioned read-only config. A real config change, including a requested
+channel change or Doctor repair, still requires a writable config.
