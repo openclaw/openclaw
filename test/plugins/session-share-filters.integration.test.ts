@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -634,5 +635,35 @@ describe("session-share source publication filters", () => {
         ).toBe(false);
       }
     });
+  });
+});
+
+it("rejects profile-shaped synthetic clients without host-attested device admission", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const fixture = commandFixture();
+    fixture.select({
+      groups: ["Team"],
+      involvingProfileId: "person",
+      gateway: true,
+      gatewayDeviceIds: ["reader"],
+    });
+    const respond = vi.fn();
+    await fixture.gatewayHandlers["session-share.list"]!({
+      req: { method: "session-share.list" },
+      params: {},
+      context: {},
+      respond,
+      hasCurrentClientAuthority: () => true,
+      client: { preparedSessionProfile: { profileId: "person", aliases: new Set(["person"]) } },
+    } as unknown as GatewayRequestHandlerOptions);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("source operator"),
+      }),
+      undefined,
+    );
   });
 });
