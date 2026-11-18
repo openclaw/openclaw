@@ -18,7 +18,6 @@ beforeEach(async () => {
   vi.stubEnv("XDG_DATA_HOME", root);
   vi.stubEnv("XDG_DATA_DIRS", root);
   for (const [name, output] of [
-    ["xdg-mime", "firefox.desktop"],
     ["firefox", "Mozilla Firefox 140.0esr"],
     ["google-chrome", "Google Chrome 156.0.1"],
   ]) {
@@ -26,6 +25,16 @@ beforeEach(async () => {
       mode: 0o700,
     });
   }
+  // Deliberately different HTML and HTTPS handlers: execute the real query path.
+  await fs.writeFile(
+    path.join(root, "xdg-mime"),
+    '#!/bin/sh\ncase "$3" in\n  text/html) printf "%s\\n" firefox.desktop ;;\n  x-scheme-handler/https) printf "%s\\n" chrome.desktop ;;\n  *) exit 1 ;;\nesac\n',
+    { mode: 0o700 },
+  );
+  await fs.writeFile(
+    path.join(root, "applications", "chrome.desktop"),
+    "[Desktop Entry]\nExec=google-chrome %u\n",
+  );
 });
 afterEach(() => {
   vi.unstubAllEnvs();

@@ -33,18 +33,23 @@ session only. It does not install browsers, change defaults, or use agent browse
 automation profiles. The selected browser receives a fresh one-time pairing link
 through the existing private local-file handoff, never in process arguments.
 
-- **macOS:** reads browser registrations and application metadata, including
-  `/Applications` and `~/Applications`.
+- **macOS:** resolves the default HTML-document handler through Launch Services
+  and reads application metadata, including `/Applications` and `~/Applications`.
 - **Windows:** asks the Windows Shell for the effective `.html` handler and reads
   installed executable version metadata. The private handoff is an HTML file, so
   its handler can differ from the HTTPS default. Discovery does not rely on the
   legacy `UserChoice` registry layout. This covers the native CLI, not the
   independently released Windows Hub.
-- **Linux:** reads the HTTPS XDG desktop association and versions of normal
+- **Linux:** reads the `text/html` XDG desktop association and versions of normal
   Chrome, Chromium, Edge, and Firefox executables on `PATH`. Custom desktop
   wrappers, Flatpak-only installs, and a `BROWSER` override may remain unknown.
 - **WSL:** retains the existing Windows desktop opener; Linux browser discovery
   does not select a browser for the Windows desktop.
+
+The handoff is a local HTML file, so its default application can differ from the
+HTTP/HTTPS browser. Unknown HTML handlers keep the existing opening path.
+Selected Windows browsers launch visibly; OpenClaw does not suppress browser
+first-run setup, and a successful process launch is not a completed pairing.
 
 Version estimates are not browser-side feature verification. Unknown browsers or
 versions retain the existing default-opening path, and the Control UI still checks

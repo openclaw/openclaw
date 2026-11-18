@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { resolveControlUiBrowser } from "./control-ui-browser.js";
@@ -238,5 +239,65 @@ it.each(["supported", "unknown"])(
       ],
     });
     expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
+  },
+);
+
+it.each(["unknown-html", "unsupported-html"])(
+  "uses macOS HTML association instead of a different HTTPS browser (%s)",
+  async (scenario) => {
+    const developer = {
+      id: "org.mozilla.firefoxdeveloperedition",
+      path: "/Applications/Firefox Developer Edition.app",
+      version: "150.0",
+    };
+    const html = scenario === "unknown-html" ? developer : safari;
+    const https = scenario === "unknown-html" ? safari : chrome;
+    const apps = [html, https, chrome];
+    const fileUrl = (appPath: string) => ({ path: appPath });
+    const bridge = Object.assign((value: unknown) => value, {
+      kLSRolesAll: 0xffffffff,
+      LSCopyDefaultRoleHandlerForContentType: (type: string, role: number) =>
+        type === "public.html" && role === 0xffffffff ? html.id : undefined,
+      NSHomeDirectory: () => "/Users/fixture",
+      NSURL: { URLWithString: (value: string) => value, fileURLWithPath: fileUrl },
+      NSWorkspace: {
+        sharedWorkspace: {
+          URLForApplicationToOpenURL: () => fileUrl(https.path),
+          URLForApplicationWithBundleIdentifier: (id: string) =>
+            fileUrl(apps.find((app) => app.id === id)?.path ?? ""),
+          URLsForApplicationsWithBundleIdentifier: (id: string) => {
+            const matches = apps.filter((app) => app.id === id);
+            return {
+              count: matches.length,
+              objectAtIndex: (index: number) => fileUrl(matches[index]!.path),
+            };
+          },
+        },
+      },
+      NSBundle: {
+        bundleWithURL: (url: { path: string }) => {
+          const app = apps.find((entry) => entry.path === url.path);
+          return { bundleIdentifier: app?.id, objectForInfoDictionaryKey: () => app?.version };
+        },
+      },
+    });
+    readOs.mockImplementation(async (_command: string, args: string[]) => ({
+      // Execute the actual JXA program against fixed native-boundary responses.
+      stdout: runInNewContext(args.at(-1)!, {
+        $: bridge,
+        ObjC: { import: () => {}, unwrap: (value: unknown) => value },
+      }),
+      stderr: "",
+    }));
+    const selected = await resolveControlUiBrowser();
+    expect(selected).toEqual(
+      scenario === "unknown-html"
+        ? { canOpen: true }
+        : {
+            canOpen: true,
+            openOptions: { browserCommand: ["/usr/bin/open", "-a", chrome.path] },
+            notice: expect.stringContaining("Chrome for this session"),
+          },
+    );
   },
 );

@@ -114,7 +114,8 @@ async function openBrowserPath(
       // not process exit; onboarding separately verifies the client connection.
       const child = await spawnAndWait({
         argv: command,
-        options: { detached: true, stdio: "ignore", windowsHide: true },
+        // This is the user’s GUI application, not a hidden diagnostic command.
+        options: { detached: true, stdio: "ignore", windowsHide: false },
       });
       child.unref();
       return true;

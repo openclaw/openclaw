@@ -122,7 +122,7 @@ describe("openLocalFile", () => {
       } else {
         expect(launchDetached).toHaveBeenCalledExactlyOnceWith({
           argv: [...command, expected],
-          options: { detached: true, stdio: "ignore", windowsHide: true },
+          options: { detached: true, stdio: "ignore", windowsHide: false },
         });
         expect(launch).not.toHaveBeenCalled();
       }

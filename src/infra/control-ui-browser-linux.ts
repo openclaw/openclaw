@@ -28,7 +28,8 @@ export async function discoverLinuxControlUiBrowsers(): Promise<ControlUiBrowser
   const signal = AbortSignal.timeout(3_000);
   const run = (command: string, args: string[]) =>
     runExec(command, args, { timeoutMs: 1_000, signal, maxBuffer: 8192, logOutput: false });
-  const defaultDesktop = await run("xdg-mime", ["query", "default", "x-scheme-handler/https"])
+  // The existing opener receives handoff.html, not the final dashboard URL.
+  const defaultDesktop = await run("xdg-mime", ["query", "default", "text/html"])
     .then((result) => result.stdout.trim())
     .catch(() => "");
   if (!/^[\w.-]+\.desktop$/.test(defaultDesktop)) {

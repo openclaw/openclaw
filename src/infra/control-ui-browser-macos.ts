@@ -16,7 +16,7 @@ const BROWSERS = [
 /** AppKit reads registrations and bundle metadata without sending events to a browser. */
 export async function discoverMacControlUiBrowsers(): Promise<ControlUiBrowserDiscovery> {
   const script = [
-    'ObjC.import("AppKit"); ObjC.import("Foundation");',
+    'ObjC.import("AppKit"); ObjC.import("Foundation"); ObjC.import("CoreServices");',
     "var workspace = $.NSWorkspace.sharedWorkspace;",
     "var result = [];",
     "function describe(url, isDefault) {",
@@ -29,7 +29,10 @@ export async function discoverMacControlUiBrowsers(): Promise<ControlUiBrowserDi
     "      isDefault: isDefault});",
     "  } catch (_) {}",
     "}",
-    'describe(workspace.URLForApplicationToOpenURL($.NSURL.URLWithString("https://localhost/")), true);',
+    // Resolve the HTML file's default role, including non-browser handlers.
+    // A hypothetical file URL cannot be used: NSWorkspace requires it to exist.
+    'var handler = $.LSCopyDefaultRoleHandlerForContentType($("public.html"), $.kLSRolesAll);',
+    "if (handler) describe(workspace.URLForApplicationWithBundleIdentifier(ObjC.unwrap(handler)), true);",
     "var specs = " + JSON.stringify(BROWSERS) + ";",
     "specs.forEach(function(spec) {",
     "  try {",
