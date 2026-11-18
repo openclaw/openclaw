@@ -1,4 +1,0 @@
-# Async presence proofs for #190243: resolveReadOnlyChannelPluginsForConfigAsync
-# must use the async auth probe (never deprecated sync), and channels list must
-# emit no DEP_PLUGIN_SDK warning when saved auth is present.
-150

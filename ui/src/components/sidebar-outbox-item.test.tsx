@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayHarness, client } from "../app/overlays-access.test-support.ts";
 import { disposeSidebarContextLifecycles } from "../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createSessions } from "../test-helpers/app-sidebar.ts";
@@ -47,11 +48,12 @@ it.each([
       activate() {
         throw new Error("not used by renderer");
       },
+      refreshOpenClawId: vi.fn(),
       dismiss: vi.fn(),
       subscribe: () => () => {},
       dispose() {},
     },
-  };
+  } satisfies ApplicationContext;
   const { container } = mountSolid(() =>
     renderSidebarOutboxItem({ entry, onNavigate: navigate }, context),
   );

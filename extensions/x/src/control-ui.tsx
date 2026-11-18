@@ -561,7 +561,7 @@ export default defineControlUiPlugin({
       id: "replies",
       label: "X replies",
       page: { id: "replies" },
-      icon: "at-sign",
+      icon: "atSign",
       order: 40,
     });
     return () => {

@@ -1,2 +1,0 @@
-# Collector continuation via the existing Gateway fixture and completion-owner exclusion.
-32

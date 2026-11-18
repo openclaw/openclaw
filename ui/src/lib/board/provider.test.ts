@@ -627,6 +627,7 @@ describe("board snapshots and refreshes", () => {
       sandboxUrl: "https://sandbox.example/host",
       sandboxPort: 18_790,
       sandboxOrigin: "https://sandbox.example:18790",
+      sandboxShellHtml: "<p>Trusted shell</p>",
     };
     const layout = snapshot(2, { widgets: [{ ...plain, sizeW: 8 }] });
     const grant = snapshot(3, { widgets: [{ ...layout.widgets[0]!, grantState: "granted" }] });

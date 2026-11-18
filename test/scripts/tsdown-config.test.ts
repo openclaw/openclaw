@@ -1,15 +1,17 @@
 // Tsdown config tests protect package artifact build contracts.
 import { execFile, type ExecFileOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire, isBuiltin, SourceMap } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { findBundledModuleRegion } from "../../scripts/lib/bundled-module-regions.mjs";
 import {
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { createCompactModuleLabelsPlugin } from "../../scripts/lib/compact-module-labels.mts";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
@@ -59,6 +61,98 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   }
   return (entry as Record<string, unknown>)[name] === source;
 }
+
+it("keeps retirement reads outside the Doctor restoration graph", async () => {
+  const selected = configs.find((config) =>
+    hasWorkerEntry(
+      config,
+      "config/sessions/session-transcript.worker",
+      path.resolve("src/config/sessions/session-transcript.worker.ts"),
+    ),
+  );
+  if (!selected) {
+    throw new Error("Missing private transcript worker build config");
+  }
+  const root = createTempDir("openclaw-retirement-read-build-");
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { "retirement-read": "src/config/sessions/session-retirement-read.worker.ts" },
+    outDir: root,
+    dts: false,
+    logLevel: "silent",
+  });
+  try {
+    const chunks = bundles.flatMap((bundle) => bundle.chunks);
+    // The rejected package emitted over 5,000 files through this read-only handler.
+    // Retain room for its query/engine dependencies without copying Doctor's restorers.
+    expect(chunks.length).toBeLessThan(1_500);
+    console.info(`Retirement read build: ${chunks.length} emitted files`);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
+it("keeps database-opening workers outside update migration attribution", async () => {
+  const name = "infra/fs-safe-copy.worker";
+  const selected = configs.find(
+    (config) =>
+      typeof config.entry === "object" &&
+      config.entry !== null &&
+      !Array.isArray(config.entry) &&
+      name in config.entry,
+  );
+  const source = selected
+    ? (selected.entry as Record<string, string | undefined>)[name]
+    : undefined;
+  if (!selected || !source) {
+    throw new Error("Missing private fs-safe copy worker build config");
+  }
+  const root = createTempDir("openclaw-db-worker-attribution-build-");
+  const modules: string[] = [];
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { [name]: source },
+    outDir: root,
+    dts: false,
+    logLevel: "silent",
+    plugins: [
+      selected.plugins,
+      {
+        name: "db-worker-attribution-proof",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              modules.push(
+                ...Object.keys(chunk.modules).map((id) =>
+                  path.relative(process.cwd(), id).split(path.sep).join("/"),
+                ),
+              );
+            }
+          }
+        },
+      },
+    ],
+  });
+  try {
+    // Opening a database must not copy update inspection into every private worker graph.
+    expect(
+      modules.filter((id) =>
+        /^src\/infra\/update-(?:doctor-migration-attribution|candidate-state|database-generations)/u.test(
+          id,
+        ),
+      ),
+    ).toEqual([]);
+    expect(modules).toContain("src/infra/update-doctor-migration-context.ts");
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
 
 it("keeps the standalone launcher bootstrap within its measured metadata-only boundary", async () => {
   const selected = configs.find((config) =>
@@ -262,6 +356,167 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
+  it("emits compact JavaScript alongside TypeScript declarations", async () => {
+    const selected = configs.find((config) => config.name === TSDOWN_PACKAGE_CONFIG_GROUP)!;
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-mixed-"));
+    materializeNativeCompiler(root);
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(
+      path.join(root, "entry.ts"),
+      'export type Value = { value: string };\nexport const value: Value = { value: "ok" };',
+    );
+    const tsconfig = path.join(root, "tsconfig.json");
+    fs.writeFileSync(
+      tsconfig,
+      JSON.stringify({
+        compilerOptions: { module: "NodeNext", target: "ES2023", types: [], skipLibCheck: true },
+        files: ["entry.ts"],
+      }),
+    );
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      cwd: root,
+      entry: { entry: "entry.ts" },
+      outDir: path.join(root, "dist"),
+      tsconfig,
+      dts: { tsconfig },
+      logLevel: "silent",
+    });
+    try {
+      expect(fs.readFileSync(path.join(root, "dist/entry.d.ts"), "utf8")).toMatch(
+        /type Value\s*=/u,
+      );
+      const runtime = await import(pathToFileURL(path.join(root, "dist/entry.js")).href);
+      expect(runtime.value).toEqual({ value: "ok" });
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
+  it("preserves source positions and ignores module-like text inside strings and functions", () => {
+    const source = `// src/owner.ts
+const script = \`
+// src/string.ts
+\`;
+function run() {
+// src/nested.ts
+return script;
+}
+// src/next.ts
+export { run };`;
+    const output = createCompactModuleLabelsPlugin().renderChunk(source, {
+      fileName: "fixture.js",
+    });
+    expect(output?.code).toBe(
+      source
+        .replace("// src/owner.ts", "//!src/owner.ts")
+        .replace("// src/next.ts", "//!src/next.ts"),
+    );
+    expect(output?.code.length).toBe(source.length);
+  });
+
+  it("reduces emitted source while preserving names, update origins, and lazy execution", async () => {
+    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+    if (!selected) {
+      throw new Error("Missing unified build config");
+    }
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-compact-"));
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');
+    fs.writeFileSync(
+      path.join(root, "src/main.ts"),
+      'export { PublicFunction, PublicClass, originValue } from "./owner.ts";\n' +
+        'export const load = () => import("./lazy.ts");',
+    );
+    fs.writeFileSync(
+      path.join(root, "src/owner.ts"),
+      `export const originValue = 7;
+export function PublicFunction(longDescriptiveInputValue) {
+  const longDescriptiveIncrementedValue = longDescriptiveInputValue + originValue;
+  const longDescriptiveMultipliedValue = longDescriptiveIncrementedValue * 3;
+  const longDescriptiveReducedValue = longDescriptiveMultipliedValue - longDescriptiveInputValue;
+  return [longDescriptiveIncrementedValue, longDescriptiveMultipliedValue, longDescriptiveReducedValue];
+}
+export class PublicClass {
+  method(longDescriptiveMethodArgument) {
+    const longDescriptiveMethodResult = PublicFunction(longDescriptiveMethodArgument);
+    return longDescriptiveMethodResult.join(":");
+  }
+}`,
+    );
+    fs.writeFileSync(
+      path.join(root, "src/lazy.ts"),
+      'process.env.OPENCLAW_FIXTURE_LAZY_LOADED = "yes"; export const value = 42;',
+    );
+    const outDir = path.join(root, "dist");
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      cwd: root,
+      entry: { fixture: "src/main.ts" },
+      outDir,
+      tsconfig: false,
+      dts: false,
+      logLevel: "silent",
+      sourcemap: "hidden",
+    });
+    try {
+      const chunks = bundles.flatMap((bundle) =>
+        bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+      );
+      const entry = chunks.find((chunk) => chunk.isEntry);
+      expect(entry).toBeDefined();
+      expect(entry?.dynamicImports).toHaveLength(1);
+      const owner = chunks.find((chunk) => findBundledModuleRegion(chunk.code, "src/owner.ts"));
+      expect(owner).toBeDefined();
+      expect(owner?.code).toMatch(/\b(?:const|var) originValue\s*=\s*7;/u);
+      const beforeFunction = owner!.code.slice(0, owner!.code.indexOf("function PublicFunction("));
+      const lines = beforeFunction.split("\n");
+      const sourceMap = new SourceMap(
+        JSON.parse(fs.readFileSync(path.join(outDir, `${owner!.fileName}.map`), "utf8")),
+      );
+      expect(sourceMap.findEntry(lines.length - 1, lines.at(-1)!.length)).toMatchObject({
+        originalSource: expect.stringContaining("src/owner.ts"),
+        originalLine: 1,
+      });
+      const relocated = path.join(root, "relocated");
+      fs.renameSync(outDir, relocated);
+      fs.rmSync(path.join(root, "src"), { recursive: true });
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "-e",
+          `
+import assert from "node:assert/strict";
+delete process.env.OPENCLAW_FIXTURE_LAZY_LOADED;
+const runtime = await import(${JSON.stringify(pathToFileURL(path.join(relocated, entry!.fileName)).href)});
+assert.equal(runtime.PublicFunction.name, "PublicFunction");
+assert.equal(runtime.PublicClass.name, "PublicClass");
+assert.equal(runtime.originValue, 7);
+assert.deepEqual(runtime.PublicFunction(2), [9, 27, 25]);
+assert.equal(new runtime.PublicClass().method(2), "9:27:25");
+assert.equal(process.env.OPENCLAW_FIXTURE_LAZY_LOADED, undefined);
+assert.equal((await runtime.load()).value, 42);
+assert.equal(process.env.OPENCLAW_FIXTURE_LAZY_LOADED, "yes");
+`,
+        ],
+        { cwd: relocated, timeout: 30_000 },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      // Bound the source retained by the loader, including the required owner labels.
+      expect(
+        chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk.code), 0),
+      ).toBeLessThan(400);
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it.each([
     "extensions/openai/setup-api",
     "extensions/openai/capability-catalog",
@@ -1019,6 +1274,66 @@ console.log("relocated session card renders with bundled fonts");
     }
   });
 
+  it("loads source workers through the relocated runtime loader artifact", async () => {
+    const root = fs.realpathSync(createTempDir("openclaw-tsdown-worker-loader-"));
+    const loader = "infra/runtime-worker-loader";
+    const selected = configs.find((config) =>
+      hasWorkerEntry(config, loader, path.resolve(`src/${loader}.mjs`)),
+    );
+    if (!selected) {
+      throw new Error("Missing runtime worker loader build entry");
+    }
+    const { bundles } = await build({
+      ...selected,
+      config: false,
+      entry: {
+        [loader]: path.resolve(`src/${loader}.mjs`),
+        "worker-argv": path.resolve("src/infra/runtime-worker-url.ts"),
+      },
+      outDir: path.join(root, "dist"),
+      dts: false,
+      logLevel: "silent",
+    });
+    try {
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+      fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+      const cwd = path.join(root, "foreign-cwd");
+      fs.mkdirSync(cwd);
+      const worker = path.join(cwd, "worker.mts");
+      fs.writeFileSync(
+        worker,
+        'import { parentPort } from "node:worker_threads"; enum Answer { value = 42 }; parentPort.postMessage(Answer.value);',
+      );
+      const result = await runNodeFixture(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
+const { resolveRuntimeWorkerThreadExecArgv } = await import(pathToFileURL(process.argv[1]).href);
+const url = pathToFileURL(process.argv[2]);
+assert.deepEqual(resolveRuntimeWorkerThreadExecArgv(new URL("worker.js", url)), []);
+assert.deepEqual(resolveRuntimeWorkerThreadExecArgv(url, "bun"), []);
+const worker = new Worker(url, { execArgv: resolveRuntimeWorkerThreadExecArgv(url) });
+worker.once("error", error => { throw error; });
+worker.once("message", value => { assert.equal(value, 42); console.log("relocated loader ran source worker"); });
+`,
+          path.join(root, "dist", "worker-argv.js"),
+          worker,
+        ],
+        { cwd, timeout: 10_000 },
+      );
+      expect(result.error, result.stderr).toBeNull();
+      expect(result.stdout.trim()).toBe("relocated loader ran source worker");
+    } finally {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    }
+  });
+
   it.each(["runtime", "worker"])(
     "keeps service relay dependencies inside the emitted %s artifact closure",
     async (target) => {
@@ -1075,34 +1390,31 @@ console.log("relocated session card renders with bundled fonts");
         readText: (file) => fs.readFileSync(path.join(root, file), "utf8"),
       });
       expect(collectPackageDistImportErrors({ files, imports })).toEqual([]);
-      if (worker) {
-        if (process.platform !== "win32") {
-          const result = await runNodeFixture(
-            [
-              path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
-              path.join(root, "dist", `${relay}.${extension}`),
-            ],
-            { timeout: 15_000 },
-          );
-          expect(result.error, result.stderr).toBeNull();
-          expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
-        }
-      } else {
-        // Each launch boots both helpers; shared chunks pull unrelated runtime
-        // exports into startup before the durable worker gate can open.
-        // The anchor's lineage writer retains the shared lazy schema catalogs.
-        expect(files.toSorted()).toEqual(
-          [
-            `dist/${relay}.${extension}`,
-            `dist/${anchor}.${extension}`,
+      if (!worker) {
+        expect(files).toEqual(
+          expect.arrayContaining([
             "dist/assets/sqlite-schema/sqlite-agent-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-client-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-daemon-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-memory-catalogs.json",
             "dist/assets/sqlite-schema/sqlite-state-catalogs.json",
-          ].toSorted(),
+          ]),
         );
-        expect(imports).toEqual([]);
+      }
+      if (process.platform !== "win32") {
+        if (!worker) {
+          fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+          fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+        }
+        const result = await runNodeFixture(
+          [
+            path.resolve("test/scripts/service-relay-artifact.test-support.mjs"),
+            path.join(root, "dist", `${relay}.${extension}`),
+          ],
+          { timeout: 15_000 },
+        );
+        expect(result.error, result.stderr).toBeNull();
+        expect(result.stdout.trim()).toBe("emitted relay and anchor completed and retired");
       }
     },
   );

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { stat } from "node:fs/promises";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import { WebSocketServer } from "ws";
 const [mode, workspaceDir, runtimeUrl, launchDescriptorUrl, admissionUrl, websocketDataUrl] =
   process.argv.slice(2);
@@ -26,7 +26,7 @@ process.on("worker-import:work", (name) => work.push(name));
 
 // The runtime, connection, abort controller, and environment cleanup remain real.
 // Controlled preparation proves imports wait for admission and join cleanup.
-const hooks = registerHooks({
+const hooks = nodeModule.registerHooks({
   resolve(specifier, context, nextResolve) {
     const name =
       context.parentURL === runtimeUrl

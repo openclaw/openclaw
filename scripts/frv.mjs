@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   mkdirSync,
@@ -34,6 +34,7 @@ import {
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
   readReleaseJobListing,
+  releaseWatcherJobName,
   releaseChildSpec,
   releaseChildSpecs,
   releaseGhRateLimitRetryAt,
@@ -68,7 +69,7 @@ import {
   tryReadReleaseDecisionArtifact,
 } from "./release-ci-summary.mjs";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(childProcess.execFile);
 const DEFAULT_REPOSITORY = "openclaw/openclaw";
 const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;
@@ -137,6 +138,11 @@ function remainingOperationTime(deadline, label = "FRV operation") {
 
 function parseArgs(argv) {
   const command = argv[0];
+  if (command === "recover") {
+    throw new Error(
+      "recover is retired; receipt-backed recovery is no longer supported. Run fresh qualification with pnpm ci:full-release for the same immutable candidate.",
+    );
+  }
   const options = {
     command,
     dryRun: false,
@@ -583,8 +589,8 @@ async function recheckArtifactProducers(
   }
 }
 
-const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate"]);
-const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker"]);
+const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate", "plugin-npm"]);
+const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "plugin-npm"]);
 
 async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
@@ -653,10 +659,14 @@ function artifactRecoveryJobs(workflow) {
       continue;
     }
     const childKind = job.env?.CHILD_WORKFLOW_KIND;
-    if (typeof childKind !== "string" || !childKind.startsWith("artifact-")) {
+    if (
+      typeof childKind !== "string" ||
+      (!childKind.startsWith("artifact-") && childKind !== "plugin-npm-preflight")
+    ) {
       continue;
     }
-    const stage = childKind.slice("artifact-".length);
+    const stage =
+      childKind === "plugin-npm-preflight" ? "plugin-npm" : childKind.slice("artifact-".length);
     if (!ARTIFACT_PRODUCER_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
       throw new Error("Source workflow artifact producer contract is unsupported");
     }
@@ -718,11 +728,39 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       continue;
     }
     const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
-    const dispatches = [
-      ...log.matchAll(
-        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
-      ),
-    ];
+    const plugin = stage === "plugin-npm";
+    const pluginDispatches = plugin
+      ? [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched plugin-npm-release\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ]
+      : [];
+    const distTags = plugin
+      ? [
+          ...new Set(
+            [
+              ...log.matchAll(
+                /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?\s*NPM_DIST_TAG: (default|extended-stable)\r?(?=\n|$)/gu,
+              ),
+            ].map((match) => match[1]),
+          ),
+        ]
+      : [];
+    const dispatches = plugin
+      ? pluginDispatches.map((match) => [
+          match[0],
+          stage,
+          plan.targetSha,
+          match[1],
+          match[2],
+          match[3],
+        ])
+      : [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ];
     if (
       dispatches.length === 0 &&
       plan.evidenceReuse?.requested === true &&
@@ -730,6 +768,9 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       job.conclusion === "success"
     ) {
       continue;
+    }
+    if (plugin && (distTags.length !== 1 || !log.includes(`TARGET_SHA: ${plan.targetSha}`))) {
+      throw new Error("Original plugin-npm dispatch inputs are unavailable or ambiguous");
     }
     if (
       dispatches.length !== 1 ||
@@ -759,7 +800,10 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       request: {
         stage,
         repository,
-        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        dispatchId: plugin
+          ? `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-plugin-npm-preflight`
+          : `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        ...(plugin ? { sourceSha: plan.targetSha, npmDistTag: distTags[0] } : {}),
         toolingSha: plan.workflowSha,
         workflowRef: plan.workflowRef,
       },
@@ -1076,7 +1120,7 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion);
+      const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
@@ -1161,9 +1205,11 @@ async function inspectQualificationStatus(plan, runId, client) {
   const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
   const blockers = [
     ...parentJobBlockers(currentJobs, parent.run_attempt),
-    ...childJobBlockers(status.children, plan.targetVersion),
+    ...childJobBlockers(status.children, plan.targetVersion, plan.targetSha),
   ];
-  const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
+  const drainJobs = currentJobs.filter(
+    (job) => releaseWatcherJobName(job.name) === "Diagnostic Drain",
+  );
   const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
   const drain = {
     status: drainJob?.status ?? "unknown",
@@ -1185,7 +1231,10 @@ async function inspectQualificationStatus(plan, runId, client) {
       decision = validateReleaseStateArtifact(artifact, { executionPlan: plan }, "decision");
     } else if (
       parent.status === "completed" ||
-      currentJobs.some((job) => job.name === "Release Decision" && job.status === "completed")
+      currentJobs.some(
+        (job) =>
+          releaseWatcherJobName(job.name) === "Release Decision" && job.status === "completed",
+      )
     ) {
       observationErrors.push("Decision evidence unavailable");
     }
@@ -3346,10 +3395,10 @@ function parentJobBlockers(jobs, attempt) {
     }));
 }
 
-function childJobBlockers(children, targetVersion) {
+function childJobBlockers(children, targetVersion, targetSha) {
   return children.flatMap((child) =>
     child.jobs
-      ? evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+      ? evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
           owner: child.key,
           job: job.name,
           conclusion: job.conclusion,
@@ -3579,6 +3628,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           for (const job of evaluateReleaseChildPolicy({
             child: { key: child.key, jobs: composite.jobs },
             targetVersion: observation.plan?.targetVersion,
+            targetSha: observation.plan?.targetSha,
           }).blockingJobs) {
             const raw = attempts[job.acceptedRunAttempt - 1].jobs.find(
               (row) => row.name === job.name && row.conclusion !== "skipped",

@@ -27,6 +27,8 @@ export type TranscriptLayoutProps = {
   getContent: (index: number) => TranscriptContent;
   activeRowKeys: ReadonlySet<string>;
   preparingRowKey?: string;
+  forecastRowKeys?: ReadonlySet<string>;
+  unsettledRowKeys?: ReadonlySet<string>;
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
   overlay: JSX.Element;
   header: JSX.Element;

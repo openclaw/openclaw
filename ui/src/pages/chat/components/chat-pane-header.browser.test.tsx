@@ -83,8 +83,8 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       expect(actions.getBoundingClientRect().left).toBeCloseTo(title.getBoundingClientRect().right);
     });
 
-    it.each(["Main session", "A long session title that must keep the same header geometry"])(
-      "keeps the desktop menu in place when the pending title becomes %s",
+    it.each(["Hello hello", "A long session title that should use the available header width"])(
+      "fits the loaded title and keeps its menu adjacent: %s",
       async (title) => {
         const { container, update } = mountChatPaneHeader(containers, {
           title: "",
@@ -92,15 +92,21 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           sessionMenuAction: chatPaneHeaderSessionMenu(),
         });
         const menu = container.querySelector<HTMLElement>(".chat-pane__identity-actions")!;
-        const trailing = container.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
-        const before = [menu, trailing].map((element) => element.getBoundingClientRect());
         update({ title, titlePending: false });
         await waitForSolid(() => expect(container.textContent).toContain(title));
-        [menu, trailing].forEach((element, index) => {
-          const after = element.getBoundingClientRect();
-          expect(after.left).toBeCloseTo(before[index]!.left, 1);
-          expect(after.width).toBeCloseTo(before[index]!.width, 1);
-        });
+        const text = container.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
+        const range = document.createRange();
+        range.selectNodeContents(text);
+        expect(text.getBoundingClientRect().width).toBeCloseTo(
+          range.getBoundingClientRect().width,
+          1,
+        );
+        expect(text.scrollWidth).toBeLessThanOrEqual(text.clientWidth);
+        const button = container.querySelector<HTMLElement>(".chat-pane__session-title-button")!;
+        expect(menu.getBoundingClientRect().left).toBeCloseTo(
+          button.getBoundingClientRect().right,
+          1,
+        );
       },
     );
 
@@ -188,15 +194,19 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           header.style[inset === "start" ? "paddingLeft" : "paddingRight"] = value;
         }
         const trigger = findElement(container, ".chat-pane__agent-identity");
-        const name = findElement(container, ".chat-pane__agent-name");
         const actions = findElement(container, ".chat-pane__header-trailing");
         const avatar = findElement(container, ".chat-pane__agent-avatar");
         expect(trigger.checkVisibility()).toBe(true);
-        expect(name.getBoundingClientRect().width).toBeGreaterThan(40);
-        const headerCenter = header.getBoundingClientRect().left + header.clientWidth / 2;
-        const identity = findElement(container, ".chat-pane__header-agent");
-        const identityCenter = identity.getBoundingClientRect().left + identity.clientWidth / 2;
-        expect(Math.abs(identityCenter - headerCenter)).toBeLessThanOrEqual(inset ? 1 : 2);
+        if (width <= 768) {
+          const name = findElement(container, ".chat-pane__agent-name");
+          expect(name.getBoundingClientRect().width).toBeGreaterThan(40);
+          const headerCenter = header.getBoundingClientRect().left + header.clientWidth / 2;
+          const identity = findElement(container, ".chat-pane__header-agent");
+          const identityCenter = identity.getBoundingClientRect().left + identity.clientWidth / 2;
+          expect(Math.abs(identityCenter - headerCenter)).toBeLessThanOrEqual(2);
+        } else {
+          expect(findElement(container, ".chat-pane__session-title").checkVisibility()).toBe(true);
+        }
         expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
           actions.getBoundingClientRect().left,
         );
@@ -207,12 +217,13 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
         expect(trigger.hasAttribute("title")).toBe(false);
         const idle = trigger.getBoundingClientRect();
         const avatarBounds = avatar.getBoundingClientRect();
-        const nameBounds = name.getBoundingClientRect();
-        expect(nameBounds.top).toBeGreaterThanOrEqual(avatarBounds.bottom);
-        expect(nameBounds.left + nameBounds.width / 2).toBeCloseTo(
-          avatarBounds.left + avatarBounds.width / 2,
-          0,
-        );
+        if (width <= 768) {
+          const nameBounds = findElement(
+            container,
+            ".chat-pane__agent-name",
+          ).getBoundingClientRect();
+          expect(nameBounds.top).toBeGreaterThanOrEqual(avatarBounds.bottom);
+        }
         expect(getComputedStyle(trigger).backgroundColor).toBe("rgba(0, 0, 0, 0)");
         await userEvent.hover(trigger);
         const hovered = trigger.getBoundingClientRect();

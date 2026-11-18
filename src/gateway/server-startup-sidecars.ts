@@ -1,4 +1,3 @@
-import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
@@ -168,11 +167,6 @@ export async function startGatewaySidecars(params: {
         ),
       );
     })(),
-    // Readiness owns process-stable request imports so the first turn and connection do not.
-    measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-      const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
-      await prewarmConfigDrivenReplyRuntime();
-    }),
     measureStartup(
       params.startupTrace,
       "sidecars.connection-runtime",

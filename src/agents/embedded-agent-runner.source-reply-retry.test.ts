@@ -254,7 +254,11 @@ it.each([
 it.each([
   ["subagent", "NO_REPLY", { lane: "subagent" }],
   ["private", "", { privateCompletion: true }],
-  ["webchat", "NO_REPLY\n<final></final>", {}],
+  [
+    "webchat",
+    "NO_REPLY",
+    { inputProvenance: { kind: "internal_system", sourceTool: "test-required-result" } },
+  ],
 ] as const)("recovers a %s result after '%s'", async (name, raw, opts) => {
   const sessionKey = name === "private" ? "agent:test:private" : `agent:test:${name}:required`;
   const config = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);

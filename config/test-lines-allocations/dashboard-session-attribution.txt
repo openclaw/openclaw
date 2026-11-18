@@ -1,2 +1,0 @@
-# Gallery regression covers session attribution source priority, checkbox filtering, and grid/list proof.
-58

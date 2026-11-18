@@ -15,6 +15,7 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
 import { sessionChanged } from "../../lib/sessions/session-rpc.test-support.ts";
+import { createNavigationPreferencesFixture } from "../../test-helpers/application-context-fixtures.ts";
 import {
   createTestGatewayClient,
   type GatewayRequestHandler,
@@ -42,6 +43,7 @@ function pageContext(overrides: {
     agents: createAgentCapability(gateway),
     agentIdentity: createAgentIdentityCapability(gateway),
     sessions: { listSnapshot: () => snapshot(null), subscribeList: () => () => {} },
+    navigation: createNavigationPreferencesFixture(),
     ...overrides,
   } as ApplicationContext;
 }
@@ -83,6 +85,7 @@ function routeData(...rows: GatewaySessionRow[]): DashboardsRouteData {
     error: null,
     basePath: "",
     fallbackAgentId: "main",
+    agents: [],
     mainKey: "main",
     globalScope: false,
   };
@@ -372,4 +375,31 @@ it("labels and filters session attribution with creator, owner, and agent fallba
     "Gamma metrics",
     "Zulu monitor",
   ]);
+});
+
+it("pins a dashboard to the sidebar rail from its card menu and unpins it again", async () => {
+  const context = pageContext({});
+  context.navigation.update({ sidebarEntries: ["route:usage"] });
+  const key = "agent:main:dashboard:release";
+  const { container } = await mountDashboard(context, routeData(row(key, "Release health")));
+  flush();
+  const trigger = container.querySelector<HTMLButtonElement>(
+    `[data-dashboard-session="${key}"] button[aria-label="Dashboard actions"]`,
+  )!;
+  const choose = async (label: string) => {
+    trigger.click();
+    await waitForSolid(() =>
+      expect(document.querySelector(`[role="menuitem"][aria-label="${label}"]`)).not.toBeNull(),
+    );
+    document.querySelector<HTMLElement>(`[role="menuitem"][aria-label="${label}"]`)!.click();
+    flush();
+  };
+
+  await choose("Pin to the sidebar");
+  expect(context.navigation.snapshot.sidebarEntries).toEqual([
+    "route:usage",
+    `session-rail:${key}`,
+  ]);
+  await choose("Unpin from the sidebar");
+  expect(context.navigation.snapshot.sidebarEntries).toEqual(["route:usage"]);
 });

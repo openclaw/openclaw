@@ -15,7 +15,11 @@ import {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
-import { applyOpenAICompletionsToolReasoning } from "../providers/openai-reasoning-effort.js";
+import {
+  applyOpenAICompletionsToolReasoning,
+  isOpenAIGpt6Model,
+  supportsOpenAITemperature,
+} from "../providers/openai-reasoning-effort.js";
 import {
   resolveOpenAIRequestReasoning,
   resolveOpenAISimpleReasoningEffort,
@@ -295,7 +299,9 @@ export function buildOpenAICompletionsRequest(
     supportsTools,
     declaredToolNames: new Set(converted?.projection.tools.map((tool) => tool.name)),
     preserveSystemPromptCacheBoundary:
-      cacheControl !== undefined && !managedCompat?.requiresStringContent,
+      cacheControl !== undefined &&
+      !managedCompat?.requiresStringContent &&
+      !compat.cacheControlSystemOnly,
   });
   applyCompletionsReplay(convertedMessages, context, model, compat);
   let messages: unknown[] = convertedMessages;
@@ -323,10 +329,10 @@ export function buildOpenAICompletionsRequest(
   if (policy.mode === "direct" || (compat.supportsPromptCacheKey && promptCacheKey)) {
     params.prompt_cache_key = compat.supportsPromptCacheKey ? promptCacheKey : undefined;
   }
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
-  if (policy.mode === "managed" && options?.topP !== undefined) {
+  if (policy.mode === "managed" && options?.topP !== undefined && !isOpenAIGpt6Model(model)) {
     params.top_p = options.topP;
   }
   const requestedResponseFormat = options?.responseFormat;
@@ -353,7 +359,7 @@ export function buildOpenAICompletionsRequest(
     params.presence_penalty = options.presencePenalty;
   }
   if (policy.mode === "managed" && options?.seed !== undefined) {
-    params.seed = options.seed;
+    params[compat.seedField ?? "seed"] = options.seed;
   }
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop = options.stop;
@@ -412,6 +418,7 @@ export function buildOpenAICompletionsRequest(
       markTools,
       true,
       compat.cacheControlSystemOnly,
+      compat.cacheControlSharedSystem,
     );
   }
   if (policy.mode === "direct" && options?.toolChoice) {
@@ -606,6 +613,7 @@ export function buildOpenAICompletionsRequest(
       markTools,
       !managedCompat?.requiresStringContent,
       compat.cacheControlSystemOnly,
+      compat.cacheControlSharedSystem,
     );
   }
   if (params.tools?.length && isKnownOpenAIEndpoint(model)) {

@@ -2,6 +2,7 @@ import path from "node:path";
 import { Check } from "typebox/value";
 import type { VaultAccess } from "./access.js";
 import { inspectEvidence } from "./evidence-files.js";
+import { hashMatches } from "./hash-fence.js";
 import { lifecycleRecord, assertLifecycleTarget } from "./lifecycle.js";
 import { planMerge, planUnmerge, type MergeReport } from "./merge-write.js";
 import { mergeRedirects, referenceIds } from "./merge.js";
@@ -172,7 +173,7 @@ export class StorageLifecycle extends StorageEdits {
         !merged ||
         !merged.valid ||
         merged.lifecycle !== "merged" ||
-        merged.hash !== input.merged.expectedHash ||
+        !hashMatches(merged.hash, input.merged.expectedHash) ||
         merged.revision !== input.merged.expectedRevision
       ) {
         throw new Error(
@@ -245,7 +246,7 @@ export class StorageLifecycle extends StorageEdits {
       !page.valid ||
       page.kind !== "page" ||
       page.lifecycle !== "active" ||
-      page.hash !== fence.expectedHash ||
+      !hashMatches(page.hash, fence.expectedHash) ||
       page.revision !== fence.expectedRevision
     ) {
       throw new Error(

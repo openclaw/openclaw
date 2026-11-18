@@ -31,6 +31,7 @@ import { buildGatewaySnapshot } from "./server/health-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import * as sharingRead from "./session-sharing-read.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -221,12 +222,16 @@ describe("gateway connection state", () => {
       first.send.mockImplementationOnce(() => {
         requestRpcSourceCancellation(source);
       });
+      const preparations = vi.spyOn(sharingRead, "prepareProjectedSessionSharing");
+      onTestFinished(() => preparations.mockRestore());
       for (const hasActiveRun of [true, false]) {
+        preparations.mockClear();
         state.broadcast(
           "sessions.changed",
           { sessionKey: scope.sessionKey, reason: "metadata" },
           sessionScope(scope.sessionKey),
         );
+        expect(preparations).toHaveBeenCalledTimes(2);
         expect([first, second].map((peer) => payload(peer).session.hasActiveRun)).toEqual([
           hasActiveRun,
           hasActiveRun,

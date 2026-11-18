@@ -53,6 +53,16 @@ describe("boundedJsonUtf8Bytes", () => {
     { name: "plain object", value: { a: "x", b: [1, 2, null] } },
     { name: "unicode string", value: { value: "🙂" } },
     {
+      name: "all JSON control escapes and unescaped Unicode",
+      value:
+        Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") +
+        '"\\/é中\u007f\u0085\u2028\u2029\ufeff',
+    },
+    {
+      name: "paired and lone surrogates in keys and values",
+      value: { "\ud800\ud800\udc00\udfff": "\udc00\ud800\udc00\ud800x\udfff🦞" },
+    },
+    {
       name: "array holes and undefined",
       value: (() => {
         const value = [undefined, () => undefined] as unknown[];

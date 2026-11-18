@@ -6,7 +6,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { readPendingInputSource } from "../config/sessions/session-pending-input-source.js";
+import { readPendingInputSnapshotForTest } from "../config/sessions/session-pending-input-snapshot.test-support.js";
 import type { SqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../infra/sqlite-worker-store.js";
@@ -249,7 +249,17 @@ it.for(
       const media = expectDefined(saved[0], "real inbound file");
       const pending = await sessionAccessor.listSessionPendingInputs(f.scope);
       const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
-      expect(pending.total).toBe(0);
+      if (!chat && outcome === "unknown") {
+        // Lost admission evidence no longer hides durable input from history/recovery.
+        expect(pending).toMatchObject({
+          total: 1,
+          items: [{ id: expect.any(String), runId: f.runId, state: "queued" }],
+        });
+        expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
+        expect(JSON.stringify(pending.items[0]?.message)).toContain(request.message);
+      } else {
+        expect(pending.total).toBe(0);
+      }
       if (goal && outcome !== "refused") {
         expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(request.message);
       }
@@ -292,13 +302,15 @@ it.for(
       } else {
         expect(await fs.readFile(media.path)).toEqual(bytes);
         if (outcome === "unknown" && !chat) {
-          const source = await readPendingInputSource(f.scope, `${f.runId}:user`, true);
-          expect(source?.snapshot).toMatchObject({
+          const source = await readPendingInputSnapshotForTest(f.scope, `${f.runId}:user`);
+          expect(source).toMatchObject({
             current: true,
             pending: { run_id: f.runId, state: "queued" },
           });
-          expect(source?.snapshot.pending?.message_json).toContain(media.id);
-          expect(source?.snapshot.pending?.message_json).toContain(request.message);
+          // History exposes the opaque storage ID, not the request's idempotency key.
+          expect(pending.items[0]?.id).toBe(source.pending?.input_id);
+          expect(source.pending?.message_json).toContain(media.id);
+          expect(source.pending?.message_json).toContain(request.message);
         } else if (accepted) {
           expect(response.ok).toBe(true);
           expect(transcript).toHaveLength(f.before.length + 1);

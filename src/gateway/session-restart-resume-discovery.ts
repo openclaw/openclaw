@@ -1,3 +1,4 @@
+import { getSubagentRunsForRequesterSession } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { listOrphanedSessionPendingInputTargets } from "../config/sessions/session-pending-input-withdrawal.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
@@ -25,6 +26,10 @@ export type PreparedRestartStore = {
   entries: Awaited<ReturnType<typeof readSessionEntrySummariesInWorker>>;
   orphaned: Awaited<ReturnType<typeof listOrphanedSessionPendingInputTargets>>;
   sessions: Map<string, Deferred>;
+};
+
+type RestartStorePreparation = Pick<RestartResumeParams, "signal" | "log"> & {
+  context: Pick<GatewayRequestContext, "restartResumeWindows">;
 };
 
 export async function discoverRestartSessionStores(
@@ -58,15 +63,29 @@ export async function discoverRestartSessionStores(
 }
 
 async function prepareRestartStore(
-  params: RestartResumeParams,
+  params: RestartStorePreparation,
   target: RestartStoreTarget,
 ): Promise<PreparedRestartStore | undefined> {
   const { signal, log } = params;
   let entries: PreparedRestartStore["entries"];
   try {
-    entries = (await readSessionEntrySummariesInWorker(target)).filter(
-      ({ entry }) => entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId,
-    );
+    entries = (await readSessionEntrySummariesInWorker(target)).filter(({ sessionKey, entry }) => {
+      if (entry.resumeAfterRestart || entry.mainRestartRecovery || entry.lifecycleRunId) {
+        return true;
+      }
+      // A settled requester has no run marker but can still owe a child result.
+      for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+        if (
+          child.requesterSettleWake ||
+          child.delivery?.status === "pending" ||
+          child.delivery?.status === "in_progress" ||
+          child.delivery?.disposition === "retryable"
+        ) {
+          return true;
+        }
+      }
+      return false;
+    });
     signal.throwIfAborted();
   } catch (error) {
     signal.throwIfAborted();
@@ -77,14 +96,11 @@ async function prepareRestartStore(
   }
   let orphaned: PreparedRestartStore["orphaned"] = [];
   try {
-    orphaned = await listOrphanedSessionPendingInputTargets(
-      target,
-      entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
-    );
+    orphaned = await listOrphanedSessionPendingInputTargets(target);
     signal.throwIfAborted();
   } catch (error) {
     signal.throwIfAborted();
-    log.warn(`Skipped interrupted input settlement for agent ${target.agentId}: ${String(error)}`);
+    log.warn(`Skipped queued input recovery for agent ${target.agentId}: ${String(error)}`);
   }
   const windows = params.context.restartResumeWindows;
   return {
@@ -102,7 +118,7 @@ async function prepareRestartStore(
 }
 
 export async function prepareRestartStores(
-  params: RestartResumeParams,
+  params: RestartStorePreparation,
   targets: RestartStoreTarget[],
 ): Promise<PreparedRestartStore[] | undefined> {
   const prepared: PreparedRestartStore[] = [];

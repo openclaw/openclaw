@@ -27,6 +27,7 @@ const unavailableMentionsCapability = {
 
 const emptySidebarAttentionStore = {
   entries: [],
+  refreshOpenClawId: () => undefined,
   activate: () => unavailableMentionsCapability,
   dismiss: () => undefined,
   subscribe: () => () => undefined,

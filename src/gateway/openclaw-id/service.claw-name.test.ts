@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
+import { createOpenClawIdAuthority } from "./authority.js";
+import { memoryStore } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService } from "./service.js";
 
 // Lets a test hold the Gateway key load, the last step before the Discovery request.
@@ -11,9 +13,9 @@ vi.mock("./gateway-key.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./gateway-key.js")>();
   return {
     ...actual,
-    loadGatewaySigner: async (stateDir: string) => {
+    loadGatewaySigner: async (...args: Parameters<typeof actual.loadGatewaySigner>) => {
       await signerLoad.gate;
-      return await actual.loadGatewaySigner(stateDir);
+      return await actual.loadGatewaySigner(...args);
     },
   };
 });
@@ -36,6 +38,8 @@ function serviceAnswering(body: unknown, status = 200) {
     getStateDir: () => stateDir,
     getGatewayServer: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },
+    // An unlinked claw: the Gateway key is created on first use.
+    createAuthority: async () => createOpenClawIdAuthority(memoryStore()),
   });
 }
 

@@ -254,8 +254,10 @@ openclaw status --deep   # check channels (WhatsApp Web + Telegram + Discord + S
 openclaw health --json   # gateway health snapshot over the WS connection
 ```
 
-Logs live under `/tmp/openclaw/`: `openclaw-YYYY-MM-DD.log` for the default
-profile and `openclaw-<profile>-YYYY-MM-DD.log` for named profiles.
+Logs live under the selected state directory's `logs/` directory:
+`openclaw-YYYY-MM-DD.log` for the default profile and
+`openclaw-<profile>-YYYY-MM-DD.log` for named profiles. Use `openclaw logs`
+to discover the active path; see [log locations](/logging#where-logs-live).
 
 ## Next steps
 

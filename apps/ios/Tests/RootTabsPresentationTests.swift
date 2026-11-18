@@ -25,6 +25,7 @@ struct RootTabsPresentationTests {
             .files: .files, .desktop: .desktop, .terminal: .terminal, .docs: .docs,
             .settings: .settings, .gateway: .gateway,
             .activity: .dashboard("/activity"), .workboard: .dashboard("/workboard"),
+            .systems: .dashboard("/systems"),
             .skillWorkshop: .dashboard("/skills/workshop"), .instances: .dashboard("/settings/devices"),
             .dreaming: .dashboard("/settings/memory/dreams"), .usage: .dashboard("/usage"),
             .cron: .dashboard("/automations"),
@@ -363,6 +364,7 @@ struct RootTabsPresentationTests {
             .cron,
             .sessions,
             .activity,
+            .systems,
             .skillWorkshop,
             .agents,
             .instances,
@@ -376,6 +378,7 @@ struct RootTabsPresentationTests {
             "chat",
             "overview",
             "activity",
+            "systems",
             "agents",
             "workboard",
             "skillWorkshop",
@@ -883,6 +886,7 @@ struct RootTabsPresentationTests {
     }
 
     @Test func `pinned pages storage round trips and preserves pin order`() {
+        #expect(RootTabs.defaultPinnedSidebarPages == [.overview, .usage, .cron])
         #expect(RootTabs.pinnedSidebarPages(from: "") == RootTabs.defaultPinnedSidebarPages)
         #expect(RootTabs.pinnedSidebarPages(from: "none").isEmpty)
         #expect(RootTabs.pinnedSidebarPagesStorage([]) == "none")
@@ -961,25 +965,6 @@ struct RootTabsPresentationTests {
     @Test func `i pad split prefers integrated visible sidebar`() {
         #expect(RootTabs.sidebarVisibility(layoutMode: .split, splitPreference: nil))
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
-    }
-
-    @Test func `destination headers own hidden sidebar reveal control`() {
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: false,
-                layoutMode: .split))
-        #expect(
-            !RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .drawer))
-        #expect(
-            RootTabs.shouldShowSidebarRevealInDestinationHeader(
-                isSidebarVisible: true,
-                layoutMode: .split))
     }
 
     private static func sessionEntry(

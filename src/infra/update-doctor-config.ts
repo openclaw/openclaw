@@ -26,23 +26,3 @@ export function getUpdateDoctorConfigFailureReason(refusal?: UpdateDoctorConfigW
       : "repair-requires-config-change"
     : undefined;
 }
-
-export function createUpdateDoctorConfigWarningStep(
-  root: string,
-  changes: readonly UpdateDoctorConfigChange[],
-) {
-  const keys = [
-    ...new Set(changes.flatMap((change) => (change.kind === "key" ? [change.key] : []))),
-  ].toSorted();
-  return {
-    name: "doctor-config-changes",
-    command: "report Doctor config changes",
-    cwd: root,
-    durationMs: 0,
-    exitCode: 0,
-    advisory: {
-      kind: "recoverable-maintenance" as const,
-      message: `Doctor changed config keys ${keys.join(", ") || "none recorded"} during update checks. Check those settings after the update; this version cannot verify that they were applied.`,
-    },
-  };
-}

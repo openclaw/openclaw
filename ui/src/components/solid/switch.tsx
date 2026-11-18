@@ -20,15 +20,26 @@ export type SwitchProps = SettingsToggleControl & {
 export function Switch(props: SwitchProps) {
   const labelId = `switch-label-${createUniqueId()}`;
   const blocked = (input: HTMLInputElement) =>
-    input.matches(":disabled") || Boolean(props.disabled) || Boolean(props.saving);
+    input.matches(":disabled") ||
+    Boolean(props.pending) ||
+    Boolean(props.disabled) ||
+    Boolean(props.saving);
   return (
-    <span class={["settings-toggle", `settings-toggle--${props.size ?? "md"}`]}>
+    <span
+      class={[
+        "settings-toggle",
+        `settings-toggle--${props.size ?? "md"}`,
+        { skeleton: props.pending },
+      ]}
+      aria-busy={props.pending ? "true" : undefined}
+    >
       <input
         ref={[liveChecked(() => props.checked), (element) => props.inputRef?.(element)]}
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
-        disabled={props.disabled}
+        disabled={props.pending || props.disabled}
+        aria-hidden={props.pending ? "true" : undefined}
         aria-disabled={props.saving ? "true" : undefined}
         aria-label={props.ariaLabel}
         aria-labelledby={
@@ -36,7 +47,7 @@ export function Switch(props: SwitchProps) {
         }
         onClick={(event) => {
           const input = event.currentTarget;
-          if (props.disabled || props.saving) {
+          if (props.pending || props.disabled || props.saving) {
             // Busy switches keep focus (aria-disabled), so cancel the native toggle here.
             event.preventDefault();
           } else if (!input.matches(":disabled") && input.checked !== props.checked) {
@@ -78,7 +89,11 @@ export function Switch(props: SwitchProps) {
           }
         }}
       />
-      <span class="settings-toggle__control" aria-hidden="true" />
+      <span
+        class="settings-toggle__control"
+        aria-hidden="true"
+        style={{ visibility: props.pending ? "hidden" : undefined }}
+      />
       <Show when={props.ariaLabel === undefined && !props.ariaLabelledBy}>
         <span id={labelId} class="settings-control__sr-label">
           {props.label}

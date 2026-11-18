@@ -332,99 +332,102 @@ suite.define(() => {
         label: `Author ${Math.floor(index / 2)}`,
       },
     }));
-    await suite.withPage(
-      { locale: "en-US", viewport: { width: 1440, height: 900 } },
-      async ({ page }) => {
-        await installMockGateway(page, { sessions: rows });
-        await page.goto(`${suite.server.baseUrl}dashboards`);
-        const gallery = page.locator("openclaw-dashboards-page");
-        const entries = gallery.locator("[data-dashboard-session]");
+    const viewport = { width: 1440, height: 900 };
+    await suite.withPage({ locale: "en-US", viewport }, async ({ page }) => {
+      await installMockGateway(page, { sessions: rows });
+      await page.goto(`${suite.server.baseUrl}dashboards`);
+      const gallery = page.locator("openclaw-dashboards-page");
+      const entries = gallery.locator("[data-dashboard-session]");
+      await entries.first().waitFor();
+      const counts: number[] = [];
+      for (const [view, group] of [
+        ["Grid", "none"],
+        ["List", "none"],
+        ["List", "author"],
+        ["Grid", "author"],
+      ] as const) {
+        await gallery.getByRole("button", { name: "Display", exact: true }).click();
+        const menu = page.locator("#dashboards-display");
+        await menu.getByRole("button", { name: view, exact: true }).click();
+        await menu.getByLabel("Grouping").selectOption(group);
+        await menu.getByLabel("Ordering").selectOption("title");
+        await page.keyboard.press("Escape");
+        await menu.waitFor({ state: "hidden" });
         await entries.first().waitFor();
-        const counts: number[] = [];
-        for (const [view, group] of [
-          ["Grid", "none"],
-          ["List", "none"],
-          ["List", "author"],
-          ["Grid", "author"],
+        await expect
+          .poll(() =>
+            entries
+              .first()
+              .locator(view === "List" ? ".dashboard-row__thumb" : ".dashboard-preview")
+              .count(),
+          )
+          .toBe(1);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        counts.push(await entries.count());
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `volume-${view}-${group}.png`),
+          });
+        }
+        const second = gallery.locator(
+          '[data-dashboard-session="agent:main:dashboard:volume-1"] a',
+        );
+        const third = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-2"] a');
+        const secondActions = gallery.locator(
+          '[data-dashboard-session="agent:main:dashboard:volume-1"] button[aria-label="Dashboard actions"]',
+        );
+        await second.focus();
+        // Each entry's actions menu follows its link in the tab order.
+        for (const [key, target] of [
+          ["Tab", secondActions],
+          ["Tab", third],
+          ["Shift+Tab", secondActions],
+          ["Shift+Tab", second],
         ] as const) {
-          await gallery.getByRole("button", { name: "Display", exact: true }).click();
-          const menu = page.locator("#dashboards-display");
-          await menu.getByRole("button", { name: view, exact: true }).click();
-          await menu.getByLabel("Grouping").selectOption(group);
-          await menu.getByLabel("Ordering").selectOption("title");
-          await page.keyboard.press("Escape");
-          await menu.waitFor({ state: "hidden" });
-          await entries.first().waitFor();
-          await expect
-            .poll(() =>
-              entries
-                .first()
-                .locator(view === "List" ? ".dashboard-row__thumb" : ".dashboard-preview")
-                .count(),
-            )
-            .toBe(1);
-          await page.evaluate(
-            () =>
-              new Promise<void>((resolve) => {
-                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-              }),
-          );
-          counts.push(await entries.count());
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `volume-${view}-${group}.png`),
-            });
-          }
-          const second = gallery.locator(
-            '[data-dashboard-session="agent:main:dashboard:volume-1"] a',
-          );
-          const third = gallery.locator(
-            '[data-dashboard-session="agent:main:dashboard:volume-2"] a',
-          );
-          await second.focus();
-          await page.keyboard.press("Tab");
-          expect(await third.evaluate((element) => element.matches(":focus"))).toBe(true);
-          await page.keyboard.press("Shift+Tab");
-          expect(await second.evaluate((element) => element.matches(":focus"))).toBe(true);
-          await page.locator(".content").evaluate((element) => {
-            element.scrollTop = element.scrollHeight / 2;
-          });
-          await expect
-            .poll(() =>
-              entries.evaluateAll((elements) =>
-                elements.some((element) => {
-                  const index = Number(
-                    element.getAttribute("data-dashboard-session")?.split("-").at(-1),
-                  );
-                  const box = element.getBoundingClientRect();
-                  return index > 400 && index < 600 && box.top < innerHeight && box.bottom > 0;
-                }),
-              ),
-            )
-            .toBe(true);
-          const last = gallery.locator(
-            '[data-dashboard-session="agent:main:dashboard:volume-999"]',
-          );
-          await last.scrollIntoViewIfNeeded();
-          await expect
-            .poll(() =>
-              last.evaluate((element) => {
+          await page.keyboard.press(key);
+          expect(await target.evaluate((element) => element.matches(":focus"))).toBe(true);
+        }
+        await page.locator(".content").evaluate((element) => {
+          element.scrollTop = element.scrollHeight / 2;
+        });
+        await expect
+          .poll(() =>
+            entries.evaluateAll((elements) =>
+              elements.some((element) => {
+                const index = Number(
+                  element.getAttribute("data-dashboard-session")?.split("-").at(-1),
+                );
                 const box = element.getBoundingClientRect();
-                return box.top < innerHeight && box.bottom > 0;
+                return index > 400 && index < 600 && box.top < innerHeight && box.bottom > 0;
               }),
-            )
-            .toBe(true);
-          expect(await entries.count()).toBeLessThanOrEqual(100);
-          await page.locator(".content").evaluate((element) => {
-            element.scrollTop = 0;
-          });
-        }
-        console.log("mounted dashboards for grid, list, grouped list, grouped grid:", counts);
-        for (const count of counts) {
-          expect.soft(count).toBeLessThanOrEqual(100);
-        }
-      },
-    );
+            ),
+          )
+          .toBe(true);
+        const last = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-999"]');
+        await last.scrollIntoViewIfNeeded();
+        await expect
+          .poll(() =>
+            last.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              return box.top < innerHeight && box.bottom > 0;
+            }),
+          )
+          .toBe(true);
+        expect(await entries.count()).toBeLessThanOrEqual(100);
+        await page.locator(".content").evaluate((element) => {
+          element.scrollTop = 0;
+        });
+      }
+      console.log("mounted dashboards for grid, list, grouped list, grouped grid:", counts);
+      for (const count of counts) {
+        expect.soft(count).toBeLessThanOrEqual(100);
+      }
+    });
   });
 
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
@@ -534,7 +537,10 @@ suite.define(() => {
         await page.waitForURL(
           /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef(?:\?.*)?$/u,
         );
-        await page.locator('a.nav-item[href="/dashboards"]:not([aria-current])').waitFor();
+        // The pages menu closed on the choice; its Dashboards item no longer reads as current.
+        await page
+          .locator('a.nav-item[href="/dashboards"]:not([aria-current])')
+          .waitFor({ state: "attached" });
         await noteInput.waitFor();
         expect(await noteInput.inputValue()).toBe(notes);
         expect(await widgetRows.allTextContents()).toEqual(["🦞", "雪", "café"]);

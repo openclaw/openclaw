@@ -744,9 +744,9 @@ async function runCliWithPreparedOutputMode(
     await configureStartupTraces();
     throw new Error(parsedContainer.error);
   }
-  const parsedProfile = parseCliProfileArgs(parsedContainer.argv);
   const containerTargetName =
     parsedContainer.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER) ?? null;
+  const parsedProfile = parseCliProfileArgs(parsedContainer.argv, containerTargetName);
   const hasPreHelpValidationError =
     !parsedProfile.ok || (containerTargetName !== null && parsedProfile.profile !== null);
   // Console formatting is a process-wide invariant. Install capture before

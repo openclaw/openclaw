@@ -271,6 +271,7 @@ export async function startTelegramTestApiProxy({
     let logged;
     let method;
     let failurePhase = "request";
+    let resetAfterForward = false;
     const recordDoneAt = () => {
       if (logged) {
         logged.doneAt ??= Date.now();
@@ -337,6 +338,49 @@ export async function startTelegramTestApiProxy({
             (Buffer.isBuffer(body) && body.includes(rejection.bodyIncludes)));
         if (matches && rejection.skip > 0) {
           rejection.skip -= 1;
+        } else if (matches && rejection.reset) {
+          failurePhase = "lease";
+          assertLeaseHealthy();
+          rejection.times -= 1;
+          if (rejection.times <= 0) requestRejection = undefined;
+          if (rejection.reset === "hang") {
+            // Models a server that accepts the request and never answers: only the
+            // client's own timeout ends it (or proxy shutdown).
+            rejectionEvents.push({
+              method,
+              ordinal,
+              rejectedAt: Date.now(),
+              upstreamForwarded: false,
+              hang: true,
+            });
+            await readBody();
+            if (logged) logged.status = "hang";
+            await new Promise((resolve) => {
+              const done = () => {
+                stopController.signal.removeEventListener("abort", done);
+                resolve();
+              };
+              response.once("close", done);
+              stopController.signal.addEventListener("abort", done, { once: true });
+            });
+            request.socket.destroy();
+            return;
+          }
+          resetAfterForward = rejection.reset === "after-forward";
+          if (!resetAfterForward) {
+            // Models a request lost on the way: Telegram never sees it.
+            rejectionEvents.push({
+              method,
+              ordinal,
+              rejectedAt: Date.now(),
+              upstreamForwarded: false,
+              reset: true,
+            });
+            await readBody();
+            if (logged) logged.status = "reset";
+            request.socket.resetAndDestroy();
+            return;
+          }
         } else if (matches) {
           failurePhase = "lease";
           assertLeaseHealthy();
@@ -387,6 +431,21 @@ export async function startTelegramTestApiProxy({
         signal: upstreamController.signal,
       });
       if (logged) logged.status = result.status;
+      if (resetAfterForward) {
+        // Models the 08:38 incident: Telegram accepted the send, then the
+        // connection reset before its response reached the Gateway (read ECONNRESET).
+        await result.arrayBuffer();
+        rejectionEvents.push({
+          method,
+          ordinal,
+          rejectedAt: Date.now(),
+          upstreamForwarded: true,
+          upstreamStatus: result.status,
+          reset: true,
+        });
+        request.socket.resetAndDestroy();
+        return;
+      }
       failurePhase = "lease";
       assertLeaseHealthy();
       failurePhase = "response-stream";
@@ -491,10 +550,10 @@ export async function startTelegramTestApiProxy({
         stopSignal: stopController.signal,
         assertLeaseHealthy,
       }),
-    rejectNextRequest({ method, skip = 0, bodyIncludes, times = 1, retryAfter }) {
+    rejectNextRequest({ method, skip = 0, bodyIncludes, times = 1, retryAfter, reset }) {
       assertLeaseHealthy();
       if (requestRejection) throw new Error("A Telegram API request rejection is active.");
-      requestRejection = { method, skip, bodyIncludes, times, retryAfter };
+      requestRejection = { method, skip, bodyIncludes, times, retryAfter, reset };
     },
     holdNextResponse({ method, skip = 0 }) {
       assertLeaseHealthy();

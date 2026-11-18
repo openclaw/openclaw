@@ -455,6 +455,44 @@ export const mainLanes: DockerE2eLane[] = [
     "published-driver-update", // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
     { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
   ),
+  // A published updater behind a linked package path: the layout a downgrade would leave under
+  // the proposed release-directory design. No CI workflow selects this lane yet.
+  npmLane("published-driver-linked-root", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
+  // Release directories behind a linked package path on an install-cli-shaped prefix: adoption
+  // and switch, and rollback after a failed post-switch Doctor. Each adds candidate updates to the cell. No CI workflow
+  // selects these lanes yet.
+  npmLane("published-driver-release-adoption", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rollback", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
+  // An added launcher takes the swap and the next update adopts again (owned prefix). A linked
+  // root whose service a published updater bound to a release has that release replaced in place;
+  // the restart rebinds the service (rebind), or with --no-restart it stays bound (in-place).
+  npmLane("published-driver-release-launcher", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-rebind", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-in-place", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 35 * 60 * 1000,
+  }),
   npmLane("published-driver-scoped-restore", {
     resources: ["service"],
     stateScenario: "empty",
@@ -576,6 +614,13 @@ export const tailLanes: DockerE2eLane[] = [
     resources: ["npm", "service"],
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
+  }),
+  liveLane("gbrain", {
+    command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gbrain",
+    e2eImageKind: false,
+    provider: "openai",
+    resources: ["npm", "service"],
+    timeoutMs: 30 * 60 * 1000,
   }),
   liveLane("live-plugin-tool", {
     command:

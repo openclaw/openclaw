@@ -204,6 +204,8 @@ export async function updateSkillsFromClawHub(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  /** Once aborted, no further skill update starts; one already in progress finishes. */
+  signal?: AbortSignal;
 }): Promise<UpdateClawHubSkillResult[]> {
   const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
   const lock = await (tracking?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile)(
@@ -220,6 +222,9 @@ export async function updateSkillsFromClawHub(params: {
     : Object.keys(lock.skills).map((slug) => normalizeTrackedSkillSlug(slug));
   const results: UpdateClawHubSkillResult[] = [];
   for (const slug of slugs) {
+    if (params.signal?.aborted) {
+      break;
+    }
     const tracked = await (tracking?.resolveTrackedUpdateTarget ?? resolveTrackedUpdateTarget)({
       workspaceDir: params.workspaceDir,
       slug,

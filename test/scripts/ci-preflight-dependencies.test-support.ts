@@ -41,8 +41,8 @@ export function runDependencyFreePreflight(entrypoint: URL, directory: string, n
   writeFileSync(
     preload,
     String.raw`
-import { isBuiltin, registerHooks } from "node:module";
-registerHooks({
+import nodeModule, { isBuiltin } from "node:module";
+nodeModule.registerHooks({
   resolve(specifier, context, nextResolve) {
     if (!isBuiltin(specifier) && !specifier.startsWith(".") &&
         !specifier.startsWith("file:") && !specifier.startsWith("/")) {
