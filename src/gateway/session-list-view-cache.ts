@@ -126,6 +126,8 @@ export type SessionListView = {
   rowHistory?: SessionRowGeneration[];
   conditional?: boolean;
   selection?: SessionEntrySelection;
+  selectionRevision?: number;
+  rowKeys?: Set<string>;
   selectedAt?: number;
   activityExpiresAt?: number;
   partitions?: SelectionPartitions;
@@ -138,6 +140,7 @@ function hasRowBaseline(view: SessionListView): boolean {
 /** The publication owns admission, recency, accounting and retirement of every list view. */
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
+  private selectionRevision = 0;
   private rowEncodings = new WeakMap<
     GatewaySessionRow,
     { refs: number; bytes: number; extraBytes: number; factBytes: number }
@@ -147,6 +150,18 @@ export class SessionListViewCache {
 
   values() {
     return this.lists.values();
+  }
+
+  invalidateSelections() {
+    this.selectionRevision++;
+  }
+
+  invalidateRows(key?: string) {
+    for (const view of this.lists.values()) {
+      if (key === undefined || view.rowKeys?.has(key)) {
+        this.retireRows(view);
+      }
+    }
   }
 
   hasRowBaselines() {
@@ -161,11 +176,16 @@ export class SessionListViewCache {
   get(key: string): SessionListView {
     let view = this.lists.get(key);
     if (view) {
+      if (view.selectionRevision !== this.selectionRevision) {
+        view.selection = undefined;
+        view.selectionRevision = this.selectionRevision;
+        this.update(view);
+      }
       this.lists.delete(key);
       this.lists.set(key, view);
       return view;
     }
-    view = { key, refs: 0, bytes: 0, historyRefs: 0 };
+    view = { key, refs: 0, bytes: 0, historyRefs: 0, selectionRevision: this.selectionRevision };
     this.lists.set(key, view);
     retainedViews++;
     this.update(view);
@@ -184,6 +204,7 @@ export class SessionListViewCache {
       this.retainRows(view, view.rows);
     }
     view.rows = undefined;
+    view.rowKeys = undefined;
     view.encodedBytes = 0;
     this.update(view);
   }
@@ -204,8 +225,9 @@ export class SessionListViewCache {
       this.retainRows(view, view.rows);
     }
     view.rows = rows;
+    view.rowKeys = retained ? new Set() : undefined;
     view.encodedBytes =
-      (retained ? this.retainRowEncodings(rows, extraRowEncodingBytes) : 0) +
+      (retained ? this.retainRowEncodings(rows, view.rowKeys!, extraRowEncodingBytes) : 0) +
       serializedJsonArrayBytes(rows) +
       sharedBytes;
     this.update(view);
@@ -213,10 +235,12 @@ export class SessionListViewCache {
 
   private retainRowEncodings(
     rows: GatewaySessionRow[],
+    keys: Set<string>,
     extraBytes?: (row: GatewaySessionRow) => number,
   ) {
     let bytes = 0;
     for (const row of rows) {
+      keys.add(row.key);
       let encoding = this.rowEncodings.get(row);
       if (encoding) {
         encoding.refs++;
@@ -295,6 +319,7 @@ export class SessionListViewCache {
       1024 +
       view.key.length * 2 +
       rowRefs * 8 +
+      (view.rowKeys?.size ?? 0) * 32 +
       pairRefs * 8 +
       (entryRefs - pairRefs) * 48 +
       (view.partitions?.size ?? 0) * 64 +
