@@ -622,20 +622,27 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("does not replay an auth mutation that occurs before the first owner is registered", async () => {
-    getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(100);
-    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-      mocks.mutationListener?.({ affectsInheritedStores: true });
-      return { entries: [] };
-    });
-    mocks.ensureOpenClawModelsJson
-      .mockResolvedValueOnce({})
-      .mockRejectedValueOnce(new Error("unexpected auth replay"));
+    // This tests replay ordering, not native database startup speed. Keep its deadline controlled.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      getPreparedModelRuntimeTestApi().setModelRuntimeBuildTimeoutMsForTest(100);
+      mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+        mocks.mutationListener?.({ affectsInheritedStores: true });
+        return { entries: [] };
+      });
+      mocks.ensureOpenClawModelsJson
+        .mockResolvedValueOnce({})
+        .mockRejectedValueOnce(new Error("unexpected auth replay"));
 
-    await expect(publishGateway({}, { catalogMode: "static" })).resolves.toBeUndefined();
-    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
-    expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
-    expect(mocks.discoverModels).toHaveBeenCalledOnce();
+      await expect(publishGateway({}, { catalogMode: "static" })).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+      expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
+      expect(mocks.discoverAuthStorage).toHaveBeenCalledOnce();
+      expect(mocks.discoverModels).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not announce an auth republication while a config replacement gate is pending", async () => {

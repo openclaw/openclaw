@@ -225,7 +225,8 @@ vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
-vi.mock("./legacy-inherited-auth-dir.js", () => ({
+vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./legacy-inherited-auth-dir.js")>()),
   resolveLegacyInheritedAuthDir: () => mocks.agentRoot,
 }));
 
