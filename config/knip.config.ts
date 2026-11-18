@@ -416,6 +416,7 @@ const repositoryScriptEntries = [
   // Installed recovery launches its driver/access probe and preloads its fault observer by path.
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-access.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery-fault.mjs!",
+  "scripts/e2e/lib/upgrade-survivor/installed-recovery-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-recovery.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-dependencies.mjs!",
   "scripts/e2e/lib/upgrade-survivor/installed-terminal-reference.mts!",

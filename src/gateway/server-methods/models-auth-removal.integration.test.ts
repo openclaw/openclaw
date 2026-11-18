@@ -283,7 +283,8 @@ describe("models.authLogout with a concurrent registered config set", () => {
             ] as const) {
               upsertAuthProfile({ agentDir, profileId, credential });
             }
-            await expect(logoutProvider({ credentialType: "api_key" })).resolves.toMatchObject({
+            const apiKeyLogout = await logoutProvider({ credentialType: "api_key" });
+            expect(apiKeyLogout).toMatchObject({
               removedProfiles: [saved.profileId],
               abortedRunIds: [],
             });
@@ -296,6 +297,7 @@ describe("models.authLogout with a concurrent registered config set", () => {
                 .find((provider) => provider.provider === "fixture")
                 ?.profiles.map((profile) => profile.profileId)
                 .toSorted(),
+              JSON.stringify({ logout: apiKeyLogout, status }),
             ).toEqual(["fixture:oauth", "fixture:ref", "fixture:token"]);
             await expect(
               logoutProvider({ profileIds: [" fixture:token ", "fixture:oauth", "fixture:token"] }),
