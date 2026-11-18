@@ -8,6 +8,7 @@ import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -61,7 +62,12 @@ type CronEditOptions = GatewayRpcOpts &
 
 async function readCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJobForEdit> {
   try {
-    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJobForEdit;
+    return (await callGatewayFromCli(
+      "cron.get",
+      opts,
+      { id },
+      { signal: getAsyncWorkSignal() },
+    )) as CronJobForEdit;
   } catch (error) {
     if (!isUnknownCronGetMethodError(error)) {
       throw error;

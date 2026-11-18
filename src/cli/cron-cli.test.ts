@@ -295,7 +295,14 @@ it("bounds oversized poll intervals by the wait timeout", async () => {
   expectRuntimeErrorContaining("timed out waiting for cron run");
 });
 
-const interruptPhases = ["sleep", "request", "completion", "cron list", "cron show job-1"];
+const interruptPhases = [
+  "sleep",
+  "request",
+  "completion",
+  "cron list",
+  "cron show job-1",
+  "cron edit job-1 --pacing-min 1s",
+];
 it.each(interruptPhases)("cancels cron %s", async (phase) => {
   vi.useFakeTimers();
   resetGatewayMock();
