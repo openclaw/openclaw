@@ -43,9 +43,12 @@ async function probe(
   );
   return response;
 }
-it("serves repeated readyz probes without synchronous runtime filesystem checks", async () => {
+it("serves repeated readyz probes without runtime filesystem or child work", async () => {
   const readiness = checker();
   const spawnSync = vi.spyOn(childProcess, "spawnSync");
+  using prepare = vi
+    .spyOn(readiness, "prepare")
+    .mockRejectedValue(new Error("probe started diagnostic I/O"));
   syncBuiltinESMExports();
   using observation = observeMainThreadFs();
   try {
@@ -55,13 +58,14 @@ it("serves repeated readyz probes without synchronous runtime filesystem checks"
       observation.stacks().filter(({ stack }) => stack.includes("child-runtime-viability.")),
     ).toEqual([]);
     expect(spawnSync).not.toHaveBeenCalled();
+    expect(prepare).not.toHaveBeenCalled();
   } finally {
     spawnSync.mockRestore();
     syncBuiltinESMExports();
   }
 });
 it.skipIf(process.platform === "win32")(
-  "detects a missing runtime library before a child launch even while readiness is cached",
+  "reports a runtime library failure published by explicit diagnostics",
   async () => {
     const executable = path.join(directories.make("readiness-runtime-"), "node");
     await fs.writeFile(executable, "#!/bin/sh\necho v26.12.0\n", { mode: 0o700 });
@@ -72,6 +76,8 @@ it.skipIf(process.platform === "win32")(
       executable,
       '#!/bin/sh\necho "node: error while loading shared libraries: libfixture.so: cannot open shared object file" >&2\nexit 127\n',
     );
+    const prepared = await readiness.prepare();
+    expect(prepared.publish().ready).toBe(false);
     const response = await probe(readiness);
     expect(response.statusCode).toBe(503);
     expect(JSON.parse(response.body ?? "null")).toMatchObject({
@@ -81,7 +87,7 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it("publishes current draining state after asynchronous runtime preparation", async () => {
+it("publishes draining state without waiting for explicit runtime preparation", async () => {
   let draining = false;
   const readiness = createReadinessChecker({
     startedAt: Date.now(),
@@ -101,7 +107,7 @@ it("publishes current draining state after asynchronous runtime preparation", as
     await release.promise;
     return prepared;
   });
-  const pending = probe(readiness);
+  const pending = readiness.prepare();
   try {
     await awaitGateBeforeSettlement(
       entered.promise,
@@ -109,9 +115,9 @@ it("publishes current draining state after asynchronous runtime preparation", as
       "readiness did not prepare asynchronously",
     );
     expect(held).toHaveBeenCalledOnce();
+    expect((await probe(readiness)).statusCode).toBe(200);
     draining = true;
-    release.resolve();
-    const response = await pending;
+    const response = await probe(readiness);
     expect(response.statusCode).toBe(503);
     expect(JSON.parse(response.body ?? "null")).toMatchObject({ failing: ["gateway-draining"] });
   } finally {
@@ -121,7 +127,7 @@ it("publishes current draining state after asynchronous runtime preparation", as
 });
 
 it.skipIf(process.platform === "win32")(
-  "bounds concurrent readyz runtime work without sharing paths or caller cancellation",
+  "bounds explicit runtime diagnostics without sharing executable paths",
   async () => {
     const alias = path.join(directories.make("readiness-runtime-alias-"), "node");
     await fs.symlink(originalExecPath, alias);
@@ -139,13 +145,13 @@ it.skipIf(process.platform === "win32")(
     syncBuiltinESMExports();
     const readiness = checker();
     const cancelledRequest = createGatewayRequest({ path: "/readyz" });
-    const pending = [probe(readiness, cancelledRequest)];
+    const pending = [readiness.prepare()];
     for (let index = 0; index < 7; index += 1) {
-      pending.push(probe(readiness));
+      pending.push(readiness.prepare());
     }
     process.execPath = alias;
     for (let index = 0; index < 8; index += 1) {
-      pending.push(probe(readiness));
+      pending.push(readiness.prepare());
     }
     try {
       await awaitGateBeforeSettlement(
@@ -158,9 +164,9 @@ it.skipIf(process.platform === "win32")(
       expect(launches.mock.calls.filter(([file]) => file === alias)).toHaveLength(1);
       release.resolve();
       const responses = await Promise.all(pending);
-      expect(responses.slice(1).every((response) => response.statusCode === 200)).toBe(true);
+      expect(responses.every((response) => response.publish().ready)).toBe(true);
       // Only concurrent work is shared: a settled observation must not hide replacement.
-      expect((await probe(readiness)).statusCode).toBe(200);
+      expect((await readiness.prepare()).publish().ready).toBe(true);
       expect(launches.mock.calls.filter(([file]) => file === alias)).toHaveLength(2);
     } finally {
       release.resolve();
