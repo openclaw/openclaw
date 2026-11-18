@@ -5,9 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn() }));
 
-vi.mock("../../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => logger,
-}));
+// mock-isolation: Capture wrapper diagnostics without installing process log transports.
+vi.mock("../../../logging/subsystem.js", async () => {
+  const { createMockSubsystemLogger } =
+    await import("../../../../test/helpers/mock-subsystem-logger.js");
+  return {
+    createSubsystemLogger: (subsystem: string) => createMockSubsystemLogger(subsystem, logger),
+  };
+});
 
 import {
   createOpenAIAttributionHeadersWrapper,

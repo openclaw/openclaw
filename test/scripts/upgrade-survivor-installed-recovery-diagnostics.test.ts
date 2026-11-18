@@ -302,10 +302,11 @@ it("publishes the last running command after outer timeout without an inner exit
   expect(fs.existsSync(path.join(f.artifacts, "diagnostics/raw.json"))).toBe(false);
 });
 
-it.each([false, true])(
-  "requires a complete selected cut and distinct subsequent update: %s",
-  (complete) => {
+it.each(["complete", "without-next-update", "without-update-repair"])(
+  "requires a complete selected cut, its update repair, and a distinct subsequent update: %s",
+  (receipt) => {
     const f = fixture();
+    const complete = receipt === "complete";
     const commands = [
       "displacement",
       "missing-status",
@@ -315,6 +316,7 @@ it.each([false, true])(
       "resume-retirement",
       "completed-status",
       "archive-completed",
+      ...(receipt === "without-update-repair" ? [] : ["update-repair"]),
       "next-update",
       "next-update-status",
     ].map((name) => {
@@ -352,7 +354,7 @@ it.each([false, true])(
           fullConfigPreserved: true,
         },
       ],
-      ...(complete
+      ...(receipt !== "without-next-update"
         ? {
             nextUpdate: {
               exitCode: 0,

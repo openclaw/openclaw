@@ -581,7 +581,7 @@ export function createSessionActivitySummaries(deps: {
       if (!current(state)) {
         continue;
       }
-      // The per-recap scope must not detach cleanup from inherited connection work.
+      // Recaps outlive requesting runs, but still owe cleanup to inherited connection work.
       const work = trackAsyncWork(() => run(state))
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });

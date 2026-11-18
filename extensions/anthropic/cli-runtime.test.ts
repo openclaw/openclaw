@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   CliBackendExecuteContext,
   CliBackendMessageInjection,
@@ -228,7 +229,7 @@ describe("Claude native stdio boundary", () => {
           turn: 1,
           argv: expect.arrayContaining(["--resume", context.sessionId]),
           initialize: {
-            appendSystemPrompt: "changed authoritative instructions",
+            systemPrompt: "changed authoritative instructions",
             systemPromptSnapshot: false,
           },
         });
@@ -690,13 +691,15 @@ describe("Claude native stdio boundary", () => {
       ["mcp__openclaw__message"],
     ]);
     expect(detail).toMatchObject({
-      initialize: { appendSystemPrompt: SYSTEM, excludeDynamicSections: true },
+      initialize: { systemPrompt: SYSTEM, excludeDynamicSections: true },
       turn: 1,
       user: INPUT,
       synthetic: false,
       privateContext: "private prefix\n\nprivate suffix",
       permission: { behavior: "deny" },
     });
+    // OpenClaw's prompt replaces Claude Code's default prompt instead of extending it.
+    expect(detail.initialize).not.toHaveProperty("appendSystemPrompt");
     expect(
       await expectWarmResume(context, detail, {
         prompt: "Which color?",
@@ -704,6 +707,30 @@ describe("Claude native stdio boundary", () => {
         promptOrigin: "host",
       }),
     ).toMatchObject({ synthetic: true, privateContext: "second private context" });
+  });
+
+  it("keeps private context above Claude Code's hook limit readable", async () => {
+    const framing = "completion framing";
+    // The encoded framing takes 22 units; the first segment has 9,845 payload units.
+    // This pair straddles that boundary; later cuts cross encoded \u003c escapes.
+    const appendContext = `${"r".repeat(9_822)}🦞${"<".repeat(4_000)}CHILD-RESULT-TAIL`;
+    const detail = await runDetail(
+      await createContext("hook-context-limit", {
+        promptContext: { prependContext: framing, appendContext },
+      }),
+    );
+    const hookContexts = detail.hookContexts as string[];
+
+    expect(detail.modelContext).toContain("CHILD-RESULT-TAIL");
+    const segments = [
+      ...String(detail.modelContext).matchAll(
+        /<system-reminder>\nUserPromptSubmit hook additional context: OpenClaw private context segment \d+[^\n]*\n(".*")\n<\/system-reminder>/g,
+      ),
+    ].map((match) => JSON.parse(expectDefined(match[1], "encoded context segment")) as string);
+    expect(segments.join("")).toBe(`${framing}\n\n${appendContext}`);
+    expect(hookContexts.map((value) => value.length <= 10_000)).not.toContain(false);
+    expect(segments[1]?.startsWith("🦞")).toBe(true);
+    expect(segments.every((segment) => segment.isWellFormed())).toBe(true);
   });
 
   it.each([

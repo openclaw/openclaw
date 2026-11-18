@@ -9,7 +9,7 @@ import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
+import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import {
@@ -18,6 +18,7 @@ import {
   type OperatorRunRecoverySnapshot,
   type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
+import { resolveGatewayUiAdminSource } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 /** An unrecoverable source still runs in memory under its retained live authority. */
@@ -75,7 +76,10 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
 }): OperatorRunRecoverySnapshot | undefined {
   const { client, authority, identity } = params;
   const remote = client.internal?.remoteIngressPrincipal;
-  if (remote?.recoverySource) {
+  if (remote) {
+    if (!remote.recoverySource) {
+      return undefined;
+    }
     remote.assertCurrent();
     authority.assertCurrent();
     const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
@@ -85,15 +89,18 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     const profile = identity.readCurrentProfile();
     return normalizeGatewayOperatorRecoverySnapshot({
       profileId: authority.profileId,
+      openclawIdPrincipal: authority.openclawIdPrincipal,
       scopes: [...authority.scopes],
       assignedRole: profile.assignedRole,
       githubLogin: profile.githubLogin ?? null,
       rolePolicy: sourceRolePolicy(
-        resolveOperatorRolePolicyForAssignment(
-          profile.profileId,
-          profile.assignedRole,
-          params.config,
-          profile.githubLogin ?? null,
+        openclawIdSubjectRolePolicy(authority.openclawIdPrincipal, () =>
+          resolveOperatorRolePolicyForAssignment(
+            profile.profileId,
+            profile.assignedRole,
+            params.config,
+            profile.githubLogin ?? null,
+          ),
         ),
       ),
       modelPolicy,
@@ -141,13 +148,14 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     assignedRole: profile.assignedRole,
     githubLogin: profile.githubLogin ?? null,
     rolePolicy: sourceRolePolicy(
-      openclawIdTunnelRolePolicy(authority.openclawIdPrincipal) ??
+      openclawIdSubjectRolePolicy(authority.openclawIdPrincipal, () =>
         resolveOperatorRolePolicyForAssignment(
           profile.profileId,
           profile.assignedRole,
           params.config,
           profile.githubLogin ?? null,
         ),
+      ),
     ),
     modelPolicy,
     grant: authority.gatewayAccessGrant,
@@ -156,6 +164,7 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     authPolicy: { ...authPolicy, generation: "" },
     sharedGeneration,
     device,
+    automationAdmin: resolveGatewayUiAdminSource(client) !== undefined,
     controlUiAdmin: client.internal?.controlUiAdmin === true,
     localOperator: client.internal?.isLocalClient === true,
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",

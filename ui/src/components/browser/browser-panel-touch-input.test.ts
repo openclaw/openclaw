@@ -49,6 +49,7 @@ function setup<T>(mount: (controller: BrowserPanel) => T) {
   vi.useFakeTimers();
   const { controller, actions } = panelScenario("tab-a", undefined, {
     "/act": () => ({ result: true }),
+    "/operator/input": () => ({ ok: true, sent: 1 }),
   });
   const clicks = () => actions("clickCoords");
   const scrolls = () =>

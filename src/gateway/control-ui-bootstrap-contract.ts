@@ -20,6 +20,16 @@ export const CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM = "bootstrapProfile";
 export const CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT = "owner";
 export type ControlUiBootstrapProfileHint = typeof CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT;
 
+/** Operator access a signed-in Control UI asks for; browser code pairing approves the same set. */
+export const CONTROL_UI_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.read",
+  "operator.write",
+  "operator.approvals",
+  "operator.questions",
+  "operator.pairing",
+] as const;
+
 /** Carries the gateway-configured Control UI mount path into browser bootstrap. */
 export const CONTROL_UI_BASE_PATH_ATTRIBUTE = "data-openclaw-control-ui-base-path";
 

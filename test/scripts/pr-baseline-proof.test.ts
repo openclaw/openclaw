@@ -1,5 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -146,23 +156,6 @@ const fixture = reuseBaselineFixture((root) => {
     oid("source-review.json"),
     ...continuation,
   ];
-  const effects = f.local("effects");
-  const proxy = f.local("observed-git");
-  writeFileSync(
-    proxy,
-    '#!/bin/sh\nif [ "$1" = push ]; then echo push >> "' + effects + '"; fi\nexec git "$@"\n',
-    { mode: 0o755 },
-  );
-  const gh = join(root, "bin/gh");
-  writeFileSync(
-    gh,
-    readFileSync(gh, "utf8").replace(
-      "const args = process.argv.slice(2);",
-      "const args = process.argv.slice(2);\nif (args[0] === 'api' && args[1] === 'graphql' && !args.some(a => a.startsWith('query=query('))) fs.appendFileSync(" +
-        JSON.stringify(effects) +
-        ", 'graphql\\n');",
-    ),
-  );
   const before = f.snapshot([
     "prep-context.env",
     "review.json",
@@ -183,29 +176,424 @@ const fixture = reuseBaselineFixture((root) => {
     review,
     args,
     continuation,
-    effects,
+    ...observePublication(f),
     before,
-    extra: { OPENCLAW_PR_GIT: proxy },
   };
 });
 
 const directFixture = reuseBaselineFixture((root) => createBaselineFixture(root, 1));
 
-function nativeState(f: ReturnType<typeof fixture>) {
+const boundFixture = reuseBaselineFixture((root) => {
+  const f = createBaselineFixture(root, 1);
+  const incomingReview = JSON.parse(f.readLocal("review.json").toString());
+  incomingReview.findings[0].id = "R1";
+  f.writeLocal("review.json", JSON.stringify(incomingReview));
+  f.prepGit("reset", "--hard", f.incoming);
+  f.pass("prepare-correction-init");
+  const original = f.snapshot(["pr-meta.json", "pr-meta.env", "review.json"]);
+  const advance = (name: string) => {
+    writeFileSync(join(f.repo, "docs", name + ".md"), name + "\n");
+    f.git(f.repo, "add", ".");
+    f.git(f.repo, "commit", "-qm", "test: " + name);
+    return f.git(f.repo, "rev-parse", "HEAD");
+  };
+  mkdirSync(join(f.repo, "src"), { recursive: true });
+  writeFileSync(join(f.repo, "src/upstream-only.ts"), "export const upstream = true;\n");
+  const firstMain = advance("first-upstream");
+  f.pass(command, flags({ "--expected-head": f.incoming, "--baseline": firstMain }));
+  const predecessor = f.prepGit("rev-parse", "HEAD");
+  const predecessorBytes = f.readLocal("prepare-baseline.json");
+  expect(JSON.parse(predecessorBytes.toString()).incomingSource).toBe(true);
+  writeFileSync(join(f.worktree, f.product[0]!), "corrected\n");
+  f.prepGit("commit", "-qam", "fix: resolve R1");
+  f.approve();
+  const published = f.publish();
+  const historicalReview = f.readLocal("correction-review.json");
+  f.expectSnapshot(original);
+  const binding = f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42");
+  const baseline = advance("newer-upstream");
+  f.git(
+    f.repo,
+    "config",
+    "url." + f.repo + "/.insteadOf",
+    "https://github.com/openclaw/openclaw.git",
+  );
+  f.git(f.repo, "remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
+  f.git(f.repo, "fetch", "-q", "origin", "main");
+  const oid = (name: string) => f.prepGit("hash-object", "--no-filters", f.local(name));
+  const sourceReview = {
+    ...validReview(published),
+    correction: {
+      incomingHeadSha: f.incoming,
+      incomingReviewJsonOid: oid("review.json"),
+      resolvedFindings: [{ id: "R1", resolution: "Verified the repaired product path." }],
+      proofPublication: {
+        version: 1,
+        kind: "published-candidate-proof",
+        headSha: published,
+        treeOid: f.prepGit("rev-parse", "HEAD^{tree}"),
+        workflowSource: baseline,
+        workflowBinding: binding,
+        expectedHostedHead: published,
+        pendingFindings: [{ id: "R2", evidence: "Published package upgrade must pass." }],
+      },
+    },
+  };
+  sourceReview.issueValidation.status = "valid";
+  sourceReview.findings = [
+    {
+      id: "R2",
+      severity: "IMPORTANT",
+      title: "Package upgrade fails",
+      area: f.product[0]!,
+      fix: "Verify the upgrade on the newer baseline.",
+    },
+  ];
+  sourceReview.tests.result = "fail";
+  f.writeLocal("source-review.json", JSON.stringify(sourceReview));
+  const args = [
+    "--for-proof",
+    ...flags({
+      "--expected-head": published,
+      "--expected-tree": f.prepGit("rev-parse", "HEAD^{tree}"),
+      "--expected-review": oid("source-review.json"),
+      "--source-review": f.local("source-review.json"),
+      "--predecessor-head": predecessor,
+      "--predecessor-binding": oid("prepare-baseline.json"),
+      "--baseline": baseline,
+    }),
+  ];
   return {
+    ...f,
+    ...observePublication(f),
+    original,
+    predecessor,
+    predecessorBytes,
+    published,
+    source: published,
+    historicalReview,
+    binding,
+    baseline,
+    oid,
+    sourceReview,
+    args,
+  };
+});
+
+describePosix("proof baseline with retained predecessor authority", () => {
+  it("admits a published incoming-source baseline without approving its pending proof", () => {
+    const f = boundFixture();
+    const receipt = f.readLocal("prepare-push-result.env");
+    const beforeAdmission = nativeState(f);
+    const result = f.run(command, f.args, f.extra);
+    nativeTrace(f, "allowed-bound-proof-baseline-admission", beforeAdmission, result, 0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const candidate = f.prepGit("rev-parse", "HEAD");
+    const record = JSON.parse(f.readLocal("prepare-baseline.json").toString());
+    expect(record).toMatchObject({
+      version: 2,
+      purpose: "proof",
+      incomingHead: f.incoming,
+      proofSource: {
+        expectedHostedHead: f.published,
+        sourceReviewOid: f.oid("source-review.json"),
+      },
+      sourceAdmission: {
+        predecessorHead: f.predecessor,
+        sourceReviewOid: f.oid("source-review.json"),
+      },
+    });
+    expect(f.prepGit("show", "-s", "--format=%P", candidate)).toBe(f.published + " " + f.baseline);
+    f.prepGit("verify-commit", candidate);
+    f.expectSnapshot(f.original);
+    expect(f.readLocal("prepare-push-result.env")).toEqual(receipt);
+    expect(readFileSync(join(f.worktree, record.archive, "prepare-baseline.json"))).toEqual(
+      f.predecessorBytes,
+    );
+    expect(readFileSync(join(f.worktree, record.archive, "correction-review.json"))).toEqual(
+      f.historicalReview,
+    );
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.published);
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42")).toBe(f.binding);
+    const review = JSON.parse(f.readLocal("correction-review.json").toString());
+    expect(review.recommendation).toBe("NEEDS WORK");
+    expect(review.findings).toEqual(f.sourceReview.findings);
+    expect(review.correction.proofPublication).toBeUndefined();
+    expect(review.tests.result).not.toBe("pass");
+    f.expectAbsent("prep.env", "gates.env", "review-transition.json");
+    expect(f.run(command, f.args).status).toBe(0);
+    for (const denied of ["prepare-gates", "prepare-push", "prepare-sync-head", "merge-verify"]) {
+      expect(f.run(denied).status, denied).not.toBe(0);
+    }
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.published);
+    const nextReview = structuredClone(f.sourceReview);
+    nextReview.pr.headSha = candidate;
+    nextReview.correction.proofPublication.headSha = candidate;
+    nextReview.correction.proofPublication.treeOid = f.prepGit("rev-parse", "HEAD^{tree}");
+    f.writeLocal("correction-review.json", JSON.stringify(nextReview));
+    f.pass("prepare-workflow-successor", [
+      "--for-proof",
+      ...flags({
+        "--expected-binding": f.binding,
+        "--from-workflow": JSON.parse(f.git(f.repo, "show", f.binding + ":binding.json")).source,
+        "--to-workflow": f.baseline,
+        "--expected-head": candidate,
+        "--expected-tree": f.prepGit("rev-parse", "HEAD^{tree}"),
+        "--expected-review": f.oid("correction-review.json"),
+        "--expected-hosted-head": f.published,
+      }),
+    ]);
+    f.pass("prepare-publish-for-proof");
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(candidate);
+    writeFileSync(join(f.worktree, f.product[0]!), "later correction\n");
+    f.prepGit("commit", "-qam", "fix: later correction");
+    const descendant = f.prepGit("rev-parse", "HEAD");
+    const fresh = { ...validReview(candidate), findings: f.sourceReview.findings };
+    fresh.issueValidation.status = "valid";
+    f.writeLocal("review.json", JSON.stringify(fresh));
+    f.writeLocal("pr-meta.json", JSON.stringify({ ...f.meta, headRefOid: candidate }));
+    f.writeLocal(
+      "pr-meta.env",
+      "PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=" +
+        candidate +
+        "\nPR_HEAD_REPO_URL=https://github.com/fixture/repo\n",
+    );
+    f.pass(
+      "prepare-correction-continue",
+      flags({
+        "--expected-head": descendant,
+        "--expected-tree": f.prepGit("rev-parse", "HEAD^{tree}"),
+        "--incoming-head": candidate,
+        "--incoming-review": f.oid("review.json"),
+        "--publication-receipt": "push",
+        "--publication-oid": f.oid("prepare-push-result.env"),
+      }),
+    );
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(descendant);
+  });
+
+  it.each(["predecessor", "review", "receipt", "prep-only", "archive"])(
+    "refuses changed %s authority without replacing the source",
+    (fault) => {
+      const f = boundFixture();
+      let args = [...f.args];
+      if (fault === "predecessor") {
+        args = args.map((value, index) =>
+          args[index - 1] === "--predecessor-head" ? f.published : value,
+        );
+      } else if (fault === "review") {
+        f.writeLocal("source-review.json", f.readLocal("source-review.json").toString() + "\n");
+      } else if (fault === "receipt") {
+        f.writeLocal(
+          "prepare-push-result.env",
+          f
+            .readLocal("prepare-push-result.env")
+            .toString()
+            .replace("PUSH_REPLACED_HOSTED_ANCESTRY=false", "PUSH_REPLACED_HOSTED_ANCESTRY=true"),
+        );
+      } else if (fault === "prep-only") {
+        unlinkSync(f.local("prepare-push-result.env"));
+      } else {
+        const first = JSON.parse(f.predecessorBytes.toString());
+        const path = join(f.worktree, first.archive, "prep-context.env");
+        writeFileSync(path, readFileSync(path).toString() + "\n");
+      }
+      const before = f.snapshot([
+        "prep-context.env",
+        "prepare-baseline.json",
+        "correction-review.json",
+      ]);
+      const result = f.run(command, args);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stdout + result.stderr).toMatch(
+        fault === "review"
+          ? /Selected proof source review changed/u
+          : fault === "receipt"
+            ? /does not match this preparation/u
+            : fault === "prep-only"
+              ? /requires the native publication result/u
+              : fault === "archive"
+                ? /Incoming authority changed|Incoming review changed|Retained preparation authority changed/u
+                : /proof-baseline-context|Successor admission|Missing signed baseline/u,
+      );
+      expect(f.prepGit("rev-parse", "HEAD")).toBe(f.published);
+      expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.published);
+      f.expectSnapshot({ ...f.original, ...before });
+      f.expectAbsent("review-transition.json");
+    },
+  );
+
+  it("refuses bound admission when hosted observation reassigns operation custody", () => {
+    const f = boundFixture();
+    const marker = f.local("bound-admission-custody-replaced");
+    replaceCustodyAfterObservation(f, marker);
+    const before = nativeState(f);
+    const result = f.run(command, f.args, f.extra);
+    nativeTrace(f, "refused-bound-custody-admission", before, result, 0, marker);
+    expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    expect(result.stderr).toContain("Operation custody changed before proof publication.");
+    expect(JSON.parse(readFileSync(marker, "utf8")).objectType).toBe("blob");
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toBe(f.source);
+    expect(nativeState(f)).toEqual(before);
+    expect(f.readLocal("prepare-baseline.json")).toEqual(f.predecessorBytes);
+    f.expectSnapshot(f.original);
+    f.expectAbsent("review-transition.json");
+  });
+
+  it("requires exact predecessor selection across interrupted and completed retries", () => {
+    const f = boundFixture();
+    const failed = f.run(command, f.args, failRestore(f.root, f.env));
+    expect(failed.status).not.toBe(0);
+    const journal = f.readLocal("review-transition.json");
+    const target = JSON.parse(journal.toString()).target as string;
+    const changed = f.args.map((value, index) =>
+      f.args[index - 1] === "--predecessor-binding" ? f.published : value,
+    );
+    const refused = f.run(command, changed);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stdout + refused.stderr).toContain("Proof baseline operation");
+    expect(f.readLocal("review-transition.json")).toEqual(journal);
+    const record = JSON.parse(
+      Buffer.from(JSON.parse(journal.toString()).binding, "base64").toString(),
+    );
+    const archive = join(f.worktree, record.archive, "baseline-source-review.json");
+    const original = readFileSync(archive);
+    writeFileSync(archive, original.toString() + "\n");
+    const tampered = f.run(command, f.args);
+    expect(tampered.status).not.toBe(0);
+    expect(tampered.stdout + tampered.stderr).toMatch(/Retained successor proof changed/u);
+    writeFileSync(archive, original);
+    const marker = f.local("bound-custody-replaced");
+    replaceCustodyAfterObservation(f, marker);
+    // The interrupted install already owns candidate authority; refusal must
+    // preserve that exact state, not reconstruct the pristine predecessor.
+    const beforeRecoveryLoss = nativeState(f);
+    const lost = f.run(command, f.args, f.extra);
+    nativeTrace(f, "refused-bound-custody-recovery", beforeRecoveryLoss, lost, 0, marker);
+    expect(lost.status).not.toBe(0);
+    expect(lost.stderr).toContain("Operation custody changed before proof publication.");
+    expect(JSON.parse(readFileSync(marker, "utf8")).objectType).toBe("blob");
+    expect(f.git(f.repo, "rev-parse", "refs/openclaw/pr-operation-locks/42")).toBe(f.source);
+    expect(nativeState(f)).toEqual(beforeRecoveryLoss);
+    expect(f.readLocal("review-transition.json")).toEqual(journal);
+    // Remove only the injected foreign owner in this settled private fixture.
+    f.git(f.repo, "update-ref", "-d", "refs/openclaw/pr-operation-locks/42", f.source);
+    const beforeRecovery = nativeState(f);
+    const recovered = f.run(command, f.args, f.extra);
+    nativeTrace(f, "allowed-bound-transition-recovery", beforeRecovery, recovered, 0);
+    expect(recovered.status, recovered.stdout + recovered.stderr).toBe(0);
+    expect(f.prepGit("rev-parse", "HEAD")).toBe(target);
+    f.expectAbsent("review-transition.json");
+    f.pass(command, f.args);
+    const completed = f.run(command, changed);
+    expect(completed.status).not.toBe(0);
+    expect(completed.stdout + completed.stderr).toContain("Completed baseline differs");
+    f.expectSnapshot(f.original);
+    expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.published);
+  });
+
+  it("rejects incomplete or mixed predecessor options before locking", () => {
+    const f = boundFixture();
+    const paired = f.args.filter(
+      (_, index) =>
+        !["--predecessor-binding", f.oid("prepare-baseline.json")].includes(f.args[index]!),
+    );
+    for (const args of [
+      paired,
+      [...f.args, "--incoming-head", f.published],
+      [...f.args, "--predecessor-head", f.predecessor],
+    ]) {
+      const result = f.run(command, args);
+      expect(result.status).toBe(2);
+      expect(
+        f.git(
+          f.repo,
+          "for-each-ref",
+          "--format=%(objectname)",
+          "refs/openclaw/pr-operation-locks/",
+        ),
+      ).toBe("");
+      f.expectSnapshot(f.original);
+    }
+  });
+});
+
+function observePublication(f: ReturnType<typeof createBaselineFixture>) {
+  const effects = f.local("effects");
+  const proxy = f.local("observed-git");
+  writeFileSync(
+    proxy,
+    '#!/bin/sh\nif [ "$1" = push ]; then echo push >> "' + effects + '"; fi\nexec git "$@"\n',
+    { mode: 0o755 },
+  );
+  const gh = join(f.root, "bin/gh");
+  writeFileSync(
+    gh,
+    readFileSync(gh, "utf8").replace(
+      "const args = process.argv.slice(2);",
+      "const args = process.argv.slice(2);\nif (args[0] === 'api' && args[1] === 'graphql' && !args.some(a => a.startsWith('query=query('))) fs.appendFileSync(" +
+        JSON.stringify(effects) +
+        ", 'graphql\\n');",
+    ),
+  );
+  return { effects, extra: { OPENCLAW_PR_GIT: proxy } };
+}
+
+type ObservedFixture = ReturnType<typeof fixture> | ReturnType<typeof boundFixture>;
+
+function nativeState(f: ObservedFixture) {
+  const binding = existsSync(f.local("prepare-baseline.json"))
+    ? JSON.parse(f.readLocal("prepare-baseline.json").toString())
+    : null;
+  const archives = new Set<string>([
+    ...(binding ? [binding.archive] : []),
+    ...Object.keys(binding?.sourceAdmission?.evidence ?? {}),
+  ]);
+  const worktree = createHash("sha256");
+  for (const path of f.prepGit("ls-files", "-z").split("\0").filter(Boolean).toSorted()) {
+    const absolute = join(f.worktree, path);
+    const stat = lstatSync(absolute, { throwIfNoEntry: false });
+    worktree.update(JSON.stringify([path, stat?.mode ?? null]));
+    if (stat) {
+      worktree.update(stat.isSymbolicLink() ? readlinkSync(absolute) : readFileSync(absolute));
+    }
+    worktree.update("\0");
+  }
+  return {
+    preparedRef: f.prepGit("rev-parse", "refs/heads/pr-42-prep"),
     preparedHead: f.prepGit("rev-parse", "HEAD"),
     indexTree: f.prepGit("write-tree"),
+    worktreeSha256: worktree.digest("hex"),
     hostedHead: f.git(f.repo, "rev-parse", "topic"),
+    workflowBinding: f.git(f.repo, "rev-parse", "refs/openclaw/pr-workflow-bindings/42"),
     files: Object.fromEntries(
       [
+        "pr-meta.json",
+        "pr-meta.env",
+        "review.json",
         "prep-context.env",
         "prepare-baseline.json",
         "review-transition.json",
         "prep.env",
         "gates.env",
         "correction-review.json",
+        "correction-incoming-review.json",
         "prepare-push-result.env",
+        "prepare-sync-result.env",
       ].map((name) => [name, existsSync(f.local(name)) ? f.oid(name) : null]),
+    ),
+    archives: Object.fromEntries(
+      [...archives].toSorted().map((archive) => [
+        archive,
+        Object.fromEntries(
+          readdirSync(join(f.worktree, archive))
+            .toSorted()
+            .map((entry) => [
+              entry,
+              f.prepGit("hash-object", "--no-filters", join(f.worktree, archive, entry)),
+            ]),
+        ),
+      ]),
     ),
     effects: existsSync(f.effects)
       ? readFileSync(f.effects, "utf8").trim().split(/\r?\n/u).filter(Boolean)
@@ -213,7 +601,10 @@ function nativeState(f: ReturnType<typeof fixture>) {
   };
 }
 
-function replaceCustodyAfterObservation(f: ReturnType<typeof fixture>, marker: string) {
+function replaceCustodyAfterObservation(
+  f: Pick<ReturnType<typeof fixture>, "root" | "source">,
+  marker: string,
+) {
   const gh = join(f.root, "bin/gh");
   const injected = `const args = process.argv.slice(2);
 if (args.some(a => a === 'repos/fixture/repo/pulls/42') && !fs.existsSync(${JSON.stringify(marker)})) {
@@ -231,11 +622,12 @@ if (args.some(a => a === 'repos/fixture/repo/pulls/42') && !fs.existsSync(${JSON
 }
 
 function nativeTrace(
-  f: ReturnType<typeof fixture>,
+  f: ObservedFixture,
   scenario: string,
   before: ReturnType<typeof nativeState>,
   result: ReturnType<ReturnType<typeof fixture>["run"]>,
   expectedPushes: number,
+  replacement?: string,
 ) {
   const canary = "SYNTHETIC_NATIVE_PROOF_SECRET_CANARY";
   const redact = (text: string) =>
@@ -251,7 +643,16 @@ function nativeTrace(
   const record = JSON.stringify({
     scenario,
     adapter: "synthetic GitHub; real native wrapper and local Git remote",
+    implementationHead: f.git(process.cwd(), "rev-parse", "HEAD"),
+    implementationTree: f.git(process.cwd(), "rev-parse", "HEAD^{tree}"),
     ownerBlob: f.prepGit("rev-parse", "HEAD:scripts/pr-lib/baseline-refresh.mjs"),
+    custodyReplacement: replacement ? JSON.parse(readFileSync(replacement, "utf8")) : null,
+    retainedCustody: f.git(
+      f.repo,
+      "for-each-ref",
+      "--format=%(objectname)",
+      "refs/openclaw/pr-operation-locks/42",
+    ),
     before,
     after,
     expectedPushes,

@@ -519,6 +519,81 @@ struct GatewayCertificateRenewalTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    @MainActor
+    func `late node route validation after stop cannot prepare another native transport`(
+        cancelled: Bool) async throws
+    {
+        struct UnusedIdentityStore: OpenClawIDNodeIdentityStore {
+            func loadOrCreateSeed() async throws -> Data {
+                Issue.record("Stopped route attempted to load a node identity")
+                throw CancellationError()
+            }
+        }
+        let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
+            .appendingPathComponent("node-route-stop-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let databaseURL = root.appendingPathComponent("node-enrollment.sqlite")
+        let suite = "NodeRouteStopTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let endpoint = try GatewayConnection.EndpointSnapshot(
+            config: (#require(URL(string: "wss://claw.example.invalid/")), nil, nil), routeAuthority: nil)
+        let coordinator = MacNodeModeCoordinator(
+            session: GatewayNodeSession(),
+            runtime: MacNodeRuntime(),
+            endpointProvider: { Issue.record("Native target fell back to operator endpoint")
+                return endpoint
+            },
+            presenceReporter: MacNodePresenceReporter(reportingEnabled: false),
+            desktopAvailability: MacDesktopAvailabilityCoordinator(defaults: defaults),
+            channelStatus: MacNodeChannelStatusStore(),
+            notificationCenter: NotificationCenter(),
+            initialPaused: false,
+            initialComputerControlEnabled: false,
+            initialComputerControlProvider: .peekaboo)
+        coordinator.selectOpenClawIDTarget(MacNodeOpenClawIDTarget(
+            hostname: "claw.example.invalid",
+            enrollmentID: UUID(),
+            databaseURL: databaseURL,
+            identityStore: UnusedIdentityStore()))
+        await coordinator.awaitStableRouteInvalidationDrain()
+        let generations = coordinator.generationsForTesting()
+        let attempt = ConnectionAttempt(
+            endpointGeneration: generations.endpointAttempt,
+            routeAuthorityGeneration: generations.routeAuthority,
+            workerUnavailable: nil,
+            endpoint: endpoint,
+            options: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-macos",
+                clientMode: "node",
+                clientDisplayName: "Stop Test",
+                includeDeviceIdentity: false),
+            sessionBox: nil,
+            workerTransportURL: "ws+unix:/tmp/retired/gateway.sock:/",
+            fallbackMainSessionKey: "main")
+        let callback = AsyncTestGate()
+        let validation = Task {
+            await callback.wait()
+            return try await coordinator.validatePostConnect(attempt)
+        }
+        await coordinator.stopAndWait()
+        if cancelled { validation.cancel() }
+        callback.open()
+        do {
+            #expect(try await validation.value == false)
+        } catch {
+            Issue.record("Stopped validation attempted preparation instead of returning false")
+        }
+        #expect(!FileManager.default.fileExists(atPath: databaseURL.path))
+    }
+
     @Test(arguments: [
         "current", "revoked", "refreshed", "credentials", "revoked-after-failure",
         "cancel-after-failure", "same-renewal-after-failure", "other-pin-after-failure",
@@ -529,9 +604,11 @@ struct GatewayCertificateRenewalTests {
         let release = AsyncTestGate()
         let endpointRead = AsyncTestGate()
         let endpointRelease = AsyncTestGate()
-        let fixture = RenewalConnectionFixture(
-            url: try #require(URL(string: "wss://gateway.example.com")),
-            beforeTrust: { entered.open(); await release.wait() })
+        let fixture = try RenewalConnectionFixture(
+            url: #require(URL(string: "wss://gateway.example.com")),
+            beforeTrust: { entered.open()
+                await release.wait()
+            })
         try fixture.learnOriginalCertificate()
         let endpoint = fixture.endpoint()
         let tls = try #require(endpoint.tls)
@@ -574,6 +651,7 @@ struct GatewayCertificateRenewalTests {
                     clientDisplayName: "Renewal Test",
                     includeDeviceIdentity: false),
                 sessionBox: fixture.sessionBox(route: tls),
+                workerTransportURL: nil,
                 fallbackMainSessionKey: "main"))
         }
         await entered.wait()

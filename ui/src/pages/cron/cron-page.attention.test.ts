@@ -4,7 +4,7 @@ import { waitForCronPage } from "./cron-page.test-support.tsx";
 import { cronRpc, mountCronPage } from "./cron-rpc.test-support.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 
-it("opens a job-only failure link on its recorded run without replaying it", async () => {
+it("opens a job-only failure link on Settings and reviews the failed run on request", async () => {
   const job = createCronViewJob("failed-once", {
     schedule: { kind: "at", at: "2026-11-01T10:00:00.000Z" },
     state: {
@@ -36,15 +36,18 @@ it("opens a job-only failure link on its recorded run without replaying it", asy
   );
   try {
     page.routeSearch = `?job=${job.id}`;
+    // An automation opens on its settings; the failure stays visible above them.
     await waitForCronPage(() =>
-      expect(page.querySelector(".cron-run-entry--highlighted")).not.toBeNull(),
+      expect(
+        page
+          .querySelector('[data-test-id="cron-detail-tab-settings"]')
+          ?.getAttribute("aria-selected"),
+      ).toBe("true"),
     );
     const warning = () => page.querySelector<HTMLElement>(".cron-failure-details");
     expect(warning()?.textContent).toContain(job.state.lastError);
     expect(warning()?.textContent).toContain("No further run is scheduled");
-    page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-settings"]')?.click();
-    await page.settle();
-    expect(warning()?.textContent).toContain("No further run is scheduled");
+    expect(page.querySelector(".cron-run-entry--highlighted")).toBeNull();
     page.querySelector<HTMLButtonElement>('[data-test-id="cron-review-failed-run"]')?.click();
     await page.settle();
     expect(page.querySelector(".cron-run-entry--highlighted")).not.toBeNull();
@@ -95,27 +98,21 @@ it("keeps an explicit older run link instead of replacing it with the latest fai
   }
 });
 
-it("clears stale history filters for an attention job without a recorded run id", async () => {
+it("opens an attention job without a recorded run id on Settings, leaving it unrun", async () => {
   const job = createCronViewJob("missing-run-id", {
     state: { lastRunStatus: "error", lastError: "Run failed" },
   });
   const { page, client } = mountCronPage(cronRpc({ "cron.get": () => job }));
   try {
     await page.settle();
-    page.cron.cronRunsQuery = "unrelated search";
-    page.cron.cronRunsStatuses = ["ok"];
-    page.cron.cronRunsDeliveryStatuses = ["delivered"];
     page.routeSearch = `?job=${job.id}`;
     await waitForCronPage(() =>
       expect(
         page
-          .querySelector('[data-test-id="cron-detail-tab-history"]')
+          .querySelector('[data-test-id="cron-detail-tab-settings"]')
           ?.getAttribute("aria-selected"),
       ).toBe("true"),
     );
-    expect(page.cron.cronRunsQuery).toBe("");
-    expect(page.cron.cronRunsStatuses).toEqual([]);
-    expect(page.cron.cronRunsDeliveryStatuses).toEqual([]);
     expect(
       vi
         .mocked(client)

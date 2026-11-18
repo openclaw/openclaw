@@ -476,12 +476,12 @@ describe("handleChatGatewayEvent", () => {
     const label = () =>
       chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
     receive(state, "status", { phase: "preparing_context", seq: 1 });
-    expect(label()).toBe("Preparing reply…");
+    expect(label()).toBe("Preparing reply");
     receive(state, "delta", {
       runId: "run-other",
       message: { role: "assistant", content: "Other" },
     });
-    expect(label()).toBe("Preparing reply…");
+    expect(label()).toBe("Preparing reply");
     receive(state, "status", { phase: "starting_model", seq: 2 });
     expect(label()).toBe("Waiting for a response");
     receive(state, "status", { phase: "preparing_context", seq: 3 });
@@ -960,7 +960,7 @@ describe("handleChatGatewayEvent", () => {
         retry: { attempt, maxAttempts: 10, reason: "rate_limit", retryAt: 10_000 + attempt },
       });
       expect(chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null)).toBe(
-        "Retrying…",
+        "Retrying",
       );
       expect(state.chatRunStartup).toMatchObject({
         phase: "retrying",

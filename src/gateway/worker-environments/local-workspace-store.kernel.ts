@@ -2,7 +2,6 @@ import { assertWorktreePersistentExecutionCurrentInDatabase } from "../../agents
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
@@ -12,8 +11,10 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
+import { localWorkspaceFingerprintPatch } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceCheckpointReceipt,
+  LocalWorkspaceManifestCheckpoint,
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
 } from "./local-workspace-store.types.js";
@@ -90,15 +91,18 @@ export function mutateLocalWorkspaceProjection(
       "Local workspace preparation expired during cleanup; retry the session. Both workspaces were preserved.",
     );
   }
-  // Mutation admission must not materialize manifests or recovery packs.
+  // Read only the header and, when referenced, its saved checkpoint; never load tree packs.
   const current = tableExists(db, table)
     ? executeSqliteQueryTakeFirstSync(
         db,
         query(db)
           .selectFrom(table)
           .select(["revision", "baseline_ref"])
-          .$if(mutation.kind === "update" && mutation.rejectedResult !== undefined, (builder) =>
-            builder.select("checkpoint_json"),
+          .$if(
+            mutation.kind === "update" &&
+              (mutation.rejectedResult !== undefined ||
+                mutation.manifest?.fingerprintsFromCheckpoint === true),
+            (builder) => builder.select("checkpoint_json"),
           )
           .$if(mutation.kind === "delete", (builder) =>
             builder.select((eb) =>
@@ -156,6 +160,26 @@ export function mutateLocalWorkspaceProjection(
   }
   if (mutation.manifest) {
     const { previousRoot, treeRoot } = mutation.manifest;
+    if (mutation.manifest.fingerprintsFromCheckpoint) {
+      const receipt = current.checkpoint_json
+        ? (JSON.parse(current.checkpoint_json) as LocalWorkspaceCheckpointReceipt) // SAFETY: Owner-written checkpoint, selected under the mutation revision.
+        : undefined;
+      const checkpoint =
+        receipt?.kind === "rejected"
+          ? receipt.checkpoint
+            ? (JSON.parse(receipt.checkpoint) as LocalWorkspaceManifestCheckpoint) // SAFETY: The rejection owner preserves the original checkpoint bytes.
+            : undefined
+          : receipt;
+      if (
+        checkpoint?.kind !== "scan" ||
+        checkpoint.previousRoot !== previousRoot ||
+        checkpoint.resultingRoot !== mutation.manifest.resultingRoot ||
+        checkpoint.treeRoot !== treeRoot
+      ) {
+        throw new Error("Local workspace checkpoint changed before acceptance");
+      }
+      mutation.manifest.fingerprints = checkpoint.fingerprints;
+    }
     if (current.baseline_ref !== previousRoot) {
       throw new Error("Local workspace manifest baseline changed");
     }
@@ -183,14 +207,7 @@ export function mutateLocalWorkspaceProjection(
               baseline_ref: mutation.manifest.resultingRoot,
               baseline_json: null,
               tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot!),
-              ...(mutation.manifest.fingerprints
-                ? {
-                    [`${mutation.manifest.fingerprints.target}_fingerprints`]: Buffer.from(
-                      mutation.manifest.fingerprints.blob,
-                      "base64",
-                    ),
-                  }
-                : {}),
+              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
             }
           : {}),
         ...(mutation.patch.source_paths_digest ? { source_paths_json: "[]" } : {}),
@@ -264,9 +281,7 @@ export const localWorkspaceReadOperations = {
   }),
   "localWorkspace.sweepCandidates": (input: { epoch: number }, db: EngineConnection) => ({
     type: "localWorkspace.sweepCandidates" as const,
-    candidates: runSqliteReadSnapshotSync(db, () =>
-      readLocalWorkspaceSweepCandidates(db, input.epoch),
-    ),
+    candidates: readLocalWorkspaceSweepCandidates(db, input.epoch),
   }),
   "localWorkspace.reviewBase": (input: { id: string }, db: EngineConnection) => ({
     type: "localWorkspace.reviewBase" as const,

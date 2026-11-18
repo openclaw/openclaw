@@ -7,12 +7,14 @@ import {
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import * as schedule from "../schedule.js";
+import { cronScriptFailureMetadata } from "../script-failure.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import type { CronJob } from "../types.js";
+import type { CronStoredJob } from "../types.js";
 import { needsCronTimerMaintenance, resolveJobErrorBackoffUntilMs } from "./jobs-scheduling.js";
 import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
@@ -49,7 +51,7 @@ it("retains the last meaningful result across quiet checks and execution failure
 
 function outcomeFixture(
   runAt: number,
-  overrides: Partial<CronJob> = {},
+  overrides: Partial<CronStoredJob> = {},
   deps: Partial<Parameters<typeof createCronServiceState>[0]> = {},
 ) {
   const job = {
@@ -101,6 +103,49 @@ function restartFailure() {
     endedAt: startedAt + 1,
   } as const;
 }
+
+it.each([
+  { code: "aborted", enabled: true },
+  { code: "internal_error", enabled: false },
+] as const)(
+  "a key-linked watcher whose condition ends with $code stays enabled: $enabled",
+  ({ code, enabled }) => {
+    const operatorSource: RestartRecoveryOperatorSource = {
+      version: 1,
+      agentId: "main",
+      sessionKey: "agent:main:watcher-owner",
+      sourceRunId: "creator-run",
+      snapshot: {
+        profileId: "fixture-operator",
+        scopes: ["operator.write"],
+        assignedRole: null,
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "fixture-generation",
+          role: "operator",
+          authMethod: "token",
+        },
+        controlUiAdmin: true,
+        localOperator: false,
+        sourceIngress: "control-ui",
+      },
+    };
+    const { job, apply } = outcomeFixture(startedAt, {
+      trigger: { script: "return { fire: false }" },
+      operatorSource: { source: operatorSource, executionRevision: "fixture-revision" },
+    });
+    apply({
+      status: "error",
+      error: `cron trigger evaluation failed (${code})`,
+      ...cronScriptFailureMetadata("trigger", code),
+    });
+    expect(job.enabled).toBe(enabled);
+    expect(job.state.nextRunAtMs !== undefined).toBe(enabled);
+  },
+);
 
 it.each([false, true])("never invents an event retry slot during outcome replay=%s", (replay) => {
   const { job, apply } = outcomeFixture(startedAt, {
@@ -384,7 +429,7 @@ it.each([
   const sendCronFailureAlert = vi.fn(async () => undefined);
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
-    { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronJob>,
+    { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronStoredJob>,
     { enqueueSessionEvent, sendCronFailureAlert, defaultAgentId: "main" },
   );
 
@@ -403,26 +448,26 @@ it.each([
   {
     name: "webhook route, no earlier alert",
     failureAlert: { after: 20, mode: "webhook", to: "https://alerts.example.com/hook" },
-    repairPending: false,
+    earlierNotice: false,
   },
-  { name: "announce route, no earlier alert", failureAlert: { after: 20 }, repairPending: false },
-  { name: "announce route, pending repair", failureAlert: { after: 2 }, repairPending: true },
+  { name: "announce route, no earlier alert", failureAlert: { after: 20 }, earlierNotice: false },
+  { name: "announce route, earlier owner notice", failureAlert: { after: 2 }, earlierNotice: true },
 ] as const)(
   "sends an owned job's auto-disable notice through its route, not a repair turn ($name)",
-  ({ failureAlert, repairPending }) => {
+  ({ failureAlert, earlierNotice }) => {
     const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
       owner: { agentId: "main", sessionKey: "agent:main:main" },
       failureAlert: { ...failureAlert },
       state: {
         consecutiveErrors: 9,
-        failureAlertIncident: repairPending
+        ...(earlierNotice
           ? {
-              scope: "run",
-              repair: { atMs: startedAt - 60_000, deadlineAtMs: startedAt + 60_000 },
+              lastFailureAlertAtMs: startedAt - 60_000,
+              failureAlertIncident: { scope: "run", signature: "earlier" },
             }
-          : undefined,
+          : {}),
       },
-    } as Partial<CronJob>);
+    } as Partial<CronStoredJob>);
 
     apply({ status: "error", error: "tenth failure" });
 
@@ -432,9 +477,6 @@ it.each([
     expect(notification?.kind === "failure-alert" && notification.payload.text).toContain(
       "was auto-disabled after 10 consecutive run failures",
     );
-    if (repairPending) {
-      expect(job.state.failureAlertIncident?.repair?.alerted).toBe(true);
-    }
   },
 );
 
@@ -626,21 +668,29 @@ it("sends one notice when an alert route also reports skipped runs", () => {
   expect(deferredNotifications).toEqual([pauseNotice]);
 });
 
-it("sends the pause notice to the agent that owns the gone conversation", () => {
-  const parentSessionKey = "agent:ops:dashboard:parent";
-  const { apply, deferredNotifications } = outcomeFixture(startedAt, {
-    agentId: undefined,
-    sessionKey: parentSessionKey,
-  });
-  apply(parentPause("archived", parentSessionKey));
-  expect(deferredNotifications).toEqual([
-    expect.objectContaining({
-      kind: "auto-disabled",
-      job: expect.objectContaining({ agentId: "ops" }),
-    }),
-  ]);
-  expect(deferredNotifications[0]?.job).not.toHaveProperty("sessionKey");
-});
+it.each(["legacy", "owner"] as const)(
+  "sends a %s pause notice to the agent, not its gone conversation",
+  async (origin) => {
+    const parentSessionKey = "agent:ops:dashboard:parent";
+    const enqueueSessionEvent = vi.fn();
+    const { state, apply, deferredNotifications } = outcomeFixture(
+      startedAt,
+      {
+        agentId: undefined,
+        ...(origin === "owner"
+          ? { owner: { sessionKey: parentSessionKey } }
+          : { sessionKey: parentSessionKey }),
+      },
+      { enqueueSessionEvent },
+    );
+    apply(parentPause("archived", parentSessionKey));
+    await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
+    expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
+      "paused: parent archived",
+      expect.objectContaining({ agentId: "ops", sessionKey: undefined, createIfMissing: true }),
+    );
+  },
+);
 
 it("sends the pause notice for a one-shot job too", () => {
   const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {

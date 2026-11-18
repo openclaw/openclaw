@@ -195,11 +195,13 @@ export type CronRunDiagnostics = NonNullable<CronRunLogWireEntry["diagnostics"]>
 export type CronRunErrorClassification =
   | { kind: "reason"; reason: FailoverReason }
   | { kind: "permanent" }
+  | { kind: "session-conflict" }
   /** Operator cancellation or lifecycle retirement, never an execution timeout. */
   | { kind: "aborted" };
 
 /** Closed producer-authored facts allowed in operator-facing failure notifications. */
 export type CronFailureNotificationDetail =
+  | { kind: "invalid-target" }
   | { kind: "command-exit"; exitCode: number }
   | { kind: "command-timeout"; mode: "wall-clock" | "no-output" }
   | {
@@ -208,7 +210,9 @@ export type CronFailureNotificationDetail =
       code: CronTriggerFailureCode;
     }
   /** A deterministic setup refusal: the job pauses until the operator records the account. */
-  | { kind: "inference-account-unrecorded" };
+  | { kind: "inference-account-unrecorded" }
+  /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
+  | { kind: "agent-stall"; classification: string };
 
 /** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
@@ -261,7 +265,6 @@ export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
   state?: unknown;
-  busy?: true;
 };
 
 export type CronJobExecutionResult = CronRunOutcome &
@@ -354,18 +357,20 @@ export type CronJobState = Omit<
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
   runningReceiptId?: string;
+  /** Receipt of the active run while its condition is still being evaluated; see the run queue. */
+  conditionCheckReceiptId?: string;
+  /** Receipt of the active run while its fired condition waits for a run slot. */
+  runSlotWaitReceiptId?: string;
   /** Nonce for a committed schedule edit during the pending run. */
   runningScheduleChangeId?: string;
   /**
-   * Unresolved recovery scope and last notified signature, when an alert was requested.
-   * `repair` records the owner-conversation repair request that replaced the streak's first
-   * alert, and `alerted` that its fallback alert was sent. It lasts until the job succeeds,
-   * so a streak is repaired at most once.
+   * Unresolved recovery scope and last notified signature, when a failure notice was sent.
+   * It lasts until the job succeeds. Stores from 2026.10 may still carry an unread `repair`
+   * marker; the next notice or success drops it.
    */
   failureAlertIncident?: {
     signature?: string;
     scope: "run" | "trigger";
-    repair?: { atMs: number; deadlineAtMs?: number; settledAtMs?: number; alerted?: true };
   };
   /** Fences notification settlement when multiple cycles share a timestamp. */
   lastFailureNotificationId?: string;
@@ -399,7 +404,6 @@ export type CronTriggerFailureCode =
 /** Result union returned by the cron trigger-script evaluator. */
 export type CronTriggerEvaluationResult =
   | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
-  | { kind: "busy" }
   | { kind: "error"; code: CronTriggerFailureCode; error: string };
 
 /** Public cron job contract with spec fields and mutable run state. */
@@ -511,6 +515,8 @@ type CronJobStateInput = Partial<
     | "streamSourceIdentity"
     | "sourceIdentity"
     | "runningReceiptId"
+    | "conditionCheckReceiptId"
+    | "runSlotWaitReceiptId"
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"
@@ -553,6 +559,7 @@ export type CronJobPatch = Partial<
     | "pacing"
     | "activeHours"
     | "idleOnly"
+    | "cyberAccessProgram"
     | "trigger"
   >
 > & {
@@ -560,6 +567,7 @@ export type CronJobPatch = Partial<
   pacing?: CronPacing | null;
   activeHours?: CronActiveHours | null;
   idleOnly?: boolean | null;
+  cyberAccessProgram?: CronJob["cyberAccessProgram"] | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;

@@ -30,7 +30,7 @@ import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
   createChatPanePendingInputControls,
-  readChatPaneMutationAccess,
+  readChatPaneRouteMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import {
@@ -87,9 +87,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const cachedSessionStatePending = Boolean(this.cachedSessionStatePending());
     const cachedSession = cachedSessionStatePending ? this.cachedSessionState() : undefined;
     const selectedSessionArchived = cachedSession?.archived ?? this.isCurrentSessionArchived(state);
-    const mutationAccess = readChatPaneMutationAccess(
+    const mutationAccess = readChatPaneRouteMutationAccess(
       this.context.gateway.snapshot,
-      state.sessionKey,
+      state,
       selectedSession,
     );
     const observerDigest = pickFreshestObserverDigest(
@@ -280,8 +280,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
-    const auth = gatewaySnapshot.hello?.auth ?? null;
-    const hasWriteScope = hasOperatorWriteAccess(auth);
+    const hasWriteScope = hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
     const composerAccess = catalogKey
       ? hasWriteScope ||
         (catalogKey.catalogId === "beam" &&
@@ -379,9 +378,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onActivityPillsLayout: this.onActivityPillsLayout,
       onScrollPortRef: this.mobileScrollFades.register,
       paneId: this.presentationId,
+      ownsComposer: this.active && this.presented,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
-      autoExpandToolCalls: state.chatVerboseLevel === "full",
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
@@ -422,11 +421,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       progressCardRefresh: progressPresentation ? detailsProgressRefresh : undefined,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       ...this.captureProgressCardActions(canWriteProgressCard),
-      readingHistory: state.chatReadingHistory,
-      onProgressManipulate: () => {
-        lockChatScroll(state);
-        this.transcript.cancelScroll();
+      get readingHistory() {
+        return state.chatReadingHistory;
       },
+      onProgressManipulate: () => lockChatScroll(state),
       onDismissProgressCard: progressPresentation
         ? this.hideProgressCard.bind(this, progressPresentation)
         : undefined,
@@ -590,7 +588,9 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onSlashCommand: nativeConversation
         ? (command) => void state.handleSendChat(command)
         : undefined,
-      showNewMessages: state.chatNewMessagesBelow,
+      get showNewMessages() {
+        return state.chatNewMessagesBelow;
+      },
       onScrollToBottom: state.scrollToBottom,
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,

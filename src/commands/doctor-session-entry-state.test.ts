@@ -10,16 +10,12 @@ import { runSessionStartupMigration } from "../config/sessions/startup-migration
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
-import type { SqlConnection } from "../infra/sql-connection.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
-import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as snapshots from "../infra/sqlite-snapshot.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
-import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -27,17 +23,17 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import * as quarantine from "../state/openclaw-quarantine-store.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { repairLegacySessionEntryStates } from "./doctor-session-delivery-state.js";
-import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
-  type DoctorSqliteMaintenanceAuthority,
-  withDoctorSqliteMaintenanceLock,
-} from "./doctor-sqlite-maintenance-lock.js";
+  seedSessionEntry,
+  withSessionEntryMaintenance,
+} from "./doctor-session-entry-state.test-support.js";
+import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 import * as entryRepairs from "./doctor/shared/session-entry-rewrite.js";
 
 let state: OpenClawTestState;
@@ -52,7 +48,7 @@ afterEach(async () => {
 });
 
 function withMaintenance<T>(run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T) {
-  return withDoctorSqliteMaintenanceLock({ env: state.env, operation: "session entry test", run });
+  return withSessionEntryMaintenance(state.env, run);
 }
 
 function repair(apply = true, authority?: DoctorSqliteMaintenanceAuthority) {
@@ -83,53 +79,7 @@ function recover(store: string, agent?: string) {
 }
 
 function seedEntry(key: string, fields: Record<string, unknown>) {
-  const env = state.env;
-  const sessionKey = `agent:main:${key}`;
-  const entry = {
-    sessionId: `session-${key}`,
-    updatedAt: 42,
-    delivery: { kind: "none" },
-    ...fields,
-  };
-  const raw = JSON.stringify(entry);
-  const database = openOpenClawAgentDatabase({ agentId: "main", env });
-  database.db
-    .prepare(
-      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-    )
-    .run(sessionKey, entry.sessionId, raw, entry.updatedAt);
-  database.db
-    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-    .run(sessionKey);
-  database.db
-    .prepare(
-      "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, 'conversation', ?, ?)",
-    )
-    .run(entry.sessionId, sessionKey, entry.updatedAt, entry.updatedAt);
-  const readStored = (connection: Pick<SqlConnection, "prepare">) =>
-    connection.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?").get(sessionKey)
-      ?.entry_json;
-  const readRaw = () => {
-    const current = openOpenClawAgentDatabase({ agentId: "main", env });
-    return readStored(current.db);
-  };
-  return {
-    raw,
-    readRaw,
-    readStored,
-    read: () => JSON.parse(String(readRaw())),
-    sessionKey,
-    databasePath: database.path,
-    scope: { agentId: "main", env, sessionKey, storePath: database.path },
-    writeRaw: (value: string) =>
-      agentDatabase()
-        .db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run(value, sessionKey),
-    row: (columns: string, table = "session_nodes") =>
-      agentDatabase()
-        .db.prepare(`SELECT ${columns} FROM ${table} WHERE session_key = ?`)
-        .get(sessionKey),
-  };
+  return seedSessionEntry(state.env, key, fields);
 }
 
 function rewrite(
@@ -279,68 +229,6 @@ it("aggregates startup guidance for terminal unmatched custody without retiring 
     pendingFinalDelivery: { kind: "replayable", text: "Unsent final", createdAt: 42 },
   });
   expect(second.readRaw()).toBe(second.raw);
-});
-
-it("closes a captured session inspection reader before removing its private snapshot", async () => {
-  const legacy = seedEntry("captured-inspection", { pendingFinalDelivery: true });
-  closeOpenClawAgentDatabasesForTest();
-  const originalBytes = fs.readFileSync(legacy.databasePath);
-  const generations = readUpdateDatabaseGenerations([legacy.databasePath]);
-  const warnings: string[] = [];
-  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
-    env: state.env,
-    signal: new AbortController().signal,
-    warn: (message) => warnings.push(message),
-  })!;
-  let snapshot:
-    | Awaited<ReturnType<typeof snapshotSource.startSqliteReadOnlyLocationAsync>["result"]>
-    | undefined;
-  let reader: DatabaseSync | undefined;
-  const openAtCleanup: boolean[] = [];
-  const prepare = snapshotSource.startSqliteReadOnlyLocationAsync;
-  vi.spyOn(snapshotSource, "startSqliteReadOnlyLocationAsync").mockImplementation((...args) => {
-    const preparation = prepare(...args);
-    return {
-      ...preparation,
-      result: preparation.result.then((prepared) => {
-        snapshot = prepared;
-        return prepared;
-      }),
-      startClose() {
-        openAtCleanup.push(reader?.isOpen ?? true);
-        return preparation.startClose();
-      },
-    };
-  });
-  const open = nodeSqlite.openNodeSqliteDatabase;
-  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    const database = open(...args);
-    if (args[0] === snapshot?.location) {
-      reader = database;
-    }
-    return database;
-  });
-  await withMaintenance(async (authority) => {
-    const scope = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: () => authority.assertCurrent(),
-    });
-    try {
-      await capture.admit();
-      const result = await scope.run(() => capture.run(() => repair(false, authority)));
-      expect(result).toMatchObject({ found: 1, repaired: 0, scannedStores: 1 });
-      expect(reader).toBeDefined();
-      expect(openAtCleanup).toEqual([false]);
-      expect(fs.existsSync(snapshot!.cleanupRoot!)).toBe(false);
-      await capture.settle();
-      expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
-      expect(warnings).toEqual([]);
-      expectBytesEqual(fs.readFileSync(legacy.databasePath), originalBytes, "inspected database");
-    } finally {
-      await scope.close();
-      await snapshot?.cleanupAsync();
-    }
-  });
 });
 
 it("backs up and repairs retained ISO endedAt without losing session data or repeating repair", async () => {

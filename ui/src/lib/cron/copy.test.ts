@@ -18,7 +18,7 @@ it("localizes missing revisions and queued run feedback at the action owner", as
   expect(request).not.toHaveBeenCalled();
 
   request.mockResolvedValueOnce({ ok: true, ran: true, enqueued: true, runId: "Run-ID" });
-  await runCronJob(state, job.id, "force");
+  await runCronJob(state, job.id);
   expect.soft(translate).toHaveBeenCalledWith("cron.runQueued", { runId: "Run-ID" });
   expect(state.cronNotice).toContain(i18n.t("cron.runQueued", { runId: "Run-ID" }));
 });

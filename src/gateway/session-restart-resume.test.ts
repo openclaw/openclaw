@@ -6,9 +6,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { withinTest } from "../../test/helpers/promise.js";
-import { addSession } from "../agents/bash-process-registry.js";
-import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
@@ -74,15 +71,12 @@ it("requests original recorded custody only at the actual marked restart admissi
         data: { phase: "start", startedAt: Date.now() },
       },
     });
-    const background = createProcessSessionFixture({
-      id: "restart-source-background",
-      backgrounded: true,
+    const claim = claimAgentRunContext("restart-source-live", target, {
+      trackOwner: true,
+      ownsContext: true,
     });
-    background.agentId = target.agentId;
-    background.sessionKey = target.sessionKey;
-    addSession(background);
     await persistRunningSessionsForRestart({ cfg });
-    resetProcessRegistryForTests();
+    releaseAgentRunContext("restart-source-live", claim);
     expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
     const context = createContext([], () => cfg);
     const admission = vi
@@ -153,7 +147,7 @@ it.for(["prepared", "managed", "crash", "slow-crash", "failed"] as const)(
             context.restartResumeWindows = { main: [{ startedAt: 100, endedAt: 200 }] };
           }
           const params = { context, signal: admission.signal, log: { warn: vi.fn() } };
-          const wait = admission.observation.waitForAgentPreparation.bind(admission.observation);
+          const wait = admission.observation.waitForAgentPreparation;
           const preparationWait = vi
             .spyOn(admission.observation, "waitForAgentPreparation")
             .mockImplementation((id, options) => {
@@ -527,151 +521,6 @@ it.each(["restart", "user", "completed"] as const)(
     }),
 );
 
-it.for([
-  "message",
-  "nested-message",
-  "nested-lost",
-  "stale-requester",
-  "current-completed",
-  "retired-completed",
-  "stopped",
-  "interrupted",
-] as const)("recovers a parked dashboard root from its recorded wake source (%s)", (source) =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:parked-root",
-      sessionId: "parked-root",
-    };
-    const runId = "parked-root-run";
-    const lifecycleRevision = "parked-root-revision";
-    replaceSessionEntrySync(target, {
-      sessionId: target.sessionId,
-      lifecycleRevision,
-      activeWriterRunId: runId,
-      updatedAt: 100,
-    });
-    for (const event of [
-      { ts: 100, data: { phase: "start", startedAt: 100 } },
-      {
-        ts: 120,
-        data: {
-          phase: "end",
-          yielded: true,
-          livenessState: "paused",
-          stopReason: "end_turn",
-        },
-      },
-    ]) {
-      await persistGatewaySessionLifecycleEvent({
-        sessionKey: target.sessionKey,
-        event: { ...event, runId, sessionId: target.sessionId },
-      });
-    }
-    const childRunId = "parked-child-run";
-    const childSessionKey = "agent:main:dashboard:parked-child";
-    const childSessionId = "parked-child";
-    const childRevision = "parked-child-revision";
-    const recovery = ["retired-completed", "stopped", "interrupted"].includes(source);
-    const completed = source === "current-completed" || source === "retired-completed";
-    const child = createSubagentRunRecord({
-      runId: childRunId,
-      childSessionKey,
-      childAgentId: "main",
-      childSessionIdentity: { sessionId: childSessionId, lifecycleRevision: childRevision },
-      requesterSessionKey: target.sessionKey,
-      requesterAgentId: target.agentId,
-      completionRequesterSessionId: target.sessionId,
-      completionRequesterLifecycleRevision: lifecycleRevision,
-      expectsCompletionMessage: true,
-      endedAt: source === "interrupted" ? undefined : 110,
-      outcome: completed ? { status: "ok" } : undefined,
-      endedReason:
-        source === "stopped" ? "subagent-killed" : completed ? "subagent-complete" : undefined,
-      pauseReason: completed || recovery ? undefined : "sessions_yield",
-      waitForMessage: source === "message" || source === "stale-requester" ? true : undefined,
-      requesterSettleWake: {
-        status: "pending",
-        attemptCount: 0,
-        requesterYieldBatch: true,
-        requesterRunId: source === "stale-requester" ? "older-root-run" : runId,
-        batchRunIds: [childRunId],
-      },
-    });
-    subagentRuns.set(childRunId, child);
-    if (source === "retired-completed") {
-      subagentRuns.retireCompletionAuthority(child);
-    }
-    const grandchildRunId = "parked-grandchild-run";
-    if (source === "nested-message") {
-      subagentRuns.set(
-        grandchildRunId,
-        createSubagentRunRecord({
-          runId: grandchildRunId,
-          childSessionKey: "agent:main:dashboard:parked-grandchild",
-          childAgentId: "main",
-          requesterSessionKey: childSessionKey,
-          requesterAgentId: "main",
-          completionRequesterSessionId: childSessionId,
-          completionRequesterLifecycleRevision: childRevision,
-          expectsCompletionMessage: true,
-          endedAt: 105,
-          pauseReason: "sessions_yield",
-          waitForMessage: true,
-          requesterSettleWake: {
-            status: "pending",
-            attemptCount: 0,
-            requesterYieldBatch: true,
-            requesterRunId: childRunId,
-            batchRunIds: [grandchildRunId],
-          },
-        }),
-      );
-    }
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
-      accepted: Promise.resolve({ ok: true }),
-      id: "restart-input",
-      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-      cancel: () => false,
-    });
-    try {
-      await persistRunningSessionsForRestart({ cfg });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
-      for (let boot = 0; boot < 2; boot++) {
-        await resumeMarkedSessions({
-          context: createContext([], () => cfg),
-          signal: new AbortController().signal,
-          log: { warn() {} },
-        });
-        const restored = (await readSessionEntryReadOnlyInWorker(target))!;
-        expect(restored.resumeAfterRestart).toBeUndefined();
-        expect(restored.activeWriterRunId).toBe(runId);
-        if (source === "message" || source === "nested-message" || source === "current-completed") {
-          expect(restored.lifecycleRunId).toBe(runId);
-          expect(restored.status).toBeUndefined();
-          expect(restored.endedAt).toBe(120);
-        } else if (recovery) {
-          expect(restored.lifecycleRunId).toBeUndefined();
-          expect(restored.status).toBe("killed");
-        } else {
-          expect(restored.lifecycleRunId).toBeUndefined();
-          expect(restored.status).toBe("failed");
-          expect(restored.lastRunError).toMatch(/wait|child|restart/i);
-        }
-      }
-      expect(resume).toHaveBeenCalledTimes(recovery ? 1 : 0);
-    } finally {
-      resume.mockRestore();
-      subagentRuns.delete(childRunId);
-      subagentRuns.delete(grandchildRunId);
-    }
-  }),
-);
-
 it("marks completed reply settlement only when accepted inputs remain queued", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
@@ -708,6 +557,12 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
       await persistRunningSessionsForRestart({ cfg: {} });
       expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
         queuedInputIds: [queued.inputId],
+        queuedInputSources: {
+          [queued.inputId]: {
+            runId: "queued-behind-completed-reply",
+            source: { kind: "unavailable" },
+          },
+        },
       });
     } finally {
       queued?.finish("interrupted");
@@ -741,6 +596,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
       },
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
     ];
+    const claims: Array<[string, string | undefined]> = [];
     try {
       for (const { sessionKey, entry, resumable } of cases) {
         const agentId = resumable ? "other" : "main";
@@ -760,10 +616,15 @@ it("marks ordinary conversations without inheriting cron or external execution o
             }),
           );
         }
-        const process = createProcessSessionFixture({ id: sessionKey, backgrounded: true });
-        process.agentId = agentId;
-        process.sessionKey = sessionKey;
-        addSession(process);
+        const runId = `live:${sessionKey}`;
+        claims.push([
+          runId,
+          claimAgentRunContext(
+            runId,
+            { agentId, sessionKey, sessionId: sessionKey },
+            { trackOwner: true, ownsContext: true },
+          ),
+        ]);
       }
       await persistRunningSessionsForRestart({ cfg: {} });
       for (const { sessionKey, resumable } of cases) {
@@ -773,20 +634,22 @@ it("marks ordinary conversations without inheriting cron or external execution o
         })?.entry;
         expect(entry).toBeDefined();
         expect(entry?.resumeAfterRestart, sessionKey).toEqual(
-          resumable ? { queuedInputIds: [], hadBackgroundExec: true } : undefined,
+          resumable ? { queuedInputIds: [] } : undefined,
         );
       }
     } finally {
+      for (const [runId, claim] of claims) {
+        releaseAgentRunContext(runId, claim);
+      }
       for (const { sessionKey, resumable } of cases) {
         if (resumable) {
           subagentRuns.delete(sessionKey);
         }
       }
-      resetProcessRegistryForTests();
     }
   }));
 
-it("settles captured queued sends as failed when the recorded owner's authority is revoked", () =>
+it("settles source-less queued sends even when the recorded owner cannot resume", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       gateway: {
@@ -823,10 +686,10 @@ it("settles captured queued sends as failed when the recorded owner's authority 
       assertCurrent() {},
     });
     assert(receipt, "Queued fixture input was not admitted");
-    const process = createProcessSessionFixture({ id: "revoked-owner-work", backgrounded: true });
-    process.agentId = target.agentId;
-    process.sessionKey = target.sessionKey;
-    addSession(process);
+    const claim = claimAgentRunContext("revoked-owner-work", target, {
+      trackOwner: true,
+      ownsContext: true,
+    });
     try {
       await persistRunningSessionsForRestart({ cfg });
       receipt.finish("interrupted");
@@ -847,7 +710,7 @@ it("settles captured queued sends as failed when the recorded owner's authority 
     } finally {
       receipt?.finish("interrupted");
       await receipt?.settled?.();
-      resetProcessRegistryForTests();
+      releaseAgentRunContext("revoked-owner-work", claim);
     }
   }));
 

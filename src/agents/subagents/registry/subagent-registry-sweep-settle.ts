@@ -7,13 +7,19 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
 import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
-import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  hasSubagentRunEnded,
+  isSubagentRunLive,
+  isSubagentRunQueued,
+  isYieldedSubagentRun,
+} from "./subagent-run-liveness.js";
 
 type CompleteRun = ReturnType<
   typeof createSubagentRegistryCompletionRuntime
@@ -29,17 +35,24 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   entry: SubagentRunRecord;
   readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
-  requesterEnded?: boolean;
 }): Promise<boolean> {
   const { runId, entry, readScope, complete } = params;
-  let requesterEnded = params.requesterEnded;
-  if (isYieldedSubagentRun(entry) && entry.waitForMessage && requesterEnded === undefined) {
+  let requesterEnded = false;
+  if (isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // An unclaimed wait belongs to the session across turns. Only a real
+    // continuation claim makes the requester's committed turn end close it.
     const requester = await loadSessionEntryByKey(
       entry.requesterSessionKey,
       entry.requesterAgentId,
     );
+    const requesterCompletion = subagentRuns.getRequesterCompletion(entry);
     requesterEnded =
-      !requester || requester.archivedAt !== undefined || isTerminalSessionStatus(requester.status);
+      requesterCompletion?.ended === true ||
+      !requester ||
+      requester.archivedAt !== undefined ||
+      (requesterCompletion !== undefined &&
+        isTerminalSessionStatus(requester.status) &&
+        requester.lastRunId === requesterCompletion.runId);
   }
   const retired = subagentRuns.isCompletionAuthorityRetired(entry);
   let continuation = isYieldedSubagentRun(entry)
@@ -59,6 +72,12 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   if (continuation?.state !== "unreachable") {
     return false;
   }
+  subagentRegistryLog.warn("Settling unreachable yielded subagent", {
+    runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    reason: continuation.error,
+    yieldedAt: entry.execution.endedAt,
+  });
   // An outcome the yield already recorded is kept, as a collector that yields now ends with its
   // yielded turn as its result; only a run with no recorded outcome takes the diagnostic error.
   const outcome = entry.execution.outcome ?? {
@@ -105,5 +124,57 @@ export async function settleUnreachableYieldedSubagentRun(params: {
       });
     }
   }
+  return true;
+}
+
+const SUBAGENT_RESTART_INTERRUPTED_ERROR =
+  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
+
+/**
+ * Settles a running row hydrated from an earlier Gateway process. Restore retires its
+ * completion authority and no process reconstructs child execution, so without a
+ * terminal outcome its requester would wait for a completion that never arrives.
+ * Returns whether it did.
+ */
+export async function settleRestartInterruptedSubagentRun(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  readScope?: Pick<SweepReadScope, "completionCurrent">;
+  complete: CompleteRun;
+  now: number;
+  processStartedAt?: number;
+}): Promise<boolean> {
+  const { runId, entry, readScope, complete, now } = params;
+  const processStartedAt = params.processStartedAt ?? performance.timeOrigin;
+  if (
+    hasSubagentRunEnded(entry) ||
+    isYieldedSubagentRun(entry) ||
+    !subagentRuns.isCompletionAuthorityRetired(entry) ||
+    // Only an earlier process could have owned this execution; this process never did.
+    !(entry.createdAt < processStartedAt) ||
+    isSubagentRunLive(entry) ||
+    isSubagentRunQueued(entry)
+  ) {
+    return false;
+  }
+  subagentRegistryLog.warn("Settling subagent interrupted by Gateway restart", {
+    runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    createdAt: entry.createdAt,
+  });
+  await complete(
+    {
+      runId,
+      expectedEntry: entry,
+      recoveryCurrent: readScope?.completionCurrent,
+      endedAt: now,
+      outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      sendFarewell: true,
+      accountId: entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    },
+    "sweeper-restart-interrupted",
+  );
   return true;
 }

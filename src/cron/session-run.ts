@@ -1,5 +1,4 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { classifyAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveCronStyleNow } from "../agents/current-time.js";
 import {
   captureSessionEventTargetForHost as captureSessionEventTarget,
@@ -23,6 +22,7 @@ import {
 } from "./isolated-agent/run-delivery-trace.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { CronOperatorSourceError } from "./operator-source-error.js";
+import { resolveCronAgentErrorClassification } from "./run-error-reason.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
 import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
@@ -60,7 +60,7 @@ export async function runCronSessionTurn(
     (await prepareAutomationSystemEvents(queueKey, job.id, job.state.runningAtMs));
   let noticesStarted = false;
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  let controlUiAdmin: true | undefined;
+  let automationAdmin: true | undefined;
   using operatorLease = new DisposableStack();
   const assertCurrent = () => {
     params.assertCurrent();
@@ -83,7 +83,7 @@ export async function runCronSessionTurn(
       try {
         operator = await restoreCronOperatorSource({
           job,
-          target: { agentId: params.agentId, sessionKey: params.sessionKey, entry: expectedTarget },
+          target: { agentId: params.agentId, sessionKey: params.sessionKey },
           signal: params.abortSignal,
           deliveryAttemptFence: params.deliveryAttemptFence,
         });
@@ -103,7 +103,7 @@ export async function runCronSessionTurn(
       if (operator) {
         operatorLease.defer(operator.release);
         operatorAuthority = operator.authority;
-        controlUiAdmin = operator.controlUiAdmin ? true : undefined;
+        automationAdmin = operator.automationAdmin ? true : undefined;
       }
       assertCurrent();
     }
@@ -224,7 +224,7 @@ export async function runCronSessionTurn(
         job,
         occurrence: params.occurrence,
         operatorAuthority,
-        controlUiAdmin,
+        automationAdmin,
         admissionSource: params.admissionSource,
         prepare: params.prepare,
         preparePrompt: async (cfg) => {
@@ -326,9 +326,6 @@ export async function runCronSessionTurn(
     });
     // Source, notice, and Cron custody remain live until the controller settles.
     const result = await receipt.settled;
-    const classification = result.terminalOutcome
-      ? classifyAgentRunTerminalOutcome(result.terminalOutcome)
-      : undefined;
     const conversationDelivered =
       conversationDelivery && result.conversationResultCommitted === true;
     const delivered = result.deliveryAmbiguous
@@ -340,12 +337,13 @@ export async function runCronSessionTurn(
       admissionDeferred: result.admissionDeferred,
       admissionDeferredReason: result.admissionDeferredReason,
       interruptedByRestart: result.interruptedByRestart,
-      errorClassification:
-        classification === "cancellation"
-          ? { kind: "aborted" }
-          : classification === "timeout"
-            ? { kind: "reason", reason: "timeout" }
-            : result.automationResult?.errorClassification,
+      errorClassification: result.terminalOutcome
+        ? resolveCronAgentErrorClassification(
+            result.terminalOutcome,
+            result.errorReason,
+            result.automationResult?.errorClassification,
+          )
+        : result.automationResult?.errorClassification,
       error:
         result.error ??
         (result.status === "cancelled" ? "Automation session turn was cancelled" : undefined),

@@ -238,7 +238,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: approved shared automation tool-default selection before policy and approval.
       // +2: reconcile the accepted public entrypoint inventory after the cron budget update.
       // +1: settled execution lifecycle classifiers for plugin subscribers (#192413).
-      162,
+      // +1: shared Decisions HTTP execution subpath (#195641), captured in the feature cut.
+      163,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -315,7 +316,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: channel display-mention and mention-adapter types (#192473).
       // +1: shared plugin-owned Control UI message translation.
       // +1: GatewayIngressPrincipalRecovery on gateway-ingress (#193098).
-      3865,
+      // +2: appendReplyMediaFailures and ReplyMediaFailure receipts on reply-payload (#186751).
+      // +21 net: accepted feature-cut exports omitted from earlier budget updates.
+      // Harness policy/base prompt/progress: +3 (#197350, #191344, #197523).
+      // Transcript replay groups: +3 (#194362); UI recovery storage: +1 (#177231).
+      // Binding inspection: +1 (#192623); service V3 types in core and plugin-entry: +8 (#176886).
+      // Decisions HTTP replaces the unshipped OpenAI executor: +3 net (#195641).
+      // Gateway person principal and access-refresh classifier: +2 (#196276, #176886).
+      3888,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -369,7 +377,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same plugin-command continuation classifier.
       // +2: the same settled execution lifecycle classifiers (#192413).
       // +1: the same Control UI message translator.
-      2235,
+      // +1: the same appendReplyMediaFailures receipt formatter (#186751).
+      // +7 net: the callable subset of the same source-audited feature-cut exports.
+      // Harness +2, transcript replay +1, binding inspection +1, Decisions +1 net, Gateway +2.
+      2243,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

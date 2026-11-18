@@ -8,6 +8,7 @@ import {
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection, sqlPublicationAnchor } from "../infra/sql-connection.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { prepareSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "../infra/sqlite-error-diagnostics.js";
 import { isSqliteWalWorkerMaintained } from "../infra/sqlite-wal-write-admission.js";
@@ -133,6 +134,11 @@ export function closeStateDatabaseHandle(
   const priorCheckpointError = database.walMaintenance?.health?.state === "error";
   let checkpointed = false;
   try {
+    if (database.db.isOpen && !delegated) {
+      // Only host checkpoints need this policy; delegated retirement owns its worker connection.
+      // Retiring handles leave pinned WAL to its remaining owners instead of waiting for readers.
+      setSqliteBusyTimeout(database.db, 0);
+    }
     checkpointed =
       database.walMaintenance?.close(options) === true && options?.checkpointMode !== "PASSIVE";
   } catch (error) {

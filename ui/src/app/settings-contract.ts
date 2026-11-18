@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeUiAppearancePreference,
+  UI_PREFERENCE_DEFAULTS,
   type TabIconPreference,
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { BoardSessionViews } from "../lib/board/settings.ts";
@@ -29,7 +30,10 @@ function normalizeChoice<T extends string>(
   return (value) => values.find((candidate) => candidate === value) ?? fallback;
 }
 
-export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
+export const normalizeChatSendShortcut = normalizeChoice(
+  CHAT_SEND_SHORTCUTS,
+  UI_PREFERENCE_DEFAULTS.chatSendShortcut,
+);
 
 const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
@@ -70,6 +74,32 @@ export function normalizeDashboardsDisplay(value: unknown): DashboardsDisplay | 
     group: normalizeChoice(DASHBOARDS_GROUPS, "none")(value.group),
   };
   return display.view === "grid" && display.sort === "updated" && display.group === "none"
+    ? undefined
+    : display;
+}
+
+const SESSION_FILES_VIEWS = ["list", "grid"] as const;
+const SESSION_FILES_SORTS = ["default", "date", "name", "type"] as const;
+export type SessionFilesDisplay = {
+  view: (typeof SESSION_FILES_VIEWS)[number];
+  sort: (typeof SESSION_FILES_SORTS)[number];
+};
+export const SESSION_FILES_DISPLAY_DEFAULTS: SessionFilesDisplay = {
+  view: "list",
+  sort: "default",
+};
+
+/** Browser-local Files panel display for session files and attachments; the defaults are not stored. */
+export function normalizeSessionFilesDisplay(value: unknown): SessionFilesDisplay | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const display: SessionFilesDisplay = {
+    view: normalizeChoice(SESSION_FILES_VIEWS, SESSION_FILES_DISPLAY_DEFAULTS.view)(value.view),
+    sort: normalizeChoice(SESSION_FILES_SORTS, SESSION_FILES_DISPLAY_DEFAULTS.sort)(value.sort),
+  };
+  return display.view === SESSION_FILES_DISPLAY_DEFAULTS.view &&
+    display.sort === SESSION_FILES_DISPLAY_DEFAULTS.sort
     ? undefined
     : display;
 }
@@ -136,14 +166,14 @@ export function normalizeTextScale(value: unknown): TextScaleStop {
 }
 
 export const UI_APPEARANCE_DEFAULTS = {
-  theme: "claw",
-  themeMode: "system",
+  theme: UI_PREFERENCE_DEFAULTS.theme,
+  themeMode: UI_PREFERENCE_DEFAULTS.themeMode,
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
   chatShowTaskProgress: true,
   chatCollapseTaskProgress: false,
-  chatSendShortcut: "enter",
+  chatSendShortcut: UI_PREFERENCE_DEFAULTS.chatSendShortcut,
   catalogOpenTarget: "viewer",
   composerHoldToRecord: true,
   lobsterPetVisits: true,
@@ -171,6 +201,8 @@ export type UiSettings = {
   background?: BackgroundPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
+  // Browser-local opt-in; grouped command activity remains the default.
+  chatInlineCommands?: boolean;
   chatPersistCommentary?: boolean;
   // Browser-local composer visibility; saved progress and other placements are unchanged.
   chatShowTaskProgress?: boolean;
@@ -188,6 +220,7 @@ export type UiSettings = {
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   boardSessionViews?: BoardSessionViews; // Per-device active dashboard tab and dock state
   dashboardsDisplay?: DashboardsDisplay; // Dashboards gallery view, ordering and grouping
+  sessionFilesDisplay?: SessionFilesDisplay; // Files panel session files view and ordering
   sidebarSessionLayouts?: SidebarSessionLayouts; // Sidebar columns and widths per session
   sidebarSessionActivePanels?: SidebarSessionActivePanels; // Collapsed active panel per session
   navCollapsed: boolean; // Collapsible sidebar state

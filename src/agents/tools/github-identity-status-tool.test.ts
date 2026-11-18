@@ -63,7 +63,7 @@ describe("github_identity_status tool", () => {
       async () => await tool.execute("status-2", {}),
     );
 
-    expect(JSON.stringify(result)).toContain("Settings → Agents → Tools");
+    expect(JSON.stringify(result)).toContain("Settings → Profile → GitHub accounts");
     expect(JSON.stringify(result)).not.toContain("github_identity_settings");
   });
 });

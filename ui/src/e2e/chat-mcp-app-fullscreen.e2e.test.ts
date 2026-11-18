@@ -47,7 +47,7 @@ const html =
   ',appInfo:{name:"Fullscreen proof",version:"1"},appCapabilities:{availableDisplayModes:["inline","fullscreen"]}}});</script>';
 
 it.each(["chromium", "webkit"] as const)(
-  "fills the expanded transcript app in %s and restores inline layout",
+  "opens a transcript fullscreen request beside chat in %s and retains its frame",
   async (engine) => {
     const browser = await { chromium, webkit }[engine].launch({ headless: true });
     const context = await browser.newContext({
@@ -68,7 +68,7 @@ it.each(["chromium", "webkit"] as const)(
                   kind: "canvas",
                   surface: "assistant_message",
                   render: "url",
-                  title: "Excalidraw fullscreen proof",
+                  title: "Excalidraw",
                   preferredHeight: 450,
                   mcpApp: { viewId: "fullscreen-view" },
                 },
@@ -79,6 +79,7 @@ it.each(["chromium", "webkit"] as const)(
         ],
         methodResponses: {
           "mcp.app.view": {
+            appIdentity: { label: "Excalidraw" },
             sandboxUrl: "/mcp-app-sandbox",
             sandboxPort: claim.port,
             html,
@@ -94,17 +95,28 @@ it.each(["chromium", "webkit"] as const)(
       const outer = host.locator("iframe");
       const app = outer.contentFrame().frameLocator("iframe");
       await app.getByRole("button", { name: "Edit", exact: true }).click();
-      await host.locator(".exit-fullscreen").waitFor();
+      await expect.poll(() => host.getAttribute("data-sidebar-ready")).toBe("");
+      await expect.poll(() => host.getAttribute("display-mode")).toBe("fullscreen");
+      const retainedFrame = await outer.elementHandle();
+      const tab = page.getByRole("tab", { name: "Excalidraw", exact: true });
+      const composer = page.locator("textarea").last();
+      await tab.waitFor();
+      await composer.click();
+      await composer.fill("Keep this draft available beside the app.");
       const measure = () =>
         host.evaluate((element) => {
-          const mount = element.querySelector(".mount")!;
           const frame = element.querySelector("iframe")!;
+          const target = document.querySelector(".mcp-app-sidebar-target")!;
+          const bounds = element.getBoundingClientRect();
           return {
             viewport: innerHeight,
-            host: element.getBoundingClientRect().height,
-            mount: mount.getBoundingClientRect().height,
+            viewportWidth: innerWidth,
+            host: bounds.height,
+            left: bounds.left,
+            right: bounds.right,
+            target: target.getBoundingClientRect().height,
+            mount: element.querySelector(".mount")!.getBoundingClientRect().height,
             iframe: frame.getBoundingClientRect().height,
-            display: getComputedStyle(element).display,
           };
         });
       const measurements = await measure();
@@ -112,29 +124,45 @@ it.each(["chromium", "webkit"] as const)(
         path.join(proof, engine + "-expanded.json"),
         JSON.stringify(measurements, null, 2),
       );
-      const screenshot = await takeControlUiScreenshotFrame(
-        page,
-        host,
-        [host.locator(".exit-fullscreen")],
-        { elements: [host], animations: "disabled" },
-      );
+      const screenshot = await takeControlUiScreenshotFrame(page, host, [tab, composer], {
+        elements: [host],
+        animations: "disabled",
+      });
       await fs.writeFile(path.join(proof, engine + "-expanded.png"), screenshot.png);
-      expect(measurements.iframe).toBeGreaterThan(700);
-      expect(measurements.iframe).toBeLessThanOrEqual(measurements.viewport);
-      await page.setViewportSize({ width: 820, height: 650 });
+      expect(measurements.iframe).toBeGreaterThan(450);
+      expect(Math.abs(measurements.host - measurements.target)).toBeLessThanOrEqual(4);
+      expect(Math.abs(measurements.iframe - measurements.mount)).toBeLessThanOrEqual(4);
+      expect(measurements.left).toBeGreaterThan(0);
+      expect(measurements.right).toBeLessThanOrEqual(measurements.viewportWidth + 1);
+      await page.setViewportSize({ width: 1200, height: 650 });
       await expect
         .poll(async () => {
           const resized = await measure();
           return (
-            resized.iframe > 550 &&
+            resized.iframe > 450 &&
             resized.iframe <= resized.viewport &&
-            resized.iframe < measurements.iframe
+            resized.iframe < measurements.iframe &&
+            Math.abs(resized.host - resized.target) <= 4 &&
+            Math.abs(resized.iframe - resized.mount) <= 4
           );
         })
         .toBe(true);
-      await host.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByRole("button", { name: "Close tab: Excalidraw", exact: true }).click();
       await expect.poll(() => host.getAttribute("display-mode")).toBe("inline");
       await expect.poll(() => outer.evaluate((e) => e.getBoundingClientRect().height)).toBe(450);
+      expect(
+        await retainedFrame?.evaluate(
+          (frame) => frame === document.querySelector("mcp-app-view iframe"),
+        ),
+      ).toBe(true);
+      await app.getByRole("button", { name: "Edit", exact: true }).click();
+      await expect.poll(() => host.getAttribute("data-sidebar-ready")).toBe("");
+      expect(
+        await retainedFrame?.evaluate(
+          (frame) => frame === document.querySelector("mcp-app-view iframe"),
+        ),
+      ).toBe(true);
+      expect(await composer.inputValue()).toBe("Keep this draft available beside the app.");
     } finally {
       await context.close();
       await browser.close();

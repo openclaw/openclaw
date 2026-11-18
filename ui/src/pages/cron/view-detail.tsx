@@ -4,10 +4,13 @@ import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
+import { formatCronCadence } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { failedRunId } from "./route-model.ts";
 import { FailureDetails } from "./view-attention.tsx";
 import {
   AdminRequired,
+  BackRow,
   ErrorBanner,
   EnabledSwitch,
   JobMenu,
@@ -47,18 +50,7 @@ export function DetailView(
   return (
     <section class="cron-page cron-page--detail" data-panel-mode={props.mode}>
       <SettingsPage wide>
-        <div class="cron-back-row">
-          <button
-            ref={props.focus?.ref("back")}
-            type="button"
-            class="cron-back"
-            data-test-id="cron-back"
-            disabled={props.busy}
-            onClick={() => props.onClosePanel()}
-          >
-            <Icon name="arrowLeft" /> {t("cron.detail.back")}
-          </button>
-        </div>
+        <BackRow {...props} />
         <div class="stack">
           <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
           <Show when={failedJob()}>
@@ -67,7 +59,13 @@ export function DetailView(
               <FailureDetails
                 job={job()}
                 fullCause={showHistory()}
-                onReviewRun={showHistory() ? undefined : () => props.onSelectJob(job())}
+                onReviewRun={(() => {
+                  // Review opens the failed run in the history; without one there is none.
+                  const runId = failedRunId(job());
+                  return showHistory() || !runId
+                    ? undefined
+                    : () => props.onSelectJob(job(), runId);
+                })()}
               />
             )}
           </Show>
@@ -115,9 +113,14 @@ function DetailHeader(
   // summary describes unsaved edits, so the two never contradict each other.
   const nextRunSuffix = () =>
     props.selectedJob ? ` · ${describeJobNextRun(props.selectedJob)}` : "";
+  // The cadence reads as the Automations sidebar does ("Daily"); event triggers keep their source.
   const subtitle = () =>
     props.mode === "job" && props.selectedJob
-      ? `${describeJobSchedule(props.selectedJob)}${nextRunSuffix()}`
+      ? `${
+          props.selectedJob.schedule.kind === "event"
+            ? describeJobSchedule(props.selectedJob)
+            : formatCronCadence(props.selectedJob)
+        }${nextRunSuffix()}`
       : t("cron.detail.newSubtitle");
   return (
     <div class="cron-detail-header">
@@ -125,7 +128,6 @@ function DetailHeader(
         <div class="cron-detail-title">{title()}</div>
         {description() ? (
           <div class="cron-detail-description" data-test-id="cron-detail-description">
-            <span class="cron-detail-description__label">{t("cron.form.description")}:</span>{" "}
             {description()}
           </div>
         ) : undefined}
@@ -149,7 +151,7 @@ function DetailHeader(
                 class="btn btn--sm"
                 data-test-id="cron-run-now"
                 disabled={props.busy || !props.connected}
-                onClick={() => props.onRun(job, "force")}
+                onClick={() => props.onRun(job)}
               >
                 <Icon name="play" /> {t("cron.actions.runNow")}
               </button>

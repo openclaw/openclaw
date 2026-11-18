@@ -12,7 +12,10 @@ const fallback = {
 } as unknown as ModelProviderConfig;
 
 function firstModel(row: Record<string, unknown>) {
-  const [model] = buildOpenAICompatibleLiveModels([{ object: "model", ...row }], fallback);
+  const [model] = buildOpenAICompatibleLiveModels(
+    [{ object: "model", capabilities: { chat: true }, ...row }],
+    fallback,
+  );
   return model;
 }
 

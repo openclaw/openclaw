@@ -1,12 +1,4 @@
-import type {
-  Browser,
-  BrowserContext,
-  CDPSession,
-  Dialog,
-  Frame,
-  Page,
-  Request,
-} from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Dialog, Frame, Page } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { BrowserEngineId } from "./engines/types.js";
 
@@ -99,10 +91,7 @@ export type ActionDownloadCapture = {
 export type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
-  requests: Map<string, BrowserNetworkRequest>;
-  // Strong Request keys would retain disposed Playwright page/context graphs.
-  requestIds: WeakMap<Request, string>;
-  nextRequestId: number;
+  readNetworkRequests?: (clear?: boolean) => BrowserNetworkRequest[];
   armIdUpload: number;
   armIdDownload: number;
   downloadWaiterDepth: number;

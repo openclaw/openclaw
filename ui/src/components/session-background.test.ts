@@ -430,6 +430,26 @@ it("retires the prior client even when the profile and gateway URL are unchanged
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
+it("keeps a shared pane photo until its last owner leaves, including on profile retirement", async () => {
+  const { context, gateway, state } = fixture();
+  const parked = mountBackground(context);
+  await waitForSolid(() => expect(imageSrc(parked)).toBe("blob:background-a"));
+  parked.presented = false;
+  await waitForSolid(() => expect(image(parked)).toBeNull());
+  const visible = mountBackground(context);
+  await waitForSolid(() => expect(imageSrc(visible)).toBe("blob:background-a"));
+  expect(fetch).toHaveBeenCalledTimes(1);
+  visible.remove();
+  await visible.updateComplete;
+  expect(revokeObjectUrl).not.toHaveBeenCalled();
+  gateway.publish({ ...state, selfUser: null });
+  expect(revokeObjectUrl).toHaveBeenCalledExactlyOnceWith("blob:background-a");
+  parked.presented = true;
+  await parked.updateComplete;
+  expect(image(parked)).toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
+});
+
 it("does not let an aborted disconnected pane publish a late image", async () => {
   const { context } = fixture();
   const deferred = createDeferred<Response>();

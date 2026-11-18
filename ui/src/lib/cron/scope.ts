@@ -47,8 +47,9 @@ export async function loadCronScopeStats(state: CronScopeState, options?: { refr
     const nextRunAtMs = nextEnabledJob.jobs[0]?.state?.nextRunAtMs;
     state.cronScopedNextWakeAtMs =
       typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs) ? nextRunAtMs : null;
-  } catch {
+  } catch (error) {
     state.cronScopedTotal = null;
     state.cronScopedNextWakeAtMs = null;
+    throw error;
   }
 }

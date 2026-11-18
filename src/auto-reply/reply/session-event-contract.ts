@@ -9,6 +9,7 @@ import type {
   EmbeddedAgentRunMeta,
   EmbeddedAgentRunPayload,
 } from "../../agents/embedded-agent-runner/result.types.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ResolvedToolPromptFinalizer } from "../../agents/resolved-tool-prompt.types.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -19,6 +20,7 @@ import type {
   CronRunTelemetry,
   CronStoredJob,
 } from "../../cron/types.js";
+import type { AgentEventPayload } from "../../infra/agent-events.js";
 import type { ExecRequestOwner } from "../../infra/exec-request-context.js";
 import type {
   SourceDeliveryOutcome,
@@ -53,6 +55,8 @@ export type SessionEventOutcome = {
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;
+  /** Structured provider cause from the selected, settled runtime attempt. */
+  errorReason?: FailoverReason;
   /** Admission policy decides whether a durable producer may retry this refusal. */
   retryable?: boolean;
   deliveryAttempted?: boolean;
@@ -97,6 +101,8 @@ export type SessionEventOptions = {
     | "hook"
     | "restart"
     | "session"
+    // Watcher reconciliation is model-only input, unlike generic system-event wakes.
+    | "session_state"
     | "device"
     | "plugin"
     // A yielded tool's result resuming its own conversation; hidden from chat display.
@@ -150,8 +156,8 @@ export type ScheduledSessionAutomation = {
     sessionModelOverrideSource?: "auto" | "user";
   };
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  /** Original Control UI admin classification, revalidated by the restored operator source. */
-  controlUiAdmin?: true;
+  /** Original authenticated UI admin delegation, revalidated by the restored operator source. */
+  automationAdmin?: true;
   admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;
   executionIdentity?: import("../../cron/service/state.js").CronExecutionIdentityAdmission;
   deliveryAttemptFence?:
@@ -188,6 +194,8 @@ export type ScheduledSessionAutomation = {
 
 /** Producer callbacks stay bound to the queued occurrence, not a later dispatcher. */
 export type SessionEventExecution = {
+  /** Admitted restart continuations can pin without an inline renderer. */
+  pinnedWidgetAuthoring?: true;
   /** Admit the prepared input to the occurrence's durable custody before queueing. */
   prepareInput?: (recorder: UserTurnTranscriptRecorder) => Promise<void>;
   /** Original command custody survives process eviction and deferred reply execution. */
@@ -206,6 +214,8 @@ export type SessionEventExecution = {
     reason: "send-policy" | "room-event" | "silent" | "message-tool-only" | "aborted",
   ) => void;
   onStarted: (runId: string) => void;
+  /** Final runtime event, after fallback selection and terminal overrides. */
+  onTerminalEvent?: (event: Omit<AgentEventPayload, "seq" | "ts">) => void;
   onTerminal: (
     runId: string,
     outcome: "completed" | "failed" | "aborted",

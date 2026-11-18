@@ -627,6 +627,18 @@ const schema = objectSchema(
 );
 
 describe("OpenAI completions sampling and response format", () => {
+  it.each(["gpt-6.2-astra", "gpt-6.2-sol", "openai/gpt-6.2-sol"])(
+    "omits rejected sampling controls for %s at the provider-options boundary",
+    (id) => {
+      const model = makeCompletionsModel({ id });
+      for (const mode of ["direct", "managed"] as const) {
+        const params = requestMode(mode, model, { temperature: 0.7, topP: 0.8 });
+        expect(params).not.toHaveProperty("temperature");
+        expect(params).not.toHaveProperty("top_p");
+      }
+    },
+  );
+
   it.each([
     [
       { temperature: 0.4, topP: 0.9 },
@@ -811,11 +823,11 @@ describe("OpenAI completions compatibility and tools", () => {
             provider: "custom-mistral-host",
             baseUrl: "https://api.mistral.ai/v1",
           },
-          { maxTokens: 2048, reasoningEffort: "high" },
+          { maxTokens: 2048, reasoningEffort: "high", seed: 12345 },
           emptyContext(),
         ),
-        { max_tokens: 2048 },
-        ["max_completion_tokens", "store", "reasoning_effort"],
+        { max_tokens: 2048, random_seed: 12345 },
+        ["max_completion_tokens", "store", "reasoning_effort", "seed"],
       ],
       [
         request({ id: "glm-5", provider: "zai", baseUrl: "" }, undefined, toolContext()),
