@@ -50,7 +50,8 @@ export async function attachPublicationReader(
     connId: handler.connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: true,
-    usesSharedGatewayAuth: false,
+    usesSharedGatewayAuth: state.sessionUsesSharedGatewayAuth,
+    sharedGatewaySessionGeneration: state.sessionSharedGatewaySessionGeneration,
     authPolicy: state.authPolicy,
     internal: {
       authenticatedOperator: true,
