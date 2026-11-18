@@ -39,7 +39,7 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missi
 state_home=installed-recovery
 service_cut=0
 case "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" in
-  older-runtime | live-gateway | owed-plugin-retry) service_cut=1 ;;
+  older-runtime | live-gateway | owed-plugin-retry | owed-plugin-retry-schedule) service_cut=1 ;;
 esac
 if [ "$service_cut" = 1 ]; then
   # This disposable container installs a native service; its state must belong to
@@ -87,6 +87,15 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ]; 
   node "$harness/scripts/e2e/lib/upgrade-survivor/older-runtime-recovery.mjs" \
     "$run_artifacts" "$candidate_prefix/lib/node_modules/openclaw" "$npm_config_prefix/lib/node_modules/openclaw" \
     "$OPENCLAW_CURRENT_PACKAGE_TGZ"
+  stop_update_restart_probe_gateway "$OPENCLAW_E2E_COMMAND_TIMEOUT"
+  exit 0
+fi
+if [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry-schedule ]; then
+  start_installed_recovery_gateway owed-plugin-retry-schedule
+  phase=owed-plugin-retry-schedule-recovery
+  node "$harness/scripts/e2e/lib/upgrade-survivor/installed-recovery-owed-retry-schedule.mjs" \
+    "$run_artifacts" "$npm_config_prefix" "$OPENCLAW_CURRENT_PACKAGE_TGZ" \
+    "$artifacts/installed-recovery.json"
   stop_update_restart_probe_gateway "$OPENCLAW_E2E_COMMAND_TIMEOUT"
   exit 0
 fi

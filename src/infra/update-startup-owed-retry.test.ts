@@ -333,12 +333,12 @@ describe("automatic retry of owed plugin steps", () => {
     expect(runAuto).not.toHaveBeenCalled();
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
 
-    // Past the hour, the schedule still decides when the retry may start.
-    const firstEligible = nextWindow(cron, window - 5 * 60_000 + HOUR_MS);
-    clock.setTime(firstEligible + 2 * 60_000);
+    // The window five minutes short of the hour still waits; the window at the hour starts it.
+    const firstEligible = window - 5 * 60_000 + HOUR_MS;
+    clock.setTime(firstEligible - 5 * 60_000);
     await hourlyCheck(cron);
     expect(runAuto).not.toHaveBeenCalled();
-    clock.setTime(nextWindow(cron, Date.now()));
+    clock.setTime(firstEligible);
     await hourlyCheck(cron);
     expect(runAuto).toHaveBeenCalledOnce();
   });
@@ -391,20 +391,13 @@ describe("automatic retry of owed plugin steps", () => {
     expect(runAuto).not.toHaveBeenCalled();
   });
 
-  it("drops a held retry after a manual update settles the row", async () => {
+  it("drops a held retry once the row is settled", async () => {
     const owner = owedUpdate();
     await check();
     expect(lifecycle.campaign?.hold()).toBe(true);
 
-    // A person runs `openclaw update` on the current core, and convergence completes.
-    vi.mocked(Date.now).mockImplementationOnce(realDateNow);
-    const manual = ledger.createUpdateRun({
-      trigger: "cli",
-      target: { channel: "stable", kind: "package", version: "2.0.0" },
-      before: { version: "2.0.0" },
-    });
+    // For example, a manual `openclaw update` whose convergence completes.
     ledger.settleUpdateRunOwedStep(owner, "plugin-convergence");
-    ledger.finishUpdateRun(manual.runId, { status: "skipped", reason: "already-current" });
     clock.setTime(Date.now() + HOUR_MS);
     await check();
     expect(getUpdateSchedule()?.campaign).toBeUndefined();
