@@ -62,7 +62,7 @@ export function prepareAssistantReplayImageContent<T>(
 }
 
 /** Synchronous half of replay sanitation; media work remains in tool-images. */
-export function prepareReplayImageContent(
+function prepareReplayImageContent(
   message: AgentMessage,
   options?: ReplayImageOptions,
 ): ContentBlock[] | undefined {
@@ -108,7 +108,7 @@ export function finishReplayImageContentWithAdapter<T, B>(
     : adapter.replace(message, content);
 }
 
-export function finishReplayImageContent(
+function finishReplayImageContent(
   message: AgentMessage,
   sanitized: ContentBlock[],
 ): AgentMessage | null {
@@ -141,15 +141,6 @@ export function finishReplayImageContent(
       return content === row.content ? row : { ...row, content: userOrResultContent };
     },
   });
-}
-
-/** Caller may collect this result immediately when its content contains no image blocks. */
-export function sanitizeImageFreeReplayMessage(
-  message: AgentMessage,
-  options?: ReplayImageOptions,
-): AgentMessage | null {
-  const content = prepareReplayImageContent(message, options);
-  return content === undefined ? message : finishReplayImageContent(message, content);
 }
 
 export async function sanitizeSessionMessagesImages(

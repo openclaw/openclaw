@@ -2,10 +2,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { renderConversationEntriesWithinBudget } from "../../../packages/agent-core/src/harness/compaction/conversation-serialization.js";
 import {
   collectConversationMessageFact,
   collectConversationRangeDescriptors,
-  renderConversationEntriesWithinBudget,
   serializeConversationEntry,
   serializeConversationWithinBudget,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";

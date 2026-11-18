@@ -77,17 +77,17 @@ export const TOOL_RESULT_ID_FIELDS = [
   "callId",
   "call_id",
 ] as const;
-export type ReplayToolResultIdField = (typeof TOOL_RESULT_ID_FIELDS)[number];
+type ReplayToolResultIdField = (typeof TOOL_RESULT_ID_FIELDS)[number];
 export type ReplayToolResultFacts = {
   /** Raw strings, including whitespace and empty strings, preserve alias rewrite semantics. */
   ids: Partial<Record<ReplayToolResultIdField, string>>;
   name?: string;
 };
-export type ReplayToolBlockUpdate = { id?: string; name?: string; removePartialJson?: true };
+type ReplayToolBlockUpdate = { id?: string; name?: string; removePartialJson?: true };
 export type ReplayToolResultUpdate = Partial<Record<ReplayToolResultIdField, string>> & {
   toolName?: string;
 };
-export type MissingReplayToolResult = Parameters<typeof makeMissingToolResult>[0];
+type MissingReplayToolResult = Parameters<typeof makeMissingToolResult>[0];
 
 /**
  * Metadata getters must describe the current value after every update. Implementations

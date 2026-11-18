@@ -6,7 +6,6 @@ import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import {
   classifyToolPairingFacts,
-  resolveLegacyToolResultId,
   selectResetKeptMessageFacts,
   type ToolCallLike,
   type ToolPairingMessageFact,
@@ -144,15 +143,6 @@ function normalizeToolResultName(
     normalizeOptionalString(fallbackName) ??
     (typeof rawToolName === "string" ? "unknown" : undefined);
   return toolName && toolName !== rawToolName ? { ...message, toolName } : message;
-}
-
-export function normalizeLegacyToolResultId(
-  message: ToolResultMessage,
-  toolCalls: ToolCallLike[],
-): ToolResultMessage {
-  const id = extractToolResultId(message);
-  const resolved = resolveLegacyToolResultId(id, message.toolName, toolCalls);
-  return resolved !== null && resolved !== id ? { ...message, toolCallId: resolved } : message;
 }
 
 /** Adjacent, ordered results need no repair; reject extras that could replace earlier results. */

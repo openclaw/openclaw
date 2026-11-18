@@ -1,10 +1,10 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { extractToolResultIds } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 import {
   extractToolResultId,
-  extractToolResultIds,
   sanitizeToolCallIdsForCloudCodeAssist as sanitize,
 } from "./tool-call-id.js";
 
