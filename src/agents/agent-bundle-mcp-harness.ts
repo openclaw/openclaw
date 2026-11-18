@@ -22,6 +22,10 @@ import {
   mergeMcpConnectCatalog,
 } from "./agent-bundle-mcp-requester-connect.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import {
+  guardWebchatMcpTools,
+  readWebchatMcpRequester,
+} from "./agent-bundle-mcp-webchat-requester.js";
 import type { CodexMcpServersConfig } from "./codex-mcp-config.types.js";
 import {
   prepareConversationCapabilityProfile,
@@ -379,6 +383,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     ...params,
     conversationCapabilityProfile: await resolveHarnessCapabilityProfile(params),
   };
+  const browserRequester = readWebchatMcpRequester(params);
   const scopedRuntimeHandle = await acquireRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -388,9 +393,9 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     cfg: params.cfg,
     manifestRegistry: params.manifestRegistry,
     toolOverrides: params.toolOverrides,
-    requesterSenderId: params.requesterSenderId,
+    requesterSenderId: browserRequester?.profileId ?? params.requesterSenderId,
     agentAccountId: params.agentAccountId,
-    messageChannel: params.messageChannel,
+    messageChannel: browserRequester ? "webchat" : params.messageChannel,
     toolDenylist: policyParams.conversationCapabilityProfile?.policy.explicitToolDenylist,
   });
   const scopedRuntime = scopedRuntimeHandle?.runtime;
@@ -405,13 +410,16 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
         agentId: params.agentId,
         reservedToolNames: params.reservedToolNames,
       });
+      guardWebchatMcpTools(liveRuntime, scopedRuntime, browserRequester?.assertCurrent);
       liveCatalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
       if (liveCatalog.tools.length > 0 && scopedRuntimeHandle) {
         rememberAdvertisedScopedMcpCatalog(scopedRuntimeHandle, liveCatalog);
       }
     }
 
-    const hasRequester = normalizeOptionalString(params.requesterSenderId) !== undefined;
+    const hasRequester =
+      scopedRuntime !== undefined ||
+      normalizeOptionalString(params.requesterSenderId) !== undefined;
     const advertisedCatalog =
       getAdvertisedScopedMcpCatalog(params.sessionId) ??
       (liveCatalog
@@ -428,12 +436,22 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
       ? Array.from(params.reservedToolNames)
       : undefined;
     const requesterConnect = scopedRuntime?.requesterConnect;
+    let disposed = false;
     const advertisedTools = buildBundleMcpToolsFromCatalog({
       catalog: advertisedCatalog,
       reservedToolNames,
-      createExecute: (tool) =>
-        requesterConnect?.createExecute(tool.serverName) ??
-        (async () => notConnectedToolResult(tool.serverName, tool.toolName, hasRequester)),
+      createExecute: (tool) => {
+        const execute = requesterConnect?.createExecute(tool.serverName);
+        return async (...args) => {
+          if (disposed) {
+            throw new Error("This MCP view has closed; ask again in a new turn.");
+          }
+          browserRequester?.assertCurrent?.();
+          return execute
+            ? execute(...args)
+            : notConnectedToolResult(tool.serverName, tool.toolName, hasRequester);
+        };
+      },
     });
     const liveByName = new Map((liveRuntime?.tools ?? []).map((tool) => [tool.name, tool]));
     // Live tools supply execution; advertised catalog supplies the stable name/schema surface.
@@ -458,7 +476,10 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     return {
       tools: executableTools,
       advertisedTools: filteredAdvertised,
-      dispose: liveRuntime?.dispose ?? (async () => {}),
+      dispose: async () => {
+        disposed = true;
+        await liveRuntime?.dispose();
+      },
     };
   } catch (error) {
     await liveRuntime?.dispose();

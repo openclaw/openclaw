@@ -7,6 +7,10 @@ import {
   acquireSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
+import {
+  guardWebchatMcpTools,
+  readWebchatMcpRequester,
+} from "../../agent-bundle-mcp-webchat-requester.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
@@ -131,6 +135,13 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     },
   });
   phases.mark("attempt.bundle-tools.mcp-acquire");
+  const browserRequester = bundleMcpEnabled
+    ? readWebchatMcpRequester({
+        sessionId: params.attempt.sessionId,
+        sessionKey: params.attempt.sessionKey,
+        requesterSenderId: params.attempt.senderId,
+      })
+    : undefined;
   const bundleMcpAcquisition = bundleMcpEnabled
     ? await acquireSessionMcpRuntime({
         ...mcpConfig,
@@ -141,9 +152,11 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
         // or the triggering run's sender on follow-ups). Cron/subagent runs
         // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
-        requesterSenderId: params.attempt.senderId,
+        requesterSenderId: browserRequester?.profileId ?? params.attempt.senderId,
         agentAccountId: params.attempt.agentAccountId,
-        messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
+        messageChannel: browserRequester
+          ? "webchat"
+          : (params.attempt.messageChannel ?? params.attempt.messageProvider),
       })
     : undefined;
   phases.mark("attempt.bundle-tools.mcp-materialize");
@@ -168,6 +181,13 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ],
       })
     : undefined;
+  if (bundleMcpRuntime && bundleMcpAcquisition) {
+    guardWebchatMcpTools(
+      bundleMcpRuntime,
+      bundleMcpAcquisition.runtime,
+      browserRequester?.assertCurrent,
+    );
+  }
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
     phases.mark("attempt.bundle-tools.lsp");

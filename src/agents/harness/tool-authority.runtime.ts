@@ -26,6 +26,7 @@ import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
+import { withWebchatMcpRequester } from "../agent-bundle-mcp-webchat-requester.js";
 import { getControllerEmbeddedAttachment } from "../embedded-agent-runner/run-state.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-origin.js";
@@ -243,6 +244,37 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       throw new Error("reply authority is no longer active");
     }
   };
+  const browserTarget = attempt.gatewayUiCommandTarget;
+  const webchatRequester =
+    (turnState?.turnKind === "direct" || turnState?.turnKind === "visible") &&
+    internal.trigger !== "memory" &&
+    !admitted.admissionSource &&
+    !attempt.spawnedBy &&
+    !attempt.scheduledToolPolicy &&
+    (!attempt.inputProvenance || attempt.inputProvenance.kind === "external_user") &&
+    !attempt.senderId?.trim() &&
+    (attempt.messageChannel ?? attempt.messageProvider) === "webchat" &&
+    browserTarget?.connId &&
+    operatorAuthority &&
+    browserTarget.profileId === operatorAuthority.profileId &&
+    sessionKey
+      ? {
+          sessionId,
+          sessionKey,
+          profileId: operatorAuthority.profileId,
+          assertCurrent: () => {
+            assertReplyActive();
+            const person = personalToolParticipants?.resolve();
+            if (
+              !person ||
+              person.profileId !== operatorAuthority.profileId ||
+              person.gatewayUiCommandTarget?.connId !== browserTarget.connId
+            ) {
+              throw new Error("Personal MCP requires the current browser participant.");
+            }
+          },
+        }
+      : undefined;
   let registered = false;
   const watchdogAttempt = turn
     ? turn.watchdog.attachAttempt({
@@ -296,7 +328,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           if (!executeAttempt) {
             throw new Error("embedded attempt execution is closed");
           }
-          return executeAttempt();
+          return withWebchatMcpRequester(webchatRequester, executeAttempt);
         });
       },
     );

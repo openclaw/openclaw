@@ -9,6 +9,7 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import { readWebchatMcpRequester } from "./agent-bundle-mcp-webchat-requester.js";
 import type { bindMcpClientElicitation } from "./mcp-client-elicitation.runtime.js";
 import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
 import type { McpToolCatalogMetadata } from "./mcp-tool-metadata.js";
@@ -36,9 +37,10 @@ export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number 
 /** Checks whether harness-scoped MCP can affect a turn without loading its runtime graph. */
 export function shouldLoadRequesterScopedMcpHarnessRuntime(params: {
   sessionId: string;
+  sessionKey?: string;
   requesterSenderId?: string | null;
 }): boolean {
-  if (params.requesterSenderId?.trim()) {
+  if (params.requesterSenderId?.trim() || readWebchatMcpRequester(params)) {
     return true;
   }
   const manager = (globalThis as Record<PropertyKey, unknown>)[SESSION_MCP_RUNTIME_MANAGER_KEY] as
