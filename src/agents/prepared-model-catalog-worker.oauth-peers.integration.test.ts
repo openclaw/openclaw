@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { vi, expect, it } from "vitest";
-import { createDeferred, withTestTimeout, withinTest } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
 import * as configRuntime from "../config/runtime-snapshot.js";
@@ -274,9 +274,7 @@ module.exports = {
       };
       const stop = registerPreparedModelRuntimePublicationListener(check);
       check();
-      return withTestTimeout(completed.promise, 30_000, "Fleet catalogs did not publish").finally(
-        stop,
-      );
+      return withinTest(completed.promise, signal).finally(stop);
     };
     await Promise.all(snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
     for (const snapshot of snapshots) {
@@ -309,17 +307,13 @@ module.exports = {
           refreshExpiredPreparedModelCatalog(params);
         }),
       );
-      await withTestTimeout(entered.promise, 30_000, "Expired provider catalog did not renew");
+      await withinTest(entered.promise, signal);
       pendingNative = snapshots[0]!.loadNativeModelCatalog!({
         provider: nativeProvider,
         modelId: `native-${revision}`,
         runtime: HARNESS_ID,
       });
-      await withTestTimeout(
-        nativeEntered.promise,
-        5_000,
-        "Native selection waited behind unrelated provider renewal",
-      );
+      await withinTest(nativeEntered.promise, signal);
       if (nativeHeld) {
         // Exercise both completion orders; late native results must retain newer provider rows.
         held.resolve();
@@ -328,11 +322,7 @@ module.exports = {
         nativeHeld.resolve();
         nativeHeld = undefined;
       }
-      const native = await withTestTimeout(
-        pendingNative,
-        5_000,
-        "Native selection did not complete",
-      );
+      const native = await withinTest(pendingNative, signal);
       expect(native).toMatchObject({
         entries: expect.arrayContaining([expect.objectContaining(nativeEntry)]),
       });
