@@ -53,7 +53,7 @@ import { isHostSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-aut
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveAutomationsRunScope } from "./automations-run-scope.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
-import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
+import { resolveExecToolScopeKey } from "./bash-process-scope.js";
 import {
   prepareDelegatedToolDenyFloor,
   resolveConversationCapabilityProfile,
@@ -159,11 +159,12 @@ export function* assembleOpenClawCodingTools(
   ];
   const sandboxWorkspaceMediaReadAllowed = isConversationToolAllowed(capabilityProfile, "read");
   // Borrowed tool restrictions do not transfer ownership of the policy session's processes.
-  const scopeKey = resolveProcessToolScopeKey({
+  const scopeKey = resolveExecToolScopeKey({
     scopeKey: options?.exec?.scopeKey,
     sessionKey: executionSessionKey,
     sessionId: options?.sessionId,
     agentId: executionAgentId,
+    config: options?.config,
   });
   registerOneShotExecScopeCleanup(options, scopeKey);
   options?.recordToolPrepStage?.("tool-policy");

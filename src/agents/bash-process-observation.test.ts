@@ -6,14 +6,16 @@ import {
   stopBackgroundProcess,
 } from "./bash-process-observation.js";
 import {
-  addSession,
   appendOutput,
   deleteSession,
   markBackgrounded,
   markExited,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 
 const { cancel } = vi.hoisted(() => ({ cancel: vi.fn(() => true) }));
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => ({ cancel }) }));
@@ -22,12 +24,12 @@ afterEach(() => {
   cancel.mockClear();
 });
 const scope = { scopeKeys: ["agent:main:owner"], agentId: "main" };
-const seed = (id: string, scopeKey = scope.scopeKeys[0]) => {
+const seed = (id: string, scopeKey = scope.scopeKeys[0]!) => {
   const session = createProcessSessionFixture({ id, backgrounded: true, startedAt: 1 });
   session.scopeKey = scopeKey;
   session.agentId = "main";
   session.processActivity = { resultSettled: false, lastOutputAtMs: session.startedAt };
-  addSession(session);
+  addSessionForTests(session);
   return session;
 };
 

@@ -25,7 +25,6 @@ import { getSessionControllerOperation } from "../../sessions/session-controller
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
-import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
@@ -761,14 +760,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("isolates sandbox policy without host session reads", async () => {
-    const { addSession, deleteSession } = await import("../bash-process-registry.js");
+    const { deleteSession } = await import("../bash-process-registry.js");
+    const { registerProcessSessionFixture: fixture } =
+      await import("../bash-process-registry.test-helpers.js");
     const { resolveSandboxContext } = await import("../sandbox/context.js");
-    const owned = createProcessSessionFixture({ id: "compaction-owned", backgrounded: true });
-    owned.scopeKey = TEST_SESSION_KEY;
-    const other = createProcessSessionFixture({ id: "policy-owned", backgrounded: true });
-    other.scopeKey = "agent:main:telegram:default:direct:12345";
-    addSession(owned);
-    addSession(other);
+    const seed = (id: string, scopeKey: string) => fixture({ id, backgrounded: true, scopeKey });
+    const owned = seed("compaction-owned", TEST_SESSION_KEY);
+    const other = seed("policy-owned", "agent:main:telegram:default:direct:12345");
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: other.scopeKey, storePath: TEST_STORE_PATH },
       { sessionId: "policy-owned", updatedAt: 1, sandboxMode: "off" },

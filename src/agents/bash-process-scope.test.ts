@@ -33,11 +33,6 @@ describe("resolveProcessToolScopeKey", () => {
       params: { sessionId: "\n", agentId: " main " },
       expected: "agent:main",
     },
-    {
-      name: "blank inputs",
-      params: { scopeKey: " ", sessionKey: "\t", sessionId: "\n", agentId: "  " },
-      expected: undefined,
-    },
   ])("uses $name", ({ params, expected }) => {
     expect(resolveProcessToolScopeKey(params)).toBe(expected);
   });

@@ -282,6 +282,7 @@ async function prepareCronRun(mintGrant = true, expiresAtMs: number | null = nul
 
 async function runCron() {
   const result = await processGatewayAllowlist({
+    scopeKey: "test-scope",
     env: process.env as Record<string, string>,
     pty: false,
     defaultTimeoutSec: 30,

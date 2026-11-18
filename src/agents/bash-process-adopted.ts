@@ -3,12 +3,11 @@ import type { ReleasedProcess } from "../process/supervisor/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createProcessSessionId } from "./bash-process-id.js";
 import {
-  addSession,
   appendOutput,
-  createProcessSession,
   listRunningSessions,
   markExited,
   type ProcessSession,
+  registerProcessSession,
 } from "./bash-process-registry.js";
 
 /** Declared services (`background: true`) are admitted, never evicted. Survivors are tracked, not counted. */
@@ -19,11 +18,11 @@ const MAX_SERVICES_PER_GATEWAY = 64;
 // or startup fails, so concurrent starts cannot pass the limit together.
 const reservations = resolveGlobalSingleton(
   Symbol.for("openclaw.execServiceReservations"),
-  () => new Set<{ scopeKey: string | undefined }>(),
+  () => new Set<{ scopeKey: string }>(),
 );
 
 /** Explain the limit when a new service would cross it; undefined when there is room. */
-function serviceCapacityError(scopeKey: string | undefined): string | undefined {
+function serviceCapacityError(scopeKey: string): string | undefined {
   const running = listRunningSessions().filter(
     (session) => session.independentService === true && !session.exited,
   );
@@ -42,10 +41,7 @@ function serviceCapacityError(scopeKey: string | undefined): string | undefined 
  * Admit one new service or throw the limit error. Dispose the slot once the
  * service is a running session (it then counts itself) or startup failed.
  */
-export function reserveServiceSlot(
-  scopeKey: string | undefined,
-  isService = true,
-): Disposable | undefined {
+export function reserveServiceSlot(scopeKey: string, isService = true): Disposable | undefined {
   if (!isService) {
     return undefined;
   }
@@ -67,7 +63,20 @@ function formatProcess({ pid, command }: ReleasedProcess): string {
 }
 
 function adoptSurvivor(parent: ProcessSession, survivor: ReleasedProcess) {
-  const session = createProcessSession({
+  const adopted = adoptReleasedProcess(parent.scopeKey, survivor, () =>
+    markExited(
+      session,
+      null,
+      null,
+      "completed",
+      session.cancellationRequested ? "manual-cancel" : "exit",
+    ),
+  );
+  if (!adopted) {
+    return undefined;
+  }
+  // The reaper reports an exit no earlier than its next tick, after this registration.
+  const session = registerProcessSession({
     id: createProcessSessionId(),
     command: survivor.command ?? `pid ${survivor.pid}`,
     scopeKey: parent.scopeKey,
@@ -91,35 +100,21 @@ function adoptSurvivor(parent: ProcessSession, survivor: ReleasedProcess) {
     cursorKeyMode: "normal",
     pid: survivor.pid,
     processActivity: { resultSettled: false, lastOutputAtMs: Date.now() },
-  });
-  const adopted = adoptReleasedProcess(parent.scopeKey ?? "", survivor, () =>
-    markExited(
-      session,
-      null,
-      null,
-      "completed",
-      session.cancellationRequested ? "manual-cancel" : "exit",
-    ),
-  );
-  if (!adopted) {
-    return undefined;
-  }
-  session.adopted = {
-    stop: async () => {
-      const outcome = await adopted.stop();
-      session.cleanupUncertain = outcome.status === "uncertain";
-      if (outcome.status === "uncertain") {
-        session.cleanupUncertain = true;
-        appendOutput(
-          session,
-          "stderr",
-          `\nOpenClaw could not confirm that pid ${survivor.pid} stopped: ${outcome.reason}. It may still be running.\n`,
-        );
-      }
-      return outcome;
+    adopted: {
+      stop: async () => {
+        const outcome = await adopted.stop();
+        session.cleanupUncertain = outcome.status === "uncertain";
+        if (outcome.status === "uncertain") {
+          appendOutput(
+            session,
+            "stderr",
+            `\nOpenClaw could not confirm that pid ${survivor.pid} stopped: ${outcome.reason}. It may still be running.\n`,
+          );
+        }
+        return outcome;
+      },
     },
-  };
-  addSession(session);
+  });
   return session;
 }
 

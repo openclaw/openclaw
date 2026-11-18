@@ -14,7 +14,6 @@ import type { ProcessSession } from "./bash-process-registry.js";
 export type DurableProcessRecord = Pick<
   ProcessSession,
   | "id"
-  | "scopeKey"
   | "cwd"
   | "startedAt"
   | "cleanupMs"
@@ -23,6 +22,8 @@ export type DurableProcessRecord = Pick<
   | "notifyOnExitEmptySuccess"
   | "cancellationRequested"
 > & {
+  /** Owning chat; rows written before it was required may carry only `sessionKey`. */
+  scopeKey?: string;
   /** An ordinary wake-armed process: no unit, so a restart always settles it as lost. */
   kind?: "ordinary";
   /** The ordinary process ran in a sandbox container, whose fate the Gateway cannot observe. */

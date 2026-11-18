@@ -3,8 +3,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveAdmittedRunActiveAssertion } from "../agents/admitted-run-context.js";
-import { addSession, deleteSession, markExited } from "../agents/bash-process-registry.js";
+import { deleteSession, markExited } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../agents/bash-process-registry.test-support.js";
 import {
   maybeNotifyOnExit,
   prepareExecExitNotification,
@@ -239,7 +240,7 @@ export function registerGoalAutomaticContinuationCases(
       silent ? { ...caller, sessionEventDelivery: false as const } : caller,
       () => prepareExecExitNotification(process, false, false),
     );
-    addSession(process);
+    addSessionForTests(process);
     try {
       markExited(process, 0, null, "completed");
       await maybeNotifyOnExit(process, "completed", false);

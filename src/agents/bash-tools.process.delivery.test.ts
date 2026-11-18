@@ -16,14 +16,16 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginHookBeforeMessageWriteEvent } from "../plugins/types.js";
 import {
-  addSession,
   appendOutput,
   markExited,
   recordNotifyOnExitRemoval,
   type ProcessSession,
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -53,7 +55,7 @@ afterEach(async () => {
 
 function createSession(output = "", id = "process") {
   const session = createProcessSessionFixture({ id, backgrounded: true });
-  addSession(session);
+  addSessionForTests(session);
   if (output) {
     appendOutput(session, "stdout", output);
   }

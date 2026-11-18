@@ -380,7 +380,7 @@ export function buildAfterTurnRuntimeContext(params: {
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
-  activeAgentId?: string;
+  activeAgentId: string;
   contextEnginePluginId?: string;
   tokenBudget?: number;
   currentTokenCount?: number;

@@ -1,7 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { addSession } from "../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../../agents/bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "../../agents/bash-process-registry.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -46,7 +48,7 @@ it.each([
       record.scopeKey = key;
       record.agentId = "main";
       record.processActivity = { resultSettled: false, lastOutputAtMs: record.startedAt };
-      addSession(record);
+      addSessionForTests(record);
       const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
       const dispatch = async (method: string, params: Record<string, unknown>) => {
         const respond = vi.fn();

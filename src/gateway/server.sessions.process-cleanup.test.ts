@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 import * as registry from "../agents/bash-process-registry.js";
-import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { registerProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -21,12 +21,10 @@ afterEach(async () => {
 
 function seedProcess(
   scopeKey: string,
-  options: Parameters<typeof createProcessSessionFixture>[0] & { agentId?: string },
+  options: Parameters<typeof registerProcessSessionFixture>[0],
   finished = false,
 ) {
-  const session = createProcessSessionFixture(options);
-  Object.assign(session, { scopeKey, agentId: options.agentId });
-  registry.addSession(session);
+  const session = registerProcessSessionFixture({ ...options, scopeKey });
   if (finished) {
     registry.markExited(session, 0, null, "completed");
   }

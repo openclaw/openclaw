@@ -4,8 +4,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
-import { addSession, deleteSession } from "../bash-process-registry.js";
+import { deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../bash-process-registry.test-support.js";
 import {
   configFor,
   createPlatformAuthRoute,
@@ -287,8 +288,8 @@ describe("compaction runtime context", () => {
     });
     active.scopeKey = scopeKey;
     other.scopeKey = "agent:other";
-    addSession(active);
-    addSession(other);
+    addSessionForTests(active);
+    addSessionForTests(other);
     try {
       expect(createContext({ sessionKey: scopeKey }).activeProcessSessions).toEqual([
         {
@@ -503,7 +504,7 @@ it.each([true, false])("preserves process scope and model policy (locked=%s)", (
     [scopedId, "session-123", 1234],
     [foreignId, "agent:main", undefined],
   ] as const) {
-    addSession({
+    addSessionForTests({
       ...createProcessSessionFixture({ id, command: "sleep 600", backgrounded: true, pid }),
       scopeKey,
     });

@@ -16,8 +16,8 @@ import {
   recordStructuredReplayTrustForToolCall,
 } from "./agent-tools.before-tool-call.js";
 import { recordToolExecutionTracked } from "./agent-tools.before-tool-call.state.js";
-import { addSession, deleteSession, markExited } from "./bash-process-registry.js";
-import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
+import { deleteSession, markExited } from "./bash-process-registry.js";
+import { registerProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import { projectEmbeddedMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
@@ -1252,12 +1252,11 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     const action = "log";
     const { ctx } = createTestContext();
     const sessionId = `wild-lagoon-${action}`;
-    const session = createProcessSessionFixture({
+    const session = registerProcessSessionFixture({
       id: sessionId,
       command: "test",
       backgrounded: true,
     });
-    addSession(session);
     markExited(session, 0, null, "failed", "overall-timeout", false);
 
     try {

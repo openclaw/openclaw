@@ -30,6 +30,7 @@ import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execut
 import { reserveServiceSlot } from "./bash-process-adopted.js";
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { markBackgrounded } from "./bash-process-registry.js";
+import { resolveExecToolScopeKey } from "./bash-process-scope.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
@@ -146,6 +147,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const scopeKey = resolveExecToolScopeKey(defaults);
   const requestPreparation = createExecRequestPreparation({
     defaults,
     agentId,
@@ -279,7 +281,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       // host=node ignores background and runs synchronously: it keeps ordinary timeouts.
       const startsService = allowBackground && params.background === true && host !== "node";
       // Hold a service slot through approval and startup; a running session then counts itself.
-      using _ = reserveServiceSlot(defaults?.scopeKey, startsService);
+      using _ = reserveServiceSlot(scopeKey, startsService);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -518,7 +520,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             safeBinProfiles,
             runId: defaults?.runId,
             onApprovalReview: (review) => (approvalReview = review),
-            scopeKey: defaults?.scopeKey,
+            scopeKey,
             approvalFollowupText: defaults?.approvalFollowupText,
             approvalFollowup: defaults?.approvalFollowup,
             maxOutput: DEFAULT_MAX_OUTPUT,
@@ -573,7 +575,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           notifyOnExitEmptySuccess,
           requestOwners: params.background === true ? undefined : requestOwners,
           independentService: params.background === true,
-          scopeKey: defaults?.scopeKey,
+          scopeKey,
           sessionKey: notifySessionKey,
           agentId,
           eventRouting: defaults?.eventRouting,
@@ -743,5 +745,3 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     executionSchema: () => execSchema,
   });
 }
-
-export const execTool = createExecTool();

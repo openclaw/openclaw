@@ -10,8 +10,9 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
-import { addSession, appendOutput, deleteSession } from "../../bash-process-registry.js";
+import { appendOutput, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../../bash-process-registry.test-support.js";
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
@@ -349,9 +350,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     );
     for (const id of ["exec-z", "exec-a"]) {
       const session = createProcessSessionFixture({ id, backgrounded: true });
-      session.scopeKey = fixture.input.attempt.sessionKey;
+      session.scopeKey = fixture.input.attempt.sessionKey!;
       appendOutput(session, "stdout", "private output tail");
-      addSession(session);
+      addSessionForTests(session);
     }
     const active = await prepareContext(fixture.input);
     expect(active.systemPromptForHook).toBe(idle.systemPromptForHook);
@@ -383,11 +384,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const fixture = createInput();
     fixture.input.capabilityToolNames = new Set(["process", "sessions_spawn", "image_generate"]);
     const process = createProcessSessionFixture({ id: "exec-a", backgrounded: true });
-    process.scopeKey = fixture.input.attempt.sessionKey;
-    addSession(process);
+    process.scopeKey = fixture.input.attempt.sessionKey!;
+    addSessionForTests(process);
     const otherProcess = createProcessSessionFixture({ id: "exec-z", backgrounded: true });
     otherProcess.scopeKey = "agent:main:another-session";
-    addSession(otherProcess);
+    addSessionForTests(otherProcess);
     vi.mocked(mediaTaskStatus.buildMediaTaskRuntimeContext).mockResolvedValue(
       "## Media Generation Tasks\n- tool=image_generate; task=image-1; status=running",
     );

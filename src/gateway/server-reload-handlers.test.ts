@@ -13,8 +13,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { prepareSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
 import { prepareRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { addSession, markBackgrounded, markExited } from "../agents/bash-process-registry.js";
-import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { markBackgrounded, markExited } from "../agents/bash-process-registry.js";
+import { registerProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import {
   encodePluginModelCatalogRelativePath,
@@ -2402,12 +2402,11 @@ describe("gateway restart deferral preflight", () => {
       logReload,
       recovery: requestRecoveryRestart,
     });
-    const session = createProcessSessionFixture({
+    const session = registerProcessSessionFixture({
       id: "background-restart-retry",
       command: "private command",
       pid: 12346,
     });
-    addSession(session);
     markBackgrounded(session);
     vi.useFakeTimers();
 

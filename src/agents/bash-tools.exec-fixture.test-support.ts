@@ -3,6 +3,7 @@ import { runExecProcess } from "./bash-tools.exec-runtime.js";
 export function runExecFixture(overrides: Partial<Parameters<typeof runExecProcess>[0]> = {}) {
   return runExecProcess({
     command: "test-command",
+    scopeKey: "test-scope",
     workdir: "/tmp",
     env: {},
     usePty: false,

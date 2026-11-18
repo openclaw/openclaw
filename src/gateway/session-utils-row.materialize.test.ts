@@ -1,8 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { prepareRunningBackgroundProcessCount } from "../agents/bash-process-observation.js";
-import { addSession, deleteSession } from "../agents/bash-process-registry.js";
+import { deleteSession } from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -61,7 +62,7 @@ test.each([
   const records = [canonical, key, BASE_ENTRY.sessionId].map((scopeKey, i) => {
     const record = createProcessSessionFixture({ id: `scope-${i}`, backgrounded: true });
     Object.assign(record, { scopeKey, agentId: "main" });
-    addSession(record);
+    addSessionForTests(record);
     return record;
   });
   try {

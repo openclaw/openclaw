@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
-import { addSession, deleteSession } from "./bash-process-registry.js";
+import { deleteSession } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  addSessionForTests,
+  resetProcessRegistryForTests,
+} from "./bash-process-registry.test-support.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -12,7 +15,7 @@ describe("bash-process-references", () => {
   function registerScopedSession(id: string, startedAt = 1_000) {
     const session = createProcessSessionFixture({ id, startedAt, backgrounded: true });
     session.scopeKey = "scope-a";
-    addSession(session);
+    addSessionForTests(session);
   }
 
   it("keeps scoped session labels valid when the limit bisects an emoji", () => {
@@ -25,7 +28,7 @@ describe("bash-process-references", () => {
       pid: 4242,
     });
     session.scopeKey = "scope-a";
-    addSession(session);
+    addSessionForTests(session);
 
     const [reference] = listActiveProcessSessionReferences({ scopeKey: "scope-a" });
     expect(reference?.name).toBe(`${"a".repeat(136)}...`);

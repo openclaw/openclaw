@@ -44,9 +44,9 @@ export function registerOneShotExecScopeCleanup(
         registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
       }
     | undefined,
-  scopeKey: string | undefined,
+  scopeKey: string,
 ): void {
-  if (!options?.oneShotCliRun || !scopeKey || !options.registerRunCleanup) {
+  if (!options?.oneShotCliRun || !options.registerRunCleanup) {
     return;
   }
   const supervisor = getProcessSupervisor();
@@ -198,7 +198,6 @@ export async function stopSessionExecProcesses(
   await drainExecSessions(
     listExecSessionsForCancellation().filter(
       (session) =>
-        session.scopeKey !== undefined &&
         keys.has(session.scopeKey) &&
         session.startedAt <= startedBy &&
         !session.durable &&

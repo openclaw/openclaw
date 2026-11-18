@@ -95,6 +95,7 @@ describe("approved exec continuation producer", () => {
     "preserves real multiline output beyond the legacy 16k boundary",
     async () => {
       const handle = await runExecProcess({
+        scopeKey: "test-scope",
         command: "/usr/bin/printf 'first line\\n\\tindented\\n\\n'; /usr/bin/printf '%017000d' 0",
         workdir: process.cwd(),
         env: {

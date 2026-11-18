@@ -51,8 +51,8 @@ describe("${generation} test API consumers", () => {
   async function verifyConsumers(): Promise<void> {
     registerSecretValueForRedaction("identity");
     expect(redactRegisteredSecretValues("session identity is locked", () => "***")).toBe("session *** is locked");
-    registry.addSession(createProcessSessionFixture({ id: "captured", backgrounded: true }));
-    replacement.addSession(createProcessSessionFixture({ id: "replacement", backgrounded: true }));
+    capturedRegistryApi.trackProcessSession(createProcessSessionFixture({ id: "captured", backgrounded: true }));
+    replacementApi.trackProcessSession(createProcessSessionFixture({ id: "replacement", backgrounded: true }));
     try {
       resetProcessRegistryForTests();
       expect(registry.listRunningSessions()).toEqual([]);

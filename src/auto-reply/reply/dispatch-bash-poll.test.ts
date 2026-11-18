@@ -1,13 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
-  addSession,
   appendOutput,
   deleteSession,
   markExited,
   recordNotifyOnExitRemoval,
 } from "../../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../../agents/bash-process-registry.test-helpers.js";
+import { addSessionForTests } from "../../agents/bash-process-registry.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   drainSystemEventEntries,
@@ -66,7 +66,7 @@ function fixture(alias = "!poll") {
   process.scopeKey = "chat:bash";
   process.sessionKey = sessionKey;
   appendOutput(process, "stdout", "Completed synthetic work");
-  addSession(process);
+  addSessionForTests(process);
   markExited(process, 0, null, "completed");
   const eventOptions = { sessionKey, contextKey: `exec:${id}` };
   const unrelated = enqueueSystemEventEntry("Unrelated pending event", eventOptions);

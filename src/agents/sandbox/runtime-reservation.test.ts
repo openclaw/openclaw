@@ -304,6 +304,7 @@ describe("durable sandbox runtime generations", () => {
     });
     await expect(
       runExecProcess({
+        scopeKey: "test-scope",
         command: "synthetic-command",
         workdir: process.cwd(),
         env: {},
