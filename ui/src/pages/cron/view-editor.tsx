@@ -162,7 +162,6 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
         <fieldset class="cron-editor-section cron-editor-extra" disabled={formDisabled()}>
           <Advanced
             {...props}
-            mode={props.mode}
             isAgentTurn={isAgentTurn()}
             supportsAnnounce={supportsAnnounce()}
             selectedDeliveryMode={selectedDeliveryMode()}

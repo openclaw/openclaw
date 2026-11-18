@@ -275,15 +275,6 @@ const enCron = {
       triggerDisabledConfigured:
         "Condition checks are turned off for this Gateway. The saved check stays until you clear it.",
       clearTrigger: "Clear check",
-      startEnabled: "Turn on after creating",
-      startEnabledHelp: "When off, the automation is saved paused.",
-      deleteAfterRun: "Delete after it runs",
-      deleteAfterRunHelp:
-        "Removes the automation after one successful run. Good for one-time reminders.",
-      sessionKey: "Session key",
-      sessionKeyHelp:
-        "The session that gets results when this automation isn’t linked to a chat. Most automations leave this blank.",
-      sessionKeyPlaceholder: "Default",
       exactTiming: "Run at the exact time",
       exactTimingHelp:
         "When off, OpenClaw can delay the start a little so many automations don’t start at once.",

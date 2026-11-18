@@ -152,7 +152,7 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
             value={form().scheduleKind}
             options={kinds()}
             ariaLabel={t("cron.form.repeat")}
-            onChange={(value) => props.onFormChange(scheduleKindPatch(form(), value))}
+            onChange={(value) => props.onFormChange(scheduleKindPatch(value))}
           />
         </span>
       )}

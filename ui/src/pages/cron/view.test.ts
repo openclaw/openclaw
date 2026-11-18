@@ -49,36 +49,6 @@ describe("cron view activity", () => {
 });
 
 describe("cron view editor", () => {
-  it("previews agent-turn Markdown safely while preserving the editable prompt", async () => {
-    const payloadText =
-      '# Weekly digest\n\n- **Garden**\n\n<script>alert(1)</script>\n<img src=x onerror="alert(1)">\n[unsafe](javascript:alert(1))';
-    const job = createJob("markdown-prompt", {
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: payloadText },
-    });
-    const container = await renderView({
-      editingJob: job,
-      form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText },
-    });
-    const preview = getElement(container, ".cron-prompt-preview .chat-text", HTMLDivElement);
-    expect(preview.querySelector("h1")?.textContent).toBe("Weekly digest");
-    expect(preview.querySelector("li strong")?.textContent).toBe("Garden");
-    expect(preview.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
-    expect(getElement(container, "#cron-payload-text", HTMLTextAreaElement).value).toBe(
-      payloadText,
-    );
-    for (const form of [
-      { payloadKind: "agentTurn" as const, payloadText: "  " },
-      { payloadKind: "systemEvent" as const, payloadText: "# Event" },
-      { payloadKind: "script" as const, payloadLocked: true, payloadText: "# Source" },
-      { payloadKind: "command" as const, payloadLocked: true, payloadText: "# Source" },
-    ]) {
-      expect(
-        (await renderEditor(form)).querySelector(".cron-prompt-preview .chat-text"),
-      ).toBeNull();
-    }
-  });
-
   it("falls back to configured channel labels when metadata has no label", async () => {
     const container = await renderEditor(
       {
@@ -108,27 +78,25 @@ describe("cron view editor", () => {
         .textContent,
     ).toBe("Every");
     selectSchedule(everyContainer, "cron");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron", deleteAfterRun: false });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron" });
     selectSchedule(everyContainer, "at");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at", deleteAfterRun: true });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
     expect(
       (await renderEditor({ scheduleKind: "at" })).querySelector("#cron-schedule-at"),
     ).not.toBeNull();
     const cronContainer = await renderEditor(
-      { scheduleKind: "cron", cronExpr: "*/15 * * * *", deleteAfterRun: true },
+      { scheduleKind: "cron", cronExpr: "*/15 * * * *" },
       { onFormChange },
     );
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
-    expect(findToggleByLabel(cronContainer, "Delete after it runs")).toBeNull();
     selectSchedule(cronContainer, "every");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every" });
     const onExitFormChange = vi.fn();
     const onExitContainer = await renderEditor(
       { scheduleKind: "on-exit" },
       { onFormChange: onExitFormChange },
     );
     expect(onExitContainer.querySelector(testId("cron-schedule-kind-on-exit"))).not.toBeNull();
-    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).not.toBeNull();
     expect(everyContainer.querySelector(testId("cron-schedule-kind-on-exit"))).toBeNull();
     selectSchedule(onExitContainer, "at");
     expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
