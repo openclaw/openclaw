@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readConfigSnapshotForEngineSelection } from "../../commands/config-preflight-snapshot.js";
 import { doctorDatabasePort as port } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -23,6 +24,8 @@ import {
 } from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { agentPortProvider } from "./agent-port.js";
+import { getDatabaseEngineSelection } from "./context.js";
+import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import * as fixtures from "./port-command.integration.test-support.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
@@ -91,6 +94,60 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     await state?.cleanup();
   });
 
+  it("persists published 2026.11.1 intent before a Workboard port round-trip", async () => {
+    const before = fixtures.canonical(workboard);
+    await port({ family: "workboard", to: "postgres" });
+    // Reproduce the released port's authored shape, bypassing current config writes.
+    fs.writeFileSync(
+      state.configPath,
+      JSON.stringify({
+        ...config(),
+        database: { engine: "postgres", postgres: { connection: fixtures.connection! } },
+      }),
+    );
+    const write = configIo.writeConfigFile;
+    vi.spyOn(configIo, "writeConfigFile").mockImplementation((candidate, options) =>
+      write(candidate, {
+        ...options,
+        beforeCommit: async () => {
+          if (options?.beforeCommit) {
+            expect(config().database?.engine).toBe("sqlite");
+            await options.beforeCommit();
+          }
+        },
+      }),
+    );
+    try {
+      await port({ family: "workboard", to: "sqlite" });
+      expect(config().database?.engine).toBe("sqlite");
+      expect(fixtures.canonical(workboard)).toEqual(before);
+      resetDatabaseEngineSelectionForTest();
+      expect((await readConfigSnapshotForEngineSelection(state.env)).valid).toBe(true);
+      expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+        state: "sqlite",
+        agent: "sqlite",
+        workboard: "sqlite",
+      });
+      await port({ family: "workboard", to: "postgres" });
+      resetDatabaseEngineSelectionForTest();
+      expect((await readConfigSnapshotForEngineSelection(state.env)).valid).toBe(true);
+      expect(getDatabaseEngineSelection()?.effectiveEngines).toMatchObject({
+        state: "sqlite",
+        agent: "sqlite",
+        workboard: "postgres",
+      });
+      const physical = readBackupEngine(workboard);
+      expect(physical.engine).toBe("postgres");
+      if (physical.engine === "postgres") {
+        expect(await fixtures.canonicalPostgres(client, physical.namespace)).toEqual(before);
+      }
+    } finally {
+      vi.restoreAllMocks();
+      resetDatabaseEngineSelectionForTest();
+      await port({ family: "workboard", to: "sqlite" });
+    }
+  }, 120_000);
+
   it.each(["state", "workboard", "agent"] as const)(
     "round-trips %s with an unrelated PostgreSQL family",
     async (family) => {
@@ -157,6 +214,14 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
       assertCurrent() {},
     });
     expect(backup.source.owner).toBe("agent");
+    // An update without an agent schema change leaves the previous release in schema_meta.
+    const anchor = readBackupEngine(agent);
+    if (anchor.engine !== "postgres") {
+      throw new Error("agent anchor must select PostgreSQL");
+    }
+    await client.query(
+      `UPDATE "${anchor.namespace}".schema_meta SET app_version = '2026.1.1' WHERE meta_key = 'primary'`,
+    );
     await port({ family: "agent", to: "sqlite" });
     expect(config().database?.families).toBeUndefined();
     expect(readBackupEngine(shared).engine).toBe("sqlite");
@@ -164,6 +229,9 @@ describe.skipIf(!fixtures.connection)("family-scoped database port", () => {
     using db = openNodeSqliteDatabase(agent, { readOnly: true });
     const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
     expect(row).toEqual({ value_json: '"agent-data"' });
+    expect(db.prepare("SELECT app_version FROM schema_meta").get()).toEqual({
+      app_version: "2026.1.1",
+    });
   }, 120_000);
 
   describe("interrupted scoped publication", () => {

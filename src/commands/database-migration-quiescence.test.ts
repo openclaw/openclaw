@@ -191,10 +191,10 @@ process.stdout.write(JSON.stringify({archivePath:request.output,verified:true}))
             mocks.rpc.mock.calls.filter(([call]) => call.method === "gateway.suspend.prepare"),
           ).toHaveLength(5);
           if (outcome === "renewal-failure") {
-            mocks.rpc.mockRejectedValue(new Error("renewal transport unavailable"));
-            await vi.advanceTimersByTimeAsync(30_000);
-            expect(scope.signal.aborted).toBe(true);
             vi.useRealTimers();
+            mocks.rpc.mockRejectedValue(new Error("renewal transport unavailable"));
+            await expect(scope.revalidate()).rejects.toThrow("renewal transport unavailable");
+            expect(scope.signal.aborted).toBe(true);
             expect((await settled).ok).toBe(false);
             expect(isPidAlive(childPid)).toBe(false);
             expect(fs.existsSync(output)).toBe(false);

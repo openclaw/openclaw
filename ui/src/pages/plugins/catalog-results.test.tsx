@@ -107,9 +107,9 @@ describe("renderPluginCatalogResults", () => {
     const { container, ui } = await mount(props);
     ui.node("openclaw-panel-empty-state").not.toBeNull();
     update(container, { ...props, remoteError: "ClawHub unavailable" });
-    ui.content(".callout.warning").toContain("ClawHub unavailable");
+    ui.content(".callout.warn").toContain("ClawHub unavailable");
     ui.node("openclaw-panel-empty-state").toBeNull();
-    container.querySelector<HTMLButtonElement>(".callout.warning button")!.click();
+    container.querySelector<HTMLButtonElement>(".callout.warn button")!.click();
     expect(props.onRetry).toHaveBeenCalledOnce();
 
     const pending = Promise.withResolvers<null>();
@@ -126,6 +126,27 @@ describe("renderPluginCatalogResults", () => {
       ui.node(".plugin-catalog-grid--skeleton").toBeNull();
       ui.node('[data-plugin-id="tool"]').not.toBeNull();
     });
+  });
+
+  it("does not report no matches when remote discovery failed", async () => {
+    const props = baseProps({
+      query: "matrix",
+      result: { items: [] },
+      remoteError: "ClawHub unavailable",
+    });
+    const { container, ui } = await mount(props);
+    ui.content(".callout.warn").toContain("ClawHub unavailable");
+    ui.node("openclaw-panel-empty-state").toBeNull();
+    container.querySelector<HTMLButtonElement>(".callout.warn button")!.click();
+    expect(props.onRetry).toHaveBeenCalledOnce();
+
+    update(container, { ...props, result: { items: [plugin("local-match")] } });
+    await waitForSolid(() => ui.node('[data-plugin-id="local-match"]').not.toBeNull());
+    ui.content(".callout.warn").toContain("ClawHub unavailable");
+
+    update(container, { ...props, remoteError: null });
+    await waitForSolid(() => ui.node("openclaw-panel-empty-state").not.toBeNull());
+    ui.node(".callout.warn").toBeNull();
   });
 
   it("retains grouped overview cards when a refresh fails", async () => {
@@ -244,6 +265,13 @@ describe("renderPluginCatalogResults", () => {
     await waitForSolid(() => ui.node('[data-plugin-id="second"]').not.toBeNull());
     ui.node('[data-plugin-id="tool"]').toBe(card);
     ui.node("input").toBe(search);
+  });
+
+  it("leaves focus where it was when the catalog opens", async () => {
+    const { container } = await mount(baseProps());
+    const search = container.querySelector<HTMLInputElement>("input")!;
+    expect(search.hasAttribute("autofocus")).toBe(false);
+    expect(document.activeElement === search).toBe(false);
   });
 
   it("does not rescan the large catalog for unrelated feedback updates", async () => {

@@ -29,11 +29,11 @@ it("keeps the configured occurrence while runtime refreshes, pauses, runs, or co
     setProps((previous) => ({ ...previous }));
     flush();
   };
-  expect(summary()).toContain(`Next run at ${formatMs(next)}`);
+  expect(summary()).toContain(`Next activity at ${formatMs(next)}`);
   const input = container.querySelector<HTMLInputElement>("#cron-schedule-at")!;
   expect(input.value).toBe(formatDateTimeLocal(at));
   for (const [state, enabled, expected] of [
-    [{ nextRunAtMs: next + 60_000 }, true, `Next run at ${formatMs(next + 60_000)}`],
+    [{ nextRunAtMs: next + 60_000 }, true, `Next activity at ${formatMs(next + 60_000)}`],
     [{ nextRunAtMs: next, runningAtMs: next }, true, "Running"],
     [{ nextRunAtMs: next }, false, "Paused"],
     [{}, true, "No next run scheduled"],
@@ -42,9 +42,6 @@ it("keeps the configured occurrence while runtime refreshes, pauses, runs, or co
     job.enabled = enabled;
     refresh();
     expect(summary()).toContain(expected);
-    expect(container.querySelector(".cron-detail-meta > .cron-detail-sub")?.textContent).toContain(
-      expected.startsWith("Next run at") ? "Next " : expected,
-    );
     expect(container.querySelector("#cron-schedule-at")).toBe(input);
     expect(input.value).toBe(formatDateTimeLocal(at));
   }

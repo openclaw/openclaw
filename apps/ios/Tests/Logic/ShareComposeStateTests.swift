@@ -2,6 +2,30 @@ import Foundation
 import Testing
 
 struct ShareComposeStateTests {
+    @Test func `accepts explicit admission without waiting for a completed agent run`() throws {
+        try ShareSendAdmissionError.requireAccepted(Data(
+            #"{"ok":true,"event":"agent.request","handled":true,"reason":"accepted"}"#.utf8))
+    }
+
+    @Test(arguments: ["message_too_large", "invalid_attachments", "session_missing"])
+    func `rejects ignored requests instead of reporting sent`(reason: String) {
+        let data = Data(#"{"ok":true,"event":"agent.request","handled":false,"reason":"\#(reason)"}"#.utf8)
+        #expect(throws: ShareSendAdmissionError.rejected(reason)) {
+            try ShareSendAdmissionError.requireAccepted(data)
+        }
+    }
+
+    @Test(arguments: [
+        #"{"ok":true}"#,
+        #"{"ok":true,"event":"unrelated","handled":true}"#,
+        "not json",
+    ])
+    func `keeps older or unknown gateway acknowledgements unconfirmed`(json: String) {
+        #expect(throws: ShareSendAdmissionError.unconfirmed) {
+            try ShareSendAdmissionError.requireAccepted(Data(json.utf8))
+        }
+    }
+
     @Test func `locks send and editing while the draft is being prepared`() {
         let controls = ShareComposeControlState.resolve(status: .preparing, hasDraftText: false)
         #expect(controls == ShareComposeControlState(isSendEnabled: false, isCancelEnabled: true, isEditable: false))

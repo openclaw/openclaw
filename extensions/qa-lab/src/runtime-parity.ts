@@ -23,21 +23,24 @@ import { readQaJsonResponse } from "./ignored-response-body.js";
 import { safeParseQaJson } from "./json.js";
 import * as parity from "./parity-shared.js";
 import type { RuntimeId } from "./runtime-id.js";
-import {
-  buildRuntimeParityCacheDiagnostics,
-  type RuntimeParityCacheDiagnostics,
-} from "./runtime-parity-cache-diagnostics.js";
+import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
+import type {
+  RuntimeParityCell,
+  RuntimeParityResult,
+  RuntimeParityResultCell,
+  RuntimeParityScenarioExecution,
+  RuntimeParityStatus,
+  RuntimeParityToolCall,
+  RuntimeParityUsagePolicy,
+} from "./runtime-parity.types.js";
 import {
   extractQaMessageText,
   readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
-
-export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
-
-type RuntimeParityStatus = "pass" | "fail" | "skip";
+import type { QaSuiteScenarioResult } from "./suite-types.js";
 
 const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
@@ -49,39 +52,6 @@ export function normalizeRuntimePair(
   }
   return ["openclaw", "codex"];
 }
-
-export type RuntimeParityToolCall = {
-  tool: string;
-  argsHash: string;
-  resultHash: string;
-  errorClass?: string;
-};
-
-export type RuntimeParityUsagePolicy =
-  | { expectation: "assistant-message-required" }
-  | { expectation: "not-applicable"; reason: string };
-
-export type RuntimeParityCell = {
-  runtime: RuntimeId;
-  transcriptBytes: string;
-  toolCalls: RuntimeParityToolCall[];
-  providerPlanToolCalls?: RuntimeParityToolCall[];
-  finalText: string;
-  usage: RuntimeParityUsage;
-  cacheDiagnostics?: RuntimeParityCacheDiagnostics;
-  wallClockMs: number;
-  bootstrapWallClockMs?: number;
-  transportErrorClass?: string;
-  runtimeErrorClass?: string;
-  bootStateLines: string[];
-  sentinelFindings?: GatewayLogSentinelFinding[];
-  modelSwitchEvidence?: Record<string, unknown>;
-};
-
-type RuntimeParityResultCell = RuntimeParityCell & {
-  status: RuntimeParityStatus;
-  details?: string;
-};
 
 // Runtime-tool fixtures reserve this prefix for tracked harness limitations.
 // Matching only that explicit skip keeps unexpected coverage loss blocking.
@@ -95,22 +65,6 @@ function isKnownHarnessGapSkip(
     cell.details?.trimStart().startsWith(KNOWN_HARNESS_GAP_DETAILS_PREFIX) === true
   );
 }
-
-export type RuntimeParityDrift =
-  | "none"
-  | "text-only"
-  | "tool-call-shape"
-  | "tool-result-shape"
-  | "structural"
-  | "failure-mode";
-
-export type RuntimeParityResult = {
-  scenarioId: string;
-  runtimeParityUsage?: RuntimeParityUsagePolicy;
-  cells: Record<RuntimeId, RuntimeParityResultCell>;
-  drift: RuntimeParityDrift;
-  driftDetails?: string;
-};
 
 export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUsagePolicy {
   // Legacy or malformed summaries must not silently disable live-usage proof.
@@ -127,12 +81,6 @@ export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUs
   }
   return { expectation: "assistant-message-required" };
 }
-
-export type RuntimeParityScenarioExecution = {
-  status: RuntimeParityStatus;
-  details?: string;
-  cell: RuntimeParityCell;
-};
 
 export function runtimeParityCellStatus(cell: RuntimeParityResultCell): RuntimeParityStatus {
   return isRuntimeParityCellPassable(cell) ? cell.status : "fail";
@@ -159,7 +107,7 @@ type QaGatewayLike = {
   tempRoot: string;
 };
 
-type QaSuiteScenarioLike = {
+type QaSuiteScenarioLike = Pick<QaSuiteScenarioResult, "runtimeParitySessionKeys"> & {
   details?: string;
   status: "pass" | "fail" | "skip";
   steps?: Array<{ details?: string; status?: "pass" | "fail" | "skip" }>;
@@ -217,7 +165,6 @@ const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const TOOL_RESULT_MISSING_ERROR_CLASS = "tool-result-missing";
 const PENDING_TOOL_RESULT_POLL_MS = 25;
-const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
 const BOOT_STATE_LINE_RE =
   /\b(?:FailoverError|No API key found|Codex app-server|agent harness selected|auth profile|runtime policy|restart mode:|plugin|doctor)\b/i;
 const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|not found)\b/i;
@@ -1110,25 +1057,6 @@ async function loadSettledRuntimeParityCaptureSources(params: {
   return sources;
 }
 
-function runtimeParitySessionKeysFromScenarioResult(result: QaSuiteScenarioLike) {
-  const sessionKeys = new Set<string>();
-  const detailBlocks = [result.details, ...(result.steps ?? []).map((step) => step.details)];
-  for (const detailBlock of detailBlocks) {
-    for (const line of detailBlock?.split(/\r?\n/u) ?? []) {
-      if (!line.startsWith(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX)) {
-        continue;
-      }
-      const sessionKey = readNonEmptyString(
-        line.slice(RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX.length),
-      );
-      if (sessionKey) {
-        sessionKeys.add(sessionKey);
-      }
-    }
-  }
-  return [...sessionKeys];
-}
-
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
   parentPrompts: readonly string[],
@@ -1168,7 +1096,7 @@ export async function captureRuntimeParityCell(
   params: RuntimeParityCaptureParams,
 ): Promise<RuntimeParityCell> {
   const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const preferredSessionKeys = runtimeParitySessionKeysFromScenarioResult(params.scenarioResult);
+  const preferredSessionKeys = params.scenarioResult.runtimeParitySessionKeys ?? [];
   const { sessions, transcriptBytes } = await loadSettledRuntimeParityCaptureSources({
     gateway: params.gateway,
     agentId,

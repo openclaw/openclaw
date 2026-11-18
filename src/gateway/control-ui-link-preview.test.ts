@@ -220,7 +220,7 @@ it.each([
 ])(
   "expires $name previews by URL while coalescing fragment variants",
   async ({ name, ttl, result }) => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
     const fetch = mockFetch((url) =>
       url.endsWith("/favicon.ico") || name === "unavailable"
         ? missing()

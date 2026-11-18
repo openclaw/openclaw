@@ -314,6 +314,11 @@ export function joinLocalPluginDetail(params: {
           : {}),
       ...(params.plugin.packageName ? { packageName: params.plugin.packageName } : {}),
       topics: [],
+      ...(params.plugin.recommendedPrompts !== undefined
+        ? { recommendedPrompts: params.plugin.recommendedPrompts }
+        : inspection?.overview?.recommendedPrompts !== undefined
+          ? { recommendedPrompts: inspection.overview.recommendedPrompts }
+          : {}),
       ...(inspection?.overview?.readme ? { readme: inspection.overview.readme } : {}),
       ...(inspection?.overview?.repositoryUrl
         ? { repositoryUrl: inspection.overview.repositoryUrl }
@@ -368,6 +373,9 @@ export function joinClawHubPluginDetail(params: {
     ...(params.remote.uiCapabilities !== undefined
       ? { uiCapabilities: params.remote.uiCapabilities }
       : {}),
+    ...(params.remote.recommendedPrompts !== undefined
+      ? { recommendedPrompts: params.remote.recommendedPrompts }
+      : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
     ...(params.remote.mcpServerDetails ? { mcpServerDetails: params.remote.mcpServerDetails } : {}),
@@ -404,6 +412,7 @@ export function projectClawHubPluginInspection(params: {
     },
     origin: "global",
     entryConfig: runtimePlugin?.installed ? config.plugins?.entries?.[runtimePlugin.id] : undefined,
+    conversationAccessAccepted: "if-declared",
   });
   const catalog = joinClawHubPluginDetail({ remote, local });
   return {
@@ -427,6 +436,9 @@ export function projectClawHubPluginInspection(params: {
     declaredSurfaceStatus: remote.metadata.manifest === "available" ? "partial" : "unavailable",
     components: emptyInstalledPluginComponents(),
     overview: {
+      ...(remote.recommendedPrompts !== undefined
+        ? { recommendedPrompts: remote.recommendedPrompts }
+        : {}),
       ...(remote.metadata.manifest === "available"
         ? {
             capabilities: projectPluginOverviewCapabilities(

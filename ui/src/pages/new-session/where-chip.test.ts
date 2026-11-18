@@ -33,7 +33,7 @@ function fields(container: ParentNode) {
       "Where trigger",
     ),
     search: expectDefined(
-      container.querySelector<HTMLButtonElement>(".header-search__toggle"),
+      container.querySelector<HTMLInputElement>(".header-search__input"),
       "environment search",
     ),
   };
@@ -86,7 +86,7 @@ describe("Where chip", () => {
     expect(document.activeElement).toBe(search);
     picker?.hide();
     picker?.show();
-    expect(container.querySelector(".header-search__toggle")).toBe(search);
+    expect(container.querySelector(".header-search__input")).toBe(search);
     expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
   });
 
@@ -153,7 +153,7 @@ describe("Where chip", () => {
       ),
     );
     expect(container.querySelector("#new-session-where-trigger")).toBe(trigger);
-    expect(container.querySelector(".header-search__toggle")).toBe(search);
+    expect(container.querySelector(".header-search__input")).toBe(search);
     expect(document.activeElement).toBe(search);
     expect(container.querySelector('[role="alert"]')).toBeNull();
   });
@@ -253,7 +253,6 @@ describe("Where chip", () => {
 
     expect(capacityCaption(option(container, "device:runner"))).toBe("1 of 2 session slots in use");
 
-    container.querySelector<HTMLButtonElement>(".header-search__toggle")!.click();
     await waitForSolid(() =>
       expect(container.querySelector('input[type="search"]')).not.toBeNull(),
     );
@@ -323,7 +322,7 @@ describe("Where chip", () => {
     const container = await renderPicker(true, undefined, {
       environments: [device("macbook", "MacBook", { workerSlots: { total: 1, available: 1 } })],
       cloudProfiles: [],
-      deviceDisabledReason: "This runtime does not support paired devices",
+      deviceDisabledReason: "This runtime doesn’t support paired devices",
     });
 
     const row = option(container, "device:macbook");
@@ -331,7 +330,7 @@ describe("Where chip", () => {
     expect(row?.querySelector(".session-menu__description")).toBeNull();
     // Unavailable cards show only the actionable reason.
     expect(capacityCaption(row)).toBeUndefined();
-    expect(hoverDetails(row)).toContain("This runtime does not support paired devices");
+    expect(hoverDetails(row)).toContain("This runtime doesn’t support paired devices");
   });
 
   it.each<[DraftEnvironment["issues"], RegExp]>([
@@ -391,7 +390,7 @@ describe("Where chip", () => {
       expect(capacityCaption(row)).toBe(disabled ? undefined : "1 of 1 session slots in use");
       if (disabled) {
         expect(hoverDetails(row)).toContain(
-          "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+          "Ask an admin to allow the required command on this device, or pick another device.",
         );
       }
     },

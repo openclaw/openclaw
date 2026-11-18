@@ -183,13 +183,13 @@ describe("Pages navigation identity", () => {
     onTestFinished(() => i18n.setLocale("en"));
     await i18n.setLocale("de");
     await vi.waitFor(() => expect(usage.label.textContent).toBe("Nutzung"));
-    sidebar.enabledRouteIds = ["templates"];
+    sidebar.enabledRouteIds = ["meetings"];
     await settleLitElement(sidebar);
     expect(pageRow(sidebar, "route:usage")).toBeNull();
-    const templates = pageEntry(sidebar, "route:templates");
-    sidebar.enabledRouteIds = ["templates", "usage"];
+    const meetings = pageEntry(sidebar, "route:meetings");
+    sidebar.enabledRouteIds = ["meetings", "usage"];
     await settleLitElement(sidebar);
-    expect(pageEntry(sidebar, "route:templates").row).toBe(templates.row);
+    expect(pageEntry(sidebar, "route:meetings").row).toBe(meetings.row);
     expect(pageEntry(sidebar, "route:usage").link.getAttribute("aria-current")).toBe("page");
   });
 

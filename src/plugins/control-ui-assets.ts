@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_SVG_MAX_BYTES,
+} from "../../packages/gateway-protocol/src/session-agent-status.js";
 import { root } from "../infra/fs-safe.js";
 import { walkRootDirectory } from "../infra/root-walk.js";
 import type { PluginManifestControlUi } from "./manifest-types.js";
@@ -27,8 +31,11 @@ export function pluginControlUiRevision(
   declaration: PluginManifestControlUi,
   uiCapabilities: readonly PluginUiCapability[] | undefined,
   assets: ReadonlyMap<string, PluginControlUiAsset>,
+  panelIcon?: string,
 ): string {
-  const digest = createHash("sha256").update(JSON.stringify({ declaration, uiCapabilities }));
+  const digest = createHash("sha256").update(
+    JSON.stringify({ declaration, uiCapabilities, panelIcon }),
+  );
   for (const [name, asset] of [...assets].toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -85,5 +92,22 @@ export async function readPluginControlUiAssets(
   if (![entryName, ...styles].every((name) => assets.has(name))) {
     throw new Error("declared browser assets are missing");
   }
-  return { directory, entryName, styles, assets, bytes };
+  let panelIcon: { path: string; body: Buffer; dataUrl: string } | undefined;
+  if (declaration.panelIcon) {
+    try {
+      const body = await pluginRoot.readBytes(declaration.panelIcon, {
+        maxBytes: SESSION_ICON_SVG_MAX_BYTES,
+      });
+      const source = body.toString("utf8").trim();
+      const dataUrl = source.startsWith("<") ? normalizeSessionIconValue(source) : null;
+      if (dataUrl) {
+        panelIcon = { path: declaration.panelIcon, body, dataUrl };
+        bytes += body.length;
+      }
+    } catch {
+      // Optional artwork never disables a healthy browser module. The root owner
+      // rejects symlinks, escaping paths, disallowed hardlinks, and oversized files.
+    }
+  }
+  return { directory, entryName, styles, assets, bytes, panelIcon };
 }

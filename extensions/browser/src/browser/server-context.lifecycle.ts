@@ -59,6 +59,9 @@ type ProfileLeaseContext = {
   signal: AbortSignal;
 };
 
+// Listeners inherit their creator's leases. Listener paths (the Gateway relay handshake) must
+// enter with `ownership: "lifecycle"`, which ignores inherited leases; caller ownership
+// nests only on the owning operation's await chain.
 const profileLeaseStorage = new AsyncLocalStorage<Map<ProfileRuntimeState, ProfileLeaseContext>>();
 const profileLifecycles = new WeakMap<ProfileRuntimeState, ProfileLifecycleActor>();
 const stoppingBrowserRuntimes = new WeakSet<BrowserServerState>();

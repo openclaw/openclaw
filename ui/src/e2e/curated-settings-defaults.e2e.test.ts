@@ -8,10 +8,9 @@ import {
   settingsRow,
 } from "./config-composer-fixtures.test-support.ts";
 const suite = createConfigSuite("Control UI curated settings defaults mocked Gateway E2E");
-const thinkingDefaultExplanation =
-  "Uses the selected model's thinking policy instead of saving a global thinking override.";
+const thinkingDefaultExplanation = "Default: use the model’s own effort setting.";
 const fastModeDefaultExplanation =
-  "Uses the selected model's fast-mode policy. Unlike Auto, Default does not enable fast mode by itself.";
+  "Default: use the model’s speed policy. Unlike Auto, this does not turn fast mode on.";
 function configResponse(config: Record<string, unknown>, hash: string) {
   return { ...configSnapshot(config, hash), appliedConfigHash: hash };
 }
@@ -46,7 +45,7 @@ async function expectQuietDefault(row: Locator) {
 async function expectDefaultInfo(row: Locator, explanation: string) {
   const info = row
     .locator(".settings-row__title")
-    .getByRole("button", { name: /^About (thinking|fast mode) defaults$/u });
+    .getByRole("button", { name: /^About (effort|speed) defaults$/u });
   await info.waitFor();
   await expect.poll(() => info.locator("svg").count()).toBe(1);
   const tooltip = info.locator("..");
@@ -79,6 +78,7 @@ async function expectModelPatch(
 suite.define(() => {
   it("persists Full tools and restores inherited Labs, browser, and Models defaults across reloads", async () => {
     await suite.withPage(settingsPageOptions, async ({ page }) => {
+      await page.clock.install();
       const initialConfig = {
         agents: {
           defaults: {
@@ -120,7 +120,7 @@ suite.define(() => {
       const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
       await codeModeSwitch.waitFor();
       expect(await codeModeSwitch.isChecked()).toBe(true);
-      await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+      await expectQuietDefault(codeModeRow);
 
       const configGetsBeforeLabsReset = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.patch");
@@ -136,19 +136,18 @@ suite.define(() => {
       expect(await codeModeSwitch.isChecked()).toBe(false);
 
       expect((await page.goto(`${suite.server.baseUrl}settings/security`))?.status()).toBe(200);
-      const browserRow = settingsRow(page, "Browser enabled");
+      const browserRow = settingsRow(page, "Browser tools");
       const profileRow = settingsRow(page, "Available tools");
-      await browserRow.getByRole("switch", { name: "Browser enabled", exact: true }).waitFor();
-      await expect.poll(() => browserRow.textContent()).toContain("Default: Enabled");
-      expect(await radio(profileRow, "Minimal").isChecked()).toBe(true);
-      expect(await profileRow.textContent()).not.toContain("Default: Full");
+      const profileSelect = profileRow.getByRole("combobox", { name: "Available tools" });
+      await browserRow.getByRole("switch", { name: "Browser tools", exact: true }).waitFor();
+      await expectQuietDefault(browserRow);
+      expect(await profileSelect.inputValue()).toBe("minimal");
 
       const securitySavesBefore = (await gateway.getRequests("config.set")).length;
       await browserRow.locator(".settings-row__title").click();
-      await radio(profileRow, "Full").click();
+      await profileSelect.selectOption("full");
       await expectQuietDefault(browserRow);
-      await expect.poll(() => radio(profileRow, "Full").isChecked()).toBe(true);
-      expect(await profileRow.textContent()).not.toContain("Using default: Full");
+      await expect.poll(() => profileSelect.inputValue()).toBe("full");
       await expect
         .poll(async () => {
           const requests = await gateway.getRequests("config.set");
@@ -167,21 +166,27 @@ suite.define(() => {
           };
         })
         .toMatchObject({ browserEnabledOverridden: false, tools: { profile: "full" } });
+      const indicator = page.locator("openclaw-settings-save-indicator");
       await expect
-        .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+        .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
         .toContain("Apply changes");
+      await page.clock.resume();
 
       expect((await page.reload())?.status()).toBe(200);
-      await expectQuietDefault(settingsRow(page, "Browser enabled"));
-      const reloadedProfileRow = settingsRow(page, "Available tools");
-      await expect.poll(() => radio(reloadedProfileRow, "Full").isChecked()).toBe(true);
-      expect(await reloadedProfileRow.textContent()).not.toContain("Using default: Full");
+      await expectQuietDefault(settingsRow(page, "Browser tools"));
+      await expect
+        .poll(() =>
+          settingsRow(page, "Available tools")
+            .getByRole("combobox", { name: "Available tools" })
+            .inputValue(),
+        )
+        .toBe("full");
 
       expect((await page.goto(`${suite.server.baseUrl}settings/model-providers`))?.status()).toBe(
         200,
       );
-      const thinkingRow = settingsRow(page, "Thinking");
-      const fastModeRow = settingsRow(page, "Fast Mode");
+      const thinkingRow = settingsRow(page, "Effort");
+      const fastModeRow = settingsRow(page, "Speed");
       await radio(thinkingRow, "High").waitFor();
       expect(await radio(thinkingRow, "High").isChecked()).toBe(true);
       await expectDefaultInfo(thinkingRow, thinkingDefaultExplanation);
@@ -207,8 +212,8 @@ suite.define(() => {
       expect(await page.getByText("Defaults saved.", { exact: true }).count()).toBe(0);
 
       expect((await page.reload())?.status()).toBe(200);
-      const reloadedThinkingRow = settingsRow(page, "Thinking");
-      const reloadedFastModeRow = settingsRow(page, "Fast Mode");
+      const reloadedThinkingRow = settingsRow(page, "Effort");
+      const reloadedFastModeRow = settingsRow(page, "Speed");
       await expectDefaultInfo(reloadedThinkingRow, thinkingDefaultExplanation);
       await expectDefaultInfo(reloadedFastModeRow, fastModeDefaultExplanation);
       expect(await radio(reloadedThinkingRow, /^Default/u).isChecked()).toBe(true);

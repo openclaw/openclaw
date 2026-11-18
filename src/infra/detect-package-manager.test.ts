@@ -8,20 +8,6 @@ import { detectPackageManager } from "./detect-package-manager.js";
 
 const PNPM_PACKAGE_MANAGER = "pnpm@12.0.0";
 
-async function withPackageManagerRoot<T>(
-  files: Array<{ path: string; content: string }>,
-  run: (root: string) => Promise<T>,
-): Promise<T> {
-  return await withTestDir({ prefix: "openclaw-detect-pm-" }, async (root) => {
-    for (const file of files) {
-      const target = path.join(root, file.path);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, file.content, "utf8");
-    }
-    return await run(root);
-  });
-}
-
 async function writePublishedOpenClawRoot(
   root: string,
   options: { shrinkwrap: boolean },
@@ -38,66 +24,52 @@ async function writePublishedOpenClawRoot(
 }
 
 describe("detectPackageManager", () => {
-  it("prefers packageManager from package.json when supported", async () => {
-    await withPackageManagerRoot(
-      [
-        { path: "package.json", content: JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }) },
-        { path: "package-lock.json", content: "" },
-      ],
-      async (root) => {
-        await expect(detectPackageManager(root)).resolves.toBe("pnpm");
-      },
-    );
-  });
-
   it.each([
-    {
-      name: "uses bun.lock",
-      files: [{ path: "bun.lock", content: "" }],
-      expected: "bun",
-    },
-    {
-      name: "uses bun.lockb",
-      files: [{ path: "bun.lockb", content: "" }],
-      expected: "bun",
-    },
-    {
-      name: "falls back to npm lockfiles for unsupported packageManager values",
-      files: [
-        { path: "package.json", content: JSON.stringify({ packageManager: "yarn@4.0.0" }) },
-        { path: "package-lock.json", content: "" },
-      ],
-      expected: "npm",
-    },
-  ])("falls back to lockfiles when $name", async ({ files, expected }) => {
-    await withPackageManagerRoot(files, async (root) => {
+    [
+      "prefers packageManager from package.json when supported",
+      {
+        "package.json": JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }),
+        "package-lock.json": "",
+      },
+      "pnpm",
+    ],
+    ["falls back to bun.lock", { "bun.lock": "" }, "bun"],
+    ["falls back to bun.lockb", { "bun.lockb": "" }, "bun"],
+    [
+      "falls back to npm lockfiles for unsupported packageManager values",
+      {
+        "package.json": JSON.stringify({ packageManager: "yarn@4.0.0" }),
+        "package-lock.json": "",
+      },
+      "npm",
+    ],
+    [
+      "uses npm-shrinkwrap as npm evidence for published npm package roots",
+      {
+        "package.json": JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }),
+        "npm-shrinkwrap.json": "{}",
+      },
+      "npm",
+    ],
+    [
+      "keeps pnpm source roots when npm-shrinkwrap is present next to pnpm-lock",
+      {
+        "package.json": JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }),
+        "npm-shrinkwrap.json": "{}",
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'",
+      },
+      "pnpm",
+    ],
+    ["returns null when no package manager markers exist", { "package.json": "{not-json}" }, null],
+  ] as const)("%s", async (_name, files, expected) => {
+    await withTestDir({ prefix: "openclaw-detect-pm-" }, async (root) => {
+      for (const [file, content] of Object.entries(files)) {
+        const target = path.join(root, file);
+        await fs.mkdir(path.dirname(target), { recursive: true });
+        await fs.writeFile(target, content, "utf8");
+      }
       await expect(detectPackageManager(root)).resolves.toBe(expected);
     });
-  });
-
-  it("uses npm-shrinkwrap as npm evidence for published npm package roots", async () => {
-    await withPackageManagerRoot(
-      [
-        { path: "package.json", content: JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }) },
-        { path: "npm-shrinkwrap.json", content: "{}" },
-      ],
-      async (root) => {
-        await expect(detectPackageManager(root)).resolves.toBe("npm");
-      },
-    );
-  });
-
-  it("keeps pnpm source roots when npm-shrinkwrap is present next to pnpm-lock", async () => {
-    await withPackageManagerRoot(
-      [
-        { path: "package.json", content: JSON.stringify({ packageManager: PNPM_PACKAGE_MANAGER }) },
-        { path: "npm-shrinkwrap.json", content: "{}" },
-        { path: "pnpm-lock.yaml", content: "lockfileVersion: '9.0'" },
-      ],
-      async (root) => {
-        await expect(detectPackageManager(root)).resolves.toBe("pnpm");
-      },
-    );
   });
 
   it.each(
@@ -209,14 +181,5 @@ describe("detectPackageManager", () => {
         "pnpm",
       );
     });
-  });
-
-  it("returns null when no package manager markers exist", async () => {
-    await withPackageManagerRoot(
-      [{ path: "package.json", content: "{not-json}" }],
-      async (root) => {
-        await expect(detectPackageManager(root)).resolves.toBeNull();
-      },
-    );
   });
 });

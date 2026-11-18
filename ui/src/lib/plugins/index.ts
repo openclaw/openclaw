@@ -35,7 +35,7 @@ export function loadPluginDiscoveryDetail(
 ): Promise<PluginsCatalogGetResult> {
   return client.request<PluginsCatalogGetResult>(
     "plugins.catalog.get",
-    { id, ...(version ? { version } : {}) },
+    { id, ...(version && !id.startsWith("local_") ? { version } : {}) },
     signal ? { signal } : undefined,
   );
 }

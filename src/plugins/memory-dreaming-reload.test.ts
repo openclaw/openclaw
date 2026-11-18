@@ -70,6 +70,10 @@ it("keeps successor sweeps and diary publication owned after another registratio
     const subagent = {
       complete: vi.fn(() => completion.promise),
       forkSession: vi.fn(async () => ({ text: "" })),
+      runForkedTurn: vi.fn(async () => ({
+        status: "refused" as const,
+        reason: "tool_policy" as const,
+      })),
       run: vi.fn(async () => ({ runId: "unused" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
@@ -99,6 +103,9 @@ it("keeps successor sweeps and diary publication owned after another registratio
       (entry) => entry.service.id === "memory-core-dreaming",
     )?.service;
     assert(service);
+    if (service?.apiVersion !== 2) {
+      throw new Error("Expected service API version 2");
+    }
     const scheduler = createTestPluginServiceScheduler();
     const context = {
       config,

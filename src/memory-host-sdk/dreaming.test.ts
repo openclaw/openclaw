@@ -189,3 +189,23 @@ it.each([
   expect(resolveMemoryDreamingPluginId(cfg)).toBe(id);
   expect(resolveMemoryDreamingPluginConfig(cfg)).toEqual({ dreaming });
 });
+
+it("falls back to Memory Core dreaming settings when the slot owner has none", () => {
+  const disabled = { enabled: false, frequency: "0 3 * * *" };
+  const withOwnerConfig = (config: Record<string, unknown>) => ({
+    plugins: {
+      slots: { memory: "memory-external" },
+      entries: {
+        "memory-external": { config },
+        "memory-core": { config: { dreaming: disabled } },
+      },
+    },
+  });
+  const cfg = withOwnerConfig({ apiUrl: "http://127.0.0.1:9077" });
+  expect(resolveMemoryDreamingPluginConfig(cfg)).toEqual({ dreaming: disabled });
+  expect(
+    resolveMemoryDreamingConfig({ pluginConfig: resolveMemoryDreamingPluginConfig(cfg) }).enabled,
+  ).toBe(false);
+  const owned = { dreaming: { enabled: true } };
+  expect(resolveMemoryDreamingPluginConfig(withOwnerConfig(owned))).toEqual(owned);
+});

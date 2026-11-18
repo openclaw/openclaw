@@ -85,7 +85,9 @@ it("bounds and orders queued audio on initial connect and reopen without replayi
   const initial = [1, 2, 3].map((byte) => Buffer.alloc(1024 * 1024, byte));
   initial.forEach((audio) => session.sendAudio(audio));
   await session.connect();
-  expect(forwarded).toEqual(initial.slice(1));
+  expect(forwarded).toHaveLength(2);
+  expect(forwarded[0]!.equals(initial[1]!), "first queued audio: bytes").toBe(true);
+  expect(forwarded[1]!.equals(initial[2]!), "second queued audio: bytes").toBe(true);
   expect(events).toEqual(["initial-connect", "audio:2", "audio:3"]);
   session.close();
   session.close();

@@ -177,6 +177,8 @@ it(
               tls: { enabled: true, autoGenerate: false, certPath, keyPath },
             },
             agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
+            // Keep the fetch trace scoped to sign-in, not background catalog polling.
+            models: { catalogRefresh: { enabled: false } },
             plugins: {
               allow: ["github-copilot"],
               slots: { memory: "none" },

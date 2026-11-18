@@ -39,12 +39,13 @@ import {
   getRemoteControlUiIngressContext,
   hasCurrentRemoteControlUiIngress,
 } from "../../ingress-attribution.js";
+import { isOpenClawIdTunnelPrincipalCurrent } from "../../openclaw-id/tunnel-principal.js";
 import { resolveIdentityOperatorScopes } from "../../operator-identity-scopes.js";
 import type { OperatorScope } from "../../operator-scopes.js";
 import { checkGatewayWsBrowserOrigin, normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { parseGatewayRole } from "../../role-policy.js";
 import { authenticatedProfileUnavailableError } from "../../server-methods/gateway-client-identity.js";
-import { formatForLog } from "../../ws-log.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type {
   AuthenticatedGatewayConnect,
@@ -178,6 +179,10 @@ export function resolveGatewayConnectPolicyFailure(
   context: GatewayConnectPhaseContext,
   state: AuthenticatedGatewayConnect,
 ): { kind: "auth" } | { kind: "origin"; reason: string } | undefined {
+  const principal = state.authResult.openclawId;
+  if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    return { kind: "auth" };
+  }
   if (context.browserOrigin) {
     const originCheck = checkGatewayWsBrowserOrigin(context.browserOrigin, getRuntimeConfig());
     if (!originCheck.ok) {
@@ -257,7 +262,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
     });
     logWsControl.warn(
-      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
+      `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatPeerTextForLog(clientLabel)} ${connectParams.client.mode} v${formatPeerTextForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatPeerTextForLog(connectParams.client.instanceId ?? "n/a")}`,
     );
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
       retryable: false,
@@ -298,19 +303,19 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   const remoteIngress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
   if (remoteIngress) {
     const denied = !hasCurrentRemoteControlUiIngress(remoteIngress)
-      ? "Remote Control UI ingress is no longer active; reconnect through the current grant."
+      ? "Remote web app ingress is no longer active; reconnect through the current grant."
       : role !== "operator"
-        ? "Remote Control UI ingress only admits the operator role."
+        ? "Remote web app ingress only admits the operator role."
         : !connectParams.device
-          ? "Remote Control UI ingress requires a signed device identity."
+          ? "Remote web app ingress requires a signed device identity."
           : Object.values(connectParams.auth ?? {}).some((credential) => credential !== undefined)
-            ? "Remote Control UI ingress requires a credential-free signed device; reconnect without stored credentials."
+            ? "Remote web app ingress requires a credential-free signed device; reconnect without stored credentials."
             : !roleScopesAllow({
                   role,
                   requestedScopes: scopes,
                   allowedScopes: remoteIngress.operatorScopeCeiling,
                 })
-              ? "Remote Control UI scopes must stay within this grant's operator scope ceiling."
+              ? "Remote web app scopes must stay within this grant's operator scope ceiling."
               : undefined;
     if (denied) {
       markHandshakeFailure("remote-control-ui-admission-denied");

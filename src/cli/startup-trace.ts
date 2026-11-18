@@ -57,7 +57,7 @@ type GatewayBootstrapStep = {
   completedAt: number;
   durationMs: number;
   calls: number;
-  metrics: Record<string, number>;
+  metrics: Record<string, number | string>;
 };
 
 const MAX_BOOTSTRAP_STEPS = 128;
@@ -78,7 +78,7 @@ export function recordGatewayBootstrapStep(
   name: string,
   startedAt: number,
   completedAt: number,
-  metrics: Readonly<Record<string, number>> = {},
+  metrics: Readonly<Record<string, number | string>> = {},
 ): void {
   if (!bootstrapSteps || !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE)) {
     return;
@@ -95,7 +95,9 @@ export function recordGatewayBootstrapStep(
   step.durationMs += completedAt - startedAt;
   step.calls += 1;
   for (const [key, value] of Object.entries(metrics)) {
-    step.metrics[key] = (step.metrics[key] ?? 0) + value;
+    const previous = step.metrics[key];
+    step.metrics[key] =
+      typeof value === "number" ? (typeof previous === "number" ? previous : 0) + value : value;
   }
 }
 
@@ -108,7 +110,7 @@ export function consumeGatewayBootstrapSteps(): GatewayBootstrapStep[] {
 export async function measureGatewayBootstrapStep<T>(
   name: string,
   run: () => T | Promise<T>,
-  metrics?: () => Readonly<Record<string, number>>,
+  metrics?: () => Readonly<Record<string, number | string>>,
 ): Promise<T> {
   const traceEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   const progressEnabled =

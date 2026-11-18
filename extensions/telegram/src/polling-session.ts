@@ -126,13 +126,23 @@ export class TelegramPollingSession {
           continue;
         }
 
-        if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
-          return;
-        }
+        try {
+          if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
+            return;
+          }
 
-        const state = await this.#runPollingCycle(bot, cycleAbortController);
-        if (state === "exit") {
-          return;
+          const state = await this.#runPollingCycle(bot, cycleAbortController);
+          if (state === "exit") {
+            return;
+          }
+        } finally {
+          cycleAbortController.abort();
+          // Bot construction owns binding registrations before polling is initialized.
+          await waitForGracefulStop(() =>
+            Promise.resolve(bot.stop())
+              .then(() => undefined)
+              .catch(() => undefined),
+          );
         }
       }
     } finally {
@@ -286,7 +296,8 @@ export class TelegramPollingSession {
       cycleAbortController.abort();
     };
     try {
-      await bot.init();
+      // SAFETY: grammY types a legacy signal; init only uses aborted and abort event listeners.
+      await bot.init(this.opts.abortSignal as Parameters<(typeof bot)["init"]>[0]);
     } catch (err) {
       abortMedia();
       return await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram bot init failed");
@@ -403,7 +414,7 @@ export class TelegramPollingSession {
         );
         // The worker waits for the whole response's ACK before advancing its offset.
         // The committed spool enqueue is the ACK boundary; offset persistence is
-        // monotonic catch-up and must not stall intake during a state-store outage.
+        // catch-up and must not stall intake during a state-store outage.
         void (async () => {
           let updateId = -1;
           for (const update of message.updates) {
@@ -566,13 +577,6 @@ export class TelegramPollingSession {
       await waitForGracefulStop(() => ingressMonitor.stop());
       // Accepted replay writes and introductions keep ownership after transport grace expires.
       await ingressMonitor.waitForDeferredClaims();
-      // Fail closed when the spool stops making progress: keeping any claim live would
-      // prevent a healthy process from recovering a wedged drain.
-      await waitForGracefulStop(() =>
-        Promise.resolve(bot.stop())
-          .then(() => undefined)
-          .catch(() => undefined),
-      );
     }
   }
 }

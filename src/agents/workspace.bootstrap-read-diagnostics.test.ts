@@ -1,8 +1,8 @@
-import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fsSafeFilesystem from "../infra/fs-safe-filesystem-worker.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
@@ -15,6 +15,7 @@ import {
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
   filterBootstrapFilesForSession as filterForSession,
   type WorkspaceBootstrapFile,
   workspaceFilesShareSourceIdentity,
@@ -166,13 +167,78 @@ it("omits missing remote files despite Gateway copies", async () => {
   );
 });
 
+it("overlaps bootstrap reads while retaining canonical prompt order", async () => {
+  const dir = await workspace();
+  const reads = new Map(
+    WORKSPACE_BOOTSTRAP_FILENAMES.map((name) => [name, Promise.withResolvers<void>()]),
+  );
+  const readFileWithSource: NonNullable<Bridge["readFileWithSource"]> = vi.fn(
+    async ({ filePath }) => {
+      await reads.get(filePath as WorkspaceBootstrapFile["name"])!.promise;
+      return { data: Buffer.from(filePath), canonicalPath: `/remote/${filePath}` };
+    },
+  );
+  await withAccess(dir, mockBridge({ readFileWithSource }), async () => {
+    const loading = loadBootstrap(dir);
+    try {
+      expect(readFileWithSource).toHaveBeenCalledTimes(WORKSPACE_BOOTSTRAP_FILENAMES.length);
+      for (const read of [...reads.values()].toReversed()) {
+        read.resolve();
+        await Promise.resolve();
+      }
+      expect((await loading).map((file) => file.content)).toEqual(WORKSPACE_BOOTSTRAP_FILENAMES);
+    } finally {
+      for (const read of reads.values()) {
+        read.resolve();
+      }
+      await loading;
+    }
+  });
+});
+
+it("joins in-flight bootstrap reads before rejecting revoked workspace access", async () => {
+  const dir = await workspace();
+  const first = Promise.withResolvers<void>();
+  const sibling = Promise.withResolvers<void>();
+  const readFileWithSource = vi.fn<NonNullable<Bridge["readFileWithSource"]>>(
+    async ({ filePath }) => {
+      await (filePath === DEFAULT_AGENTS_FILENAME ? first : sibling).promise;
+      return { data: Buffer.from(filePath), canonicalPath: `/remote/${filePath}` };
+    },
+  );
+  await withAccess(dir, mockBridge({ readFileWithSource }), async (release) => {
+    let settled = false;
+    const loading = loadBootstrap(dir);
+    const outcome = loading.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    const rejection = expect(loading).rejects.toThrow(/Workspace access/);
+    try {
+      expect(readFileWithSource).toHaveBeenCalledTimes(WORKSPACE_BOOTSTRAP_FILENAMES.length);
+      release();
+      first.resolve();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+    } finally {
+      first.resolve();
+      sibling.resolve();
+      await outcome;
+      await rejection;
+    }
+  });
+});
+
 it("does not split surrogate pairs when bounding unreadable reasons", async () => {
   const tempDir = await workspace({ "AGENTS.md": "# AGENTS.md\n" });
   const reason = `${"x".repeat(299)}😀tail`;
-  vi.spyOn(syncFs, "read").mockImplementation(((...args: unknown[]) => {
-    const callback = args.at(-1) as (error: Error) => void;
-    callback(new Error(reason));
-  }) as typeof syncFs.read);
+  vi.spyOn(fsSafeFilesystem, "runFsSafeFilesystemTask").mockRejectedValue(new Error(reason));
   const files = await loadBootstrap(tempDir);
   expect(files.find((file) => file.name === DEFAULT_AGENTS_FILENAME)?.content).toBe(
     `[UNREADABLE: ${"x".repeat(299)}]`,

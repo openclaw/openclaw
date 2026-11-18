@@ -6,17 +6,19 @@ import { closeDefaultRetainedNativeWorkerSource } from "../infra/worker-native-l
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { selectInstallMutationWriteOptions } from "./install-config-mutation.js";
 import { persistPluginInstall } from "./install-persistence.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
 import { readCurrentInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { updatePluginSnapshotCandidates } from "./installed-plugin-snapshot-candidates.js";
 import { withPluginLifecycleLeaseAsync } from "./plugin-lifecycle-lease.js";
-import { PluginSourceSnapshotDescriptorSchema } from "./plugin-source-snapshot.types.js";
+import {
+  PLUGIN_SOURCE_SNAPSHOT_PREFIX,
+  resolvePluginSourceCapturesDirectory,
+} from "./plugin-source-capture-path.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 afterEach(() => closeDefaultRetainedNativeWorkerSource());
 
 it.each(["canonical", "reordered"] as const)(
-  "persists unexecuted managed source and publishes a same-version reinstall snapshot (%s)",
+  "persists install digests without publishing snapshots on same-version reinstall (%s)",
   async (recordOrder) => {
     await withOpenClawTestState(
       { label: "snapshot-real-install", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
@@ -64,19 +66,26 @@ it.each(["canonical", "reordered"] as const)(
           });
           const index = await readCurrentInstalledPluginIndex({ env: state.env });
           const record = index?.installRecords[pluginId];
-          const descriptor = PluginSourceSnapshotDescriptorSchema.parse(
+          expect(
             index?.plugins.find((plugin) => plugin.pluginId === pluginId)?.sourceSnapshot,
-          );
+          ).toBeUndefined();
+          const digests = record?.sourceSnapshotDigests?.[pluginId];
           expect(record?.version).toBe("1.0.0");
           expect(record?.integrity).toBe(
             recordOrder === "reordered" ? "sha512-synthetic" : undefined,
           );
-          expect(descriptor.packageIntegrity).toBe(record?.integrity);
-          expect(descriptor.installRecordHash).toBe(hashJson(record));
-          expect(record?.sourceSnapshotDigests?.[pluginId]).toEqual({
-            contentDigest: descriptor.contentDigest,
-            dependencyClosureDigest: descriptor.dependencyClosureDigest,
+          expect(digests).toEqual({
+            contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+            dependencyClosureDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
           });
+          const captureRoot = resolvePluginSourceCapturesDirectory(state.stateDir);
+          expect(
+            fs.existsSync(captureRoot)
+              ? fs
+                  .readdirSync(captureRoot)
+                  .filter((name) => name.startsWith(PLUGIN_SOURCE_SNAPSHOT_PREFIX))
+              : [],
+          ).toEqual([]);
           expect(fs.existsSync(marker)).toBe(false);
           expect(
             await withPluginLifecycleLeaseAsync({ env: state.env }, (lease) =>
@@ -87,12 +96,11 @@ it.each(["canonical", "reordered"] as const)(
               }),
             ),
           ).toEqual([]);
-          return descriptor;
+          return digests;
         };
         const first = await install();
         const second = await install();
-        expect(second.generation).not.toBe(first.generation);
-        expect(second.installedRevision).toBeGreaterThan(first.installedRevision);
+        expect(second).toEqual(first);
       },
     );
   },

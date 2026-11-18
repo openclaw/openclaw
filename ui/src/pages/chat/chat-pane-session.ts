@@ -1,10 +1,3 @@
-import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type {
-  SessionCatalogTranscriptItem,
-  SessionsCatalogReadResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
-import { projectCatalogItemForDisplay } from "../../../../src/chat/session-catalog-display.js";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   type ControlUiSessionBranch,
@@ -13,8 +6,6 @@ import {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
-import { t } from "../../i18n/index.ts";
-import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -24,21 +15,14 @@ import {
   sessionPullRequestsForGateway,
   sessionGitHubRepository,
 } from "../../lib/session-pull-requests.ts";
-import {
-  lookupCatalogSession,
-  parseCatalogSessionKey,
-  type CatalogSessionKey,
-} from "../../lib/sessions/catalog-key.ts";
+import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
-import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
-import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
+import { ChatPaneCatalog } from "./chat-pane-catalog.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   chatBranchId,
@@ -47,13 +31,10 @@ import {
   listDismissedChatPullRequests,
 } from "./components/chat-pull-requests.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
-import { scheduleChatScroll } from "./scroll.ts";
-
-registerChatSessionEnglish();
 
 const NO_PULL_REQUESTS: ControlUiSessionPullRequest[] = [];
 
-export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
+export abstract class ChatPaneSession extends ChatPaneCatalog {
   readonly repository: {
     target: { store: ReturnType<typeof sessionPullRequestsForGateway>; key: string } | null;
     dismissedIds: ReadonlySet<string>;
@@ -76,36 +57,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   deferredSessionHydration: { resume?: () => void } | null = null;
-  private catalogRead: { controller: AbortController; older: boolean } | undefined;
-  private catalogReadPending = false;
-
-  protected retireCatalogRead(resume = false): void {
-    const read = this.catalogRead;
-    if (!read) {
-      if (!resume) {
-        this.catalogReadPending = false;
-      }
-      return;
-    }
-    this.catalogRead = undefined;
-    // Continuation writes share catalogLoadGeneration. Hiding a read must not
-    // retire their adopted-send intent or change the reader's pagination.
-    this.catalogReadPending = resume && !read.older;
-    if (!read.older) {
-      this.history.catalogLoading = false;
-      if (this.state) {
-        this.state.chatLoading = false;
-      }
-    }
-    read.controller.abort();
-  }
-
-  protected resumeCatalogRead(): void {
-    const key = parseCatalogSessionKey(this.state?.sessionKey);
-    if (key && this.catalogReadPending) {
-      void this.loadCatalogSession(key, false);
-    }
-  }
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
     string,
@@ -550,176 +501,5 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     }
     state.sessionKey = nextSessionKey;
     return nextSessionKey;
-  }
-
-  protected openCatalogSession(key: CatalogSessionKey, state: ChatPageHost) {
-    this.catalogRequestedSessionKey = this.sessionKey;
-    this.history.catalogMessages = [];
-    this.history.catalogCursor = undefined;
-    this.history.catalogSession = null;
-    this.history.catalogHost = null;
-    // Payload-store entries and their object URLs are reclaimed only by
-    // explicit release; clearing the array alone strands them for the tab.
-    releaseChatAttachmentPayloads(state.chatAttachments);
-    this.chatState.attachmentInputProps(state).onAttachmentsChange([]);
-    state.chatLoading = true;
-    void this.loadCatalogSession(key, false);
-  }
-
-  protected catalogItemMessage(item: SessionCatalogTranscriptItem): Record<string, unknown> | null {
-    const timestamp = parseDateStringTimestampMs(item.timestamp);
-    const message = projectCatalogItemForDisplay(item);
-    if (!message) {
-      return null;
-    }
-    return {
-      ...message,
-      ...(timestamp == null ? {} : { timestamp }),
-      ...(item.type === "userMessage"
-        ? {
-            senderLabel: item.sender?.label ?? t("sessionsView.user"),
-            ...(item.sender
-              ? {
-                  __openclaw: {
-                    ...asOptionalRecord(message["__openclaw"]),
-                    senderIdentity: item.sender.identity,
-                    senderId: item.sender.identity.id,
-                    senderName: item.sender.label,
-                    senderProfileAvatarUrl: item.sender.avatarUrl,
-                  },
-                }
-              : {}),
-          }
-        : {}),
-    };
-  }
-
-  protected prependUniqueCatalogMessages(messages: unknown[]): unknown[] {
-    const seenIds = new Set(this.history.catalogMessages.map(catalogMessageId).filter(Boolean));
-    const uniqueMessages = messages.filter((message) => {
-      const messageId = catalogMessageId(message);
-      if (!messageId || !seenIds.has(messageId)) {
-        if (messageId) {
-          seenIds.add(messageId);
-        }
-        return true;
-      }
-      return false;
-    });
-    return [...uniqueMessages, ...this.history.catalogMessages];
-  }
-
-  protected async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {
-    const scope = this.captureConnectionScope();
-    if (!scope) {
-      return false;
-    }
-    const { state, client } = scope;
-    if (older && !this.history.catalogCursor) {
-      return false;
-    }
-    this.retireCatalogRead();
-    const read = { controller: new AbortController(), older };
-    this.catalogRead = read;
-    this.catalogReadPending = false;
-    const agentId = resolveChatAgentId(state);
-    const requestedSessionKey = this.sessionKey;
-    const isCurrent = () =>
-      !read.controller.signal.aborted &&
-      this.catalogRead === read &&
-      this.isConnectionScopeCurrent(scope) &&
-      this.sessionKey === requestedSessionKey &&
-      resolveChatAgentId(state) === agentId;
-    if (!older) {
-      this.history.catalogLoading = true;
-      this.history.catalogCursor = undefined;
-      this.olderCursorsSeen.clear();
-      this.historyObserverArmed = false;
-      this.transcriptScrollTop = null;
-      this.historyObserver?.disconnect();
-      this.historyObserver = null;
-    }
-    try {
-      if (!older) {
-        const lookup = await lookupCatalogSession({
-          agentId,
-          client,
-          key,
-          isCurrent,
-          signal: read.controller.signal,
-        });
-        if (!lookup || !isCurrent()) {
-          return false;
-        }
-        this.history.catalogHost = lookup.host;
-        this.history.catalogSession = lookup.session;
-      }
-      const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
-      const page = await client.request<SessionsCatalogReadResult>(
-        "sessions.catalog.read",
-        {
-          agentId,
-          catalogId: key.catalogId,
-          hostId: key.hostId,
-          threadId: key.threadId,
-          ...(this.history.catalogSession?.sourceHomeId
-            ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
-            : {}),
-          limit: 50,
-          ...(older && this.history.catalogCursor ? { cursor: this.history.catalogCursor } : {}),
-        },
-        { signal: read.controller.signal },
-      );
-      if (!isCurrent()) {
-        return false;
-      }
-      // Only accepted pages advance progress. A cancelled read must leave its
-      // cursor reusable instead of falsely exhausting a later retry.
-      if (requestedOlderCursor) {
-        this.olderCursorsSeen.add(requestedOlderCursor);
-      }
-      const messages = page.items
-        .toReversed()
-        .map((item) => this.catalogItemMessage(item))
-        .filter((message) => message !== null);
-      const nextMessages = older ? this.prependUniqueCatalogMessages(messages) : messages;
-      const addedMessages = nextMessages.length > this.history.catalogMessages.length;
-      // Exhaust when the cursor cannot make new forward progress: absent, unchanged,
-      // or already visited this session (a provider cycling c1 -> c2 -> c1). Any of
-      // these stops the re-armed observer from looping. An advancing, never-seen
-      // cursor with no newly rendered messages (an entirely filtered/duplicate page)
-      // must keep paging — real older history may sit behind it.
-      const olderExhausted =
-        older &&
-        (!page.nextCursor ||
-          page.nextCursor === requestedOlderCursor ||
-          this.olderCursorsSeen.has(page.nextCursor));
-      this.history.catalogMessages = nextMessages;
-      this.history.catalogCursor = olderExhausted ? undefined : page.nextCursor;
-      if (older) {
-        this.history.olderError = null;
-      } else {
-        state.lastError = null;
-      }
-      scheduleChatScroll(state, !older);
-      return !older || addedMessages || !olderExhausted;
-    } catch (error) {
-      if (isCurrent()) {
-        if (older) {
-          this.history.olderError = formatUiError(error);
-        } else {
-          state.lastError = formatUiError(error);
-        }
-      }
-      return false;
-    } finally {
-      if (isCurrent() && !older) {
-        this.history.catalogLoading = false;
-        state.chatLoading = false;
-      }
-      if (this.catalogRead === read) {
-        this.catalogRead = undefined;
-      }
-    }
   }
 }

@@ -4,6 +4,7 @@ import { getCommandPathWithRootOptions, normalizeRootLogLevelArgv } from "./argv
 import { CAPABILITY_METADATA } from "./capability-cli/metadata.js";
 import { providerSummaryText } from "./capability-cli/output.js";
 import { runCapabilityCommand } from "./capability-cli/providers-command.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 import { removeCommandByName } from "./program/command-tree.js";
 
@@ -69,7 +70,7 @@ export async function registerCapabilityCli(
         const id = String(opts.name);
         const entry = CAPABILITY_METADATA.find((candidate) => candidate.id === id);
         if (!entry) {
-          throw new Error(`Unknown capability: ${String(opts.name)}`);
+          throwExpectedCliError(`Unknown capability: ${id}`);
         }
         return entry;
       }),

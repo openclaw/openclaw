@@ -53,9 +53,10 @@ allow entry. See [Node command policy](/nodes/command-policy#command-policy).
 
 In the iOS app:
 
-1. Open **Settings -> Permissions** and find **Apple Health Summaries** in the
-   always-visible **Apple Health** section.
-2. Tap **Enable Apple Health Summaries**.
+1. Open **Settings** and tap the toolbar's **Device** button. In the native
+   fallback (offline, Limited access, or no embedded Dashboard), open
+   **Device Settings** instead.
+2. Turn on **Health summaries**.
 3. Read the disclosure, then choose which Health categories OpenClaw may read
    in Apple's permission sheet.
 
@@ -134,7 +135,7 @@ calculated, so the same minute is not counted twice.
 - The summary is for personal health and fitness context, not diagnosis or
   medical advice.
 
-To stop sharing, return to **Apple Health Summaries** and tap **Turn Off Summaries**.
+To stop sharing, turn off **Health summaries** in the same place.
 The iOS device then removes the Health capability and `health.summary` command from its node
 surface. You can also remove `health.summary` from
 `gateway.nodes.commands.allow` to close the Gateway side of the gate.
@@ -154,8 +155,9 @@ Add `health.summary` to `gateway.nodes.commands.allow`. Also check that
 
 ### `HEALTH_ACCESS_DISABLED`
 
-The app-side sharing switch is off. Enable **Apple Health Summaries** under
-**Settings -> Permissions -> Apple Health** on the iOS device.
+The app-side sharing switch is off. Turn on **Health summaries** under
+**Settings** -> **Device** (or **Device Settings** in the native fallback) on
+the iOS device.
 
 ### Summary succeeds but metrics are missing
 

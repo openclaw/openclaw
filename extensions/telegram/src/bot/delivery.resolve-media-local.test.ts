@@ -15,10 +15,13 @@ import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const { lookup } = vi.hoisted(() => ({ lookup: vi.fn() }));
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof Dns>()),
-  lookup,
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof Dns & { default: typeof Dns }>();
+  const overrides = {
+    lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 describe("Telegram media acquisition through grammY and the media store", () => {
   const fixture = useTelegramHttpFixture();
@@ -79,6 +82,7 @@ describe("Telegram media acquisition through grammY and the media store", () => 
       new Response(bytes, { headers: { "content-type": "image/png" } });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const acquiring = resolveMedia({
+      budget: new AbortController().signal,
       ctx: context(),
       token: fixture.cfg.channels.telegram.botToken,
       apiRoot: fixture.cfg.channels.telegram.apiRoot,
@@ -98,7 +102,12 @@ describe("Telegram media acquisition through grammY and the media store", () => 
   it("does not retry a getFile size rejection", async () => {
     fixture.rejections.push({ error_code: 400, description: "Bad Request: file is too big" });
     await expect(
-      resolveMedia({ ctx: context(), token: "fixture", maxBytes: 1024 }),
+      resolveMedia({
+        budget: new AbortController().signal,
+        ctx: context(),
+        token: "fixture",
+        maxBytes: 1024,
+      }),
     ).rejects.toMatchObject({ code: "max_bytes", status: 400 });
     expect(fixture.requests.map(({ method }) => method)).toEqual(["getFile"]);
   });
@@ -120,11 +129,13 @@ describe("Telegram media acquisition through grammY and the media store", () => 
         parameters: { retry_after: mode === "deadline" ? 1200 : 60 },
       });
       const abort = new AbortController();
+      const budget = new AbortController();
       const bytes = await readFile(fixture.photoPath);
       const sourceFetch = async () =>
         new Response(bytes, { headers: { "content-type": "image/png" } });
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       const acquiring = resolveMedia({
+        budget: budget.signal,
         ctx: context(),
         token: "fixture",
         apiRoot: fixture.cfg.channels.telegram.apiRoot,
@@ -149,7 +160,8 @@ describe("Telegram media acquisition through grammY and the media store", () => 
         if (mode === "shutdown") {
           abort.abort();
         } else {
-          await vi.advanceTimersByTimeAsync(1200000);
+          // The caller's media budget ran out during the flood wait.
+          budget.abort();
         }
         expect(await outcome).toMatchObject({ error: { code: "http_error", status: 429 } });
         expect(fixture.requests).toHaveLength(1);
@@ -177,6 +189,7 @@ describe("Telegram media acquisition through grammY and the media store", () => 
       );
     };
     const acquiring = resolveMedia({
+      budget: new AbortController().signal,
       ctx: context(),
       token: "fixture",
       apiRoot: fixture.cfg.channels.telegram.apiRoot,
@@ -202,6 +215,7 @@ describe("Telegram media acquisition through grammY and the media store", () => 
         return new Response(bytes, { headers: { "content-type": "image/png" } });
       };
       const acquiring = resolveMedia({
+        budget: new AbortController().signal,
         ctx: context(),
         token: "fixture",
         maxBytes: 1024,
@@ -273,6 +287,7 @@ describe("Telegram downloaded image documents", () => {
         }),
       };
       const result = await resolveMedia({
+        budget: new AbortController().signal,
         ctx,
         token: "12345:fixture-token",
         maxBytes: 1_024,

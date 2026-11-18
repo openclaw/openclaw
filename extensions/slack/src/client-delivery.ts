@@ -10,6 +10,7 @@ import {
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -21,6 +22,7 @@ import {
   normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError, getSlackWebApiErrorData } from "./errors.js";
+import { buildSlackLiteralText } from "./literal-text.js";
 import {
   buildSlackMessageIdentityPayload,
   hasSlackMessageIdentity,
@@ -245,6 +247,7 @@ export async function postSlackMessageBestEffort(params: {
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
   mrkdwn?: boolean;
+  literalText?: boolean;
   unfurl?: SlackUnfurlOptions;
 }) {
   const threadPayload =
@@ -267,6 +270,7 @@ export async function postSlackMessageBestEffort(params: {
     ...(params.unfurl?.unfurlMedia !== undefined
       ? { unfurl_media: params.unfurl.unfurlMedia }
       : {}),
+    ...(params.literalText ? buildSlackLiteralText(params.text) : {}),
   };
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
@@ -326,10 +330,7 @@ export async function uploadSlackFile(params: {
   completionClient?: WebClient;
   channelId: string;
   mediaUrl: string;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];

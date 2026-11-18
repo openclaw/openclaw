@@ -58,6 +58,7 @@ function local(waitForCallback: Callback["waitForCallback"]) {
   const fixture = context(false);
   const close = vi.fn(async () => undefined);
   start.mockImplementation(async () => ({
+    redirectUrl: "http://localhost:3000/openrouter-oauth/callback",
     waitForCallback,
     close,
     complete: async () => undefined,

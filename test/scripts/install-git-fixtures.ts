@@ -25,14 +25,21 @@ export function createInstallGitCommitFixtureScript(source: "bundle" | "remote")
       selected="$(git -C "$seed" rev-parse HEAD)"
       git -C "$seed" update-ref "refs/heads/$selected" "$base"
       git -C "$seed" push -q origin main "refs/heads/$selected"
-      git -C "$repo" remote set-url origin "$tmp/remote.git"
-      if git -C "$repo" cat-file -e "$selected" 2>/dev/null; then
+      git -C "$repo" remote set-url origin "file://$tmp/remote.git"
+      git -C "$tmp/remote.git" config uploadpack.allowFilter true
+      git -C "$repo" config remote.origin.promisor true
+      git -C "$repo" config remote.origin.partialclonefilter blob:none
+      git -C "$repo" branch main "$base"
+      if GIT_NO_LAZY_FETCH=1 git -C "$repo" cat-file -e "$selected" 2>/dev/null; then
         echo "fixture already has the requested commit"
         exit 1
       fi
     fi
     GIT_UPDATE=0
-    checkout_git_openclaw_ref "$repo" "$selected"
+    GIT_TRACE_PACKET="$tmp/packets" checkout_git_openclaw_ref "$repo" "$selected"
+    if [[ "${source}" == remote ]]; then
+      grep -q 'fetch> have ' "$tmp/packets"
+    fi
     [[ "$(git -C "$repo" rev-parse HEAD)" == "$selected" ]]
     [[ -z "$(git -C "$repo" symbolic-ref --quiet HEAD || true)" ]]
     [[ "$GIT_REF_KIND" == immutable ]]

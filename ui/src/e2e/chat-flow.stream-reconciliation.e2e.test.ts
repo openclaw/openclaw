@@ -24,7 +24,7 @@ const assistantTexts = async (page: Page) =>
   );
 const terminalMessage = (text: string, displayContent: ReturnType<typeof textContent> = []) =>
   chatMessage("assistant", text, { openclawDisplayContent: displayContent });
-const stopButton = (page: Page) => page.getByRole("button", { name: "Stop generating" });
+const stopButton = (page: Page) => page.getByRole("button", { name: "Stop", exact: true });
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 const savedAnswer = (runId: string, text: string, id = "answer", seq = 2) => ({
   ...chatMessage("assistant", text),
@@ -343,8 +343,12 @@ suite.define(() => {
     if (terminal === "error") {
       const failure = page.locator(".chat-error").filter({ hasText: errorMessage });
       await failure
-        .locator("summary strong")
-        .getByText("Couldn't finish this reply. Check the conversation before trying again.")
+        .locator(".app-toast__message")
+        .getByText("Couldn't finish this reply.", { exact: true })
+        .waitFor();
+      await failure
+        .locator(".app-toast__description")
+        .getByText("Check the conversation before trying again.", { exact: true })
         .waitFor();
       await failure.locator("summary").click();
       const details = failure.getByLabel("Error details", { exact: true });

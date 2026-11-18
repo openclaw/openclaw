@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import * as knnSubprocess from "./manager-search-knn.js";
 
@@ -17,7 +17,7 @@ it("pins the search generation until concurrent reindex publication", async ({ s
   await manager.sync({ reason: "test" });
   const fields = manager as unknown as {
     db: DatabaseSync;
-    provider: EmbeddingProvider;
+    provider: MemoryEmbeddingProvider;
     syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
   };
   const queryStarted = createDeferred<void>();

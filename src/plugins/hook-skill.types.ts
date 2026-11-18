@@ -15,7 +15,9 @@ export type PluginHookSkillArtifact = {
 
 export type PluginHookSkillChangedEvent = {
   action: "created" | "updated" | "removed";
-  source: "workshop" | "clawhub" | "source-install" | "upload";
+  source: "workshop" | "clawhub" | "source-install" | "upload" | "plugin";
+  /** Set by the host when `source` is "plugin": the plugin whose skills root changed. */
+  pluginId?: string;
   occurredAt: string;
   before?: PluginHookSkillArtifact;
   after?: PluginHookSkillArtifact;

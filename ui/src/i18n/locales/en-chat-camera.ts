@@ -21,14 +21,13 @@ const enChatCamera = {
       insecure:
         "Live preview requires HTTPS or localhost. Use your device camera or upload a photo. Your browser may show a camera or file picker.",
       unsupported:
-        "This browser cannot show a live camera preview. Use your device camera or upload a photo. Your browser may show a camera or file picker.",
+        "This browser can’t show a live camera preview. Use your device camera or upload a photo. Your browser may show a camera or file picker.",
       permissionDenied:
-        "Camera access was denied. Allow camera access in your browser and system settings, then try again.",
-      notFound: "No camera was found. Connect a camera, or upload a photo instead.",
-      unavailable:
-        "The camera could not start. Check that another app is not using it, then try again.",
+        "Couldn’t access your camera. Allow camera access in your browser and system settings, then try again.",
+      notFound: "Couldn’t find a camera. Connect one or upload a photo.",
+      unavailable: "Couldn’t start your camera. Close other apps using it, then try again.",
       stopped: "Your camera stopped. Reconnect it and try again, or upload a photo instead.",
-      captureFailed: "The photo could not be captured. Try again, or upload a photo instead.",
+      captureFailed: "Couldn’t take a photo. Try again or upload a photo.",
     },
   },
 } satisfies TranslationMap;

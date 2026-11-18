@@ -37,7 +37,7 @@ export function extractAttemptPermissionNotice(systemPrompt: string) {
 export async function buildAttemptSystemPrompt(params: BuildAttemptSystemPromptParams) {
   const { buildConfiguredAgentSystemPrompt } = await import("../../system-prompt-config.js");
   let renderedSkillsPrompt = "";
-  const baseSystemPrompt = buildConfiguredAgentSystemPrompt({
+  const baseSystemPrompt = await buildConfiguredAgentSystemPrompt({
     ...params.embeddedSystemPrompt,
     onRenderedSkillsPrompt: (skillsPrompt) => {
       renderedSkillsPrompt = skillsPrompt;

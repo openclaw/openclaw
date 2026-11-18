@@ -15,6 +15,7 @@ import {
 } from "./client-credential-receipt.js";
 import {
   openClientCredentialCustody,
+  openClientCredentialCustodyAsync,
   isClientCredentialBusyError,
   runClientCredentialOperation,
   type ClientTokenRecord,
@@ -52,16 +53,21 @@ const token: ClientTokenRecord = {
   updated_at_ms: 789,
 };
 
-it("reports store creation for rollback attribution without claiming an existing store", () => {
-  const { env } = fixture();
-  {
-    using first = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
-    expect(first?.created).toBe(true);
-  }
-  using reopened = openClientCredentialCustody(env, { createIfMissing: true, migration: true });
-  expect(reopened?.created).toBe(false);
-  expect(fs.statSync(resolveClientCredentialStorePath(env)).mode & 0o077).toBe(0);
-});
+it.each(["sync SDK", "async Doctor"] as const)(
+  "reports native creation and preserves existing custody (%s)",
+  async (mode) => {
+    const { env } = fixture();
+    const open =
+      mode === "sync SDK" ? openClientCredentialCustody : openClientCredentialCustodyAsync;
+    {
+      using first = await open(env, { createIfMissing: true, migration: true });
+      expect(first?.created).toBe(true);
+    }
+    using reopened = await open(env, { createIfMissing: true, migration: true });
+    expect(reopened?.created).toBe(false);
+    expect(fs.statSync(resolveClientCredentialStorePath(env)).mode & 0o077).toBe(0);
+  },
+);
 
 it.each(["./../state/openclaw.sqlite", "./state//openclaw.sqlite", "./state\\openclaw.sqlite"])(
   "refuses an unsafe relative receipt binding: %s",

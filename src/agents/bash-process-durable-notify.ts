@@ -4,13 +4,15 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { ProcessSession } from "./bash-process-registry.js";
-import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "./subagents/spawn/subagent-capabilities.js";
 import { withoutGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 /** Restart completions are fresh host input, never restored requester continuations. */
 export async function prepareAdoptedDurableProcessNotification(
   session: ProcessSession,
-  persistedSessionId: string,
 ): Promise<void> {
   session.notifySessionTarget = undefined;
   const { agentId, sessionKey } = session;
@@ -42,25 +44,21 @@ export async function prepareAdoptedDurableProcessNotification(
         assertCurrent: assertNotificationsEnabled,
       }),
     );
-    if (target.sessionId !== persistedSessionId) {
-      session.notifyOnExit = false;
-      return;
-    }
     const entry = await readSessionEntryReadOnlyInWorker(
       { agentId, sessionKey, storePath: target.storePath },
       assertNotificationsEnabled,
     );
     if (
-      entry?.sessionId !== persistedSessionId ||
+      !entry ||
       entry.archivedAt !== undefined ||
       entry.incognito ||
-      isSubagentEnvelopeSession(sessionKey, { entry })
+      (isSubagentEnvelopeSession(sessionKey, { entry }) &&
+        !isVisibleSpawnedSession(sessionKey, { entry }))
     ) {
       session.notifyOnExit = false;
       return;
     }
-    // Session-event admission pins this generation and prepares the principal's
-    // current authority at execution; config changes also remain live at effects.
+    // The chat key follows transcript successors; admission prepares current authority.
     session.notifySessionTarget = target;
   } catch {
     session.notifyOnExit = false;

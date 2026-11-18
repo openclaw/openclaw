@@ -17,12 +17,18 @@ function hasSkillWorkshopPluginMigrationMarker(value: unknown): boolean {
 const isWorkshopId = (id: unknown) =>
   typeof id === "string" && id.trim().toLowerCase() === SKILL_WORKSHOP_PLUGIN_ID;
 
+/** A non-empty allowlist without Workshop, which would turn the plugin off. */
+function allowlistOmitsWorkshop(allow: unknown): allow is unknown[] {
+  return Array.isArray(allow) && allow.length > 0 && !allow.some(isWorkshopId);
+}
+
 /**
  * Releases from 2026.10.1 ignored all `skill-workshop` plugin policy while the id was retired,
  * and Workshop ran regardless. Unmarked configs keep that outcome: an entry or deny id authored
- * before the plugin returned is dropped. Only policy that also exists in `previousConfig` is
- * stale. Allowlists and the global switch are never rewritten; Doctor's health check reports
- * when they keep the plugin off.
+ * before the plugin returned is dropped, and an allowlist from then gains the plugin, since it
+ * never governed Workshop. Only policy that also exists in `previousConfig` is from that era.
+ * The global `plugins.enabled: false` switch is never rewritten; Doctor's health check reports
+ * that it keeps the plugin off.
  */
 export function materializeSkillWorkshopPlugin(
   cfg: OpenClawConfig,
@@ -61,6 +67,12 @@ export function materializeSkillWorkshopPlugin(
     plugins.deny = plugins.deny.filter((id) => !isWorkshopId(id));
     changes.push(
       "Removed skill-workshop from plugins.deny; it was ignored while Skill Workshop was built in.",
+    );
+  }
+  if (plugins && allowlistOmitsWorkshop(plugins.allow) && allowlistOmitsWorkshop(previous?.allow)) {
+    plugins.allow = [...plugins.allow, SKILL_WORKSHOP_PLUGIN_ID];
+    changes.push(
+      "Added skill-workshop to plugins.allow; Skill Workshop ran outside the allowlist while it was built in.",
     );
   }
   return {

@@ -6,6 +6,7 @@ export type ConnectReqClient = {
   mode: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  timeZone?: string;
   instanceId?: string;
 };
 

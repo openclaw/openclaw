@@ -14,6 +14,7 @@ import {
 } from "node:worker_threads";
 
 const MARK = "__openclawIsolatedCompat";
+const CLEANUP_UNCERTAIN = Symbol.for("openclaw.command-cleanup-uncertain");
 
 function isPlainObject(value) {
   if (value === null || typeof value !== "object") {
@@ -67,26 +68,33 @@ function createCodec(side) {
     }
     return id;
   };
-  const encodeError = (error) => {
+  const encodeError = (error, seen = new Map()) => {
     if (!(error instanceof Error)) {
-      return { [MARK]: "thrown", value: encode(error) };
+      return { [MARK]: "thrown", value: encode(error, seen) };
     }
-    const props = {};
-    for (const key of Object.keys(error)) {
-      if (typeof error[key] !== "function") {
-        props[key] = encode(error[key]);
-      }
+    if (seen.has(error)) {
+      return seen.get(error);
     }
     const remote = remoteIds.get(error);
-    return {
+    const encoded = {
       [MARK]: "error",
       ref: remote ?? register(error),
       remote: remote !== undefined,
       name: error.name,
       message: error.message,
       stack: error.stack,
-      props,
+      cleanupUncertain: Object.getOwnPropertyDescriptor(error, CLEANUP_UNCERTAIN)?.value === true,
+      aggregate: error instanceof AggregateError,
+      props: {},
     };
+    seen.set(error, encoded);
+    // Cleanup classification uses a non-enumerable marker and nested error chains.
+    for (const key of new Set([...Object.keys(error), "cause", "errors"])) {
+      if (Object.hasOwn(error, key) && typeof error[key] !== "function") {
+        encoded.props[key] = encode(error[key], seen);
+      }
+    }
+    return encoded;
   };
   const encode = (value, seen = new Map()) => {
     if (value === process.env) {
@@ -104,7 +112,7 @@ function createCodec(side) {
       return value;
     }
     if (value instanceof Error) {
-      return encodeError(value);
+      return encodeError(value, seen);
     }
     if (seen.has(value)) {
       return seen.get(value);
@@ -167,11 +175,22 @@ function createCodec(side) {
         // Preserve the caller's own error object, including its class.
         return local.get(value.ref);
       }
-      const error = new Error(value.message);
+      const error = value.aggregate
+        ? new AggregateError([], value.message)
+        : new Error(value.message);
+      seen.set(value, error);
+      if (value.cleanupUncertain) {
+        Object.defineProperty(error, CLEANUP_UNCERTAIN, { value: true });
+      }
       error.name = value.name;
       error.stack = value.stack;
       for (const [key, item] of Object.entries(value.props)) {
-        error[key] = decode(item, call, seen);
+        Object.defineProperty(error, key, {
+          value: decode(item, call, seen),
+          enumerable: key !== "cause" && key !== "errors",
+          writable: true,
+          configurable: true,
+        });
       }
       remoteIds.set(error, value.ref);
       return error;
@@ -241,7 +260,7 @@ function createCodec(side) {
   return { encode, encodeError, decode, invoke };
 }
 
-/** Run `exportName` from `moduleUrl` in a worker; callbacks run synchronously on this thread. */
+/** Run `exportName` from `moduleUrl` in a worker; callbacks settle on this thread before the worker resumes. */
 export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args) {
   const codec = createCodec("p");
   const flag = new Int32Array(new SharedArrayBuffer(4));
@@ -267,27 +286,25 @@ export async function runIsolatedUpdateCompatExport(moduleUrl, exportName, args)
       worker.ref();
       worker.postMessage({ type: "invoke", id, ref, method, args: codec.encode(callArgs) }, []);
     });
-  port1.on("message", (request) => {
+  const handleCallback = async (request) => {
     let reply;
     try {
-      const value = codec.invoke(
+      const value = await codec.invoke(
         request.ref,
         request.method,
         codec.decode(request.args, callWorker),
       );
-      if (typeof value?.then === "function") {
-        // The worker waits synchronously and cannot await caller promises.
-        value.then(undefined, () => undefined);
-        reply = { ok: true, value: undefined };
-      } else {
-        reply = { ok: true, value: codec.encode(value) };
-      }
+      // Only the worker blocks in Atomics.wait; this thread can settle asynchronous callbacks.
+      reply = { ok: true, value: codec.encode(value) };
     } catch (error) {
       reply = { ok: false, error: codec.encodeError(error) };
     }
     port1.postMessage(reply, []);
     Atomics.store(flag, 0, 1);
     Atomics.notify(flag, 0);
+  };
+  port1.on("message", (request) => {
+    void handleCallback(request);
   });
   port1.unref();
   worker.on("message", (message) => {

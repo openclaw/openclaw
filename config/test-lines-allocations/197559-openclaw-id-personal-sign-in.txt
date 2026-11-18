@@ -1,0 +1,4 @@
+# PR #197559 (OCF-509): device sign-in over a personal connection is security-sensitive. Tests
+# cover issuer pacing and single redemption, token checks (aud, nonce, expiry), profile-bound
+# polling, token custody after redemption, read-scoped dispatch, Labs off, and UI sign-out races.
+188

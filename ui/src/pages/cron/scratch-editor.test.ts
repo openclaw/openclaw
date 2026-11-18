@@ -237,7 +237,7 @@ describe("ordinary automation scratch editor", () => {
       content: null,
       expectedRevision: 6,
     });
-    expect(editor.textContent).toContain("No scratch saved.");
+    expect(editor.textContent).toContain("No scratch saved yet.");
   });
 
   it.each([

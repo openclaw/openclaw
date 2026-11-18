@@ -36,7 +36,7 @@ it.each([
   expect(manager.t("filePreview.listLabel")).toBe("Files");
   expect(manager.t("filePreview.fileCount", { count: "2" })).toBe("2 files");
   expect(manager.t("filePreview.bundle.binary")).toBe(
-    "This binary file is included in the bundle but cannot be displayed as text.",
+    "This binary file is included in the bundle but can’t be displayed as text.",
   );
   expect(manager.t("filePreview.bundle.incomplete")).toBe(
     "Some bundle content is unavailable. Select a file to see its status.",

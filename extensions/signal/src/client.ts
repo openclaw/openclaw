@@ -137,8 +137,7 @@ function initiateSignalHttp(
   return new Promise((resolve, reject) => {
     const deadline = setTimeout(() => {
       request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
-    }, timeoutMs);
-    deadline.unref?.();
+    }, timeoutMs).unref();
     const rejectResponse = (error: Error) => {
       clearTimeout(deadline);
       reject(error);
@@ -497,8 +496,7 @@ export async function streamSignalEvents(params: {
             response?.destroy(error);
             request.destroy(error);
             rejectOnce(error);
-          }, effectiveTimeoutMs);
-    headerDeadline?.unref?.();
+          }, effectiveTimeoutMs).unref();
     const cleanup = () => {
       if (headerDeadline) {
         clearTimeout(headerDeadline);

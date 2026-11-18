@@ -12,6 +12,7 @@ import type {
   ManagedWorktreeGcResult,
   ManagedWorktreeRecord,
 } from "../../agents/worktrees/types.js";
+import * as gitReads from "../../infra/git-read-cache.js";
 import { registerProjectRegistry, removeProjectRegistry } from "../../projects/project-registry.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -86,6 +87,9 @@ it("routes checkout operations through the managed worktree service", async () =
   const createParams = { repoRoot: "/repo", name: "task-one", baseRef: "main" };
 
   await expectResult(invoke("list"), { worktrees: [record] });
+  await expectResult(invoke("list", {}, admin), {
+    worktrees: [{ ...record, gcProtection: "branch-moved" }],
+  });
   await expectResult(invoke("create", createParams, admin), record);
   await expectResult(invoke("remove", { id: record.id, force: true }), removed);
   await expectResult(invoke("restore", { id: record.id }), restored);
@@ -110,22 +114,37 @@ it("routes checkout operations through the managed worktree service", async () =
     id: record.id,
     reason: "manual-delete",
     allowSnapshotLoss: true,
+    retryPreserved: undefined,
   });
+  const preserved = {
+    state: "preserved",
+    reason: "nested-repository",
+    attempts: 1,
+    nextAttemptAt: null,
+  };
+  remove.mockResolvedValue({ removed: false, preserved });
+  await expectResult(invoke("remove", { id: record.id }), { removed: false, preserved });
+  await expectResult(invoke("remove", { id: record.id, retryPreserved: true }), {
+    removed: false,
+    preserved,
+  });
+  expect(remove).toHaveBeenLastCalledWith(expect.objectContaining({ retryPreserved: true }));
 });
 
 it("lists branches for admin clients and configured workspaces only", async () => {
-  const branches = vi
-    .spyOn(managedWorktrees, "listRepositoryBranches")
-    .mockResolvedValue({ branches: [] });
+  const branches = vi.spyOn(gitReads, "runGitReadOperation").mockResolvedValue({ branches: [] });
   const invoke = requests(admin);
 
   for (const includeRepositoryStatus of [false, true]) {
     const options = includeRepositoryStatus ? { includeRepositoryStatus: true } : {};
     const response = await invoke("branches", { repoRoot: "/anywhere", ...options });
-    expect(response?.[0]).toBe(true);
+    expect(response).toEqual([true, { branches: [] }, undefined]);
     expect(branches).toHaveBeenCalledWith(
-      "/anywhere",
-      ...(includeRepositoryStatus ? [options] : []),
+      {
+        type: "repository.branches",
+        input: { repoRoot: "/anywhere", includeRepositoryStatus: options.includeRepositoryStatus },
+      },
+      expect.objectContaining({ snapshot: true }),
     );
   }
 
@@ -144,14 +163,15 @@ it("authorizes registered project aliases but not outside paths", async () => {
   await fs.mkdir(outside);
   const project = await registerProjectRegistry({ path: repoRoot, name: "Registered" });
   const create = vi.spyOn(managedWorktrees, "create").mockResolvedValue(record);
-  const branches = vi
-    .spyOn(managedWorktrees, "listRepositoryBranches")
-    .mockResolvedValue({ branches: [] });
+  const branches = vi.spyOn(gitReads, "runGitReadOperation").mockResolvedValue({ branches: [] });
   const invoke = requests(writer);
   try {
     const allowed = await invoke("branches", { repoRoot: alias });
-    expect(allowed?.[0]).toBe(true);
-    expect(branches).toHaveBeenCalledWith(repoRoot);
+    expect(allowed).toEqual([true, { branches: [] }, undefined]);
+    expect(branches).toHaveBeenCalledWith(
+      { type: "repository.branches", input: { repoRoot, includeRepositoryStatus: undefined } },
+      expect.objectContaining({ snapshot: true }),
+    );
 
     const created = await invoke("create", {
       repoRoot: alias,

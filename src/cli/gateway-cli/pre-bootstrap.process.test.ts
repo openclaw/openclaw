@@ -20,17 +20,13 @@ beforeEach(() => {
 });
 
 function stateManifest(root: string): Record<string, string> {
+  const files = listDirectoryTreeStrictSync(root).filter(({ dirent }) => dirent.isFile());
   return Object.fromEntries(
-    listDirectoryTreeStrictSync(root)
-      .map((walkEntry) => walkEntry.dirent)
-      .filter((entry) => entry.isFile())
-      .map((entry) => {
-        const filename = path.join(entry.parentPath, entry.name);
-        return [
-          path.relative(root, filename),
-          createHash("sha256").update(fs.readFileSync(filename)).digest("hex"),
-        ];
-      }),
+    files.map(({ dirent }) => {
+      const filename = path.join(dirent.parentPath, dirent.name);
+      const hash = createHash("sha256").update(fs.readFileSync(filename)).digest("hex");
+      return [path.relative(root, filename), hash];
+    }),
   );
 }
 
@@ -87,9 +83,7 @@ function gatewayRunCliScript(args: string[]): string {
       const calls = globalThis[Symbol.for("openclaw.test.startupAllowanceCalls")] = [];
       registerHooks({
         resolve(specifier, context, nextResolve) {
-          const parent = context.parentURL ?? "";
-          if (specifier === "./run.js" &&
-              (parent.endsWith("/cli/gateway-cli/run-command.ts") || parent.endsWith("/cli/gateway-cli/run-command.js"))) {
+          if (specifier === "./run.js" && /\\/cli\\/gateway-cli\\/run-command\\.(?:ts|js)$/.test(context.parentURL ?? "")) {
             return {
               shortCircuit: true,
               url: "data:text/javascript," + encodeURIComponent(
@@ -394,59 +388,65 @@ describe("Gateway config selection before migration admission", () => {
     90_000,
   );
 
-  it.each([
-    { flag: "--allow-unconfigured", dispatch: "fast" },
-    { flag: "--allow-unconfigured", dispatch: "Commander" },
-    { flag: "--dev", dispatch: "fast" },
-    { flag: "--dev", dispatch: "Commander" },
+  it.each<[string[], number, (string | RegExp)?, string?]>([
+    [["--allow-unconfigured"], 0],
+    [["--allow-unconfigured", "--"], 0],
+    [["--dev"], 0],
+    [["--dev", "--"], 0],
+    [["--port", "abc"], 1, "Use a port number from 1 to 65535, for example 18789."],
+    [["--bind", "bogus"], 1, 'Use "loopback", "lan", "tailnet", "auto", or "custom".'],
+    [["--auth", "bogus"], 1, 'Use "none", "token", "password", or "trusted-proxy".'],
+    [["--tailscale", "bogus"], 1, 'Use "off", "serve", or "funnel".'],
+    [["--ws-log", "bogus"], 1, 'Use "auto", "full", or "compact".'],
+    [[], 78, /plugins\.entries\.schema-probe\.config\S*: .*endpoint/, "schema-probe"],
   ])(
-    "passes $flag through $dispatch startup admission without config",
-    async ({ flag, dispatch }) => {
-      const suffix = dispatch === "Commander" ? ["--"] : [];
-      const dev = flag === "--dev";
-      const { root, configPath, env, options } = createFixture("openclaw-startup-allowance-");
-      const result = await runIsolatedModuleScript(
+    "applies CLI startup admission for %j (exit %i)",
+    async (args, code, error, plugin) => {
+      const { root, configPath, env, options } = createFixture("openclaw-startup-admission-");
+      if (plugin) {
+        const pluginDir = path.join(root, "plugins", plugin);
+        fs.mkdirSync(pluginDir, { recursive: true });
+        writeJson(path.join(pluginDir, "package.json"), {
+          name: `@openclaw/${plugin}`,
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.js"] },
+        });
+        fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
+        writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+          id: plugin,
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["endpoint"],
+            properties: { endpoint: { type: "string" } },
+          },
+        });
+        // Core schema accepts this config; only the plugin's own schema rejects it.
+        writeJson(configPath, {
+          gateway: { mode: "local" },
+          plugins: { load: { paths: [pluginDir] }, entries: { [plugin]: { config: {} } } },
+        });
+      }
+      const invocation = runIsolatedModuleScript(
         cliEnv(root, env),
-        gatewayRunCliScript(["--port", "18736", flag, ...suffix]),
+        gatewayRunCliScript(["--port", "18736", ...args]),
         options,
       );
-      expect(readResult(result)).toEqual([{ dev, allowUnconfigured: !dev }]);
-      expect(fs.existsSync(configPath)).toBe(false);
+      if (error) {
+        const stderr =
+          typeof error === "string"
+            ? expect.stringContaining(`Invalid ${args[0]}. ${error}`)
+            : expect.stringMatching(error);
+        await expect(invocation).rejects.toMatchObject({ code, stderr });
+        await expect(invocation).rejects.not.toMatchObject({
+          stderr: expect.stringContaining("Missing config"),
+        });
+      } else {
+        const dev = args.includes("--dev");
+        expect(readResult(await invocation)).toEqual([{ dev, allowUnconfigured: !dev }]);
+      }
+      expect(fs.existsSync(configPath)).toBe(Boolean(plugin));
     },
     75_000,
   );
-
-  it("names plugin schema issues instead of reporting startup config drift", async () => {
-    const { root, configPath, env, options } = createFixture("openclaw-startup-plugin-schema-");
-    const pluginId = "schema-probe";
-    const pluginDir = path.join(root, "plugins", pluginId);
-    fs.mkdirSync(pluginDir, { recursive: true });
-    writeJson(path.join(pluginDir, "package.json"), {
-      name: `@openclaw/${pluginId}`,
-      version: "1.0.0",
-      openclaw: { extensions: ["./index.js"] },
-    });
-    fs.writeFileSync(path.join(pluginDir, "index.js"), "export default {};\n");
-    writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
-      id: pluginId,
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["endpoint"],
-        properties: { endpoint: { type: "string" } },
-      },
-    });
-    // Core schema accepts this config; only the plugin's own schema rejects it.
-    writeJson(configPath, {
-      gateway: { mode: "local" },
-      plugins: { load: { paths: [pluginDir] }, entries: { [pluginId]: { config: {} } } },
-    });
-    // EX_CONFIG with the failing setting named, as for core schema errors.
-    await expect(
-      runIsolatedModuleScript(cliEnv(root, env), gatewayRunCliScript(["--port", "18737"]), options),
-    ).rejects.toMatchObject({
-      code: 78,
-      stderr: expect.stringMatching(/plugins\.entries\.schema-probe\.config\S*: .*endpoint/),
-    });
-  }, 75_000);
 });
