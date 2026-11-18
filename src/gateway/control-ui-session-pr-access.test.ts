@@ -351,7 +351,7 @@ it.each(["unchanged", "revoked"] as const)(
             own: (close) => source.own(close),
             createTransport(command) {
               const owned = source.createTransport(command);
-              if (held || command.type !== "agentDbDeletion.snapshot") {
+              if (held || command.type !== "agentDatabaseDeletion.snapshot") {
                 return owned;
               }
               held = true;
