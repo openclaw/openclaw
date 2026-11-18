@@ -114,7 +114,7 @@ export function createCronCreatorAuthorityRunScope(
 }
 
 /** Keeps native identity out of the capability transported through harness contracts. */
-export function hasCronChannelRequester(scope: CronCreatorAuthorityRunScope): boolean {
+function hasCronChannelRequester(scope: CronCreatorAuthorityRunScope): boolean {
   return channelRequestersByScope.has(scope);
 }
 

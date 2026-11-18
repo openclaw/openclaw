@@ -149,6 +149,8 @@ async function withAgentManagement<T>(
         {
           agentId: "main",
           sessionKey: callerSessionKey,
+          turnSourceChannel: channel,
+          turnSourceAccountId: accountId,
           operationalRunInstance,
           approvalAuthority: authority,
         },
