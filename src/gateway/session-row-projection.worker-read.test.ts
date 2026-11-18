@@ -125,6 +125,69 @@ it("materializes updated rows across worker batches", async () => {
   }, true);
 });
 
+it.each(["bulk", "exact"] as const)(
+  "shares two dirty row reads with %s preparation first",
+  async (first) => {
+    await withSessionRowProjectionState(async (create) => {
+      const rows = Array.from({ length: 2 }, (_, index) => ({
+        query: { agentId: "main", key: `agent:main:shared-row-read-${index}` },
+        entry: { sessionId: `shared-row-read-${index}`, updatedAt: 1, label: "Previous" },
+      }));
+      for (const { query, entry } of rows) {
+        seedRow(query, entry);
+      }
+      const projection = await create({ cfg: {}, modelCatalog: [] });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const pending: Promise<unknown>[] = [];
+      try {
+        await projection.ensureMaterialized();
+        const reads: string[][] = [];
+        observeRowFacts((owner) => async (input) => {
+          reads.push([...input.sessionKeys]);
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        });
+        for (const { query, entry } of rows) {
+          seedRow(query, { ...entry, updatedAt: 2, label: "Committed" });
+          invalidateFacts(projection, query);
+        }
+        const selected = rows[0]!;
+        const describe = () =>
+          withReadySessionRows(
+            projection,
+            () => [selected.query],
+            (read) => read.describe(selected.query)?.entry,
+          );
+        const firstRead = first === "bulk" ? projection.ensureMaterialized() : describe();
+        pending.push(firstRead);
+        await entered.promise;
+        const secondRead = first === "bulk" ? describe() : projection.ensureMaterialized();
+        pending.push(secondRead);
+        release.resolve();
+        const description = await (first === "bulk" ? secondRead : firstRead);
+        expect(description).toMatchObject({
+          sessionId: selected.entry.sessionId,
+          label: "Committed",
+        });
+        await Promise.all(pending);
+        expect(reads.flat().toSorted()).toEqual(rows.map(({ query }) => query.key));
+        for (const { query, entry } of rows) {
+          expect(projection.snapshot(query).row).toMatchObject({
+            sessionId: entry.sessionId,
+            label: "Committed",
+          });
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled(pending);
+      }
+    }, true);
+  },
+);
+
 it("refuses held row facts after configured-alias close", async ({ signal }) => {
   await withSessionRowProjectionState(async (create, state) => {
     const aliasDirectory = state.path("row-alias");

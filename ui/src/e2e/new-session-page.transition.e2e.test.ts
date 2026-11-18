@@ -33,6 +33,18 @@ const rosterMatch = { includeGlobal: true };
 const SESSION_KEY = "agent:main:dashboard:0f403cb8-3920-4cf1-8eb7-79f2f00ce488";
 const RUN_ID = "transition-proof-run";
 
+type SessionTransitionFrames = {
+  invalid: number;
+  firstInvalid: {
+    activeViewTransition: boolean;
+    handoffCover: boolean;
+    newSessionVisible: boolean;
+    chatVisible: boolean;
+  } | null;
+  running: boolean;
+  chatSurfaceReady: boolean;
+};
+
 function createdKey(params: unknown) {
   if (
     !params ||
@@ -517,9 +529,61 @@ suite.define(() => {
       expect(await submittedPrompt.isVisible()).toBe(true);
       expect(await submittedPrompt.count()).toBe(1);
 
+      // Keep either the submitted preview or Chat visible in every handoff frame.
+      await page.evaluate(() => {
+        const frames: SessionTransitionFrames = {
+          invalid: 0,
+          firstInvalid: null,
+          running: true,
+          chatSurfaceReady: false,
+        };
+        Reflect.set(globalThis, "__openclawSessionTransitionFrames", frames);
+        const sample = () => {
+          if (!frames.running) {
+            return;
+          }
+          const outlet = document.querySelector("openclaw-router-outlet");
+          const handoffCover = outlet?.classList.contains("session-route-handoff") === true;
+          const newSessionVisible = Boolean(
+            document.querySelector(".new-session-page__starting")?.getClientRects().length,
+          );
+          const composer = document.querySelector(".agent-chat__composer-combobox");
+          const chatVisible = Boolean(composer?.getClientRects().length);
+          if (
+            document.activeViewTransition ||
+            handoffCover ||
+            (!newSessionVisible && !chatVisible)
+          ) {
+            frames.invalid += 1;
+            frames.firstInvalid ??= {
+              activeViewTransition: Boolean(document.activeViewTransition),
+              handoffCover,
+              newSessionVisible,
+              chatVisible,
+            };
+          }
+          frames.chatSurfaceReady ||= chatVisible;
+          requestAnimationFrame(sample);
+        };
+        requestAnimationFrame(sample);
+      });
+
       await gateway.deferNext("chat.startup");
       releaseChatModule();
       await gateway.waitForRequest("chat.startup");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                Reflect.get(
+                  globalThis,
+                  "__openclawSessionTransitionFrames",
+                ) as SessionTransitionFrames
+              ).chatSurfaceReady,
+          ),
+        )
+        .toBe(true);
       await page.locator(".agent-chat__composer-combobox").waitFor();
       await expect
         .poll(() => page.getByText("keep progress moving", { exact: true }).count())
@@ -537,6 +601,15 @@ suite.define(() => {
         rosterMatch,
       );
       expect(await gateway.getRequests("sessions.resolve")).toHaveLength(0);
+      const invalidFrames = await page.evaluate(() => {
+        const frames = Reflect.get(
+          globalThis,
+          "__openclawSessionTransitionFrames",
+        ) as SessionTransitionFrames;
+        frames.running = false;
+        return { invalid: frames.invalid, firstInvalid: frames.firstInvalid };
+      });
+      expect(invalidFrames.invalid, JSON.stringify(invalidFrames.firstInvalid)).toBe(0);
       await gateway.resolveDeferred("sessions.list", createdSessionList);
       await gateway.resolveDeferred("chat.startup");
       await waitForCommittedChatRoute(page);
@@ -582,6 +655,16 @@ suite.define(() => {
       throw error;
     } finally {
       releaseChatModule();
+      await page
+        .evaluate(() => {
+          const frames = Reflect.get(globalThis, "__openclawSessionTransitionFrames") as
+            | SessionTransitionFrames
+            | undefined;
+          if (frames) {
+            frames.running = false;
+          }
+        })
+        .catch(() => undefined);
     }
   });
   it.each([
