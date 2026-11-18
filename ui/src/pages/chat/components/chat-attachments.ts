@@ -217,13 +217,9 @@ export function handleChatAttachmentPaste(
       recoverDroppedTextPaste(e, text ?? "");
       return;
     }
+    // The card is composer presentation sent as message text, so upload limits do not apply.
     e.preventDefault();
     const file = new File([text], `pasted-text-${Date.now()}.txt`, { type: "text/plain" });
-    const stagedBytes = stagedAttachmentBytes(props);
-    if (admitAttachmentFiles([file], props.attachmentLimits, stagedBytes).length === 0) {
-      // The rejection toast named the file; the clipboard still holds the text.
-      return;
-    }
     const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
     props.onAttachmentsChange([...currentAttachments(props), attachment]);
     return;
