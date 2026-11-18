@@ -133,6 +133,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     (workerHostedCloud && sandbox
       ? createCodexWorkerClientFactory({
           runtime: options.runtime,
+          agentId: sessionAgentId,
           permissionMode: params.permissionMode,
           sandbox,
           signal: params.abortSignal ?? new AbortController().signal,

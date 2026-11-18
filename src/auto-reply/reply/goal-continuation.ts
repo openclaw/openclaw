@@ -211,10 +211,19 @@ export async function enqueueGoalContinuation(params: GoalContinuationParams): P
   if (!eligible()) {
     return false;
   }
+  let workerDispatch = params.base.goalContinuation?.workerDispatch;
+  if (codexPlacement === "worker" && !workerDispatch && params.base.operatorAuthority) {
+    const { captureRepositoryGoalDispatch } = await import("../../gateway/repository-dispatch.js");
+    params.base.operatorAuthority.assertCurrent();
+    workerDispatch = captureRepositoryGoalDispatch(params.base.operatorAuthority.assertCurrent);
+    if (!eligible()) {
+      return false;
+    }
+  }
   const continuation: GoalContinuation = {
     ...params.expectedSession,
     goalId: params.initialGoalId ?? entry.goal.id,
-    ...(codexPlacement === "worker" ? { workerGoal: true as const } : {}),
+    ...(codexPlacement === "worker" ? { workerGoal: true as const, workerDispatch } : {}),
     ...(codexPlacement === "local" ? { localCodexGoal: true as const } : {}),
   };
   if (!isGoalContinuationCurrent(continuation, entry)) {

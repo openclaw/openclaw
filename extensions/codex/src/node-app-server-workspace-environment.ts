@@ -17,6 +17,7 @@ export async function createCodexNodeWorkspaceEnvironment(params: {
   };
   signal: AbortSignal;
   assertExecAuthorized: () => void;
+  commandEnvironment?: Parameters<typeof runCodexNodeExecServer>[0]["commandEnvironment"];
 }) {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0, maxPayload: 64 * 1024 * 1024 });
   try {

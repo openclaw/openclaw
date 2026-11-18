@@ -1,7 +1,12 @@
 /** A caller-owned app-server client over the placement's authorized node duplex. */
 import { EventEmitter, once } from "node:events";
 import { PassThrough, Writable } from "node:stream";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  prepareWorkerGitHubBindingGrant,
+  type WorkerGitHubBindingRefresh,
+} from "openclaw/plugin-sdk/github-worker-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createBoundedLineFramer } from "openclaw/plugin-sdk/process-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
@@ -19,6 +24,7 @@ const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 export function createCodexWorkerClientFactory(params: {
   runtime?: Pick<PluginRuntime, "nodes">;
+  agentId?: string;
   permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   sandbox: SandboxContext;
   signal: AbortSignal;
@@ -49,21 +55,52 @@ export function createCodexWorkerClientFactory(params: {
     await options?.assertCurrentAsync?.();
     assertCurrent();
     const workspace = readCodexPlacementWorkspaceIdentity(params.sandbox);
-    const channel = await runtime.nodes.openDuplex({
-      nodeId,
-      command: resolveCodexWorkerAppServerCommand(process.env, true),
-      params: {
-        placement: { cwd: params.sandbox.containerWorkdir, ...workspace },
-        authorization: "session-full",
-        ...(params.workspaceReadiness ? { resourcePreparationRequired: true } : {}),
-      },
-      sessionKey: params.sandbox.sessionKey,
-      timeoutMs: 0,
-      maxMessageBytes: MAX_FRAME_BYTES,
-      maxOutstandingDeliveryBytes: MAX_FRAME_BYTES + 2 * 1024 * 1024,
-      signal,
-      assertCurrent,
-    });
+    const grant = params.agentId
+      ? await prepareWorkerGitHubBindingGrant({
+          sessionId: workspace.sessionId,
+          sessionKey: workspace.sessionKey,
+          agentId: params.agentId,
+          signal,
+          assertCurrent: () => {
+            assertCurrent();
+            return true;
+          },
+        })
+      : undefined;
+    let acquiredChannel: Awaited<ReturnType<PluginRuntime["nodes"]["openDuplex"]>> | undefined;
+    try {
+      assertCurrent();
+      grant?.assertCurrent();
+      acquiredChannel = await runtime.nodes.openDuplex({
+        nodeId,
+        command: resolveCodexWorkerAppServerCommand(process.env, true),
+        params: {
+          placement: { cwd: params.sandbox.containerWorkdir, ...workspace },
+          authorization: "session-full",
+          ...(grant ? { github: grant.binding } : {}),
+          ...(params.workspaceReadiness ? { resourcePreparationRequired: true } : {}),
+        },
+        sessionKey: params.sandbox.sessionKey,
+        timeoutMs: 0,
+        maxMessageBytes: MAX_FRAME_BYTES,
+        maxOutstandingDeliveryBytes: MAX_FRAME_BYTES + 2 * 1024 * 1024,
+        signal: grant ? AbortSignal.any([signal, grant.signal]) : signal,
+        assertCurrent: () => {
+          assertCurrent();
+          grant?.assertCurrent();
+        },
+      });
+      assertCurrent();
+      grant?.assertCurrent();
+    } catch (error) {
+      acquiredChannel?.close();
+      await grant?.revoke();
+      throw error;
+    }
+    const channel = acquiredChannel;
+    let renewalTimer: ReturnType<typeof setInterval> | undefined;
+    let renewalWork: Promise<void> | undefined;
+    let grantRevocation: Promise<void> | undefined;
     const events = new EventEmitter();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
@@ -77,6 +114,19 @@ export function createCodexWorkerClientFactory(params: {
         return;
       }
       closed = true;
+      clearInterval(renewalTimer);
+      grantRevocation = Promise.resolve().then(async () => {
+        try {
+          await grant?.revoke();
+        } finally {
+          await renewalWork?.catch(() => {});
+        }
+      });
+      void grantRevocation.catch(() =>
+        embeddedAgentLog.warn(
+          "Worker GitHub credential cleanup failed; the token may remain valid until expiry.",
+        ),
+      );
       signal.removeEventListener("abort", onAbort);
       unsubscribe?.();
       if (nativeExit) {
@@ -152,6 +202,7 @@ export function createCodexWorkerClientFactory(params: {
       off: (event, listener) => events.off(event, listener),
       waitForCleanup: async () => {
         await channel.closed.catch(() => undefined);
+        await grantRevocation;
       },
     };
     const client = CodexAppServerClient.fromTransport(transport);
@@ -218,6 +269,61 @@ export function createCodexWorkerClientFactory(params: {
           assertCurrent();
           await client.request("openclaw/resources/settle", { status }, { signal, assertCurrent });
         })().catch(() => finish(true));
+      }
+      if (grant) {
+        const currentGrant = grant;
+        const assertRenewalCurrent = () => {
+          signal.throwIfAborted();
+          assertCurrent();
+          currentGrant.assertCurrent();
+          if (closed) {
+            throw new Error("Worker GitHub transport closed");
+          }
+        };
+        const install = async (update: WorkerGitHubBindingRefresh, errorMessage: string) => {
+          const acknowledged = await client.request("openclaw/github/refresh", update, {
+            timeoutMs: 15_000,
+            signal: currentGrant.signal,
+            assertCurrent: assertRenewalCurrent,
+          });
+          assertRenewalCurrent();
+          if (!isRecord(acknowledged) || acknowledged.generation !== update.generation) {
+            throw new Error(errorMessage);
+          }
+        };
+        // Initial installation and renewal must both acknowledge the exact generation.
+        await install(
+          { generation: 0, token: currentGrant.binding.token },
+          "Worker GitHub credential installer is unavailable; update the worker bundle",
+        );
+        let installedGeneration = 0;
+        renewalTimer = setInterval(() => {
+          if (closed || renewalWork) {
+            return;
+          }
+          renewalWork = (async () => {
+            assertRenewalCurrent();
+            const update = await currentGrant.refresh(installedGeneration);
+            assertRenewalCurrent();
+            if (!update) {
+              return;
+            }
+            await install(update, "Worker GitHub credential installation was not acknowledged");
+            installedGeneration = update.generation;
+            await currentGrant.refresh(installedGeneration);
+            assertRenewalCurrent();
+          })()
+            .catch(() => {
+              // Unknown installation cannot extend the old credential's admitted lifetime.
+              if (!closed) {
+                finish(true, new Error("Worker GitHub credential renewal failed"));
+              }
+            })
+            .finally(() => {
+              renewalWork = undefined;
+            });
+        }, 30_000);
+        renewalTimer.unref?.();
       }
       return client;
     } catch (error) {

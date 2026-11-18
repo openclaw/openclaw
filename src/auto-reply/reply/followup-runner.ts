@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -101,20 +102,34 @@ export function createFollowupRunner(
     : getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const defaults = { ...initialDefaults, resolveGatewayContext };
   // Follow-ups retain the host owner, never the invoking turn's transcript or request scope.
-  const runFollowup = (queued: FollowupRun): Promise<void> =>
-    withoutRequiredSessionPlacement(() =>
-      withoutSessionTranscriptReadFence(() =>
-        runWithAgentWorkspaceReadiness(undefined, () =>
-          withPluginRuntimeGatewayContextResolver(
-            resolveGatewayContext,
-            () => executeFollowup(queued),
-            {
-              inheritRequestScope: false,
-            },
+  const runFollowup = (queued: FollowupRun): Promise<void> => {
+    const run = () =>
+      withoutRequiredSessionPlacement(() =>
+        withoutSessionTranscriptReadFence(() =>
+          runWithAgentWorkspaceReadiness(undefined, () =>
+            withPluginRuntimeGatewayContextResolver(
+              resolveGatewayContext,
+              () => executeFollowup(queued),
+              {
+                inheritRequestScope: false,
+              },
+            ),
           ),
         ),
-      ),
-    );
+      );
+    const workerDispatch = queued.goalContinuation?.workerDispatch;
+    return workerDispatch
+      ? workerDispatch(
+          {
+            agentId: queued.run.agentId,
+            sessionKey: queued.run.sessionKey ?? "",
+            sessionId: queued.run.sessionId,
+            runId: queued.controllerInput?.protocolRunId ?? randomUUID(),
+          },
+          run,
+        )
+      : run();
+  };
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
