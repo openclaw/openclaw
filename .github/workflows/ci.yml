@@ -2554,11 +2554,13 @@ jobs:
             fi
           }
           trap restore_apt EXIT
+          # Run the deadline as root: Playwright's own sudo does not pass it on, so a
+          # deadline outside sudo would leave apt-get downloading with its lock held.
+          # Resolve the CLI as the runner user so pnpm (a Corepack shim) never runs as root.
+          playwright="$(pnpm --dir ui exec which playwright)"
           download_webkit_deps() {
-            # Run the deadline as root: Playwright's own sudo does not pass it on, so
-            # a deadline outside sudo would leave apt-get downloading with its lock held.
             "${as_root[@]}" env "PATH=$PATH" timeout --kill-after=10s "$1" \
-              pnpm --dir ui exec playwright install-deps webkit
+              "$playwright" install-deps webkit
           }
           printf 'APT::Get::Download-Only "true";\n' | "${as_root[@]}" tee "$download_only" > /dev/null
           status=0
