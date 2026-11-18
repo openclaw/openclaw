@@ -1,5 +1,6 @@
 import { For, Show } from "solid-js";
 import { openShellNewSession, type ShellNewSessionHost } from "../app/app-shell-new-session.ts";
+import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import type { ChatSendShortcut } from "../app/settings.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { isMobileBrowserPlatform } from "../lib/browser-platform.ts";
@@ -71,6 +72,12 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
     keyboardShortcutEntry("reviewPanel", KEYBOARD_SHORTCUT_COMBOS.reviewPanel),
   ]),
   keyboardShortcutSection("sidebar", [
+    keyboardShortcutEntry("jumpToSession", KEYBOARD_SHORTCUT_COMBOS.sessionJump),
+    keyboardShortcutEntry(
+      "recentSession",
+      KEYBOARD_SHORTCUT_COMBOS.recentSession,
+      KEYBOARD_SHORTCUT_COMBOS.recentSessionReverse,
+    ),
     keyboardShortcutEntry("toggleSessionSelect", KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect),
     keyboardShortcutEntry("extendSessionSelect", KEYBOARD_SHORTCUT_COMBOS.extendSessionSelect),
   ]),
@@ -99,15 +106,19 @@ const KEYBOARD_SHORTCUT_SECTIONS = [
 // Both the chat composer and the new-session page submit on the same
 // chatSendShortcut preference, so their displayed chords swap together.
 const SEND_PREFERENCE_ENTRY_IDS = new Set(["sendMessage", "startNewSession"]);
+// Browsers keep these chords for their own tabs; only desktop hosts deliver them.
+const DESKTOP_HOST_ENTRY_IDS = new Set(["jumpToSession", "recentSession"]);
 
 function resolveKeyboardShortcutSections(
   sendShortcut: "enter" | "modifier-enter" = "enter",
 ): readonly KeyboardShortcutSection[] {
   const mobile = isMobileBrowserPlatform();
+  const desktopHost = isNativeWebChromeHost();
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
     keyboardShortcutSection(
       section.id,
       section.entries
+        .filter((entry) => desktopHost || !DESKTOP_HOST_ENTRY_IDS.has(entry.id))
         .filter(
           (entry) =>
             !mobile ||

@@ -108,7 +108,7 @@ struct GatewayMenuCard: View {
                 Spacer(minLength: 4)
 
                 if let shortcut = self.model.shortcutNumber {
-                    Text(verbatim: "⌘" + String(shortcut))
+                    Text(verbatim: "⌃⌘" + String(shortcut))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(self.palette.secondary)
                 }

@@ -66,6 +66,7 @@ import {
   SidebarSessionProjection,
   type SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
+import { createSidebarSessionShortcutsFor } from "./app-sidebar-session-shortcuts.ts";
 import {
   visibleSidebarSessionCatalogs,
   sidebarSessionSnoozeWakeRows,
@@ -112,6 +113,9 @@ const EMPTY_CATALOG_ROWS: ReadonlyMap<string, SidebarRecentSession> = new Map();
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
   readonly personCardTriggers = new WeakMap<HTMLElement, HTMLElement>();
   readonly presencePeople = new Map<string, HTMLElement>();
+  /** Desktop-host session keys: mod+1–9 by sidebar position, Control+Tab by recency. */
+  readonly sessionShortcuts = createSidebarSessionShortcutsFor(this);
+  readonly shortcutSessionKeys = () => this.visibleSessionTreeInOrder().map((row) => row.key);
 
   mountedPresence() {
     return {
@@ -342,6 +346,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   override disconnectedCallback() {
+    this.sessionShortcuts.disconnect();
     // The same host moves between desktop and drawer synchronously.
     queueMicrotask(() => {
       if (!this.isConnected) {
@@ -355,6 +360,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   override updated() {
     super.updated();
+    this.sessionShortcuts.sync();
     if (this.sessionSortMode === "people" && !this.sessionPeopleSortAvailable()) {
       this.setSessionSortMode("created");
     }

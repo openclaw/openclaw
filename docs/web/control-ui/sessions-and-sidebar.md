@@ -747,6 +747,18 @@ Choose **Advanced → Icon & color** from a session menu and select a color swat
   It uses the same permissions, protected-session checks, archive lifecycle, and
   **Undo** as the chat header menu. The archived conversation stays open; this
   is not a separate stop or delete action.
+- In desktop apps, **⌘1–⌘8** on Mac or **Ctrl+1–Ctrl+8** on Windows/Linux opens
+  the session at that position in the sidebar, counting pinned sessions, groups,
+  and expanded child sessions from the top, as listed. **⌘9 / Ctrl+9** opens the
+  last listed session. Collapsed sections and imported catalog sessions are skipped.
+  The shortcuts also work while the sidebar is hidden.
+- In desktop apps, **⌃Tab** switches to the session you opened before the current
+  one. Keep **Control** held and press **Tab** again to go further back through up to
+  20 recently opened sessions, or add **Shift** to go the other way; releasing
+  **Control** keeps the session you stopped on. Recent sessions are remembered for
+  the window until it reloads. Before you have opened a second session, **⌃Tab**
+  moves to the next session in the sidebar. Web browsers keep both chords for their
+  own tabs.
 
 Both shortcuts work from the chat composer, ignore key repeat and text
 composition, and leave open modal dialogs in control. The keyboard-shortcuts help
@@ -764,7 +776,8 @@ works while that menu is open.
 In the macOS app, these additional shortcuts apply while the Dashboard web view
 has keyboard focus. A separate native reading pane does not forward Archive to
 the Dashboard or another window. **⌘N** opens **New Thread** in the selected
-experience. **File → New Gateway Window…** has no keyboard shortcut.
+experience. **File → New Gateway Window…** has no keyboard shortcut. Gateways in
+the Gateway menu use **⌃⌘1–9**, because **⌘1–9** opens sessions.
 
 These direct shortcuts do not change the command palette's **⌘K / Ctrl+K**, then
 **⌘Enter / Ctrl+Enter** workflow for starting a task in the background.

@@ -182,7 +182,8 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             let item = NSMenuItem(title: gateway.name, action: #selector(self.openGateway(_:)), keyEquivalent: key)
             item.target = self
             item.identifier = NSUserInterfaceItemIdentifier(gateway.id)
-            item.keyEquivalentModifierMask = [.command]
+            // Command-1 through Command-9 belong to the web sidebar's sessions.
+            item.keyEquivalentModifierMask = [.command, .control]
             self.configureCard(item, gateway: gateway, now: now)
             self.ownedMenu.addItem(item)
             self.rows.append((gateway, item))
@@ -194,7 +195,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             alternate.target = self
             alternate.identifier = item.identifier
             alternate.isAlternate = true
-            alternate.keyEquivalentModifierMask = [.command, .option]
+            alternate.keyEquivalentModifierMask = [.command, .control, .option]
             self.ownedMenu.addItem(alternate)
             if gateway.isPrimary, gateways.contains(where: { !$0.isPrimary }) {
                 self.ownedMenu.addItem(.separator())

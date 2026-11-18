@@ -108,6 +108,8 @@ const enCommandPalette = {
       stopResponse: "Stop active response",
       cancelDictation: "Cancel dictation",
       saveQueuedMessage: "Save queued message",
+      jumpToSession: "Open sidebar session by number",
+      recentSession: "Switch to recent session",
       toggleSessionSelect: "Select multiple sessions",
       extendSessionSelect: "Extend session selection",
       zoomIn: "Zoom in",

@@ -415,11 +415,12 @@ same Gateway can appear in multiple windows with different active sessions and
 navigation state.
 
 The main **Gateways** menu is always present. It lists the primary Gateway, when
-configured, then **This Mac** when available and saved Gateways, with Command-1
-through Command-9 in that order. Select an item to open its window in the chosen
+configured, then **This Mac** when available and saved Gateways, with
+Control-Command-1 through Control-Command-9 in that order (Command-1 through
+Command-9 open sidebar sessions). Select an item to open its window in the chosen
 experience or bring its existing window to the front. Hold Option for **New …
-Window**, or use Option-Command with the same digit, to open another independent
-window. Cards show health, version and shortened build ID, endpoint, latency, and
+Window**, or use Control-Option-Command with the same digit, to open another
+independent window. Cards show health, version and shortened build ID, endpoint, latency, and
 open window count for the selected experience. Browser-authenticated profiles
 show **Access** and session expiry. A **Primary** badge identifies the primary
 Gateway, and a front-window marker follows the selected experience's frontmost
@@ -461,8 +462,10 @@ Inline widgets also load from that window's Gateway.
 
 In the Web experience, the sidebar identity menu lists the Mac app's configured
 Gateways, with health, primary, and current-selection indicators. The selected Gateway shows a checkmark
-in place of its shortcut hint. Other rows among the first nine show **⌘1–9**
+in place of its shortcut hint. Other rows among the first nine show **⌃⌘1–9**
 shortcuts in native Gateway menu order; later rows have no shortcut hint.
+**⌘1–9** opens sidebar sessions instead (see
+[Direct session shortcuts](/web/control-ui/sessions-and-sidebar#direct-session-shortcuts)).
 Choose a Gateway to replace the current dashboard in the same window, or
 Command-click or Control-click it to open a separate dashboard window. **Set as
 primary…** makes the viewed token-authenticated profile the Mac app's primary
