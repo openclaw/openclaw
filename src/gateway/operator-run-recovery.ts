@@ -156,6 +156,10 @@ async function restoreGatewayOperatorSnapshot(params: {
       subscriptions.push(ingress.release);
     }
     assertLifetime();
+    if (ingress) {
+      ingress.signal.addEventListener("abort", revoke, { once: true });
+      subscriptions.push(() => ingress.signal.removeEventListener("abort", revoke));
+    }
     const principal = snapshot.openclawIdPrincipal;
     if (principal) {
       await prepareOpenClawIdTunnelPrincipal(principal);
