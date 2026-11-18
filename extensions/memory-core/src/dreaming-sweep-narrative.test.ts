@@ -23,6 +23,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appendNarrativeEntry } from "./dreaming-dreams-file.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
+import * as dreamingPhases from "./dreaming-phases.js";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 import { recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { forgetMemoryEntries } from "./memory-forget.js";
@@ -334,7 +335,10 @@ describe("dreaming sweep diary publication", () => {
     { label: "completion is request-scoped", error: new RequestScopedSubagentRuntimeError() },
   ])("writes one generic fallback when $label", async ({ error }) => {
     const sweep = await createSweep({ narrativeError: error });
-    expectHandled(await sweep.run(), "degraded");
+    expect(await sweep.run()).toMatchObject({
+      handled: true,
+      reply: { isError: true, text: expect.stringContaining(error.message) },
+    });
     expect(sweep.narratives).toHaveLength(1);
     const dreams = await sweep.readDreams();
     expect(diaryEntryCount(dreams)).toBe(1);
@@ -345,7 +349,9 @@ describe("dreaming sweep diary publication", () => {
 
   it("still publishes the prepared Light/REM entry when the deep report fails", async () => {
     const sweep = await createSweep({ promote: true, failDeepReport: true });
-    await sweep.run();
+    expect(await sweep.run()).toMatchObject({
+      reply: { isError: true, text: expect.stringContaining("1 of 1 workspaces failed") },
+    });
     expect(logText(sweep.logger.error)).toContain("dreaming promotion failed");
     expect(logText(sweep.logger.warn)).toContain("failed=1, degraded=0, narrativesPending=0");
     expect(expectNarrative(sweep)?.message).toContain(LASTING);
@@ -354,11 +360,35 @@ describe("dreaming sweep diary publication", () => {
 
   it("publishes prepared Light material when REM report publication fails", async () => {
     const sweep = await createSweep({ failRemReport: true });
-    await sweep.run();
+    expect(await sweep.run()).toMatchObject({
+      reply: { isError: true, text: expect.stringContaining("ENOTDIR") },
+    });
     expect(logText(sweep.logger.error)).toContain("rem dreaming failed");
     expect(logText(sweep.logger.warn)).toContain("failed=1, degraded=0, narrativesPending=0");
     expectNarrative(sweep, "anthropic/claude-haiku-4-5");
     expect(diaryEntryCount(await sweep.readDreams())).toBe(1);
+  });
+
+  it("keeps healthy promotion and reports when another workspace throws", async () => {
+    const sweep = await createSweep({ promote: true });
+    const brokenWorkspace = await createTempWorkspace("broken-sweep-");
+    sweep.config.agents!.entries!.broken = { workspace: brokenWorkspace };
+    const runPhases = dreamingPhases.runDreamingSweepPhases;
+    vi.spyOn(dreamingPhases, "runDreamingSweepPhases").mockImplementation((params) => {
+      if (params.workspaceDir === brokenWorkspace) {
+        throw new Error("synthetic workspace failure");
+      }
+      return runPhases(params);
+    });
+    expect(await sweep.run()).toMatchObject({
+      reply: { isError: true, text: expect.stringContaining("1 of 2 workspaces failed") },
+    });
+    expect(await fs.readFile(path.join(sweep.workspaceDir, "MEMORY.md"), "utf8")).toContain(
+      FRAGMENT,
+    );
+    expect(await sweep.readReport("deep")).toContain("Promoted 1 candidate(s)");
+    expect(diaryEntryCount(await sweep.readDreams())).toBe(1);
+    expect(logText(sweep.logger.warn)).toContain("failed=1");
   });
 
   it.each([false, true])("settles the detached diary with Forget=%s", async (forget) => {

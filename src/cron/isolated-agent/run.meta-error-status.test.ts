@@ -61,6 +61,22 @@ async function useRealOutcome() {
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
 
+  it.each([false, true, undefined])(
+    "does not infer a provider cause when providerStarted=%s",
+    async (providerStarted) => {
+      await useRealOutcome();
+      mockAgentRun({
+        payloads: [{ text: "SQLite commit checkpoint expired", isError: true }],
+        meta: { providerStarted },
+      });
+      const result = await runTurn();
+      expect(result).toMatchObject({ status: "error", error: "SQLite commit checkpoint expired" });
+      expect(result.errorClassification).toEqual(
+        providerStarted === false ? { kind: "reason", reason: "unknown" } : undefined,
+      );
+    },
+  );
+
   it.each([false, true])(
     "carries native-selected observations to the hook unless delivery replaces the failure (%s)",
     async (deliveryReplacesFailure) => {

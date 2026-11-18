@@ -30,6 +30,16 @@ Existing databases remain protected against replacement during cleanup.
 Explicitly disabling dreaming removes jobs carrying
 its stable declaration key in the active cron store.
 
+The managed sweep records an automation error when any workspace fails or a
+synchronously completed narrative is degraded. It finishes the other workspaces
+first, preserving their promotions and reports, then reports the failed-workspace
+count and first error through the normal automation failure-notification policy.
+The details remain in job history and failure webhooks; chat alerts retain their
+existing normalized-cause contract rather than including arbitrary error text.
+Detached narratives that are still pending do not make the run unhealthy. Their
+later publication outcomes and retry behavior are separate from this synchronous
+sweep status.
+
 ## What dreaming writes
 
 - **Machine state** in SQLite-backed plugin state (recall store, phase signals, ingestion checkpoints, locks).
