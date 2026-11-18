@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledSettingsStorageKey,
+  defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
@@ -26,8 +27,8 @@ suite.define(() => {
     async (storage) => {
       await suite.withPage({ colorScheme: "light", serviceWorkers: "block" }, async ({ page }) => {
         await installNativeEmbed(page, { platform: "ios", formFactor: "pad" });
-        await page.addInitScript((storage) => {
-          if (storage === "malformed") {
+        await page.addInitScript((storageMode) => {
+          if (storageMode === "malformed") {
             localStorage.setItem("openclaw.control.settings.v1", "{");
           } else {
             Object.defineProperty(window, "localStorage", {
@@ -83,7 +84,7 @@ suite.define(() => {
               const active = (await navigator.serviceWorker.getRegistration())?.active;
               return (
                 active?.state === "activated" &&
-                !!(await caches.match(new URL("__offline_shell__", base).href))
+                (await caches.match(new URL("__offline_shell__", base).href)) !== undefined
               );
             }, suite.server.baseUrl),
           { timeout: 20_000 },
@@ -151,6 +152,7 @@ suite.define(() => {
             { key: settingsKey, settings: saved },
           );
           const gateway = await installMockGateway(page, {
+            featureMethods: [...defaultControlUiFeatureMethods, "cron.list"],
             operatorScopes: ["operator.admin", "operator.read", "operator.write"],
             methodResponses: createNativeEmbedLayoutMethodResponses(),
           });
