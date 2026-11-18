@@ -240,6 +240,11 @@ function expectLabelCleanup() {
   );
 }
 
+const existingTarget = {
+  profileName: "chrome-live",
+  profile: { name: "chrome-live", driver: "existing-session" },
+  targetId: "7",
+};
 const requireRecord = createRequireRecord("object", "expected-label");
 
 function deepSnapshot() {
@@ -495,6 +500,26 @@ describe("existing-session browser routes", () => {
     expect(evaluate).not.toHaveBeenCalled();
   });
 
+  it("supports coordinate clicks for existing-session profiles", async () => {
+    const response = await invoke("act", {
+      kind: "clickCoords",
+      x: 25,
+      y: "32",
+      doubleClick: true,
+    });
+
+    expectResponseContaining(response, { ok: true, targetId: "7", url: "https://example.com" });
+    const coords = requireRecord(mcp.clickChromeMcpCoords.mock.calls[0]?.[0], "click params");
+    expect(coords).toMatchObject({
+      ...existingTarget,
+      x: 25,
+      y: 32,
+      doubleClick: true,
+    });
+    expect(coords.button).toBeUndefined();
+    expect(coords.delayMs).toBeUndefined();
+  });
+
   it.each([{ button: "right" }, { delayMs: 5 }])(
     "rejects unsupported native coordinate input %j before clicking",
     async (options) => {
@@ -723,6 +748,28 @@ describe("existing-session interaction navigation guard", () => {
         "Browser navigation verification timed out after 61250ms",
       );
       expect(completed).toHaveBeenCalledTimes(completedCount);
+    },
+  );
+
+  it.each([
+    ["delay exceeding call timeout", undefined, 1_000],
+    ["condition after a delay", "ready", 1_250],
+  ] as const)(
+    "completes a healthy existing-session %s through the client transport",
+    async (_name, text, durationMs) => {
+      setWaitReadyAfter(durationMs);
+      const request = await startClientAction(
+        {
+          kind: "wait",
+          timeMs: 1_000,
+          timeoutMs: 500,
+          ...(text ? { text } : {}),
+        },
+        DEFAULT_SSRF_POLICY,
+      );
+      await vi.advanceTimersByTimeAsync(durationMs + 750);
+      expect(request.settled).toHaveBeenCalledOnce();
+      expect(await request.completion).toMatchObject({ result: { ok: true, targetId: "7" } });
     },
   );
 

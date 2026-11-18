@@ -733,6 +733,28 @@ it("defaults OpenAI login to ChatGPT OAuth when API key is also available", asyn
   expectNoCalls(runApiKeyAuth, select);
 });
 
+it("prompts when a provider exposes multiple non-OAuth login methods", async () => {
+  const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
+  const runCliAuth = vi.fn().mockResolvedValue({ profiles: [] });
+  const { select } = usePrompter(vi.fn().mockResolvedValue("cli"));
+  useProvider("anthropic", "Anthropic", [
+    { id: "api-key", label: "Anthropic API Key", kind: "api_key", run: runApiKeyAuth },
+    { id: "cli", label: "Claude CLI", kind: "custom", run: runCliAuth },
+  ]);
+
+  await loginCommand({ provider: "anthropic" });
+
+  expect(select).toHaveBeenCalledWith({
+    message: "Auth method for Anthropic",
+    options: [
+      { value: "api-key", label: "Anthropic API Key", hint: undefined },
+      { value: "cli", label: "Claude CLI", hint: undefined },
+    ],
+  });
+  expect(runApiKeyAuth).not.toHaveBeenCalled();
+  expect(runCliAuth).toHaveBeenCalledOnce();
+});
+
 it("routes OAuth login and refresh to the explicit agent", async () => {
   const originalConfig = useCoderAgentConfig();
   const { note } = usePrompter();

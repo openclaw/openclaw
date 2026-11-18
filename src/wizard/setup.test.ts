@@ -820,6 +820,32 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("honors a provider-required picker while keeping existing model settings", async () => {
+    const modelSelection = { promptWhenAuthChoiceProvided: true, allowKeepCurrent: false };
+    promptDefaultModel.mockResolvedValueOnce({ model: "ollama/llama3" });
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "ollama", label: "ollama", auth: [], wizard: { setup: { modelSelection } } },
+      method: {
+        id: "local",
+        label: "ollama",
+        kind: "custom",
+        run: vi.fn(async () => ({ profiles: [] })),
+      },
+      wizard: { modelSelection },
+    });
+    readExistingModel();
+    await runWizard(
+      { authChoice: "ollama", flow: undefined },
+      createRuntime(),
+      buildWizardPrompter({}, { defaultSelect: "keep-model" }),
+    );
+    expectCall(promptDefaultModel, { allowKeep: false });
+    expect(prepareAuthChoice).toHaveBeenCalledOnce();
+    expect(persistedWizardConfigs().at(-1)?.agents?.defaults?.model).toEqual({
+      primary: "ollama/llama3",
+    });
+  });
+
   it("infers an API-key flag while preserving an existing default model", async () => {
     resolvePluginProviders.mockReturnValueOnce([
       { id: "", label: "Empty", auth: [] },
