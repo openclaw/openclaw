@@ -550,6 +550,17 @@ describe("provider failures seen by non-owners in shared chats", () => {
           status: 503,
         }),
     ],
+    [
+      "a billing failure followed by a fallback timeout",
+      () =>
+        createTestFallbackSummaryError({
+          message: "All models failed (2)",
+          attempts: [
+            { provider: "openai", model: "gpt-5.5", error: "402", reason: "billing", status: 402 },
+            { provider: "anthropic", model: "claude", error: "timed out", reason: "timeout" },
+          ],
+        }),
+    ],
   ])("says the assistant is unavailable for %s", async (_label, makeError) => {
     const errorLog = vi.mocked((await import("../../runtime.js")).defaultRuntime.error);
     errorLog.mockClear();

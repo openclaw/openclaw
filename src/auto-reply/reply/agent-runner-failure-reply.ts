@@ -200,8 +200,11 @@ export function resolveNonOwnerProviderFailureText(params: {
   ) {
     return undefined;
   }
+  // A fallback summary carries the last attempt's reason; earlier attempts can still be billing.
   const isProviderFailure =
-    (facts.reason !== undefined && OPERATOR_PROVIDER_FAILURE_REASONS.has(facts.reason)) ||
+    [facts.reason, ...readFallbackAttempts(error).map((attempt) => attempt.reason)].some(
+      (reason) => reason !== undefined && OPERATOR_PROVIDER_FAILURE_REASONS.has(reason),
+    ) ||
     classifyOAuthRefreshFailureError(error) !== null ||
     collectErrorGraphCandidates(error, readErrorCauses).some(
       (candidate) =>
