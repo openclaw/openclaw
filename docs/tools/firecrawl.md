@@ -1,5 +1,5 @@
 ---
-summary: "Use Firecrawl in OpenClaw to search the web, read any page, and pull data from many providers with Firecrawl Alexandria."
+summary: "Use Firecrawl in OpenClaw to search the web, read any page, and pull data from providers with Firecrawl Alexandria."
 read_when:
   - You want Firecrawl-backed web extraction
   - You want keyless Firecrawl Search (Free) or keyless web_fetch
@@ -9,15 +9,15 @@ read_when:
 title: "Firecrawl"
 ---
 
-OpenClaw can use [Firecrawl](https://www.firecrawl.dev/) in three ways:
+Use [Firecrawl](https://www.firecrawl.dev/) in OpenClaw to search the web, read any page, and pull data from providers with [Firecrawl Alexandria](https://alexandria.firecrawl.dev/).
+
+OpenClaw can use Firecrawl in three ways:
 
 - as the `web_search` provider
 - as explicit plugin tools: `firecrawl_search` and `firecrawl_scrape`
 - as a fallback extractor for `web_fetch`
 
 It is a hosted extraction/search service that supports bot circumvention and caching, which helps with JS-heavy sites or pages that block plain HTTP fetches.
-
-Firecrawl also gives agents data from many providers through [Firecrawl Alexandria](https://alexandria.firecrawl.dev/).
 
 ## Install plugin
 
