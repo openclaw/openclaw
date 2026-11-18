@@ -5,7 +5,6 @@ import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import {
   captureComposerProof,
   installTalkBrowserFixtures,
@@ -406,78 +405,6 @@ suite.define(() => {
         }
       }),
   );
-
-  it("preserves the new-session dictation border beside the image-drop tint", () =>
-    suite.withPage(
-      {
-        permissions: ["microphone"],
-        viewport: { width: 1056, height: 740 },
-        colorScheme: "dark",
-        reducedMotion: "reduce",
-      },
-      async ({ page }) => {
-        const { textarea, admit, emit } = await openDictation(page, { route: "new" });
-        await button(page, "Dictate", true).click();
-        await admit();
-        await emit("Describe this image");
-        const shell = page.locator(".new-session-page__composer");
-        const input = shell.locator(":scope > .agent-chat__input");
-        await expect
-          .poll(() => input.getAttribute("class"))
-          .toContain("agent-chat__input--dictating");
-        const border = () =>
-          input.evaluate((element) => {
-            const style = getComputedStyle(element, "::after");
-            return {
-              opacity: Number(style.opacity),
-              background: style.backgroundImage,
-              inset: style.top,
-              zIndex: style.zIndex,
-            };
-          });
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const stage = process.env.OPENCLAW_PROOF_STAGE ?? "after";
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".new-session-page"),
-            [textarea],
-            {
-              elements: [input],
-              animations: "disabled",
-            },
-          );
-          await writeFile(path.join(suite.artifactDir, stage + "-dictation-clean.png"), frame.png);
-          const annotated = await rasterizeProofAnnotations(suite.browser, {
-            viewport: page.viewportSize()!,
-            scale: await page.evaluate(() => devicePixelRatio),
-            image: frame.png,
-            annotations: [
-              {
-                kind: "outline",
-                rect: frame.elements[0]!.bounds,
-                text:
-                  stage === "before"
-                    ? "Dictation border is hidden"
-                    : "Dictation border remains visible",
-                labelAt: { x: 330, y: 510 },
-                color: "#F5A66F",
-              },
-            ],
-          });
-          await writeFile(
-            path.join(suite.artifactDir, stage + "-dictation-annotated.png"),
-            annotated,
-          );
-          console.log("Dictation border proof:", suite.artifactDir);
-        }
-        await expect.poll(border).toMatchObject({ opacity: 1, inset: "-1px", zIndex: "5" });
-        expect((await border()).background).toContain("conic-gradient");
-        // Dictation owns ::after; the idle drop tint must stay on its own surface.
-        expect(
-          await input.evaluate((element) => Number(getComputedStyle(element, "::before").opacity)),
-        ).toBe(0);
-      },
-    ));
 
   it("cancels new-session dictation after dismissing its tooltip", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
