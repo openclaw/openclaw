@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -125,6 +125,34 @@ it("skips idle garbage collection for a worktree with a live run lease", async (
   expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
 
   await lease.release();
+  expect((await service.gc()).removed).toEqual([]);
+  await updateRegistryWorktree(env, created.id, {
+    lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+  });
   const collected = await service.gc();
   expect(collected.removed).toContain(created.id);
+});
+
+it("retains an old checkout used yesterday after its run lease has ended", async () => {
+  const yesterday = Date.now() - 24 * 60 * 60 * 1000;
+  await updateRegistryWorktree(env, created.id, {
+    lastActiveAt: yesterday - IDLE_GC_MS,
+  });
+  const clock = vi.spyOn(Date, "now").mockReturnValue(yesterday);
+  try {
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    await lease.release();
+    expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday);
+    clock.mockReturnValue(yesterday + 60_000);
+    const next = await acquireWorktreeRunLease(created.id, { env });
+    expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday);
+    // A long-running use refreshes activity when its last holder releases custody.
+    clock.mockReturnValue(yesterday + 10 * 60_000);
+    await next.release();
+  } finally {
+    clock.mockRestore();
+  }
+  expect((await service.gc()).removed).not.toContain(created.id);
+  expect(getRegistryWorktree(env, created.id)?.lastActiveAt).toBe(yesterday + 10 * 60_000);
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
 });
