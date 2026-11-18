@@ -76,14 +76,8 @@ automatic setup cannot finish. The screenshots show an earlier manual flow;
 your build may use different labels or layouts.
 
 <Steps>
-<Step title="Get started">
+<Step title="Read the security notice">
 <a id="welcome-and-security-notice" />
-On a new install, **Get started** sets OpenClaw up on this Mac. To use OpenClaw
-that already runs somewhere else, choose **Already use OpenClaw on another
-computer? Connect to it** instead; it opens the choices in the next step. A
-note at the bottom reminds you that OpenClaw acts with the permissions and
-services you enable.
-
 OpenClaw is a personal agent designed for one trusted operator. For shared use,
 separate trust boundaries and limit tool access; see [Security](/gateway/security).
 Use a strong modern model and strict tool policy or sandboxing when enabling
@@ -100,8 +94,6 @@ These rules apply to automatic setup too.
 </Step>
 <Step title="Choose where the Gateway runs">
 <a id="local-vs-remote" />
-This page appears when you choose **Connect to it** on the Welcome page, and
-when you reopen setup on a Mac that already has a connection.
 
 - **This Mac (Local only):** set up authentication and save credentials on this Mac.
 - **Remote (over SSH/Tailnet):** connect to a Gateway that already has credentials
@@ -122,11 +114,9 @@ any local process connect; use it only on a fully trusted machine.
 </Step>
 <Step title="Prepare the local runtime">
 <a id="cli" />
-When local runtime setup is needed, it runs while you pick your AI: the bottom
-of the window shows **Setting up OpenClaw on this Mac…** until it finishes. If
-it fails, **Getting things ready** opens with the reason and **Try again**.
-Connecting to an independently managed Gateway skips installation without
-taking over its CLI or service. See
+Wait for **Getting things ready** to finish. This step appears only when local
+runtime setup is needed. Connecting to an independently managed Gateway skips
+installation without taking over its CLI or service. See
 [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup) for runtime details.
 
 macOS may offer to install Command Line Tools when OpenClaw initializes Git in
@@ -140,18 +130,16 @@ finds on the Gateway host are tagged **On this Mac**. Nothing is tested,
 installed, or saved until you pick an entry. Picking an entry, or a sign-in
 under **More providers**, replaces the list with that provider's card: its
 sign-in steps, key form, and live AI test. **Choose another AI** returns to the
-list. **More providers** lists every other supported sign-in. Setup must pass a live AI test before you
-can continue.
+list. **More providers** lists every other supported sign-in. Setup must pass a
+live AI test before you can continue.
 
 See [AI connection options](/start/onboarding#ai-connection-options) below for login reuse,
 local models, and custom endpoints.
 </Step>
 <Step title="Continue in the dashboard">
-On this Mac, the dashboard opens as soon as the AI test passes; there is no
-separate final page. A newly verified model opens guided setup for your
-workspace, Gateway, channels, and optional features, then agent chat. An
-already configured model opens the normal dashboard. Remote setups end on a
-short confirmation page first.
+A newly verified model opens guided setup for your workspace, Gateway,
+channels, and optional features, then agent chat. An already configured model
+opens the normal dashboard.
 
 - **Import memory (optional):** choose files during guided setup or later in
   **Settings → Import Memory**. Local Gateways can import Claude Code, Codex,

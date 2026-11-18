@@ -45,19 +45,12 @@ extension OnboardingView {
 
     func maybeInstallCLI(for pageIndex: Int) {
         guard self.requiresLocalCLI else { return }
-        // The AI page runs setup in the background; the CLI page only shows it after a failure.
-        let onSetupPage = pageIndex == cliPageIndex || pageIndex == aiPageIndex
-        if Self.shouldActivateExistingCLI(
-            onCLIPage: pageIndex == cliPageIndex,
-            onAIPage: pageIndex == aiPageIndex,
-            executableReady: cliExecutableReady,
-            installed: cliInstalled)
-        {
+        if pageIndex == cliPageIndex, cliExecutableReady {
             self.startExistingCLIActivationIfNeeded()
             return
         }
         guard Self.shouldAutoInstallCLI(
-            onCLIPage: onSetupPage,
+            onCLIPage: pageIndex == cliPageIndex,
             visible: onboardingVisible,
             statusKnown: cliStatusKnown,
             executableReady: cliExecutableReady,
@@ -65,16 +58,6 @@ extension OnboardingView {
             installing: installingCLI)
         else { return }
         self.startCLIInstall()
-    }
-
-    static func shouldActivateExistingCLI(
-        onCLIPage: Bool,
-        onAIPage: Bool,
-        executableReady: Bool,
-        installed: Bool) -> Bool
-    {
-        // On the AI page, a ready Gateway stays ready: activating again would clear readiness and loop.
-        executableReady && (onCLIPage || (onAIPage && !installed))
     }
 
     static func shouldAutoInstallCLI(
@@ -247,7 +230,6 @@ extension OnboardingView {
     }
 
     private func finishCLIInstallProgress() {
-        if !self.cliInstalled { self.cliSetupFailed = true }
         self.installingCLI = false
         self.cliInstallPhase = .idle
         OnboardingController.shared.setWindowCloseEnabled(true)
@@ -283,7 +265,6 @@ extension OnboardingView {
         guard GatewayProcessManager.shared.installation == .managed else {
             self.cliStatusKnown = true
             self.cliStatus = GatewayProcessManager.Installation.ownershipFailure
-            self.cliSetupFailed = true
             return
         }
         let status = await CLIInstaller.status()

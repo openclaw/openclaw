@@ -30,6 +30,8 @@ extension OnboardingView {
             self.aiSetupPage(contentHeight: contentHeight)
         case 4:
             self.findGatewayPage()
+        case 5:
+            self.reachabilityPage()
         case 9:
             self.readyPage()
         default:
@@ -39,32 +41,39 @@ extension OnboardingView {
 
     func welcomePage() -> some View {
         onboardingPage {
-            VStack(spacing: 12) {
-                Text("Welcome to OpenClaw")
-                    .font(.largeTitle.weight(.semibold))
-                Text("Your own AI assistant, right here on your Mac.")
-                    .font(.title3)
+            VStack(spacing: 18) {
+                VStack(spacing: 8) {
+                    Text("Welcome to OpenClaw")
+                        .font(.largeTitle.weight(.semibold))
+                    Text("Your personal AI assistant, living on your own Mac.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
+                Text(
+                    "It answers questions, works with your files and apps, and can chat with you " +
+                        "on WhatsApp or Telegram. Setup takes about two minutes.")
+                    .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                Button(action: self.getStarted) {
-                    Text("Get started")
-                        .frame(minWidth: 120)
+                    .frame(maxWidth: 520)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                self.onboardingCard(spacing: 14, padding: 16) {
+                    self.featureRow(
+                        title: "Ask, create, and automate",
+                        subtitle: "Give your assistant tasks and let it help across your Mac.",
+                        systemImage: "sparkles")
+                    self.featureRow(
+                        title: "Chat wherever you like",
+                        subtitle: "This app, WhatsApp, Telegram, Discord, Slack — your choice.",
+                        systemImage: "bubble.left.and.bubble.right.fill")
+                    self.featureRow(
+                        title: "Stay in control",
+                        subtitle: "Everything runs where you decide, with permissions you grant.",
+                        systemImage: "hand.raised.fill")
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                // Every page stays mounted, so Return must only reach this button on Welcome.
-                .keyboardShortcut(self.activePageIndex == 0 ? .defaultAction : nil)
-                .padding(.top, 20)
-                if self.startsOnThisMac {
-                    HStack(spacing: 4) {
-                        Text("Already use OpenClaw on another computer?")
-                            .foregroundStyle(.secondary)
-                        Button("Connect to it", action: self.showHostingChoice)
-                            .buttonStyle(.link)
-                    }
-                    .font(.callout)
-                    .padding(.top, 8)
-                }
+                .frame(maxWidth: 520)
+
                 Label {
                     Text(
                         "OpenClaw can take actions using the permissions and services you enable. " +
@@ -74,9 +83,9 @@ extension OnboardingView {
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: 500)
-                .padding(.top, 24)
+                .frame(maxWidth: 500, alignment: .leading)
             }
+            .padding(.top, 8)
         }
     }
 
@@ -193,6 +202,15 @@ extension OnboardingView {
         .onChange(of: state.remoteUrl) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
         .onChange(of: state.remoteToken) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
         .onChange(of: state.remoteIdentity) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
+    }
+
+    func reachabilityPage() -> some View {
+        onboardingPage {
+            OnboardingReachabilityContent(unavailableReason: self.openClawID.accountUnavailableReason) {
+                self.openClawID.begin(.makeReachable)
+                self.showOpenClawID = true
+            }
+        }
     }
 
     private var localGatewaySubtitle: String {
@@ -796,6 +814,15 @@ extension OnboardingView {
                         title: "Configure later",
                         subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
                         systemImage: "gearshape")
+                } else if self.selectedConnectionMode == .local {
+                    self.featureRow(
+                        title: "Reach it from anywhere",
+                        subtitle: "Optional OpenClaw ID setup. Native sign-in is not available in this build.",
+                        systemImage: "globe",
+                        buttonTitle: "Learn more")
+                    {
+                        self.currentPage = self.pageOrder.firstIndex(of: self.reachabilityPageIndex) ?? 0
+                    }
                 } else {
                     self.featureRow(
                         title: "Connected to your Gateway",

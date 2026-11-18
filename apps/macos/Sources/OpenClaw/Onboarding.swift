@@ -667,8 +667,6 @@ struct OnboardingView: View {
     @State var monitoringDiscovery = false
     @State var cliExecutableReady = false
     @State var cliInstalled = false
-    /// Mac setup runs behind the AI picker; its progress page appears only once an attempt fails.
-    @State var cliSetupFailed = false
     @State var cliStatusKnown = false
     @State var onboardingVisible = false
     @State var cliInstallLocation: String?
@@ -697,9 +695,6 @@ struct OnboardingView: View {
     @State var configuredGatewayProbe = OnboardingConfiguredGatewayProbe()
     @State var localGatewayProbe: LocalGatewayProbe?
     @State var defaultsToLocalGateway: Bool
-    /// A fresh install starts on this Mac; the hosting choice appears only from the Welcome link.
-    @State var hostingChoiceShown: Bool
-    let startsOnThisMac: Bool
     @Bindable var state: AppState
     let initialPage: OnboardingFirstRun.Page
     let initialError: String?
@@ -717,6 +712,7 @@ struct OnboardingView: View {
     let cliPageIndex = 2
     let aiPageIndex = 3
     let findPageIndex = 4
+    let reachabilityPageIndex = 5
     let readyPageIndex = 9
 
     /// The active page is scrollable on short screens. Taller windows donate all
@@ -728,16 +724,14 @@ struct OnboardingView: View {
     static func pageOrder(
         for mode: AppState.ConnectionMode,
         requiresCLIInstall: Bool,
-        joinedClaw: Bool = false,
-        hostingChoice: Bool = true) -> [Int]
+        joinedClaw: Bool = false) -> [Int]
     {
         // The OpenClaw ID claw owns its AI setup, which needs operator.admin a member key does
         // not hold; there is no Gateway to find either.
         if mode == .remote, joinedClaw { return [0, 1, 9] }
         return switch mode {
         case .local:
-            // A local setup ends on the chat once AI works; Dashboard owns the remaining first-run steps.
-            (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]).filter { hostingChoice || $0 != 1 }
+            requiresCLIInstall ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9]
         case .remote:
             [0, 1, 4, 3, 9]
         case .unconfigured:
@@ -763,13 +757,8 @@ struct OnboardingView: View {
         if self.finishState.connectionCompletion != nil { return [0, 1, 4, 9] }
         return Self.pageOrder(
             for: self.selectedConnectionMode,
-            requiresCLIInstall: self.showsCLIPage(installed: self.cliInstalled),
-            joinedClaw: self.primaryIsJoinedClaw,
-            hostingChoice: self.hostingChoiceShown)
-    }
-
-    func showsCLIPage(installed: Bool) -> Bool {
-        self.requiresLocalCLI && !installed && self.cliSetupFailed
+            requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled,
+            joinedClaw: self.primaryIsJoinedClaw)
     }
 
     var primaryIsJoinedClaw: Bool {
@@ -803,8 +792,7 @@ struct OnboardingView: View {
     func preservePageAfterCLIReadiness(wasInstalled: Bool) {
         let previous = Self.pageOrder(
             for: self.selectedConnectionMode,
-            requiresCLIInstall: self.showsCLIPage(installed: wasInstalled),
-            hostingChoice: self.hostingChoiceShown)
+            requiresCLIInstall: self.requiresLocalCLI && !wasInstalled)
         self.currentPage = Self.pageCursor(preserving: self.requestedPage, from: previous, to: self.pageOrder)
     }
 
@@ -813,7 +801,8 @@ struct OnboardingView: View {
     }
 
     var buttonTitle: String {
-        self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
+        if self.activePageIndex == self.reachabilityPageIndex { return "Not now" }
+        return self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
     var isCLIBlocking: Bool {
@@ -959,10 +948,8 @@ struct OnboardingView: View {
             state.syncGatewayConfigNow()
         }
         self.dashboardHandoffOpener = dashboardHandoffOpener
-        let freshInstall = !state.onboardingSeen && state.connectionMode == .unconfigured
-        _defaultsToLocalGateway = State(initialValue: freshInstall)
-        self.startsOnThisMac = freshInstall
-        _hostingChoiceShown = State(initialValue: !freshInstall || initialPage == .connection)
+        _defaultsToLocalGateway = State(
+            initialValue: !state.onboardingSeen && state.connectionMode == .unconfigured)
         _gatewayDiscovery = State(initialValue: discoveryModel)
         _aiSetup = State(initialValue: OnboardingAISetupModel(
             gateway: aiSetupGateway,

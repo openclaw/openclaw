@@ -56,22 +56,6 @@ extension OnboardingView {
         self.probeConfiguredGatewayForDashboard()
     }
 
-    /// Get started means this Mac on a fresh install; a reopened setup keeps its hosting choice page.
-    func getStarted() {
-        guard self.startsOnThisMac else {
-            self.handleNext()
-            return
-        }
-        self.hostingChoiceShown = false
-        self.selectLocalGateway()
-        withAnimation { self.currentPage = 1 }
-    }
-
-    func showHostingChoice() {
-        self.hostingChoiceShown = true
-        withAnimation { self.currentPage = self.pageOrder.firstIndex(of: self.connectionPageIndex) ?? 0 }
-    }
-
     func handleBack() {
         withAnimation {
             self.currentPage = max(0, self.currentPage - 1)
@@ -105,14 +89,12 @@ extension OnboardingView {
     }
 
     func advanceAfterInference() {
-        // Working AI on this Mac goes straight to the chat; other setups confirm on the ready page.
-        if self.state.connectionMode == .local {
-            self.finish()
-            return
+        guard self.activePageIndex != self.reachabilityPageIndex,
+              self.activePageIndex != self.readyPageIndex else { return }
+        let destination = self.state.connectionMode == .local ? self.reachabilityPageIndex : self.readyPageIndex
+        if let cursor = self.pageOrder.firstIndex(of: destination) {
+            withAnimation { self.currentPage = cursor }
         }
-        guard self.activePageIndex != self.readyPageIndex,
-              let cursor = self.pageOrder.firstIndex(of: self.readyPageIndex) else { return }
-        withAnimation { self.currentPage = cursor }
     }
 
     @discardableResult

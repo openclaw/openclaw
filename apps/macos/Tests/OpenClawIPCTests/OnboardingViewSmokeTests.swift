@@ -168,13 +168,14 @@ struct OnboardingViewSmokeTests {
             let requiresSetup = managedAttachment || ["unreadable", "fresh", "fresh-recommended"].contains(scenario)
 
             #expect(!view.cliInstalled)
-            // A fresh install's Get started means this Mac, so it skips the hosting choice (1).
-            // Mac setup runs behind the AI page; its own page (2) appears only after a failed attempt.
-            let localOrder = [0, 1, 3]
-                .filter { scenario != "fresh-recommended" || $0 != 1 }
-            // Remote setup visits the remote connection page (4) before AI setup.
-            let expectedOrder = scenario == "remote" ? [0, 1, 4, 3, 9] : localOrder
+            let expectedOrder = scenario == "remote"
+                ? [0, 1, 4, 3, 9]
+                : (requiresSetup ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9])
             try #require(view.pageOrder == expectedOrder)
+            // Remote setup visits the remote connection page (4) before AI setup.
+            #expect(view.activePageIndex(for: 2) == (scenario == "remote"
+                    ? 4
+                    : (requiresSetup ? view.cliPageIndex : view.aiPageIndex)))
             if scenario == "fresh-recommended" {
                 #expect(view.selectedConnectionMode == .local)
                 #expect(view.isConnectionSelectionBlocking)
@@ -303,15 +304,15 @@ struct OnboardingViewSmokeTests {
         #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
     }
 
-    @Test func `local setup ends on AI setup while remote keeps its final step`() {
+    @Test func `configured flows keep native reachability and final steps after AI setup`() {
         // Memory import, permissions, channels and hatch remain Dashboard-owned.
-        // A local setup opens the chat once AI works; remote keeps the native ready page.
+        // Native onboarding retains the optional reachability and final pages.
         #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: true) == [0, 1, 2, 3])
+            requiresCLIInstall: true) == [0, 1, 2, 3, 5, 9])
         #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: false) == [0, 1, 3])
+            requiresCLIInstall: false) == [0, 1, 3, 5, 9])
         #expect(OnboardingView.pageOrder(
             for: .remote,
             requiresCLIInstall: true) == [0, 1, 4, 3, 9])
@@ -391,17 +392,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
-    @Test func `AI page starts an existing CLI's Gateway once, not again after it is ready`() {
-        // Activation clears readiness and its success sets it again, which re-runs page monitoring.
-        #expect(OnboardingView.shouldActivateExistingCLI(
-            onCLIPage: false, onAIPage: true, executableReady: true, installed: false))
-        #expect(!OnboardingView.shouldActivateExistingCLI(
-            onCLIPage: false, onAIPage: true, executableReady: true, installed: true))
-        // The CLI page keeps main's behavior: it is shown only to retry setup.
-        #expect(OnboardingView.shouldActivateExistingCLI(
-            onCLIPage: true, onAIPage: false, executableReady: true, installed: true))
-    }
-
     @Test func `paused gateway keeps CLI setup and recovery visible after every install path`() {
         for afterFreshInstall in [false, true] {
             let outcome = OnboardingView.localGatewayActivationOutcome(
@@ -409,7 +399,7 @@ struct OnboardingViewSmokeTests {
                 afterFreshInstall: afterFreshInstall)
 
             #expect(!outcome.ready)
-            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3])
+            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3, 5, 9])
             #expect(outcome.status == "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
         }
     }
