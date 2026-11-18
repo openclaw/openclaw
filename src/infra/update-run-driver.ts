@@ -2,7 +2,11 @@ import { hostname } from "node:os";
 import type { z } from "zod";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { captureNamespacedStateLeaseProcessOwner } from "./state-lease-process-owner.js";
-import type { RecordedUpdateRunDriver, UpdateRunDriverSchema } from "./update-run-driver-schema.js";
+import {
+  RecordedUpdateRunDriverSchema,
+  type RecordedUpdateRunDriver,
+  type UpdateRunDriverSchema,
+} from "./update-run-driver-schema.js";
 
 export { toUpdateRunDriver, type RecordedUpdateRunDriver } from "./update-run-driver-schema.js";
 export type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
@@ -16,7 +20,11 @@ export function readRecordedUpdateRunDriver(): RecordedUpdateRunDriver | undefin
   if (!driver || (process.platform !== "linux" && process.platform !== "darwin")) {
     return driver;
   }
-  return { ...driver, namespace: captureNamespacedStateLeaseProcessOwner().namespace };
+  // An unrecognized namespace records as unknown rather than failing adoption.
+  const namespace = RecordedUpdateRunDriverSchema.shape.namespace.safeParse(
+    captureNamespacedStateLeaseProcessOwner().namespace,
+  );
+  return { ...driver, namespace: namespace.data ?? null };
 }
 
 export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDriver): boolean {

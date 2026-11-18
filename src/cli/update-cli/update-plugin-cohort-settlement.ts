@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
@@ -31,6 +32,7 @@ import {
   hasUnrecordedUpdateRunDriver,
   inspectUpdateRunAbandonment,
   needsPostCoreRepair,
+  updateRunLastActivity,
 } from "../../infra/update-run-activity.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
@@ -88,11 +90,19 @@ function hasPackageRecoveryAuthority(installKey: string): boolean {
 /**
  * Every process the run recorded as its driver ran on this host in an earlier boot,
  * so none of them and none of their children survive. A run that lost a driver's
- * identity, or that a managed helper adopted, keeps the lease store's proof.
+ * identity, or that a managed helper adopted, keeps the lease store's proof. Its
+ * history must also have gone quiet before this boot began: a clone sharing the host
+ * name, machine identity and state directory boots on its own, and its live updater
+ * keeps writing.
  */
 function ranBeforeRestart(run: UpdateRunRecord): boolean {
   const drivers = [run.origin.driver, ...(run.origin.previousDrivers ?? [])];
-  if (!drivers[0] || run.origin.managedHandoff || hasUnrecordedUpdateRunDriver(run)) {
+  if (
+    !drivers[0] ||
+    run.origin.managedHandoff ||
+    hasUnrecordedUpdateRunDriver(run) ||
+    updateRunLastActivity(run) >= Date.now() - os.uptime() * 1000
+  ) {
     return false;
   }
   const current = captureNamespacedStateLeaseProcessOwner().namespace;
@@ -389,6 +399,7 @@ export async function inspectInterruptedUpdateRecovery(
       refuse,
       inspectHistory,
       refuseOtherRecovery,
+      databasePath,
       store,
       rebooted,
       refused:
@@ -404,7 +415,9 @@ export async function inspectInterruptedUpdateRecovery(
   if (!inspected) {
     return undefined;
   }
-  const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, store, rebooted } = inspected;
+  const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
+    inspected;
+  const rebooted = inspected.rebooted === true;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
     const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
@@ -430,8 +443,13 @@ export async function inspectInterruptedUpdateRecovery(
           owner: _owner,
           ...claimedStore
         } = captureUpdateCommandExecutorAuthority(ownership);
-        // After a restart the claim's store is a new one; the earlier boot is the proof.
-        if (claimed !== installKey || (!rebooted && !isDeepStrictEqual(claimedStore, store))) {
+        // After a restart the claim's store is a new one at the same place; the earlier
+        // boot is the proof.
+        const sameStore = rebooted
+          ? databasePath !== undefined &&
+            claimedStore.databasePath === fs.realpathSync(databasePath)
+          : isDeepStrictEqual(claimedStore, store);
+        if (claimed !== installKey || !sameStore) {
           throw refuse("The update lease store changed while this update was starting.");
         }
         if (!(await pendingRecovery())) {

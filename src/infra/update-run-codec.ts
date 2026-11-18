@@ -265,8 +265,9 @@ function boundedJson(
 }
 
 /**
- * Driver boot namespaces only let a later update skip a repair after a restart, so
- * they yield first: a run without them keeps the explicit repair it had before.
+ * Driver boot namespaces only let a later update skip a repair after a restart. They
+ * yield before recovery receipts fail or admission identities and routing are evicted;
+ * diagnostic text is still shortened first. A run without them keeps explicit repair.
  */
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
   const json = boundedOriginJsonWithNamespaces(origin);

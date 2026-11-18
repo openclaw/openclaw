@@ -16,7 +16,7 @@ import {
 } from "./update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
-function updateRunLastActivity(record: UpdateRunRecord): number {
+export function updateRunLastActivity(record: UpdateRunRecord): number {
   return Math.max(
     record.updatedAtMs,
     ...record.steps.flatMap((step) => [step.startedAtMs ?? 0, step.endedAtMs ?? 0]),

@@ -194,6 +194,7 @@ afterEach(async () => {
     gatewayService.readGatewayServiceState,
     restartHealth.waitForGatewayHealthyRestart,
     processOwner.captureNamespacedStateLeaseProcessOwner,
+    os.uptime,
   ]) {
     if (vi.isMockFunction(spied)) {
       spied.mockRestore();
@@ -456,30 +457,40 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
   /**
    * A machine restart after the kill: the temporary lease store is gone, the run's
    * drivers name the boot they ran in (`drivers`, current first; `undefined` is a
-   * driver recorded without one), and this process reports `current`.
+   * driver recorded without one), this process reports `current`, and this boot
+   * started after the run's last write unless `bootedBeforeLastWrite`.
    */
   const rebooted =
-    (drivers: Array<string | null | undefined>, current: string, origin: object = {}) =>
+    (
+      drivers: Array<string | null | undefined>,
+      current: string,
+      { origin = {}, bootedBeforeLastWrite = false } = {},
+    ) =>
     async (killed: Dead) => {
       await loseStore();
       const { db } = openOpenClawStateDatabase();
       const select = db.prepare("SELECT origin_json FROM update_runs WHERE run_id = ?");
-      const recorded = JSON.parse(String(select.get(killed.runId)?.origin_json));
+      const stored = JSON.parse(String(select.get(killed.runId)?.origin_json));
       const capture = processOwner.captureNamespacedStateLeaseProcessOwner;
       // The killed updater recorded the boot it ran in: this host's, this boot's.
-      expect(recorded.driver.namespace).toBe(capture().namespace);
-      const [driver, ...previous] = drivers.map((namespace, index) => ({
+      expect(stored.driver.namespace).toEqual(expect.any(String));
+      expect(stored.driver.namespace).toBe(capture().namespace);
+      const [driver, ...previous] = drivers.map((boot, index) => ({
         // Earlier drivers are other dead processes of that boot on this host.
-        ...(index ? { ...recorded.driver, startIdentity: String(index) } : recorded.driver),
-        namespace,
+        ...(index ? { ...stored.driver, startIdentity: String(index) } : stored.driver),
+        namespace: boot,
       }));
       const update = db.prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?");
       const previousDrivers = previous.length ? previous : undefined;
-      update.run(JSON.stringify({ ...recorded, driver, previousDrivers, ...origin }), killed.runId);
+      update.run(JSON.stringify({ ...stored, driver, previousDrivers, ...origin }), killed.runId);
       vi.spyOn(processOwner, "captureNamespacedStateLeaseProcessOwner").mockImplementation(() => ({
         ...capture(),
         namespace: current,
       }));
+      if (!bootedBeforeLastWrite) {
+        // This machine has just booted.
+        vi.spyOn(os, "uptime").mockReturnValue(0);
+      }
     };
   it.each(["linux", "darwin"] as const)(
     "settles a run killed before a %s machine restarted, then proceeds",
@@ -544,12 +555,33 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
           [namespace({ platform: "linux", pid: "pid:[4026532001]" })],
           namespace({ platform: "linux", boot: laterBoot, pid: "pid:[4026532001]" }),
         ],
+        [
+          "the run was recorded in a Linux PID namespace other than the host's",
+          [namespace({ platform: "linux", pid: "pid:[4026532001]" })],
+          linux(laterBoot),
+        ],
+        [
+          "one of the run's drivers ran in this boot",
+          [linux(), linux(laterBoot)],
+          linux(laterBoot),
+        ],
+        [
+          "the run was recorded on another platform",
+          [namespace({ platform: "darwin" })],
+          linux(laterBoot),
+        ],
       ] as const
     ).map(([name, drivers, current]) => ({
       name,
       refusal: unleased,
       control: rebooted([...drivers], current),
     })),
+    {
+      // A clone sharing this host's name, machine identity and state boots on its own.
+      name: "the run kept writing after this boot began",
+      refusal: unleased,
+      control: rebooted([linux()], linux(laterBoot), { bootedBeforeLastWrite: true }),
+    },
     {
       // Abandonment already refuses it; the restart rule never reads its other drivers.
       name: "the run lost its updater's identity before a restart",
@@ -566,7 +598,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       control: (killed: Dead) => {
         const driver = { host: os.hostname(), pid: killed.proc.pid!, startIdentity: "1" };
         const managedHandoff = { parent: driver, helper: driver };
-        return rebooted([linux()], linux(laterBoot), { managedHandoff })(killed);
+        return rebooted([linux()], linux(laterBoot), { origin: { managedHandoff } })(killed);
       },
     },
     {
