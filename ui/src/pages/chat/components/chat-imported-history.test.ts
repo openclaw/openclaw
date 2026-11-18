@@ -9,8 +9,10 @@ import {
 } from "../../../../../src/chat/session-catalog-display.js";
 import { wrapExternalContent } from "../../../../../src/security/external-content.js";
 import { i18n } from "../../../i18n/index.ts";
-import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractText, extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";

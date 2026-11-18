@@ -4,8 +4,10 @@
 // transcript mutation actions.
 import { For } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
-import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageDisplayMarkdown,
+} from "../../../lib/chat/message-display.ts";
 import { extractText } from "../../../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import * as toolCards from "../../../lib/chat/tool-cards.ts";

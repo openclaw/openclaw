@@ -442,6 +442,30 @@ it.each([
   );
 });
 
+it("bounds personal restart confirmation to its worker operation", () => {
+  const file = "src/gateway/github-personal-publication-store.worker.ts";
+  const writer = "requirePersonalGitHubPublicationConfirmationInDatabase";
+  const source = `export function ${writer}() {}
+    export const operations = {
+      "githubPublications.personalRestart": () => ${writer}(),
+    };`;
+  expectAllowed({ [file]: source });
+  expectDenied(
+    { [file]: source.replace("githubPublications.personalRestart", "githubPublications.bypass") },
+    "unreviewed GitHub publication writer reference",
+  );
+  expectDenied(
+    {
+      [file]: `export function ${writer}() {}`,
+      [publicationWorker]: `
+        import { ${writer} } from "../gateway/github-personal-publication-store.worker.js";
+        function personalMutation() { ${writer}(); }
+      `,
+    },
+    "unreviewed GitHub publication writer reference",
+  );
+});
+
 it("guards publication mutation entry paths and the existing repeated factory calls", () => {
   const factory = "createGitHubPublicationExecutionStoreInDatabase";
   const reject = allowedGraph({

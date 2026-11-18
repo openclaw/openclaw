@@ -934,7 +934,7 @@ packages/ai/src/transports/openai-responses-params-internal.ts	2
 packages/ai/src/transports/openai-responses-payload-policy.ts	2
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	10
-packages/ai/src/transports/openai-responses-replay-messages-internal.ts	7
+packages/ai/src/transports/openai-responses-replay-messages-internal.ts	6
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
 packages/ai/src/transports/openai-responses-websocket.ts	3
@@ -1027,7 +1027,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	4
+src/agents/agent-tools.read.ts	3
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
@@ -1735,7 +1735,6 @@ src/gateway/server-methods/channels.ts	2
 src/gateway/server-methods/chat-abort-authorization.ts	2
 src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
-src/gateway/server-methods/chat-send-attachments.ts	1
 src/gateway/server-methods/chat-send-request.ts	1
 src/gateway/server-methods/chat-server-timing.ts	1
 src/gateway/server-methods/chat-transcript-inject.ts	1
@@ -2284,7 +2283,7 @@ src/tui/tui-session-projection.ts	2
 src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	2
 src/utils.ts	1
-src/utils/delivery-context.shared.ts	2
+src/utils/delivery-context.shared.ts	1
 src/utils/string-readers.ts	2
 src/utils/usage-format.ts	1
 src/version.ts	4

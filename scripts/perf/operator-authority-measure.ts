@@ -375,7 +375,6 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
       target: {
         agentId: "synthetic-agent",
         sessionKey: "agent:synthetic-agent:recovery",
-        sessionId: "synthetic-recovery",
       },
       context,
       assertCurrent() {},
