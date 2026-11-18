@@ -8,7 +8,14 @@ read_when:
   - Understanding how skill commands are registered
 ---
 
-The Gateway handles commands sent as standalone messages starting with `/`.
+The Gateway recognizes text slash commands, directives, and inline shortcuts only
+when the sender text starts with `/` (leading whitespace and channel-owned bot
+addressing are allowed). Ordinary prose and quotations such as
+`Send /model to choose another model.` stay unchanged.
+A leading directive can still be followed by a task or chained with other directives,
+for example `/think high /verbose on explain this code`. Once a message starts
+with `/`, existing chained directive parsing remains; this is not Markdown-aware
+quote parsing.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
 
 When a conversation is bound to an ACP session, normal text routes to the ACP
@@ -44,6 +51,10 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
+    - Integrations that wrap sender text in envelopes or sender labels must supply
+      clean command text as `CommandBody` or `BodyForCommands`. A wrapped `Body`
+      alone no longer exposes a command; a plain slash-leading `Body` still works.
+      A slash on a later line does not turn a prose message into a command.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
       command and its delivered acknowledgement are retained as user/assistant
@@ -52,7 +63,7 @@ command handling is enabled for the surface.
       to the current message and never change later turns. Include them with
       the task. Use [session permission modes](/gateway/permission-modes) for
       session-wide policy. `/exec host=... node=...` still persists placement.
-    - In **normal chat** messages with other text, they act as inline hints and
+    - In **messages starting with a slash** that include task text, directives act as inline hints and
       do **not** persist session settings.
       Model selection is the exception: an authorized inline `/model` or
       configured `/<alias>` persists the session selection. Owner/admin `-a`
@@ -652,7 +663,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Accordion>
   <Accordion title="Fast path and inline shortcuts">
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
-    - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
+    - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) can accompany task text in messages starting with `/`, and are stripped before the model sees the remaining text. Mid-sentence mentions such as `Please explain /status` do not run a shortcut.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.

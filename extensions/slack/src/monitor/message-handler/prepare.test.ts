@@ -2052,6 +2052,20 @@ describe("prepareSlackMessage sender prefix", () => {
     );
   }
 
+  it.each([
+    ["Send /model to choose another model.", "Send /model to choose another model."],
+    ["/think high explain this", "/think high explain this"],
+    ["/help Please\ncontinue", "/help Please continue"],
+  ])("keeps the sender command projection after bot addressing: %j", async (text, commandBody) => {
+    const ctx = createSenderPrefixCtx();
+    ctx.allowFrom = ["U1"];
+    const result = await prepareSenderPrefixMessage(ctx, "<@BOT> " + text, "1700000000.0006");
+    expect(result?.ctxPayload).toMatchObject({
+      CommandBody: commandBody,
+      BodyForCommands: commandBody,
+    });
+  });
+
   it("keeps user parenthetical text when a Slack mention name cannot resolve", async () => {
     const ctx = createSenderPrefixCtx();
     ctx.resolveUserName = async (id: string) => ({

@@ -341,7 +341,7 @@ describe("mixed inline directives", () => {
   });
 
   it("preserves a mixed alias named list as a model selection", async () => {
-    const body = "please reply /list -s";
+    const body = "/list -s please reply";
     const cfg = { commands: { text: true }, agents: { defaults: {} } } as OpenClawConfig;
     const aliasIndex: ModelAliasIndex = {
       byAlias: new Map([
@@ -477,7 +477,8 @@ describe("mixed inline directives", () => {
     const sessionEntry = createSessionEntry({ execHost: "node", execNode: "worker-1" });
     const initialEntry = { ...sessionEntry };
     for (const [body, security, ask] of [
-      ["please reply /exec host=gateway node=other security=deny ask=always", "deny", "always"],
+      ["/exec host=gateway node=other security=deny ask=always please reply", "deny", "always"],
+      ["please reply /exec host=gateway node=other security=deny ask=always", undefined, undefined],
       ["please reply again", undefined, undefined],
     ] as const) {
       const directives = routeDirectives(body, cfg);

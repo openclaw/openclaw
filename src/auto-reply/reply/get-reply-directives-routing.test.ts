@@ -15,59 +15,15 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
 }));
 
 describe("sender-owned directive projection", () => {
-  it.each([
-    {
-      name: "selects an inline shortcut after a rendered group mention",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-      chatType: "channel" as const,
-      isGroup: true,
-    },
-    {
-      name: "selects an inline shortcut when the rendered mention trails the text",
-      rawText: "Please /help continue <@BOT> (Bek (Ops))",
-      commandText: "Please /help continue",
-      expected: "Please continue <@BOT> (Bek (Ops))",
-      chatType: "channel" as const,
-      isGroup: true,
-    },
-    {
-      name: "selects an inline shortcut on a later line after a rendered mention",
-      rawText: "<@BOT> (Bek (Ops)) Please summarize\n/help",
-      commandText: "Please summarize /help",
-      expected: "<@BOT> (Bek (Ops)) Please summarize\n",
-      chatType: "channel" as const,
-      isGroup: true,
-    },
-    {
-      name: "selects an inline shortcut after mention rendering in a direct message",
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please continue",
-      chatType: "direct" as const,
-      isGroup: false,
-    },
-    {
-      name: "keeps attachment context after a multiline sender shortcut",
-      rawText: "<@BOT> (Bek (Ops)) Please /help\ncontinue\n[slack attachment unavailable]",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
-      commandText: "Please /help continue",
-      expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
-      chatType: "channel" as const,
-      isGroup: true,
-    },
-  ])("$name", ({ rawText, commandSourceText, commandText, expected, chatType, isGroup }) => {
-    const preparedSource = commandSourceText ?? rawText;
+  it("keeps leading whitespace, group addressing, and chained directives", () => {
+    const body = " \t<@BOT> (Bek (Ops)) /think high /verbose on explain this";
     const ctx = buildTestCtx({
       Provider: "slack",
       Surface: "slack",
-      ChatType: chatType,
-      CommandBody: commandText,
-      RawBody: rawText,
-      BodyForAgent: rawText,
+      ChatType: "channel",
+      CommandBody: body,
+      BodyForAgent: body,
       CommandAuthorized: true,
-      ChannelContext: { chat: { commandSourceText: preparedSource } },
     });
     const result = resolveReplyDirectiveRouting({
       commandText: ctx.commandText,
@@ -75,16 +31,91 @@ describe("sender-owned directive projection", () => {
       modelAliases: [],
       canInterpretTextDirectives: true,
       isAuthorizedSender: true,
-      isGroup,
+      isGroup: true,
       wasMentioned: true,
       ctx,
-      cfg: { commands: { text: true } },
+      cfg: {},
       agentId: "main",
       resetTriggered: false,
     });
-    expect(result.inlineCommand).toBe("/help");
-    expect(result.cleanedBody).toBe(expected);
+    expect(result.directives).toMatchObject({ thinkLevel: "high", verboseLevel: "on" });
+    expect(result.cleanedBody.trim()).toBe("<@BOT> (Bek (Ops)) explain this");
   });
+
+  it.each([
+    {
+      name: "selects an inline shortcut after a rendered group mention",
+      rawText: "<@BOT> (Bek (Ops)) /help Please continue",
+      commandText: "/help Please continue",
+      expected: "<@BOT> (Bek (Ops)) Please continue",
+      chatType: "channel" as const,
+      isGroup: true,
+    },
+    {
+      name: "selects an inline shortcut when the rendered mention trails the text",
+      rawText: "/help Please continue <@BOT> (Bek (Ops))",
+      commandText: "/help Please continue",
+      expected: "Please continue <@BOT> (Bek (Ops))",
+      chatType: "channel" as const,
+      isGroup: true,
+    },
+    {
+      name: "keeps a later-line shortcut in prose after a rendered mention",
+      rawText: "<@BOT> (Bek (Ops)) Please summarize\n/help",
+      commandText: "Please summarize /help",
+      expected: "<@BOT> (Bek (Ops)) Please summarize\n/help",
+      noShortcut: true,
+      chatType: "channel" as const,
+      isGroup: true,
+    },
+    {
+      name: "selects an inline shortcut after mention rendering in a direct message",
+      rawText: "<@BOT> (Bek (Ops)) /help Please continue",
+      commandText: "/help Please continue",
+      expected: "<@BOT> (Bek (Ops)) Please continue",
+      chatType: "direct" as const,
+      isGroup: false,
+    },
+    {
+      name: "keeps attachment context after a multiline sender shortcut",
+      rawText: "<@BOT> (Bek (Ops)) /help Please\ncontinue\n[slack attachment unavailable]",
+      commandSourceText: "<@BOT> (Bek (Ops)) /help Please\ncontinue",
+      commandText: "/help Please continue",
+      expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
+      chatType: "channel" as const,
+      isGroup: true,
+    },
+  ])(
+    "$name",
+    ({ rawText, commandSourceText, commandText, expected, chatType, isGroup, noShortcut }) => {
+      const preparedSource = commandSourceText ?? rawText;
+      const ctx = buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: chatType,
+        CommandBody: commandText,
+        RawBody: rawText,
+        BodyForAgent: rawText,
+        CommandAuthorized: true,
+        ChannelContext: { chat: { commandSourceText: preparedSource } },
+      });
+      const result = resolveReplyDirectiveRouting({
+        commandText: ctx.commandText,
+        agentText: ctx.agentText,
+        modelAliases: [],
+        canInterpretTextDirectives: true,
+        isAuthorizedSender: true,
+        isGroup,
+        wasMentioned: true,
+        ctx,
+        cfg: { commands: { text: true } },
+        agentId: "main",
+        resetTriggered: false,
+      });
+      expect(result.inlineCommand).toBe(noShortcut ? undefined : "/help");
+      expect(result.cleanedBody).toBe(expected);
+    },
+  );
 
   it("rejects prepared channel metadata that does not reconstruct the command body", () => {
     const agentText = "[Forwarded message]\nPlease /help continue";
@@ -92,12 +123,12 @@ describe("sender-owned directive projection", () => {
       Provider: "slack",
       Surface: "slack",
       ChatType: "channel",
-      CommandBody: "Please /help continue",
+      CommandBody: "/help Please continue",
       RawBody: "unrelated sender text",
       BodyForAgent: agentText,
       CommandAuthorized: true,
       ChannelContext: {
-        chat: { commandSourceText: "<@BOT> (Bek (Ops)) different /help text" },
+        chat: { commandSourceText: "<@BOT> (Bek (Ops)) different /help\ntext" },
       },
     });
     const result = resolveReplyDirectiveRouting({
@@ -128,9 +159,9 @@ describe("sender-owned directive projection", () => {
     },
     {
       name: "removes sender status while preserving forwarded status",
-      commandText: "Please /status summarize",
-      rawText: "Please /status summarize",
-      agentText: "Please /status summarize\n[Forwarded message]\n/status marker",
+      commandText: "/status Please summarize",
+      rawText: "/status Please summarize",
+      agentText: "/status Please summarize\n[Forwarded message]\n/status marker",
       expected: "Please summarize\n[Forwarded message]\n/status marker",
       inlineStatus: true,
     },
@@ -152,9 +183,9 @@ describe("sender-owned directive projection", () => {
     },
     {
       name: "strips repeated sender status without changing remaining whitespace",
-      commandText: "Please /status summarize /status\n  code()",
-      rawText: "Please /status summarize /status\n  code()",
-      agentText: "Please /status summarize /status\n  code()",
+      commandText: "/status Please summarize /status\n  code()",
+      rawText: "/status Please summarize /status\n  code()",
+      agentText: "/status Please summarize /status\n  code()",
       expected: "Please summarize\n  code()",
       inlineStatus: true,
     },

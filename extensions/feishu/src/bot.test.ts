@@ -905,6 +905,13 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockSendMessageFeishu.mock.calls[0]![0].to).toBe("chat:oc_dm_chat_1");
   });
 
+  it("does not turn plain Feishu group text into a command probe", async () => {
+    const text = "@Ada /status";
+    await receiveGroup({ messageId: "msg-group-command-prose", text });
+    expect(mockShouldComputeCommandAuthorized).toHaveBeenCalledWith(text, currentRuntimeConfig);
+    expect(inboundContext()).toMatchObject({ CommandBody: text, BodyForCommands: text });
+  });
+
   it.each([
     ["ou-attacker", false],
     ["ou-admin", true],

@@ -7,7 +7,7 @@ title: "Thinking levels"
 
 ## What it does
 
-- Inline directive in any inbound body: `/t <level>`, `/think:<level>`, or `/thinking <level>`.
+- Start a message with `/t <level>`, `/think:<level>`, or `/thinking <level>` (leading whitespace and channel-owned bot addressing are allowed). You can follow it with task text or other directives. Mid-sentence mentions such as `Please explain /think high` remain ordinary text.
 - Levels (aliases): `off | minimal | low | medium | high | xhigh | adaptive | max | ultra`, roughly mirroring Anthropic's classic "think" < "think hard" < "think harder" < "ultrathink" magic-word ladder:
   - minimal ~ "think"
   - low ~ "think hard"

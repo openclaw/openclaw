@@ -1117,18 +1117,18 @@ describe("handleInlineActions", () => {
     {
       name: "channel mention",
       chatType: "channel" as const,
-      rawText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help continue",
-      commandText: "Please /help continue",
+      rawText: "<@BOT> (Bek (Ops)) /help Please continue",
+      commandSourceText: "<@BOT> (Bek (Ops)) /help Please continue",
+      commandText: "/help Please continue",
       expected: "<@BOT> (Bek (Ops)) Please continue",
     },
 
     {
       name: "multiline sender before attachment context",
       chatType: "channel" as const,
-      rawText: "<@BOT> (Bek (Ops)) Please /help\ncontinue\n[slack attachment unavailable]",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
-      commandText: "Please /help continue",
+      rawText: "<@BOT> (Bek (Ops)) /help Please\ncontinue\n[slack attachment unavailable]",
+      commandSourceText: "<@BOT> (Bek (Ops)) /help Please\ncontinue",
+      commandText: "/help Please continue",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
     },
   ])("routes a Slack inline shortcut once after $name rendering", async (params) => {
@@ -1241,6 +1241,16 @@ describe("sender command dispatch ownership", () => {
   });
 
   it.each([
+    {
+      name: "ordinary slash prose",
+      shape: "prose",
+      forwarded: false,
+      commandName: "/help",
+      commandText: "Please explain /help and /status before /reset.",
+      normalized: "Please explain /help and /status before /reset.",
+      botUsername: undefined,
+      expectedPrompt: undefined,
+    },
     {
       name: "explicit skill reference",
       shape: "skill",
@@ -1377,7 +1387,13 @@ describe("sender command dispatch ownership", () => {
         ([params]) => params.command.commandBodyNormalized,
       );
 
-      if (shape === "skill") {
+      if (shape === "prose") {
+        expect(result.kind).toBe("continue");
+        expect(sessionCtx.agentText).toBe(commandText);
+        expect(dispatched).toEqual([]);
+        expect(onBlockReply).not.toHaveBeenCalled();
+        expect(buildStatusReplyMock).not.toHaveBeenCalled();
+      } else if (shape === "skill") {
         const expected = expandedOfficeHoursRequest(commandText);
         expect(result.kind).toBe("continue");
         expect(sessionCtx.agentText).toBe(expected);

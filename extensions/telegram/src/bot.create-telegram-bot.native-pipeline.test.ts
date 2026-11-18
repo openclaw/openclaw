@@ -36,6 +36,27 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 describe("createTelegramBot typed command pipeline", () => {
+  it("keeps a mid-message command entity in the ordinary message pipeline", async () => {
+    const text = "Please explain /status";
+    const bot = await createBot(true, true, {
+      commands: { native: true },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    await bot.handleUpdate({
+      update_id: 1003,
+      message: {
+        ...commandMessage("/status"),
+        text,
+        entities: [{ type: "bot_command", offset: text.indexOf("/status"), length: 7 }],
+      },
+    });
+    expect(harness.replySpy).toHaveBeenCalledOnce();
+    expect(harness.replySpy.mock.calls[0]?.[0]).toMatchObject({
+      CommandBody: text,
+      CommandTurn: { kind: "normal", source: "message" },
+    });
+  });
+
   it("runs the login executor without dispatching a turn", async () => {
     const bot = await createBot();
     await bot.handleUpdate({ update_id: 1004, message: commandMessage("/login") });

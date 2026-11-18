@@ -133,11 +133,10 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {
-  return text
-    .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
-    .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Transport mentions are normalized to <at> markup; plain @name is sender text.
+  const body = text.replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ").trim();
+  // Preserve multiline slash arguments after removing transport mentions.
+  return body.startsWith("/") && /[\r\n]/.test(body) ? body : body.replace(/\s+/g, " ");
 }
 
 function parseMediaResource(

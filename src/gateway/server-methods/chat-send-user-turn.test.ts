@@ -316,9 +316,16 @@ describe("prepareChatSendUserTurn", () => {
     },
     { name: "reset", inboundMessage: "/reset\ninspect this", suppressed: false },
     { name: "suppressed status", inboundMessage: "/status", suppressed: true },
+    {
+      name: "ordinary slash prose",
+      inboundMessage: "Send /model to choose another model.\n/status is another example.",
+      suppressed: false,
+      prose: true,
+    },
   ])(
     "separates $name command input from attachment text while preserving turn facts",
-    async ({ inboundMessage, suppressed }) => {
+    async ({ inboundMessage, suppressed, prose }) => {
+      const command = !suppressed && !prose;
       const { controller, readInput } = createUserTurnInputController(inboundMessage);
       const parsedMessage = `${inboundMessage}\n[media attached: media://inbound/voice.mp3]`;
       const prepared = prepareChatSendUserTurn({
@@ -363,9 +370,9 @@ describe("prepareChatSendUserTurn", () => {
         RawBody: parsedMessage,
         CommandAuthorized: !suppressed,
         CommandTurn: {
-          kind: suppressed ? "normal" : "text-slash",
-          source: suppressed ? "message" : "text",
-          authorized: !suppressed,
+          kind: command ? "text-slash" : "normal",
+          source: command ? "text" : "message",
+          authorized: command,
           body: inboundMessage,
         },
         media: [
@@ -383,8 +390,8 @@ describe("prepareChatSendUserTurn", () => {
         SenderUsername: "Gateway CLI",
       });
       expect(prepared.accountId).toBe("account-1");
-      expect(prepared.isInternalTextSlashCommandTurn).toBe(!suppressed);
-      expect(prepared.ctx.CommandSource).toBe(suppressed ? undefined : "text");
+      expect(prepared.isInternalTextSlashCommandTurn).toBe(command);
+      expect(prepared.ctx.CommandSource).toBe(command ? "text" : undefined);
       expect(prepared.ctx.CommandInterpretationSuppressed).toBe(suppressed ? true : undefined);
       const ctx = finalizeInboundContext(prepared.ctx);
       const routed = resolveReplyDirectiveRouting({
@@ -401,6 +408,10 @@ describe("prepareChatSendUserTurn", () => {
         resetTriggered: false,
       });
       expect(routed.hasInlineStatus).toBe(false);
+      if (prose) {
+        expect(routed.cleanedBody).toBe(ctx.agentText);
+        expect(routed.directives.hasModelDirective).toBe(false);
+      }
       if (inboundMessage.startsWith("/skill")) {
         expect(normalizeCommandBody(ctx.commandText)).toBe("/skill weather\nfirst\n  second");
       }

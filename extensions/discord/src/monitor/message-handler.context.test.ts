@@ -25,6 +25,14 @@ async function context(
 }
 
 describe("discord message context", () => {
+  it.each(["Send /model to choose another model.", "/think high explain this"])(
+    "keeps the typed sender source for %j",
+    async (text) => {
+      const payload = await context({ baseText: text, messageText: text }, text);
+      expect(payload).toMatchObject({ RawBody: text, CommandBody: text, BodyForCommands: text });
+    },
+  );
+
   it("preserves batched reply identities", async () => {
     const payload = await context({
       replyToMode: "batched",

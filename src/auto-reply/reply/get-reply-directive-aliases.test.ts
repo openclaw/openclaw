@@ -363,8 +363,8 @@ describe("reply directive resolution", () => {
   });
 
   it("preserves unauthorized mixed input exactly without exposing model state", async () => {
-    const body = "please /model anthropic/claude-opus-4-6@work --runtime codex -s now";
-    const agentText = "[wrapped]\nplease /model anthropic/claude-opus-4-6 now";
+    const body = "/model anthropic/claude-opus-4-6@work --runtime codex -s please now";
+    const agentText = "[wrapped]\n/model anthropic/claude-opus-4-6 please now";
     const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
       body,
       agentText,
@@ -422,7 +422,7 @@ describe("reply directive resolution", () => {
   });
 
   it("still routes model directives after unknown skill references", async () => {
-    const body = "Please use $missing_skill then /model anthropic/claude-opus-4-6";
+    const body = "/model anthropic/claude-opus-4-6 Please use $missing_skill";
 
     const { result } = await resolveModelDirective({
       body,
@@ -438,11 +438,30 @@ describe("reply directive resolution", () => {
       hasModelDirective: true,
       rawModelDirective: "anthropic/claude-opus-4-6",
     });
-    expect(result.result.cleanedBody).toBe("Please use $missing_skill then");
+    expect(result.result.cleanedBody).toBe("Please use $missing_skill");
+  });
+
+  it.each([
+    "Please use $missing_skill then /model anthropic/claude-opus-4-6",
+    "Show me how /fable works",
+    "Please explain /think high /status /help",
+    "First line\n/think high",
+    "> /think high",
+  ])("keeps slash mentions in prose: %j", async (body) => {
+    const { result, sessionEntry } = await resolveModelDirective({ body, surface: "webchat" });
+    expect(result).toMatchObject({
+      kind: "continue",
+      result: {
+        cleanedBody: body,
+        inlineStatusRequested: false,
+        directives: { hasModelDirective: false, hasThinkDirective: false },
+      },
+    });
+    expect(sessionEntry).toEqual(createSessionEntry());
   });
 
   it("keeps commands.text:false model syntax literal, including an empty agent projection", async () => {
-    const body = "please /fable --runtime codex -s now";
+    const body = "/fable --runtime codex -s please now";
     const { result, sessionEntry, sessionCtx } = await resolveModelDirective({
       body,
       agentText: "",

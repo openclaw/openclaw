@@ -79,8 +79,8 @@ describe("handleCompactCommand", () => {
           Provider: "whatsapp",
           Surface: "whatsapp",
           CommandSource: "text",
-          CommandBody: "/compact: focus on decisions",
-          commandText: "/compact: focus on decisions",
+          CommandBody: "/compact: focus on decisions\nAda: keep this label",
+          commandText: "/compact: focus on decisions\nAda: keep this label",
           From: "+15550001",
           To: "+15550002",
           SenderName: "Alice",
@@ -111,7 +111,7 @@ describe("handleCompactCommand", () => {
     expect(call.sessionKey).toBe("agent:main:main");
     expect(call.allowGatewaySubagentBinding).toBe(true);
     expect(call.trigger).toBe("manual");
-    expect(call.customInstructions).toBe("focus on decisions");
+    expect(call.customInstructions).toBe("focus on decisions\nAda: keep this label");
     expect(call.messageChannel).toBe("whatsapp");
     expect(call.groupId).toBe("group-1");
     expect(call.groupChannel).toBe("#general");

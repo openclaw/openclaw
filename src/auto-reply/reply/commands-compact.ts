@@ -28,7 +28,7 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { matchCommandPrefix, rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { createCompactionNoticePayload } from "./compaction-notice.js";
-import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { stripMentions } from "./mentions.js";
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -37,7 +37,7 @@ function extractCompactInstructions(params: {
   agentId?: string;
   isGroup: boolean;
 }): string | undefined {
-  const raw = stripStructuralPrefixes(params.rawBody ?? "");
+  const raw = params.rawBody ?? "";
   const stripped = params.isGroup
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;

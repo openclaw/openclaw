@@ -30,6 +30,20 @@ export function resolveReplyDirectiveRouting(params: {
   hasInlineStatus: boolean;
   unauthorizedReasoningDirectiveAttempt: boolean;
 } {
+  // Admit slash syntax from the sender projection once. Cleanup of a raw
+  // channel span or a chained directive cannot create a new command source.
+  const senderText = params.isGroup
+    ? stripMentions(params.commandText, params.ctx, params.cfg, params.agentId)
+    : params.commandText;
+  if (!senderText.trimStart().startsWith("/")) {
+    return {
+      directives: clearInlineDirectives(params.commandText),
+      cleanedBody: params.agentText,
+      hasInlineStatus: false,
+      unauthorizedReasoningDirectiveAttempt: false,
+    };
+  }
+
   const allowStatusDirective = params.canInterpretTextDirectives;
   const parseDirectives = (text: string) =>
     parseInlineSessionDirectives(text, {
@@ -145,9 +159,18 @@ export function resolveReplyDirectiveRouting(params: {
         stripProviderMentions ? stripMentions(text, params.ctx, params.cfg, params.agentId) : text,
         { botUsername: params.ctx.BotUsername },
       );
+    const preparedSender =
+      preparedSource === undefined
+        ? ""
+        : stripMentions(preparedSource, params.ctx, params.cfg, params.agentId);
+    const commandBody = params.commandText.trim();
     const preparedSourceMatches =
       preparedSource !== undefined &&
-      normalizeSource(preparedSource, true) === params.commandText.trim();
+      (normalizeSource(preparedSender, false) === commandBody ||
+        // This release's Slack command projection still folds multiline whitespace.
+        (params.ctx.Provider === "slack" &&
+          /[\r\n]/.test(preparedSender) &&
+          preparedSender.replace(/\s+/g, " ") === commandBody));
     // A channel may identify its exact sender span after provider rendering. Accept it only when
     // provider-owned mention stripping reconstructs the same command body; supplemental context
     // and arbitrary channel metadata must never become a command source.
@@ -157,11 +180,11 @@ export function resolveReplyDirectiveRouting(params: {
     const firstLine = lineEnd < 0 ? rawText : rawText.slice(0, lineEnd);
     // Normalized commands may omit multiline tails. Those bytes remain prompt content.
     const commandSource =
-      preparedSourceMatches || params.resetTriggered || rawText.trim() === params.commandText.trim()
+      preparedSourceMatches || params.resetTriggered || rawText.trim() === commandBody
         ? rawText
-        : normalizeSource(firstLine) === params.commandText.trim()
+        : normalizeSource(firstLine) === commandBody
           ? firstLine
-          : normalizeSource(rawText) === params.commandText.trim()
+          : normalizeSource(rawText) === commandBody
             ? rawText
             : undefined;
     if (commandSource !== undefined) {

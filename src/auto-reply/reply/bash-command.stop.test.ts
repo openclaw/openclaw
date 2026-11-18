@@ -111,6 +111,17 @@ describe("handleBashChatCommand", () => {
     createExecToolMock.mockReset();
   });
 
+  it.each(["[example] /bash stop session-1", "Ada: /bash stop session-1"])(
+    "does not promote wrapped text into a bash request: %j",
+    async (body) => {
+      getSessionMock.mockReturnValue(buildRunningSession());
+      const result = await handleBashChatCommand(buildParams(body));
+      expect(result.text).toContain("Unrecognized bash request");
+      expect(cancelBackgroundExecSessionMock).not.toHaveBeenCalled();
+      expect(createExecToolMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { status: "completed", exitCode: 1, exitSignal: null, label: "code 1" },
     { status: "failed", exitCode: null, exitSignal: "SIGTERM", label: "signal SIGTERM" },
