@@ -1,4 +1,4 @@
-import { createSignal, Errored, For, lazy, Loading, Show } from "solid-js";
+import { createSignal, Errored, For, lazy, Loading, Repeat, Show } from "solid-js";
 import { titleForRoute, visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -45,13 +45,12 @@ export function LazySettingsSidebar(
   return (
     <Loading
       on={attempt()}
-      fallback={<SettingsSidebarFallback sidebarProps={props.sidebarProps} failed={false} />}
+      fallback={<SettingsSidebarFallback sidebarProps={props.sidebarProps} />}
     >
       <Errored
         fallback={(_error, reset) => (
           <SettingsSidebarFallback
             sidebarProps={props.sidebarProps}
-            failed={true}
             retry={() => {
               setAttempt((value) => value + 1);
               reset();
@@ -67,7 +66,6 @@ export function LazySettingsSidebar(
 
 function SettingsSidebarFallback(props: {
   sidebarProps: SettingsSidebarFallbackProps;
-  failed: boolean;
   retry?: () => void;
 }) {
   return (
@@ -84,7 +82,7 @@ function SettingsSidebarFallback(props: {
                 ? "settings-embed-list"
                 : "native-embed-header"
             }
-            aria-busy={props.failed ? "false" : "true"}
+            aria-busy={props.retry ? "false" : "true"}
           >
             <Show when={props.sidebarProps.presentation === "embed-page"}>
               <button
@@ -101,10 +99,10 @@ function SettingsSidebarFallback(props: {
                 : (props.sidebarProps.activePluginTab?.label ??
                   titleForRoute(props.sidebarProps.activeRouteId, t))}
             </h1>
-            <p role={props.failed ? "alert" : "status"}>
-              {t(props.failed ? "nav.settingsLoadFailed" : "common.loading")}
+            <p role={props.retry ? "alert" : "status"}>
+              {t(props.retry ? "nav.settingsLoadFailed" : "common.loading")}
             </p>
-            <Show when={props.failed}>
+            <Show when={props.retry}>
               <button class="btn" onClick={() => props.retry?.()}>
                 {t("common.retry")}
               </button>
@@ -112,7 +110,7 @@ function SettingsSidebarFallback(props: {
           </section>
         }
       >
-        <aside class="settings-sidebar" aria-busy={props.failed ? undefined : "true"}>
+        <aside class="settings-sidebar" aria-busy={props.retry ? undefined : "true"}>
           <header class="settings-sidebar__header" onMouseDown={beginNativeWindowDragFromTopInset}>
             <button
               type="button"
@@ -126,7 +124,7 @@ function SettingsSidebarFallback(props: {
             </button>
             <h1 class="settings-sidebar__title">{t("nav.settings")}</h1>
           </header>
-          <Show when={props.failed} fallback={<SettingsSidebarSkeleton {...props.sidebarProps} />}>
+          <Show when={props.retry} fallback={<SettingsSidebarSkeleton {...props.sidebarProps} />}>
             <div class="settings-sidebar__empty" role="alert">
               {t("nav.settingsLoadFailed")}
               <button class="btn btn--sm" type="button" onClick={() => props.retry?.()}>
@@ -153,8 +151,6 @@ function SettingsSidebarFallback(props: {
 }
 
 function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
-  const groups = () =>
-    visibleSettingsNavigationGroups(props.canAdmin, props.nativeDeviceSettings ?? null);
   return (
     <>
       <div class="settings-sidebar__agent" aria-hidden="true">
@@ -169,17 +165,20 @@ function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
         aria-busy="true"
         aria-label={t("common.loading")}
       >
-        <For each={groups()}>
+        <For
+          each={visibleSettingsNavigationGroups(props.canAdmin, props.nativeDeviceSettings ?? null)}
+        >
           {(group) => (
             <div class="settings-sidebar__group" aria-hidden="true">
               <Show when={group.labelKey}>
                 <span class="skeleton settings-sidebar__loading-group-label" />
               </Show>
-              <For
-                each={
-                  group.labelKey === "nav.settingsGroupAgents"
-                    ? [...group.routes, ...(props.pluginTabs ?? [])]
-                    : group.routes
+              <Repeat
+                count={
+                  group.routes.length +
+                  (group.labelKey === "nav.settingsGroupAgents"
+                    ? (props.pluginTabs?.length ?? 0)
+                    : 0)
                 }
               >
                 {() => (
@@ -188,7 +187,7 @@ function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
                     <span class="skeleton settings-sidebar__loading-label" />
                   </span>
                 )}
-              </For>
+              </Repeat>
             </div>
           )}
         </For>

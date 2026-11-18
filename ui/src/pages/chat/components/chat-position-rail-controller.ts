@@ -203,15 +203,16 @@ export function createPositionRail(props: PositionRailParams) {
       void refresh(view);
       onSettled(() => {
         refreshingWindow = false;
+        if (!connected || !scroller || scroller !== scrollElement) {
+          return;
+        }
         // A virtual window change can move the retained marker out of DOM order.
         // Restore its focus after commit without treating it as new navigation.
         if (
-          connected &&
-          scroller === scrollElement &&
           !pendingFocusId &&
           focusedId &&
           focused instanceof HTMLElement &&
-          scroller?.contains(focused) &&
+          scroller.contains(focused) &&
           scroller.ownerDocument.activeElement === scroller.ownerDocument.body
         ) {
           interactionState.focusedId = focusedId;
@@ -224,12 +225,7 @@ export function createPositionRail(props: PositionRailParams) {
         }
         // The browser can recenter a retained focused marker when the keyed window
         // commits. Apply the explicit reader destination to the committed window.
-        if (
-          revealOffset !== undefined &&
-          scroller &&
-          scroller === scrollElement &&
-          viewportOffset === revealOffset
-        ) {
+        if (viewportOffset === revealOffset) {
           scroller.scrollTop = revealOffset;
         }
       });
