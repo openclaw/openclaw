@@ -84,7 +84,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       );
 
     it.each([false, true])(
-      "fences production action and transferred readers at native COMMIT (rollback=%s)",
+      "retains admitted actions while fencing role readers at native COMMIT (rollback=%s)",
       async (rollback) => {
         const person = profile(`native-fence-${rollback}`);
         const action = await prepareAction(person);
@@ -112,7 +112,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             commits++;
             expect([bound(), readBound(), readSettled()]).toEqual([false, "pending", "pending"]);
             expect(() => authority.assertSettled(person.id)).toThrow("has not settled");
-            expect(action.assertCurrent).toThrow("Personal profile owner changed");
+            expect(action.assertCurrent).not.toThrow();
             if (rollback) {
               throw new Error("synthetic native COMMIT refusal");
             }
@@ -128,11 +128,10 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
           );
         if (rollback) {
           expect(mutate).toThrow("synthetic native COMMIT refusal");
-          await expect(perform(false)).resolves.toMatchObject({ ok: true });
         } else {
           mutate();
-          await expect(perform(false)).rejects.toThrow("Personal profile owner changed");
         }
+        await expect(perform(false)).resolves.toMatchObject({ ok: true });
         expect(commits).toBe(1);
         expect([bound(), readBound(), readSettled()]).toEqual([
           rollback,
@@ -141,7 +140,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         ]);
         expect(() => authority.assertSettled(person.id)).not.toThrow();
         await expect(getCanonicalUserPreferences(person.id)).resolves.toMatchObject({
-          entries: { "synthetic.authority": !rollback },
+          entries: { "synthetic.authority": false },
         });
       },
     );
@@ -225,7 +224,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     });
 
     it.runIf(engine === "postgres")(
-      "keeps production authority closed after losing a real COMMIT reply",
+      "retains admitted actions while role readers await recovery after losing a COMMIT reply",
       async () => {
         const person = profile("lost-role-commit");
         const action = await prepareAction(person);
@@ -288,7 +287,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
             { "synthetic.authority": false },
             { assertCurrent: action.assertCurrent },
           ),
-        ).rejects.toThrow("Personal profile owner changed");
+        ).resolves.toMatchObject({ ok: true });
         const observer = new Client({ connectionString: mixedAgentConnection });
         await observer.connect();
         try {
