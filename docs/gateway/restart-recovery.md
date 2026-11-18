@@ -699,11 +699,14 @@ turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
 
-If shutdown interrupts the requester while it is processing a captured child
-result, that settle input keeps its completion obligation. Startup resumes the
-same input under fresh authority instead of also sending a generic restart
-input. Its original transcript entry and completion receipt prevent duplicate
-handoffs across later restarts. An intentional Stop still ends the obligation.
+If shutdown interrupts the requester after a captured child result was committed
+to its transcript, that result is already delivered. The Gateway resumes the
+interrupted requester turn under fresh authority with its normal restart input,
+using the committed result in the saved conversation. The registry settles its
+receipt without submitting the result again. Unconsumed results remain owned by
+the registry. The transcript and completion receipt prevent duplicate handoffs
+across later restarts. A requester that deliberately yielded remains parked for
+its children. An intentional Stop still ends the obligation.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes
