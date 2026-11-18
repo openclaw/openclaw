@@ -228,11 +228,19 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     await loadRuntimeOwnerAssignmentHelpers();
   let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
   if (!manifestRegistry && shouldLoadPluginMetadataForSecrets(sourceConfig)) {
-    const { resolveConfigWidePluginManifestRegistry } = await loadRuntimeManifestHelpers();
-    manifestRegistry = resolveConfigWidePluginManifestRegistry({
-      config: sourceConfig,
-      env: runtimeEnv,
-    });
+    const { resolveConfigWidePluginMetadataSnapshotAsync } = await loadRuntimeManifestHelpers();
+    manifestRegistry = (
+      await resolveConfigWidePluginMetadataSnapshotAsync({
+        config: sourceConfig,
+        env: runtimeEnv,
+      })
+    ).manifestRegistry;
+  }
+  if (manifestRegistry) {
+    // Web-provider discovery can enter the synchronous plugin loader. Prepare
+    // its migration facts through the worker before that loader consumes them.
+    const { readPluginStateMigrationReadinessAsync } = await loadRuntimeManifestHelpers();
+    await readPluginStateMigrationReadinessAsync({ env: runtimeEnv });
   }
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??

@@ -3,4 +3,8 @@
  * Isolating it keeps tests able to mock manifest discovery without loading plugins.
  */
 export { listPluginOriginsFromMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-export { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
+export {
+  resolveConfigWidePluginManifestRegistry,
+  resolveConfigWidePluginMetadataSnapshotAsync,
+} from "../config/io.plugin-metadata.js";
+export { readPluginStateMigrationReadinessAsync } from "../plugins/plugin-state-migration-readiness.js";
