@@ -44,6 +44,7 @@ export {
   isSessionReactionEvent,
   isSessionsCreateParams,
   isSessionsTitlePrepareParams,
+  isSessionsSteerTargetParams,
   isSessionsSteerActiveParams,
   isSessionsSendParams,
   isSessionsReclaimParams,
