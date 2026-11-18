@@ -439,6 +439,7 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
   assert(instance);
   const nativeClone = globalThis.structuredClone;
   const clones = { calls: 0, stateBearingBatches: 0, questions: 0, results: 0 };
+  let coldClones: typeof clones | undefined;
   let admittedBatch: unknown;
   let admittedQuestions: unknown;
   // Only the known fixture and its native-cloned result are inspected by reference.
@@ -502,6 +503,9 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
         fixture === "small" ? 32 : decisionJsonLimits.maxBytes - 2048,
       );
       peakRssBytes = Math.max(peakRssBytes, process.memoryUsage().rss);
+      if (mode === "work" && index === 0) {
+        coldClones = { ...clones };
+      }
     }
   } finally {
     globalThis.structuredClone = nativeClone;
@@ -523,7 +527,18 @@ async function benchmarkRegisteredV1(evaluations: number, fixture: string, mode:
     inputJsonBytes,
     stateEvidenceBytes,
     questionCount: Object.keys(batch.questions).length,
-    ...(mode === "work" ? { clones } : {}),
+    ...(coldClones
+      ? {
+          clones,
+          coldClones,
+          warmClones: {
+            calls: clones.calls - coldClones.calls,
+            stateBearingBatches: clones.stateBearingBatches - coldClones.stateBearingBatches,
+            questions: clones.questions - coldClones.questions,
+            results: clones.results - coldClones.results,
+          },
+        }
+      : {}),
     firstEvaluationMs: timingsMs[0],
     warmTimingsMs: timingsMs.slice(1),
     cpuMs: (cpu.user + cpu.system) / 1000,

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { describe, expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
@@ -35,7 +35,7 @@ describe("memory search provenance enrichment", () => {
     await manager.sync({ reason: "test" });
     const { db, provider } = manager as unknown as {
       db: DatabaseSync;
-      provider: EmbeddingProvider;
+      provider: MemoryEmbeddingProvider;
     };
     const writer = memoryIndexFixtureWriter(manager);
     using embed = vi.spyOn(provider, "embed");

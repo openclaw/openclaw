@@ -16,6 +16,7 @@ import {
   type PluginCache,
 } from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { restorePrivateStateStoreModes } from "../state/openclaw-state-db-permissions.js";
 import {
   readAdmittedConfigSnapshot,
   createConfigPreflightSnapshotReader,
@@ -128,6 +129,8 @@ async function prepareStartupConfig(
       beforeStatePreparation,
       prepareClientCredentials: async (snapshot) => {
         const { prepareStartupClientCredentials } = await import("./startup-client-credentials.js");
+        // Repair modes broadened by remount before strict startup credential reads.
+        restorePrivateStateStoreModes(env);
         await prepareStartupClientCredentials({ env, config: snapshot.config });
       },
     });

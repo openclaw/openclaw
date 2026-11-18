@@ -72,6 +72,16 @@ export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   );
 }
 
+/** An ended message wait owns a continuation, not a finished result. */
+export function isEndedSubagentMessageWait(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.status === "terminal" &&
+    isYieldedSubagentRun(entry) &&
+    entry.waitForMessage === true &&
+    hasSubagentRunEnded(entry)
+  );
+}
+
 /** Last instant covered by registration grace, independent of live execution custody. */
 export function getSubagentRunStaleAt(entry: SubagentRunLivenessRecord): number {
   if (hasSubagentRunEnded(entry)) {

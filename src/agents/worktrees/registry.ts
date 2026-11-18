@@ -196,6 +196,7 @@ export function updateRegistryWorktree(
   options: {
     onlyIfLive?: boolean;
     onlyIfActiveAt?: number;
+    pendingId?: string;
     assertCurrent?: () => void;
     removalToken?: string;
     workerAuthority?: WorktreeWorkerAuthority;

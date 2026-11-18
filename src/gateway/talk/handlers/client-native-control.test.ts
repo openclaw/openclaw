@@ -467,10 +467,9 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               );
               expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
               socket.serverEvent(nativeDelegation("after-cancel", "Start a fresh small task."));
-              await socket.waitForSent(
-                (frame) =>
-                  frame.includes('"delegation_item_id":"after-cancel"') &&
-                  frame.includes("Real runner consultation completed."),
+              // Assert the terminal result below so a failed consultation cannot hang this fixture.
+              await socket.waitForSent((frame) =>
+                frame.includes('"delegation_item_id":"after-cancel"'),
               );
               expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
                 nativeCompletion("after-cancel"),

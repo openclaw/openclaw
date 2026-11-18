@@ -58,6 +58,7 @@ it("includes the documentation link in keyboard menu navigation", async () => {
   link.dispatchEvent(
     new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true }),
   );
+  await vi.dynamicImportSettled();
   await waitForSolid(() =>
     expect(document.activeElement).toBe(
       container.querySelector('[data-chat-permission-option="default"]'),

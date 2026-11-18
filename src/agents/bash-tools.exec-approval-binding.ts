@@ -25,7 +25,7 @@ export async function resolveGatewayExecApprovalDrift(params: {
       return current.message;
     }
   }
-  if (params.cwdSnapshot && !revalidateApprovedCwdSnapshot(params.cwdSnapshot)) {
+  if (params.cwdSnapshot && !(await revalidateApprovedCwdSnapshot(params.cwdSnapshot))) {
     return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
   }
   return undefined;

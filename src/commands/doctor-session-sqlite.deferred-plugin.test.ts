@@ -243,7 +243,7 @@ it.each([
       );
       expect(retainedIssue?.message).toContain("expected=[]");
       expect(retainedIssue?.message).toContain("current=[fixture-plugin]");
-      expect(retainedIssue?.message).toContain("changed=[]");
+      expect(retainedIssue?.message).toContain("changed=[fixture-plugin:added]");
       expect(retainedIssue?.message).toContain("Retained inputs remain protected");
 
       await editAndDeleteImportedSessions(scope, "edited after interrupted archival");

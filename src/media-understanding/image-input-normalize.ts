@@ -2,6 +2,7 @@
 // input-file media path before provider execution.
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
+import { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } from "../media/image-processor-config.js";
 import { normalizeInputImageBuffer } from "../media/input-files.js";
 import { readImageMetadataFromHeader } from "../media/media-services.js";
 import {
@@ -13,7 +14,6 @@ import { MEDIA_CAPABILITY_DEFAULTS } from "./defaults.constants.js";
 
 const HEIC_MIME_RE = /^image\/hei[cf](?:-sequence)?$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
-const MEDIA_UNDERSTANDING_MAX_SOURCE_PIXELS = 40_000_000;
 
 /** Normalizes image bytes before provider execution, converting HEIC/HEIF inputs to JPEG. */
 export async function normalizeImageDescriptionInput(params: {
@@ -77,7 +77,7 @@ export async function optimizeImageDescriptionInput(params: {
     fileName: params.fileName,
     maxBytes,
     imageCompression,
-    maxInputPixels: MEDIA_UNDERSTANDING_MAX_SOURCE_PIXELS,
+    maxInputPixels: MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS,
   });
   return {
     buffer: optimized.buffer,

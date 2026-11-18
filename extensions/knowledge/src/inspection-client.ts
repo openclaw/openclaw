@@ -1,8 +1,8 @@
 import type { FeatureClient, FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 
 /** The UI explicitly requests its vocabulary detail and follows every page. */
-export async function loadVocabulary(feature: FeatureClient<typeof contract>, detail = false) {
+export async function loadVocabulary(feature: FeatureClient<FullOutputContract>, detail = false) {
   const input = detail
     ? { view: "definitions" as const, includeRecords: true }
     : { view: "catalog" as const, kind: "page" as const };
@@ -18,7 +18,7 @@ export async function loadVocabulary(feature: FeatureClient<typeof contract>, de
     result.nextOffset = page.nextOffset;
   }
   // SAFETY: catalog and definitions views always return definitions; later pages were appended above.
-  return result as FeatureOutput<typeof contract, "ontology"> & {
-    definitions: NonNullable<FeatureOutput<typeof contract, "ontology">["definitions"]>;
+  return result as FeatureOutput<FullOutputContract, "ontology"> & {
+    definitions: NonNullable<FeatureOutput<FullOutputContract, "ontology">["definitions"]>;
   };
 }

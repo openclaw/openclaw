@@ -29,8 +29,9 @@ import {
 } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
+import { IDLE_GC_MS } from "./retention.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
+import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
@@ -239,7 +240,9 @@ it
           orphansRetired: 0,
           protectedCount: 1,
           failedCount: 0,
-          protectionReasons: { unreadable: 1 },
+          protectionReasons: {
+            [pass === 0 ? "unreadable" : getRegistryWorktree(env, record!.id)!.gcProtection!]: 1,
+          },
           issues: [
             {
               id: record!.id,
@@ -255,7 +258,12 @@ it
       gcSpy.mockRestore();
       await fs.chmod(locked, 0o755);
     }
-    expect((await service.gc()).removed).toEqual([record!.id]);
+    expect((await service.gc()).removed).toEqual([]);
+    expect((await service.gc({ retryDeferred: true })).removed).toEqual([record!.id]);
+    const restored = await service.restore({ id: record!.id });
+    expect(await fs.readFile(path.join(restored.path, "tracked/file.txt"), "utf8")).toBe(
+      "preserve unreadable content\n",
+    );
   },
 );
 
@@ -373,11 +381,11 @@ it.each([
     if (phase === "before cleanup") {
       await changeOrigin();
     } else {
-      const withAllocation = allocation.withWorktreeAllocationLease;
-      vi.spyOn(allocation, "withWorktreeAllocationLease").mockImplementationOnce(
+      const withMutation = allocation.withWorktreeMutationLease;
+      vi.spyOn(allocation, "withWorktreeMutationLease").mockImplementationOnce(
         async (params, run) => {
           await changeOrigin();
-          return await withAllocation(params, run);
+          return await withMutation(params, run);
         },
       );
     }

@@ -695,7 +695,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     try {
       assertRemoteControlUiIngressCurrent(remoteIngress);
     } catch {
-      close(1008, "remote Control UI ingress closed");
+      close(1008, "remote web app ingress closed");
       return;
     }
     if (isClosed()) {

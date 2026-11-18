@@ -310,7 +310,10 @@ export async function buildPreparedModelCatalogSnapshot(
   );
   logStage("registry-read", `entries=${entries.length}`);
 
-  const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({ config: cfg });
+  const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({
+    config: cfg,
+    metadataSnapshot: manifestMetadataSnapshot,
+  });
   logStage("suppress-resolver-ready");
 
   for (const entry of entries) {
@@ -364,7 +367,8 @@ export async function buildPreparedModelCatalogSnapshot(
     ),
   ]);
   // Runtime declarations describe possible models, not account entitlement.
-  // Only live registry or refreshed rows may publish those provider models.
+  // Only live registry or refreshed rows may publish those provider models; the registry
+  // already carries their catalog details (readGeneratedPluginModelCatalogProviders).
   const manifestKeyOf = createModelCatalogIdentityKeyResolver();
   const discoveredKeys = new Set(models.map(manifestKeyOf));
   const discoveredByRoute = new Map(

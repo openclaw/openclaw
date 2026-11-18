@@ -72,6 +72,32 @@ function isViewerCreator(creator: SessionUsageCreator, viewerId: string | null |
     : creator.actor.type === "human" && creator.actor.id === viewerId;
 }
 
+/** Identity rows for the "Started by" picker: the viewer reads "You", with session counts. */
+export function usageCreatorOptions(
+  creators: readonly SessionUsageCreator[],
+  selectedKey: string | null,
+  viewerId: string | null | undefined,
+): UsageValueOption[] {
+  const entries = creators.map((creator): UsageValueOption => {
+    const viewer = isViewerCreator(creator, viewerId);
+    return {
+      value: creator.key,
+      label: viewer ? t("usage.creators.you") : creatorLabel(creator),
+      secondary: viewer ? creatorLabel(creator) : undefined,
+      count: creator.sessionCount,
+      pinned: viewer,
+      leading: creator.actor?.id ? (
+        <SessionOwnerChip owner={creator.actor} size="row" />
+      ) : undefined,
+    };
+  });
+  // Keep the active filter explicit when this range has no creator metadata.
+  if (selectedKey !== null && !entries.some((option) => option.value === selectedKey)) {
+    entries.push({ value: selectedKey, label: t("usage.creators.selected") });
+  }
+  return entries;
+}
+
 export function UsageCreatorFilter(props: {
   options: readonly SessionUsageCreator[];
   selectedKey: string | null;
@@ -79,29 +105,9 @@ export function UsageCreatorFilter(props: {
   placement?: OverlayPlacement;
   onSelect: (key: string | null) => void;
 }) {
-  const options = createMemo((): UsageValueOption[] => {
-    const entries = props.options.map((creator): UsageValueOption => {
-      const viewer = isViewerCreator(creator, props.viewerId);
-      return {
-        value: creator.key,
-        label: viewer ? t("usage.creators.you") : creatorLabel(creator),
-        secondary: viewer ? creatorLabel(creator) : undefined,
-        count: creator.sessionCount,
-        pinned: viewer,
-        leading: creator.actor?.id ? (
-          <SessionOwnerChip owner={creator.actor} size="row" />
-        ) : undefined,
-      };
-    });
-    // Keep the active filter explicit when this range has no creator metadata.
-    if (
-      props.selectedKey !== null &&
-      !entries.some((option) => option.value === props.selectedKey)
-    ) {
-      entries.push({ value: props.selectedKey, label: t("usage.creators.selected") });
-    }
-    return entries;
-  });
+  const options = createMemo(() =>
+    usageCreatorOptions(props.options, props.selectedKey, props.viewerId),
+  );
   const selectedLabel = () =>
     props.selectedKey === null
       ? t("usage.creators.all")

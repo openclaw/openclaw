@@ -5,6 +5,7 @@ import {
   type AgentHarnessAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as harnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -19,7 +20,9 @@ import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js"
 import {
   createAttempt,
   createBindingStore as migrationStore,
+  createCompletedSessionFactory,
   mockClient,
+  prepareHistoryHandoff,
   registerHarness,
   reopenState,
 } from "./agentsapi-harness.persistence.test-helpers.js";
@@ -27,7 +30,7 @@ import {
   withNativeFixture,
   withPersistenceFixture,
 } from "./agentsapi-persistence-fixture.test-support.js";
-import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
+import { createHostedSession } from "./agentsapi.test-support.js";
 
 const { createSession, fetchWithSsrFGuardMock, resolveProviderAuth } = vi.hoisted(() => ({
   createSession: vi.fn<typeof import("./agentsapi-session.js").createAgentsApiSession>(),
@@ -70,25 +73,7 @@ beforeEach(() => {
   // Keep harness deadlines virtual, but share real clocks and heartbeats with SQLite lease workers.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
-  createSession.mockImplementation((options) => {
-    const turn = createTurn({ id: `turn-${options.sessionId}`, session_id: options.sessionId });
-    return {
-      isAvailable: () => false,
-      isSettled: () => true,
-      wasSubmitted: () => true,
-      queueMessage: async () => {},
-      readUsageTurns: async () => [],
-      run: async (prompt, persistInput, onSubmitted) => {
-        await persistInput();
-        await options.client.message(options.sessionId, prompt, options.signal);
-        onSubmitted();
-        options.onSettled?.();
-        return { turn, cancelled: false, terminatedByTool: false };
-      },
-      close: async () => {},
-      reconcileAfterClose: async () => turn,
-    };
-  });
+  createSession.mockImplementation(createCompletedSessionFactory());
 });
 
 const nativeTools = ["exec", "process", "read", "write", "edit", "apply_patch", "web_search"];
@@ -208,6 +193,69 @@ it.each([true, false])("sends only enabled forwarding surfaces: %s", async (enab
       expect(loadMcp).toHaveBeenCalledTimes(enabled ? 2 : 0);
     },
     () => ({ plugins: { entries: { agentsapi: { config: { forwarding } } } } }),
+  );
+});
+
+it("seeds a fresh isolated runtime with prior work without replaying it after restart", async () => {
+  await withPersistenceFixture(
+    "history-native-session",
+    async (client) => {
+      const { params } = client;
+      const recorder = await prepareHistoryHandoff(params);
+      client.create.mockRestore();
+      const requests: unknown[] = [];
+      fetchWithSsrFGuardMock.mockImplementation(async ({ url, init, beforeRequest }) => {
+        beforeRequest?.();
+        requests.push(await new Request(url, init).json());
+        return {
+          response: Response.json({ id: "history-native-session" }),
+          finalUrl: url,
+          release: async () => {},
+        };
+      });
+      await client.run({
+        prompt: "Continue and check completed actions.",
+        userTurnTranscriptRecorder: recorder,
+      });
+      expect(requests).toHaveLength(1);
+      const serialized = JSON.stringify(requests[0]);
+      expect(serialized).toContain("Merge fixture PR 42, then archive the task.");
+      expect(serialized).toContain("PR 42 is already merged.");
+      expect(serialized).not.toContain("Continue and check completed actions.");
+      expect(serialized).not.toContain("Later unrelated input.");
+      await client.restart();
+      await client.run({ runId: "next-run", prompt: "Report the remaining work." });
+      expect(requests).toHaveLength(1);
+      expect(client.message.mock.calls.map(([, prompt]) => prompt)).toEqual([
+        expect.stringContaining("Continue and check completed actions."),
+        expect.stringContaining("Report the remaining work."),
+      ]);
+      expect(client.message.mock.calls.every(([, prompt]) => !prompt.includes("PR 42"))).toBe(true);
+      // Switching away does not delete this binding. Import the missing local
+      // exchange when returning, then stop importing it after native completion.
+      await (
+        await SessionManager.openAsync(params.sessionTarget!, params.workspaceDir)
+      ).appendMessageAsync({
+        role: "user",
+        content: "Other-runtime progress: release note is ready.",
+        timestamp: 5,
+      });
+      await client.restart();
+      await client.run({ runId: "reenter-run", prompt: "Continue the release note." });
+      expect(client.message.mock.calls.at(-1)?.[1]).toContain(
+        "Other-runtime progress: release note is ready.",
+      );
+      await client.run({ runId: "ordinary-run", prompt: "Finish the summary." });
+      expect(client.message.mock.calls.at(-1)?.[1]).not.toContain("Other-runtime progress");
+      expect(requests).toHaveLength(1);
+    },
+    () => ({
+      plugins: {
+        entries: {
+          agentsapi: { config: { forwarding: { gatewayTools: false, mcpServers: false } } },
+        },
+      },
+    }),
   );
 });
 

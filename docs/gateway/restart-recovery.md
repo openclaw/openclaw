@@ -15,7 +15,19 @@ execution gets one ordinary system input asking the agent to inspect current
 state and continue. Recorded yield waits stay parked when their wake source
 survives; a lost source produces a visible failure instead.
 The transcript remains the agent's context; the Gateway does not reconstruct or
-replay the old execution.
+replay the old execution. For a captured interrupted turn, the shutdown marker
+retains its original requester's bounded authentication source. Startup revalidates
+that source and current session access before admitting the continuation; a shared
+session's owner or another participant cannot replace it. A revoked or unavailable
+source fails recovery rather than falling back to another person. Older markers
+without a captured source keep the session-principal recovery policy.
+
+If the interrupted turn left a managed workspace pending, its recovery input waits
+for the workspace owner to finish preparation before starting the turn. Setup
+failures still produce the ordinary actionable error; pending setup alone does
+not discard the resume input. Setup scripts require the recovered caller's current
+administrator authority. The restart marker remains durable until the resumed
+turn is admitted, so another restart during preparation can recover it again.
 
 During graceful shutdown, interrupted embedded runs have a short abort-settle
 budget (normally two seconds) to deliver their terminal partial reply before their
@@ -47,6 +59,16 @@ not resumed. Missing boot history also prevents unmarked recovery. Files, extern
 actions, and tool effects may already have changed, so the agent checks them
 before repeating work.
 
+When an accepted queued input moves into the transcript for execution, the same
+transaction records its nonterminal run identity. A crash between that append and
+source adoption therefore uses root-session recovery, not queued-input replay.
+Recovery rechecks current authority; if admission fails, it records a visible
+failure in the conversation instead of silently dropping the turn.
+
+Unmarked crash recovery has no requester source captured by graceful shutdown.
+It follows the existing source-less session-principal policy; it does not
+manufacture a captured running-root requester from queued-input provenance.
+
 On upgrade from the retired restart-recovery subsystem (through 2026.10.9),
 startup and `openclaw doctor --fix` also repair tombstoned root sessions, with or
 without a recorded continuation. The repair backs up the original database,
@@ -67,6 +89,14 @@ up and retires the legacy recovery fields when the session is terminal or archiv
 preserving its status, archive, current writer identities, and delivery notice
 without resuming it or replaying a pending final; startup reports an aggregate
 count per agent instead of repeating warnings for each such session.
+
+After a clean shutdown, the Gateway waits for final cleanup and flushes file logs
+and output pipes. Shared-state leases finish their cleanup before the SQLite worker
+host closes. Completed orderly cleanup preserves exit status 0; cleanup failures
+still produce a failed exit. On macOS and Linux, any remaining referenced handles get a
+one-second final drain before the process logs remaining handle types and re-raises
+`SIGTERM`. Failed or retained
+cleanup keeps its existing deadline and exit-status handling.
 
 ## Unexpected exits
 
@@ -129,22 +159,22 @@ heartbeat observer works independently of the optional V8 flight recorder.
 
 ## What survives a restart
 
-| State                                                             | Behavior                                                                        |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Conversations and transcripts                                     | Remain in the per-agent SQLite database                                         |
-| Running root session at graceful shutdown                         | Receives one resume input at the next startup                                   |
-| Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                       |
-| Accepted user input captured in that shutdown marker              | Runs after the resume input, in FIFO order, with its sender's current authority |
-| Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                     |
-| Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request    |
-| Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                          |
-| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                         |
-| Background process                                                | Ends with the old process; its root session receives the resume input           |
-| Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                    |
-| Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                   |
-| ACP or external-harness session                                   | Keeps its harness owner's restart policy                                        |
-| Update outcome                                                    | Remains a passive report in the originating conversation                        |
-| Gateway terminal PTY                                              | Ends with the old process                                                       |
+| State                                                             | Behavior                                                                                               |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Conversations and transcripts                                     | Remain in the per-agent SQLite database                                                                |
+| Running root session at graceful shutdown                         | Receives one resume input at the next startup                                                          |
+| Root session left unfinished in a pending crash-recovery interval | Receives the same single resume input at the next startup                                              |
+| Accepted user input still queued when the process stops           | Runs after root resume admission, in FIFO order, with its original source limits and current authority |
+| Running sub-agent                                                 | Stops quietly; its root requester receives the resume input                                            |
+| Session parked in `sessions_yield` with a surviving wake source   | Keeps its recorded wait, including dashboard roots; no startup model request                           |
+| Yielded requester whose descendants were stopped                  | Receives the root resume input to reconcile their work                                                 |
+| Yielded session whose external continuation source is gone        | Closes with a recorded, visible failure                                                                |
+| Background process                                                | Ends with the old process; its root session receives the resume input                                  |
+| Already-produced outbound messages and media                      | Keep the existing delivery queue and delivery reconciliation                                           |
+| Scheduled jobs                                                    | Keep cron's own scheduling, catch-up, and interruption policy                                          |
+| ACP or external-harness session                                   | Keeps its harness owner's restart policy                                                               |
+| Update outcome                                                    | Remains a passive report in the originating conversation                                               |
+| Gateway terminal PTY                                              | Ends with the old process                                                                              |
 
 A session counts as running when its own agent loop is active, a descendant
 sub-agent is running, or it owns a running background process. The Gateway reads
@@ -153,11 +183,21 @@ to its top-level requester; the child does not receive an independent resume inp
 Idle and finished sessions are not marked. Cron occurrence sessions and
 ACP/external-harness sessions are excluded.
 
-The marker is a small private field on the existing session entry. It records the
-IDs of accepted user inputs still queued behind that session at shutdown. The
+The marker is a small private field on the existing session entry. It retains
+the interrupted root turn's captured requester source when available; each queued
+input's own durable row retains its original authenticated source separately.
+These private limits are not included in chat history or model messages. The
 Gateway writes one marker per running root session or recorded yield wait,
-batched by session store, before aborting work. It uses the existing session-entry JSON in SQLite and needs
-no schema migration.
+batched by session store, before aborting work. It uses the existing session-entry
+JSON in SQLite and needs no schema migration.
+
+Shutdown closes request admission and scheduled wakeups before writing markers.
+Accepted ingress inputs retain their live source authority until the markers are
+written and the session owner stops them for restart. Queued rows survive even
+without a shutdown marker. A real grant revocation or permission change during
+that interval still cancels the affected work. At startup, queued inputs must
+regain current authority before they can execute.
+
 Crash recovery uses the nonterminal run marker committed with accepted plain
 chat input, before dispatch hooks or runtime start. The same commit records its
 writer identity; terminal settlement clears the run marker. Recovery is bounded
@@ -173,8 +213,14 @@ admission owns its recovery pass, including delayed preparation and automatic
 preparation retries. An unavailable database records `resume deferred: agent
 database unavailable` with its agent ID; it does not suppress another agent's
 recovery. Recovery runs after database preparation ends, under the session's
-current authority, before that agent accepts fresh inputs. Another agent becoming
+current authority, before the same session accepts fresh inputs. Another agent becoming
 available does not revoke an already admitted session's authority.
+
+Runtime status and automation-list notifications do not invalidate a resumed
+turn's stored session generation. Compaction and subsequent tool calls retain the
+same admitted owner; session replacement, revocation, and uncertain storage changes
+still refuse stale authority. Model fallback does not retry a refused session
+generation, because selecting another model cannot restore that authority.
 
 The boot owner retains each agent's pending crash intervals in the existing shared
 SQLite machine-state store until its recovery pass completes, including an empty
@@ -193,16 +239,27 @@ recovery without consuming its markers or discarding its crash intervals. Recove
 consumes each eligible persisted run identity once; retrying a retained interval
 cannot resume that same run again.
 
-The initial recovery pass keeps the existing external-input fence until its
-retained inputs own their ordinary queue slots. A store prepared later keeps its
-own input readiness pending until its retained inputs are admitted. This also
-applies when several logical agents share the same physical store. Database
+Startup opens external input after recovery discovery installs each session's
+admission wait. Recovery admission continues in the background: a fresh turn for
+a recovering session waits until its resume input and retained FIFO inputs own
+their ordinary queue slots. Other sessions in the same agent can proceed.
+Incoming session events wait before reserving their FIFO position, so they cannot
+block the recovery input that must precede them. A shutdown marker still resumes
+the interrupted work when shutdown left the session marked as killed or when a
+completed reply had background commands, even when no queued input remains.
+Stores prepared later install these waits before publishing database admission.
+This also applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
 startup's temporary database access or wait for model executions to finish.
 Crash recovery waits for preparation to settle without an interactive request
 deadline. Slow preparation does not disqualify interrupted work; failed preparation
 still prevents unmarked adoption and reports the normal admission diagnostics.
 This requires the updated Gateway, with no marker or schema migration.
+
+Gateway readiness does not wait for recovered turns to enter their queues.
+Catalog and read-only methods such as `models.list`, `mentions.list`, and
+`sessions.github.options` use their own data owners' readiness. Startup retries
+in the Control UI back off from 500 milliseconds to eight seconds.
 
 <a id="graceful-restarts-drain-first" />
 
@@ -232,6 +289,33 @@ retirement; the warning does not permanently abandon the close operation. Resume
 markers do not replace pending transcript or cron outcome writes. Embedded hosts
 also join those resources before reusing the runtime.
 
+Plugin-origin finalizers retain shared-state admission through this drain so
+worktree run leases and subagent settle records can persist before SDK retirement.
+Final cleanup failures are reported as shutdown failures, not startup failures.
+The failure summary names the fatal cleanup error, including nested resource-owner
+causes; earlier grace warnings are listed separately as `warnings`. An admissions
+grace warning includes a bounded pending snapshot: effect count and the first
+pending effect's phase, source phase, operation phase, interruption and settling
+status. The same facts appear in the pending close span. Session and run identifiers
+and session content are omitted; `none` means the observed owner has no such phase,
+and `null` means its boolean status is unavailable. A zero effect count does not
+mean the full admissions join has settled: it also waits for source, subagent, and
+terminal-persistence cleanup.
+
+Agent database native closes taking at least 500 ms append phase durations to the
+existing clean-close receipt: WAL-maintenance stop, checkpoint, native close, and
+lease release. A per-database resource drain taking at least 500 ms also emits one
+`agent database close settled` line on the same logger, separating resource join,
+native executor join, and remaining native-owner cleanup. Executor join includes
+accepted work, native receipt phases, and subsequent shared-state cleanup; these durations overlap
+and should not be added together. Native receipt totals also include preparation
+and identity checks outside the named phases. Both lines carry the agent ID, thread ID, and a
+short hash of the captured database path for correlation without printing the path.
+Different aliases of a path can have different hashes. Fast closes retain their
+existing logging. These diagnostics identify a slow owner without changing its
+receipts, deadlines, checkpoints, or durability. For an updated Gateway, collect
+them at the handoff **after** deployment: the outgoing release runs shutdown.
+
 A plain stop (`SIGTERM` or `SIGINT`) arriving during an in-process restart makes
 the Gateway finish its bounded shutdown and exit instead of starting again.
 Managed update handoffs keep their own stop handling.
@@ -248,12 +332,19 @@ is never reused for an in-process restart. Node exits naturally after owned hand
 close; the native shutdown watchdog kills the process if leaked handles keep it
 alive two seconds past the shutdown deadline. Its worker and main-thread fallback
 share one monotonic deadline, including worker startup time, and report retained
-cleanup owners before forcing exit. After a clean shutdown retires those
-watchdogs, the command waits ten seconds past its own final cleanup. If a leaked
-handle still keeps the process alive, the Gateway prints the active resource types
-to stderr. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
+cleanup owners before forcing exit. Shutdown cleanup runs under the Gateway's
+own plugin authority, so a completed requesting invocation cannot prevent memory
+or channel transports from closing. After settled shutdown retires those
+watchdogs, the Gateway command waits one second past its own final cleanup. If a
+leaked handle still keeps the process alive, it prints active resource and handle
+types to stderr, plus details for at most eight handles: stdout/stderr labels, TLS
+servername and remote address, or a child executable (without arguments). Endpoint
+names and executable strings are bounded to 255 characters and JSON escaped. On Linux and macOS, a stop with exit status `0` then ends with `SIGTERM`,
 which supervisors count as a clean stop. A non-zero status, which can be a
-supervisor restart instruction, and Windows keep the report only. A duplicate `SIGTERM` during shutdown is
+supervisor restart instruction, and Windows keep the report only. A recorded
+cleanup rejection with status `1` and no retained work uses `SIGUSR2` after one second,
+so supervisors observe failure; logs and any stability bundle preserve the reason. Pending persistence or
+retained resources still keep the hard deadline. A duplicate `SIGTERM` during shutdown is
 logged once and ignored. That signal exit is accepted, and the supervisor starts
 a fresh Gateway.
 
@@ -516,18 +607,25 @@ one new input through the normal session-event path:
 
 > The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.
 
-If the session had running background exec processes, that same input also says:
-
-> Background exec processes were stopped; rerun them if still needed.
+Background commands that were waiting to wake the conversation are reported
+separately, with a notice for each command, after any restart, including a crash. See
+[lost background commands](/gateway/background-process#lost-background-commands).
 
 This is a new input, not a replay of the original user prompt or unfinished tool
 call. Later model requests can contain the text as conversation history. The
 agent checks the transcript and current state before continuing; effects are not
 guaranteed exactly once.
 
-For a session with a human owner, the input uses that recorded principal's current
-role, scopes, and session access, narrowed by the session's current permission mode
-and tool policy. When no owner is set, the human creator is used. On a Gateway
+For a captured interrupted turn, the input revalidates the original requester's
+authentication source and current session access, bounded by that source's original
+scopes, model limits, and current policy. Its accepted access-grant custody is
+resumed rather than requested anew. A revoked or unavailable captured source
+prevents resume; the session owner or a later participant cannot replace it.
+
+For older markers without a captured source, a session with a human owner uses
+that recorded principal's current role, scopes, and session access, narrowed by the
+session's current permission mode and tool policy. When no owner is set, the human
+creator is used. On a Gateway
 without `gateway.roles`, a profile has no authority of its own: the input uses the
 authenticated connection the person last sent from in that session (its device,
 sign-in method and scopes), revalidated against current pairing, auth and profile
@@ -546,17 +644,24 @@ a needed capability, the agent must ask for an authorized input.
 WebChat uses the same session and transcript. An unanswered accepted user prompt
 stays in history as its original entry, separate from the restart input. Channel
 sessions use their current delivery route so normal replies return to the
-conversation. The resume input inherits no old browser connection, approval, or
-requester authority snapshot; on a Gateway without roles it uses only the current,
-revalidated authority of the person's recorded device.
+conversation. The resume input does not replay an old browser connection or
+unfinished tool approval. Captured source facts are a revalidation basis, not a
+portable grant; markers without those facts use the legacy principal policy above.
+On a Gateway without roles, recovery still requires the current, revalidated
+authority of the recorded device. A resumed Control UI task
+can update pinned dashboard widgets under that admitted authority without a
+connected browser. Inline widgets still require a connected capable client.
 
-Only accepted user messages whose IDs were captured in the graceful-shutdown
-marker follow the resume input, in FIFO order. Older queued rows left by a crash
-remain inert, even if the session is marked during a later shutdown. Each retained
-message runs as its recorded sender under that sender's current authority. If the
-sender is revoked or cannot be resolved to a current principal, the message becomes
-an ordinary failed send that the sender can resend. A channel identity without a
-profile does not authorize queued execution after restart.
+Accepted queued user messages replay from their own durable, unconsumed rows after
+both graceful restarts and crashes. A running root's resume input is admitted first;
+the queued inputs then follow in FIFO order. Each row retains its original app
+grant, ID membership, and scope and model limits. The Gateway revalidates that
+source against current policy before replay; a later sign-in cannot replace it.
+Missing or unsupported sources end with `restart-unrecoverable`; revoked sources
+end with `revoked`. The sender can see the recorded cause. Temporary authority
+or dispatch outages leave the row queued for the next Gateway startup.
+On upgrade, valid per-input sources in older shutdown markers migrate into their
+rows before replay. A channel identity without a profile does not authorize replay.
 
 New messages arriving during a resumed run use ordinary steering and queue rules.
 Resumed turns execute on the bounded `restart-recovery` lane at
@@ -574,7 +679,7 @@ Children are not adopted or independently resumed at startup.
 A child that already ended its execution with `sessions_yield waitFor:"message"`
 keeps its paused task across restart. Shutdown marks that session directly;
 startup consumes the marker while preserving the registry's exact paused task,
-without replaying execution or restoring old tool or completion authority.
+without replaying execution or restoring old tool authority.
 The same registry fact protects a recorded message wait after an unclean stop.
 A fresh continuation from its controlling requester goes through ordinary
 admission and retains task-owned result delivery. If the requester finishes or
@@ -587,12 +692,32 @@ includes dashboard/operator sessions; existing `sessions_yield` rules still
 determine which completion they await. Startup
 does not send a resume input or run the model for that wait. A fresh continuation
 of the surviving child delivers its completion through the ordinary requester
-handoff.
+handoff. Each parked session has one bounded startup log line with its agent,
+session key, and `yield-waiting` reason. The restart summary's `parked` count
+describes these retained waits, independently of conversation environment cleanup.
 
 A requester yielded for children that restart stopped keeps the ordinary root
 recovery path. Its single resume input reconciles the stopped children's work;
 it is not re-parked waiting for their old executions. A stopped child also needs
 reconciliation when other children still have reachable waits.
+
+Startup admits pending completion custody against the requester's current
+principal, session ID, and lifecycle revision. It never reuses the previous
+process's authority. This covers nested yielded requesters and captured results
+that were waiting for a busy or yielded requester. The whole outstanding cohort
+keeps one requester authority, including when a paused child continues in a new
+turn. Normal delivery records the receipt so another restart cannot deliver it
+again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
+custody.
+
+If shutdown interrupts the requester after a captured child result was committed
+to its transcript, that result is already delivered. The Gateway resumes the
+interrupted requester turn under fresh authority with its normal restart input,
+using the committed result in the saved conversation. The registry settles its
+receipt without submitting the result again. Unconsumed results remain owned by
+the registry. The transcript and completion receipt prevent duplicate handoffs
+across later restarts. A requester that deliberately yielded remains parked for
+its children. An intentional Stop still ends the obligation.
 
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes
@@ -653,12 +778,11 @@ Marker persistence, skipped authority, and bounded shutdown leftovers are report
 in logs. A resume admission proves only that the new input was accepted; use the
 session transcript and actual delivery outcome to check whether work finished.
 
-Apart from that upgrade bridge, old restart claims, authority snapshots, interrupted pending-input rows, and queued
-inference records may remain in existing databases. They are ignored rather than
-reconstructed or deleted. Their text stays preserved. Legacy interrupted and
-ownerless queued inputs left by a crash do not add pending counts, notices, or
-history pins. Normal retention applies to data that was pinned only by those
-retired recovery records.
+Old restart claims, retired authority snapshots, and legacy interrupted input
+records can remain in existing databases without being replayed. Normal retention
+applies to those records. Accepted inputs still in `queued` state are different:
+their unconsumed durable rows remain visible as pending and are re-admitted after
+startup, or end with a recorded cause when recovery is impossible.
 
 ## Verify recovery after an update
 

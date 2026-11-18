@@ -1003,7 +1003,7 @@ describe("google transport stream", () => {
     expect(payload.toolConfig).toBeUndefined();
     expect((payload.generationConfig as { thinkingConfig?: unknown }).thinkingConfig).toEqual({
       includeThoughts: true,
-      thinkingLevel: "HIGH",
+      thinkingLevel: "MEDIUM",
     });
     expect(result.api).toBe("google-generative-ai");
     expect(result.provider).toBe("google");
@@ -1926,12 +1926,10 @@ describe("google transport stream", () => {
     const cancel = vi.fn();
     guardedFetchMock.mockResolvedValueOnce(
       new Response(
-        new ReadableStream<Uint8Array>({
-          pull() {
-            resolveBodyRead();
-          },
-          cancel,
-        }),
+        new ReadableStream<Uint8Array>(
+          { pull: () => resolveBodyRead(), cancel },
+          { highWaterMark: 0 },
+        ), // Signal only when the transport actually reads the body.
         { headers: { "content-type": "text/event-stream" } },
       ),
     );

@@ -172,6 +172,7 @@ const { values } = parseArgs({
     "page-phases": { type: "string", default: "visit,action,leave" },
     "page-origin": { type: "string", default: "new-session" },
     pairs: { type: "string", default: "1" },
+    "fresh-browser": { type: "boolean", default: false },
     trace: { type: "boolean", default: false },
     "observer-origins": { type: "boolean", default: false },
     "gesture-geometry": { type: "boolean", default: false },
@@ -182,6 +183,8 @@ const { values } = parseArgs({
     "mutation-audit": { type: "boolean", default: false },
     "transcript-layout-audit": { type: "boolean", default: false },
     "transcript-paint-marker": { type: "boolean", default: false },
+    "transcript-paint-probe": { type: "boolean", default: false },
+    "transcript-timing-only": { type: "boolean", default: false },
     "live-region-audit": { type: "boolean", default: false },
     "remount-audit": { type: "boolean", default: false },
     "route-transitions": { type: "boolean", default: false },
@@ -307,6 +310,14 @@ if (values.trace && values["cpu-only"]) {
 }
 if (values["transcript-paint-marker"] && !values["transcript-layout-audit"]) {
   throw new Error("--transcript-paint-marker requires --transcript-layout-audit");
+}
+if (values["transcript-paint-probe"] && !values["transcript-layout-audit"]) {
+  throw new Error("--transcript-paint-probe requires --transcript-layout-audit");
+}
+if (values["transcript-timing-only"] && values["transcript-layout-audit"]) {
+  throw new Error(
+    "--transcript-timing-only requires a separate run from --transcript-layout-audit",
+  );
 }
 if (
   values["transcript-layout-audit"] &&
@@ -578,7 +589,10 @@ try {
   const catalog: EngineScenario[] = [
     ...createEngineBootScenarios(servers[0]!.server.baseUrl),
     ...createEngineActionScenarios(),
-    ...createEngineCompletedRunScenarios(servers[0]!.server.baseUrl),
+    ...createEngineCompletedRunScenarios(
+      servers[0]!.server.baseUrl,
+      !values["transcript-timing-only"],
+    ),
     ...createEngineIdleScenarios(idleDurationMs),
     ...createEngineIdleControls(idleDurationMs),
     ...createChatComposerScenarios(),
@@ -767,6 +781,7 @@ try {
     })),
     host: { platform: os.platform(), arch: os.arch(), cpus: os.cpus().length, load: os.loadavg() },
     pairs,
+    freshBrowser: values["fresh-browser"],
     viewports,
     networkProfiles,
     methodDelay: values["rpc-delay-method"]
@@ -786,6 +801,8 @@ try {
     mutationAudit: values["mutation-audit"],
     transcriptLayoutAudit: values["transcript-layout-audit"],
     transcriptPaintMarker: values["transcript-paint-marker"],
+    transcriptPaintProbe: values["transcript-paint-probe"],
+    transcriptTimingOnly: values["transcript-timing-only"],
     liveRegionAudit: values["live-region-audit"],
     remountAudit: values["remount-audit"],
     routeTransitions: values["route-transitions"],
@@ -814,8 +831,7 @@ try {
                     : values["cpu-only"]
                       ? "WebKit smoothed utilization diagnostic (not action CPU) and Chromium CDP thread CPU; no timeline or script profiler"
                       : "Untraced wall and browser-local application time; Chromium CDP counters only, unavailable WebKit/Firefox counters are null",
-    order:
-      "Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser context per observation",
+    order: `Serial network profiles alternate each pair; engine/configuration/bundle positions rotate and reverse across pairs; fresh browser ${values["fresh-browser"] ? "process and " : ""}context per observation`,
     acceptance:
       "Census screens >1.3x engine/Chromium; confirm with ten rotated pairs plus A/A. Fix proof: twenty rotated pairs plus A/A; median regression <=5% and p95 no worse. Missing CPU clocks cannot certify CPU wins on a noisy host; >20% attributable regression blocks.",
     rapidNavigationContract:
@@ -865,9 +881,10 @@ try {
               createEngineBootScenarios(slot.server.baseUrl, networkProfile.gatewayLatencyMs).find(
                 ({ id }) => id === item.id,
               ) ??
-              createEngineCompletedRunScenarios(slot.server.baseUrl).find(
-                ({ id }) => id === item.id,
-              ) ??
+              createEngineCompletedRunScenarios(
+                slot.server.baseUrl,
+                !values["transcript-timing-only"],
+              ).find(({ id }) => id === item.id) ??
               createEngineProfileReadinessScenarios(
                 slot.server.baseUrl,
                 networkProfile.gatewayLatencyMs,
@@ -971,7 +988,11 @@ try {
               continue;
             }
             const browserSlotKey = browserKey(engine, configuration.accessibility);
-            if (scenario.memory || !browsers.get(browserSlotKey)!.isConnected()) {
+            if (
+              values["fresh-browser"] ||
+              scenario.memory ||
+              !browsers.get(browserSlotKey)!.isConnected()
+            ) {
               await browsers.get(browserSlotKey)!.close();
               browsers.set(browserSlotKey, await launchEngine(engine, configuration.accessibility));
             }
@@ -1410,6 +1431,7 @@ try {
                   artifactPrefix,
                   engine,
                   values["transcript-paint-marker"],
+                  values["transcript-paint-probe"],
                 );
               }
               if (scenario.id.startsWith("gesture-")) {
@@ -1504,7 +1526,7 @@ try {
                     page,
                     scenario.id === "event-load-unloaded"
                       ? -1
-                      : scenario.id === "event-load-pageup"
+                      : scenario.id === "event-load-pageup" || scenario.id === "event-load-end"
                         ? 0
                         : Number(scenario.id.slice("event-load-".length)),
                     eventLoadTools,

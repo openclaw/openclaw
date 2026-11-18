@@ -54,6 +54,18 @@ function parseSample(value: unknown, requests: number) {
   };
 }
 
+function cloneCounts(value: unknown) {
+  assert(isRecord(value), "Missing clone counts");
+  const counts = {
+    calls: nonNegative(value.calls),
+    stateBearingBatches: nonNegative(value.stateBearingBatches),
+    questions: nonNegative(value.questions),
+    results: nonNegative(value.results),
+  };
+  assert(Object.values(counts).every(Number.isInteger));
+  return counts;
+}
+
 function parseProductionSample(
   value: unknown,
   evaluations: number,
@@ -72,16 +84,27 @@ function parseProductionSample(
     assert.equal(value.stateEvidenceBytes, fixture === "small" ? 32 : 1_046_528);
     assert.equal(value.questionCount, 1);
   }
-  const clones = mode === "work" ? value.clones : undefined;
-  if (mode === "work") {
-    assert(isRecord(clones));
-    assert(nonNegative(clones.calls) > 0 && Number.isInteger(clones.calls));
-    assert(
-      nonNegative(clones.stateBearingBatches) > 0 && Number.isInteger(clones.stateBearingBatches),
-    );
-    assert(nonNegative(clones.results) > 0 && Number.isInteger(clones.results));
+  const cloneWork =
+    mode === "work"
+      ? {
+          clones: cloneCounts(value.clones),
+          coldClones: cloneCounts(value.coldClones),
+          warmClones: cloneCounts(value.warmClones),
+        }
+      : undefined;
+  if (cloneWork) {
+    assert(cloneWork.clones.calls > 0 && cloneWork.clones.stateBearingBatches > 0);
+    assert(cloneWork.clones.results > 0);
+    for (const field of ["calls", "stateBearingBatches", "questions", "results"] as const) {
+      assert.equal(
+        cloneWork.clones[field],
+        cloneWork.coldClones[field] + cloneWork.warmClones[field],
+      );
+    }
   } else {
-    assert(!Object.hasOwn(value, "clones"), "Cost must use the unwrapped native clone");
+    for (const field of ["clones", "coldClones", "warmClones"]) {
+      assert(!Object.hasOwn(value, field), "Cost must use the unwrapped native clone");
+    }
   }
   assert.equal(value.evaluations, evaluations);
   assert.equal(value.validatedOutputs, evaluations);
@@ -99,16 +122,7 @@ function parseProductionSample(
           questionCount: nonNegative(value.questionCount),
         }
       : {}),
-    ...(isRecord(clones)
-      ? {
-          clones: {
-            calls: nonNegative(clones.calls),
-            stateBearingBatches: nonNegative(clones.stateBearingBatches),
-            questions: nonNegative(clones.questions),
-            results: nonNegative(clones.results),
-          },
-        }
-      : {}),
+    ...cloneWork,
     firstEvaluationMs: nonNegative(value.firstEvaluationMs),
     warmTimingsMs: value.warmTimingsMs.map(nonNegative),
     cpuMs: nonNegative(value.cpuMs),
@@ -323,20 +337,26 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
         .filter((sample) => sample.variant === variant)
         .map((sample) => sample.result);
       if (options.mode === "work") {
-        const counts = rows.map((row) => {
-          assert("clones" in row && row.clones);
-          return row.clones;
-        });
         return [
           variant,
-          {
-            calls: summarizeBenchmarkTimings(counts.map((row) => row.calls)),
-            stateBearingBatches: summarizeBenchmarkTimings(
-              counts.map((row) => row.stateBearingBatches),
-            ),
-            questions: summarizeBenchmarkTimings(counts.map((row) => row.questions)),
-            results: summarizeBenchmarkTimings(counts.map((row) => row.results)),
-          },
+          Object.fromEntries(
+            (["clones", "coldClones", "warmClones"] as const).map((phase) => [
+              phase,
+              Object.fromEntries(
+                (["calls", "stateBearingBatches", "questions", "results"] as const).map((field) => [
+                  field,
+                  summarizeBenchmarkTimings(
+                    rows.map((row) => {
+                      assert("clones" in row && row.clones);
+                      const counts = row[phase];
+                      assert(counts);
+                      return counts[field];
+                    }),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
         ];
       }
       return [
@@ -421,6 +441,9 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
                 ? "cpuMs covers the validated loop; processCpuMs/peak cover the worker through its result snapshot"
                 : "cpuMs includes evaluation loop and owned teardown; clone-instrumented work runs are not cost",
             evaluationsPerWorker: options.requests,
+            ...(options.mode === "work"
+              ? { coldEvaluationsPerWorker: 1, warmEvaluationsPerWorker: options.requests - 1 }
+              : {}),
           }),
       runtime: { node: process.version, platform: process.platform, arch: process.arch },
       hardware: {

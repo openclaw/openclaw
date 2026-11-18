@@ -70,7 +70,7 @@ it("selects live, marked, and recent windows without preserving idle history", (
   addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
   const live = addNode("live-history");
   addWindow(live.key, "running-history", cutoff - 1, null);
-  const protectedNode = addNode("busy", { resumeAfterRestart: { queuedInputIds: [] } });
+  const protectedNode = addNode("busy", { resumeAfterRestart: {} });
   addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
   for (const column of ["updated_at", "last_activity_at", "last_interaction_at"]) {
     addNode(column, { updatedAt: column === "updated_at" ? cutoff : 1 });
@@ -100,7 +100,23 @@ it("retains explicit cross-generation references without treating archive or pin
     usageFamilySessionIds: ["idle", "usage"],
     compactionCheckpoints: [checkpoint("checkpoint", "before", "after")],
   });
-  expectProtection(["previous", "usage", "checkpoint", "before", "after"]);
+  expectProtection(["previous", "checkpoint", "before", "after"]);
+});
+
+it("lets idle runs of an active rotating session cool despite usage-family lineage", () => {
+  const runs = Array.from({ length: 50 }, (_, i) => `run-${i}`);
+  const { key } = addNode("cron", {
+    previousSessionId: "run-49",
+    usageFamilySessionIds: [...runs, "cron"],
+  });
+  for (const id of runs) {
+    addWindow(key, id);
+  }
+  database.prepare("UPDATE session_nodes SET last_activity_at = ?").run(cutoff);
+  expectProtection(["cron", "run-49"]);
+  expect(
+    readSessionColdStorageProtection({ db: database }, cutoff, new Set(), ["run-0", "run-49"]),
+  ).toEqual(new Set(["cron", "run-49"]));
 });
 
 it("does not let legacy checkpoint self-references protect an idle current window", () => {
@@ -161,7 +177,7 @@ it.each([false, true])(
 );
 
 it("checks selected windows against their owners and all cross-generation references", () => {
-  const busy = addNode("marked", { resumeAfterRestart: { queuedInputIds: [] } });
+  const busy = addNode("marked", { resumeAfterRestart: {} });
   addWindow(busy.key, "busy-history");
   const invalid = addNode("invalid", {}, "not-json");
   addWindow(invalid.key, "invalid-history");

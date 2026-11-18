@@ -187,7 +187,7 @@ suite.define(() => {
           await page.locator(".context-usage summary").click();
           const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
           await picker.locator("[data-chat-model-select]").click();
-          const expected = baseline ? "First account plan" : "Subscription";
+          const expected = baseline ? "First account plan" : "Selected account";
           await expect.poll(() => picker.textContent()).toContain(expected);
           if (!baseline) {
             expect(await picker.textContent()).not.toContain("First account plan");

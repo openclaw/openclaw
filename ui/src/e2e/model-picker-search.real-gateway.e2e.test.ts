@@ -97,7 +97,7 @@ suite.define(() => {
       throw new Error("Dashboard browser handoff missing");
     }
     const issued = new URL(handoff.browserUrl);
-    const url = new URL("cron", issued);
+    const url = new URL("cron?new", issued);
     url.hash = issued.hash;
     await suite.withPage(
       { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
@@ -126,7 +126,6 @@ suite.define(() => {
         const press = (key: string) => page.keyboard.press(key);
         await page.goto(url.toString());
         await waitForControlUiGatewayReady(page);
-        await page.locator('[data-test-id="cron-new-task"]').click();
         const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
         const trigger = picker.locator(".picker-select__trigger");
         await trigger.click();
@@ -150,7 +149,6 @@ suite.define(() => {
         expect(await pickerValue(picker)).toBe("fixture/not-in-catalog");
 
         await trigger.click();
-        await picker.locator(".header-search__toggle").click();
         await search.fill("granite");
         expect(await picker.locator('[data-value="fixture/granite"]').count()).toBe(1);
         await publish(models.filter((model) => model.id !== "granite"));

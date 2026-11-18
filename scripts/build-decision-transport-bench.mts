@@ -91,19 +91,22 @@ await runBenchmarkEntrypoint("build-decision-transport-bench", async () => {
     },
     logLevel: "warn",
   });
-  const smoke = spawnSync(
-    process.execPath,
-    [path.join(outDir, "worker.mjs"), "2", ...(workload === "http" ? [] : [workload])],
-    {
-      encoding: "utf8",
-      timeout: 30_000,
-      maxBuffer: 2 * 1024 * 1024,
-    },
-  );
-  if (smoke.error || smoke.status !== 0) {
-    throw new Error(`Compiled worker smoke failed: ${smoke.error?.message ?? smoke.stderr}`);
+  // The finite runtime-v1 protocol owns every evaluation; building must not spend samples.
+  if (workload !== "runtime-v1") {
+    const smoke = spawnSync(
+      process.execPath,
+      [path.join(outDir, "worker.mjs"), "2", ...(workload === "http" ? [] : [workload])],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        maxBuffer: 2 * 1024 * 1024,
+      },
+    );
+    if (smoke.error || smoke.status !== 0) {
+      throw new Error(`Compiled worker smoke failed: ${smoke.error?.message ?? smoke.stderr}`);
+    }
+    process.stderr.write(smoke.stdout);
   }
-  process.stderr.write(smoke.stdout);
   const sha256 = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
   const outputs = listDirectoryTreeStrictSync(outDir)
     .filter(({ dirent }) => dirent.isFile())

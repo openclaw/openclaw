@@ -118,8 +118,8 @@ it.each([
     expect(button.getAttribute("aria-disabled")).toBe("true");
     const tooltip = () =>
       panel.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
-    expect(tooltip()?.content).toContain("pulseaudio and pulseaudio-utils");
-    expect(tooltip()?.content).toContain("restart the managed desktop");
+    expect(tooltip()?.content).toContain("PulseAudio and pulseaudio-utils");
+    expect(tooltip()?.content).toContain("restart this desktop");
     expect(tooltip()?.hasAttribute("open-on-click")).toBe(true);
     expect(panel.querySelector("[role='alert']")).toBeNull();
     button.focus();
@@ -129,7 +129,7 @@ it.each([
     await panel.updateComplete;
     updatePanel(panel, { presented: true });
     await panel.updateComplete;
-    expect(tooltip()?.content).toContain("restart the managed desktop");
+    expect(tooltip()?.content).toContain("restart this desktop");
     expect(panel.querySelector("[role='alert']")).toBeNull();
     expect(AudioSocketMock.instances).toHaveLength(0);
     expect(AudioContextMock.instances).toHaveLength(0);

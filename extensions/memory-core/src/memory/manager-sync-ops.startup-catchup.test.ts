@@ -163,7 +163,7 @@ describe("session startup catch-up", () => {
       },
     });
     const harness = await Harness.create([], true);
-    const parse = vi.spyOn(memorySessions, "buildSessionEntries");
+    const parse = vi.spyOn(memorySessions, "streamSessionEntries");
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     try {
       await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([]);
