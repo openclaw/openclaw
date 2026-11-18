@@ -62,7 +62,7 @@ suite.define(() => {
         expect(await input.inputValue()).toBe(prompt);
         // The rendered preview sits with the other task settings under Advanced.
         await page.locator("details.cron-advanced > summary").click();
-        const preview = page.locator(".cron-editor .chat-text");
+        const preview = page.locator(".cron-prompt-preview .chat-text");
         await preview.waitFor({ state: "visible" });
         const frame = await takeControlUiScreenshotFrame(page, input, [input, preview], {
           animations: "disabled",

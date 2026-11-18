@@ -90,7 +90,11 @@ export type FsSafeCopyReply =
   | { type: "probe"; backend: TreeCloneBackend | undefined; nativeMode: FsSafeNativeMode }
   | { type: "metadata"; entries: (CloneFileMetadata | undefined)[] }
   | { type: "acl"; acl: DarwinAclInspection }
-  | { type: "written"; workspaceEvidence?: WorktreeWorkerAuthority["workspaceEvidence"] }
+  | {
+      type: "written";
+      cloneWriteBytes?: number;
+      workspaceEvidence?: WorktreeWorkerAuthority["workspaceEvidence"];
+    }
   | {
       type: "provisioned";
       paths: string[];

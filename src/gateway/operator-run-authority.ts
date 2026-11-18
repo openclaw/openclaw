@@ -662,17 +662,19 @@ export async function captureGatewayOperatorRunAuthority(input: {
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
       assertCurrent,
     };
-    const recoverySnapshot = captureGatewayOperatorRecoverySnapshot({
-      client,
-      authority: admission,
-      modelPolicy: modelPolicy.original,
-      identity: preparedProfile,
-      config: getConfig(),
-    });
+    const { snapshot: recoverySnapshot, unavailableReason: recoverySnapshotUnavailableReason } =
+      captureGatewayOperatorRecoverySnapshot({
+        client,
+        authority: admission,
+        modelPolicy: modelPolicy.original,
+        identity: preparedProfile,
+        config: getConfig(),
+      });
     assertCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
       recoverySnapshot,
+      recoverySnapshotUnavailableReason,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         ...assertProfileCurrent(),

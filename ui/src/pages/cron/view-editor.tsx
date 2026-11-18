@@ -1,5 +1,5 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -8,6 +8,7 @@ import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
+import { EnabledSwitch } from "./view-controls.tsx";
 import { Advanced } from "./view-delivery.tsx";
 import {
   collectBlockingFields,
@@ -83,17 +84,6 @@ export function EditorActions(props: EditorProps & { onCancel: () => void }) {
       </button>
       {props.canManage ? (
         <>
-          {props.mode === "create" && props.form.scheduleKind !== "event" ? (
-            <button
-              type="button"
-              class="btn"
-              data-test-id="cron-submit-run"
-              disabled={props.busy || !props.canSubmit}
-              onClick={() => props.onSubmitRunNow()}
-            >
-              {t("cron.form.createAndRun")}
-            </button>
-          ) : undefined}
           <button
             type="button"
             class="btn primary"
@@ -113,74 +103,98 @@ export function EditorActions(props: EditorProps & { onCancel: () => void }) {
   );
 }
 
-export function Editor(props: EditorProps) {
+export function Editor(props: EditorProps & { phoneLayout: boolean }) {
   const { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode } =
     payloadFacts(props);
   const { blockingFields, blockedByValidation } = createSubmitState(props);
   const sessionTarget = () => props.form.sessionTarget;
   const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
+  const formDisabled = () => props.busy || !props.canManage;
+  const editableJob = () =>
+    props.mode === "job" && props.phoneLayout && props.canManage ? props.editingJob : undefined;
   return (
     <>
-      <fieldset
-        class="cron-editor"
-        disabled={props.busy || !props.canManage}
-        aria-busy={props.busy ? "true" : "false"}
-      >
-        <PromptBlock {...props} payloadLocked={payloadLocked()} isAgentTurn={isAgentTurn()} />
-        <ScheduleDetails {...props} />
-        <div class="settings-group cron-editor-card">
-          <CronInput
+      <div class="cron-editor-layout">
+        <fieldset
+          class="cron-editor"
+          disabled={formDisabled()}
+          aria-busy={props.busy ? "true" : "false"}
+        >
+          <PromptBlock
             {...props}
-            field="agentId"
-            label={t("cron.form.agentId")}
-            help={t("cron.form.agentHelp")}
-            quietHelp
-            list="cron-agent-suggestions"
-            disabled={props.form.clearAgent}
-            placeholder={t("cron.form.agentPlaceholder")}
+            payloadLocked={payloadLocked()}
+            isAgentTurn={isAgentTurn()}
+            phoneLayout={props.phoneLayout}
           />
-          <CronSelect
-            {...props}
-            field="sessionTarget"
-            label={t("cron.form.runsIn")}
-            help={t("cron.form.sessionHelp")}
-            quietHelp
-            options={[
-              { value: "main", label: t("cron.form.mainSession") },
-              { value: "isolated", label: t("cron.form.isolatedSession") },
-              ...(knownSessionTarget() ? [] : [{ value: sessionTarget(), label: sessionTarget() }]),
-            ]}
-          />
+          <ScheduleDetails {...props} />
+        </fieldset>
+        <div class="settings-group cron-editor-card cron-editor-placement">
+          <Show when={editableJob()} keyed>
+            {(job) => (
+              <div class="settings-row cron-editor-active">
+                <span class="settings-row__title">{t("cron.detail.active")}</span>
+                <EnabledSwitch {...props} job={job} />
+              </div>
+            )}
+          </Show>
+          <fieldset class="cron-editor-section" disabled={formDisabled()}>
+            <CronInput
+              {...props}
+              field="agentId"
+              label={t("cron.form.agentId")}
+              help={t("cron.form.agentHelp")}
+              quietHelp
+              list="cron-agent-suggestions"
+              disabled={props.form.clearAgent}
+              placeholder={t("cron.form.agentPlaceholder")}
+            />
+            <CronSelect
+              {...props}
+              field="sessionTarget"
+              label={t("cron.form.runsIn")}
+              help={t("cron.form.sessionHelp")}
+              quietHelp
+              options={[
+                { value: "main", label: t("cron.form.mainSession") },
+                { value: "isolated", label: t("cron.form.isolatedSession") },
+                ...(knownSessionTarget()
+                  ? []
+                  : [{ value: sessionTarget(), label: sessionTarget() }]),
+              ]}
+            />
+          </fieldset>
         </div>
-        <Advanced
-          {...props}
-          mode={props.mode}
-          isAgentTurn={isAgentTurn()}
-          supportsAnnounce={supportsAnnounce()}
-          selectedDeliveryMode={selectedDeliveryMode()}
-        />
-        {blockedByValidation() ? (
-          <div class="cron-form-status" role="status" aria-live="polite">
-            <div class="cron-form-status__title">{t("cron.form.cantAddYet")}</div>
-            <div class="cron-help">{t("cron.form.fillRequired")}</div>
-            <ul class="cron-form-status__list">
-              <For each={blockingFields()} keyed={(field) => field.inputId}>
-                {(field) => (
-                  <li>
-                    <button
-                      type="button"
-                      class="cron-form-status__link"
-                      onClick={() => focusFormField(field().inputId)}
-                    >
-                      {field().label}: {t(field().message)}
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </div>
-        ) : undefined}
-      </fieldset>
+        <fieldset class="cron-editor-section cron-editor-extra" disabled={formDisabled()}>
+          <Advanced
+            {...props}
+            mode={props.mode}
+            isAgentTurn={isAgentTurn()}
+            supportsAnnounce={supportsAnnounce()}
+            selectedDeliveryMode={selectedDeliveryMode()}
+          />
+          {blockedByValidation() ? (
+            <div class="cron-form-status" role="status" aria-live="polite">
+              <div class="cron-form-status__title">{t("cron.form.cantAddYet")}</div>
+              <div class="cron-help">{t("cron.form.fillRequired")}</div>
+              <ul class="cron-form-status__list">
+                <For each={blockingFields()} keyed={(field) => field.inputId}>
+                  {(field) => (
+                    <li>
+                      <button
+                        type="button"
+                        class="cron-form-status__link"
+                        onClick={() => focusFormField(field().inputId)}
+                      >
+                        {field().label}: {t(field().message)}
+                      </button>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </div>
+          ) : undefined}
+        </fieldset>
+      </div>
       {props.editingJob && props.canManage ? (
         <CronScratchEditor
           jobId={props.editingJob.id}
@@ -190,6 +204,8 @@ export function Editor(props: EditorProps) {
       ) : undefined}
       {props.mode === "create" && props.canManage ? (
         <EditorActions {...props} onCancel={() => props.onClosePanel()} />
+      ) : props.mode === "job" && props.phoneLayout && props.editingJob ? (
+        <EditorActions {...props} onCancel={() => props.onCancelEdit()} />
       ) : undefined}
     </>
   );
@@ -203,6 +219,7 @@ function PromptBlock(
   props: CronProps & {
     payloadLocked: boolean;
     isAgentTurn: boolean;
+    phoneLayout: boolean;
   },
 ) {
   const lockedPayloadLabel = () =>
@@ -316,7 +333,9 @@ function PromptBlock(
           <span class="cron-prompt__clock" aria-hidden="true">
             <Icon name="clock" />
           </span>
-          <ScheduleControls {...props} />
+          <div class="cron-editor-schedule">
+            <ScheduleControls {...props} phoneLayout={props.phoneLayout} />
+          </div>
           {props.isAgentTurn ? (
             <span class="cron-prompt__run-controls">
               <span class="cron-tray-picker" title={t("cron.form.modelHelp")}>
@@ -351,10 +370,12 @@ function PromptBlock(
             </span>
           ) : undefined}
         </div>
-        <TrayErrors
-          fieldErrors={props.fieldErrors}
-          fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
-        />
+        <div class="cron-editor-tray-errors">
+          <TrayErrors
+            fieldErrors={props.fieldErrors}
+            fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
+          />
+        </div>
         <ScheduleSummary {...props} />
       </div>
     </div>

@@ -160,6 +160,10 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
       .toEqual([]);
     for (const control of await controls.all()) {
       if (await control.isEnabled()) {
+        // Resting on a closed rail item opens its floating section peek, which stays open while
+        // the pointer is inside the sidebar. Start each trial click outside it so a slow click
+        // on a rail item cannot leave that peek covering the next header control.
+        await page.mouse.move(width - 1, 899);
         await control.click({ trial: true });
       }
     }

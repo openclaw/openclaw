@@ -107,8 +107,10 @@ limited to the current message or thread; inline reply and audio directives rema
 restricted. See [message tool access](/tools#configure-access-and-approvals).
 
 After `sessions_yield`, the frozen batch waits for its own children and their
-descendants to settle. A still-running child from an earlier requester turn does
-not delay that batch's result; the earlier batch retains its own completion wake.
+descendants to settle. Children paused to wait for a message remain resumable and
+retain their completion wake, while the batch offers its ready results. A
+still-running child from an earlier requester turn does not delay that batch's
+result; the earlier batch retains its own completion wake.
 
 Private results are addressed to the requester chat by its session key. If a new
 session, a reset or a compaction successor replaces the chat's session before the

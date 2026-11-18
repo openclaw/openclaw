@@ -114,17 +114,21 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
       }
       return spawnState.containerExists ? result(0, `${spawnState.inspectRunning}\n`) : missing();
     }
-    if (
-      format ===
-      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}'
-    ) {
+    if (format?.includes('"State":{{json .State}}')) {
       if (spawnState.inspectError) {
         return result(125, "", spawnState.inspectError);
       }
       return spawnState.containerExists
         ? result(
             0,
-            `${"c".repeat(64)}\n${spawnState.inspectRunning}\n${spawnState.readOnlyRoot}\n${spawnState.labelHash}\n`,
+            JSON.stringify({
+              Id: "c".repeat(64),
+              State: { Running: spawnState.inspectRunning, Paused: false },
+              ReadonlyRootfs: spawnState.readOnlyRoot,
+              Labels: { "openclaw.configHash": spawnState.labelHash },
+              Mounts: JSON.parse(spawnState.mounts),
+              Tmpfs: spawnState.tmpfs,
+            }),
           )
         : missing();
     }

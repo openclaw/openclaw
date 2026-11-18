@@ -175,7 +175,7 @@ describe("cancelled pending input dismissal", () => {
           ...page.items,
           {
             ...retained("user-stopped", "cancelled", "Keep my stopped request", 104),
-            cancelledByUser: true,
+            endCause: "user-stop",
           },
         ],
       },
