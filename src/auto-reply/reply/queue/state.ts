@@ -120,6 +120,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       if (source.controllerInput) {
         source.controllerInput.payload = "unbound";
       }
+      source.userTurnTranscriptRecorder?.finishPendingInput?.("cancelled", "overflow");
       source.onQueueDisposition?.("queue-cap-old");
       // Selection closes now; source custody lasts through the durable drop receipt.
       completeFollowupRunLifecycle(source, { kind: "dropped", reason: "queue-cap-old" });

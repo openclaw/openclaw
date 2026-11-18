@@ -439,17 +439,6 @@ export async function executeSessionsSend(
         /^cron:[^:]+:trigger$/.test(parseAgentSessionKey(requesterSessionKey)?.rest ?? "");
       let targetSession = await readSession(resolvedKey, targetAgentId);
       let targetSessionEntry = targetSession.store[targetSession.canonicalKey];
-      if (
-        opts?.expectedTargetLifecycleRevision !== undefined &&
-        (targetSessionEntry?.lifecycleRevision ?? null) !== opts.expectedTargetLifecycleRevision
-      ) {
-        return sendFailure(
-          "error",
-          "Target session lifecycle changed before retained send.",
-          displayKey,
-          runId,
-        );
-      }
       const inputProvenance = {
         kind: "inter_session" as const,
         sourceSessionKey: requesterSessionKey,
@@ -497,7 +486,7 @@ export async function executeSessionsSend(
         communication = await prepareSessionsSendCommunication({
           config: cfg,
           allowApproval: opts?.retainedReplay ? false : undefined,
-          expectedTask: opts?.expectedTargetRun,
+          expectTask: opts?.expectTargetTask,
           source,
           target: targetEndpoint(),
           message,
@@ -592,13 +581,11 @@ export async function executeSessionsSend(
             sessionKey: resolvedKey,
             displayKey,
             runId,
-            expectedSessionId,
-            expectedTask: opts?.expectedTargetTask,
             sendParams,
             callGateway: communication.callGateway,
           });
           if (attempt.selfHeld && retainedSend && targetSessionEntry) {
-            return retainedSend(attempt.selfHeld, "resume", attempt.targetTask);
+            return retainedSend(attempt.selfHeld, "resume");
           }
           return attempt.result;
         }
@@ -615,7 +602,9 @@ export async function executeSessionsSend(
           sourceOrigin: sameSession ? requesterOrigin : undefined,
           sessionKey: resolvedKey,
           sessionStoreTarget: targetSession,
-          allowActiveRunQueueDelivery: !sameSession && timeoutSeconds === 0,
+          // A parent's guidance belongs in its busy child's current run; a queued turn would
+          // start after that run finished and redo its work. Other targets steer only zero-wait.
+          allowActiveRunQueueDelivery: !sameSession && (timeoutSeconds === 0 || ownChild),
           expectedSessionId,
           preparedTargetSessionId: targetSessionEntry?.sessionId,
           assertSendCurrent: communication.assertCurrent,

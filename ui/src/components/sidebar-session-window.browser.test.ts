@@ -57,3 +57,85 @@ it("preserves measured two-line row heights when layout invalidation does not re
   expect(rows()[0]).toBe(first);
   expect(first.getBoundingClientRect().height).toBe(height);
 });
+
+it("keeps enlarged child groups apart when child loading settles after reopening", async () => {
+  const parentKey = "agent:main:parent";
+  const nextKey = "agent:main:next";
+  const childKeys = Array.from({ length: 4 }, (_, index) => `agent:main:dashboard:child-${index}`);
+  const harness = createSessionsHarness("main", [parentKey, nextKey, ...childKeys]);
+  const result = harness.sessions.state.result!;
+  result.sessions.forEach((row, index) => {
+    Object.assign(
+      row,
+      index === 0
+        ? { label: "Parent task", childSessions: childKeys, createdAt: 100 }
+        : index === 1
+          ? { label: "Following task", createdAt: 90 }
+          : {
+              label: `Child ${index}`,
+              kind: "direct",
+              spawnedBy: parentKey,
+              parentSessionKey: parentKey,
+              createdAt: index,
+            },
+    );
+  });
+  harness.list.mockImplementation(async (options) => ({
+    ...result,
+    sessions:
+      options?.spawnedBy === parentKey
+        ? result.sessions.filter((row) => childKeys.includes(row.key))
+        : result.sessions,
+    hasMore: false,
+  }));
+  const { sidebar } = await mountSidebar(
+    createGateway(createTestGatewayClient(async () => ({}))),
+    harness.sessions,
+  );
+  sidebar.style.cssText = "display:block;width:320px;height:700px;--control-ui-text-scale:1.25";
+  const scroller = sidebar.querySelector<HTMLElement>(".sidebar-shell__body")!;
+  scroller.style.cssText = "height:600px;flex:none;overflow:auto";
+  sidebar.setSessionSortMode("created");
+  sidebar.connected = true;
+  sidebar.sessionsShowPreview = false;
+  await waitForSolid(() =>
+    expect(sidebar.querySelector(`[data-child-session-toggle="${parentKey}"]`)).not.toBeNull(),
+  );
+  const toggle = sidebar.querySelector<HTMLButtonElement>(
+    `[data-child-session-toggle="${parentKey}"]`,
+  )!;
+  if (toggle.getAttribute("aria-expanded") !== "true") {
+    toggle.click();
+  }
+  const separated = () => {
+    const children = [
+      ...sidebar.querySelectorAll<HTMLElement>(
+        `[data-session-tree="${parentKey}"] .sidebar-recent-session--child`,
+      ),
+    ];
+    expect(children).toHaveLength(childKeys.length);
+    const next = sidebar.querySelector<HTMLElement>(`[data-session-key="${nextKey}"]`)!;
+    const lastChild = children.at(-1)!;
+    // Enlarged rows exceed the 32px estimate, so losing their measurements overlaps the next root.
+    expect(lastChild.getBoundingClientRect().height).toBeGreaterThan(32);
+    expect(next.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      lastChild.getBoundingClientRect().bottom,
+    );
+  };
+  await waitForSolid(separated);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    toggle.click();
+    await waitForSolid(() =>
+      expect(
+        sidebar.querySelectorAll(
+          `[data-session-tree="${parentKey}"] .sidebar-recent-session--child`,
+        ),
+      ).toHaveLength(0),
+    );
+    toggle.click();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    await waitForSolid(separated);
+  }
+});

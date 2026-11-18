@@ -41,6 +41,7 @@ import { executeCliProcess } from "./execute-process.js";
 import { createCliToolTracking } from "./execute-tool-tracking.js";
 import { resolveCliChildEnv } from "./execution-env.js";
 import { createCliRunCurrentAssertion } from "./execution-target.js";
+import { readCliStreamRefusalOutput, recordCliStreamRefusalToolEffects } from "./exit-error.js";
 import {
   buildCliArgs,
   isClaudeCliBackendId,
@@ -53,6 +54,7 @@ import {
 } from "./helpers.js";
 import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
+import { readCliPromptContext, toCliModelRequestPayload } from "./model-request-hook.js";
 import {
   recallNativeSessionSystemPrompt,
   rememberNativeSessionSystemPrompt,
@@ -165,7 +167,7 @@ export async function executePreparedCliRun(
     params.controlOperation !== undefined
       ? basePrompt
       : applyPluginTextReplacements(basePrompt, context.backendResolved.textTransforms?.input);
-  const promptContext =
+  let promptContext: PreparedCliRunContext["promptContext"] =
     privatePrependContext || context.promptContext?.appendContext
       ? {
           ...(privatePrependContext
@@ -186,6 +188,15 @@ export async function executePreparedCliRun(
             : {}),
         }
       : undefined;
+  // Last text a plugin can screen before the CLI owns it; image paths stay host-owned.
+  if (context.beforeModelRequest) {
+    const request = await context.beforeModelRequest(
+      toCliModelRequestPayload(prompt, promptContext),
+    );
+    assertCurrent();
+    prompt = request.prompt;
+    promptContext = readCliPromptContext(request);
+  }
   if (
     nodePlacement &&
     ((params.images?.length ?? 0) > 0 ||
@@ -585,6 +596,14 @@ export async function executePreparedCliRun(
       }
     }
     if (runFailed) {
+      const refused = readCliStreamRefusalOutput(runError);
+      if (refused) {
+        const { acceptedSessionSpawns } = toolTracking.withExecutionEvidence(refused);
+        recordCliStreamRefusalToolEffects(runError, {
+          toolSummary: events.getToolSummary(),
+          ...(acceptedSessionSpawns ? { acceptedSessionSpawns } : {}),
+        });
+      }
       throw toolTracking.attachDeliveryEvidence(runError);
     }
     if (!runOutput) {

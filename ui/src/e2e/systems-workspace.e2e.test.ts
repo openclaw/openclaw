@@ -3,13 +3,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expectAllSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -191,8 +190,14 @@ suite.define(() => {
         };
         const navigate = async (path: string) => {
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-          await page.locator('[data-navigation-view="pages"]').click();
-          await page.locator(`.sidebar-pages a[href$="/${path}"]`).click();
+          if (path === "activity") {
+            // Activity heads the Users section; on a phone People only opens its list.
+            await page.locator('[data-navigation-view="online"]').click();
+            await page.locator(".sidebar-online__overview a").click();
+            return;
+          }
+          await page.locator("[data-rail-more]").click();
+          await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
         };
         await page.goto(suite.server.baseUrl + "systems");
         await page
@@ -214,8 +219,8 @@ suite.define(() => {
             .locator("main.content")
             .evaluate((element) => getComputedStyle(element).paddingInline);
         expect(await inset()).toBe("0px");
+        // New session shows the Sessions drawer; tapping its avatar there would open the agent menu.
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-        await page.locator('[data-navigation-view="sessions"]').click();
         await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
         await page.locator(".chat-thread").waitFor();
         expect(await inset()).toBe("0px");
@@ -685,90 +690,69 @@ suite.define(() => {
     },
   );
 
-  it.each(["dashboards", "systems"])(
-    "scrolls the %s middle sidebar without moving the personal rail",
-    async (route) => {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { width: 1440, height: 900 },
-        },
-        async ({ page }) => {
-          // The middle column no longer includes the navigation stack: overflow its own roster.
-          await installSystemsGateway(page, 40);
-          await page.goto(suite.server.baseUrl + route);
-          await page.locator('[data-navigation-view="pages"]').click();
-          await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-          await page.locator('[data-navigation-view="sessions"]').click();
-          const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
-          const scroller = page.locator(".sidebar-shell__body");
-          const railControls = page.locator(
-            ".sidebar-rail__bottom :is(.sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card)",
+  it("scrolls the systems middle sidebar without moving the personal rail", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 1440, height: 900 },
+      },
+      async ({ page }) => {
+        // The middle column no longer includes the navigation stack: overflow its own roster.
+        await installSystemsGateway(page, 40);
+        await page.goto(suite.server.baseUrl + "systems");
+        const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
+        const scroller = page.locator(".sidebar-shell__body");
+        const railControls = page.locator(
+          ".sidebar-rail__bottom :is(.sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card)",
+        );
+        const railBounds = () =>
+          railControls.evaluateAll((controls) =>
+            controls.map((control) => {
+              const { x, y, width, height } = control.getBoundingClientRect();
+              return { x, y, width, height };
+            }),
           );
-          const railBounds = () =>
-            railControls.evaluateAll((controls) =>
-              controls.map((control) => {
-                const { x, y, width, height } = control.getBoundingClientRect();
-                return { x, y, width, height };
-              }),
-            );
-          const row = page
-            .locator(route === "systems" ? ".systems-machine" : ".sidebar-recent-session")
-            .first();
-          await row.waitFor();
-          if (route === "dashboards") {
-            await expectAllSidebarSessions(scroller, 30);
-            await revealSidebarTarget(
-              scroller,
-              page.locator('.sidebar-recent-session[data-session-key="agent:main:task-29"]'),
-            );
-            await scroller.evaluate((element) => {
-              element.scrollTop = 0;
-            });
-            await page
-              .locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]')
-              .waitFor();
-          }
-          const homeTop = () => home.evaluate((element) => element.getBoundingClientRect().top);
-          const rowTop = () => row.evaluate((element) => element.getBoundingClientRect().top);
-          await home.hover();
-          await row.hover();
-          const initialHomeTop = await homeTop();
-          const initialRowTop = await rowTop();
-          const firstRow = await row.elementHandle();
-          const initialRailBounds = await railBounds();
-          expect(initialRailBounds).toHaveLength(3);
+        const row = page.locator(".systems-machine").first();
+        await row.waitFor();
+        const homeTop = () => home.evaluate((element) => element.getBoundingClientRect().top);
+        const rowTop = () => row.evaluate((element) => element.getBoundingClientRect().top);
+        await home.hover();
+        await row.hover();
+        const initialHomeTop = await homeTop();
+        const initialRowTop = await rowTop();
+        const firstRow = await row.elementHandle();
+        const initialRailBounds = await railBounds();
+        expect(initialRailBounds).toHaveLength(3);
 
-          await page.mouse.wheel(0, 160);
-          await expect
-            .poll(() =>
-              firstRow!.evaluate(
-                (element, top) =>
-                  !element.isConnected || element.getBoundingClientRect().top < top - 80,
-                initialRowTop,
-              ),
-            )
-            .toBe(true);
+        await page.mouse.wheel(0, 160);
+        await expect
+          .poll(() =>
+            firstRow!.evaluate(
+              (element, top) =>
+                !element.isConnected || element.getBoundingClientRect().top < top - 80,
+              initialRowTop,
+            ),
+          )
+          .toBe(true);
 
-          expect(await homeTop()).toBe(initialHomeTop);
-          expect(await railBounds()).toEqual(initialRailBounds);
-          expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(80);
+        expect(await homeTop()).toBe(initialHomeTop);
+        expect(await railBounds()).toEqual(initialRailBounds);
+        expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(80);
 
-          await page.mouse.wheel(0, -1000);
-          await expect.poll(rowTop).toBeCloseTo(initialRowTop, 0);
-          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
-          await home.hover();
-          await page.mouse.wheel(0, 120);
-          expect(await homeTop()).toBe(initialHomeTop);
-          expect(await railBounds()).toEqual(initialRailBounds);
-          expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
-          expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
-          await firstRow!.dispose();
-        },
-      );
-    },
-  );
+        await page.mouse.wheel(0, -1000);
+        await expect.poll(rowTop).toBeCloseTo(initialRowTop, 0);
+        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
+        await home.hover();
+        await page.mouse.wheel(0, 120);
+        expect(await homeTop()).toBe(initialHomeTop);
+        expect(await railBounds()).toEqual(initialRailBounds);
+        expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
+        expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
+        await firstRow!.dispose();
+      },
+    );
+  });
 
   it("loads the lazy workspace and keeps its machine picker aligned after navigation", async () => {
     const context = await suite.browser.newContext({
@@ -789,11 +773,10 @@ suite.define(() => {
 
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
-      await page.locator('[data-navigation-view="pages"]').click();
-      await page.locator('.sidebar-pages a[href$="/dashboards"]').click();
+      // Leave through a page without a sidebar so the Sessions view and its inventory remain.
+      await evaluateControlUiContext(page, (app) => app.navigate("usage"));
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-      await page.locator('.sidebar-pages a[href$="/systems"]').click();
-      await page.locator('[data-navigation-view="sessions"]').click();
+      await evaluateControlUiContext(page, (app) => app.navigate("systems"));
       await inventory.waitFor();
       await expect
         .poll(() => page.locator(".systems-heading h2").textContent())

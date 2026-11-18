@@ -104,7 +104,8 @@ suite.define(() => {
         const listRect = row.closest(".sidebar-recent-sessions__list")!.getBoundingClientRect();
         const scrollerStyle = getComputedStyle(scroller);
         return {
-          leftInset: rowRect.left - sidebarRect.left,
+          // The panel's 1px hairline sits on its rail side only; measure inside it.
+          leftInset: rowRect.left - sidebarRect.left - sidebar.clientLeft,
           rightInset: sidebarRect.right - rowRect.right - scrollbarWidth,
           listLeft: listRect.left,
           listRight: listRect.right,

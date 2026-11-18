@@ -42,7 +42,7 @@ it("retains accepted restart intent after pre-runtime dispatch fully settles", a
       ),
     ).toBe(false);
     await persistRunningSessionsForRestart({ cfg: {} });
-    expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({ queuedInputIds: [] });
+    expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({});
   } finally {
     resetGatewayWorkAdmission();
   }

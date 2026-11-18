@@ -50,7 +50,6 @@ export type MediaGenerateToolOptions = {
   config?: OpenClawConfig;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   agentSessionKey?: string;
   sandboxSessionKey?: string;
   sandboxAgentId?: string;

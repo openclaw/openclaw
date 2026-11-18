@@ -222,29 +222,60 @@ export function recordRequesterDelivery(
   if (delivery.requesterDelivery?.state !== "consumed") {
     delivery.requesterDelivery = fact;
   }
-  if (delivery.status === "pending" || delivery.status === "in_progress") {
+  if (
+    delivery.disposition !== "ambiguous" &&
+    (delivery.status === "pending" || delivery.status === "in_progress")
+  ) {
     delivery.disposition = undefined;
     delivery.lastError = undefined;
   }
 }
 
+/** A result committed to the requester transcript is never replayed. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
+}
+
+/** A committed private result can settle delivery when there is no uncertain send to resolve. */
 export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
   return (
-    entry.delivery?.requesterDelivery?.state === "consumed" &&
+    entry.delivery?.disposition !== "ambiguous" &&
+    hasConsumedRequesterInput(entry) &&
     entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
     (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
   );
 }
 
-/** A cancelled private continuation cannot unconsume its committed input. */
+// The requester turn itself stopped; no answer exists to deliver.
+const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]>([
+  "requester_aborted",
+  "requester_timed_out",
+  "requester_preparation_changed",
+  "requester_state_conflict",
+  "requester_transcript_conflict",
+]);
+
+/**
+ * A committed result can cover a turn that failed before answering. An unconfirmed
+ * channel send keeps its own outcome even when the requester received the input.
+ */
 export function resolveRequesterDeliveryOutcome(
   entries: readonly SubagentRunRecord[],
   outcome: SubagentAnnounceDeliveryResult | undefined,
 ): SubagentAnnounceDeliveryResult | undefined {
+  const turnFailedBeforeAnswer =
+    outcome?.finalAssistantVisibleText === undefined &&
+    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
   return outcome &&
     !outcome.delivered &&
+    outcome.disposition !== "ambiguous" &&
     entries.length > 0 &&
-    entries.every(hasConsumedPrivateRequesterInput)
+    entries.every(
+      (entry) =>
+        entry.delivery?.disposition !== "ambiguous" &&
+        (hasConsumedPrivateRequesterInput(entry) ||
+          (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry))),
+    )
     ? { delivered: true, path: "direct" }
     : outcome;
 }

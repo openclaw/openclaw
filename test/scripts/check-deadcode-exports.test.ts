@@ -258,6 +258,18 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
       "prefetchPreparedPlugins",
       "../../scripts/openclaw-release-ready.mjs",
     ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyReleaseEvidenceChecksum",
+      "../../scripts/lib/stable-release-closeout.mjs",
+    ],
+    [
+      "yml",
+      ".github/workflows/openclaw-stable-main-closeout.yml",
+      "verifyStablePublishRecovery",
+      "../../scripts/lib/stable-publish-recovery.mjs",
+    ],
   ] as const)("models %s inline imports from %s", (kind, file, symbol, importedFrom) => {
     const source = fs.readFileSync(file, "utf8");
     const compile = knipConfig.compilers[kind];
@@ -266,7 +278,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
     }
     expect(compile(source, file)).toContain(`import { ${symbol} } from "${importedFrom}";`);
     const remaining = compile(
-      source.replace(new RegExp(`^\\s*import \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
+      source.replace(new RegExp(`^\\s*(?:import|const) \\{ ${symbol} \\}[^\\n]+\\n`, "mu"), ""),
       file,
     );
     expect(remaining).not.toContain(symbol);
@@ -899,6 +911,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const manifest = fs.readFileSync("package.json", "utf8");
     const compile = knipConfig.compilers.json;
     const compiled = compile(manifest, "package.json");
+    expect(compiled).not.toContain("import { isImmutableManagedServiceUpdateHandoffProcess");
     expect(compiled).toMatch(
       /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
     );

@@ -140,25 +140,25 @@ function sameVisibleRows(a: readonly SidebarRecentSession[], b: readonly Sidebar
 
 export class SidebarSessionProjection {
   // Record frame admission only; owner.updated can precede child DOM bindings.
-  private publishedSessionPresentation: readonly unknown[] | undefined;
-  private readonly helloPresentation = new SidebarProjectionMemo<unknown>();
-  private readonly pluginPresentation = new SidebarProjectionMemo<string>();
-  private readonly rosterPresentation = new SidebarProjectionMemo<unknown>();
-  private readonly catalogPresentation = new SidebarProjectionMemo<unknown>();
-  private readonly sectionPresentation = new SidebarProjectionMemo<unknown>();
-  private readonly rowPresentation = new SidebarProjectionMemo<readonly SidebarRecentSession[]>();
-  private readonly homePresentation = new SidebarProjectionMemo<readonly SidebarRecentSession[]>();
-  private mountedCatalogRevision = 0;
-  private admittedPresencePresentation = "";
-  private readonly mountedCatalogRows = new Set<{ key: string }>();
+  #publishedSessionPresentation: readonly unknown[] | undefined;
+  readonly #helloPresentation = new SidebarProjectionMemo<unknown>();
+  readonly #pluginPresentation = new SidebarProjectionMemo<string>();
+  readonly #rosterPresentation = new SidebarProjectionMemo<unknown>();
+  readonly #catalogPresentation = new SidebarProjectionMemo<unknown>();
+  readonly #sectionPresentation = new SidebarProjectionMemo<unknown>();
+  readonly #rowPresentation = new SidebarProjectionMemo<readonly SidebarRecentSession[]>();
+  readonly #homePresentation = new SidebarProjectionMemo<readonly SidebarRecentSession[]>();
+  #mountedCatalogRevision = 0;
+  #admittedPresencePresentation = "";
+  readonly #mountedCatalogRows = new Set<{ key: string }>();
 
   mountCatalogRow(key: string): () => void {
     const row = { key };
-    this.mountedCatalogRows.add(row);
-    this.mountedCatalogRevision += 1;
+    this.#mountedCatalogRows.add(row);
+    this.#mountedCatalogRevision += 1;
     return () => {
-      this.mountedCatalogRows.delete(row);
-      this.mountedCatalogRevision += 1;
+      this.#mountedCatalogRows.delete(row);
+      this.#mountedCatalogRevision += 1;
     };
   }
 
@@ -203,7 +203,7 @@ export class SidebarSessionProjection {
           group.sessionKeys.map((key) => zone.sessionRows.get(key)),
         ),
       host.connected,
-      this.helloPresentation.readRevision(
+      this.#helloPresentation.readRevision(
         () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],
         // Capability refreshes replace hello's fields while retaining its handshake identity.
         () => context?.gateway.snapshot.hello && { ...context.gateway.snapshot.hello },
@@ -219,7 +219,7 @@ export class SidebarSessionProjection {
           ])
         : null,
       host.sessionDataContext?.plugins.registryStatus,
-      this.pluginPresentation.readRevision(
+      this.#pluginPresentation.readRevision(
         () => [context?.plugins, context?.plugins.revision],
         // Plugins may mutate registered values before invalidate(); retain that public boundary.
         () => JSON.stringify(host.pluginNavigation().map(({ key, value }) => [key, value])),
@@ -231,7 +231,7 @@ export class SidebarSessionProjection {
       host.sessionDataContext?.sessions.eventSubscriptionError,
       host.sessionDataContext?.sessions.state.groupSettings,
       rosterSnapshot && [
-        this.rosterPresentation.readRevision(
+        this.#rosterPresentation.readRevision(
           () => [rosterSnapshot.cards],
           () =>
             rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
@@ -256,12 +256,12 @@ export class SidebarSessionProjection {
       data.loadingMoreSessionCatalogIds,
       data.childSessionErrorsByParent,
       catalogs &&
-        this.catalogPresentation.readRevision(
+        this.#catalogPresentation.readRevision(
           () => [
             // Catalog and prepared-row owners already track roster and session revisions.
             catalogs,
             host.catalogSessionRows(),
-            this.mountedCatalogRevision,
+            this.#mountedCatalogRevision,
             areSessionCatalogsSettled(data),
             data.visibleSessionLimits,
           ],
@@ -280,7 +280,7 @@ export class SidebarSessionProjection {
                 ),
               ),
               // Explicit disclosure actions invalidate directly; compare prepared facts here.
-              Array.from(this.mountedCatalogRows, ({ key }) => projectedRowsByKey.get(key)),
+              Array.from(this.#mountedCatalogRows, ({ key }) => projectedRowsByKey.get(key)),
               areSessionCatalogsSettled(data),
               data.visibleSessionLimits,
             ];
@@ -289,13 +289,13 @@ export class SidebarSessionProjection {
         ),
       data.ownerCounts.counts,
       data.ownerCounts.error,
-      this.admittedPresencePresentation,
-      this.rowPresentation.readRevision(
+      this.#admittedPresencePresentation,
+      this.#rowPresentation.readRevision(
         () => tree,
         () => tree,
         sameVisibleRows,
       ),
-      this.sectionPresentation.readRevision(
+      this.#sectionPresentation.readRevision(
         () => sections,
         () =>
           sections.map(({ rows, ...header }) => [
@@ -305,14 +305,14 @@ export class SidebarSessionProjection {
           ]),
         sameSidebarPresentation,
       ),
-      this.homePresentation.readRevision(
+      this.#homePresentation.readRevision(
         () => homes,
         () => homes,
         sameVisibleRows,
       ),
     ];
-    const changed = !sameSidebarPresentation(presentation, this.publishedSessionPresentation);
-    this.publishedSessionPresentation = presentation;
+    const changed = !sameSidebarPresentation(presentation, this.#publishedSessionPresentation);
+    this.#publishedSessionPresentation = presentation;
     return changed;
   }
 
@@ -321,15 +321,15 @@ export class SidebarSessionProjection {
     next: PresencePayload | undefined,
     scope: SidebarPresenceScope,
   ): boolean {
-    this.admittedPresencePresentation = sidebarPresencePresentation(next, scope);
+    this.#admittedPresencePresentation = sidebarPresencePresentation(next, scope);
     return (
       previous === next ||
-      sidebarPresencePresentation(previous, scope) === this.admittedPresencePresentation
+      sidebarPresencePresentation(previous, scope) === this.#admittedPresencePresentation
     );
   }
 
   refreshPresencePresentation(host: SidebarPresentationHost, scope: SidebarPresenceScope): void {
-    this.admittedPresencePresentation = sidebarPresencePresentation(
+    this.#admittedPresencePresentation = sidebarPresencePresentation(
       host.sessionData.presencePayload,
       scope,
     );
@@ -417,82 +417,82 @@ export class SidebarSessionProjection {
 
   revision = 0;
   createdOrderRevision = 0;
-  private observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
+  #observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
   subtitleDeadline = Infinity;
-  private readonly observedOrder = new Map<string, number>();
-  private nextCreatedOrder = 0;
-  private readonly stickySections = new Map<string, Set<string>>();
+  readonly #observedOrder = new Map<string, number>();
+  #nextCreatedOrder = 0;
+  readonly #stickySections = new Map<string, Set<string>>();
   // Rows a lone section showed, kept after a peer arrives until collapse or
   // Show less (resetMembership) so the list does not shrink under the reader.
-  private readonly revealed = new Map<string, number>();
+  readonly #revealed = new Map<string, number>();
   readonly children = new SidebarChildExpansion(() => {
     this.revision += 1;
   });
-  private readonly heldSubtitles = new Map<
+  readonly #heldSubtitles = new Map<
     string,
     { value: SidebarSubtitleValue; catalogValue?: SidebarSubtitleValue; shownAt: number }
   >();
-  private previousInput: Pick<
+  #previousInput: Pick<
     SidebarProjectionInput,
     "grouping" | "sortMode" | "statusFilter" | "agentId" | "connectionIdentity" | "listSource"
   > | null = null;
-  private previousCollapsedSections = new Set<string>();
+  #previousCollapsedSections = new Set<string>();
 
   get createdOrder(): ReadonlyMap<string, number> {
-    return this.observedOrder;
+    return this.#observedOrder;
   }
 
   observeRows(results: readonly { sessions: readonly { key: string }[] }[]): void {
     if (
-      results.length === this.observedResults.length &&
-      results.every((value, index) => Object.is(value, this.observedResults[index]))
+      results.length === this.#observedResults.length &&
+      results.every((value, index) => Object.is(value, this.#observedResults[index]))
     ) {
       return;
     }
-    this.observedResults = results;
-    const previousOrder = this.nextCreatedOrder;
+    this.#observedResults = results;
+    const previousOrder = this.#nextCreatedOrder;
     for (const result of results) {
       for (const { key } of result.sessions) {
-        if (key && !this.observedOrder.has(key)) {
-          this.observedOrder.set(key, this.nextCreatedOrder++);
+        if (key && !this.#observedOrder.has(key)) {
+          this.#observedOrder.set(key, this.#nextCreatedOrder++);
         }
       }
     }
-    if (previousOrder !== this.nextCreatedOrder) {
+    if (previousOrder !== this.#nextCreatedOrder) {
       this.createdOrderRevision += 1;
       this.revision += 1;
     }
     // Paging gaps must retain their tie-break index; evict absent keys only
     // when the sidebar-lifetime registry actually exceeds its memory bound.
-    if (this.observedOrder.size <= SIDEBAR_CREATED_ORDER_CAP) {
+    if (this.#observedOrder.size <= SIDEBAR_CREATED_ORDER_CAP) {
       return;
     }
     const retainedKeys = new Set(
       results.flatMap((result) => result.sessions.map(({ key }) => key)),
     );
-    for (const key of this.observedOrder.keys()) {
-      if (this.observedOrder.size <= SIDEBAR_CREATED_ORDER_CAP) {
+    for (const key of this.#observedOrder.keys()) {
+      if (this.#observedOrder.size <= SIDEBAR_CREATED_ORDER_CAP) {
         break;
       }
       if (!retainedKeys.has(key)) {
-        this.observedOrder.delete(key);
+        this.#observedOrder.delete(key);
       }
     }
   }
 
   promoteCreatedSession(key: string): boolean {
-    const currentOrder = this.observedOrder.get(key);
+    const currentOrder = this.#observedOrder.get(key);
     if (currentOrder === 0) {
       return false;
     }
-    for (const [existingKey, order] of this.observedOrder) {
+    for (const [existingKey, order] of this.#observedOrder) {
       if (existingKey !== key && (currentOrder === undefined || order < currentOrder)) {
-        this.observedOrder.set(existingKey, order + 1);
-        this.nextCreatedOrder = Math.max(this.nextCreatedOrder, order + 2);
+        this.#observedOrder.set(existingKey, order + 1);
+        this.#nextCreatedOrder = Math.max(this.#nextCreatedOrder, order + 2);
       }
     }
-    this.observedOrder.set(key, 0);
-    this.nextCreatedOrder = Math.max(this.nextCreatedOrder, 1);
+    this.#observedOrder.set(key, 0);
+    this.#nextCreatedOrder = Math.max(this.#nextCreatedOrder, 1);
     this.createdOrderRevision += 1;
     this.revision += 1;
     return true;
@@ -502,7 +502,7 @@ export class SidebarSessionProjection {
     // Record the state published by this pass, including sticky membership and subtitles.
     this.revision += 1;
     this.subtitleDeadline = Infinity;
-    const previous = this.previousInput;
+    const previous = this.#previousInput;
     const scopeChanged =
       previous !== null &&
       (previous.agentId !== input.agentId ||
@@ -521,14 +521,14 @@ export class SidebarSessionProjection {
     }
     this.children.beginPass(input, previous);
     if (scopeChanged) {
-      this.heldSubtitles.clear();
+      this.#heldSubtitles.clear();
     }
     for (const sectionId of input.collapsedSections) {
-      if (!this.previousCollapsedSections.has(sectionId)) {
+      if (!this.#previousCollapsedSections.has(sectionId)) {
         this.resetMembership(sectionId);
       }
     }
-    this.previousInput = {
+    this.#previousInput = {
       grouping: input.grouping,
       sortMode: input.sortMode,
       statusFilter: input.statusFilter,
@@ -536,9 +536,9 @@ export class SidebarSessionProjection {
       connectionIdentity: input.connectionIdentity,
       listSource: input.listSource,
     };
-    this.previousCollapsedSections = new Set(input.collapsedSections);
+    this.#previousCollapsedSections = new Set(input.collapsedSections);
 
-    const staleKeys = new Set([...this.children.keys(), ...this.heldSubtitles.keys()]);
+    const staleKeys = new Set([...this.children.keys(), ...this.#heldSubtitles.keys()]);
     const observed = new Set<string>();
     const pending = [...input.rows, ...(input.referencedRows ?? [])];
     for (const session of pending) {
@@ -548,12 +548,12 @@ export class SidebarSessionProjection {
       observed.add(session.key);
       staleKeys.delete(session.key);
       this.children.observe(session, input.listLoaded);
-      this.observeSubtitle(session, input.subtitle);
+      this.#observeSubtitle(session, input.subtitle);
       pending.push(...session.children);
     }
     for (const key of staleKeys) {
       this.children.delete(key);
-      this.heldSubtitles.delete(key);
+      this.#heldSubtitles.delete(key);
     }
 
     const { grouping, knownGroups, selfOwnerId, sectionOrder, catalogIds } = input;
@@ -588,9 +588,9 @@ export class SidebarSessionProjection {
               (!hideEmptyGroups || section.id.startsWith("catalog:")))),
       );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
-    for (const sectionId of this.stickySections.keys()) {
+    for (const sectionId of this.#stickySections.keys()) {
       if (!sectionIds.has(sectionId)) {
-        this.stickySections.delete(sectionId);
+        this.#stickySections.delete(sectionId);
       }
     }
     // A lone catch-all sits directly under the global Sessions toolbar. Empty
@@ -632,7 +632,7 @@ export class SidebarSessionProjection {
       const { initialLimit: pageLimit, key } = sidebarSessionPagination(grouping, section.id);
       const visibleLimit = Math.max(
         input.visibleSessionLimits.get(key) ?? pageLimit,
-        this.revealed.get(section.id) ?? 0,
+        this.#revealed.get(section.id) ?? 0,
       );
       const initialLimit = sole ? totalRowCount : pageLimit;
       const rowLimit = sole ? totalRowCount : visibleLimit;
@@ -648,7 +648,7 @@ export class SidebarSessionProjection {
       if (!collapsed) {
         let optionalSlots = Math.max(0, rowLimit - requiredRowCount);
         let retainedSlots = rowLimit;
-        const sticky = this.stickySections.get(section.id);
+        const sticky = this.#stickySections.get(section.id);
         // Keep one prior page through run-state and recency changes. An unbounded
         // union eventually renders the entire roster without a Show more action.
         section.rows = section.rows.filter((row) => {
@@ -666,9 +666,9 @@ export class SidebarSessionProjection {
           return true;
         });
         if (sole) {
-          this.revealed.set(section.id, section.rows.length);
+          this.#revealed.set(section.id, section.rows.length);
         }
-        this.stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
+        this.#stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
         visibleRows.push(...section.rows);
         visibleRowCount = section.rows.length;
       }
@@ -688,11 +688,11 @@ export class SidebarSessionProjection {
   resetMembership(sectionId?: string): void {
     this.revision += 1;
     if (sectionId === undefined) {
-      this.stickySections.clear();
-      this.revealed.clear();
+      this.#stickySections.clear();
+      this.#revealed.clear();
     } else {
-      this.stickySections.delete(sectionId);
-      this.revealed.delete(sectionId);
+      this.#stickySections.delete(sectionId);
+      this.#revealed.delete(sectionId);
     }
   }
 
@@ -712,21 +712,21 @@ export class SidebarSessionProjection {
     // ambient narration hold must not pair a new glyph with an old tool label.
     const held =
       params.session.hasActiveRun && params.showPreview && !params.toolActivity
-        ? this.heldSubtitles.get(params.session.key)
+        ? this.#heldSubtitles.get(params.session.key)
         : undefined;
     return params.hasDisplay ? held?.catalogValue : held?.value;
   }
 
-  private observeSubtitle(
+  #observeSubtitle(
     session: SidebarRecentSession,
     environment: SidebarProjectionInput["subtitle"],
   ): void {
     if (!session.hasActiveRun || !environment.showPreview) {
-      this.heldSubtitles.delete(session.key);
+      this.#heldSubtitles.delete(session.key);
       return;
     }
-    if (!environment.sidebarLiveActivity && this.heldSubtitles.get(session.key)?.value.narration) {
-      this.heldSubtitles.delete(session.key);
+    if (!environment.sidebarLiveActivity && this.#heldSubtitles.get(session.key)?.value.narration) {
+      this.#heldSubtitles.delete(session.key);
     }
     const params = {
       session,
@@ -739,13 +739,13 @@ export class SidebarSessionProjection {
     const value = resolveSidebarSessionSubtitle(params);
     if (!value.subtitle) {
       if (session.attention.kind === "question" || session.attention.kind === "error") {
-        this.heldSubtitles.delete(session.key);
+        this.#heldSubtitles.delete(session.key);
       }
       // Transient gaps between event updates keep the last shown line; the
       // hold dies with the run (the hasActiveRun branch above).
       return;
     }
-    const held = this.heldSubtitles.get(session.key);
+    const held = this.#heldSubtitles.get(session.key);
     const now = Date.now();
     const replacing = held !== undefined && held.value.subtitle !== value.subtitle;
     // Attention, agent-declared status, and the queued explanation require
@@ -766,7 +766,7 @@ export class SidebarSessionProjection {
       return;
     }
     const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });
-    this.heldSubtitles.set(session.key, {
+    this.#heldSubtitles.set(session.key, {
       value,
       ...(catalogValue.subtitle ? { catalogValue } : {}),
       shownAt: held !== undefined && !replacing ? held.shownAt : now,

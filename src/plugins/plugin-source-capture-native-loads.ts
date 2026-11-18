@@ -9,6 +9,8 @@ import type {
   PluginCaptureReclaimCandidate,
 } from "../infra/fs-safe-copy-worker-contract.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -249,16 +251,12 @@ export function createPluginNativeCaptureCustody(ownedRoots: Set<string>) {
     }
     const [
       { deserialize },
-      { runtimeProcessEntrypoints },
-      { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl },
       { runCommandBuffersWithTimeout },
       { hasCommandProcessCleanupError },
       { withCommandProcessScope },
       { withChildProcessOperation },
     ] = await Promise.all([
       import("node:v8"),
-      import("../infra/runtime-process-entrypoints.js"),
-      import("../infra/runtime-worker-url.js"),
       import("../process/exec-runner.js"),
       import("../process/exec-result.js"),
       import("../process/exec-spawn.js"),

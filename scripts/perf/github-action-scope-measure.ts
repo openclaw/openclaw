@@ -3,6 +3,7 @@
  * Freeze once with local-workspace-checkpoint-measure.ts --freeze-source <capsule>
  * --revision <base>, then run this script with --capsule <capsule> --output <new-dir>.
  * --counts records work; --allocation samples allocation separately from timing.
+ * --control-pairs 0 reuses completed A/A controls for a follow-up A/B campaign.
  * --publication measures the durable publication coordinator and real local Git.
  * Baseline and candidate function bodies come from Git and the working tree. Both
  * execute in the same process, interleaved A/A then A/B, through the registered
@@ -10,6 +11,10 @@
  * --lineage records baseline A/A at depth 1/4/16/64 through real principal and
  * admitted-run owners. --large-fixture <root> reflinks a completed synthetic
  * database and workspace/ into the isolated test fixture (requires btrfs or APFS).
+ * --team-fixture imports the agent roster from team-shape-fixture.ts output.
+ * --compare-role-selection compares the role lookup owner within lineage calls.
+ * --prepare-pr --compare-assertion-chains advances --changed-files entries through
+ * PR preparation, comparing retained source, target preparation and Git configuration assertions.
  * This is boundary/owner evidence, not a running Gateway transport measurement.
  */
 import assert from "node:assert/strict";
@@ -28,18 +33,32 @@ const { values } = parseArgs({
     allocation: { type: "boolean" },
     "cpu-profile": { type: "boolean" },
     publication: { type: "boolean" },
+    "prepare-pr": { type: "boolean" },
+    "changed-files": { type: "string", default: "2000" },
     lineage: { type: "boolean" },
     "working-source": { type: "boolean" },
     "active-runs": { type: "boolean" },
     depths: { type: "string", default: "1,4,16,64" },
     "large-fixture": { type: "string" },
+    "team-fixture": { type: "string" },
+    "compare-role-selection": { type: "boolean" },
+    "actions-only": { type: "boolean" },
+    "compare-runtime-config": { type: "boolean" },
+    "body-bytes": { type: "string", default: "0" },
+    "edit-body": { type: "boolean" },
+    "assignment-miss": { type: "boolean" },
+    "compare-assertion-chains": { type: "boolean" },
     sessions: { type: "string", default: "2000" },
     runs: { type: "string", default: "20000" },
     roles: { type: "string", default: "2000" },
     pairs: { type: "string", default: "5" },
+    "control-pairs": { type: "string" },
   },
 });
 assert(values.capsule && values.output, "--capsule and --output are required");
+assert(!values["prepare-pr"] || values.lineage, "--prepare-pr requires --lineage");
+const changedFiles = Number(values["changed-files"]);
+assert(Number.isSafeInteger(changedFiles) && changedFiles > 0, "Invalid --changed-files");
 assert(
   [values.counts, values.allocation, values["cpu-profile"]].filter(Boolean).length <= 1,
   "Separate census, allocation and CPU profile runs",
@@ -50,6 +69,8 @@ assert(capsule !== root);
 const manifest = JSON.parse(fs.readFileSync(path.join(capsule, "checkpoint-source.json"), "utf8"));
 const pairs = Number(values.pairs);
 assert(Number.isInteger(pairs) && pairs > 0, "--pairs must be a positive integer");
+const controlPairs = Number(values["control-pairs"] ?? values.pairs);
+assert(Number.isInteger(controlPairs) && controlPairs >= 0, "Invalid --control-pairs");
 const readSource = (relative: string) =>
   values.lineage && !values["working-source"]
     ? execFileSync("git", ["show", `${manifest.revision}:${relative}`], {
@@ -61,35 +82,53 @@ const readSource = (relative: string) =>
 const output = path.resolve(values.output);
 fs.mkdirSync(output);
 const key = 'globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]';
-const variants: [string, string, string][] = values.lineage
-  ? []
-  : [
-      ["src/gateway/github-publication-actions.ts", "performSessionGitHubAction", ""],
+const variants: [string, string, string][] = values["compare-assertion-chains"]
+  ? [
+      ["src/gateway/github-pr-workspace-preparation.ts", "performSessionGitHubPreparation", ""],
+      ["src/agents/worktrees/checkout-git-config.ts", "withWorktreeGitConfig", ""],
       [
-        "src/gateway/github-publication-action-target.ts",
-        "preparePublishingSession",
-        "\nexport function pullRequestState",
+        "src/gateway/session-sharing-source.ts",
+        "createAdmittedSessionSharingAuthority",
+        "\nexport function captureSessionSharingTalkAuthority",
       ],
-      [
-        "src/gateway/github-publication-requester.ts",
-        "prepareRequesterPolicy",
-        "\nfunction prepareRequesterSource",
-      ],
-      [
-        "src/gateway/github-publication-inspect.ts",
-        "readOwnGitHubPullRequest",
-        "\nexport async function performSessionGitHubInspection",
-      ],
-      [
-        "src/agents/subagents/registry/subagent-registry-read.ts",
-        "listSubagentRunsForRequester",
-        "\nexport async function getLatestSubagentRunByChildSessionKey",
-      ],
-    ];
+    ]
+  : values["compare-role-selection"]
+    ? [
+        [
+          "src/gateway/operator-role-policy.ts",
+          "resolveOperatorRoleSelection",
+          "\n/** An enabled role boundary",
+        ],
+      ]
+    : values.lineage
+      ? []
+      : [
+          ["src/gateway/github-publication-actions.ts", "performSessionGitHubAction", ""],
+          [
+            "src/gateway/github-publication-action-target.ts",
+            "preparePublishingSession",
+            "\nexport function pullRequestState",
+          ],
+          [
+            "src/gateway/github-publication-requester.ts",
+            "prepareRequesterPolicy",
+            "\nfunction prepareRequesterSource",
+          ],
+          [
+            "src/gateway/github-publication-inspect.ts",
+            "readOwnGitHubPullRequest",
+            "\nexport async function performSessionGitHubInspection",
+          ],
+          [
+            "src/agents/subagents/registry/subagent-registry-read.ts",
+            "listSubagentRunsForRequester",
+            "\nexport async function getLatestSubagentRunByChildSessionKey",
+          ],
+        ];
 const hashes: Record<string, { baseline: string; candidate: string }> = {};
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 function region(source: string, name: string, end: string) {
-  const declaration = new RegExp(`^(export )?(async )?function ${name}\\(`, "m");
+  const declaration = new RegExp(`^(export )?(async )?function ${name}(?:<[^>]+>)?\\(`, "m");
   const match = declaration.exec(source);
   assert(match, name);
   const finish = end ? source.indexOf(end, match.index) : source.length;
@@ -112,7 +151,7 @@ for (const [relative, name, end] of variants) {
     b = region(candidate, name, end);
   hashes[relative] = { baseline: hash(a.body), candidate: hash(b.body) };
   const rename = (body: string, suffix: string) =>
-    body.replace(/^export /, "").replace(`function ${name}(`, `function ${name}${suffix}(`);
+    body.replace(/^export /, "").replace(`function ${name}`, `function ${name}${suffix}`);
   const wrapper = `${b.exported ? "export " : ""}function ${name}(...args: Parameters<typeof ${name}Candidate>): ReturnType<typeof ${name}Candidate> {
     return (${key}?.arm === "candidate" ? ${name}Candidate : ${name}Baseline)(...args);
   }\n`;
@@ -129,6 +168,11 @@ for (const [relative, name, end] of variants) {
 const query = "src/agents/subagents/registry/subagent-registry-queries.ts";
 fs.writeFileSync(path.join(capsule, query), readSource(query));
 const counters: [string, string, string][] = [
+  [
+    "src/sessions/session-controller.target.ts",
+    "  const storeScope = params.storeScope.trim();",
+    "session.targetCapture",
+  ],
   [
     "src/gateway/session-sharing-routing.ts",
     "  return (current: OpenClawConfig) => {",
@@ -201,6 +245,21 @@ const counters: [string, string, string][] = [
     "sharing.filter",
   ],
   [query, "): LatestSubagentRunReadIndex<T> {", "runs.index"],
+  ["src/gateway/operator-role-policy.ts", "Object.keys(assignments)", "role.enumerations"],
+];
+const immutableConsumers = [
+  "src/agents/agent-roster.ts",
+  "src/agents/prepared-model-catalog-fingerprints.ts",
+  "src/agents/model-runtime-policy.ts",
+  "src/agents/operator-model-policy.ts",
+  "src/plugins/config-state.ts",
+  "src/plugins/runtime/load-context.ts",
+  "src/plugins/activation-context.ts",
+  "src/config/runtime-config-snapshot-match.ts",
+  "src/config/runtime-snapshot-value-fact.ts",
+  "src/config/sessions/combined-store-paths.ts",
+  "src/secrets/provider-env-vars.ts",
+  "src/gateway/session-store-key.ts",
 ];
 const rewritten = new Set(variants.map(([relative]) => relative).concat(query));
 for (const [relative] of counters) {
@@ -218,13 +277,86 @@ if (values.counts) {
       file,
       source.replaceAll(
         needle,
-        counter === "sharing.deepEqual"
-          ? `${key}?.count?.(${JSON.stringify(counter)});\n${needle}`
-          : counter === "sharing.currency"
-            ? `${needle}\n${key}?.count?.(${JSON.stringify(counter)});\n${key}?.currency?.(readCurrent);`
-            : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
+        counter === "role.enumerations"
+          ? `(${key}?.count?.(${JSON.stringify(counter)}), ${needle})`
+          : counter === "sharing.deepEqual"
+            ? `${key}?.count?.(${JSON.stringify(counter)});\n${needle}`
+            : counter === "sharing.currency"
+              ? `${needle}\n${key}?.count?.(${JSON.stringify(counter)});\n${key}?.currency?.(readCurrent);`
+              : `${needle}\n${key}?.count?.(${JSON.stringify(counter)});`,
       ),
     );
+  }
+}
+const retry = "src/infra/git-network-retry.ts";
+const retrySource = readSource(retry);
+assert(retrySource.includes("    const start = () => {"));
+assert(retrySource.includes("    return options.startRun ? options.startRun(start) : start();"));
+fs.writeFileSync(
+  path.join(capsule, retry),
+  values.counts
+    ? retrySource
+        .replace("    const start = () => {", "    const execute = () => {")
+        .replace(
+          "    return options.startRun ? options.startRun(start) : start();",
+          `    const start = () => ${key}?.gitAttempt ? ${key}.gitAttempt(execute) : execute();\n    return options.startRun ? options.startRun(start) : start();`,
+        )
+    : retrySource,
+);
+// Remove observers from earlier uses of this capsule.
+fs.writeFileSync(path.join(capsule, "src/infra/git-exec.ts"), readSource("src/infra/git-exec.ts"));
+
+for (const relative of [
+  "src/gateway/github-publication.test-support.ts",
+  "src/gateway/github-publication-git.test-support.ts",
+  "src/gateway/github-pr-workspace-preparation.test-support.ts",
+]) {
+  fs.writeFileSync(
+    path.join(capsule, relative),
+    fs.readFileSync(path.join(root, relative), "utf8"),
+  );
+}
+
+if (values["compare-runtime-config"]) {
+  for (const relative of immutableConsumers) {
+    let source = readSource(relative);
+    if (values.counts) {
+      source = source.replace(
+        "isDeeplyFrozenPlainData",
+        "isDeeplyFrozenPlainData as inspectFrozenData",
+      );
+      assert(source.includes("as inspectFrozenData"), relative);
+      source += `\nfunction isDeeplyFrozenPlainData(value: unknown): boolean {
+        const frozen = inspectFrozenData(value);
+        ${key}?.count?.(${JSON.stringify(relative + ":frozen=")} + frozen);
+        return frozen;
+      }\n`;
+      if (
+        [
+          "src/config/runtime-snapshot-value-fact.ts",
+          "src/plugins/runtime/load-context.ts",
+          "src/agents/prepared-model-catalog-fingerprints.ts",
+        ].includes(relative)
+      ) {
+        source = source.replace(
+          "  if (cached !== undefined) {",
+          `  if (cached !== undefined) {\n    ${key}?.count?.(${JSON.stringify(relative + ":cache-hit")});`,
+        );
+      }
+      if (relative.endsWith("/runtime-config-snapshot-match.ts")) {
+        source = source.replace(
+          "  if (text === undefined) {",
+          `  ${key}?.count?.(${JSON.stringify(relative + ":cache-")} + (text === undefined ? "miss" : "hit"));\n  if (text === undefined) {`,
+        );
+      }
+      if (relative.endsWith("/agent-roster.ts")) {
+        source = source.replace(
+          "  return cached.facts;",
+          `  ${key}?.count?.(publication ? "roster.publication" : "roster.frozen");\n  return cached.facts;`,
+        );
+      }
+    }
+    fs.writeFileSync(path.join(capsule, relative), source);
   }
 }
 
@@ -255,15 +387,66 @@ if (values["large-fixture"]) {
     else await fs.copyFile(${JSON.stringify(db)}, path.join(root, "agents/main/agent/openclaw-agent.sqlite"), fs.constants.COPYFILE_FICLONE_FORCE);`,
     ),
   );
+  if (values["prepare-pr"]) {
+    const preparationSupport = "src/gateway/github-pr-workspace-preparation.test-support.ts";
+    fs.writeFileSync(
+      path.join(capsule, preparationSupport),
+      readSource(preparationSupport).replaceAll("timeoutMs: 10_000,", "timeoutMs: 120_000,"),
+    );
+    const gitSupport = path.join(capsule, "src/gateway/github-publication-git.test-support.ts");
+    const source = fs.readFileSync(gitSupport, "utf8");
+    const initialCommit =
+      '  await git("add", "artifact.txt");\n  await git("commit", "-m", "base");';
+    assert(source.includes(initialCommit));
+    fs.writeFileSync(
+      gitSupport,
+      source.replace("timeoutMs: 10000,", "timeoutMs: 120000,").replace(
+        initialCommit,
+        `  if (process.platform === "darwin") (await import("node:child_process")).execFileSync("cp", ["-cR", ${JSON.stringify(path.join(fixture, "workspace"))}, path.join(cwd, "large-fixture")]);
+  else await fs.cp(${JSON.stringify(path.join(fixture, "workspace"))}, path.join(cwd, "large-fixture"), {recursive: true, mode: fs.constants.COPYFILE_FICLONE_FORCE});
+  await git("add", "-A");
+  await git("commit", "-qm", "base");`,
+      ),
+    );
+  }
+}
+
+if (values["compare-runtime-config"]) {
+  assert(values.lineage && values["compare-role-selection"] && values["actions-only"]);
+  const relative = "src/secrets/runtime-state.ts";
+  const candidate = fs.readFileSync(path.join(root, relative), "utf8");
+  const baseline = execFileSync("git", ["show", `${manifest.revision}:${relative}`], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  hashes[relative] = { baseline: hash(baseline), candidate: hash(candidate) };
+  assert(candidate.includes("  freezeJsonSnapshot(next.config);"));
+  fs.writeFileSync(
+    path.join(capsule, relative),
+    candidate.replace(
+      "  freezeJsonSnapshot(next.config);",
+      `  if (${key}?.arm === "candidate") freezeJsonSnapshot(next.config);`,
+    ),
+  );
+  const support = "src/gateway/github-publication-requester.test-support.ts";
+  fs.writeFileSync(
+    path.join(capsule, support),
+    readSource(support).replaceAll(
+      "  setRuntimeConfigSnapshot(config);",
+      `  setRuntimeConfigSnapshot(config);\n  ${key}?.activate?.(config);`,
+    ),
+  );
 }
 
 const fixtureTest = `// oxfmt-ignore
 import { createPublicationActionFixture, publicationCheckpoint } from "./github-publication-actions.test-support.js";
-import { it, expect } from "vitest";
+${values["prepare-pr"] ? 'import { fixture as createPreparationFixture, mocks as preparationMocks } from "./github-pr-workspace-preparation.test-support.js";' : ""}
+import { it, expect, vi } from "vitest";
 import fs from "node:fs/promises";
-import { loadavg } from "node:os";
+import { loadavg, devNull } from "node:os";
+import { createHistogram } from "node:perf_hooks";
 import { Session } from "node:inspector/promises";
-import { createHook, executionAsyncId } from "node:async_hooks";
+import { AsyncLocalStorage, createHook, executionAsyncId } from "node:async_hooks";
 import { startVisitorPublicationFixture, createRequesterPublicationFixture, capturePublicationGuest } from "./github-publication-requester.test-support.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
@@ -271,20 +454,49 @@ import { installGitHubPublicationTestHarness } from "./github-publication.test-s
 import { syncCanonicalGitHubIdentity } from "../state/user-profile-writes.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { readRuntimeConfig, hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
+import { configSnapshotsMatch } from "../config/runtime-config-snapshot-match.js";
+import { activationConfigFingerprint } from "../plugins/runtime/load-context.js";
+import { readAgentRosterFacts } from "../agents/agent-roster.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { getRuntimeAuthProfileStoreCredentialsRevision, getRuntimeAuthProfileStoreSnapshotsRevision, listOwnedRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { listSubagentRunsForRequester } from "../agents/subagents/registry/subagent-registry-read.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import { prepareSystemAgentRunAdmission, resolveAdmittedRunActiveAssertion, bindOperatorModelExecution } from "../agents/admitted-run-context.js";
-import { SESSION_KEY } from "./github-publication.test-support.js";
+import { SESSION_KEY, githubPublicationTestMocks, commandResult } from "./github-publication.test-support.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 installGitHubPublicationTestHarness({creatorEmail: "publication-guest@example.test", sandbox: "required", realWorktree: true});
 it("measures actions at the registered boundary with a large authority inventory", async () => {
  const publication=process.env.LANE2450_PUBLICATION==="1";
  const lineage=process.env.LANE2458_LINEAGE==="1";
- const f = publication ? await createRequesterPublicationFixture(publicationCheckpoint,"local") : await createPublicationActionFixture();
- ${values["large-fixture"] ? `if(process.platform==="darwin") (await import("node:child_process")).execFileSync("cp",["-cR",${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture"]); else await fs.cp(${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},f.local.cwd+"/large-fixture",{recursive:true,mode:fs.constants.COPYFILE_FICLONE_FORCE});` : ""}
+ const state = {arm:"baseline",count:undefined,currency:undefined,activate:undefined,gitAttempt:undefined};
+ globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
+ const secrets = ${Boolean(values["compare-runtime-config"])} ? await vi.importActual<typeof import("../secrets/runtime-state.js")>("../secrets/runtime-state.js") : undefined;
+ if(secrets) {
+  state.activate = (config) => secrets.activateSecretsRuntimeSnapshotState({snapshot:{config,sourceConfig:config,
+   authStores:listOwnedRuntimeAuthProfileStoreSnapshots(),authStoreCredentialsRevision:getRuntimeAuthProfileStoreCredentialsRevision(),authStoreSnapshotsRevision:getRuntimeAuthProfileStoreSnapshotsRevision(),
+   warnings:[],webTools:{search:{providerSource:"none",diagnostics:[]},fetch:{providerSource:"none",diagnostics:[]},diagnostics:[]}},refreshContext:null,refreshHandler:null});
+  githubPublicationTestMocks().getConfigSnapshot.mockImplementation(secrets.getActiveSecretsRuntimeConfigSnapshot);
+ }
+ const preparation=${Boolean(values["prepare-pr"])};
+ console.log("[github-action-measure] preparing fixture");
+ const f = ${values["prepare-pr"] ? "await createPreparationFixture()" : 'publication ? await createRequesterPublicationFixture(publicationCheckpoint,"local") : await createPublicationActionFixture()'};
+ console.log("[github-action-measure] fixture ready");
+ if (${Number(values["body-bytes"])} > 0) {
+  f.state.body = "Synthetic publication evidence and implementation notes.\\n".repeat(Math.ceil(${Number(values["body-bytes"])}/55)).slice(0,${Number(values["body-bytes"])}) + f.state.body;
+  const transport=githubPublicationTestMocks().runCommand;
+  const original=transport.getMockImplementation();
+  transport.mockImplementation(async (...args)=>{
+   const result=await original(...args);
+   return args[0].includes("PATCH") && result.code===0 ? commandResult(JSON.stringify(f.state)) : result;
+  });
+ }
+ ${values["large-fixture"] && !values["prepare-pr"] ? `if(process.platform==="darwin") (await import("node:child_process")).execFileSync("cp",["-cR",${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},(preparation ? f.upstream : f.local.cwd)+"/large-fixture"]); else await fs.cp(${JSON.stringify(path.join(path.resolve(values["large-fixture"]), "workspace"))},(preparation ? f.upstream : f.local.cwd)+"/large-fixture",{recursive:true,mode:fs.constants.COPYFILE_FICLONE_FORCE});` : ""}
+ if(preparation){await f.local.git("-C",f.upstream,"checkout","topic/existing");const {execFileSync}=await import("node:child_process");const seedGit=(...args)=>execFileSync("git",["-C",f.upstream,...args],{timeout:120000,env:{...process.env,GIT_CONFIG_GLOBAL:devNull,GIT_CONFIG_SYSTEM:devNull,GIT_AUTHOR_NAME:"Fixture",GIT_AUTHOR_EMAIL:"fixture@example.test",GIT_COMMITTER_NAME:"Fixture",GIT_COMMITTER_EMAIL:"fixture@example.test"}});await fs.writeFile(f.upstream+"/bench-seed.txt","seed");seedGit("add","-A");seedGit("commit","-qm","Seed large synthetic checkout");f.pr.head.sha=f.branch.commit.sha=await f.local.git("-C",f.upstream,"rev-parse","HEAD");await f.invoke();}
  await syncCanonicalGitHubIdentity({identity:{accountId:101,login:"contributor"},authenticationAlias:{kind:"email",email:"publication-guest@example.test"}});
+ console.log("[github-action-measure] initial preparation ready");
  const sessions=Number(process.env.LANE2450_SESSIONS ?? 2000);
  const runs=Number(process.env.LANE2450_RUNS ?? 20000);
  const roles=Number(process.env.LANE2450_ROLES ?? 2000);
@@ -292,19 +504,34 @@ it("measures actions at the registered boundary with a large authority inventory
  for(let i=0;i<runs;i++) subagentRuns.set(\`fixture-\${i}\`,createSubagentRunRecord({runId:\`fixture-\${i}\`,childSessionKey:\`agent:main:subagent:fixture-\${i}\`,requesterSessionKey:\`agent:main:fixture:\${i%sessions}\`,completionRequesterSessionId:\`fixture-\${i%sessions}\`,requesterDisplayKey:"fixture",task:"fixture",cleanup:"keep",createdAt:i+1,...(${Boolean(values["active-runs"])} ? {} : {endedAt:i+2})}));
  await using visitors = await startVisitorPublicationFixture(f);
  const current=currentGitHubPublicationConfig();
- const config={...current,agents:{...current.agents,defaults:{...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),["contributor","guest"]])}}}};
+ const team=${values["team-fixture"] ? `JSON.parse(await fs.readFile(${JSON.stringify(path.join(path.resolve(values["team-fixture"]), "openclaw.json"))},"utf8"))` : "undefined"};
+ let config={...current,agents:{...current.agents,entries:{...team?.agents?.entries,...current.agents?.entries},defaults:{...team?.agents?.defaults,...current.agents?.defaults,model:"fixture/model"}},gateway:{...current.gateway,roles:{...current.gateway!.roles!,assignments:{byGithubLogin:Object.fromEntries([...Array.from({length:roles},(_,i)=>[\`fixture-\${i}\`,"guest"]),[${JSON.stringify(values["assignment-miss"] ? "unrelated-contributor" : "contributor")},"guest"]])}}}};
  setRuntimeConfigSnapshot(config);
+ state.activate?.(config);
+ config=readRuntimeConfig();
  prepareGatewayConnectOperatorAccess(f.guestSource.client);
  const rows=[];
  const cpuProfile=process.env.LANE2458_CPU_PROFILE==="1";
  const heap=process.env.LANE2450_ALLOC==="1" || cpuProfile ? new Session():undefined;heap?.connect();
  if(cpuProfile)await heap.post("Profiler.enable");
- const state = {arm:"baseline",count:undefined,currency:undefined};
+ const gitAttempts=new AsyncLocalStorage();
  const censusHook=process.env.LANE2450_COUNTS==="1" ? createHook({before(){}}).enable():undefined;
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
- const pairs=[{kind:"warmup",arms:lineage?["baseline","baseline"]:["baseline","candidate"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(lineage ? [] : Array.from({length:${pairs}},(_,i)=>({kind:"AB",arms:i%2?["candidate","baseline"]:["baseline","candidate"]})))];
+ const compare=${Boolean(values["compare-role-selection"] || values["compare-assertion-chains"])} || !lineage;
+ const pairs=[{kind:"warmup",arms:compare?["baseline","candidate"]:["baseline","baseline"]},...Array.from({length:${controlPairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(compare ? Array.from({length:${pairs}},()=>({kind:"AB",arms:["baseline","candidate"]})) : [])];
  let i=0;
  for(const depth of lineage ? ${JSON.stringify(values.depths.split(",").map(Number))} : [0]) {
+ for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) {
+ console.log(JSON.stringify({phase:"prepare-sample",depth,pair,slot,arm}));
+ state.arm=arm;
+ if(state.activate){state.activate({...config,ui:{...config.ui,seamColor:"#"+(depth*100+pair*2+slot).toString(16).padStart(6,"0")}});config=readRuntimeConfig();expect(isDeeplyFrozenPlainData(config)).toBe(arm==="candidate");prepareGatewayConnectOperatorAccess(f.guestSource.client);}
+ const consumerCounts={};
+ if(${Boolean(values["compare-runtime-config"])}) {
+  if(process.env.LANE2450_COUNTS==="1")state.count=(key)=>consumerCounts[key]=(consumerCounts[key]??0)+1;
+  const equivalent=structuredClone(config);
+  for(let read=0;read<10;read++){readAgentRosterFacts(config);hashRuntimeConfigValue(config);activationConfigFingerprint(config);expect(configSnapshotsMatch(config,equivalent)).toBe(true);}
+  state.count=undefined;
+ }
  const releases=[];
  let parent;
  let principal;
@@ -323,54 +550,70 @@ it("measures actions at the registered boundary with a large authority inventory
  }
  const model=lineage ? bindOperatorModelExecution(principal.authority,{provider:"fixture",model:"model"}):undefined;
  if(model)releases.push(model.release);
- const invocation=lineage ? {client:{...f.guestSource.client,internal:{...f.guestSource.client.internal,operatorRunAuthority:principal.authority}}}:undefined;
+ const invocation=lineage ? {raw:${Boolean(values["actions-only"])},client:{...f.guestSource.client,internal:{...f.guestSource.client.internal,operatorRunAuthority:principal.authority}}}:undefined;
  try {
- if(cpuProfile)await heap.post("Profiler.start");
- for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) for(const action of publication ? ["publish"] : lineage ? ["assert", "model", "edit_read", "edit"] : ["edit_read","edit","requester_runs"]) {
+ if(preparation)f.guestSource.client.internal={...f.guestSource.client.internal,operatorRunAuthority:principal.authority};
+ for(const action of preparation ? ["prepare_pr"] : publication ? ["publish"] : ${Boolean(values["actions-only"])} ? ["edit_read","edit"] : lineage ? ["assert", "model", "edit_read", "edit"] : ["edit_read","edit","requester_runs"]) {
   // Expire the synthetic request window outside measurement; normal RPC admission still runs.
   pruneStaleControlPlaneBuckets(Date.now()+360000);
   i++;state.arm=arm;
   if(publication)await fs.writeFile(f.local!.cwd+"/artifact.txt",\`Publication fixture \${i}\\n\`);
+  if(preparation)await f.advanceHead(Object.fromEntries(Array.from({length:${changedFiles}},(_,n)=>["bench-"+n+".txt","fixture revision "+i+" "+n+"\\n"])));
+  // Mock histories retain command payloads; keep fixture bookkeeping outside every measured action.
+  let mockHistory;
+  if(preparation){
+   const bytes=value=>typeof value==="string" ? Buffer.byteLength(value) : value?.byteLength??0;
+   mockHistory={calls:preparationMocks.runCommand.mock.calls.length,inputBytes:preparationMocks.runCommand.mock.calls.reduce((sum,[,options])=>sum+bytes(options?.input),0),outputBytes:preparationMocks.runCommand.mock.settledResults.reduce((sum,result)=>sum+(result.type==="fulfilled"?bytes(result.value?.stdout)+bytes(result.value?.stderr):0),0),heapBefore:process.memoryUsage().heapUsed};
+   vi.clearAllMocks();global.gc?.();mockHistory.heapAfter=process.memoryUsage().heapUsed;
+  }
   const counts={};
+  const gitAssertions=[];
+  state.gitAttempt=(run)=>{const attempt={};gitAssertions.push(attempt);return gitAttempts.run(attempt,run);};
   const currencySteps=new Map();
   if(process.env.LANE2450_COUNTS==="1"){
-   state.count=(key)=>counts[key]=(counts[key]??0)+1;
+   state.count=(key)=>{counts[key]=(counts[key]??0)+1;const attempt=gitAttempts.getStore();if(attempt)attempt[key]=(attempt[key]??0)+1;};
    state.currency=(owner)=>{const id=executionAsyncId();let seen=currencySteps.get(id);if(!seen)currencySteps.set(id,seen=new Set());if(!seen.has(owner)){seen.add(owner);state.count("sharing.uniqueCurrencyPerAsyncStep");}};
   }
-  let maxSegment=0,last=performance.now();
   const synchronous=action==="assert" || action==="model";
-  const timer=synchronous ? undefined : setInterval(()=>{const now=performance.now();maxSegment=Math.max(maxSegment,now-last);last=now;},1);
   const allocating=process.env.LANE2450_ALLOC==="1";
   if(allocating)await heap!.post("HeapProfiler.startSampling",{samplingInterval:32768,includeObjectsCollectedByMajorGC:true,includeObjectsCollectedByMinorGC:true});
+  if(cpuProfile)await heap.post("Profiler.start");
+  const loadStart=loadavg();
+  const delayHistogram=synchronous ? undefined : createHistogram();
+  let maxSegment=0,last=performance.now();
+  const timer=synchronous ? undefined : setInterval(()=>{const now=performance.now();const elapsed=now-last;maxSegment=Math.max(maxSegment,elapsed);delayHistogram.record(Math.max(1,Math.round(elapsed*1e6)));last=now;},1);
   const cpu=process.threadCpuUsage(); const started=performance.now();
   const iterations=synchronous ? Math.ceil(1024/depth) : 1;
   let result;
   for(let iteration=0;iteration<iterations;iteration++){
   currencySteps.clear();
   const callStarted=performance.now();
-  result=action==="assert" ? active() : action==="model" ? model.assertCurrent() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?{title:\`Fixture \${i}\`,expectedTitle:f.state.title}:{})},SESSION_KEY,invocation);
+  result=preparation ? await f.invoke() : action==="assert" ? active() : action==="model" ? model.assertCurrent() : publication ? await (async()=>{const admitted=await capturePublicationGuest(f);try{return await f.coordinator.requestForSessionV2(f.request(\`benchmark-\${i}\`,admitted.requester));}finally{admitted.release();}})() : action==="requester_runs" ? listSubagentRunsForRequester("agent:main:fixture:0",{requesterSessionId:"fixture-0"}) : await f.invoke("guest",{action:"edit",...f.expected,...(action==="edit"?(${Boolean(values["edit-body"])}?{body:String(i).padStart(8,"0")+f.state.body.slice(8),expectedBody:f.state.body}:{title:\`Fixture \${i}\`,expectedTitle:f.state.title}):{})},SESSION_KEY,invocation);
   if(synchronous)maxSegment=Math.max(maxSegment,performance.now()-callStarted);
   }
   const wallMs=performance.now()-started;const usage=process.threadCpuUsage(cpu);
   if(timer){maxSegment=Math.max(maxSegment,performance.now()-last);clearInterval(timer);}
+  if(cpuProfile){const {profile}=await heap.post("Profiler.stop");await fs.writeFile(process.env.LANE2450_OUTPUT!+".sample"+i+"."+arm+".cpuprofile",JSON.stringify(profile));}
   let allocatedBytes;
-  if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);}
+  if(allocating){const {profile}=await heap!.post("HeapProfiler.stopSampling");const sum=n=>n.selfSize+n.children.reduce((s,c)=>s+sum(c),0);allocatedBytes=sum(profile.head);await fs.writeFile(process.env.LANE2450_OUTPUT!+".allocation-"+i+".json",JSON.stringify(profile));}
   state.count=undefined;
   state.currency=undefined;
-  if(synchronous)expect(result).toBeUndefined();
+  if(preparation)expect(result).toMatchObject({status:"prepared",headCommit:f.pr.head.sha});
+  else if(synchronous)expect(result).toBeUndefined();
   else if(publication)expect(result.status).toBe("published");
   else if(action==="requester_runs")expect(result).toHaveLength(Math.ceil(runs/sessions));
   else expect(result.details).toHaveProperty("headCommit",f.publication.headCommit);
   for(const name of Object.keys(counts))counts[name]/=iterations;
-  const row={i,pair,slot,depth,iterations,control:control.kind,arm,action,wallMs:wallMs/iterations,cpuMs:(usage.user+usage.system)/1000/iterations,maxSegment,allocatedBytes:allocatedBytes===undefined?undefined:allocatedBytes/iterations,counts,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
+  const delay=delayHistogram ? {samples:delayHistogram.count,p50Ms:delayHistogram.percentile(50)/1e6,p95Ms:delayHistogram.percentile(95)/1e6,p99Ms:delayHistogram.percentile(99)/1e6,maxMs:delayHistogram.max/1e6} : undefined;
+  const row={i,pair,slot,depth,iterations,consumerCounts,control:control.kind,arm,action,wallMs:wallMs/iterations,cpuMs:(usage.user+usage.system)/1000/iterations,maxSegment,delay,allocatedBytes:allocatedBytes===undefined?undefined:allocatedBytes/iterations,counts,gitAssertions,mockHistory,loadStart,load:loadavg()};rows.push(row);console.log(JSON.stringify(row));
  }
- if(cpuProfile){const {profile}=await heap.post("Profiler.stop");await fs.writeFile(process.env.LANE2450_OUTPUT!+".depth"+depth+".cpuprofile",JSON.stringify(profile));}
  } finally {for(const release of releases.toReversed())release();}
  }
- heap?.disconnect();censusHook?.disable();subagentRuns.clear();
+ }
+ heap?.disconnect();censusHook?.disable();subagentRuns.clear();secrets?.clearSecretsRuntimeSnapshotState();
  delete globalThis[Symbol.for("openclaw.benchmark.githubActionScope")];
- await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,rows},null,2));
-},600000);
+ await fs.writeFile(process.env.LANE2450_OUTPUT!,JSON.stringify({sessions,runs,roles,agents:Object.keys(config.agents.entries).length,rows},null,2));
+},7200000);
 `;
 const testPath = "src/gateway/github-publication-actions.test.ts";
 fs.writeFileSync(path.join(capsule, testPath), fixtureTest);
@@ -380,17 +623,32 @@ fs.writeFileSync(
     {
       revision: manifest.revision,
       pairs,
+      controlPairs,
       hashes,
       testSha256: hash(fixtureTest),
       counts: Boolean(values.counts),
       allocation: Boolean(values.allocation),
       cpuProfile: Boolean(values["cpu-profile"]),
       publication: Boolean(values.publication),
+      preparePr: Boolean(values["prepare-pr"]),
+      changedFiles,
+      compareAssertionChains: Boolean(values["compare-assertion-chains"]),
       lineage: Boolean(values.lineage),
       largeFixture: values["large-fixture"],
-      acceptance: values.lineage
-        ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
-        : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
+      teamFixture: values["team-fixture"],
+      compareRoleSelection: Boolean(values["compare-role-selection"]),
+      actionsOnly: Boolean(values["actions-only"]),
+      compareRuntimeConfig: Boolean(values["compare-runtime-config"]),
+      bodyBytes: Number(values["body-bytes"]),
+      editBody: Boolean(values["edit-body"]),
+      assignmentMiss: Boolean(values["assignment-miss"]),
+      acceptance: values["compare-assertion-chains"]
+        ? "After warmup, at least five A/A controls (or matching completed controls) and five interleaved A/B pairs. Candidate median main-thread CPU must beat both A/A arms and paired A; median peak timer delay must be within the A spread; median timer-delay histogram p95 must not regress. Record load and allocation separately. Timer gaps are an event-loop delay proxy, not exact synchronous task durations. Redundant target preparation must fall without changing rejection behavior."
+        : values["compare-role-selection"]
+          ? "Warm registered-action CPU and allocation improve at least 20%; no latency or max-segment regression of 20%. A/A controls bound noise; five interleaved A/B pairs. Role assignment enumerations become zero after immutable-index preparation, including misses; authority assertions remain unchanged."
+          : values.lineage
+            ? "Real principal/session/admitted owners at depth 1/4/16/64; A/A pairs after warmup, CPU and allocation sampled separately. Run pinned baseline/candidate capsules interleaved for at least five A/B pairs. A candidate must reduce plugin entries to a constant per principal/source, improve depth-16/64 owner CPU and allocation at least 20%, and not regress depth-1/action latency or max segment by 20%."
+            : "Warm edit CPU and allocation must improve at least 20%; no user-facing metric may regress 20%. Census confirms fewer redundant scopes/assertions; A/A controls bound noise. Requester lookup must stop full-index builds.",
     },
     null,
     2,

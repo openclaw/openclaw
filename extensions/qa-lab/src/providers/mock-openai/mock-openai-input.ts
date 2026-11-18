@@ -105,7 +105,14 @@ export function splitMockConversationContext(text: string) {
     /<conversation_context>\n([\s\S]*)\n<\/conversation_context>\n\nCurrent user request:\n([\s\S]*)$/.exec(
       text,
     );
-  return { current: projection?.[2] ?? text, history: projection?.[1] ?? "" };
+  const runtimeContext =
+    /OpenClaw runtime context for this turn:\n[\s\S]*\n\nCurrent user request:\n([\s\S]*)$/.exec(
+      text,
+    );
+  return {
+    current: projection?.[2] ?? runtimeContext?.[1] ?? text,
+    history: projection?.[1] ?? "",
+  };
 }
 
 function extractCurrentTaskEvent(text: string): string | undefined {
@@ -286,7 +293,7 @@ function isUserTurn(item: ResponsesInputItem) {
 }
 
 function isContinuationUserText(text: string) {
-  const trimmed = text.trim();
+  const trimmed = splitMockConversationContext(text).current.trim();
   if (!trimmed) {
     return false;
   }

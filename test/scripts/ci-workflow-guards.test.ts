@@ -3086,7 +3086,15 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     const check = () =>
       runWorkflowShellScript(expectDefined(budget.run, "budget script"), {
         cwd: selected,
-        env: { ...process.env, BASE_SHA: base },
+        env: {
+          ...process.env,
+          BASE_SHA: base,
+          OPENCLAW_RELEASE_CONTEXT_REF: "",
+          GITHUB_ACTIONS: "true",
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_BASE_REF: "main",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
       });
     const unallocated = check();
     expect(unallocated.status, unallocated.stdout + unallocated.stderr).toBe(1);
@@ -6893,6 +6901,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBeUndefined();
     expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
     expect(runStep.env.OPENCLAW_NODE_TEST_TARGETS_JSON).toBe("${{ toJson(matrix.targets) }}");
+    expect(runStep.env.OPENCLAW_NODE_TEST_TARGET_VOLUMES_GZIP_BASE64).toBe(
+      "${{ matrix.target_volumes_gzip_base64 || '' }}",
+    );
     expect(runStep.env.OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64).toBe(
       "${{ matrix.groups_pool && steps.node-test-groups.outputs.groups_gzip_base64 || matrix.groups_gzip_base64 || '' }}",
     );
