@@ -153,6 +153,7 @@ export async function admitFollowupRunLifecycle(
     throw new Error("Input completed before source adoption");
   }
   const admission = Promise.resolve().then(async () => {
+    run.operatorAuthority?.reauthorize?.();
     await run.turnAdoptionLifecycle?.onAdopted();
     // A successful custody callback commits before the post-await authority check.
     state.adopted = true;
