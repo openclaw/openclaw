@@ -39,6 +39,8 @@ export type CreateVerifiedSqliteSnapshotOptions = {
   integrity?: SqliteIntegrityCheckOptions;
   transform?: (database: DatabaseSync) => void | Promise<void>;
   validate?: SqliteSnapshotValidator;
+  /** Backup archives only: caller must compare the consumed bytes after hard-link-only publication. */
+  deferPublishedContentCheck?: boolean;
 };
 
 export type PublishedSqliteFileGuard = {
@@ -73,4 +75,6 @@ export type PublishVerifiedSqliteFileOptions = {
 export type VerifiedSqliteSnapshot = SqliteFileContent & {
   path: string;
   userVersion: number;
+  /** Caller still owes the full published-byte comparison against this receipt. */
+  deferredContentCheck?: { identity: BigIntStats };
 };
