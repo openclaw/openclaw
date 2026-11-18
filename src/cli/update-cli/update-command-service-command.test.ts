@@ -2,11 +2,26 @@ import { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { isLaunchAgentNotActivated } from "../../daemon/launchd-install-outcome.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
-it.each(["installed", "load-failed", "start-refused", "invalid-receipt", "compensation-failed"])(
+const legacyGuard =
+  "Gateway install failed: Error: SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was left unchanged: Error: Refusing to install LaunchAgent ai.openclaw.gateway from inside ai.openclaw.gateway; run this command from an external shell.";
+
+it.each([
+  "legacy-guard",
+  "quoted-guard",
+  "explicit-unknown",
+  "incomplete-audit",
+  "installed",
+  "load-failed",
+  "start-refused",
+  "pre-activation",
+  "invalid-receipt",
+  "compensation-failed",
+])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -16,21 +31,42 @@ it.each(["installed", "load-failed", "start-refused", "invalid-receipt", "compen
         files: [{ sourcePath: path.join(root, "service"), before: null, after: null }],
         guards: [],
       };
-      const preserved = outcome === "start-refused";
+      const preActivation = outcome === "pre-activation";
+      const legacy = outcome === "legacy-guard";
+      const quoted = outcome === "quoted-guard";
+      const unknown = outcome === "explicit-unknown";
+      const incomplete = outcome === "incomplete-audit";
+      const preserved = outcome === "start-refused" || preActivation || legacy;
       const warning = "installer warning";
       const compensationFailed = outcome === "compensation-failed";
-      const failed = preserved || compensationFailed || outcome === "load-failed";
+      const failed =
+        preserved ||
+        quoted ||
+        unknown ||
+        incomplete ||
+        compensationFailed ||
+        outcome === "load-failed";
       const error = compensationFailed
         ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
-        : preserved
-          ? "SERVICE_DEFINITION_UNKNOWN: Service is masked. Run `systemctl --user unmask openclaw-gateway.service`."
-          : "load failed";
+        : incomplete
+          ? "Gateway install failed: Error: SERVICE_DEFINITION_UNKNOWN: Service definition inspection or backup failed; the definition was preserved: Error: Gateway service definition changed during inspection."
+          : legacy || unknown
+            ? legacyGuard
+            : quoted
+              ? `unverified install quoting: ${legacyGuard}`
+              : preActivation
+                ? "ENOTDIR"
+                : preserved
+                  ? "SERVICE_DEFINITION_UNKNOWN: Service is masked. Run `systemctl --user unmask openclaw-gateway.service`."
+                  : "load failed";
       const response = JSON.stringify({
         action: "install",
         ok: !failed,
+        ...(preActivation || compensationFailed ? { result: "launchagent-not-activated" } : {}),
+        ...(unknown ? { result: "activation-unverified" } : {}),
         warnings: [warning],
         ...(failed ? { error } : {}),
-        ...(!preserved && !compensationFailed
+        ...(!preserved && !compensationFailed && !quoted && !unknown && !incomplete
           ? { definitionBackup: outcome === "invalid-receipt" ? { files: [] } : backup }
           : {}),
       });
@@ -51,14 +87,27 @@ it.each(["installed", "load-failed", "start-refused", "invalid-receipt", "compen
         "install",
       );
       if (failed) {
-        await expect(result).rejects.toThrow(error);
+        await expect(result).rejects.toThrow(
+          incomplete
+            ? "Gateway service definition changed during inspection"
+            : legacy || quoted || unknown
+              ? "run this command from an external shell."
+              : error,
+        );
+        expect(await result.catch(isLaunchAgentNotActivated)).toBe(preActivation || legacy);
       } else {
         await expect(result).resolves.toBe("unverified");
       }
       expect(warnings).toContain(warning);
       if (preserved) {
         expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
-      } else if (outcome === "invalid-receipt" || compensationFailed) {
+      } else if (
+        outcome === "invalid-receipt" ||
+        compensationFailed ||
+        quoted ||
+        unknown ||
+        incomplete
+      ) {
         expect(definitionRecovery).toEqual({ unverified: true });
         expect(warnings).toContainEqual(expect.stringContaining("receipt could not be verified"));
       } else {

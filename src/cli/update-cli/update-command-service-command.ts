@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { markLaunchAgentNotActivated } from "../../daemon/launchd-install-outcome.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "../../daemon/service-stage.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
@@ -34,6 +35,10 @@ import {
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service-env.js";
 
+// Older installers lack a result discriminator. Accept only their complete install-phase
+// error field, never a refusal quoted by stderr, warnings or a recovery failure.
+const legacyInsideLaunchAgent =
+  /^Gateway install failed: Error: (?:SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was (?:restored|left unchanged): Error: )?Refusing to install LaunchAgent [A-Za-z0-9._-]+ from inside [A-Za-z0-9._-]+; run this command from an external shell\.$/u;
 export const DEFINITION_DENIAL = /\bSERVICE_DEFINITION_(?:SEALED|UNKNOWN):[^\n]*/;
 
 /** The installed CLI observed failed health after accepting activation, not a refusal. */
@@ -344,6 +349,15 @@ export async function runUpdatedInstallGatewayCommand(
   const response = (complete ? safeParseJsonRecord(res.stdout) : undefined) as
     | (Omit<DaemonActionResponse, "ok"> & { ok: unknown; rebind?: unknown })
     | undefined;
+  const failedInstall =
+    installing && exited && complete && res.code === 1 && response?.ok === false;
+  const notActivated =
+    failedInstall &&
+    response.action === "install" &&
+    (response.result === "launchagent-not-activated" ||
+      (response.result === undefined &&
+        typeof response.error === "string" &&
+        legacyInsideLaunchAgent.test(response.error)));
   if (installing && response) {
     const warnings = filterStringEntries(response.warnings);
     if (warnings.length) {
@@ -355,10 +369,19 @@ export async function runUpdatedInstallGatewayCommand(
       );
       const error = typeof response.error === "string" ? response.error : "";
       const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
+      // Older installers had no result code and some omitted the action. Only their
+      // top-level denial counts, never a quotation or an explicitly uncertain result.
+      const legacyDenial =
+        failedInstall &&
+        response.result === undefined &&
+        (response.action === undefined || response.action === "install") &&
+        /^(?:Gateway install failed: Error: )?SERVICE_DEFINITION_(?:SEALED|UNKNOWN): (?:\[[a-z-]+\] The |Service is masked\. |Service definition refresh failed; the previous definition was (?:restored|left unchanged): )/u.test(
+          error,
+        );
       if (backup.success && !recoveryFailed) {
         params.definitionRecovery.backup = backup.data;
         params.definitionRecovery.unverified = false;
-      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
+      } else if (!recoveryFailed && (notActivated || legacyDenial)) {
         params.definitionRecovery.preserved = true;
         params.definitionRecovery.unverified = false;
       } else {
@@ -425,6 +448,9 @@ export async function runUpdatedInstallGatewayCommand(
   }
   if (executor && message.includes("UPDATE_NATIVE_AUTHORITY:")) {
     throw new UpdateCommandRecoveryPendingError(message);
+  }
+  if (notActivated && !message.includes("UPDATE_NATIVE_AUTHORITY:")) {
+    throw markLaunchAgentNotActivated(new Error(message));
   }
   throw new Error(message);
 }

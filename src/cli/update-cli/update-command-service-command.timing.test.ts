@@ -103,7 +103,7 @@ it("keeps failed reconciliation children on the existing failure path", async ()
   expect(onTimedStep).not.toHaveBeenCalled();
 });
 
-it("keeps outer authority failure classification when the child also reports a preserved definition", async () => {
+it("keeps outer authority failure classification without treating an inspection failure as preservation", async () => {
   mocks.command.mockImplementation(async (argv: string[]) =>
     argv.includes("check")
       ? probeResult(true)
@@ -123,7 +123,7 @@ it("keeps outer authority failure classification when the child also reports a p
   await expect(failure).rejects.toThrow(
     "updated install refresh failed: UPDATE_NATIVE_AUTHORITY: exit 1 (/fixture/root/dist/entry.js)",
   );
-  expect(definitionRecovery).toEqual({ preserved: true, unverified: false });
+  expect(definitionRecovery).toEqual({ unverified: true });
 });
 
 it.each([false, true])("retains a timed step when history write fails=%s", (failed) => {

@@ -1,3 +1,4 @@
+import { isLaunchAgentNotActivated } from "../../daemon/launchd-install-outcome.js";
 import { currentGatewayServiceRebindReceipt } from "../../daemon/service-rebind.js";
 import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -107,7 +108,7 @@ export function createDaemonActionContext(params: {
   const fail = (
     message: string,
     hints?: string[],
-    result?: "restart-health-failed" | "still-starting",
+    result?: "restart-health-failed" | "still-starting" | "launchagent-not-activated",
   ) => {
     if (params.json) {
       emit({
@@ -146,7 +147,7 @@ export async function installDaemonServiceAndEmit(params: {
   service: GatewayService;
   warnings: string[];
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
-  fail: (message: string, hints?: string[]) => void;
+  fail: (message: string, hints?: string[], result?: "launchagent-not-activated") => void;
   install: () => Promise<void>;
   /** Distinguishes successful registration from application readiness. */
   successMessage?: string;
@@ -165,10 +166,13 @@ export async function installDaemonServiceAndEmit(params: {
     phase = "install verification";
     installed = await params.service.isLoaded({ env: process.env });
   } catch (err) {
-    params.fail(
-      `${params.serviceNoun} ${phase} failed: ${String(err)}`,
-      await buildInstallFailureHints(err),
-    );
+    const message = `${params.serviceNoun} ${phase} failed: ${String(err)}`;
+    const hints = await buildInstallFailureHints(err);
+    if (phase === "install" && isLaunchAgentNotActivated(err)) {
+      params.fail(message, hints, "launchagent-not-activated");
+    } else {
+      params.fail(message, hints);
+    }
     return;
   }
   if (!installed) {

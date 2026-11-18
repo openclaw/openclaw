@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
@@ -170,6 +170,137 @@ async function startHandoffAndReadCommand(params: {
 }
 
 describe("managed service update handoff command", () => {
+  it.skipIf(process.platform === "win32")(
+    "records the exact sibling job after failed self-removal",
+    async () => {
+      const dir = systemRoots.make("openclaw-retiring-job-");
+      const { prepareLaunchdUpdateHandoff } =
+        await import("./update-managed-service-handoff-launchd.js");
+      const { fixtureProgramArguments } =
+        await import("./update-managed-service-handoff-launchd.test-support.js");
+      await prepareLaunchdUpdateHandoff({
+        directory: dir,
+        env: {},
+        executable: process.execPath,
+        args: [],
+      });
+      const xml = await fs.readFile(path.join(dir, "handoff.plist"), "utf8");
+      const label = /<key>Label<\/key><string>([^<]+)<\/string>/.exec(xml)![1];
+      const [sh, flag, script, name, target] = fixtureProgramArguments(xml);
+      expect(target).toBe(`gui/${process.getuid!()}/${label}`);
+      // Exercise the generated shell after the helper exits, replacing only native I/O.
+      expect(script).toContain("/bin/launchctl");
+      const { spawnSync } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const cleanup = spawnSync(
+        sh!,
+        [flag!, script!.replace("/bin/launchctl", "/bin/false"), name!, target!, "/bin/true"],
+        { encoding: "utf8" },
+      );
+      expect(cleanup.status).toBe(1);
+      expect(cleanup.stderr).toContain(`launchctl bootout ${target} failed (exit 1)`);
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["absent", "denied"])(
+    "refuses a checkout LaunchAgent conversion before transfer and reports failed cleanup (bootout: %s)",
+    async (cleanup) => {
+      const root = systemRoots.make("openclaw-conversion-checkout-");
+      const longTmp = path.join(root, "長".repeat(32));
+      await fs.mkdir(longTmp);
+      const short = await fs.mkdtemp("/tmp/oc-up-");
+      onTestFinished(() => fs.rm(short, { recursive: true, force: true }));
+      const coordinator = resolvePreferredOpenClawTmpDirMock();
+      resolvePreferredOpenClawTmpDirMock.mockImplementation((options) =>
+        options?.tmpdir ? short : coordinator,
+      );
+      vi.spyOn(os, "tmpdir").mockReturnValue(longTmp);
+      await fs.mkdir(path.join(root, ".git"));
+      const native = await import("../daemon/launchd-exec.js");
+      let socketPath = "";
+      const bootstrap = vi
+        .spyOn(native, "execLaunchctl")
+        .mockImplementation(async ([cmd, , plist]) => {
+          if (cmd === "bootstrap") {
+            const xml = await fs.readFile(plist!, "utf8");
+            socketPath = /<key>SockPathName<\/key><string>([^<]+)<\/string>/.exec(xml)?.[1] ?? "";
+          }
+          if (cmd === "bootout") {
+            return {
+              code: cleanup === "absent" ? 113 : 1,
+              stdout: "",
+              stderr: cleanup === "absent" ? "Could not find service" : "Operation not permitted",
+              termination: "exit",
+            };
+          }
+          return {
+            code: 5,
+            stdout: "",
+            stderr: "Bootstrap failed",
+            termination: "exit",
+          };
+        });
+      const { startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      const failure = await startManagedServiceUpdateHandoff({
+        root,
+        supervisor: "launchd",
+        execPath: process.execPath,
+        argv1: path.join(root, "dist/index.js"),
+        restartDrainTimeoutMs: 1000,
+        meta: {},
+      }).catch((err: unknown) => err);
+      expect(String(failure)).toMatch(/launchctl bootstrap.*Bootstrap failed/);
+      if (cleanup === "denied") {
+        expect(String(failure)).toMatch(
+          /launchctl bootout gui\/\d+\/ai\.openclaw\.update\.[\w-]+ failed: .*Operation not permitted/,
+        );
+      } else {
+        expect(String(failure)).not.toContain("bootout");
+      }
+      expect(bootstrap.mock.calls.map(([args]) => args[0])).toEqual(["bootstrap", "bootout"]);
+      expect(path.dirname(path.dirname(socketPath))).toBe(short);
+      expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(103);
+      await expect(fs.access(path.dirname(socketPath))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(spawnMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["inside", "unknown"] as const)(
+    "rejects a ready helper with %s LaunchAgent membership before transfer",
+    async (membership) => {
+      const root = systemRoots.make("openclaw-conversion-checkout-");
+      await fs.mkdir(path.join(root, ".git"));
+      const native = await import("../daemon/launchd-exec.js");
+      const ctl = vi
+        .spyOn(native, "execLaunchctl")
+        .mockResolvedValue({ code: 0, stdout: "", stderr: "", termination: "exit" });
+      const detector = await import("../daemon/service-process-membership.js");
+      vi.spyOn(detector, "inspectServiceProcessMembershipSync").mockReturnValue(membership);
+      spawnMock.mockImplementationOnce((command: string, args: string[]) => {
+        expect(command).toBe("/usr/bin/nc");
+        const dir = path.dirname(args[1]!);
+        return createReadyChild(command, [
+          path.join(dir, "handoff.cjs"),
+          path.join(dir, "handoff.json"),
+        ]);
+      });
+      const { startManagedServiceUpdateHandoff } =
+        await import("./update-managed-service-handoff.js");
+      await expect(
+        startManagedServiceUpdateHandoff({
+          root,
+          supervisor: "launchd",
+          execPath: process.execPath,
+          argv1: path.join(root, "dist/index.js"),
+          restartDrainTimeoutMs: 1000,
+          meta: {},
+        }),
+      ).rejects.toThrow(/outside the serving LaunchAgent/);
+      expect(ctl.mock.calls.map(([args]) => args[0])).toEqual(["bootstrap", "bootout"]);
+    },
+  );
+
   it("pins update, recovery, and triage before the detached helper starts", async () => {
     const root = await fs.realpath(systemRoots.make("openclaw-handoff-launcher-"));
     const releaseA = path.join(root, "release-a");

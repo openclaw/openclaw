@@ -106,6 +106,11 @@ export async function readManagedHandoffRepairFacts(
   let timeoutMs = 0;
   const roots = new Set([await fs.realpath(os.tmpdir())]);
   if (process.platform === "darwin") {
+    const { resolveExistingPreferredOpenClawTmpDir } = await import("./tmp-openclaw-dir.js");
+    const shortRoot = resolveExistingPreferredOpenClawTmpDir({ tmpdir: () => "/tmp" });
+    if (shortRoot) {
+      roots.add(await fs.realpath(shortRoot));
+    }
     // A Gateway-started handoff lives under the service TMPDIR, not this CLI's.
     const { resolveServiceTmpDir } = await import("../daemon/service-tmp-dir.js");
     const serviceRoot = await fs

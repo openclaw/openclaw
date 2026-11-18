@@ -1,12 +1,14 @@
 /** Transactional LaunchAgent installation, staging, rollback, and removal. */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
   execLaunchctl,
   formatLaunchctlResultDetail,
   isLaunchctlNotLoaded,
 } from "./launchd-exec.js";
+import { markLaunchAgentNotActivated } from "./launchd-install-outcome.js";
 import { assertValidLaunchAgentLabel, resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   bootstrapLaunchAgentOrThrow,
@@ -28,6 +30,7 @@ import { resolveDaemonHomeDir } from "./paths.js";
 import type { GatewayServiceInstallArgs, GatewayServiceManageArgs } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
+  GatewayServiceAuthorityError,
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
 
@@ -127,6 +130,27 @@ async function bootoutLaunchAgent(serviceTarget: string): Promise<void> {
 export async function installLaunchAgent(
   args: GatewayServiceInstallArgs,
 ): Promise<{ plistPath: string }> {
+  const activation = { attempted: false };
+  try {
+    return await installLaunchAgentWithActivation(args, activation);
+  } catch (error) {
+    if (
+      !activation.attempted &&
+      error instanceof Error &&
+      !(error instanceof AggregateError) &&
+      !(error instanceof GatewayServiceAuthorityError) &&
+      !hasCommandProcessCleanupError(error)
+    ) {
+      throw markLaunchAgentNotActivated(error);
+    }
+    throw error;
+  }
+}
+
+async function installLaunchAgentWithActivation(
+  args: GatewayServiceInstallArgs,
+  activation: { attempted: boolean },
+): Promise<{ plistPath: string }> {
   const targetPlistPath = resolveLaunchAgentPlistPath(args.env);
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
@@ -179,7 +203,6 @@ export async function installLaunchAgent(
       preserveAutoStart: args.preserveAutoStart,
       preservedEnabled: enabled,
     });
-  let activationAttempted = false;
   const install = async () => {
     const published = await writeLaunchAgentPlist(
       args,
@@ -191,7 +214,7 @@ export async function installLaunchAgent(
     // Recheck immediately before activation; another supervisor can appear during publication.
     await assertNoSystemLaunchDaemonOwnership(label);
     assertGatewayServiceUpdateCurrent();
-    activationAttempted = true;
+    activation.attempted = true;
     if (loaded) {
       await bootoutLaunchAgent(serviceTarget);
     }
@@ -207,7 +230,7 @@ export async function installLaunchAgent(
           // A booted-out process that never exits, or a failing hook, never skips restoring the
           // previous agent; its error is thrown once that recovery is done.
           let failure: { error: unknown } | undefined;
-          if (activationAttempted) {
+          if (activation.attempted) {
             await files.assertCurrent();
             const current = await probeLaunchAgentState(serviceTarget);
             if (current.state === "unknown") {
@@ -241,7 +264,7 @@ export async function installLaunchAgent(
             );
           }
           const restored = await files.restore();
-          if (activationAttempted && restoreLoaded) {
+          if (activation.attempted && restoreLoaded) {
             await files.assertCurrent();
             await assertNoSystemLaunchDaemonOwnership(label);
             await bootstrap(targetPlistPath, "openclaw gateway start");
@@ -249,7 +272,7 @@ export async function installLaunchAgent(
           if (failure) {
             throw failure.error;
           }
-          return restored || activationAttempted;
+          return restored || activation.attempted;
         });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the

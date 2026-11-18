@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { gitReleaseSlot } from "./git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease } from "./git-release.js";
+import { readPackageVersion } from "./package-json.js";
 import type { CommandRunner } from "./update-runner-types.js";
 
 const target = vi.hoisted(() => ({
@@ -199,9 +200,9 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   const convert = (gitRoot: string) =>
     updateGitRelease({
       gitRoot,
-      runCommand: (argv, options) =>
+      runCommand: async (argv, options) =>
         argv[1]?.endsWith("openclaw.mjs")
-          ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
+          ? { code: 0, stdout: `${await readPackageVersion(path.dirname(argv[1]))}\n`, stderr: "" }
           : runCommandWithTimeout(argv, options),
       defaultCommandEnv: undefined,
       timeoutMs: 10_000,
@@ -238,8 +239,13 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     );
     await pulled();
 
-    await convert(checkout);
+    const result = await convert(checkout);
 
     expect(target.conversionTargets).toEqual([serving]);
+    expect(result.gitReleaseConversion).toMatchObject({
+      slot: gitReleaseSlot(path.join(path.dirname(checkout), "state", "git-install")),
+      selected: { target: await fs.readlink(result.root!) },
+      previous: { release: { version: "1.0.0" } },
+    });
   });
 });

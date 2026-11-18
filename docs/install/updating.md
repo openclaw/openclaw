@@ -53,6 +53,16 @@ backup.
 
 ## Update implementation contract
 
+A first Git-release conversion whose LaunchAgent rebind is refused from inside
+the running service fails with an external-shell recovery action. For this refusal
+or a verified installer failure before service activation, the installed updater
+restores its captured previous release selection only while its exact
+trial is still unstarted and its link and fallback identities are unchanged.
+Started or replaced trials keep their existing recovery facts. This compensation
+does not rewrite the LaunchAgent or undo data migrations; Gateway-initiated
+conversion still requires an external service context. The installed updater must
+contain this repair.
+
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
 older service definitions without adopting another global installation. The
@@ -761,6 +771,14 @@ the original config and database backups before Doctor migrates the state and
 converts heartbeats to Automations. Unknown keys and invalid heartbeat settings
 still refuse admission. Repeating the migration preserves the converted jobs and
 does not repeat the heartbeat delivery notice.
+
+On macOS, the first dashboard update from a checkout-backed LaunchAgent needs to
+change the service definition to use the stable release launcher. The running
+Gateway starts the updater in a temporary sibling launchd job and verifies its
+placement before handing over the update. If placement cannot be verified, the
+update stops before selecting a release. The installer still checks that it is
+outside the job it would replace. This requires the **running** updater to have
+the fix; building a newer target does not change how the old Gateway hands off.
 
 Before replacing a Git checkout's build or an installed package, the updater
 retains its running runtime. Late module imports and background workers keep

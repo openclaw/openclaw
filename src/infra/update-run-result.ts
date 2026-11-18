@@ -2,6 +2,7 @@ import type {
   PluginUpdateIntegrityDriftParams,
   PluginUpdateSummary,
 } from "../plugins/update-source.js";
+import type { GitReleaseSelectionRollback } from "./git-release.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import type { UpdateFailureFact } from "./update-failure-facts.js";
 import type { GitRuntimeArtifactIdentity } from "./update-git-runtime.js";
@@ -20,6 +21,8 @@ export type UpdateRunResult = {
   /** The executing owner's terminal failure; steps also retain superseded attempts. */
   failedStep?: UpdateStepResult;
   gitRuntime?: GitRuntimeArtifactIdentity;
+  /** Local publication evidence for a refused, never-started first service rebind. */
+  gitReleaseConversion?: GitReleaseSelectionRollback;
   /** The preparation owner verified that completion needs no runtime regeneration. */
   sourceRuntimePrepared?: boolean;
   before?: UpdateRunRecord["before"];

@@ -10,11 +10,13 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import { inspectServiceProcessMembershipSync } from "../daemon/service-process-membership.js";
 import { forceKillChildProcessTree } from "../process/child-process-tree.js";
 import {
   GatewayDrainingError,
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
+import { fitsBrokerSocketPath } from "../process/spawn-broker/socket-directory.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
@@ -22,10 +24,12 @@ import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import { resolveNodeSqliteLocation } from "./node-sqlite.js";
 import { resolveOpenClawCliEntryPath } from "./openclaw-cli-invocation.js";
+import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
 import { probePortUsage } from "./ports-probe.js";
 import type { GatewayRestartIntent } from "./restart-intent.js";
 import { resolveRuntimeScriptEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 import {
   readControlPlaneUpdateSentinelMeta,
   MANAGED_SERVICE_UPDATE_UNSAFE_EXIT_CODE,
@@ -64,6 +68,7 @@ import {
   describeManagedHandoffBlocker,
   readHandoffStartupFailure,
 } from "./update-managed-service-handoff-diagnostics.js";
+import { prepareLaunchdUpdateHandoff } from "./update-managed-service-handoff-launchd.js";
 import {
   MANAGED_HANDOFF_BOOTSTRAP_SOURCE,
   resolveSystemdHandoffLauncher,
@@ -77,6 +82,7 @@ import {
 } from "./update-managed-service-handoff-node.js";
 import { hasForegroundUpdatePaths } from "./update-managed-service-handoff-origin.js";
 import { MANAGED_HANDOFF_PARENT_SOURCE } from "./update-managed-service-handoff-parent-source.js";
+import { MANAGED_HANDOFF_PARK_SOURCE } from "./update-managed-service-handoff-park-source.js";
 import { MANAGED_HANDOFF_RECOVERY_SOURCE } from "./update-managed-service-handoff-recovery-source.js";
 import { MANAGED_HANDOFF_RESULT_SOURCE } from "./update-managed-service-handoff-result-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
@@ -236,76 +242,7 @@ function assertGatewayParkOwner() {
   }
 }
 
-async function parkGatewayService() {
-  if (params.operatorRestartWarning) throw new Error(params.operatorRestartWarning);
-  const recovery = params.serviceRecovery;
-  if (!recovery) return;
-  assertGatewayParkOwner();
-  if (recovery.kind === "schtasks") {
-    await prepareTransferredGateway();
-    assertGatewayParkOwner();
-    pendingServiceStop = runServiceCommand("schtasks.exe", ["/End", "/TN", recovery.taskName], () => {
-      restorationArmed = true;
-      recordServiceStop();
-    }, params.parentExitDeadlineAt, params.parentExitTimeoutMs);
-    if ((await pendingServiceStop).code !== 0) throw new Error("scheduled task stop failed");
-    return;
-  }
-  const systemd = recovery.kind === "systemd";
-  let target;
-  if (systemd) {
-    const current = await inspectSystemdService(recovery.unit, params.parentExitDeadlineAt);
-    if (
-      !current ||
-      current.Id !== recovery.unit ||
-      current.LoadState !== "loaded" ||
-      current.ActiveState !== "active" ||
-      current.MainPID !== String(params.parentPid) ||
-      !/^[1-9]\d*$/.test(current.ExecMainStartTimestampMonotonic || "") ||
-      !/^[a-f0-9]{32}$/i.test(current.InvocationID || "")) {
-      throw new Error("systemd service does not match the exact active gateway parent");
-    }
-    assertGatewayParkOwner();
-    parkedServiceGeneration = current.ExecMainStartTimestampMonotonic;
-    parkedServiceInvocation = current.InvocationID;
-    parkedServiceFragment = current.FragmentPath;
-  } else {
-    if (recovery.kind !== "launchd") throw new Error("unsupported managed update supervisor");
-    target = "gui/" + recovery.uid + "/" + recovery.label;
-    const inspection = await runServiceCommand("launchctl", ["print", target], undefined, params.parentExitDeadlineAt);
-    if (inspection.code !== 0 || parseLaunchctlJob(inspection.stdout, target).runtime.pid !== params.parentPid) {
-      throw new Error("launchd service does not match the exact active gateway parent");
-    }
-    assertGatewayParkOwner();
-  }
-  await prepareTransferredGateway();
-  assertGatewayParkOwner();
-  if (!systemd) {
-    restorationArmed = true;
-    const disabled = await runServiceCommand("launchctl", ["disable", target], undefined, params.parentExitDeadlineAt);
-    if (disabled.code !== 0) throw new Error("launchctl disable failed: " + disabled.stderr);
-    assertGatewayParkOwner();
-  }
-  // Accepted spawn acknowledges parking; the exact stop stays open through parent exit.
-  await new Promise((resolve, reject) => {
-    pendingServiceStop = runServiceCommand(
-      systemd ? "systemctl" : "launchctl",
-      systemd ? ["--user", "stop", recovery.unit] : ["bootout", target],
-      () => {
-        if (systemd) restorationArmed = true;
-        recordServiceStop();
-        resolve();
-      },
-      params.parentExitDeadlineAt,
-      systemd ? params.parentExitTimeoutMs : undefined,
-    );
-    pendingServiceStop.then((result) => {
-      if (systemd ? !restorationArmed : result.code !== 0 && !isLaunchdNotLoaded(result)) {
-        reject(new Error((systemd ? "systemd stop" : "launchctl bootout") + " failed: " + result.stderr));
-      }
-    });
-  });
-}
+${MANAGED_HANDOFF_PARK_SOURCE}
 
 ${MANAGED_HANDOFF_RECOVERY_SOURCE}
 async function finishGatewayServicePark() {
@@ -917,7 +854,25 @@ async function spawnManagedServiceUpdateHandoff(
   const updateLeaseDatabaseIdentity = identityStore.databaseIdentity;
   owner.leaseDatabaseIdentity = updateLeaseDatabaseIdentity;
   const parentStartIdentity = (await identityStore.processIdentity(parentPid)).startIdentity;
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
+  const gitCheckout = await looksLikeGitCheckout(rootIdentity);
+  const launchdConversion =
+    params.supervisor === "launchd" &&
+    !params.action &&
+    !params.foregroundOrigin &&
+    gitCheckout &&
+    !readPackageReleaseSlotSync(rootIdentity);
+  const tmpRoot = os.tmpdir();
+  // Keep the socket and the rest of its artifacts in one private directory. mkdtemp
+  // appends six bytes; Darwin's sockaddr_un leaves 103 for the pathname.
+  const socketSuffix = `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}XXXXXX/ctl`;
+  const tempRoot =
+    launchdConversion && !fitsBrokerSocketPath(tmpRoot, socketSuffix)
+      ? resolvePreferredOpenClawTmpDir({ tmpdir: () => "/tmp" })
+      : tmpRoot;
+  if (launchdConversion && !fitsBrokerSocketPath(tempRoot, socketSuffix)) {
+    throw new Error("No safe temporary directory fits the LaunchAgent control socket path.");
+  }
+  const dir = await fs.mkdtemp(path.join(tempRoot, MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX));
   const scriptPath = fileURLToPath(resolveRuntimeScriptEntrypointUrl("managedUpdateHandoff", dir));
   const paramsPath = path.join(dir, "handoff.json");
   const environmentPath = path.join(dir, "handoff.env");
@@ -993,6 +948,7 @@ async function spawnManagedServiceUpdateHandoff(
   );
   const env = params.devTarget ? applyDevUpdateTargetEnv(readyEnv, params.devTarget) : readyEnv;
 
+  let launchd: Awaited<ReturnType<typeof prepareLaunchdUpdateHandoff>> | undefined;
   const helperParams = {
     ...(systemdScope && !params.action ? { environmentPath } : {}),
     operatorRestartWarning: owner.operatorRestartWarning,
@@ -1073,7 +1029,7 @@ async function spawnManagedServiceUpdateHandoff(
       params.foregroundOrigin || owner.operatorRestartWarning
         ? undefined
         : resolveGatewayServiceRecovery(params.supervisor, serviceEnv),
-    recovery: await ((await looksLikeGitCheckout(rootIdentity))
+    recovery: await (gitCheckout
       ? readCurrentGitUpdateRecovery(rootIdentity, owner.recoveryTimeoutMs)
       : verifyPackageUpdateRecovery(rootIdentity)),
     recoveryModulePath: path.join(rootIdentity, "dist", "cli", "daemon-cli.js"),
@@ -1091,6 +1047,15 @@ async function spawnManagedServiceUpdateHandoff(
     if (helperParams.environmentPath) {
       await writeSystemdHandoffEnvironment(helperParams.environmentPath, env);
     }
+    if (launchdConversion) {
+      launchd = await prepareLaunchdUpdateHandoff({
+        directory: dir,
+        env,
+        executable: handoffNodeExecutable,
+        args: spawnArgs,
+      });
+      helperParams.sensitivePaths.push(...launchd.files);
+    }
     helperParams.sensitivePaths.push(...(await identityStore.stageRuntime(dir)));
     await fs.writeFile(scriptPath, `${HANDOFF_SCRIPT}\n`, { mode: 0o700 });
     await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
@@ -1104,17 +1069,23 @@ async function spawnManagedServiceUpdateHandoff(
     if (params.foregroundOrigin && isGatewayRestartDraining()) {
       throw new GatewayDrainingError();
     }
+    if (launchd) {
+      await launchd.bootstrap();
+      owner.requesterAuthority?.assertCurrent();
+      owner.requesterAuthority?.signal?.throwIfAborted();
+    }
+    const launcher = launchd ?? systemdScope;
     const spawnOptions: SpawnOptions = {
       cwd: dir,
       env,
       detached: true,
       stdio:
-        helperParams.stateEngine === "postgres" && !(systemdScope && !params.action)
+        helperParams.stateEngine === "postgres" && !(launcher && !params.action)
           ? ["pipe", "pipe", helperLog?.fd ?? "ignore", "ipc"]
           : ["pipe", "pipe", helperLog?.fd ?? "ignore"],
     };
-    const spawned = systemdScope
-      ? spawn(systemdScope.command, systemdScope.args, spawnOptions)
+    const spawned = launcher
+      ? spawn(launcher.command, launcher.args, spawnOptions)
       : spawn(handoffNodeExecutable, spawnArgs, spawnOptions);
     const { stdin, stdout } = spawned;
     if (!stdin || !stdout) {
@@ -1202,16 +1173,37 @@ async function spawnManagedServiceUpdateHandoff(
         forceKillChildProcessTree(child);
         throw new Error("managed update handoff helper lease identity is unavailable");
       }
+      // Bootstrap success alone is not proof of native placement. Refuse before the
+      // updater receives ownership or can publish a trial. The installer checks again.
+      if (
+        launchd &&
+        inspectServiceProcessMembershipSync(helper.helper.pid, "darwin") !== "outside"
+      ) {
+        throw new Error(
+          "launchctl could not verify the update helper is outside the serving LaunchAgent; service rebind refused.",
+        );
+      }
       owner.helper = helper;
     }
   } catch (err) {
     child?.removeListener("exit", onExit);
     child?.stdin.destroy();
     child?.stdout.destroy();
+    const cleanupFailure = await launchd?.bootout().then(
+      () => undefined,
+      (error: Error) => error,
+    );
     const failure = await readHandoffStartupFailure(err, logPath, serviceEnv);
     await helperLog?.close().catch(() => {});
     helperLog = undefined;
     await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
+    if (cleanupFailure) {
+      throw new AggregateError(
+        [failure, cleanupFailure],
+        `${String(failure)}; ${cleanupFailure.message}`,
+        { cause: err },
+      );
+    }
     throw failure;
   } finally {
     await helperLog?.close().catch(() => {});

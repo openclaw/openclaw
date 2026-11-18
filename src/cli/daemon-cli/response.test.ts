@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { markLaunchAgentNotActivated } from "../../daemon/launchd-install-outcome.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createDaemonActionContext, installDaemonServiceAndEmit } from "./response.js";
@@ -108,6 +109,28 @@ describe("daemon install verification", () => {
     );
     expect(params.emit).not.toHaveBeenCalled();
   });
+
+  it.each(["before-activation", "uncertain", "post-check"])(
+    "only certifies proven install-phase refusal (%s)",
+    async (scenario) => {
+      const refusal = markLaunchAgentNotActivated(new Error("ENOTDIR"));
+      const params = createInstallParams(async () => {
+        throw refusal;
+      });
+      if (scenario !== "post-check") {
+        params.install.mockRejectedValue(
+          scenario === "uncertain" ? new AggregateError([refusal], "rollback unknown") : refusal,
+        );
+      }
+      await installDaemonServiceAndEmit(params);
+      const args = params.fail.mock.calls[0]!;
+      expect(args.length).toBe(scenario === "before-activation" ? 3 : 2);
+      if (scenario === "before-activation") {
+        expect(args[2]).toBe("launchagent-not-activated");
+      }
+      expect(params.emit).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([false, true])(
     "emits verified registration with optional post-check (postCheck=%s)",

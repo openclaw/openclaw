@@ -533,7 +533,8 @@ describe("preserved update activation with real version guards", () => {
               outcome === "clean refusal"
                 ? JSON.stringify({
                     ok: false,
-                    error: `SERVICE_DEFINITION_${denial.toUpperCase()}: late owner denial`,
+                    error:
+                      "SERVICE_DEFINITION_UNKNOWN: [inspection-failed] The service definition cannot be replaced.",
                   })
                 : "",
             stderr:

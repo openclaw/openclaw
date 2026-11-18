@@ -5,7 +5,9 @@ import { DOMParser } from "linkedom";
 import { expect, it, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as pidAlive from "../shared/pid-alive.js";
+import { isLaunchAgentNotActivated } from "./launchd-install-outcome.js";
 import { installLaunchAgent } from "./launchd-install.js";
+import * as audit from "./service-audit.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
@@ -320,6 +322,39 @@ it.each(["publication", "activation"])(
     for (const input of f.files.slice(1)) {
       await expect(fs.access(input)).rejects.toMatchObject({ code: "ENOENT" });
     }
+  },
+);
+
+it.each([true, false])(
+  "retains the pre-install refusal only after a complete LaunchAgent audit (complete=%s)",
+  async (complete) => {
+    const f = await fixture("darwin");
+    vi.spyOn(audit, "auditGatewayServiceConfig").mockResolvedValueOnce({
+      ok: false,
+      issues: [],
+      ...(complete ? {} : { definitionDriftError: "incomplete inspection" }),
+      definitionDrift: [
+        {
+          kind: "unknown-edit",
+          key: "LowPriorityIO",
+          message: "operator edit",
+          reason: "unknown-key",
+        },
+      ],
+    });
+    const install = vi.fn(f.install);
+    const attempt = reconcileGatewayServiceDefinition({
+      env: f.env,
+      root: "/old",
+      command: f.command,
+      expectedCommand: f.command,
+      install,
+      warn: () => {},
+    });
+    await expect(attempt).rejects.toThrow("LowPriorityIO: operator edit");
+    expect(await attempt.catch(isLaunchAgentNotActivated)).toBe(complete);
+    expect(install).not.toHaveBeenCalled();
+    expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
   },
 );
 

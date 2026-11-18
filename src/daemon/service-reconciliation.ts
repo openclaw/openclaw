@@ -4,6 +4,10 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import {
+  isLaunchAgentNotActivated,
+  markLaunchAgentNotActivated,
+} from "./launchd-install-outcome.js";
 import { auditGatewayServiceConfig, type GatewayServiceExpectedCommand } from "./service-audit.js";
 import { captureGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import {
@@ -55,9 +59,10 @@ export async function reconcileGatewayServiceDefinition(params: {
         }
       }
     };
-    const deny = (message: string): never => {
+    const deny = (message: string, notActivated = false): never => {
       warn(message);
-      throw new Error(`SERVICE_DEFINITION_UNKNOWN: ${message}`);
+      const error = new Error(`SERVICE_DEFINITION_UNKNOWN: ${message}`);
+      throw notActivated ? markLaunchAgentNotActivated(error) : error;
     };
     const command = params.command;
     if (!command) {
@@ -66,6 +71,7 @@ export async function reconcileGatewayServiceDefinition(params: {
     const inspectHint = `Run ${formatCliCommand("openclaw gateway status --deep", params.env)} before retrying after the active maintenance or update finishes.`;
     let keys: string[] = [];
     let preservePolicy: string[] = [];
+    let refusedLaunchAgentEdit = false;
     const transaction = await captureGatewayServiceDefinitionBackup({
       env: params.env,
       command,
@@ -145,6 +151,10 @@ export async function reconcileGatewayServiceDefinition(params: {
               ),
           ) ?? [];
         if (audit.definitionDriftError || edits.length) {
+          // An inspected operator edit stopped our install before any native write.
+          // Unknown ownership or an unreadable definition is not the same proof.
+          refusedLaunchAgentEdit =
+            process.platform === "darwin" && !audit.definitionDriftError && edits.length > 0;
           throw new Error(
             [audit.definitionDriftError, ...edits.map((fact) => `${fact.key}: ${fact.message}`)]
               .filter(Boolean)
@@ -175,6 +185,7 @@ export async function reconcileGatewayServiceDefinition(params: {
       }
       return deny(
         `Service definition inspection or backup failed; the definition was preserved: ${String(error)}`,
+        refusedLaunchAgentEdit,
       );
     });
     return await settleGatewayServiceRebind(assertCurrent, async () => {
@@ -228,9 +239,14 @@ export async function reconcileGatewayServiceDefinition(params: {
             "recovery-pending",
           );
         }
-        return deny(
-          `Service definition refresh failed; the previous definition was ${recoveryResult ? "restored" : "left unchanged"}: ${String(error)}`,
-        );
+        const detail = `Service definition refresh failed; the previous definition was ${recoveryResult ? "restored" : "left unchanged"}: ${String(error)}`;
+        if (isLaunchAgentNotActivated(error)) {
+          warn(detail);
+          throw markLaunchAgentNotActivated(
+            new Error(`SERVICE_DEFINITION_UNKNOWN: ${detail}`, { cause: error }),
+          );
+        }
+        return deny(detail);
       }
     });
   });
