@@ -339,6 +339,7 @@ suite.define(() => {
     for (const [index, page] of pages.entries()) {
       await page.goto(new URL("automations?job=" + job.id, urls[index]).toString());
       await waitForControlUiGatewayReady(page);
+      await page.locator('[data-test-id="cron-edit"]').click();
       await page.locator("#cron-name").waitFor();
     }
     expect(await alice.locator("#cron-name").isDisabled()).toBe(false);
@@ -375,6 +376,7 @@ suite.define(() => {
     ).rejects.toThrow();
     await bob.reload();
     await waitForControlUiGatewayReady(bob);
+    await bob.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => bob.locator("#cron-name").isDisabled()).toBe(false);
     await bob.locator("#cron-name").fill("Hourly ping edited by Bob");
     await bob.locator('[data-test-id="cron-submit"]').click();
@@ -416,6 +418,7 @@ suite.define(() => {
     // The same administrator edits a fresh legacy job through the actual page.
     await admin.goto(new URL("automations?job=legacy-ui-edit", urls[0]).toString());
     await waitForControlUiGatewayReady(admin);
+    await admin.locator('[data-test-id="cron-edit"]').click();
     await admin.locator("#cron-name").waitFor();
     await selectPickerValue(
       admin.locator("openclaw-select-picker:has(#cron-payload-model-picker)"),
