@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMetaForEntryAsync } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveSessionThreadInfo } from "../../channels/plugins/session-conversation.js";
@@ -67,26 +66,31 @@ import {
   readSessionsSendMessage,
   readSessionsSendMode,
   readSessionsSendTarget,
-  readSessionsSendTimeout,
 } from "./sessions-send-tool.input.js";
 import type { SessionsSendToolOptions } from "./sessions-send-tool.types.js";
 
-/** One send implementation, shared by direct execution and the one-shot retained replay. */
 export async function executeSessionsSend(
-  opts: SessionsSendToolOptions | undefined,
+  opts: SessionsSendToolOptions,
   toolCallId: string,
-  args: unknown,
+  {
+    params,
+    mode,
+    timeoutSeconds,
+  }: {
+    params: Record<string, unknown>;
+    mode: ReturnType<typeof readSessionsSendMode>;
+    timeoutSeconds: number;
+  },
   retain?: ReturnType<typeof createSelfHeldSendRetainer>,
 ) {
+  opts.signal?.throwIfAborted();
   const requesterOrigin = normalizeDeliveryContext(opts?.requesterOrigin);
   const withRequesterAuthority = bindRequesterYieldCronAuthority(opts?.requesterTurnRunId);
 
-  const params = isRecord(args) ? args : {};
   const promptedAt = Date.now();
   const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
   const sendGatewayCall = opts?.callGateway ?? callSessionsSendGateway;
   const message = readSessionsSendMessage(params);
-  const mode = readSessionsSendMode(params);
   const resumeCaller =
     mode === undefined || mode === "resume"
       ? captureSessionsSendResumeCaller(opts?.retainedReplay ? opts.assertSourceCurrent : undefined)
@@ -94,7 +98,6 @@ export async function executeSessionsSend(
   if (mode === "resume" && !resumeCaller) {
     return sendFailure("forbidden", "Task resume requires an admitted parent tool caller.");
   }
-  const timeoutSeconds = readSessionsSendTimeout(params, mode);
   const {
     cfg,
     mainKey,

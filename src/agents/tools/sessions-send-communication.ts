@@ -288,8 +288,10 @@ export async function prepareSessionsSendCommunication(params: {
     if (!closed) {
       closed = true;
       unsubscribe();
+      params.signal?.removeEventListener("abort", close);
     }
   };
+  params.signal?.addEventListener("abort", close, { once: true });
   try {
     assertSource();
     let source = await readSessionCommunicationLineage(params.source, read, assertSource);

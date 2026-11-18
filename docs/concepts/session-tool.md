@@ -404,7 +404,10 @@ and their existing explicit resume and cancellation controls. Newly registered
 tasks record their store and can use automatic continuation.
 
 `timeoutSeconds` limits the sending tool's wait, not the receiver's execution
-budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.
+budget. The budget covers target lookup, admission, transcript acknowledgment,
+and reply waiting together, and is declared to the turn watchdog. The default is
+30 seconds. `timeoutSeconds: 0` skips reply waiting but still bounds admission
+at 30 seconds. A timeout can follow accepted input; inspect the target before retrying.
 When that wait expires, eligible pending reply delivery continues observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
 inter-session replies use the same completion observation.
@@ -425,9 +428,9 @@ An inline reply has `delivery.status: "skipped"` and starts no additional reques
 Neither field is a target-completion receipt.
 Separately admitted turns wait for the active reply and delivery to finish. They keep their order behind other agent commands; cancellation or the
 receiver's execution deadline can withdraw a waiting turn before it runs.
-Sends accepted by an active turn wait for transcript persistence before acknowledging. The existing two-minute steering
-deadline is independent of `timeoutSeconds`, which controls reply waiting. A
-deadline without confirmed persistence returns an error; it never acknowledges
+Sends accepted by an active turn wait for transcript persistence within the sending
+tool's budget before acknowledging. A timeout without confirmed persistence
+returns a visible timeout; it never acknowledges
 volatile input or replays input that might already have been consumed.
 A persisted steer is part of the target's history; acknowledgment does not mean
 that the model has finished processing it. A backend without durable steering
