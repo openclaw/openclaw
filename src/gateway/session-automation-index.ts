@@ -3,7 +3,7 @@ import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessio
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { resolveScheduledPrincipal } from "../cron/execution-context.js";
-import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { resolveCronJobSessionBindings } from "../cron/job-session-bindings.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { getChildLogger } from "../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -130,12 +130,11 @@ function buildAutomationKeys(
     if (!job.enabled) {
       continue;
     }
-    for (const key of resolveCronJobBoundSessionKeys(job, { cfg, defaultAgentId })) {
-      const agentId = job.owner?.agentId ?? defaultAgentId;
+    for (const [key, agentId] of resolveCronJobSessionBindings(job, { cfg, defaultAgentId })) {
       if (parseAgentSessionKey(key)) {
         keys.add(key);
-      } else if (agentId) {
-        keys.add(`${normalizeAgentId(agentId)}\0${key}`);
+      } else {
+        keys.add(`${agentId}\0${key}`);
       }
     }
   }

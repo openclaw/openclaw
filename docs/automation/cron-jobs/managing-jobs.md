@@ -159,7 +159,9 @@ openclaw automations create "0 6 * * *" "Check ops queue" --name "Ops sweep" --s
 openclaw automations edit <jobId> --clear-agent
 ```
 
-Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+Conversation automation views use the conversation's physical key and selected agent. With `session.scope: "global"`, jobs targeting `session:global` or that agent's main-session alias belong to its `global` conversation. An explicitly agent-qualified named target remains separate, and another agent's `global` conversation keeps its own jobs.
+
+Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar. An agent's main session, including `global`, cannot be archived.
 
 Before archiving or deleting a session with an enabled bound job, the Control UI asks for confirmation. The dialog names the jobs that will pause and offers **Archive anyway** or **Delete anyway**; the warning appears even if you turned off delete confirmations. Archiving a nested session tree lists the jobs bound to any session in the tree. Sessions without a bound job archive and delete as before. The browser console records each warning as `[session-automation-confirm] <archive|delete> shown`, followed by `confirmed` or `cancelled`.
 
