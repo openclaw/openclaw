@@ -165,7 +165,7 @@ function NativeNotificationSection(props: {
               <Icon name={testPending() ? "loader" : "send"} />
               {testPending()
                 ? t("configView.notifications.sendingTest")
-                : t("configView.notifications.sendTest")}
+                : t("configView.notifications.testAllBrowsers")}
             </button>
           ) : (
             <button
@@ -323,6 +323,10 @@ function WebPushSection(props: {
         description={
           props.push.permission === "install-required" ? (
             <p class="settings-section__desc">{t("configView.notifications.iosInstallRequired")}</p>
+          ) : props.push.supported && props.push.canManage && registered() ? (
+            <p class="settings-section__desc">
+              {t("configView.notifications.testAllBrowsersHint")}
+            </p>
           ) : undefined
         }
       >
@@ -384,7 +388,7 @@ function WebPushSection(props: {
                     disabled={busy() || !props.actions.connected}
                     onClick={() => submit(props.actions.onWebPushTest?.())}
                   >
-                    <Icon name="send" /> {t("configView.notifications.sendTest")}
+                    <Icon name="send" /> {t("configView.notifications.testAllBrowsers")}
                   </button>
                 </Show>
               </>

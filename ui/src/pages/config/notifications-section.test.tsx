@@ -257,7 +257,10 @@ it("keeps settings available after an admitted command rejects", async () => {
       return completion.promise;
     },
   });
-  const send = view.getByRole("button", { name: "Send test" });
+  const send = view.getByRole("button", { name: "Test all browsers" });
+  expect(view.container.textContent).toContain(
+    "Tests include browsers registered by other people on this Gateway.",
+  );
   send.click();
   await waitForSolid(() => expect(send.hasAttribute("disabled")).toBe(true));
   completion.reject(new Error("Example notification service is unavailable."));
@@ -266,7 +269,9 @@ it("keeps settings available after an admitted command rejects", async () => {
   );
   expect(view.container.textContent).toContain("Browser support");
   expect(view.container.querySelectorAll(".cfg-field__error")).toHaveLength(1);
-  expect(view.getByRole("button", { name: "Send test" }).hasAttribute("disabled")).toBe(false);
+  expect(view.getByRole("button", { name: "Test all browsers" }).hasAttribute("disabled")).toBe(
+    false,
+  );
   expect(view.container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false);
   expect(view.container.querySelector('.cfg-field__error[role="alert"]')?.textContent).toContain(
     "Example notification service is unavailable.",
