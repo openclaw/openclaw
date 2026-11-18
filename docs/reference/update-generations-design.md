@@ -484,7 +484,12 @@ something the source showed.
   switch and its post-switch Doctor leaves the candidate selected and the run
   open, for the existing reconciliation in `openclaw update repair`, which runs
   from whichever release the link names. No code was added for that case and
-  it was not exercised.
+  it was not exercised. Since
+  [#200866](https://github.com/openclaw/openclaw/pull/200866), a plain
+  `openclaw update` finishes a killed run whose candidate is installed but not
+  confirmed, when that run reserved its plugin recovery (see "Finishing a
+  killed update" below). A kill right after the link switch was not among the
+  cases it ran.
 - **A service bound to a release path.** A published updater run through the
   link writes the release's real path into the service definition (seen in
   the linked-root cell: `ExecStart` named `releases/2026.11.3/.../dist/index.js`).
@@ -589,12 +594,81 @@ something the source showed.
   with repair's settlement. It does so only when the update lease store still
   holds the dead updater's lease, its recorded process is gone, it did not
   leave the Gateway stopped, and the outcome is a rollback onto the
-  still-installed previous version or keeping a verified candidate. It still
-  refuses and names `openclaw update repair` for an installed version that
+  still-installed previous version or keeping a verified candidate. As merged,
+  it refused and named `openclaw update repair` for an installed version that
   was not verified, a rollback the killed update had already begun, a stopped
   Gateway, an update the Gateway started, a lost lease store, and a source
-  checkout. The `package-installed-recovery` lane was not rerun against this
-  change.
+  checkout. The next bullet covers the changes that took over all of those
+  except an update the Gateway started.
+- **Finishing a killed update.** Three later changes settle more of what a
+  killed update leaves, each keeping every proof #200680 requires.
+  - **An installed version that was not finished.**
+    [#200866](https://github.com/openclaw/openclaw/pull/200866) runs repair's
+    finalization as a stage, `finishInterruptedUpdate` in
+    `update-command-finalize.ts`: Doctor for the installed version, plugin
+    convergence, and Gateway restoration. It covers three states: a candidate
+    installed and not confirmed finished, a rollback the killed update had
+    begun on the version it installed, and a Gateway the killed update stopped
+    and never started. The last applies only when this update would restart
+    the Gateway anyway. The stage has to run before target resolution, because
+    it rewrites config that resolution reads, and the update's own run does
+    not exist yet at that point. So the stage records the same repair-shaped
+    run repair would (its `finalize:repair-continuation` step), and the
+    update's run gets an `interrupted-update-finalization` warning step that
+    names it. When the stage fails, Doctor maintenance has to wait, or the
+    Gateway stays stopped, the update stops and names repair. It also refuses
+    when other update history still owes recovery, because repair would finish
+    that too.
+  - **A lease store emptied by a restart.** The lease row is what showed the
+    dead updater's processes gone, and a machine restart removes it.
+    [#200994](https://github.com/openclaw/openclaw/pull/200994) records the
+    boot each driver ran in as `origin.driver.namespace`, and on each
+    `origin.previousDrivers` entry: platform, kernel boot ID, Linux PID
+    namespace, and a digest of the machine identity. When the row is gone, the
+    next update settles the run only if every recorded driver ran on this
+    host, with the same non-null machine identity and platform, in a different
+    boot; the platform is Linux or macOS, and on Linux the driver and this
+    process are both in the initial PID namespace; and the run's last write
+    predates the current boot. A run with a managed handoff or an unrecorded
+    driver identity keeps the refusal. The key is optional JSON in
+    `origin_json`. Older readers drop it, and the public run record strips it.
+  - **A source checkout.** A checkout's version does not show whether a killed
+    update had already swapped in its build.
+    [#201009](https://github.com/openclaw/openclaw/pull/201009) has an
+    in-place checkout update record the commit and build it activated, as
+    `origin.gitActivation`, before it reserves its plugin recovery. The next
+    update settles it like a package install only when the recorded builds
+    match the plugin recovery, the checkout is still at that commit with no
+    local changes (untracked files included), and its build is complete, made
+    from that commit, and the recorded build. Otherwise it refuses and names
+    which of those failed. After a restart both proofs must hold: the restart
+    rule shows the processes gone, and the checkout checks run again under the
+    installation claim. Package-to-Git conversion never records the field, and
+    the Git release layout never reserves plugin recovery, so neither changes.
+  - **Still by hand.** `openclaw update repair` is still needed for an update
+    the Gateway started or a managed helper adopted; an updater that may still
+    be alive, or whose exit was not observed; another installation's recovery;
+    a dry run; a stopped Gateway under `--no-restart`; other update history
+    that still owes recovery; a missing lease row without the restart proof,
+    which covers Windows, containers, and runs recorded by older versions; and
+    a checkout whose run has no `origin.gitActivation` or that was changed by
+    hand. A run that a published updater left gets neither the restart rule
+    nor the checkout rule, because that updater did not record the new
+    fields.
+  - **Measured.** The `package-installed-recovery` Docker lane now kills an
+    updater after activation in every cut, leaving the candidate installed
+    and its run `running`, and a plain `openclaw update --no-restart` follows
+    with no repair. Under Docker Desktop on macOS, six of seven cuts passed.
+    `partial-previous` passed its harness and then failed an access-reader
+    check that cannot pass on that host and failed the same way before the
+    change. The lane has no Gateway service and never reaches a begun
+    rollback, so those two states ran only in process tests with a fixture
+    service. No Linux host ran the lane. #200994 and #201009 ran in process
+    tests from real updater children killed with SIGKILL; they replaced the
+    lease store and the boot identity instead of restarting a host, and no
+    killed source update was traced from the shipped CLI. A cloned machine
+    that shares the host name, machine identity, and state directory is
+    refused only by the last-write check, read from source, not run.
 - **Local overrides** replay into the candidate release before the link names
   it, so a selected release is still written once.
 - **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
@@ -950,6 +1024,10 @@ existing handoff carries stop, publish, or rollback authority.
   plugin steps used a real ledger, cohort, package directory, and config
   with a simulated service manager and Gateway; no managed npm install ran
   under a cohort.
+- Finishing a killed update ran installed only for a candidate left
+  unconfirmed, under Docker Desktop on macOS with no Gateway service. Not run
+  installed: a begun rollback, a stopped Gateway, a Linux host, a real host
+  restart, and a killed source checkout update from the shipped CLI.
 - The source trace read code and ran nothing. Not read: the launchd, systemd,
   and Task Scheduler writers, how the plugin loader enforces quarantine, the
   restart sentinel, and every use of the updater's retained runtime.
