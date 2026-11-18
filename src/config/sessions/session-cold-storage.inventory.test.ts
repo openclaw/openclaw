@@ -230,3 +230,20 @@ it("keeps the host's configured refusal selection during worker preparation", as
     recordAgentDatabaseAdmissions([], { env: state.env });
   }
 });
+
+it("keeps the maintenance pass healthy when a configured agent has no database", async () => {
+  const store = state.statePath("absent-store", "{agentId}.sqlite");
+  const config = {
+    agents: { entries: { main: {} } },
+    acp: { allowedAgents: ["codex"] },
+    session: {
+      store,
+      maintenance: { mode: "enforce", resetArchiveRetention: "365d" },
+    },
+    env: state.env,
+  };
+  await expect(runSessionColdStorageMaintenance({ config })).resolves.toEqual({
+    archivedTranscripts: 0,
+    externalizedTranscripts: 0,
+  });
+});
