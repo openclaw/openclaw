@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
+  captureUiProof,
   createNewSessionPageE2eSuite,
   installMockGateway,
 } from "./new-session-page.test-support.ts";
@@ -95,6 +96,7 @@ suite.define(() => {
         );
       }),
     ).toBe(true);
+    await captureUiProof(suite, page, "mobile-keyboard-roomy.png");
 
     await page.evaluate(() => {
       for (const key of ["height", "offsetTop"]) {
