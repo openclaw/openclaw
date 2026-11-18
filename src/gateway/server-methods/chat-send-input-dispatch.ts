@@ -18,6 +18,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
+import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -176,6 +177,7 @@ export async function handleChatSendWithStorage(
   let committedInput: { sessionId: string; lifecycleRevision?: string } | undefined;
   let releaseBeforeDispatch: void | (() => void) = undefined;
   let dashboardAuthority: Awaited<ReturnType<typeof createChatSendDashboardAuthority>> | undefined;
+  let setupFailure: unknown;
   try {
     const assertCustodyLifetimeCurrent = () => {
       admission.assertWorkAdmissionCurrent();
@@ -300,6 +302,8 @@ export async function handleChatSendWithStorage(
           (admission.localGoalAdmission ||
             (userTurn.baseInput.display !== false &&
               (!systemInputProvenance || systemInputProvenance.kind === "external_user")))));
+    const inputAcceptance = context.dedupe.get(`chat:${clientRunId}`);
+    const queuedInputAdmission = readQueuedChatInputAdmission(clientRunId);
     admission.setPendingInputCleanup(async () => {
       try {
         const pending =
@@ -312,9 +316,13 @@ export async function handleChatSendWithStorage(
               activeRunAbort.entry?.adapter,
             )
           : undefined;
-        userTurnRecorder.finishPendingInput?.(
-          disposition,
-          reason === "user-stop" ? true : undefined,
+        await settleUserTurnPendingInput(
+          userTurnRecorder,
+          activeRunAbort.controller.signal,
+          setupFailure ?? activeRunAbort.controller.signal.reason,
+          reason === "delete",
+          "cancelled",
+          inputAcceptance?.effectAccepted === true || queuedInputAdmission !== undefined,
         );
         if (pending && reason) {
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
@@ -326,7 +334,6 @@ export async function handleChatSendWithStorage(
             reason,
           });
         }
-        await userTurnRecorder.waitForPendingInputSettlement?.();
       } finally {
         dashboardAuthority?.release();
         releaseSessionAuthorization?.();
@@ -686,6 +693,7 @@ export async function handleChatSendWithStorage(
       });
     }
   } catch (err) {
+    setupFailure = err;
     dashboardAuthority?.release();
     releaseBeforeDispatch?.();
     await handleChatSendSetupError({
