@@ -9,12 +9,182 @@ import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import type { UpdateDatabaseBackup } from "../../src/infra/update-database-backup.js";
 
+/**
+ * Cold-navigation acceptance, declared before measurement:
+ * - stopped update Doctor backfills zero archives; required migrations still finish;
+ * - readiness precedes backfill, with exact cold restore before/after and unchanged archive bytes;
+ * - background work completes once per pending archive and foreground writes run between archives;
+ * - five interleaved baseline/candidate CLI-update samples, same fixture/host, report median/p95
+ *   TOTAL UPDATE, GATEWAY DOWNTIME, eventual backfill cost and foreground write latency separately.
+ * This mode only prepares synthetic input. It does not itself prove a CLI update or downtime.
+ */
+async function prepareColdNavigationFixture() {
+  const root = path.resolve(process.argv[6] ?? ".openclaw/tmp/cold-navigation");
+  const archives = Number(process.argv[7] ?? 32);
+  const events = Number(process.argv[8] ?? 1024);
+  assert.ok(Number.isSafeInteger(archives) && archives > 0);
+  assert.ok(Number.isSafeInteger(events) && events > 1);
+  fs.mkdirSync(root, { recursive: true });
+  for (const name of ["home", "state", "cache", "workspace"]) {
+    fs.mkdirSync(path.join(root, name));
+  }
+  const state = path.join(root, "state");
+  const env = {
+    ...process.env,
+    HOME: path.join(root, "home"),
+    XDG_CACHE_HOME: path.join(root, "cache"),
+    OPENCLAW_STATE_DIR: state,
+    OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+  };
+  const config = {
+    gateway: { mode: "local", auth: { mode: "token", token: "synthetic-cold-navigation-proof" } },
+    agents: {
+      ownership: "explicit",
+      entries: { main: { workspace: path.join(root, "workspace") } },
+    },
+    plugins: { enabled: false },
+  };
+  fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
+  Object.assign(process.env, env);
+  const { zstdCompressSync } = await import("node:zlib");
+  const { CURRENT_SESSION_VERSION } = await import("../../src/config/sessions/version.js");
+  const { writeSessionEntry } =
+    await import("../../src/config/sessions/session-accessor.sqlite-entry-write.js");
+  const { runOpenClawAgentWriteTransaction, closeOpenClawAgentDatabasesAsync } =
+    await import("../../src/state/openclaw-agent-db.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+  let rawBytes = 0;
+  let compressedBytes = 0;
+  try {
+    runOpenClawAgentWriteTransaction(
+      (database) => {
+        const { db } = database;
+        writeSessionEntry(database, "agent:main:cold-proof", { sessionId: "hot", updatedAt: 1 });
+        db.prepare(
+          "INSERT OR IGNORE INTO session_windows(session_id,session_key,created_at,updated_at) VALUES('hot','agent:main:cold-proof',1,1)",
+        ).run();
+        const window = db.prepare(
+          "INSERT INTO session_windows(session_id,session_key,created_at,updated_at) VALUES(?,'agent:main:cold-proof',1,1)",
+        );
+        const insert = db.prepare(
+          "INSERT INTO session_transcript_cold_archives(session_id,generation,archive_name,archive_sha256,event_count,raw_bytes,archive_bytes,last_seq,archived_at,storage,archive_blob) VALUES(?,'fixture',?,?,?, ?,?,?,1,'sqlite',?)",
+        );
+        for (let archive = 0; archive < archives; archive++) {
+          const sessionId = "cold-" + String(archive).padStart(5, "0");
+          const records = [
+            JSON.stringify({ kind: "header", version: 1, sessionId, generation: "fixture" }),
+          ];
+          let payloadBytes = -1;
+          for (let seq = 0; seq < events; seq++) {
+            const eventJson = JSON.stringify(
+              seq === 0
+                ? {
+                    type: "session",
+                    id: sessionId,
+                    version: CURRENT_SESSION_VERSION,
+                    timestamp: "2026-01-01T00:00:00.000Z",
+                    cwd: path.join(root, "workspace"),
+                  }
+                : {
+                    type: "message",
+                    id: "message-" + seq,
+                    parentId: seq > 1 ? "message-" + (seq - 1) : null,
+                    timestamp: "2026-01-01T00:00:00.000Z",
+                    message: { role: "user", content: "synthetic cold history ".repeat(512) },
+                  },
+            );
+            payloadBytes += Buffer.byteLength(eventJson) + 1;
+            records.push(
+              JSON.stringify({
+                kind: "event",
+                row: {
+                  seq,
+                  created_at: 1,
+                  event_json: eventJson,
+                },
+              }),
+            );
+          }
+          for (let seq = 1; seq < events; seq++) {
+            records.push(
+              JSON.stringify({
+                kind: "identity",
+                row: {
+                  event_id: "message-" + seq,
+                  seq,
+                  event_type: "message",
+                  parent_id: seq > 1 ? "message-" + (seq - 1) : null,
+                  message_idempotency_key: null,
+                  created_at: 1,
+                },
+              }),
+            );
+          }
+          for (let seq = 1; seq < events; seq++) {
+            records.push(
+              JSON.stringify({
+                kind: "active",
+                row: {
+                  active_position: seq - 1,
+                  event_seq: seq,
+                  message_position: seq - 1,
+                  context_eligible: 1,
+                },
+              }),
+            );
+          }
+          records.push(
+            JSON.stringify({
+              kind: "index",
+              row: {
+                indexed_seq: events - 1,
+                leaf_event_id: "message-" + (events - 1),
+                needs_rebuild: 0,
+                active_event_count: events - 1,
+                active_message_count: events - 1,
+                updated_at: 1,
+              },
+            }),
+          );
+          const raw = Buffer.from(records.join("\n"));
+          const compressed = zstdCompressSync(raw);
+          const hash = createHash("sha256").update(compressed).digest("hex");
+          window.run(sessionId);
+          insert.run(
+            sessionId,
+            hash + ".jsonl.zst",
+            hash,
+            events,
+            payloadBytes,
+            compressed.length,
+            events - 1,
+            compressed,
+          );
+          rawBytes += raw.length;
+          compressedBytes += compressed.length;
+        }
+      },
+      { agentId: "main", env },
+    );
+  } finally {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  }
+  console.log(
+    JSON.stringify({ root, archives, eventsPerArchive: events, rawBytes, compressedBytes }),
+  );
+}
+
 const label = process.argv[2] ?? "sample";
 assert.match(label, /^[a-zA-Z0-9-]+$/u);
 const generationOnly = process.argv[3] === "generations-only";
 const samples = Number(process.argv[4] ?? 5);
 assert.ok(Number.isSafeInteger(samples) && samples > 0);
 const sourceRoot = path.resolve(process.argv[5] ?? ".");
+if (process.argv[3] === "cold-navigation-fixture") {
+  await prepareColdNavigationFixture();
+  process.exit(0);
+}
 if (process.argv[3] === "stopped-backup-phases") {
   const { measureStoppedBackupPhases } = await import("./stopped-backup-measure.ts");
   await measureStoppedBackupPhases({

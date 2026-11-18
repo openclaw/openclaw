@@ -6,13 +6,20 @@ import {
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
+import {
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import {
+  pendingSessionColdNavigationQuery,
+  readSessionColdTranscript,
+} from "./session-cold-storage-state.js";
 import { transcriptDependencyFactsProjectableSql } from "./session-transcript-active-facts.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -25,8 +32,13 @@ export type TranscriptActiveFactsBackfillSession = {
   sessionId: string;
   activeEventCount: number;
   updatedAt: number;
+  coldNavigation?: true;
 };
-export type TranscriptActiveFactsBackfillCursor = { sessionId: string; afterPosition: number };
+export type TranscriptActiveFactsBackfillCursor = {
+  sessionId: string;
+  afterPosition: number;
+  coldNavigation?: true;
+};
 export type TranscriptActiveFactsBackfillBatch = {
   afterPosition: number;
   done: boolean;
@@ -37,6 +49,7 @@ export type TranscriptActiveFactsBackfillBatch = {
   rowsVisited: number;
   bytesRead: number;
   elapsedMs: number;
+  warning?: string;
 };
 
 export type TranscriptActiveFactsBackfillProbe = {
@@ -60,7 +73,7 @@ const MAX_PROBE_ROWS = 8_192;
 export function discoverTranscriptActiveFactsBackfillSessions(
   database: EngineConnection,
 ): TranscriptActiveFactsBackfillSession[] {
-  return executeSqliteQuerySync(
+  const active = executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<DB>(database)
       .selectFrom("session_transcript_index_state as state")
@@ -95,6 +108,27 @@ export function discoverTranscriptActiveFactsBackfillSessions(
       .orderBy("state.updated_at", "desc")
       .orderBy("state.session_id"),
   ).rows;
+  // Current archives already retain navigation. Old archives use Doctor's
+  // durable pending predicate; discovery never scans their payloads.
+  const cold = executeSqliteQuerySync(
+    database,
+    pendingSessionColdNavigationQuery(database)
+      .select([
+        "archive.session_id as sessionId",
+        "archive.event_count as activeEventCount",
+        "archive.archived_at as updatedAt",
+      ])
+      .orderBy("archive.session_id"),
+  ).rows;
+  return [
+    ...active,
+    ...cold.map(({ sessionId, activeEventCount, updatedAt }) => ({
+      sessionId,
+      activeEventCount,
+      updatedAt,
+      coldNavigation: true as const,
+    })),
+  ];
 }
 
 /**
@@ -285,7 +319,17 @@ export type TranscriptActiveFactsBackfillOperations = {
 
 export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorkerDatabaseContext) {
   const database = context.database;
+  let coldNavigation: typeof import("./session-cold-storage-navigation.js") | undefined;
+  let coldCodec: typeof import("./session-cold-storage-codec.js") | undefined;
   return bindSqliteWorkerDatabase<TranscriptActiveFactsBackfillOperations>(database, {
+    async prepare(command) {
+      if (command.input.coldNavigation && !coldNavigation) {
+        [coldNavigation, coldCodec] = await Promise.all([
+          import("./session-cold-storage-navigation.js"),
+          import("./session-cold-storage-codec.js"),
+        ]);
+      }
+    },
     execute(command: SqliteWorkerCommand<TranscriptActiveFactsBackfillOperations>) {
       // PostgreSQL needs a separately measured source-row locking protocol; its
       // ordinary writers continue filling facts through the existing owner.
@@ -302,6 +346,40 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
             database,
             () => {
               entered = true;
+              if (command.input.coldNavigation) {
+                const backfill = coldNavigation?.backfillSessionColdNavigationInTransaction;
+                if (!backfill) {
+                  throw new Error("Cold navigation backfill was not prepared");
+                }
+                const archive = readSessionColdTranscript(database, command.input.sessionId);
+                const pending = executeSqliteQueryTakeFirstSync(
+                  database,
+                  pendingSessionColdNavigationQuery(database)
+                    .select("archive.session_id")
+                    .where("archive.session_id", "=", command.input.sessionId),
+                );
+                if (archive && pending) {
+                  // Keep an archive atomic: interruption cannot publish partial
+                  // navigation or hide the source from cold restoration. Foreground
+                  // arrivals get the FIFO before the next paced background batch.
+                  withSqliteDatabaseWriteScope(
+                    database,
+                    [sqliteSessionIdWriteScope(archive.session_id)],
+                    () => backfill({ db: database, path: context.databasePath }, archive),
+                  );
+                }
+                return {
+                  afterPosition: -1,
+                  done: true,
+                  unavailable: !archive || !pending,
+                  busy: false,
+                  rowsFilled: archive && pending ? archive.event_count : 0,
+                  rowsSkipped: 0,
+                  rowsVisited: archive && pending ? archive.event_count : 0,
+                  bytesRead: archive && pending ? archive.raw_bytes : 0,
+                  elapsedMs: performance.now() - started,
+                };
+              }
               return backfillTranscriptActiveFactsBatchInTransaction(database, command.input);
             },
             {
@@ -312,6 +390,27 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
         );
         return { ...result, elapsedMs: performance.now() - started };
       } catch (error) {
+        // The transaction owner has confirmed rollback. Only an archive read
+        // failure may be skipped; authority, cancellation, SQL and lifecycle
+        // failures remain terminal and never authorize replay.
+        if (
+          command.input.coldNavigation &&
+          coldCodec &&
+          error instanceof coldCodec.SessionColdArchiveReadError
+        ) {
+          return {
+            afterPosition: -1,
+            done: true,
+            unavailable: true,
+            busy: false,
+            rowsFilled: 0,
+            rowsSkipped: 0,
+            rowsVisited: 0,
+            bytesRead: 0,
+            elapsedMs: performance.now() - started,
+            warning: error.message,
+          };
+        }
         if (entered || !isSqliteLockError(error)) {
           throw error;
         }

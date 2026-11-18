@@ -534,14 +534,21 @@ the update stays accepted and the pending checks remain retryable with
 `openclaw update finish`; the result reports the next action. Migration admission,
 repairs, backup verification, and recovery fences still complete before startup.
 
-Cold transcript navigation backfill uses about ten minutes of archive work per
-Doctor invocation, finishing the current archive transaction before stopping.
-Doctor and the native update receipt report migrated and pending archive counts;
-pending navigation is a recoverable warning, so it does not fail or roll back the
-update. `openclaw update finish` retains the warning in update history. Every
-later native update runs candidate Doctor again even when database schemas are
-already current, and resumes the remaining archives. Operators can also run
-`openclaw doctor --fix`; pending archives retain their existing cold-restore path.
+Update Doctor leaves reconstructible SQLite cold transcript navigation pending
+until the Gateway is ready. Required version migrations, archive verification,
+and recovery checks still run before activation. Doctor reports pending archive
+counts as a recoverable warning, retained by `openclaw update finish` in update
+history; pending archives keep their existing cold-restore path.
+
+After readiness, the existing transcript-facts backfill worker discovers pending
+archives from SQL and commits one complete archive per background writer turn.
+It yields to queued foreground writes and paces subsequent turns using admitted
+execution time. A large archive can still hold one transaction; deferral moves
+that work out of downtime, not out of the update's total eventual work. Cancellation
+and restart retain completed navigation and rediscover pending archives without
+a new progress store. Standalone `openclaw doctor --fix` and PostgreSQL retain
+the existing ten-minute archive-work budget, excluding backups and finishing
+the current archive transaction before stopping.
 
 During a native update, when plugins are unchanged and only deferred model retirement
 remains, a supporting candidate completes the second Doctor pass with the required

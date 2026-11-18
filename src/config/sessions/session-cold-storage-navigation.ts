@@ -54,7 +54,7 @@ export function retainSessionColdNavigationInTransaction(
   }
 }
 
-/** Doctor commits each verified archive independently; rollback leaves it eligible for retry. */
+/** Commit each verified archive independently; rollback leaves it eligible for retry. */
 export function backfillSessionColdNavigationInTransaction(
   database: ColdDatabase,
   archive: Omit<SessionColdArchive, "archive_blob">,

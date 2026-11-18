@@ -13,6 +13,7 @@ import type {
 import {
   decodeSessionColdRecords,
   readVerifiedSessionColdArchiveSync,
+  SessionColdArchiveReadError,
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
 const chunkMetadataColumns = [
@@ -77,7 +78,9 @@ export function readSessionColdChunks(
     hash !== archive.archive_sha256 ||
     `${hash}.jsonl.zst` !== archive.archive_name
   ) {
-    throw new Error("Cold transcript archive chunk metadata does not match its parent");
+    throw new SessionColdArchiveReadError(
+      "Cold transcript archive chunk metadata does not match its parent",
+    );
   }
   return chunks;
 }

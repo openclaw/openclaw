@@ -1,4 +1,5 @@
 import { channel } from "node:diagnostics_channel";
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
@@ -20,12 +21,14 @@ import { updateSqliteTranscriptEventJsonInTransaction } from "./session-accessor
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
+import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
 } from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
+  currentId,
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
@@ -38,6 +41,213 @@ import { createSessionTranscriptFactsBackfill } from "./session-transcript-facts
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptPayloadUpdater, prepareTranscriptPayload } from "./transcript-payload.js";
+
+it.for(["missing", "corrupt"] as const)(
+  "leaves a %s archive pending but completes healthy archives later in the same pass",
+  (failure, { signal }) =>
+    withState({ label: "cold-navigation-invalid", scenario: "minimal" }, async (state) => {
+      const f = await createSessionColdStorageFixture(
+        state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      );
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(f.scope.storePath) });
+      runOpenClawAgentWriteTransaction(({ db }) => {
+        db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(historicalId);
+        db.prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?").run(
+          historicalId,
+        );
+        db.prepare(
+          "INSERT INTO session_windows(session_id,session_key,created_at,updated_at) VALUES('aaa-invalid',?,1,1)",
+        ).run(f.scope.sessionKey);
+        db.prepare(
+          "INSERT INTO session_transcript_cold_archives " +
+            "(session_id,generation,archive_name,archive_sha256,event_count,raw_bytes,archive_bytes,last_seq,archived_at,storage,archive_blob) " +
+            "SELECT 'aaa-invalid',generation,?,?,event_count,raw_bytes,archive_bytes,last_seq,archived_at,storage,archive_blob " +
+            "FROM session_transcript_cold_archives WHERE session_id = ?",
+        ).run("0".repeat(64) + ".jsonl.zst", "0".repeat(64), historicalId);
+      }, f.options);
+      if (failure === "corrupt") {
+        fs.writeFileSync(
+          resolveSessionColdArchivePath(f.scope.storePath, "0".repeat(64) + ".jsonl.zst"),
+          "invalid archive",
+        );
+      }
+      const warn = vi.fn();
+      const pass = createSessionTranscriptFactsBackfill({
+        database: f.options,
+        assertCurrent: () => signal.throwIfAborted(),
+        signal,
+        log: { info() {}, warn },
+      });
+      try {
+        while (!(await pass.runBatch()).complete) {
+          signal.throwIfAborted();
+        }
+        expect(warn).toHaveBeenCalledOnce();
+        expect(
+          discover(f.database())
+            .filter((row) => row.coldNavigation)
+            .map((row) => row.sessionId),
+        ).toEqual(["aaa-invalid"]);
+        expect(
+          f
+            .database()
+            .prepare(
+              "SELECT count(*) AS count FROM transcript_events WHERE session_id = 'aaa-invalid'",
+            )
+            .get(),
+        ).toEqual({ count: 0 });
+        expect(f.database().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      } finally {
+        await pass.close();
+      }
+    }),
+);
+
+it.for(["before", "after"] as const)(
+  "restores old cold archives exactly %s background completion and resumes a cancelled pass",
+  (when, { signal }) =>
+    withState({ label: "cold-navigation-backfill", scenario: "minimal" }, async (state) => {
+      const f = await createSessionColdStorageFixture(
+        state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      );
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(f.scope.storePath) });
+      // Released archives predate retained navigation. The archive remains canonical.
+      runOpenClawAgentWriteTransaction(({ db }) => {
+        db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(historicalId);
+        db.prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?").run(
+          historicalId,
+        );
+      }, f.options);
+      const archives = () =>
+        f.database().prepare("SELECT * FROM session_transcript_cold_archives").all();
+      const originalArchives = archives();
+      expect(discover(f.database())).toContainEqual(
+        expect.objectContaining({
+          sessionId: historicalId,
+          coldNavigation: true,
+        }),
+      );
+      const makePass = (passSignal: AbortSignal) =>
+        createSessionTranscriptFactsBackfill({
+          database: f.options,
+          assertCurrent: () => signal.throwIfAborted(),
+          signal: passSignal,
+          log: { info() {}, warn() {} },
+        });
+      const cancellation = new AbortController();
+      const cancelled = makePass(cancellation.signal);
+      expect((await cancelled.runBatch()).complete).toBe(false);
+      cancellation.abort();
+      await cancelled.close();
+      // A new owner rediscovers pending SQL state; it never depends on the lost cursor.
+      const resumed = makePass(signal);
+      try {
+        expect((await resumed.runBatch()).complete).toBe(false);
+        if (when === "after") {
+          // Covered hot probes do not reserve the writer. Stop just before the cold batch.
+          for (const session of discover(f.database()).filter((row) => !row.coldNavigation)) {
+            expect(session.activeEventCount).toBeLessThan(8192);
+            await resumed.runBatch();
+          }
+          const assertCurrent = () => signal.throwIfAborted();
+          const authority = { assertCurrent, authorize: assertCurrent };
+          const actor = await createSessionActorFactory(f.options).acquire(
+            { database: { kind: "file" }, sessionKey: f.scope.sessionKey },
+            { assertCurrent, assertReadable: assertCurrent },
+          );
+          const entered = createDeferred();
+          const release = createDeferred();
+          const order: string[] = [];
+          let held: Promise<void> | undefined;
+          let foreground: ReturnType<typeof actor.appendTranscriptEvent> | undefined;
+          let background: ReturnType<typeof resumed.runBatch> | undefined;
+          try {
+            await actor.read(authority);
+            held = runOpenClawAgentWorkerWrite(f.options, async () => {
+              entered.resolve();
+              await release.promise;
+            });
+            await withinTest(entered.promise, signal);
+            foreground = actor
+              .appendTranscriptEvent(
+                {
+                  commandId: "foreground-with-cold-backlog",
+                  phaseId: "synthetic",
+                  sessionId: currentId,
+                  lifecycleRevision: null,
+                  eventJson: JSON.stringify({
+                    type: "model_change",
+                    id: "foreground",
+                    parentId: null,
+                    timestamp: "2026-11-17T00:00:00.000Z",
+                    provider: "synthetic",
+                    modelId: "synthetic",
+                  }),
+                },
+                authority,
+              )
+              .then((result) => {
+                order.push("foreground");
+                return result;
+              });
+            background = resumed.runBatch().then((result) => {
+              order.push("background");
+              return result;
+            });
+            release.resolve();
+            await held;
+            const appended = await foreground;
+            expect(appended, JSON.stringify(appended)).toMatchObject({ kind: "committed" });
+            await background;
+            expect(order).toEqual(["foreground", "background"]);
+          } finally {
+            release.resolve();
+            await Promise.allSettled([held, foreground, background]);
+            await actor.release();
+          }
+        }
+        if (when === "before") {
+          // The already discovered cold target becomes hot before its queued publication.
+          await restoreSessionColdTranscript(f.scope);
+        }
+        while (!(await resumed.runBatch()).complete) {
+          signal.throwIfAborted();
+        }
+        if (when === "after") {
+          expect(archives()).toEqual(originalArchives);
+          expect(
+            f
+              .database()
+              .prepare(
+                "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_json IS NULL AND event_zstd IS NULL",
+              )
+              .get(historicalId),
+          ).toEqual({ count: 2 });
+          expect(discover(f.database()).some((row) => row.coldNavigation)).toBe(false);
+          // Losing the process cursor after publication does not duplicate completed work.
+          const repeated = makePass(signal);
+          try {
+            while (!(await repeated.runBatch()).complete) {
+              signal.throwIfAborted();
+            }
+          } finally {
+            await repeated.close();
+          }
+          expect(archives()).toEqual(originalArchives);
+          await restoreSessionColdTranscript(f.scope);
+        }
+        const restored = f.snapshot();
+        for (const key of ["events", "identities", "active", "index"] as const) {
+          expect(restored[key].filter((row) => row.session_id === historicalId)).toEqual(
+            f.original[key].filter((row) => row.session_id === historicalId),
+          );
+        }
+        expect(f.database().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      } finally {
+        await resumed.close();
+      }
+    }),
+);
 
 function fixture(env: NodeJS.ProcessEnv) {
   const scope = { agentId: "main", env, sessionId: "backfill", sessionKey: "agent:main:backfill" };

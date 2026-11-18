@@ -88,7 +88,9 @@ export function createSessionTranscriptFactsBackfill(params: {
         `${sessionIndex}/${sessions.length} sessions completed ` +
         `(${sessionsSkipped} already covered)` +
         (current
-          ? ` (current at position ${afterPosition} of ${current.activeEventCount} active events)`
+          ? current.coldNavigation
+            ? " (current: cold navigation)"
+            : ` (current at position ${afterPosition} of ${current.activeEventCount} active events)`
           : "") +
         `, ${bytesRead} payload bytes, ${pauses} lock-contention pauses; ` +
         `since last report: ${intervalBatches} batches, ` +
@@ -128,7 +130,7 @@ export function createSessionTranscriptFactsBackfill(params: {
         }
         sessions = discovery.sessions;
         params.log.info(
-          `session: transcript facts backfill discovered ${sessions.length} active session(s)`,
+          `session: transcript facts backfill discovered ${sessions.length} transcript(s), including ${sessions.filter((session) => session.coldNavigation).length} pending cold archive(s)`,
         );
         if (sessions.length === 0) {
           await close();
@@ -143,7 +145,7 @@ export function createSessionTranscriptFactsBackfill(params: {
         await close();
         return { complete: true, delayMs: 250 };
       }
-      if (probeNext) {
+      if (probeNext && !session.coldNavigation) {
         const started = performance.now();
         const probe = await withSessionHistoryWorkerDatabase(
           { ...params.database, readCustody: params.readCustody },
@@ -198,10 +200,22 @@ export function createSessionTranscriptFactsBackfill(params: {
       );
       const store = await client;
       const batch = await store.execute(
-        { type: "batch", input: { sessionId: session.sessionId, afterPosition } },
+        {
+          type: "batch",
+          input: {
+            sessionId: session.sessionId,
+            afterPosition,
+            ...(session.coldNavigation ? { coldNavigation: true } : {}),
+          },
+        },
         assertCurrent,
         { signal: params.signal },
       );
+      if (batch.warning) {
+        params.log.warn(
+          `Cold navigation for ${session.sessionId} remains pending: ${batch.warning}`,
+        );
+      }
       contentionDelayMs = batch.busy ? Math.min(5_000, contentionDelayMs * 2) : 250;
       // Charge preparation and reply delivery while holding the writer, not foreground FIFO wait.
       const delayMs = Math.max(

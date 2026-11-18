@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { backupDoctorPostgresMigration } from "../commands/doctor-postgres-migration.js";
+import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
 import { backfillSessionColdNavigationInTransaction } from "../config/sessions/session-cold-storage-navigation.js";
-import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import {
+  pendingSessionColdNavigationQuery,
+  readSessionColdTranscript,
+} from "../config/sessions/session-cold-storage-state.js";
 import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-db-engine.js";
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
@@ -17,6 +21,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { isPostgresSqlConnection } from "./sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -44,6 +49,7 @@ export async function migrateSessionColdNavigation(
   } = {},
 ): Promise<MigrationMessages> {
   const env = params.env ?? process.env;
+  const updateDoctor = isUpdateDoctorLintPass(env);
   const signal = resolveSqliteInspectionSignal();
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -94,19 +100,10 @@ export async function migrateSessionColdNavigation(
           const database = { db: native, path: target.path };
           try {
             const db = getNodeSqliteKysely<DB>(database.db);
-            const pending = db
-              .selectFrom("session_transcript_cold_archives as archive")
+            // PostgreSQL keeps Doctor until it has a measured background writer.
+            const deferUntilReady = updateDoctor && !isPostgresSqlConnection(database.db);
+            const pending = pendingSessionColdNavigationQuery(database.db)
               .select("archive.session_id")
-              .where((eb) =>
-                eb.not(
-                  eb.exists(
-                    eb
-                      .selectFrom("transcript_events as event")
-                      .select("event.seq")
-                      .whereRef("event.session_id", "=", "archive.session_id"),
-                  ),
-                ),
-              )
               .orderBy("archive.session_id")
               .limit(1);
             let cursor: string | undefined;
@@ -123,7 +120,7 @@ export async function migrateSessionColdNavigation(
               if (!next) {
                 break;
               }
-              if (remainingWorkMs <= 0) {
+              if (deferUntilReady || remainingWorkMs <= 0) {
                 const count = withEngineStoreAdmission(() =>
                   executeSqliteQueryTakeFirstSync(
                     database.db,
@@ -135,7 +132,7 @@ export async function migrateSessionColdNavigation(
                   ),
                 );
                 warnings.push(
-                  `Cold transcript navigation in ${target.path}: migrated ${migrated}, pending ${count?.count ?? 0}; resumes on the next doctor run (openclaw doctor --fix). Pending archives keep the existing cold-restore path.`,
+                  `Cold transcript navigation in ${target.path}: migrated ${migrated}, pending ${count?.count ?? 0}; ${deferUntilReady ? "resumes in the Gateway after readiness, or with openclaw doctor --fix" : "resumes on the next doctor run (openclaw doctor --fix)"}. Pending archives keep the existing cold-restore path.`,
                 );
                 break;
               }

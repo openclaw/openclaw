@@ -9,6 +9,14 @@ import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types
 
 export const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
+/** A verified archive read failed; its owner can leave it pending after confirmed rollback. */
+export class SessionColdArchiveReadError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "SessionColdArchiveReadError";
+  }
+}
+
 type SessionColdFile = Pick<
   SessionColdArchive,
   "archive_name" | "archive_sha256" | "archive_bytes" | "storage" | "archive_blob"
@@ -19,7 +27,7 @@ function verifySessionColdArchiveBytes(bytes: Buffer, archive: SessionColdFile):
     bytes.length !== archive.archive_bytes ||
     createHash("sha256").update(bytes).digest("hex") !== archive.archive_sha256
   ) {
-    throw new Error(
+    throw new SessionColdArchiveReadError(
       `Cold transcript archive ${archive.archive_name} failed verification. Restore it from a verified backup.`,
     );
   }
@@ -27,7 +35,7 @@ function verifySessionColdArchiveBytes(bytes: Buffer, archive: SessionColdFile):
 }
 
 function missingSessionColdArchive(archiveName: string, cause: unknown): Error {
-  return new Error(
+  return new SessionColdArchiveReadError(
     `Cold transcript archive ${archiveName} is missing or unreadable. Restore it from a backup; its transcript has not been replaced with empty history.`,
     { cause },
   );
@@ -35,7 +43,7 @@ function missingSessionColdArchive(archiveName: string, cause: unknown): Error {
 
 export function resolveSessionColdArchivePath(storePath: string, archiveName: string): string {
   if (!/^[a-f0-9]{64}\.jsonl\.zst$/.test(archiveName)) {
-    throw new Error("Invalid cold transcript archive name");
+    throw new SessionColdArchiveReadError("Invalid cold transcript archive name");
   }
   return path.join(resolveSessionArtifactDirectory(storePath), "cold", archiveName);
 }
@@ -151,7 +159,14 @@ export function* decodeSessionColdRecords(
     "session_id" | "generation" | "event_count" | "raw_bytes" | "last_seq"
   > & { first_seq?: number },
 ): Generator<SessionColdRecord> {
-  const decoded = zlib.zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES });
+  let decoded: Buffer;
+  try {
+    decoded = zlib.zstdDecompressSync(bytes, { maxOutputLength: MAX_COLD_ARCHIVE_BYTES });
+  } catch (cause) {
+    throw new SessionColdArchiveReadError("Cold transcript archive could not be decompressed", {
+      cause,
+    });
+  }
   let headerSeen = false;
   let eventCount = 0;
   let rawBytes = -1;
@@ -164,18 +179,30 @@ export function* decodeSessionColdRecords(
     if (!line.trim() && !decoded.toString("utf8", offset).trimEnd()) {
       break;
     }
-    const record = sessionColdRecordSchema.parse(JSON.parse(line));
+    let record: SessionColdRecord;
+    try {
+      record = sessionColdRecordSchema.parse(JSON.parse(line));
+    } catch (cause) {
+      // Do not put raw archive records or parser input excerpts in maintenance warnings.
+      throw new SessionColdArchiveReadError("Cold transcript archive contains an invalid record", {
+        cause,
+      });
+    }
     if (!headerSeen) {
       if (
         record.kind !== "header" ||
         record.sessionId !== archive.session_id ||
         record.generation !== archive.generation
       ) {
-        throw new Error("Cold transcript archive metadata does not match its contents");
+        throw new SessionColdArchiveReadError(
+          "Cold transcript archive metadata does not match its contents",
+        );
       }
       headerSeen = true;
     } else if (record.kind === "header") {
-      throw new Error("Cold transcript archive metadata does not match its contents");
+      throw new SessionColdArchiveReadError(
+        "Cold transcript archive metadata does not match its contents",
+      );
     }
     if (record.kind === "event") {
       if (
@@ -184,7 +211,9 @@ export function* decodeSessionColdRecords(
           record.row.seq !== archive.first_seq) ||
         (lastSeq !== undefined && record.row.seq <= lastSeq)
       ) {
-        throw new Error("Cold transcript archive metadata does not match its contents");
+        throw new SessionColdArchiveReadError(
+          "Cold transcript archive metadata does not match its contents",
+        );
       }
       eventCount++;
       rawBytes += Buffer.byteLength(record.row.event_json) + 1;
@@ -199,6 +228,8 @@ export function* decodeSessionColdRecords(
     lastSeq !== archive.last_seq ||
     rawBytes !== archive.raw_bytes
   ) {
-    throw new Error("Cold transcript archive metadata does not match its contents");
+    throw new SessionColdArchiveReadError(
+      "Cold transcript archive metadata does not match its contents",
+    );
   }
 }
