@@ -2956,6 +2956,7 @@ src/agents/agent-run-terminal-error.ts
 src/agents/agent-run-terminal-outcome.ts
 src/agents/run-termination.ts
 src/config/sessions/session-run-lifecycle-projection.ts
+src/config/sessions/session-restart-resume-scope.ts
 src/shared/agent-liveness.ts
 src/tui/gateway-chat-requests.ts
 packages/gateway-client/src/request-error.ts
