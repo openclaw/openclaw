@@ -346,11 +346,21 @@ if [ "$UPDATE_RESTART_MODE" = auto-auth ] ||
   { [ "$SCENARIO" = package-installed-recovery ] && {
     [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ] ||
       [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = live-gateway ] ||
-      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ]
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ] ||
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = killed-run-admission ]
   }; }; then
   # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
   DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
+fi
+if [ "$SCENARIO" = package-installed-recovery ] &&
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = killed-run-admission ]; then
+  # A monitoring-agent shape: the host's PID namespace and a stable machine identity.
+  # Only one such cell may run at a time on a Docker host: it can see other containers' processes.
+  machine_id_file="$(mktemp "${TMPDIR:-/tmp}/openclaw-machine-id.XXXXXX")"
+  node -e 'process.stdout.write(require("node:crypto").randomBytes(16).toString("hex") + "\n")' >"$machine_id_file"
+  chmod 0644 "$machine_id_file"
+  DOCKER_RUN_USER_ARGS+=(--pid=host -v "$machine_id_file:/etc/machine-id:ro")
 fi
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
