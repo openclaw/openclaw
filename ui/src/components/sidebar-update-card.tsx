@@ -27,6 +27,7 @@ import { projectUpdateRun } from "../app/update-run-projection.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
+  isFinishingUpdateCampaign,
   isUpdateActionable,
 } from "../app/update-schedule-projection.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
@@ -342,9 +343,11 @@ export function SidebarUpdateCard(
       severity: statusBanner?.tone === "danger" ? ("error" as const) : ("warning" as const),
       title: blocked
         ? t("updates.sidebar.blockedTitle")
-        : busy
-          ? t("updates.sidebar.updating")
-          : t("updates.sidebar.availableTitle"),
+        : isFinishingUpdateCampaign(props.updateSchedule)
+          ? t("updates.sidebar.finishingTitle")
+          : busy
+            ? t("updates.sidebar.updating")
+            : t("updates.sidebar.availableTitle"),
     };
   }
 

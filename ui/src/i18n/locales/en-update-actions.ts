@@ -95,6 +95,7 @@ const enUpdateActions = {
       checkFailed: "Couldn’t check for updates. Try again.",
       updating: "Updating Gateway…",
       availableTitle: "Update available",
+      finishingTitle: "Finishing update",
       availableBadge: "Available",
       availableSummary: "A newer revision is ready.",
       blockedTitle: "Update blocked",
