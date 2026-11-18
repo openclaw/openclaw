@@ -412,7 +412,7 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
     signal: ctx.signal,
     assertCurrent: ctx.assertCurrent,
     onManualCodeInput: ctx.onManualCodeInput,
-    localBrowserMessage: "Complete sign-in in browser…",
+    localBrowserMessage: "Sign in to ChatGPT in your browser…",
   });
   if (!creds) {
     return { profiles: [] };
