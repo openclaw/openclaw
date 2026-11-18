@@ -213,6 +213,14 @@ function installedRecoveryCurrent(value, sanitize) {
           "refused-update",
           "update-repair",
           "update-repair-probe",
+          // The owed-plugin-retry cell's commands.
+          "owed-update",
+          "owed-update-probe",
+          "owed-enable-auto",
+          "owed-status-before",
+          "owed-status-after",
+          "owed-retry-probe",
+          "owed-next-check-probe",
         ]
       : [
           "displacement",

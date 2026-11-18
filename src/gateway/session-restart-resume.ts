@@ -73,13 +73,11 @@ import {
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
+import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import {
   captureSessionRestartOperatorSource,
   prepareSessionSystemTurnAuthority,
 } from "./session-system-turn-authority.js";
-
-const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
 
 type SessionIdentity = {
   agentId: string;
@@ -450,7 +448,7 @@ export async function resumeMarkedSessions(
 
 async function resumeRestartStore(
   { context, signal, log }: RestartResumeParams,
-  { target, entries, orphaned, windows, sessions }: PreparedRestartStore,
+  { target, entries, orphaned, outOfScope, windows, sessions }: PreparedRestartStore,
   deferred: Map<string, () => Promise<void>>,
 ): Promise<boolean> {
   let completed = true;
@@ -460,7 +458,7 @@ async function resumeRestartStore(
   );
   const summary = createRestartResumeSummary("startup");
   const queuedKeys = new Set(orphaned.map(({ sessionKey }) => sessionKey));
-  const ended = new Set<string>();
+  const ended = new Set(outOfScope);
   for (const { sessionKey } of entries) {
     summary.record(
       parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId,
@@ -691,7 +689,7 @@ async function resumeRestartStore(
     }
     for (const session of orphaned) {
       const agentId = parseAgentSessionKey(session.sessionKey)?.agentId ?? target.agentId;
-      // Input queued behind an out-of-scope marker ended with it.
+      // Input queued behind work from another restart resume scope ended with it.
       const endCause = ended.has(session.sessionKey) ? "restart-unrecoverable" : undefined;
       try {
         const remaining = await continueSessionQueuedInputs(

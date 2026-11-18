@@ -438,7 +438,8 @@ export const mainLanes: DockerE2eLane[] = [
   ),
   upgradeSurvivorLane("published-upgrade-survivor", publishedUpgradeSurvivorCommand, 2580 * 1000),
   // Explicit cells with a fixture-managed Gateway service: a newer writer recovering
-  // an older runtime, and a killed update that stopped the Gateway.
+  // an older runtime, a killed update that stopped the Gateway, and an automatic retry
+  // of owed plugin convergence.
   ...serviceRecoveryCuts.map((cut) =>
     npmLane(`package-installed-recovery-${cut}`, {
       command: upgradeSurvivorScriptCommand(

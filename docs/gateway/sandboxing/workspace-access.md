@@ -386,6 +386,11 @@ the canonical file, and import the saved change into the private checkout under 
 same custody before resuming its runtimes. Capture,
 publication, and lifecycle operations retain their reconciliation lease and pause
 requirements.
+GitHub publication resumes the guest after its changes settle into the canonical
+worktree. Git staging and snapshot verification then read that accepted host view
+under the same reconciliation lease. Background guest edits made during staging
+remain in the private checkout for the next checkpoint; they cannot mix into the
+snapshot being published. Source admission and Git safety checks remain unchanged.
 Ordinary reconciliation uses btrfs capture for guest exports from private
 checkouts provisioned as subvolumes. A snapshot that omits nested subvolumes is
 discarded and captured again under pause, preserving their contents. Once an

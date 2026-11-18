@@ -697,7 +697,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
   });
 
-  it.each(["older-runtime", "live-gateway"])(
+  it.each(["older-runtime", "live-gateway", "owed-plugin-retry"])(
     "keeps packaged %s recovery independent of survivor baseline expansion",
     (cut) => {
       const name = `package-installed-recovery-${cut}`;

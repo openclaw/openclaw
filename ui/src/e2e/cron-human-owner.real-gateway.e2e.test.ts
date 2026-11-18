@@ -28,7 +28,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { selectChatModel, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
@@ -311,9 +311,27 @@ suite.define(() => {
     expect(await page.locator("#cron-name").count()).toBe(0);
     await page.locator('[data-test-id="cron-submit"]').click();
     await page.getByText(namingTitle, { exact: true }).first().waitFor();
-    expect(namingModels).toEqual(["edited"]);
     const { jobs } = await rpc<{ jobs: CronJob[] }>(page, "cron.list", { includeDisabled: true });
-    expect(jobs.filter((job) => job.name === namingTitle)).toHaveLength(1);
+    const created = jobs.filter((job) => job.name === namingTitle);
+    expect(created).toHaveLength(1);
+    await page.goto(new URL(`automations?job=${created[0]!.id}`, urls[0]).toString());
+    await page.locator('[data-test-id="cron-edit"]').click();
+    await page.locator("#cron-name").fill("");
+    expect(await page.locator("#cron-name").getAttribute("placeholder")).toBe(namingTitle);
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.locator('[data-test-id="cron-edit"]').waitFor();
+    expect((await rpc<CronJob>(page, "cron.get", { id: created[0]!.id })).name).toBe(namingTitle);
+    const menu = page.locator(".cron-detail-actions .cron-job-menu");
+    await menu.locator(".cron-job-menu__trigger").click();
+    await menu.locator('[data-value="clone"]').click();
+    const name = page.locator("#cron-name");
+    expect(await name.inputValue()).toBe(`${namingTitle} copy`);
+    await name.fill("Second garden");
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.getByText("Second garden", { exact: true }).first().waitFor();
+    const copies = await rpc<{ jobs: CronJob[] }>(page, "cron.list", { includeDisabled: true });
+    expect(copies.jobs.filter((job) => job.name === "Second garden")).toHaveLength(1);
+    expect(namingModels).toEqual(["edited"]);
   });
 
   it("saves and transfers an owned automation, then denies the former owner", async () => {
@@ -452,10 +470,7 @@ suite.define(() => {
     await waitForControlUiGatewayReady(admin);
     await admin.locator('[data-test-id="cron-edit"]').click();
     await admin.locator("#cron-name").waitFor();
-    await selectPickerValue(
-      admin.locator("openclaw-select-picker:has(#cron-payload-model-picker)"),
-      "fixture/edited",
-    );
+    await selectChatModel(admin.locator(".cron-prompt__run-controls"), "fixture/edited");
     await admin.locator('[data-test-id="cron-submit"]').click();
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: "legacy-ui-edit" })).payload)

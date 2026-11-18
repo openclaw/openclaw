@@ -44,8 +44,23 @@ again: its marker is cleared, the session's queued input ends without running (i
 sender sees that the Gateway restarted before it ran), and the startup summary
 counts the session as `scope-changed`. When a token is set, a marker without one
 counts as another scope's. Without the variable, every graceful restart resumes as
-described above. The scope covers shutdown markers only: crash recovery of unmarked
-runs and of queued input does not consult it.
+described above.
+
+The token also covers work that has no shutdown marker. Each accepted run records
+the token it started under. Startup compares the marker's token, or without a
+marker the recorded one, before crash recovery of an orphaned run, a parked yield,
+or a legacy upgrade cycle, and before it takes back custody of a child's
+completion, which would wake the parent. Work from another token, or without a
+token while one is set, is not resumed (the summary counts `scope-changed`) and
+its child completions do not wake it. Queued input left by a crash replays only
+when its session's token matches; otherwise it ends without running, as above,
+including for a session that recorded no token. Recovered markers carry the
+current token, so another restart under it still resumes them.
+
+Upgrade: runs started before a build that records the token, or before the
+supervisor first set one, carry no token. The first start with a token set
+therefore does not crash-recover them, does not take back their child completion
+custody, and ends their queued input.
 
 The recovery input stays intact in the agent transcript but is hidden from the
 Control UI chat feed, including queued, live, and reloaded history. The continued

@@ -32,6 +32,10 @@ export interface ReleaseValidationWaiver {
   childRole: string;
   jobName: string;
   reason: string;
+  testFailures?: {
+    stepName: string;
+    signatures: { kind: "vitest"; file: string; test: string }[];
+  };
   evidence?: { runId: string; runAttempt: number };
   qualificationExemption?: QualificationExemptionEvidence;
 }
