@@ -303,8 +303,7 @@ export async function settleManagedHandoffPluginCohort(
  * core; a stopped Gateway only when this update would restart it anyway. Inspect
  * before package settlement, whose own claim retires that lease, and run the
  * returned settlement after it. The settlement throws for recovery this update
- * leaves to repair, including a finish that a repair run left unfinished; recovery
- * that repair cannot settle stays with admission's refusal.
+ * leaves to repair; recovery that repair cannot settle stays with admission's refusal.
  */
 export async function inspectInterruptedUpdateRecovery(
   root: string,
@@ -348,49 +347,12 @@ export async function inspectInterruptedUpdateRecovery(
       () => undefined,
       (error: unknown) => (error instanceof UpdateRecoveryRequiredError ? error : undefined),
     );
-  /**
-   * Finishing runs after settlement retired the plugin recovery, so once it fails only
-   * repair's own bookkeeping shows the work unfinished: an interrupted run no repair has
-   * acknowledged, and the run created right after it is a repair that ended without
-   * success. Finishing creates that repair before any other run; an update that settled
-   * the run with nothing to finish creates its own run next. Read in the state that
-   * admission selected, which can be a managed service's.
-   */
-  const refuseUnfinishedRepair = (ledgerEnv: NodeJS.ProcessEnv) =>
-    withUpdateDatabaseEngine(
-      ledgerEnv,
-      async (readable) => {
-        if (!readable) {
-          return undefined;
-        }
-        // Newest first: the run created after `history[index]` is `history[index - 1]`.
-        const history = listUpdateRuns({ limit: 100 }, { ...options, env: ledgerEnv });
-        for (const [index, owed] of history.entries()) {
-          const next = history[index - 1];
-          if (
-            isAbandonedUpdateRun(owed) &&
-            !isAcknowledgedAbandonedUpdateRun(owed) &&
-            next?.steps.some((step) => step.step === "finalize:repair-continuation") &&
-            next.status !== "running" &&
-            next.status !== "succeeded"
-          ) {
-            const outcome = `${next.status}${next.reason ? `: ${next.reason}` : ""}`;
-            return new Error(
-              `Interrupted update ${owed.runId} is still unfinished: update repair run ${next.runId} did not finish it (${outcome}). Run ${repair}, then retry ${update}.`,
-            );
-          }
-        }
-        return undefined;
-      },
-      { dryRun: true },
-    ).catch(() => undefined);
   const inspect = async () => {
     const pending = await pendingRecovery();
-    if (!pending) {
-      return { unfinishedRepair: true as const };
-    }
-    const pair = await inspectPluginCohortRecoveryAdmission({ env }).catch(() => undefined);
-    if (!pair) {
+    const pair = pending
+      ? await inspectPluginCohortRecoveryAdmission({ env }).catch(() => undefined)
+      : undefined;
+    if (!pending || !pair) {
       return undefined;
     }
     const installKind = await resolveUpdateInstallKind(root);
@@ -517,25 +479,13 @@ export async function inspectInterruptedUpdateRecovery(
   if (!inspected) {
     return undefined;
   }
-  if (inspected.unfinishedRepair) {
-    return async (resolveAdmissionEnv) => {
-      const refused = await refuseUnfinishedRepair(await resolveAdmissionEnv(invocationCwd));
-      if (refused) {
-        throw refused;
-      }
-    };
-  }
   const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
     inspected;
   const rebooted = inspected.rebooted === true;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
-    const admissionEnv = await resolveAdmissionEnv(invocationCwd);
-    if (resolveOpenClawStateSqlitePath(admissionEnv) !== resolveOpenClawStateSqlitePath(env)) {
-      const unfinished = await refuseUnfinishedRepair(admissionEnv);
-      if (unfinished) {
-        throw unfinished;
-      }
+    const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
+    if (admitted !== resolveOpenClawStateSqlitePath(env)) {
       return;
     }
     if (refused) {

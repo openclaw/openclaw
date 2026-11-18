@@ -2130,8 +2130,7 @@ named by an `interrupted-update-finalization` warning. Then the update
 continues. A stopped Gateway is restarted only when the update would restart it
 anyway. When that Gateway is still stopped and the update runs with
 `--no-restart`, or when finishing fails, the update stops and names
-`openclaw update repair`. After a failed finish, later updates keep stopping
-until `openclaw update repair` completes it.
+`openclaw update repair`.
 Otherwise it stops with `Update <id> has unfinished recovery` and, when repair
 can settle it, the reason and the command to run; see
 [how a killed update is settled](/cli/update/how-updates-run#replacing-the-package-directory).

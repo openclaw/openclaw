@@ -10,17 +10,13 @@ import { expectedPathExchangeRoute } from "../../infra/path-exchange.test-suppor
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
-  createUpdateRun,
-  finishUpdateRun,
   getUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
-  recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   beginRollback,
@@ -197,7 +193,6 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       error: new Error("synthetic Doctor failure"),
       detail: "synthetic Doctor failure",
       stage: { status: "failed" },
-      later: /did not finish it \(failed: repair-failed\)/u,
     },
     {
       // Repair exits 2 here; the stage hands the same outcome to this update as a refusal.
@@ -208,9 +203,8 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       }),
       detail: "Doctor maintenance remains pending. Stop the Gateway",
       stage: { status: "skipped", reason: "doctor-maintenance-pending" },
-      later: /did not finish it \(skipped: doctor-maintenance-pending\)/u,
     },
-  ])("stops and names repair when finishing fails: $name", ({ error, detail, stage, later }) =>
+  ])("stops and names repair when finishing fails: $name", ({ error, detail, stage }) =>
     fixtures.lifetime.run(async () => {
       const killed = await unfinishedUpdate(unfinished[0]!);
       finalization.doctor.mockRejectedValue(error);
@@ -222,29 +216,10 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
       // Left as repair leaves it: the plugin recovery settled and its own run not successful.
       expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
-      const [failedRun] = finalizationRuns();
       expect(finalizationRuns()).toEqual([expect.objectContaining(stage)]);
       expect(listUpdateRuns({ limit: 100 }).filter((run) => run.status === "succeeded")).toEqual(
         [],
       );
-
-      // The settled recovery no longer shows the unfinished work; repair's bookkeeping does:
-      // every later update stops on it, a dry run too, changing nothing, until repair finishes it.
-      const owed = new RegExp(
-        `Interrupted update ${killed.runId} is still unfinished: update repair run ${failedRun?.runId} ${later.source}\\. Run ${repair}, then retry openclaw update\\.$`,
-        "u",
-      );
-      const before = { ...reserved(killed.runId), runs: listUpdateRuns({ limit: 100 }) };
-      await expect(nextUpdate(killed.slot)).rejects.toThrow(owed);
-      await expect(nextUpdate(killed.slot, { dryRun: true })).rejects.toThrow(owed);
-      expect({ ...reserved(killed.runId), runs: listUpdateRuns({ limit: 100 }) }).toEqual(before);
-      expect(mocks.proceed).not.toHaveBeenCalled();
-      expect(finalization.doctor).toHaveBeenCalledOnce();
-      finalization.doctor.mockResolvedValue(undefined);
-      await updateRepairCommand({ json: true, yes: true });
-      expect(finalizationRuns()[0]).toMatchObject({ status: "succeeded" });
-      await nextUpdate(killed.slot);
-      expect(mocks.proceed).toHaveBeenCalledOnce();
     }),
   );
 
@@ -267,33 +242,6 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       expect(mocks.proceed).not.toHaveBeenCalled();
       expect(ctx.service.start).not.toHaveBeenCalled();
       expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-      // Repair finished and acknowledged the run; it could do no more, so updates go on.
-      await nextUpdate(killed.slot, { restart: true });
-      expect(mocks.proceed).toHaveBeenCalledOnce();
-    }));
-
-  it("does not hold updates for a later failed repair when the settled run had nothing to finish", () =>
-    fixtures.lifetime.run(async () => {
-      // Settled with nothing to finish; the update that went on recorded its own run,
-      // and closed the dead one without an acknowledgment.
-      const killed = await updater(await installation());
-      await nextUpdate(killed.slot);
-      await reconcileAbandonedUpdateRunsAsync({});
-      const { runId: went } = createUpdateRun({ trigger: "cli" });
-      finishUpdateRun(went, { status: "succeeded" });
-      // Later, an unrelated repair fails.
-      const { runId: failed } = createUpdateRun({ trigger: "cli" });
-      const continuation = { step: "finalize:repair-continuation", status: "completed" } as const;
-      recordUpdateRunStep(failed, { ...continuation, endedAtMs: Date.now() });
-      finishUpdateRun(failed, { status: "failed", reason: "repair-failed" });
-      const { db } = openOpenClawStateDatabase();
-      const at = db.prepare("UPDATE update_runs SET created_at_ms = ? WHERE run_id = ?");
-      at.run(Number(getUpdateRun(went)?.createdAtMs) + 1, failed);
-      expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
-
-      await nextUpdate(killed.slot);
-
-      expect(mocks.proceed).toHaveBeenCalledTimes(2);
     }));
 
   it("refuses while another updater holds the installation", () =>
