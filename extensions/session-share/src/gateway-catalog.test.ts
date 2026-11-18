@@ -19,8 +19,8 @@ const transport = vi.hoisted(() => ({
     stopAndWait: ReturnType<typeof vi.fn>;
   }>,
 }));
-vi.mock(import("openclaw/plugin-sdk/gateway-runtime"), async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
   loadGatewayReaderIdentityV1: async (key: string) => {
     if (transport.identityMissing || !key || key === "primary") {
       throw new Error("missing identity");
@@ -36,8 +36,8 @@ vi.mock(import("openclaw/plugin-sdk/gateway-runtime"), async (importOriginal) =>
     start() {}
   },
 }));
-vi.mock(import("openclaw/plugin-sdk/secret-ref-runtime"), async (importOriginal) => ({
-  ...(await importOriginal()),
+vi.mock("openclaw/plugin-sdk/secret-ref-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/secret-ref-runtime")>()),
   coerceSecretRef: (value: unknown) => value,
   resolveSecretRefValues: async () => {
     await transport.onResolve?.();
