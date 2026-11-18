@@ -319,7 +319,13 @@ export function createGatewayChatUserTurnController(params: {
           __openclaw: {
             ...metadata,
             ...(request.activeSteer
-              ? { activeSteer: { ...request.activeSteer, sessionId: request.p.sessionId } }
+              ? {
+                  activeSteer: {
+                    ...request.activeSteer,
+                    sessionId: request.p.sessionId,
+                    originalText: request.p.message,
+                  },
+                }
               : {}),
             ...(request.requestIdentity ? { chatRequestIdentity: request.requestIdentity } : {}),
             ...(request.suppressCommandInterpretation

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.js";
 import type { SessionPendingInputEndCause } from "../../config/sessions/session-pending-input-end-cause.types.js";
@@ -68,7 +69,13 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
 export function compareChatSendSubmittedInput(
   request: Pick<
     NormalizedChatSendRequest,
-    "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
+    | "requestIdentity"
+    | "rawMessage"
+    | "mentions"
+    | "workContext"
+    | "appContext"
+    | "activeSteer"
+    | "p"
   >,
   session: ComparisonSession,
   comparison?: ChatSendRetryComparison,
@@ -90,13 +97,42 @@ export function compareChatSendSubmittedInput(
   }
   const submitted = comparison?.submitted;
   if (!submitted) {
-    return request.mentions?.length || request.workContext || request.appContext
+    return request.activeSteer ||
+      request.mentions?.length ||
+      request.workContext ||
+      request.appContext
       ? "unverifiable"
       : false;
+  }
+  const storedSteer = asOptionalRecord(submitted["__openclaw"]?.activeSteer);
+  if (request.activeSteer) {
+    // Active-only receipts must match their exact operation even without an HMAC.
+    if (
+      !storedSteer ||
+      typeof storedSteer.profileId !== "string" ||
+      typeof storedSteer.sessionId !== "string" ||
+      typeof storedSteer.runId !== "string" ||
+      typeof storedSteer.originalText !== "string"
+    ) {
+      return "unverifiable";
+    }
+    if (
+      storedSteer.profileId !== request.activeSteer.profileId ||
+      storedSteer.sessionId !== request.p.sessionId ||
+      storedSteer.runId !== request.activeSteer.runId ||
+      storedSteer.originalText !== request.p.message
+    ) {
+      return true;
+    }
+  } else if (storedSteer) {
+    return true;
   }
   const storedIdentity = submitted["__openclaw"]?.chatRequestIdentity;
   if (typeof storedIdentity === "string") {
     return storedIdentity !== request.requestIdentity;
+  }
+  if (request.activeSteer) {
+    return false;
   }
   // Pre-fingerprint transcripts retain their existing annotation comparison contract.
   const storedMentions = submitted["__openclaw"]?.humanMentions;

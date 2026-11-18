@@ -50,6 +50,7 @@ type ChatSendRetryParams = Pick<
     | "workContext"
     | "appContext"
     | "activeSteer"
+    | "p"
   >;
   session: Pick<
     ChatSendPreAdmissionParams["session"],
@@ -104,6 +105,7 @@ export function resolveChatSendRequestConflict(
     return undefined;
   }
   if (
+    !request.activeSteer &&
     comparison &&
     !comparison.submitted &&
     request.requestIdentity !== undefined &&

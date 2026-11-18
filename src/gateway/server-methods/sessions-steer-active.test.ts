@@ -17,6 +17,7 @@ import {
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { captureSessionQueuedInputsForRestart } from "../../config/sessions/session-pending-input-history.js";
 import * as pendingInputStore from "../../config/sessions/session-pending-input-store.js";
+import * as identity from "../../infra/device-identity-async.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.backend-contracts.js";
 import * as continuation from "../../sessions/session-controller.message-join.js";
 import { continueSessionQueuedInputs } from "../queued-chat-inputs.js";
@@ -106,7 +107,6 @@ function attach(
   });
   return op;
 }
-
 it("delivers literal human input once and reconciles the durable receipt", async () => {
   await using f = await createFixture({ preserveContent: true });
   const profile = human(f);
@@ -153,7 +153,6 @@ it("delivers literal human input once and reconciles the durable receipt", async
   expect((await send(f, { message: "changed" })).mock.calls[0]?.[0]).toBe(false);
   expect((await send(f, { runId: "different-run" })).mock.calls[0]?.[0]).toBe(false);
 });
-
 it.each(["idle", "wrong-run", "wrong-session", "unsupported"])(
   "rejects %s without dispatch or interruption",
   async (kind) => {
@@ -182,7 +181,6 @@ it.each(["idle", "wrong-run", "wrong-session", "unsupported"])(
     expect(f.readTranscript()).toEqual(f.activeTranscript);
   },
 );
-
 it.each(["anonymous", "synthetic", "forged-sender", "read-only"])(
   "refuses %s identity",
   async (kind) => {
@@ -210,7 +208,6 @@ it.each(["anonymous", "synthetic", "forged-sender", "read-only"])(
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   },
 );
-
 it("joins concurrent duplicates and never retries an unconfirmed native acceptance", async ({
   signal,
 }) => {
@@ -248,7 +245,6 @@ it("joins concurrent duplicates and never retries an unconfirmed native acceptan
   expect(calls).toHaveBeenCalledOnce();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
-
 it.each(["replacement", "completed", "scope-revoked"])(
   "does not deliver after %s during approval",
   async (change) => {
@@ -283,7 +279,6 @@ it.each(["replacement", "completed", "scope-revoked"])(
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   },
 );
-
 it("accepts a host-bound person ingress but rejects it after revocation", async () => {
   await using f = await createFixture({ preserveContent: true });
   const profile = human(f);
@@ -311,7 +306,6 @@ it("accepts a host-bound person ingress but rejects it after revocation", async 
   await expect(send(f, { idempotencyKey: "after-revocation" })).rejects.toThrow("aborted");
   expect(received).toHaveBeenCalledOnce();
 });
-
 it("never replays retained active-only input during restart recovery", async () => {
   await using f = await createFixture({ active: false, preserveContent: true });
   const input = await stageSessionPendingInput(f.scope, {
@@ -347,7 +341,6 @@ it("never replays retained active-only input during restart recovery", async () 
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   expect(f.readTranscript()).toEqual(f.activeTranscript);
 });
-
 it("preserves accepted delivery when the completion store fails and does not reinject", async () => {
   await using f = await createFixture({ preserveContent: true });
   human(f);
@@ -388,7 +381,6 @@ it("preserves accepted delivery when the completion store fails and does not rei
   expect(received).toHaveBeenCalledOnce();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
-
 it.each(["rejected", "accepted"] as const)(
   "reconciles %s without a transcript after the target ends",
   async (status) => {
@@ -439,7 +431,6 @@ it.each(["rejected", "accepted"] as const)(
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
   },
 );
-
 it("rejects failed preparation without recording undelivered text", async () => {
   await using f = await createFixture({ preserveContent: true });
   human(f);
@@ -458,7 +449,6 @@ it("rejects failed preparation without recording undelivered text", async () => 
   expect(received).not.toHaveBeenCalled();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
-
 it("keeps a proven native authority refusal rejected without persisting text", async () => {
   await using f = await createFixture({ preserveContent: true });
   human(f);
@@ -475,3 +465,36 @@ it("keeps a proven native authority refusal rejected without persisting text", a
   expect(attempted).toHaveBeenCalledOnce();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
+it.each(["run", "person"])(
+  "keyless retries reject a different %s after RAM dedupe is cleared",
+  async (change) => {
+    await using f = await createFixture({ preserveContent: true });
+    human(f);
+    const unavailable = vi
+      .spyOn(identity, "loadChatRequestIdentityKeyAsync")
+      .mockResolvedValue(null);
+    const received = vi.fn();
+    attach(f, async (_text, options) => {
+      received();
+      options?.onQueueAccepted?.(true);
+    });
+    try {
+      expect((await send(f)).mock.calls[0]?.[1]).toMatchObject({ status: "accepted" });
+      f.context.dedupe.clear();
+      expect((await send(f)).mock.calls[0]?.[1]).toMatchObject({ status: "accepted" });
+      if (change === "person") {
+        const { profile } = bindChatProfile(f.client, "other-steer@example.test", true);
+        f.client.authenticatedUserId = profile.id;
+      }
+      const retry = await send(f, change === "run" ? { runId: "never-targeted-run" } : {});
+      expect(retry.mock.calls[0]).toMatchObject({
+        0: false,
+        2: { details: { reason: "chat-request-conflict" } },
+      });
+      expect(received).toHaveBeenCalledOnce();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      unavailable.mockRestore();
+    }
+  },
+);
