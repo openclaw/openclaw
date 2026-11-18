@@ -1040,6 +1040,17 @@ Do not use this error for an ordinary upstream 401/403 or an unverified diagnost
 code. Those remain provider failures. A code string alone does not establish a
 deployment-policy denial.
 
+## Harness runtime updates
+
+A native harness whose own runtime is too old for the requested model can return
+`AgentHarnessRuntimeUpdateRequiredError` from
+`openclaw/plugin-sdk/agent-harness-runtime` as its prompt error. Its message must
+name the update. The host records the code `harness_update_required` in the
+run's failure notice, and Control UI then offers **Start a new session**, which
+starts a session on the OpenClaw harness that asks the agent to perform the
+update. OpenClaw never installs or updates the runtime itself. Preserve the
+Error object through terminal emission, as for request-policy denials.
+
 ## Harness execution identity
 
 The harness host's closure-bound `preparedEnvironment()` returns non-secret

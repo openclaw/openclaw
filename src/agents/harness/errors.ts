@@ -1,3 +1,4 @@
+import { HARNESS_UPDATE_REQUIRED_CODE } from "../../shared/run-failure-notice.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 
 export const MODEL_REQUEST_POLICY_DENIED_TEXT =
@@ -13,6 +14,19 @@ export class AgentHarnessModelRequestPolicyError extends Error {
     super(MODEL_REQUEST_POLICY_DENIED_TEXT);
     this.name = "AgentHarnessModelRequestPolicyError";
     recordModelFallbackStop(this);
+  }
+}
+
+/**
+ * The selected harness runtime is too old to run the requested model. The message names
+ * the update; the code lets clients offer a new session on another harness.
+ */
+export class AgentHarnessRuntimeUpdateRequiredError extends Error {
+  readonly code = HARNESS_UPDATE_REQUIRED_CODE;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AgentHarnessRuntimeUpdateRequiredError";
   }
 }
 
