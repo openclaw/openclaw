@@ -38,6 +38,7 @@ export type ContributionsElement = SolidBridgeElement<ContributionsProps>;
 function PluginContributionsContent(props: ContributionsProps, host: ContributionsElement) {
   const context = useApplication();
   const [actionRead, setActionRead] = createSignal<{ promise: Promise<void> } | null>(null);
+  const [actionRevision, setActionRevision] = createSignal(0, { ownedWrite: true });
   let lifetime = new AbortController();
   const actionLifetimes = new Map<
     AbortSignal,
@@ -76,6 +77,9 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     lifetime.abort();
     actionLifetimes.clear();
     lifetime = new AbortController();
+    // Every authority retirement invalidates the rendered action, even if a
+    // same-turn hide/show leaves the committed presentation unchanged.
+    setActionRevision((revision) => revision + 1);
   });
   const source = createMemo(() =>
     projectSource(
@@ -187,8 +191,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
   }
   const actions = createMemo(() => {
     const runtime = source().read();
-    // Target changes retire the invocation before this presentation is recomputed.
-    void [props.sessionKey, props.agentId, props.presented];
+    actionRevision();
     return (
       runtime
         ?.registrations("actions")

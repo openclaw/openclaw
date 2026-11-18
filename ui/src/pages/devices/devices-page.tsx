@@ -627,7 +627,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       loading: devices.nodesLoading,
       initialInventoryReady: routeDataInitialized,
       inventoryRead,
-      inventoryScope: inventoryScope(),
+      // Reconnect retires in-flight receipts, not the same device inventory.
+      inventoryScope: devices,
       onReloadInventory: () => {
         refreshNodeInventory();
         if (canManagePairing) {

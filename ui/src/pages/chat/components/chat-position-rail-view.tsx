@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, onSettled } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
@@ -85,6 +85,7 @@ export type PositionRailViewParams = {
   hoveredId: string | null;
   bindMarker: (id: string, element?: HTMLButtonElement) => void;
   bindScroller: (element?: Element) => void;
+  syncVisibilityTargets: () => void;
   bindPreview: (element?: Element, description?: () => string) => void;
   onScroll: () => void;
   stopScrollInput: (event: Event) => void;
@@ -98,6 +99,8 @@ export type PositionRailViewParams = {
 
 /** Presentation only; the rail owner manages windowing, interaction, and DOM lifetime. */
 export function ChatPositionRailView(props: PositionRailViewParams) {
+  // Seed the initial transcript layout after refs attach, before the next frame.
+  onSettled(() => props.syncVisibilityTargets());
   const assistantLabel = createMemo(
     () => props.assistant?.name.trim() || t("chat.thread.positionAssistantMessage"),
   );

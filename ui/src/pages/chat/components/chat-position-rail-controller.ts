@@ -540,7 +540,6 @@ export function createPositionRail(props: PositionRailParams) {
       observationPending = true;
       resizeObserver = new ResizeObserver(observeLayout);
       resizeObserver.observe(scrollElement);
-      onSettled(syncVisibilityTargets);
       scheduleLayout();
     }
   };
@@ -674,6 +673,7 @@ export function createPositionRail(props: PositionRailParams) {
         : (interaction.hoveredId ?? interaction.focusedId),
       bindMarker,
       bindScroller,
+      syncVisibilityTargets,
       bindPreview,
       onScroll: () => {
         // Read once in the owned frame, after transcript mutations have settled.
