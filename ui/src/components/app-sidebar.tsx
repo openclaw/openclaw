@@ -1,4 +1,5 @@
 import "../styles/sidebar-attention-floating.css";
+import type { RouteMatch } from "@openclaw/uirouter";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import {
@@ -13,6 +14,7 @@ import {
 } from "solid-js";
 import { sidebarViewForPage } from "../app-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../app-route-paths.ts";
+import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -89,18 +91,20 @@ function AppSidebarContent(
   owner.bindContext(context);
   onSettled(() => {
     let previousPage = "";
+    let previousDestination: RouteMatch | undefined;
     const synchronizePage = () => {
       const state = context.router.getState();
       const destination = state.pendingMatches[0] ?? state.matches[0];
-      const route = destination?.routeId;
+      const presented = selectShellRouteState(state);
+      const route = presented.routeId;
       if (!route) {
         return;
       }
       const pluginRef =
         route === "plugin"
           ? pluginTabRefFromSearch(
-              destination.location.search,
-              destination.location.pathname,
+              presented.location?.search ?? "",
+              presented.location?.pathname,
               context.basePath,
             )
           : undefined;
@@ -113,9 +117,10 @@ function AppSidebarContent(
         navigationSectionForPage(context.plugins.registrations("navigation"), pluginKey),
       );
       const page = `${route}\n${pluginKey}\n${section}`;
-      if (page === previousPage) {
+      if (destination === previousDestination && page === previousPage) {
         return;
       }
+      previousDestination = destination;
       previousPage = page;
       const view = sidebarViewForPage(route, pluginKey, section);
       if (view && owner.navigationView !== view) {
@@ -123,7 +128,8 @@ function AppSidebarContent(
         owner.invalidate();
       }
     };
-    // Route events cannot coalesce: a quick Back may return before the shell paints.
+    // Observe each logical transition even when a cold destination keeps the current page.
+    // Match replacement also settles navigation after temporary rail previews restore their view.
     synchronizePage();
     const stops = [
       context.router.subscribe(synchronizePage),
