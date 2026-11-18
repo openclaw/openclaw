@@ -19,6 +19,7 @@ import {
   type CodeModeMatrixCellResult,
 } from "../../scripts/code-mode-model-matrix.js";
 import { compareCodeModeMatrixResults } from "../../scripts/lib/code-mode-matrix-comparison.js";
+import * as gatewayFixtures from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
 import { createGatewayMatrixWorkload } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import {
   BUILD_STAMP_FILE,
@@ -376,5 +377,29 @@ it("compares only complete, unique cells with the same workload identity", () =>
     expect(() => compareCodeModeMatrixResults([baseline], [{ ...candidate, workload }])).toThrow(
       "workload changed",
     );
+  }
+});
+
+it("includes the exact process-helper bytes in the fixed workload fingerprint", () => {
+  const fixture = gatewayFixtures.createGatewayMatrixFixture("process-contracts", 1);
+  const firstHelper = {
+    ...fixture,
+    processHelperSource: 'console.log("probe"); setTimeout(() => {}, 2000);\n',
+  };
+  const secondHelper = {
+    ...fixture,
+    processHelperSource: 'console.log("probe"); setTimeout(() => {}, 3000);\n',
+  };
+  const spy = vi.spyOn(gatewayFixtures, "createGatewayMatrixFixture");
+  try {
+    spy.mockReturnValue(firstHelper);
+    const baseline = createGatewayMatrixWorkload("process-contracts", 1, "off", 120);
+    spy.mockReturnValue(secondHelper);
+    const candidate = createGatewayMatrixWorkload("process-contracts", 1, "off", 120);
+    expect(candidate.promptSha256).toBe(baseline.promptSha256);
+    expect(candidate.settings).toEqual(baseline.settings);
+    expect(candidate.fixtureSha256).not.toBe(baseline.fixtureSha256);
+  } finally {
+    spy.mockRestore();
   }
 });

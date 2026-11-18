@@ -337,6 +337,21 @@ describe("existing-session browser routes", () => {
     expectLabelCleanup();
   });
 
+  it("omits deltas for existing-session snapshots without stable document identity", async () => {
+    snapshotMock
+      .mockResolvedValueOnce(snapshotTree("root-1", ["save-1", "button", "Save"]))
+      .mockResolvedValueOnce(
+        snapshotTree("root-2", ["save-2", "button", "Save"], ["alert-2", "alert", "Required"]),
+      );
+    const handler = route("snapshot");
+    await runRoute(handler, { query: { format: "ai" } });
+    const second = await runRoute(handler, { query: { format: "ai" } });
+
+    const body = requireRecord(second.body, "second snapshot body");
+    expect(body.snapshot).not.toContain("[new]");
+    expect(body.newElements).toBeUndefined();
+  });
+
   it("labels and returns only Chrome MCP refs inside the final snapshot budget", async () => {
     snapshotMock.mockResolvedValueOnce(
       snapshotTree(
@@ -383,6 +398,28 @@ describe("existing-session browser routes", () => {
     } else {
       expect(body.snapshot).not.toContain("TRUNCATED");
     }
+  });
+
+  it("routes close through profile selection state with exact call options", async () => {
+    const ctrl = new AbortController();
+    const response = await invoke(
+      "act",
+      { kind: "close", targetId: "7", timeoutMs: 4321 },
+      { signal: ctrl.signal },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith("7", {
+      exactTargetId: true,
+      signal: expect.any(AbortSignal),
+      timeoutMs: 60_000,
+    });
+    const reason = new Error("caller cancelled");
+    ctrl.abort(reason);
+    expect(routeState.profileCtx.closeTab).toHaveBeenCalledWith(
+      "7",
+      expect.objectContaining({ signal: expect.objectContaining({ aborted: true, reason }) }),
+    );
   });
 
   it.each([undefined, "#admin"])("rejects disallowed snapshots (selector=%s)", async (selector) => {
@@ -694,6 +731,14 @@ describe("existing-session interaction navigation guard", () => {
     const request = await startClientAction({ kind: "wait", selector: "#ready", timeoutMs: 250 });
     expect(request.settled).toHaveBeenCalledOnce();
     await expectClientError(request, "Timed out waiting for condition");
+  });
+
+  it("checks navigation after key-driven submit", async () => {
+    const typeResponse = await runAction({ ...typeAndSubmit, ref: "field-1" });
+
+    expect(typeResponse.statusCode).toBe(200);
+    expect(press).toHaveBeenCalledWith(expect.objectContaining({ key: "Enter" }));
+    expectNavigationProbeUrls(Array.from({ length: 4 }, () => publicUrl));
   });
 
   it("does not run a wait predicate in a document rejected by navigation policy", async () => {
