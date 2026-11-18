@@ -45,11 +45,12 @@ fact instead of using display-history mirrors as delivery evidence.
 
 When a provider rejects a malformed tool call before dispatch, the built-in
 runner can continue once from the current transcript after earlier tools have
-settled. Earlier failed tools do not block this continuation when every failure
-carries host evidence that execution never started and its result already
-precedes the rejected response in the current turn. Failures that may have caused
-side effects, unfinished tools, and asynchronous work still block it; the
-continuation does not replay the original task or increase the retry budget.
+settled. An earlier failed tool does not block this continuation when its
+result already precedes the rejected response in the current turn, whether or
+not the failed tool had started: the model has read that failure and the
+continuation repeats nothing. Unconsumed or unattributed failures, unfinished
+tools, and asynchronous work still block it; the continuation does not replay
+the original task or increase the retry budget.
 
 If a model prints a complete tool call as text, including a call to an available
 deferred tool, the built-in runner can request one native correction when replay

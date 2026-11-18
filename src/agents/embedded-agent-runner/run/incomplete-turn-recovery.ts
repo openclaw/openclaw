@@ -13,7 +13,6 @@ import {
   type ReplyDeliveryState,
   type ReplyExpectation,
 } from "../../reply-completion.js";
-import { readToolEffectReceipt } from "../../tool-effect-receipt.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "../empty-assistant-turn.js";
 import { assessLastAssistantMessage } from "../thinking.js";
@@ -462,27 +461,19 @@ function resolveEmptyResponseRetryInstruction(
       isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
     readSettledToolCalls(assistant).length === 0;
   let consumedToolFailure = false;
-  if (rejectedBeforeDispatch && params.attempt.lastToolError?.executionStarted === false) {
+  if (rejectedBeforeDispatch && params.attempt.lastToolError) {
     const messages = params.attempt.messagesSnapshot;
     const failureIndex = messages.findLastIndex(
       (message) => message.role === "toolResult" && message.isError,
     );
     const failure = messages[failureIndex];
-    const latestUserIndex = messages.findLastIndex((message) => message.role === "user");
-    // A later refusal cannot erase an earlier failure that may have caused effects.
+    // The model already read the retained failure in this turn and chose the rejected call,
+    // so continuing replays nothing, whether or not the failed tool had started.
     consumedToolFailure =
-      failureIndex > latestUserIndex &&
+      failureIndex > messages.findLastIndex((message) => message.role === "user") &&
       failureIndex < messages.indexOf(assistant) &&
       failure?.role === "toolResult" &&
-      failure.toolName === params.attempt.lastToolError.toolName &&
-      messages
-        .slice(latestUserIndex + 1, failureIndex + 1)
-        .every(
-          (message) =>
-            message.role !== "toolResult" ||
-            !message.isError ||
-            readToolEffectReceipt(message)?.state === "not_started",
-        );
+      failure.toolName === params.attempt.lastToolError.toolName;
   }
   if (
     shouldSkipNonVisibleTurnRetry({
