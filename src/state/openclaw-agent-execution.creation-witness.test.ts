@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -34,12 +35,51 @@ import {
   createAgentCreationWitnessSource as source,
   createAliasedAgentCreationWitnessFixture as aliasedFixture,
 } from "./openclaw-agent-execution.creation-fixture.test-support.js";
-import { captureOpenClawAgentDatabaseExecution as capture } from "./openclaw-agent-execution.js";
+import {
+  captureOpenClawAgentDatabaseExecution as capture,
+  captureOpenClawAgentDatabaseExecutionAsync,
+  prepareOpenClawAgentDatabaseExecution,
+} from "./openclaw-agent-execution.js";
+import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 type Execution = ReturnType<typeof capture>;
 type Options = ReturnType<typeof fixture>;
+
+it("prepares an agent database while its original creation witness is retained", async () => {
+  const options = fixture();
+  const creator = await captureOpenClawAgentDatabaseExecutionAsync(options, {}, "observed-absence");
+  await using _ = onExit(() => creator.release());
+  expect(fs.existsSync(options.path)).toBe(false);
+  await prepareOpenClawAgentDatabaseExecution(options, () => {});
+  expect(creator.fileIdentity).toMatchObject({ kind: "file" });
+  await expect(creator.runExisting(source(), async () => "prepared")).resolves.toBe("prepared");
+});
+
+it("does not prepare a database when cancelled behind its writer", async ({ signal }) => {
+  const options = fixture();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const writing = runOpenClawAgentWorkerWrite(options, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  const controller = new AbortController();
+  const cancelled = new Error("Preparation cancelled while queued");
+  try {
+    await entered.promise;
+    const preparing = prepareOpenClawAgentDatabaseExecution(options, () => {}, controller.signal);
+    controller.abort(cancelled);
+    await expect(preparing).rejects.toBe(cancelled);
+    expect(fs.existsSync(options.path)).toBe(false);
+  } finally {
+    release.resolve();
+    await writing;
+  }
+  await prepareOpenClawAgentDatabaseExecution(options, () => signal.throwIfAborted());
+  expect(fs.existsSync(options.path)).toBe(true);
+});
 
 function onExit(cleanup: () => Promise<unknown>) {
   return {
