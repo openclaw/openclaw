@@ -14,6 +14,7 @@ import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
   createNavigationPreferencesFixture,
+  normalizeApplicationContext,
 } from "../../test-helpers/application-context-fixtures.ts";
 import {
   createTestGatewayClient,
@@ -93,7 +94,7 @@ function withLiveCapabilities(
     plugins,
     agentIdentity: createAgentIdentityCapability(context.gateway),
   };
-  return applicationContext;
+  return normalizeApplicationContext(applicationContext);
 }
 
 export function createInitializationContext(client?: GatewayBrowserClient): ApplicationContext {

@@ -42,6 +42,7 @@ it.each([
     basePath: "/team",
     navigate,
     sidebarAttention: {
+      mentions: null,
       get entries() {
         return entries;
       },

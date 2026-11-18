@@ -38,7 +38,10 @@ import type { SessionRequestClient } from "../lib/sessions/session-capability.ts
 import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
 import { createSidebarContextLifecycle } from "./app-sidebar-context-lifecycle.ts";
 import { seedSidebarEveryonePreference } from "./app-sidebar-setup.ts";
-import { createApplicationGatewaySnapshot } from "./application-context-fixtures.ts";
+import {
+  createApplicationGatewaySnapshot,
+  normalizeApplicationContext,
+} from "./application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -505,7 +508,7 @@ export function createContext(
   };
   const lifecycle = createSidebarContextLifecycle(gateway, agents, selectedAgentId);
   sidebarSessionGatewayBindings.get(sessions)?.(gateway, lifecycle.agentSelection);
-  return {
+  return normalizeApplicationContext({
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,
@@ -534,7 +537,7 @@ export function createContext(
       snapshot: { approvalQueue },
       subscribe: vi.fn<ApplicationOverlays["subscribe"]>(() => () => undefined),
     } as unknown as ApplicationOverlays,
-  } as unknown as ApplicationContext;
+  } as unknown as ApplicationContext);
 }
 
 export async function mountSidebar(

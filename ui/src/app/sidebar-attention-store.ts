@@ -64,8 +64,14 @@ export function createSidebarAttentionStore(sources: SidebarAttentionStoreSource
     get entries() {
       return owner?.entries ?? [];
     },
+    get mentions() {
+      return owner?.mentions ?? null;
+    },
     activate(Owner: SidebarAttentionStoreOwnerConstructor) {
-      owner ??= new Owner(sources, listeners.publish);
+      if (!owner) {
+        owner = new Owner(sources, listeners.publish);
+        listeners.publish();
+      }
       return owner.mentions;
     },
     refreshOpenClawId() {

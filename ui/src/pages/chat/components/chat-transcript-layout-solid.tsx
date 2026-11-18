@@ -24,6 +24,7 @@ import {
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
+import { TranscriptReadPresentation } from "./chat-transcript-read-presentation.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts";
 
@@ -203,9 +204,15 @@ function TranscriptRows(props: {
                     aria-hidden={active() ? undefined : "true"}
                   >
                     <TranscriptRowKeyContext value={() => row()?.key}>
-                      <ContentPresentation value={() => presented() && (active() || preparing())}>
-                        <RowContent value={content()} />
-                      </ContentPresentation>
+                      <TranscriptReadPresentation
+                        value={() =>
+                          presented() && active() && !props.snapshot.initialPositionPending()
+                        }
+                      >
+                        <ContentPresentation value={() => presented() && (active() || preparing())}>
+                          <RowContent value={content()} />
+                        </ContentPresentation>
+                      </TranscriptReadPresentation>
                     </TranscriptRowKeyContext>
                   </div>
                 </>
