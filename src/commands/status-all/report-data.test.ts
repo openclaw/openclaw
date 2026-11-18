@@ -98,8 +98,12 @@ describe("statusAllCommand report data", () => {
     expect(redactSensitiveText(`gateway.auth.token: ${secretValue}`)).toBe(
       "gateway.auth.token: ghp_R3…8sW1",
     );
+    // Local diagnostics stay bounded: 16 + 384 = 400 UTF-16 units survive.
+    const overLimit = `long diagnostic ${"x".repeat(400)} TAIL`;
     const output = await reportText({
-      overview: { secretDiagnostics: [fixText, `gateway.remote.token: ${secretValue}`] },
+      overview: {
+        secretDiagnostics: [fixText, `gateway.remote.token: ${secretValue}`, overLimit],
+      },
     });
     expectReport(
       output,
@@ -107,8 +111,9 @@ describe("statusAllCommand report data", () => {
         "Remove OPENCLAW_GATEWAY_TOKEN from the shell",
         "if the environment variable should supply the token.",
         "gateway.remote.token: ***",
+        `long diagnostic ${"x".repeat(384)}`,
       ],
-      [secretValue],
+      [secretValue, "x".repeat(385), "TAIL"],
     );
   });
 

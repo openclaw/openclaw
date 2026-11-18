@@ -26,9 +26,9 @@ export function buildStatusSecretDiagnostics(
   owners: NonNullable<StatusSummary["degradedSecretOwners"]>,
   diagnostics: string[],
 ): string[] {
-  const redact = (value: string) =>
-    redactStatusSecrets(sanitizeTerminalText(redactStatusSecrets(value)));
-  const safeText = (value: string) => truncateUtf16Safe(redact(value), 160);
+  const redact = (value: string, limit: number) =>
+    truncateUtf16Safe(redactStatusSecrets(sanitizeTerminalText(redactStatusSecrets(value))), limit);
+  const safeText = (value: string) => redact(value, 160);
   const ownerPaths = new Set(owners.flatMap((owner) => owner.paths));
   const ownerDiagnostics = new Map(
     owners.map((owner) => [
@@ -44,8 +44,8 @@ export function buildStatusSecretDiagnostics(
   });
   return [
     ...ownerDiagnostics.values(),
-    // Local diagnostics carry fix text; keep it whole, as doctor does.
-    ...new Set(localDiagnostics.map(redact)),
+    // Local diagnostics carry fix text; 400 fits the ~290-unit token conflict hint.
+    ...new Set(localDiagnostics.map((diagnostic) => redact(diagnostic, 400))),
   ];
 }
 
