@@ -338,6 +338,7 @@ it.each([
 ])("retains $phase custody ($uncertain)", async ({ phase, uncertain }) => {
   const prepared = phase === "build" ? undefined : await idle();
   const failure = uncertain ? new CommandProcessCleanupError() : new Error("settled");
+  const request = new AbortController();
   if (phase === "retire") {
     vi.spyOn(nativeWorktreeFilesystem, "remove").mockImplementationOnce(async (directory) => {
       await fs.unlink(path.join(directory, "source"));
@@ -347,7 +348,12 @@ it.each([
     await collect(onError);
     expect(onError).toHaveBeenCalledWith(failure, prepared?.id);
   } else {
-    const fail = () => Promise.reject(failure);
+    const fail = () => {
+      if (phase === "validate") {
+        request.abort(new Error("request retired"));
+      }
+      return Promise.reject(failure);
+    };
     const build: typeof params.prepare = (...args) => params.prepare(...args).then(fail);
     await expect(
       prepare(
@@ -358,7 +364,13 @@ it.each([
                 contentKey: "commit-2",
                 refresh: (_existing, record, guard) => build(record, guard).then(() => true),
               }
-            : { validate: fail },
+            : {
+                validate: fail,
+                options: {
+                  ...options,
+                  workerAuthority: { assertCurrent: () => request.signal.throwIfAborted() },
+                },
+              },
       ),
     ).rejects.toBe(failure);
   }

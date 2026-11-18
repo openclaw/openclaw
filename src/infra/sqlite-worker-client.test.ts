@@ -56,13 +56,20 @@ it("attributes queued commands without changing wire bytes or exposing private c
   const check = async (type: string, input: unknown, requestClass: string) => {
     const command = { type, input };
     await expect(store.execute(command)).resolves.toBe("committed");
-    expect(dispatch.mock.lastCall?.[0]).toEqual(serialize(command));
-    expect(dispatch.mock.lastCall?.[5]).toBe(requestClass);
-    expect(normalizeWorkerRequestClass(dispatch.mock.lastCall?.[5])).toBe(requestClass);
+    expect(dispatch.mock.lastCall?.[0].input).toEqual(serialize(command));
+    expect(dispatch.mock.lastCall?.[2].requestClass).toBe(requestClass);
+    expect(normalizeWorkerRequestClass(dispatch.mock.lastCall?.[2].requestClass)).toBe(
+      requestClass,
+    );
   };
   const input = { value: "synthetic-private-payload" };
   const cases = [
     ["audit.writer.process", "audit.writer.process"],
+    ["localWorkspace.prepare", "localWorkspace.prepare"],
+    ["localWorkspace.mutate", "localWorkspace.mutate"],
+    ["localWorkspace.manifest", "localWorkspace.manifest"],
+    ["localWorkspace.private-workspace", "localWorkspace"],
+    ["localWorkspace.prepare.private-workspace", "localWorkspace"],
     ["worktrees.private-customer-123", "worktrees"],
     ["session.entry.read", "session.entry.read"],
     ["session.entries.replace", "session.entries.replace"],

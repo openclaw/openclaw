@@ -1,17 +1,17 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Show, useContext } from "solid-js";
-import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
 import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
 import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
 import { ChatModelCatalogState, isModelCatalogLoading } from "./chat-model-catalog-state.tsx";
+import { createChatModelFavoriteReorder } from "./chat-model-favorite-reorder.ts";
 import {
   createChatModelFavorites,
   createChatModelFavoritesOpening,
@@ -44,7 +44,10 @@ import {
 } from "./chat-model-picker-search.ts";
 import { createModelPickerWindow } from "./chat-model-picker-window.tsx";
 import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
-import { ChatModelProviderHeading } from "./chat-model-provider-heading.tsx";
+import {
+  ChatModelProviderHeading,
+  prepareChatModelProviderAuth,
+} from "./chat-model-provider-heading.tsx";
 import { ChatModelProviderRail } from "./chat-model-provider-rail.tsx";
 import {
   ChatModelSettings,
@@ -57,11 +60,16 @@ registerModelProviderAuthEnglish();
 
 type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
-  onSelectionClose: (event: MouseEvent) => void;
-  searchRef: (element: HTMLInputElement) => void;
 };
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
+  const modelAuthStatus = createMemo(() => panel.params.modelAuthStatusResult);
+  const authProfileId = createMemo(() => panel.params.authProfileId);
+  // Account headings are only needed inside the lazily mounted picker, not at Chat boot.
+  const providerAuth = createMemo(() => {
+    i18nRevision();
+    return prepareChatModelProviderAuth(modelAuthStatus(), authProfileId());
+  });
   const owner = createChatModelFavoritesScope(() => panel.params.sessionKey);
   const favorites = createChatModelFavorites(owner);
   const search = useContext(ChatModelSearchContext);
@@ -308,7 +316,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       entry.runtimeOverride ??
         (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
     );
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
     event.stopPropagation();
@@ -317,7 +325,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       return;
     }
     panel.params.onTargetSelect?.(groupId, value);
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   // Retain the route boundary across unrelated owner publications.
   const renderDirect = (render: () => JSX.Element) => render();
@@ -338,12 +346,26 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       </Show>
     );
   }
+  const favoriteRows = createMemo(
+    () =>
+      state().orderedProviderGroups.find(([provider]) => provider === FAVORITES_GROUP)?.[1].lead,
+  );
+  const reorderFavorite = createChatModelFavoriteReorder({
+    scope: owner.scope,
+    rows: favoriteRows,
+    disabled: () => disabled() || favorites.disabled(),
+    move: (source, destination, side) => favorites.move(source, destination, side),
+  });
   function ModelOption(props: {
     entry: ModelPickerOption;
     provider: string;
     hideCooldown?: boolean;
   }) {
     const key = createMemo(() => modelRowKey(props.entry, props.provider));
+    const model = createMemo(() => props.entry.value);
+    const reorder = createMemo(() =>
+      props.provider === FAVORITES_GROUP ? reorderFavorite(model) : undefined,
+    );
     return (
       <>
         {renderRow(key(), () => (
@@ -367,6 +389,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                     },
                   }
                 : undefined
+            }
+            reorder={
+              !searchView?.filtering() && (favoriteRows()?.length ?? 0) > 1 ? reorder() : undefined
             }
             hideCooldown={props.hideCooldown}
             index={state().optionIndex.get(key()) ?? 0}
@@ -400,14 +425,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         options().length > 0 &&
         options().every((option) => option.disabled && option.unavailableReason === "cooldown"),
     );
-    const auth = createMemo(() => {
-      const authProvider =
-        resolveModelRuntimeRoute(props.provider, providerRuntime(props.provider) ?? undefined) ===
-        "claudeCli"
-          ? "claude-cli"
-          : props.provider;
-      return panel.params.providerAuth?.get(authProvider);
-    });
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -421,7 +438,8 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             favorites={props.provider === FAVORITES_GROUP}
             options={options()}
             cooldown={providerCooldown()}
-            auth={auth()}
+            providerAuth={providerAuth()}
+            runtime={providerRuntime(props.provider)}
             accounts={props.provider === state().activeProvider ? accounts() : undefined}
             onSettings={panel.params.onProviderSettings}
           />
@@ -505,7 +523,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             <div class="chat-controls__model-search-wrap">
               <Icon name="search" />
               <input
-                ref={[search?.inputRef(), panel.searchRef]}
+                ref={searchView?.inputRef()}
                 class="chat-controls__model-search"
                 data-chat-model-search="true"
                 type="search"

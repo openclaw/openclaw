@@ -40,7 +40,14 @@ export function assertSqliteWorkerDatabaseIdentity(owner: SqliteWorkerOperationC
   }
 }
 
-function assertRequestCustody(owner: SqliteWorkerOperationContext): void {
+export function assertSqliteWorkerRequestCustody(owner: SqliteWorkerOperationContext): void {
+  assertSqliteWorkerDatabaseIdentity(owner);
+  owner.assertPhysicalSourceCurrent?.();
+  assertSqliteWorkerRequestAuthority(owner);
+}
+
+/** Physical source qualification may block; live authority must be read afterward. */
+export function assertSqliteWorkerRequestAuthority(owner: SqliteWorkerOperationContext): void {
   if (owner.requestCustody && !readSqliteWorkerRequestCustody(owner.requestCustody)) {
     const refusal = new SqliteWorkerError("SQLite worker request custody is revoked", "closed");
     owner.refusal = refusal;
@@ -51,7 +58,6 @@ function assertRequestCustody(owner: SqliteWorkerOperationContext): void {
     owner.refusal = refusal;
     throw refusal;
   }
-  assertSqliteWorkerDatabaseIdentity(owner);
 }
 
 /** Ask the live host owner for a native stage; preparation precedes writer-lock acquisition. */
@@ -66,7 +72,7 @@ export function requestSqliteWorkerOperationAdmission(
   if (scope.owner.sourceReservations) {
     throw new SqliteWorkerError("SQLite source reservations prohibit host admission", "closed");
   }
-  assertRequestCustody(scope.owner);
+  assertSqliteWorkerRequestCustody(scope.owner);
   const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
   const startedAt = Date.now();
   const deadlineNs =
@@ -120,7 +126,7 @@ export function requestSqliteWorkerOperationAdmission(
     scope.owner.refusal = refusal;
     throw refusal;
   }
-  assertRequestCustody(scope.owner);
+  assertSqliteWorkerRequestCustody(scope.owner);
   // A fresh live grant authorizes compensation after a previous stage was refused.
   delete scope.owner.refusal;
 }

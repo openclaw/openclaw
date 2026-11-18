@@ -8,6 +8,7 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import * as configCli from "../cli/config-cli.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -201,7 +202,6 @@ export function registerGatewayToolFinalEffectTests() {
         requested,
         authority,
         call,
-        execution: inference.binding.execution,
         requestCount: () => requestCount,
         close: async () => {
           for (const record of await manager.listPendingRecords()) {
@@ -266,8 +266,7 @@ export function registerGatewayToolFinalEffectTests() {
       async (outcome) => {
         const f = await fixture(true);
         const controller = new AbortController();
-        const applyStarted = createDeferred();
-        const releaseApply = createDeferred();
+        const revokeBeforeWrite = vi.fn(() => releaseAgentRunDelegatedAuthority(f.authority));
         let pending: ReturnType<typeof f.call> | undefined;
         try {
           pending = f.call(controller.signal);
@@ -283,16 +282,13 @@ export function registerGatewayToolFinalEffectTests() {
           assert(record);
           const completion = f.session.pendingApproval?.completion;
           assert(completion);
-          // Pause external inference preparation, not the approval owner or persistent sink.
+          // Exact commands skip inference. Revoke after approval and hand off to the real writer.
           if (outcome === "precommit-revoked") {
-            const execution = f.execution;
-            vi.mocked(setupInference.resolvePersistentApplyInference).mockImplementationOnce(
-              async () => {
-                applyStarted.resolve();
-                await releaseApply.promise;
-                return execution;
-              },
-            );
+            const runConfigSet = configCli.runConfigSet;
+            vi.spyOn(configCli, "runConfigSet").mockImplementationOnce((opts) => {
+              revokeBeforeWrite();
+              return runConfigSet(opts);
+            });
           }
           if (outcome === "tool-cancelled") {
             expect(f.manager.isPending(record)).toBe(true);
@@ -303,11 +299,6 @@ export function registerGatewayToolFinalEffectTests() {
             await f.manager.forceDenyIfRuntimeAuthorityClosed(record.id);
           } else {
             expect(await f.manager.resolve(record.id, "allow-once", "fixture-operator")).toBe(true);
-            if (outcome === "precommit-revoked") {
-              await applyStarted.promise;
-              releaseAgentRunDelegatedAuthority(f.authority);
-              releaseApply.resolve();
-            }
           }
           const result = await pending.then(
             (value) => ({ value }),
@@ -320,6 +311,9 @@ export function registerGatewayToolFinalEffectTests() {
           }
           // A cancelled tool wait can finish before the approval owner's durable handoff.
           await completion;
+          if (outcome === "precommit-revoked") {
+            expect(revokeBeforeWrite).toHaveBeenCalledOnce();
+          }
           if (outcome === "approve") {
             expect(result).toHaveProperty("value");
             expect(JSON.parse(await fs.readFile(f.configPath, "utf8"))).toMatchObject({
@@ -343,7 +337,6 @@ export function registerGatewayToolFinalEffectTests() {
             expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
           }
         } finally {
-          releaseApply.resolve();
           controller.abort();
           await pending?.catch(() => undefined);
           await f.close();

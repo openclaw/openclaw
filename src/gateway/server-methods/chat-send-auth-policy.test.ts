@@ -132,11 +132,10 @@ it.each([true, false])(
       publish(narrowed);
       publish(granted);
       if (verified) {
-        expect(authority.signal?.aborted).toBe(true);
-        expect(authority.assertCurrent).toThrow(/authority is no longer active/);
         expect(client.invalidated).toBe(true);
-        expect(active.input.abortSignal.aborted).toBe(true);
-        expect(getExistingFollowupQueue(key)?.items ?? []).toHaveLength(0);
+        expect(active.input.abortSignal.aborted).toBe(false);
+        await expectRetained();
+        expect(authority.reauthorize).toThrow();
       } else {
         publish({ ...current, gateway: { ...current.gateway, allowRealIpFallback: true } });
         expect(client.invalidated).toBe(true);

@@ -72,11 +72,11 @@ function createOffer(
 
 describe("onboard recommendations read selection", () => {
   it.each([
-    { agent: "   ", error: "--agent must not be blank" },
-    { agent: "writer!", error: 'Unknown agent id "writer!"' },
+    { agent: "   ", error: "--agent must not be blank", kind: "ExpectedCliError" },
+    { agent: "writer!", error: 'Unknown agent id "writer!"', kind: "Error" },
   ])(
     "rejects invalid selector '$agent' without changing the default offer",
-    async ({ agent, error }) => {
+    async ({ agent, error, kind }) => {
       await withOpenClawTestState({ label: "recommendation-agent-selection" }, async (state) => {
         await state.writeConfig({
           agents: { entries: { writer: { workspace: state.workspaceDir } } },
@@ -89,9 +89,9 @@ describe("onboard recommendations read selection", () => {
           nowMs: 1,
         });
 
-        await expect(
-          onboardRecommendationsCommand({ agent, json: true }, makeRuntime()),
-        ).rejects.toThrow(error);
+        const rejected = onboardRecommendationsCommand({ agent, json: true }, makeRuntime());
+        await expect(rejected).rejects.toThrow(error);
+        await expect(rejected).rejects.toHaveProperty("name", kind);
         expect(await store.read()).toEqual(offer);
       });
     },

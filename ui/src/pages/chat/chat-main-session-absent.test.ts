@@ -53,3 +53,34 @@ it("gates the first turn on proven absence only until the session has a row", as
   host.connectionEpoch += 1;
   expect(canSend()).toBe(false);
 });
+
+it("keeps one agent's empty history from opening another agent's global conversation", async () => {
+  let refuse = false;
+  const host = makeChatHost({
+    sessionKey: "global",
+    assistantAgentId: "main",
+    hello: sessionMutationGatewayHello(["operator.sessions.write"]),
+    requestHandlers: {
+      "chat.history": () => {
+        if (refuse) {
+          throw new Error("history unavailable");
+        }
+        return { messages: [] };
+      },
+    },
+  });
+  const snapshot = createApplicationGatewaySnapshot({
+    client: host.client,
+    phase: "connected",
+    hello: host.hello,
+  });
+  const canSend = () => readChatPaneRouteMutationAccess(snapshot, host).composeScope.allowed;
+
+  await loadChatHistory(host);
+  expect(canSend()).toBe(true);
+  // Same connection and key, another agent: its read fails, so nothing proves absence.
+  refuse = true;
+  host.assistantAgentId = "research";
+  await loadChatHistory(host).catch(() => undefined);
+  expect(canSend()).toBe(false);
+});

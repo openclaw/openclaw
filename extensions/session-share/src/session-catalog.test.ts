@@ -516,6 +516,6 @@ it.each([
     await f.hydrate();
     expect(await f.host()).toMatchObject({ sessions: [], error: { code: "NODE_INVOKE_FAILED" } });
   } else {
-    await expect(f.read()).rejects.toThrow("Invalid OpenClaw transcript");
+    await expect(f.read()).rejects.toThrow("Invalid OpenClaw chat history");
   }
 });

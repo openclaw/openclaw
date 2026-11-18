@@ -19,7 +19,7 @@ suite.define(() => {
     await suite.withPage(
       { locale: "en-US", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
-        await page.clock.setFixedTime(now);
+        await page.clock.install({ time: now });
         await page.addInitScript(
           (key) =>
             localStorage.setItem(key, JSON.stringify({ themeMode: "dark", navCollapsed: true })),

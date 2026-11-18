@@ -212,7 +212,7 @@ async function run(count, measure) {
   } finally {
     counting = false;
     await worker?.terminate();
-    admission.finish();
+    await admission.finish();
   }
 }
 

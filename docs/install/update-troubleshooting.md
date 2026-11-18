@@ -623,6 +623,11 @@ Windows host-wide legacy capture cleanup remains report-only.
   verified offline. Inspect `openclaw gateway status --deep`, stop it through its
   service owner, and retry. On macOS, a loaded LaunchAgent can respawn even when
   disabled and temporarily has no PID; `openclaw gateway stop` unloads it.
+  On Linux, source builds use loaded command locations to prove that their
+  output paths are physically separate from managed Gateways without reading
+  those services’ environment files. Overlapping or unverified locations retain
+  the full inspection and offline-owner checks; changing service-file permissions
+  is not a build prerequisite for a positively separate checkout.
 - `update-ledger-busy`: another process held the state database's write lock
   beyond the update step budget. The command exited successfully without admitting
   a run and left previous history intact. Retry once the Gateway's writes settle.

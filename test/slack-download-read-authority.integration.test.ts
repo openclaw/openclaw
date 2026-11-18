@@ -31,13 +31,15 @@ const interleaving = vi.hoisted(() => ({
   afterGatewayMirror: undefined as (() => Promise<void>) | undefined,
 }));
 
-vi.mock("node:dns/promises", async (original) => {
-  const actual = await original<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: (...args: Parameters<typeof actual.lookup>) =>
       interleaving.lookup ? interleaving.lookup(args[0]) : actual.lookup(...args),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 vi.mock("@openclaw/media-core/mime", async (original) => {

@@ -65,7 +65,13 @@ const expectedSystemRequester = {
   prepareDispatchCredential: expect.any(Function),
   signal: expect.any(AbortSignal),
   prepareSource: expect.any(Function),
-  snapshot: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
+  snapshot: {
+    version: 1,
+    authenticationSource: "non-member",
+    actor: { kind: "system" },
+    scopes: ["operator.admin"],
+    grant: null,
+  },
   assertCurrent: expect.any(Function),
   assertInvocationCurrent: expect.any(Function),
 };

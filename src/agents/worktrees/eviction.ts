@@ -11,6 +11,11 @@ import { WorktreeRemovalContentionError } from "./errors.js";
 import type { WorktreeEvictionReason } from "./git-worktree-operations.js";
 import { prepareWorktreeRegistryGuard, readRegistryWorktrees } from "./registry-read.js";
 import {
+  deferFailedWorktreeRemoval,
+  deferWorktreeCleanup,
+  removalDeferralReason,
+} from "./registry-retirement.js";
+import {
   createWorktreeRemovalClaimsGuard,
   getRegistryWorktreeProvisionedPaths,
   updateRegistryWorktree,
@@ -22,6 +27,7 @@ import {
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import type {
   ManagedWorktreeRecord,
   WorktreeRegistryPredicate,
@@ -30,11 +36,12 @@ import type {
 
 const log = createSubsystemLogger("agents/worktrees");
 
-/** Capacity eviction keeps run exclusion but deliberately permits loss of unsaved data. */
+/** Capacity eviction retains checkout custody and a complete recovery snapshot. */
 export async function evictManagedWorktree(params: {
   env: NodeJS.ProcessEnv;
   record: ManagedWorktreeRecord;
   reason: WorktreeEvictionReason;
+  retryDeferred?: boolean;
   guard: WorktreeAllocationGuard;
   getConfig: () => OpenClawConfig;
 }): Promise<WorktreeEvictionReason | "dirty-purged"> {
@@ -42,7 +49,7 @@ export async function evictManagedWorktree(params: {
     const { env, record, guard } = params;
     const authority = guard.workerAuthority;
     if (!authority?.leaseSet) {
-      throw new Error("Worktree eviction requires the allocation lease's worker authority");
+      throw new Error("Worktree eviction requires retained checkout worker authority");
     }
     const token = randomUUID();
     const dependencies: string[] = [];
@@ -73,8 +80,12 @@ export async function evictManagedWorktree(params: {
     let outcome:
       | { ok: true; value: WorktreeEvictionReason | "dirty-purged" }
       | { ok: false; error: unknown };
+    const started = performance.now();
     try {
       assertCurrent();
+      if (params.retryDeferred && record.gcRetry) {
+        await deferWorktreeCleanup(env, { observed: record, reason: null }, assertCurrent);
+      }
       const { withSettledLocalWorkspace } =
         await import("../../gateway/worker-environments/local-workspace-projection.js");
       const value = await withSettledLocalWorkspace<WorktreeEvictionReason | "dirty-purged">(
@@ -91,70 +102,57 @@ export async function evictManagedWorktree(params: {
           };
           let snapshotRef: string | undefined;
           let dirty = false;
-          let snapshotError: string | undefined;
-          try {
-            const signal = AbortSignal.any([
-              ...(guard.signal ? [guard.signal] : []),
-              AbortSignal.timeout(5_000),
-            ]);
-            await withManagedWorktreeGit(
-              { record, env, getConfig: params.getConfig, signal, beforeRun },
-              async (git) => {
-                const provisionedPaths = await getRegistryWorktreeProvisionedPaths(env, record.id);
-                if (!provisionedPaths) {
-                  throw new Error("provisioned path ledger is unavailable");
-                }
-                const snapshot = await captureManagedWorktreeSnapshot({
-                  record,
-                  env,
-                  reason: `capacity-${params.reason}`,
-                  provisionedPaths,
-                  git,
-                  signal,
-                  assertCurrent: beforeRun,
-                  workerAuthority: heldClaimsAuthority(),
-                  requireDiskSpace: guard.requireDiskSpace,
-                });
-                snapshotRef = snapshot.snapshotRef;
-                beforeRun();
-                await updateRegistryWorktree(
-                  env,
-                  record.id,
-                  { snapshotRef, provisionedState: snapshot.provisionedState },
-                  { assertCurrent: beforeRun, workerAuthority: heldClaimsAuthority() },
+          await withManagedWorktreeGit(
+            { record, env, getConfig: params.getConfig, signal: guard.signal, beforeRun },
+            async (git) => {
+              const provisionedPaths = await getRegistryWorktreeProvisionedPaths(env, record.id);
+              if (!provisionedPaths) {
+                throw new Error("provisioned path ledger is unavailable");
+              }
+              const snapshot = await captureManagedWorktreeSnapshot({
+                record,
+                env,
+                reason: `capacity-${params.reason}`,
+                provisionedPaths,
+                git,
+                signal: guard.signal,
+                assertCurrent: beforeRun,
+                workerAuthority: heldClaimsAuthority(),
+                requireDiskSpace: guard.requireDiskSpace,
+              });
+              snapshotRef = snapshot.snapshotRef;
+              beforeRun();
+              await updateRegistryWorktree(
+                env,
+                record.id,
+                { snapshotRef, provisionedState: snapshot.provisionedState },
+                { assertCurrent: beforeRun, workerAuthority: heldClaimsAuthority() },
+              );
+              dirty = Boolean(
+                await git.require(
+                  record.repoRoot,
+                  [
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    worktreeSnapshotBase(snapshotRef, snapshotRef),
+                    snapshotRef,
+                  ],
+                  { signal: guard.signal, beforeRun },
+                ),
+              );
+              if (accepted) {
+                const snapshotCommit = await git.require(
+                  record.repoRoot,
+                  ["rev-parse", `${snapshotRef}^{commit}`],
+                  { signal: guard.signal, beforeRun },
                 );
-                dirty = Boolean(
-                  await git.require(
-                    record.repoRoot,
-                    [
-                      "diff-tree",
-                      "--no-commit-id",
-                      "--name-only",
-                      "-r",
-                      `${snapshotRef}^`,
-                      snapshotRef,
-                    ],
-                    { signal, beforeRun },
-                  ),
-                );
-                if (accepted) {
-                  const snapshotCommit = await git.require(
-                    record.repoRoot,
-                    ["rev-parse", `${snapshotRef}^{commit}`],
-                    { signal, beforeRun },
-                  );
-                  const archive = await accepted.prepareArchive?.();
-                  await archive?.(snapshotCommit);
-                }
-              },
-            );
-          } catch (error) {
-            if (hasSqliteWorkerOutcomeUnknown(error)) {
-              throw error;
-            }
-            beforeRun();
-            snapshotError = String(error);
-          }
+                const archive = await accepted.prepareArchive?.();
+                await archive?.(snapshotCommit);
+              }
+            },
+          );
           beforeRun();
           const live = await readRegistryWorktrees(env, { liveOnly: true });
           const liveIds = new Set(live.map((candidate) => candidate.id));
@@ -249,13 +247,29 @@ export async function evictManagedWorktree(params: {
             // Deletion already holds custody; caller cancellation cannot abandon its settlement.
             { leaseSet: authority.leaseSet, predicates: [claimsPredicate()] },
           );
-          const reason = dirty || snapshotError ? "dirty-purged" : params.reason;
+          const reason = dirty ? "dirty-purged" : params.reason;
           log.warn(
-            `Worktree evicted: ${record.id}; reason ${reason}; selected ${params.reason}; ${snapshotRef ? `snapshot ${snapshotRef}` : "no recovery snapshot"}${snapshotError ? `; snapshot failed: ${snapshotError}` : ""}`,
+            `Worktree evicted: ${record.id}; reason ${reason}; selected ${params.reason}; ${snapshotRef ? `snapshot ${snapshotRef}` : "no recovery snapshot"}`,
           );
           return reason;
         },
-      );
+      ).catch(async (error: unknown) => {
+        const refusal = removalDeferralReason(error);
+        if (refusal && !hasSqliteWorkerOutcomeUnknown(error)) {
+          await deferFailedWorktreeRemoval({
+            env,
+            id: record.id,
+            stage: "snapshot",
+            ...refusal,
+            elapsedMs: Math.round(performance.now() - started),
+            now: Date.now(),
+            previousAttempts: record.gcRetry?.attempts ?? 0,
+            claimToken: token,
+            assertCurrent,
+          });
+        }
+        throw error;
+      });
       outcome = { ok: true, value };
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {

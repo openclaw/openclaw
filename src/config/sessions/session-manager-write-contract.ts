@@ -1,10 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { BashExecutionMessage, CustomMessage } from "../../agents/sessions/messages.js";
 import type {
-  CommittedCompactionBoundary,
-  PreparedCompactionAppend,
-} from "../../agents/sessions/session-compaction-persistence.js";
-import type {
   ModelChangeEntry,
   SessionEntry,
   SessionLeafControl,
@@ -26,6 +22,10 @@ import type {
   TranscriptWriteSnapshot,
 } from "./session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type {
+  CommittedCompactionBoundary,
+  PreparedCompactionAppend,
+} from "./session-compaction-persistence.types.js";
 import type {
   PreparedSessionTranscriptHydration as PreparedSessionTranscriptReload,
   SessionTranscriptContextSelection,

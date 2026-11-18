@@ -3,6 +3,11 @@ import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  finishUpdateRun,
+  readOwedUpdateSteps,
+  recordUpdateRunOwedStep,
+} from "../infra/update-run-ledger.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import {
@@ -170,6 +175,51 @@ describe("update-cli", () => {
           reviewToken: "repair-reviewed-surface",
         });
       }
+    },
+  );
+
+  it.each([
+    { outcome: "settles", code: 0, service: "the active installation" },
+    { outcome: "keeps", code: 1, service: "another installation" },
+  ])(
+    "update repair $outcome what an earlier update owes when the service targets $service",
+    async ({ code }) => {
+      f.setTty(false);
+      mockFreshEntrypoint();
+      f.mockCompletionCacheRefresh({ code, stderr: "still EACCES" });
+      const root = code ? "/opt/other-openclaw" : await update.updateCliShared.resolveUpdateRoot();
+      f.primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      const earlier = update.createUpdateRun({ trigger: "cli" }).runId;
+      recordUpdateRunOwedStep(earlier, "shell-completion", "EACCES: permission denied");
+      recordUpdateRunOwedStep(earlier, "service-definition", "install failed");
+      recordUpdateRunOwedStep(earlier, "plugin-convergence", "plugin registry exploded");
+      recordUpdateRunOwedStep(earlier, "post-plugin-doctor", "state database is locked");
+      finishUpdateRun(earlier, { status: "succeeded" });
+
+      await runCli(["repair", "--json", "--yes"]);
+
+      // Repair runs full Doctor and then completes plugin convergence, which settles both
+      // plugin steps whatever happens to the completion cache and the service definition.
+      const repair = update.listUpdateRuns({ limit: 1 })[0];
+      expect(repair, getErrorOutput()).toMatchObject({ status: "succeeded" });
+      const owed = code
+        ? [
+            { id: "shell-completion", reason: "Completion cache update failed: still EACCES" },
+            { id: "service-definition", reason: "install failed" },
+          ]
+        : [];
+      expect(readOwedUpdateSteps()).toEqual(
+        owed.map((step) => ({ ...step, runId: repair?.runId })),
+      );
+      const output = lastWriteJsonCall() as { owedSteps?: unknown };
+      expect(output).toMatchObject({ mode: "finalize", coreUpdate: "completed" });
+      expect(output.owedSteps).toEqual(code ? owed : undefined);
+      if (code) {
+        expect(getErrorOutput()).toContain(
+          "Warning: Gateway service definition refresh is owed: install failed. Settled when `openclaw update` next refreshes the service definition; `openclaw update repair` rechecks it.",
+        );
+      }
+      expect(update.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     },
   );
 

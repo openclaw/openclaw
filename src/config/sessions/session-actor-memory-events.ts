@@ -269,6 +269,22 @@ export function createSessionActorMemoryEvents(options: {
         }
       : { appended: false as const };
   };
+  /**
+   * Append a navigation control under a rotated transcript generation.
+   *
+   * An in-place rewind or branch switch keeps the session id, so the rotated
+   * generation is what retires pre-cut readers: a raw-delta cursor captured
+   * before the cut must fail with `generation_mismatch`, exactly as it does on
+   * the SQLite path. `writeEvent` carries the rotated token into the version and
+   * the watermark together.
+   */
+  const appendNavigationControl = (event: unknown) => {
+    state.hot.transcript.version = {
+      ...state.hot.transcript.version,
+      generation: randomUUID(),
+    };
+    return appendRaw(event);
+  };
   const replaceRows = (
     rows: SessionActorMemoryState["events"],
     replacement?: { preserveGeneration?: boolean },
@@ -326,6 +342,7 @@ export function createSessionActorMemoryEvents(options: {
     checkMutation,
     rebasePrepared,
     appendRaw,
+    appendNavigationControl,
     replaceRows,
   };
 }

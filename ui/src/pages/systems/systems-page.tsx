@@ -327,6 +327,7 @@ function SystemsWorkspace(props: {
 }) {
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const inventoryKnown = () => controller().state.inventory !== null;
   const readStatus = () => {
     latest(props.inventoryRead.read);
     return null;
@@ -404,7 +405,10 @@ function SystemsWorkspace(props: {
         class="systems-page-header"
       />
       <header class="systems-toolbar">
-        <div class="systems-heading">
+        <div
+          class="systems-heading"
+          style={{ visibility: inventoryKnown() ? undefined : "hidden" }}
+        >
           <h2>{title()}</h2>
           <span>{row() ? systemKindLabel(row()!) : t("systems.selectHint")}</span>
         </div>
@@ -541,10 +545,7 @@ function SystemsWorkspace(props: {
               class="systems-state"
               role="status"
               style={{
-                visibility:
-                  props.inventoryRead.pending() && !controller().state.inventory
-                    ? "hidden"
-                    : undefined,
+                visibility: controller().connected() && !inventoryKnown() ? "hidden" : undefined,
               }}
             >
               <span class="systems-state__icon" aria-hidden="true">

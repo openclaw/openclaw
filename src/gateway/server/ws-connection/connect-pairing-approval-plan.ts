@@ -79,7 +79,7 @@ export type PairingApprovalPlan = {
   operatorApprovalKind: "trusted-proxy" | "remote-ingress" | null;
   trustedProxyUser: string | undefined;
   isSameKeyScopeUpgrade: boolean;
-  /** OpenClaw ID re-issue of an approved role's revoked token, within its approved scopes. */
+  /** OpenClaw ID re-issue bounded by current membership, or the owner's stored approval. */
   restoresApprovedAccess: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
@@ -208,7 +208,8 @@ export async function resolvePairingApprovalPlan(
   // OpenClaw ID sign-out revokes the browser's tokens but keeps its device approved
   // (OCF-495), so its next connect asks for an approved role without an active token.
   // Only the OpenClaw ID lane re-issues it: that lane would pair a fresh key for this
-  // principal anyway. Scopes beyond the approved row stay an owner decision below.
+  // principal anyway. A member's signed membership owns its current scope ceiling;
+  // other principals still need the stored approval for re-issue.
   const isSameKeyApprovedRoleReissue =
     openclawIdPairing &&
     reason === "role-upgrade" &&
@@ -235,11 +236,12 @@ export async function resolvePairingApprovalPlan(
   const restoresApprovedAccess =
     isSameKeyApprovedRoleReissue &&
     laneOperatorScopes !== null &&
-    roleScopesAllow({
-      role,
-      requestedScopes: laneOperatorScopes,
-      allowedScopes: resolvePairedAccessScopes(existingPairedDevice),
-    });
+    (openclawIdPrincipal?.kind === "member" ||
+      roleScopesAllow({
+        role,
+        requestedScopes: laneOperatorScopes,
+        allowedScopes: resolvePairedAccessScopes(existingPairedDevice),
+      }));
   const autoApproveOperatorScopes =
     isSameKeyApprovedRoleReissue && !restoresApprovedAccess ? null : laneOperatorScopes;
   const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({

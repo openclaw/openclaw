@@ -19,15 +19,13 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "../../agents/session-runtime-compat.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.types.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/preparation.types.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
-import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveMaxActiveTranscriptBytes,
@@ -39,7 +37,7 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isMemoryFlushPlanNativeProviderOwned } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
-import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.state.js";
@@ -53,6 +51,7 @@ import {
   resolveFollowupContextTokens,
   resolveMemoryFlushSandbox,
 } from "./agent-runner-memory-runtime.js";
+import { resolveSessionCompactionTarget } from "./agent-runner-memory-target.js";
 import {
   estimateContextTokensFromSessionTranscript,
   readSessionLogSnapshot,
@@ -85,6 +84,7 @@ import {
   resolveCompactionThreshold,
   resolveProjectedPromptTokens,
   resolveResponsesServerCompactionThreshold,
+  settleFailedPreflightCompaction,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
@@ -154,23 +154,11 @@ export async function runSessionCompactionIfNeeded(params: {
   }
 
   const compactionSessionKey = params.sessionKey;
-  const configuredAgentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
-  const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
-    ? configuredAgentId
-    : resolveAgentIdFromSessionKey(compactionSessionKey, configuredAgentId);
-  const compactionStorePath = resolveSessionStorePathForScope({
-    agentId: compactionAgentId,
+  const { compactionStore, compactionTarget } = resolveSessionCompactionTarget({
+    ...params,
     sessionKey: compactionSessionKey,
-    storePath:
-      params.storePath ??
-      resolveSessionStorePathCore(params.cfg.session?.store, { agentId: compactionAgentId }),
+    entry,
   });
-  const compactionStore = params.sessionStore ?? { [compactionSessionKey]: entry };
-  const compactionTarget = {
-    agentId: compactionAgentId,
-    sessionKey: compactionSessionKey,
-    storePath: compactionStorePath,
-  };
   const readTranscriptSize = async (sessionId: string) =>
     readCompactionTranscriptBytes({
       target: { ...compactionTarget, sessionId },
@@ -461,7 +449,12 @@ export async function runSessionCompactionIfNeeded(params: {
         return compactionStore[compactionSessionKey] ?? entry;
       }
       await notifyCompaction("incomplete");
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      return settleFailedPreflightCompaction(
+        entry,
+        reason,
+        tokenCountForCompaction,
+        contextWindowTokens,
+      );
     }
 
     if (params.replyOperation && admissionTransition) {
