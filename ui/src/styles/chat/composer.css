@@ -2752,6 +2752,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__model-option {
+  --reorder-edge: 0px;
+  position: relative;
   order: var(--chat-model-rank, 0);
   content-visibility: auto;
   contain-intrinsic-block-size: auto 0px;
