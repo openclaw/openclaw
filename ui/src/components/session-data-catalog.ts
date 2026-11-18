@@ -420,21 +420,24 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
     continueRefresh: async () => {
       const discoveryGeneration = owner.sessionScopeGeneration;
       const scope = owner.sessionCatalogLive.refreshScope;
-      const discoveryClient = visibleSessionCatalogClient(owner);
-      if (!discoveryClient || !owner.isSessionDataHostConnected) {
-        if (owner.isSessionDataHostConnected && sessionCatalogDiscoveryPages(owner).length > 0) {
+      const sweepCurrent = () =>
+        discoveryGeneration === owner.sessionScopeGeneration &&
+        scope === owner.sessionCatalogLive.refreshScope &&
+        owner.isSessionDataHostConnected;
+      // Hiding before or during the sweep leaves pages unread; reopening finishes them.
+      const keepUnreadPages = () => {
+        if (sweepCurrent() && sessionCatalogDiscoveryPages(owner).length > 0) {
           owner.sessionCatalogLive.skipHiddenRefresh();
         }
+      };
+      const discoveryClient = visibleSessionCatalogClient(owner);
+      if (!discoveryClient) {
+        keepUnreadPages();
         return;
       }
       // Empty prefixes belong to this finite cursor sweep, not a window that root
       // refreshes must replay. Errors and repeated cursors stop the affected host.
-      while (
-        discoveryGeneration === owner.sessionScopeGeneration &&
-        scope === owner.sessionCatalogLive.refreshScope &&
-        discoveryClient === visibleSessionCatalogClient(owner) &&
-        owner.isSessionDataHostConnected
-      ) {
+      while (sweepCurrent() && discoveryClient === visibleSessionCatalogClient(owner)) {
         const pages = sessionCatalogDiscoveryPages(owner);
         if (pages.length === 0) {
           return;
@@ -449,6 +452,7 @@ export async function refreshSessionCatalogs(owner: SessionCatalogDataOwner): Pr
           return;
         }
       }
+      keepUnreadPages();
     },
     applyError: (error) => {
       withdrawFreshSessionCatalogs(owner, sessionCatalogRequestError(error));

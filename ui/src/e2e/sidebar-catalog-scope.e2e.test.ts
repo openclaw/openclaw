@@ -14,7 +14,7 @@ const suite = createControlUiE2eSuite({ name: "Sidebar catalog scope" });
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("keeps background catalog reads quiet while navigation is hidden and catches up once on reopen", async () => {
+  it("keeps background catalog reads quiet while the sidebar is collapsed and catches up once on reopen", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       await page.clock.install();
       const gateway = await installMockGateway(page, {
@@ -24,40 +24,28 @@ suite.define(() => {
       const reads = () => gateway.getRequests("sessions.catalog.list", { limitPerHost: 40 });
       await page.goto(`${suite.server.baseUrl}new`);
       await waitForControlUiRoute(page, { routeId: "new-session" });
-      const navigation = page.locator(".sidebar-shell");
-      const toggle = page.locator('[data-navigation-view="sessions"]');
-      await expect.poll(() => navigation.isVisible()).toBe(true);
+      const collapse = page.getByRole("button", { name: "Collapse sidebar", exact: true }).first();
+      const advance = async (ms: number) => {
+        await pauseVirtualClock(page);
+        await page.clock.fastForward(ms);
+        await page.clock.resume();
+      };
       await expect.poll(async () => (await reads()).length).toBe(1);
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(false);
-      await pauseVirtualClock(page);
-      await page.clock.fastForward(125_001);
-      await page.clock.resume();
-      expect(await reads()).toHaveLength(1);
-
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await pauseVirtualClock(page);
-      await page.clock.fastForward(5_001);
-      await page.clock.resume();
-      await expect.poll(async () => (await reads()).length).toBe(2);
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(false);
-      await pauseVirtualClock(page);
-      await page.evaluate(() => {
-        window.dispatchEvent(new Event("focus"));
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
-      await page.clock.fastForward(125_001);
-      await page.clock.resume();
-      expect(await reads()).toHaveLength(2);
-
-      await toggle.click();
-      await expect.poll(() => navigation.isVisible()).toBe(true);
-      await pauseVirtualClock(page);
-      await page.clock.fastForward(5_001);
-      await page.clock.resume();
-      await expect.poll(async () => (await reads()).length).toBe(3);
+      for (const reopened of [2, 3]) {
+        await collapse.click();
+        await expect.poll(() => collapse.isVisible()).toBe(false);
+        // Neither the poll nor tab activation may read rows nobody can see.
+        await page.evaluate(() => {
+          window.dispatchEvent(new Event("focus"));
+          document.dispatchEvent(new Event("visibilitychange"));
+        });
+        await advance(125_001);
+        expect(await reads()).toHaveLength(reopened - 1);
+        await page.keyboard.press("Control+b");
+        await expect.poll(() => collapse.isVisible()).toBe(true);
+        await advance(5_001);
+        await expect.poll(async () => (await reads()).length).toBe(reopened);
+      }
       expect(await gateway.getSocketCount()).toBe(1);
     });
   });
