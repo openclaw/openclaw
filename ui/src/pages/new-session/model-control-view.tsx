@@ -92,7 +92,6 @@ export function NewSessionModelControlView(props: {
     if (!props.previewInitialDefaults || !connected) {
       return false;
     }
-    updates().revision();
     const roster = context()?.agents.state;
     // The agent can land before the first catalog read. Keep unknown labels
     // reserved through that handoff, but never mask a retained or retired catalog.

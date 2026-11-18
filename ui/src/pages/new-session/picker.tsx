@@ -20,10 +20,9 @@ export function SessionPicker(props: {
   labelPending?: boolean;
   icon: JSX.Element;
   summary?: string;
-  triggerAttributes?: Pick<
-    JSX.HTMLAttributes<HTMLButtonElement>,
-    "title" | "aria-label" | "aria-description"
-  > & { [name: `data-${string}`]: string | undefined };
+  triggerAttributes?: Pick<JSX.HTMLAttributes<HTMLButtonElement>, "title" | "aria-description"> & {
+    [name: `data-${string}`]: string | undefined;
+  };
   params: NewSessionPlaceControlsOptions;
   children: JSX.Element;
   lazy?: boolean;
@@ -49,7 +48,7 @@ export function SessionPicker(props: {
         ]}
       >
         <button
-          aria-label={props.label}
+          aria-label={props.summary ? `${props.label}, ${props.summary}` : props.label}
           {...props.triggerAttributes}
           id={`new-session-${props.kind}-trigger`}
           ref={(node) => {

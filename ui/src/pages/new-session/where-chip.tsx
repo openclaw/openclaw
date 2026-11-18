@@ -77,9 +77,6 @@ export function WhereChip(props: WhereChipProps) {
       icon={triggerIcon()}
       summary={view().configurationSummary}
       triggerAttributes={{
-        "aria-label": view().configurationSummary
-          ? `${label()}, ${view().configurationSummary}`
-          : label(),
         "aria-description":
           props.state.kind === "cloud" && view().cloudPresentation.label
             ? t("newSession.cloudWorkerProvider", { provider: view().cloudPresentation.label })
