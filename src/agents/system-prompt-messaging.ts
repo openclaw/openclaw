@@ -105,9 +105,9 @@ export function buildMessagingSection(params: {
   const hasSubagents = params.availableTools.has("subagents");
   const hasSessionsYield = params.availableTools.has("sessions_yield");
   const suppressSilentTokenGuidance = messageToolOnly || params.silentReplyPromptMode === "none";
-  const completionEventGuidance = suppressSilentTokenGuidance
-    ? "- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or silent placeholder."
-    : `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
+  // Always use the same completion-event guidance wording to keep the suffix
+  // digest stable across normal and announce/yield turns.
+  const completionEventGuidance = `- Completion event requesting update: rewrite in normal voice; send. Never forward raw metadata or default to ${SILENT_REPLY_TOKEN}.`;
   const subagentOrchestrationGuidance = params.delegationSectionRenders
     ? ""
     : hasSessionsSpawn
