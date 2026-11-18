@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -203,11 +204,8 @@ function loadOlderChatInputHistory(
       const messages = page.messages ?? [];
       for (let i = messages.length - 1; i >= 0 && items.length < CHAT_INPUT_HISTORY_LIMIT; i--) {
         const message = messages[i];
-        if (!message || typeof message !== "object") {
-          continue;
-        }
-        const entry = message as { role?: unknown };
-        if (typeof entry.role !== "string" || entry.role.toLowerCase() !== "user") {
+        const entry = asOptionalRecord(message);
+        if (typeof entry?.role !== "string" || entry.role.toLowerCase() !== "user") {
           continue;
         }
         const text = extractText(message);
