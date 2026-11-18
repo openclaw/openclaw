@@ -9,6 +9,7 @@ import { buildModelsListResult, prepareModelsListResult } from "./models-list-re
 import {
   createModelsListTestContext,
   modelAuthStore,
+  listModels,
   requestModelsList,
 } from "./models-list-result.openai-routes.test-support.js";
 
@@ -315,4 +316,50 @@ it.each([false, true])("projects cooldown only when unavailable (%s)", async (av
     { ...model, agentRuntime, tags: ["configured"], available: false },
   ]);
   expect(evaluateEntry).toHaveBeenCalledTimes(hostEvaluations);
+});
+
+it("keeps an authenticated cooling model visible without exposing missing or disallowed auth", async () => {
+  const until = Date.now() + 3_600_000;
+  const model = (provider: string, id: string) => ({ provider, id, name: id });
+  const result = await listModels({
+    view: "default",
+    cfg: {
+      agents: {
+        defaults: {
+          model: "fixture/ready",
+          modelPolicy: { allow: ["fixture/*", "unsigned/*"] },
+        },
+      },
+    },
+    catalog: [
+      model("fixture", "ready"),
+      model("fixture", "cooling"),
+      model("unsigned", "missing"),
+      model("restricted", "hidden"),
+    ],
+    metadataSnapshot,
+    preparedAuthStore: modelAuthStore(
+      {
+        "fixture:key": { type: "api_key", provider: "fixture", key: "synthetic-key" },
+        "restricted:key": { type: "api_key", provider: "restricted", key: "synthetic-key" },
+      },
+      {
+        "fixture:key": {
+          cooldownUntil: until,
+          cooldownReason: "rate_limit",
+          cooldownModel: "cooling",
+        },
+      },
+    ),
+  });
+  expect(result.models.map(({ provider, id }) => `${provider}/${id}`)).toEqual([
+    "fixture/ready",
+    "fixture/cooling",
+  ]);
+  expect(result.models.find(({ id }) => id === "cooling")).toMatchObject({
+    available: false,
+    unavailableReason: "cooldown",
+    unavailableUntil: until,
+  });
+  expect(result.models.find(({ id }) => id === "ready")).toMatchObject({ available: true });
 });
