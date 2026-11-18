@@ -3,6 +3,7 @@
  * Freeze once with local-workspace-checkpoint-measure.ts --freeze-source <capsule>
  * --revision <base>, then run this script with --capsule <capsule> --output <new-dir>.
  * --counts records work; --allocation samples allocation separately from timing.
+ * --control-pairs 0 reuses completed A/A controls for a follow-up A/B campaign.
  * --publication measures the durable publication coordinator and real local Git.
  * Baseline and candidate function bodies come from Git and the working tree. Both
  * execute in the same process, interleaved A/A then A/B, through the registered
@@ -51,6 +52,7 @@ const { values } = parseArgs({
     runs: { type: "string", default: "20000" },
     roles: { type: "string", default: "2000" },
     pairs: { type: "string", default: "5" },
+    "control-pairs": { type: "string" },
   },
 });
 assert(values.capsule && values.output, "--capsule and --output are required");
@@ -67,6 +69,8 @@ assert(capsule !== root);
 const manifest = JSON.parse(fs.readFileSync(path.join(capsule, "checkpoint-source.json"), "utf8"));
 const pairs = Number(values.pairs);
 assert(Number.isInteger(pairs) && pairs > 0, "--pairs must be a positive integer");
+const controlPairs = Number(values["control-pairs"] ?? values.pairs);
+assert(Number.isInteger(controlPairs) && controlPairs >= 0, "Invalid --control-pairs");
 const readSource = (relative: string) =>
   values.lineage && !values["working-source"]
     ? execFileSync("git", ["show", `${manifest.revision}:${relative}`], {
@@ -514,7 +518,7 @@ it("measures actions at the registered boundary with a large authority inventory
  const censusHook=process.env.LANE2450_COUNTS==="1" ? createHook({before(){}}).enable():undefined;
  globalThis[Symbol.for("openclaw.benchmark.githubActionScope")]=state;
  const compare=${Boolean(values["compare-role-selection"] || values["compare-assertion-chains"])} || !lineage;
- const pairs=[{kind:"warmup",arms:compare?["baseline","candidate"]:["baseline","baseline"]},...Array.from({length:${pairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(compare ? Array.from({length:${pairs}},()=>({kind:"AB",arms:["baseline","candidate"]})) : [])];
+ const pairs=[{kind:"warmup",arms:compare?["baseline","candidate"]:["baseline","baseline"]},...Array.from({length:${controlPairs}},()=>({kind:"AA",arms:["baseline","baseline"]})),...(compare ? Array.from({length:${pairs}},()=>({kind:"AB",arms:["baseline","candidate"]})) : [])];
  let i=0;
  for(const depth of lineage ? ${JSON.stringify(values.depths.split(",").map(Number))} : [0]) {
  for(const [pair,control] of pairs.entries()) for(const [slot,arm] of control.arms.entries()) {
@@ -619,6 +623,7 @@ fs.writeFileSync(
     {
       revision: manifest.revision,
       pairs,
+      controlPairs,
       hashes,
       testSha256: hash(fixtureTest),
       counts: Boolean(values.counts),
@@ -638,7 +643,7 @@ fs.writeFileSync(
       editBody: Boolean(values["edit-body"]),
       assignmentMiss: Boolean(values["assignment-miss"]),
       acceptance: values["compare-assertion-chains"]
-        ? "After warmup, at least five A/A controls and five interleaved A/B pairs. Candidate median main-thread CPU must beat both A/A arms and paired A; median peak timer delay must be within the A spread; median timer-delay histogram p95 must not regress. Record load and allocation separately. Timer gaps are an event-loop delay proxy, not exact synchronous task durations. Redundant target preparation must fall without changing rejection behavior."
+        ? "After warmup, at least five A/A controls (or matching completed controls) and five interleaved A/B pairs. Candidate median main-thread CPU must beat both A/A arms and paired A; median peak timer delay must be within the A spread; median timer-delay histogram p95 must not regress. Record load and allocation separately. Timer gaps are an event-loop delay proxy, not exact synchronous task durations. Redundant target preparation must fall without changing rejection behavior."
         : values["compare-role-selection"]
           ? "Warm registered-action CPU and allocation improve at least 20%; no latency or max-segment regression of 20%. A/A controls bound noise; five interleaved A/B pairs. Role assignment enumerations become zero after immutable-index preparation, including misses; authority assertions remain unchanged."
           : values.lineage

@@ -41,6 +41,7 @@ import {
 import { commandResult, githubPublicationTestMocks } from "./github-publication.test-support.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import type { GatewayRequestOptions } from "./server-methods/types.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 import {
@@ -351,13 +352,19 @@ export async function fixture(
     invocation: {
       requester?: "guest" | "maintainer";
       caller?: "guest" | "maintainer" | null;
+      client?: GatewayRequestOptions["client"];
     } = {},
   ) => {
     const principal = invocation.requester === "maintainer" ? f.maintainerSource : f.guestSource;
     const caller = invocation.caller === undefined ? invocation.requester : invocation.caller;
     const callerSource = caller === "maintainer" ? f.maintainerSource : f.guestSource;
     const operator =
-      caller === null ? undefined : await captureGatewayOperatorRunAuthority(callerSource);
+      caller === null
+        ? undefined
+        : await captureGatewayOperatorRunAuthority({
+            ...callerSource,
+            client: invocation.client ?? callerSource.client,
+          });
     using _ = { [Symbol.dispose]: () => operator?.release() };
     const callGateway: InProcessGatewayCaller = async <T>(
       method: string,
@@ -366,7 +373,7 @@ export async function fixture(
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: principal.client,
+        client: invocation.client ?? principal.client,
         context: Object.assign(createRequestContext(), principal.context, {
           githubPublicationService: f.coordinator,
           workerSessionPlacementService: f.placements,
@@ -447,9 +454,12 @@ export async function admitSharedParent(
     profileId: f.guestProfile,
   });
   onTestFinished(principal.release);
-  f.guestSource.client.internal = {
-    ...f.guestSource.client.internal,
-    operatorRunAuthority: principal.authority,
+  return {
+    ...f.guestSource.client,
+    internal: {
+      ...f.guestSource.client.internal,
+      operatorRunAuthority: principal.authority,
+    },
   };
 }
 

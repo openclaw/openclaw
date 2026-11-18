@@ -752,9 +752,7 @@ describe("existing PR preparation through the registered agent action", () => {
   ])("keeps private source transfer bound to the current requester (%s)", async (variant) => {
     const f = await fixture({ fork: true });
     const sharingScope = { agentId: "main", sessionKey: "agent:main:publication-parent" };
-    if (variant === "sharing") {
-      await admitSharedParent(f, sharingScope);
-    }
+    const client = variant === "sharing" ? await admitSharedParent(f, sharingScope) : undefined;
     const cancellation = new AbortController();
     f.pr.base.repo.private = true;
     f.pr.head.repo.private = true;
@@ -849,7 +847,7 @@ describe("existing PR preparation through the registered agent action", () => {
         "original PR contents\n",
       );
     } else {
-      await expect(f.invoke({}, f.sandbox, cancellation.signal)).rejects.toThrow(
+      await expect(f.invoke({}, f.sandbox, cancellation.signal, { client })).rejects.toThrow(
         variant === "wrong author" ? "could not be verified as yours" : undefined,
       );
       observing = false;
