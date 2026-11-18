@@ -35,12 +35,15 @@ trap cleanup EXIT
 # and keeps its diagnostics apart from the other published-driver cells.
 CELL_ENTRY=published-driver.mjs
 DEFAULT_ARTIFACT_DIR="$ROOT_DIR/.artifacts/published-driver-update"
+DEFAULT_DRIVER=latest
 if [ "${OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION:-0}" = "1" ]; then
   CELL_ENTRY=published-driver-plugin-publication.mjs
   DEFAULT_ARTIFACT_DIR="$ROOT_DIR/.artifacts/published-driver-plugin-publication"
+  # Its plugin fixtures are versioned from the driver, so it needs a release, not a dist-tag.
+  DEFAULT_DRIVER=2026.11.5
 fi
 ARTIFACT_DIR="${2:-$DEFAULT_ARTIFACT_DIR}"
-DRIVER_TAG="${3:-latest}"
+DRIVER_TAG="${3:-$DEFAULT_DRIVER}"
 mkdir -p "$ARTIFACT_DIR"
 ARTIFACT_DIR="$(cd "$ARTIFACT_DIR" && pwd)"
 printf 'prepare-container\n' > "$ARTIFACT_DIR/phase.txt"

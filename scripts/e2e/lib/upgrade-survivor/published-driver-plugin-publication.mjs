@@ -27,6 +27,8 @@ assert(
 );
 const readOnlyConfig = fault !== "corrupt-plugin";
 assert(candidateArg && artifactsArg && driverVersion, "Expected candidate, artifacts and driver");
+// Fixture packages and version assertions use this value, so a dist-tag such as `latest` cannot work.
+assert.match(driverVersion, /^\d+\.\d+\.\d+$/, "Expected a concrete driver release version");
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
 const accountHome = os.userInfo().homedir;
@@ -434,6 +436,16 @@ try {
     assert.equal(fs.readFileSync(configPath, "utf8"), configBefore);
     assert.equal(afterFirst.servingVersion, target);
     assert.equal(afterFirst.readyz, 200);
+    // The refusal came before plugin convergence: plugins stay at the driver's release.
+    for (const spec of plugins) {
+      const id = spec.split("/")[1];
+      assert.deepEqual(afterFirst.plugins[id], {
+        version: driverVersion,
+        diskVersion: driverVersion,
+      });
+      assert.deepEqual(afterFirst.inventory[id], { version: driverVersion, status: "loaded" });
+    }
+    assertRecorded(afterFirst, first.run, "failed");
     const nextAction = first?.run?.origin?.nextAction ?? "";
     assert.match(nextAction, /`openclaw gateway stop --force` for the managed service/);
     log("refused channel change cell passed");
