@@ -1115,6 +1115,26 @@ was restored byte for byte. Scoped scripts-test typecheck, lint, formatting
 and both line-cap ratchets pass. Independent preservation and local
 ClawSweeper reviews found no actionable defects.
 
+### Standalone SQLite fixture cleanup
+
+At `4f8b68e647afb8507f3e5bba54af1374cb608389`, standalone SQLite test
+teardown clears its directory tracker before removal and stops on the first
+error. Reuse the shared cleanup owner while preserving the synchronous hook,
+fixture registration, child-process mock and all three declarations / five
+expanded cases. Retain macOS staging and manifest identity, the three distinct
+rejection guards, and Linux's embedded-library behavior. Production and shared
+helpers are unchanged. Mocked compilation and probing do not establish real
+SQLite capability qualification.
+
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and cannot retry. The shared
+owner preserves the same error, removes the healthy root, retains the failed
+root and removes it on retry. Both injected runs intentionally report one
+teardown failure and four passing cases. Both clean runs pass all five cases.
+Temporary instrumentation was restored byte for byte. Scoped scripts-test
+typecheck, lint, formatting and both line-cap ratchets pass. Independent
+preservation and local ClawSweeper reviews found no actionable defects.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
