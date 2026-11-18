@@ -85,6 +85,13 @@ completion delivery and retry. A collector that yields retains its terminal timi
 and reply even if a later turn advances the child session. Retained routing
 metadata does not keep the child running.
 
+When a hidden sub-agent's task ends (it finishes, fails, times out or is stopped),
+OpenClaw stops the processes it still runs: `yieldMs` commands, `background: true`
+services and processes its commands left running. A sub-agent waiting in
+`sessions_yield` keeps the commands it waits on. Use `durable: true`, or start the
+service from the parent session, to keep a service after the sub-agent ends.
+Visible spawned sessions keep their processes until reset, delete or archive.
+
 A graceful Gateway shutdown records the top-level requesters of running children,
 then cancels the children through the ordinary abort path. They settle terminally
 and quietly, without completion announcements or failure notices to their parents
