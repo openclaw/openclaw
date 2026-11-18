@@ -34,35 +34,108 @@ const artifact = z.strictObject({
   digest,
 });
 
+const commonRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  repository,
+  releaseTag,
+  channel: z.enum(["beta", "latest", "extended-stable"]),
+  candidateSha: sha,
+  reference: z.strictObject({ releaseTag, targetSha: sha, validationEvidenceDigest: digest }),
+  delta: z.strictObject({ commits: count, added: count, deleted: count }),
+  artifacts: z.array(artifact).min(1).max(256),
+  publicationScope: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(200)
+        .regex(/^[A-Za-z0-9@][A-Za-z0-9@._/+:-]*$/u),
+    )
+    .min(1)
+    .max(256),
+  run: z.strictObject({ id, attempt: id }),
+  requestId: z
+    .string()
+    .regex(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u),
+  expiresAt: z.string().datetime(),
+});
+
+const partialValidationSnapshot = z.strictObject({
+  runId: id,
+  runAttempt: id,
+  candidateSha: sha,
+  capturedAt: z.string().datetime(),
+  evidenceUrl: z.url().refine((value) => {
+    const url = new URL(value);
+    return url.origin === "https://github.com" && !url.username && !url.password && !url.search;
+  }, "Use a durable GitHub evidence URL without credentials or query parameters."),
+  evidenceDigest: digest,
+  summary: z.strictObject({
+    passed: count.min(1),
+    failed: count,
+    cancelled: count,
+    skipped: count,
+    unfinished: count,
+  }),
+  outstandingChecks: z
+    .array(
+      z.strictObject({
+        name: z.string().min(1).max(200),
+        status: z.enum(["failed", "cancelled", "skipped", "unfinished"]),
+        jobId: id,
+        runId: id,
+        runAttempt: id,
+      }),
+    )
+    .min(1)
+    .max(80),
+});
+
 export const fastTrackRequestSchema = z
-  .strictObject({
-    schemaVersion: z.literal(1),
-    policy: z.literal(FAST_TRACK_POLICY),
-    action: z.literal(FAST_TRACK_ACTION),
-    repository,
-    releaseTag,
-    channel: z.enum(["beta", "latest", "extended-stable"]),
-    candidateSha: sha,
-    reference: z.strictObject({ releaseTag, targetSha: sha, validationEvidenceDigest: digest }),
-    delta: z.strictObject({ commits: count, added: count, deleted: count }),
-    artifacts: z.array(artifact).min(1).max(256),
-    publicationScope: z
-      .array(
-        z
-          .string()
-          .min(1)
-          .max(200)
-          .regex(/^[A-Za-z0-9@][A-Za-z0-9@._/+:-]*$/u),
-      )
-      .min(1)
-      .max(256),
-    run: z.strictObject({ id, attempt: id }),
-    requestId: z
-      .string()
-      .regex(/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u),
-    expiresAt: z.string().datetime(),
-  })
+  .discriminatedUnion("policy", [
+    commonRequestSchema.extend({
+      policy: z.literal(FAST_TRACK_POLICY),
+      action: z.literal(FAST_TRACK_ACTION),
+    }),
+    commonRequestSchema.extend({
+      policy: z.literal("approved-partial-frv-v1"),
+      action: z.literal("Approve publication with incomplete validation"),
+      reason: z.string().min(10).max(1000),
+      validationSnapshot: partialValidationSnapshot,
+    }),
+  ])
   .superRefine((request, context) => {
+    if (request.policy === "approved-partial-frv-v1") {
+      const snapshot = request.validationSnapshot;
+      if (
+        snapshot.candidateSha !== request.candidateSha ||
+        Date.parse(snapshot.capturedAt) >= Date.parse(request.expiresAt)
+      ) {
+        context.addIssue({
+          code: "custom",
+          message: "Validation snapshot must bind this candidate and precede request expiry.",
+        });
+      }
+      const jobs = new Set(snapshot.outstandingChecks.map((job) => job.jobId));
+      if (jobs.size !== snapshot.outstandingChecks.length) {
+        context.addIssue({
+          code: "custom",
+          message: "Validation snapshot contains duplicate jobs.",
+        });
+      }
+      for (const status of ["failed", "cancelled", "skipped", "unfinished"] as const) {
+        if (
+          snapshot.summary[status] !==
+          snapshot.outstandingChecks.filter((job) => job.status === status).length
+        ) {
+          context.addIssue({
+            code: "custom",
+            message: "Validation summary must enumerate every outstanding check.",
+          });
+        }
+      }
+    }
+
     try {
       validateNpmPublishBoundary(request.releaseTag.slice(1), request.channel);
     } catch {
@@ -125,6 +198,11 @@ export function collectFastTrackEligibility(input: {
   validatedReference: unknown;
 }): { commits: number; added: number; deleted: number } {
   const request = parseFastTrackRequest(input.request);
+  if (request.policy !== FAST_TRACK_POLICY) {
+    throw new Error(
+      "This verifier requires authenticated partial-FRV evidence before admitting the partial-FRV policy; publisher integration is not enabled.",
+    );
+  }
   const reference = validatedReferenceSchema.parse(input.validatedReference);
   if (
     reference.repository !== request.repository ||

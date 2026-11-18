@@ -112,6 +112,48 @@ await test("card contains complete escaped immutable contents and identity-bound
     request().digest,
   );
   assert.match(JSON.stringify(card), /example\/project/u);
+  assert.doesNotMatch(JSON.stringify(card), /<pre>/u);
+  assert.ok(card.cardsV2[0].card.sections.some((section) => section.header === "Artifacts"));
+  assert.ok(widgets.some((widget) => widget.decoratedText?.topLabel === "Repository"));
+  assert.ok(card.cardsV2[0].card.sections.some((section) => section.collapsible));
+  const partial = parseRequest(
+    {
+      payload: JSON.stringify({
+        ...payload,
+        action: "Approve publication with incomplete validation",
+        validationSnapshot: {
+          runId: "456",
+          summary: { passed: 47, failed: 1, unfinished: 1 },
+          outstandingChecks: [
+            {
+              name: "Windows startup",
+              status: "failed",
+              jobId: "501",
+              runId: "457",
+              runAttempt: "1",
+            },
+          ],
+        },
+        evidenceUrl: "https://github.com/example/project/actions/runs/456",
+        unsafeUrl: "javascript:alert(1)",
+      }),
+    },
+    now,
+  );
+  const sections = approvalCard(partial, "https://approval.example/chat").cardsV2[0].card.sections;
+  const validation = sections.find((section) => section.header === "Existing validation");
+  assert.match(validation.widgets[0].decoratedText.text, /47 passed · 1 failed · 1 unfinished/u);
+  assert.match(validation.widgets[1].textParagraph.text, /Windows startup.*FAILED/u);
+  assert.equal(validation.uncollapsibleWidgetsCount, 2);
+  const links = sections
+    .flatMap((section) => section.widgets)
+    .filter((widget) => widget.decoratedText?.onClick);
+  assert.equal(links.length, 1);
+  assert.equal(
+    links[0].decoratedText.onClick.openLink.url,
+    "https://github.com/example/project/actions/runs/456",
+  );
+
   const html = parseRequest(
     { payload: JSON.stringify({ ...payload, note: "<a>hidden</a>" }) },
     now,
@@ -119,6 +161,38 @@ await test("card contains complete escaped immutable contents and identity-bound
   assert.match(
     JSON.stringify(approvalCard(html, "https://approval.example/chat")),
     /&lt;a&gt;hidden&lt;\/a&gt;/u,
+  );
+});
+
+await test("cards preserve the full approval action and lossless fractional values", () => {
+  const precise = parseRequest(
+    {
+      payload: JSON.stringify({
+        ...payload,
+        smallAmount: 0.0004,
+        budget: { values: { amount: 12.34567, fee: 0.0004 } },
+      }),
+    },
+    now,
+  );
+  const sections = approvalCard(precise, "https://approval.example/chat").cardsV2[0].card.sections;
+  const fields = sections
+    .flatMap((section) => section.widgets)
+    .map((widget) => widget.decoratedText)
+    .filter(Boolean);
+  assert.deepEqual(
+    {
+      action: fields.find((field) => field.topLabel === "Action")?.text,
+      wraps: fields.find((field) => field.topLabel === "Action")?.wrapText,
+      amount: fields.find((field) => field.topLabel === "Small Amount")?.text,
+      budget: fields.find((field) => field.topLabel === "Values")?.text,
+    },
+    {
+      action: payload.action,
+      wraps: true,
+      amount: "0.0004",
+      budget: "12.34567 amount · 0.0004 fee",
+    },
   );
 });
 
@@ -175,6 +249,52 @@ await test("HTTP boundary enforces separate principals; request-only token canno
   assert.equal(
     (await post("/requests", "machine", { payload: JSON.stringify(tooLarge) })).status,
     413,
+  );
+  assert.equal(
+    (
+      await post("/requests", "machine", {
+        payload: JSON.stringify({
+          ...expired,
+          ...Object.fromEntries(
+            Array.from({ length: 110 }, (_, index) => [`field${index}`, index]),
+          ),
+        }),
+      })
+    ).status,
+    413,
+  );
+  const widgetCount = (card) =>
+    card.cardsV2[0].card.sections.reduce((total, section) => total + section.widgets.length, 0);
+  const baseCount = widgetCount(
+    approvalCard(
+      parseRequest({ payload: JSON.stringify(expired) }, Date.now()),
+      "https://approval.example/chat",
+    ),
+  );
+  const capacity = {
+    ...expired,
+    requestId: "00000000-0000-4000-8000-000000000099",
+    ...Object.fromEntries(
+      Array.from({ length: 100 - baseCount }, (_, index) => [`capacity${index}`, index]),
+    ),
+  };
+  assert.equal(
+    widgetCount(
+      approvalCard(
+        parseRequest({ payload: JSON.stringify(capacity) }, Date.now()),
+        "https://approval.example/chat",
+      ),
+    ),
+    100,
+  );
+  assert.equal(
+    (await post("/requests", "machine", { payload: JSON.stringify(capacity) })).status,
+    413,
+  );
+  delete capacity.capacity0;
+  assert.equal(
+    (await post("/requests", "machine", { payload: JSON.stringify(capacity) })).status,
+    200,
   );
   const raw = await new Promise((resolve, reject) => {
     const socket = connect(server.address().port, "127.0.0.1", () => {

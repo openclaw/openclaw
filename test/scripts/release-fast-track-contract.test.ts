@@ -467,3 +467,78 @@ it("does not propagate HTTP-client errors that echo Authorization credentials", 
     vi.unstubAllGlobals();
   }
 });
+
+it("binds a separate partial-FRV approval to retained results without relaxing small-delta admission", async () => {
+  const original = request();
+  const partial = {
+    ...original,
+    policy: "approved-partial-frv-v1",
+    action: "Approve publication with incomplete validation",
+    reason: "Accept the explicitly listed validation gaps for these exact artifacts.",
+    delta: { commits: 83, added: 90000, deleted: 420 },
+    validationSnapshot: {
+      runId: "456",
+      runAttempt: "2",
+      candidateSha: original.candidateSha,
+      capturedAt: "2026-11-17T11:00:00.000Z",
+      evidenceUrl:
+        "https://github.com/openclaw/openclaw/releases/download/example/frv-snapshot.json",
+      evidenceDigest: digest,
+      summary: { passed: 47, failed: 1, cancelled: 0, skipped: 0, unfinished: 1 },
+      outstandingChecks: [
+        { name: "Windows startup", status: "failed", jobId: "501", runId: "457", runAttempt: "1" },
+        { name: "Soak", status: "unfinished", jobId: "502", runId: "458", runAttempt: "1" },
+      ],
+    },
+  };
+  expect(parseFastTrackRequest(partial)).toMatchObject({
+    policy: partial.policy,
+    delta: partial.delta,
+  });
+  for (const change of [
+    { action: original.action },
+    { validationSnapshot: undefined },
+    { validationSnapshot: { ...partial.validationSnapshot, candidateSha: "f".repeat(40) } },
+    {
+      validationSnapshot: {
+        ...partial.validationSnapshot,
+        summary: { ...partial.validationSnapshot.summary, failed: 0 },
+      },
+    },
+    {
+      validationSnapshot: {
+        ...partial.validationSnapshot,
+        summary: { ...partial.validationSnapshot.summary, passed: 0 },
+      },
+    },
+    {
+      validationSnapshot: {
+        ...partial.validationSnapshot,
+        evidenceUrl: "https://example.invalid/untrusted",
+      },
+    },
+  ]) {
+    expect(() => parseFastTrackRequest({ ...partial, ...change })).toThrow();
+  }
+  const changedSnapshot = { ...partial.validationSnapshot, runAttempt: "3" };
+  expect(fastTrackRequestDigest({ ...partial, validationSnapshot: changedSnapshot })).not.toBe(
+    fastTrackRequestDigest(partial),
+  );
+  await expect(
+    verifyFastTrackApproval({
+      serviceOrigin: "https://approval.example",
+      identityToken: "synthetic-token",
+      request: parseFastTrackRequest(partial),
+      repositoryRoot: "unused",
+      validatedReference: {
+        repository: original.repository,
+        ...original.reference,
+        validationMode: "full-release-validation",
+        published: true,
+      },
+    }),
+  ).rejects.toThrow(/authenticated partial-FRV evidence/u);
+  expect(() =>
+    parseFastTrackRequest({ ...partial, policy: original.policy, action: original.action }),
+  ).toThrow();
+});

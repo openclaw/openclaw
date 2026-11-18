@@ -140,7 +140,15 @@ export function createHandler({
           result = { hostAppDataAction: { chatDataAction: { [operation]: { message } } } };
         } else {
           const request = parseRequest(value, Date.now());
-          if (Buffer.byteLength(JSON.stringify(approvalCard(request, `${baseUrl}/chat`))) > 32000) {
+          const card = approvalCard(request, `${baseUrl}/chat`);
+          if (
+            Buffer.byteLength(JSON.stringify(card)) > 32000 ||
+            // A decided card adds two metadata widgets and removes one button-list widget.
+            card.cardsV2[0].card.sections.reduce(
+              (total, section) => total + section.widgets.length,
+              0,
+            ) > 99
+          ) {
             res
               .writeHead(413)
               .end(

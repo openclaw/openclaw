@@ -34,6 +34,17 @@ steps; local tests alone do not establish them.
   Google user ID is persisted; an ID change fails rather than silently rebinding.
   Requests notify every enrolled approver and require at least one enrolled approver. No domain-wide approval.
 
+## Card presentation
+
+The service renders labeled fields rather than a JSON blob. Numeric summaries
+are compact, named outstanding checks are prominent, and nested evidence/artifact
+and technical identity sections can be expanded. All request fields remain
+reviewable, including fields from applications other than OpenClaw. Links only
+open HTTPS URLs without user information. The exact compact JSON still owns the
+digest and persisted approval; presentation never changes its contents. Cards
+exceeding 32,000 serialized bytes or 99 pending widgets are rejected before
+delivery, reserving the final widget for the recorded decision.
+
 ## Deployment requirements
 
 Use a separate project managed by `services@openclaw.org`. Do not reuse a project

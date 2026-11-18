@@ -1,0 +1,6 @@
+# PR #201080: independent Google callback/decision HTTP boundaries, first-decision
+# and replay behavior, readable-card escaping/bindings, exact release request
+# digests, both policies, Git-backed complete-delta/binary/threshold checks,
+# and real publication-preflight CLI credential handling.
+# Two new test files total 1000 lines; ordinary allowance remains 400.
+600

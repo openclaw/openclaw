@@ -56,6 +56,41 @@ submodule or otherwise unmeasurable changes are ineligible. Shallow history is
 insufficient. The Git-backed helper recomputes counts and rejects caller/count or
 reference mismatches; its typed reference input is not itself authentication.
 
+## Partial-FRV approval policy
+
+`approved-partial-frv-v1` uses the same service and approvers, but a different
+explicit action: **Approve publication with incomplete validation**. It has no
+commit/line ceiling. It does not widen `approved-fast-track-v1` or turn a failed
+FRV run into a successful one.
+
+The request includes an operator reason and `validationSnapshot`: exact FRV
+run/attempt and candidate SHA, capture time, a durable GitHub evidence URL and
+SHA-256 digest, passed/failed/cancelled/skipped/unfinished counts, and every
+outstanding check's name, category, job ID and producing run/attempt. At least
+one check must have passed, and every non-passing count must match the enumerated
+checks. The retained snapshot must preserve original job statuses/conclusions,
+not just this card's summary. The reason is an operator statement, not verified
+evidence. A changed snapshot, reason or artifact requires a new approval.
+
+This is currently a **request/status contract only**. The existing small-delta
+verifier explicitly refuses this policy; it cannot be used to evade its limits.
+Publisher support must authenticate and retain the snapshot using the existing
+FRV evidence owners, verify exact source/artifact/publication bindings, and keep
+build/package integrity and publication authorization mandatory. Neither a URL,
+caller-supplied summary nor a matching hash establishes that authentication.
+Keep original FRV results and the separate human exception in release evidence.
+A partially validated release never resets the fully validated baseline.
+
+## Readable approval cards
+
+Cards show labeled release details, change counts, and a compact validation
+summary. Outstanding checks are visible before expanding technical details.
+Source/reference information, exact artifact digests, request identity and policy
+remain available in expandable sections. Evidence URLs are clickable HTTPS links;
+unknown fields are also displayed. JSON is retained for exact hashing/storage,
+not dumped into the human review card. Decision buttons keep the same immutable
+request/digest binding and disappear after the first decision.
+
 ## Independent human decision
 
 The standalone service in `deploy/release-approval/` has no OpenClaw dependency.
