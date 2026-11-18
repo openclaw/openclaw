@@ -77,6 +77,14 @@ export async function resolveNonInteractiveApiKey(params: {
   if (useSecretRefMode && flagKey) {
     const explicitEnvKey = normalizeOptionalSecretInput(process.env[explicitEnvVar]);
     if (explicitEnvKey) {
+      // Ref mode can only store a reference to the env var, so a differing flag
+      // value would be silently dropped. Mirror the gateway credential check
+      // and reject the mismatch instead of discarding the explicit flag value.
+      if (!isMalformedApiKeyInput(explicitEnvKey) && flagKey !== explicitEnvKey) {
+        return reject(
+          `${params.flagName} does not match ${explicitEnvVar}. Set the environment variable to the same value or omit the flag.`,
+        );
+      }
       return returnOperatorKey(explicitEnvKey, "env", explicitEnvVar);
     }
     // A literal flag value cannot be converted into a durable secret reference;

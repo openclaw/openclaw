@@ -111,6 +111,42 @@ describe("resolveNonInteractiveApiKey", () => {
     });
   });
 
+  it("stores the env reference when a ref-mode flag matches the env var", async () => {
+    resolveEnvApiKey.mockReturnValue(null);
+    await withEnvAsync({ CUSTOM_API_KEY: "matching-key" }, async () => {
+      expect(await resolveKey({ flagValue: "matching-key", secretInputMode: "ref" })).toEqual({
+        key: "matching-key",
+        source: "env",
+        envVarName: "CUSTOM_API_KEY",
+      });
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.error).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects a ref-mode flag that differs from the provider env var without leaking either value", async () => {
+    resolveEnvApiKey.mockReturnValue(null);
+    await withEnvAsync({ CUSTOM_API_KEY: "stale-env-key-should-not-leak" }, async () => {
+      expect(
+        await resolveKey({
+          flagValue: "rotated-flag-key-should-not-leak",
+          secretInputMode: "ref",
+          json: true,
+        }),
+      ).toBeNull();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      const output = [
+        ...runtime.log.mock.calls.map(([line]) => String(line)),
+        ...runtime.error.mock.calls.map(([line]) => String(line)),
+      ].join("\n");
+      expect(output).toContain("--custom-api-key");
+      expect(output).toContain("CUSTOM_API_KEY");
+      expect(output).toContain("does not match");
+      expect(output).not.toContain("stale-env-key-should-not-leak");
+      expect(output).not.toContain("rotated-flag-key-should-not-leak");
+    });
+  });
+
   it.each<RejectedCase>([
     [{}, "Missing --custom-api-key", 1],
     [{ flagValue: malformedKey }, commandError, 0],
