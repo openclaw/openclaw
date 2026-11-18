@@ -93,7 +93,7 @@ export function describeSubagentSpawnTargetParameter(params: {
   requireAgentId?: boolean;
   /** `tools.swarm.defaultAgentId`, used when collect=true omits agentId. */
   collectDefaultAgentId?: string;
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
 }): string | undefined {
   const requesterAgentId = normalizeAgentId(params.requesterAgentId);
   const senderRestricted = params.inheritedToolPolicySource === "sender";

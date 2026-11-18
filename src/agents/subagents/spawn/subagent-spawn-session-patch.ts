@@ -47,7 +47,11 @@ import {
 } from "../../../utils/delivery-context.shared.js";
 import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy.js";
 import { getSessionToolUsageRanking } from "../../embedded-agent-runner/session-prompt-state.js";
-import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
+import {
+  inheritedToolAllowPatch,
+  inheritedToolDenyPatch,
+  inheritedToolPolicySourcePatch,
+} from "../../inherited-tool-deny.js";
 import { readSessionToolUsageRankingSnapshot } from "../../session-tool-usage-snapshot.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
@@ -98,7 +102,8 @@ export async function createInitialSubagentSession(input: {
   >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
+  inheritedToolPolicyRunSessionKey?: string;
   delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
   modelPatch: Partial<
     Extract<
@@ -127,9 +132,7 @@ export async function createInitialSubagentSession(input: {
     blindPrompt: params.blind ? true : undefined,
     inheritedToolPolicyVersion: 1,
     ...(params.delegatedToolPolicy ? { delegatedToolPolicy: params.delegatedToolPolicy } : {}),
-    ...(params.inheritedToolPolicySource
-      ? { inheritedToolPolicySource: params.inheritedToolPolicySource }
-      : {}),
+    ...inheritedToolPolicySourcePatch(params),
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...params.modelPatch,

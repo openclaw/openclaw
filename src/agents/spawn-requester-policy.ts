@@ -1,6 +1,6 @@
 /** Sender policy provenance is host-owned and survives delegated turns. */
 export function resolveSenderRestrictedSpawnError(params: {
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
   requesterAgentId?: string;
   targetAgentId?: string;
   visible?: boolean;

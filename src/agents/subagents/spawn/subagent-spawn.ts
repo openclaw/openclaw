@@ -10,6 +10,7 @@ import { getCanonicalGatewayContextResolver } from "../../../plugins/runtime/gat
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agent-tool-source-execution-guard.js";
 import { prepareNativeDelegatedToolPolicy } from "../../delegated-tool-policy.js";
+import { inheritedToolPolicySourcePatch } from "../../inherited-tool-deny.js";
 import {
   runSpawnPipeline,
   summarizeSpawnError,
@@ -141,7 +142,6 @@ export async function spawnSubagentDirect(
       requesterSessionKey: requesterInternalKey,
       context: ctx,
     });
-    const delegatedToolPolicy = delegation.policy;
     assertDelegationCurrent = delegation.assertCurrent;
     if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
@@ -247,8 +247,8 @@ export async function spawnSubagentDirect(
         admissionPatch: admission.childSessionPatch,
         inheritedToolAllowlist: ctx.inheritedToolAllowlist,
         inheritedToolDenylist: ctx.inheritedToolDenylist,
-        inheritedToolPolicySource: ctx.inheritedToolPolicySource,
-        delegatedToolPolicy,
+        ...inheritedToolPolicySourcePatch(ctx),
+        delegatedToolPolicy: delegation.policy,
         modelPatch: plan.initialSessionPatch,
         swarmGroupId,
         collect: params.collect === true,

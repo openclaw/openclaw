@@ -501,6 +501,8 @@ export function* assembleOpenClawCodingTools(
               ? createRuntimeConfigReader(options.config)
               : undefined,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
+            inheritedToolPolicyRunSessionKey:
+              capabilityProfile.policy.inheritedToolPolicyRunSessionKey,
             processScopeKey: scopeKey,
           },
         )

@@ -118,6 +118,7 @@ export async function prepareCodexNativeExecutionPolicy(
               "subagentControlScope",
               "inheritedToolPolicyVersion",
               "inheritedToolPolicySource",
+              "inheritedToolPolicyRunSessionKey",
               "inheritedToolAllow",
               "inheritedToolDeny",
               "delegatedToolPolicy",

@@ -80,7 +80,7 @@ type WorkerGatewayToolsDependencies = {
   portals: WorkerPortalToolExecutorDependencies["portals"];
   skillLibrary?: AnyAgentTool;
   portalAvailable?: boolean;
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
   inheritedToolDenylist?: string[];
   delegatedToolPolicyActive?: boolean;
   prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;

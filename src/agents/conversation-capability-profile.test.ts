@@ -5,6 +5,8 @@ import { createAccountListHelpers } from "../channels/plugins/account-helpers.js
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { bindScheduledExecutionContext } from "../cron/execution-context-registry.js";
+import type { ScheduledExecutionContext } from "../cron/scheduled-occurrence.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.types.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -16,6 +18,7 @@ import {
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import {
   prepareConversationCapabilityProfile,
   resolveConversationCapabilityProfile as resolveProfile,
@@ -226,6 +229,36 @@ describe("resolveConversationCapabilityProfile", () => {
     });
     expect(scheduled.policy.explicitToolAllowlist).toContain("write");
   });
+
+  it.each([true, false])(
+    "records a run's spawn provenance only from its admitted fresh session (bound=%s)",
+    (bound) => {
+      const runSessionKey = "agent:main:cron:job:run:session";
+      const { operationalRunInstance } = createTestAdmittedRunContext("run-1");
+      const context = { freshRunSessionKey: runSessionKey } as unknown as ScheduledExecutionContext;
+      const unbind = bound
+        ? bindScheduledExecutionContext(operationalRunInstance, context)
+        : () => undefined;
+      try {
+        const profile = resolveProfile({
+          sessionKey: runSessionKey,
+          agentId: "main",
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+          operationalRunInstance,
+        });
+        expect(profile.policy.inheritedToolPolicySource).toBe(bound ? "scheduled-run" : undefined);
+        expect(profile.policy.inheritedToolPolicyRunSessionKey).toBe(
+          bound ? runSessionKey : undefined,
+        );
+        // Only the run's own turn stamps the origin its sub-agents inherit.
+        expect(profile.requesterOrigin?.scheduledRunSessionKey).toBe(
+          bound ? runSessionKey : undefined,
+        );
+      } finally {
+        unbind();
+      }
+    },
+  );
 
   it("normalizes additive runtime tools without making them explicit overrides", () => {
     const runtimePluginToolGrant = {

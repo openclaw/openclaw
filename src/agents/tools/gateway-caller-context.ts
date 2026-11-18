@@ -44,6 +44,7 @@ import {
 } from "../embedded-agent-runner/run-state.js";
 import {
   captureRequesterOrigin,
+  carryScheduledRunStamp,
   requesterCreatorProfileId,
   type RequesterOrigin,
 } from "../requester-origin.js";
@@ -604,7 +605,9 @@ export async function withGatewayToolCallerIdentity<T>(
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
       watchdogAttempt: identity.watchdogAttempt ?? inheritedOwner?.watchdogAttempt,
-      requesterOrigin: inheritedOwner?.requesterOrigin ?? identity.requesterOrigin,
+      requesterOrigin:
+        carryScheduledRunStamp(inheritedOwner?.requesterOrigin, identity.requesterOrigin) ??
+        identity.requesterOrigin,
       sessionEventDelivery:
         inheritedOwner?.sessionEventDelivery === false || identity.sessionEventDelivery === false
           ? false

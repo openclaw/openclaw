@@ -17,7 +17,10 @@ import { isHostScopedAgentToolActive } from "../agent-tools.ring-zero-context.js
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
-import { resolveRequesterConversationToolPolicy } from "../requester-tool-policy.js";
+import {
+  hasSenderIdentity,
+  resolveRequesterConversationToolPolicy,
+} from "../requester-tool-policy.js";
 import {
   resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
@@ -700,7 +703,7 @@ function resolveSenderScopedGroupToolPolicy(
   groupPolicyParams: Parameters<typeof resolveRequesterConversationToolPolicy>[0],
   groupPolicy: { deny?: string[] } | undefined,
 ): { deny?: string[] } | undefined {
-  if (!policyDeniesAllTools(groupPolicy) || !hasSenderIdentity(params)) {
+  if (!policyDeniesAllTools(groupPolicy) || !hasSenderIdentity(params.requesterOrigin ?? params)) {
     return undefined;
   }
   const groupPolicyWithoutSender = resolveRequesterConversationToolPolicy({
@@ -720,14 +723,4 @@ function resolveSenderScopedGroupToolPolicy(
     senderE164: undefined,
   });
   return policyDeniesAllTools(groupPolicyWithoutSender) ? undefined : groupPolicy;
-}
-
-function hasSenderIdentity(params: PluginHarnessToolPolicyContext): boolean {
-  const requester = params.requesterOrigin ?? params;
-  return Boolean(
-    requester.senderId?.trim() ||
-    requester.senderName?.trim() ||
-    requester.senderUsername?.trim() ||
-    requester.senderE164?.trim(),
-  );
 }

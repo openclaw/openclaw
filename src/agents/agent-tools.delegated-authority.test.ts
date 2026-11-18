@@ -12,9 +12,13 @@ import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.w
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { writeHostFile } from "./host-file-write.js";
+import type { RequesterOrigin } from "./requester-origin.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import type { AnyAgentTool } from "./tools/common.js";
-import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 const requester = "agent:intake:main";
 const child = "agent:coder:dashboard:task";
@@ -124,6 +128,59 @@ it("keeps tools that did not rely on the grant usable after revocation", async (
   revoke();
   await expect(bound.execute("read", {})).resolves.toMatchObject({ details: { read: true } });
   expect(execute).toHaveBeenCalledOnce();
+});
+
+const run = "agent:main:cron:job:run:r1";
+const stamped = { sessionKey: run, scheduledRunSessionKey: run };
+
+it.each([
+  {
+    kind: "a stamped profile under the run's unstamped caller",
+    outer: { sessionKey: run },
+    profile: stamped,
+    expected: stamped,
+  },
+  {
+    kind: "an unstamped profile",
+    outer: { sessionKey: run },
+    profile: { sessionKey: run },
+    expected: { sessionKey: run },
+  },
+  {
+    kind: "an operator caller",
+    outer: { sessionKey: run, operatorProfileId: "op" },
+    profile: stamped,
+    expected: { ...stamped, operatorProfileId: "op" },
+  },
+])("tool callers get the run's own origin for $kind", async (row) => {
+  const config: OpenClawConfig = {};
+  const resolved = resolveConversationCapabilityProfile({
+    config,
+    agentId: "main",
+    sessionKey: run,
+  });
+  const capabilityProfile = { ...resolved, requesterOrigin: row.profile as RequesterOrigin };
+  let seen: RequesterOrigin | undefined;
+  const source: AnyAgentTool = {
+    ...createStubTool("read"),
+    execute: async () => {
+      seen = getGatewayToolCallerIdentity()?.requesterOrigin;
+      return { content: [], details: {} };
+    },
+  };
+  await withGatewayToolCallerIdentity(
+    { agentId: "main", sessionKey: run, requesterOrigin: row.outer },
+    async () => {
+      const bind = createCodingToolsGatewayCaller({
+        options: { config },
+        agentId: "main",
+        sessionKey: run,
+        capabilityProfile,
+      });
+      await bind(source).execute("call", {});
+    },
+  );
+  expect(seen).toEqual(row.expected);
 });
 
 it.each([false, true])(

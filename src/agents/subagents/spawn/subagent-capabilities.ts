@@ -46,7 +46,8 @@ type PersistedSubagentToolPolicyEnvelope = {
   completionOwnerSessionKey?: string;
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
-  inheritedToolPolicySource?: "sender";
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
+  inheritedToolPolicyRunSessionKey?: string;
   delegatedToolPolicy?: DelegatedToolPolicy;
 };
 
@@ -317,6 +318,10 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     return undefined;
   }
   const completionOwnerSessionKey = normalizeOptionalString(entry.completionOwnerSessionKey);
+  const runSessionKey =
+    entry.inheritedToolPolicySource === "scheduled-run"
+      ? normalizeOptionalString(entry.inheritedToolPolicyRunSessionKey)
+      : undefined;
   let delegatedToolPolicy = readDelegatedToolPolicy(entry.delegatedToolPolicy);
   if (delegatedToolPolicy) {
     const targetAgentId = delegatedToolPolicy.targetAgentId;
@@ -342,9 +347,11 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
     delegatedToolPolicy,
-    ...(entry.inheritedToolPolicySource === "sender"
-      ? { inheritedToolPolicySource: "sender" as const }
+    ...(entry.inheritedToolPolicySource === "sender" ||
+    entry.inheritedToolPolicySource === "scheduled-run"
+      ? { inheritedToolPolicySource: entry.inheritedToolPolicySource }
       : {}),
+    ...(runSessionKey ? { inheritedToolPolicyRunSessionKey: runSessionKey } : {}),
   };
 }
 

@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import { readScheduledFreshRunSessionKey } from "../cron/execution-context-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
@@ -16,7 +17,12 @@ import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
 import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
-import { captureRequesterOrigin, type RequesterOrigin } from "./requester-origin.js";
+import type { OperationalRunInstanceRef } from "./operational-run-instance.js";
+import {
+  captureRequesterOrigin,
+  stampScheduledRunOrigin,
+  type RequesterOrigin,
+} from "./requester-origin.js";
 import { isInternalOwnerRequester, resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
@@ -109,6 +115,8 @@ export type ConversationCapabilityProfileParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */
   scheduledToolPolicy?: ScheduledToolPolicyContext;
+  /** The host-admitted run; its scheduled context names a freshly minted run session. */
+  operationalRunInstance?: OperationalRunInstanceRef;
 };
 
 /** Prepare the authoritative inbound surface once for each tool catalog. */
@@ -165,6 +173,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
     requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
     conversationPolicy: pickSandboxToolPolicy(params.conversationToolPolicy),
+    trustedScheduledRunSessionKey: readScheduledFreshRunSessionKey(params),
   });
   const {
     groupPolicy,
@@ -240,6 +249,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
     inheritedToolPolicyForSpawn,
     delegatedToolPolicy: requesterPolicies.delegatedToolPolicy,
     inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+    inheritedToolPolicyRunSessionKey: requesterPolicies.inheritedToolPolicyRunSessionKey,
     delegated: requesterPolicies.delegated,
     requesterPolicySource: requesterPolicies.requesterPolicySource,
     runtimeToolPolicyForInheritance,
@@ -257,12 +267,15 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
   const trustedGroupChannel = trustedGroup.dropped ? null : params.groupChannel;
   const trustedGroupSpace = trustedGroup.dropped ? null : params.groupSpace;
   return {
-    requesterOrigin: captureRequesterOrigin({
-      ...params,
-      groupId: trustedGroup.groupId,
-      groupChannel: trustedGroupChannel,
-      groupSpace: trustedGroupSpace,
-    }),
+    requesterOrigin: stampScheduledRunOrigin(
+      captureRequesterOrigin({
+        ...params,
+        groupId: trustedGroup.groupId,
+        groupChannel: trustedGroupChannel,
+        groupSpace: trustedGroupSpace,
+      }),
+      policy,
+    ),
     agentId: policy.agentId,
     serviceIdentity: {
       accountId: params.agentAccountId,
