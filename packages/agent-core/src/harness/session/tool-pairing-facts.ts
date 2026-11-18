@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentMessage } from "../../types.js";
 
 export type ToolCallLike = { id: string; name?: string };
 type CallFact = ToolCallLike & { contentIndex: number };
@@ -15,6 +16,30 @@ export type ToolPairingFrameFact = {
   remainder: Array<{ index: number; id?: string | null }>;
   failed: boolean;
 };
+
+/** The identity is opaque: array adapters use message identity, readers use row identity. */
+export function selectResetKeptMessageFacts<
+  T extends {
+    role: AgentMessage["role"];
+    pairing: ToolPairingMessageFact | undefined;
+    identity: unknown;
+  },
+>(messages: readonly T[]): T[] {
+  const frames = classifyToolPairingFacts(messages.map((message) => message.pairing));
+  const pairedResults = new Set(
+    frames.flatMap((frame) =>
+      frame.occurrences.flatMap((occurrence) =>
+        occurrence.result ? [messages[occurrence.result.index]?.identity] : [],
+      ),
+    ),
+  );
+  return messages.filter(
+    (message) =>
+      message.role === "user" ||
+      message.role === "assistant" ||
+      (message.role === "toolResult" && pairedResults.has(message.identity)),
+  );
+}
 
 /** Tracks repeated provider ids by occurrence instead of collapsing them into a set. */
 export function createToolCallOccurrenceQueue<T>(): {

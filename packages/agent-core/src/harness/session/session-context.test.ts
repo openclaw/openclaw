@@ -13,6 +13,8 @@ import {
 import { convertToLlm } from "../messages.js";
 import type { SessionTreeEntry as Entry } from "../types.js";
 import { buildSessionContext, projectSessionEntryMessage } from "./session.js";
+import { selectResetKeptMessageFacts } from "./tool-pairing-facts.js";
+import { collectToolPairingMessageFact, selectResetKeptEntries } from "./tool-result-pairing.js";
 
 const timestamp = "2026-07-17T00:00:00.000Z";
 const historyPrelude = Symbol.for("openclaw.sessionHistoryPrelude");
@@ -106,6 +108,31 @@ function resetContext(entries: [Entry, ...Entry[]], firstKeptEntryId = "kept") {
     user("new", "reset", "new turn"),
   ]);
 }
+
+it("selects reset facts by row identity while preserving public message aliases", () => {
+  const result = toolResult("result", "call", "call-id", "BODY_PAYLOAD");
+  const entries = [
+    user("kept", null, "ask"),
+    toolCall("call", "kept", "call-id"),
+    result,
+    { ...result, id: "alias" },
+    toolResult("orphan", "alias", "unknown", "ORPHAN_PAYLOAD"),
+  ];
+  expect(selectResetKeptEntries(entries).map((entry) => entry.id)).toEqual([
+    "kept",
+    "call",
+    "result",
+    "alias",
+  ]);
+  const facts = entries.map(({ id, message }) => ({
+    role: message.role,
+    pairing: collectToolPairingMessageFact(message),
+    identity: id,
+  }));
+  expect(JSON.stringify(facts)).not.toContain("PAYLOAD");
+  const kept = selectResetKeptMessageFacts(facts).map((fact) => fact.identity);
+  expect(kept).toEqual(["kept", "call", "result"]);
+});
 
 it.each(["reply", "model-change"])(
   "ignores a synthetic %s when selecting the inference model",

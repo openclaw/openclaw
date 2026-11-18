@@ -7,6 +7,7 @@ import type { SessionTreeEntry } from "../types.js";
 import {
   classifyToolPairingFacts,
   resolveLegacyToolResultId,
+  selectResetKeptMessageFacts,
   type ToolCallLike,
   type ToolPairingMessageFact,
 } from "./tool-pairing-facts.js";
@@ -279,20 +280,18 @@ export function collectCompletedToolCallBlocks(
 
 /** Select reset-tail model context without changing persisted entry bytes or order. */
 export function selectResetKeptEntries(entries: readonly SessionTreeEntry[]): SessionTreeEntry[] {
-  const messages = entries.flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-  const frames = classifyToolUseResultPairing(messages);
-  const pairedResults = new Set(
-    frames.flatMap((frame) =>
-      frame.occurrences.flatMap((occurrence) =>
-        occurrence.sourceResult ? [occurrence.sourceResult] : [],
-      ),
+  return selectResetKeptMessageFacts(
+    entries.flatMap((entry) =>
+      entry.type === "message"
+        ? [
+            {
+              entry,
+              role: entry.message.role,
+              pairing: collectToolPairingMessageFact(entry.message),
+              identity: entry.message,
+            },
+          ]
+        : [],
     ),
-  );
-  return entries.filter(
-    (entry) =>
-      entry.type === "message" &&
-      (entry.message.role === "user" ||
-        entry.message.role === "assistant" ||
-        (entry.message.role === "toolResult" && pairedResults.has(entry.message))),
-  );
+  ).map(({ entry }) => entry);
 }
