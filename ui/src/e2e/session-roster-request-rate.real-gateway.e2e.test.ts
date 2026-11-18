@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expect, it } from "vitest";
 import type {
   RequestFrame,
@@ -24,7 +25,9 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -284,7 +287,60 @@ suite.define(() => {
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         // People opens Activity; going back returns to this page beside the Sessions list.
         await page.goBack();
-        await selected.waitFor();
+        try {
+          await selected.waitFor();
+        } catch (error) {
+          try {
+            const state = await withTimeout(
+              page.evaluate((sessionKey) => {
+                const host = document.querySelector<AppSidebarElement>("openclaw-app-sidebar");
+                const rows = [...(host?.querySelectorAll<HTMLElement>("[data-session-key]") ?? [])];
+                const visible = (row: HTMLElement) =>
+                  row.getClientRects().length > 0 && getComputedStyle(row).visibility !== "hidden";
+                const matches = rows.filter((row) => row.dataset.sessionKey === sessionKey);
+                const ownerLabel = host?.querySelector("#sidebar-session-owner-title")?.textContent;
+                return {
+                  route: host?.activeRouteId === "sessions" ? "sessions" : "other",
+                  view:
+                    ["sessions", "online", "pages", "automations", "customize", "plugin"].find(
+                      (view) => view === host?.navigationView,
+                    ) ?? "unknown",
+                  navigationVisible: host?.navigationVisible ?? null,
+                  navigationCollapsed: host?.navigationCollapsed ?? null,
+                  mode:
+                    ["chip", "roster"].find((mode) => mode === host?.sidebarAgentsMode) ??
+                    "unknown",
+                  ownerPresentation:
+                    ["All owners", "Involving me", "My sessions"].find((label) =>
+                      ownerLabel?.includes(label),
+                    ) ?? "other",
+                  rows: rows.length,
+                  visibleRows: rows.filter(visible).length,
+                  selectedRows: matches.length,
+                  selectedVisible: matches.some(visible),
+                };
+              }, key),
+              5_000,
+            );
+            const request = lists.findLast(({ params }) => params.source === "sidebar");
+            recordControlUiE2eFailureFacts(page, {
+              rosterBack: {
+                ...state,
+                lastRequestedOwner: !request
+                  ? "unobserved"
+                  : request.params.ownerId === undefined
+                    ? "all"
+                    : request.params.ownerId === viewerId
+                      ? "viewer"
+                      : "other",
+                lastRequestedInvolvingMe: request?.params.involvingMe ?? null,
+              },
+            });
+          } catch {
+            recordControlUiE2eFailureFacts(page, { rosterBackCaptureUnavailable: true });
+          }
+          throw error;
+        }
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
         await pauseVirtualClock(page);
         const beforeOther = lists.length;
