@@ -1,7 +1,6 @@
-import { createMemo } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ChannelAccountSnapshot, ToolsCatalogResult } from "../../api/types.ts";
+import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { loadLazyLocaleTranslation } from "../../i18n/lib/registry.ts";
@@ -113,12 +112,11 @@ describe("renderAgents", () => {
 
   it("renders the selected agent's tool catalog loading state", async () => {
     const mounted = mountConnected(() => {
-      const readCatalog = createMemo(() => new Promise<ToolsCatalogResult>(() => {}));
       const props = createProps();
       return (
         <Agents
           {...props}
-          tools={{ ...props.tools, readCatalog }}
+          tools={{ ...props.tools, toolsCatalog: { result: null, pending: true, failed: false } }}
           config={config({})}
           readData={() => ({ ...props.readData(), agentsPanel: "tools" })}
         />

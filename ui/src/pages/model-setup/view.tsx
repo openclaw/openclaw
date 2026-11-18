@@ -237,10 +237,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             </span>
             <input
               class="input"
-              ref={(element) => {
-                input = element;
-                props.onManualInput?.(element);
-              }}
+              ref={[(element) => (input = element), props.onManualInput]}
               type="password"
               autocomplete="off"
               required
@@ -348,13 +345,15 @@ function Ready(props: ModelSetupViewProps & { result: SystemAgentSetupDetectResu
 
 function ModelSetupBody(props: ModelSetupViewProps & { detection: () => null }) {
   const ready = () => (props.page.phase === "ready" ? props.page.result : undefined);
+  // Keep the ready subtree across rescans, but hold a valid result for its teardown.
+  const readyEntry = createMemo(ready, { equals: (a, b) => Boolean(a) === Boolean(b) });
   return (
     <Switch>
-      <Match when={ready()}>
-        {(result) => (
+      <Match when={readyEntry()} keyed>
+        {(initialResult) => (
           <Ready
             {...props}
-            result={result()}
+            result={ready() ?? initialResult}
             actionsDisabled={props.actionsDisabled || props.activationUnresolved === true}
           />
         )}
@@ -593,7 +592,7 @@ function EmbeddedModelSetup(props: {
     <>
       {" "}
       <openclaw-modal-dialog
-        ref={(element) => props.view.onWizardDialog?.(element)}
+        ref={[props.view.onWizardDialog]}
         label={t("modelSetup.discovery.title")}
         onModal-cancel={() => props.view.onClose?.()}
         onOverlay-after-show={(event: Event) =>

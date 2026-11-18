@@ -59,7 +59,6 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
   }
 
   let loadGeneration = 0;
-  let timelineCompletion: Promise<void> = Promise.resolve();
 
   async function load(opts?: { day?: string; today?: boolean; silent?: boolean }) {
     const current = client;
@@ -76,8 +75,6 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
     }
     const requestedDay = state.day;
     const generation = ++loadGeneration;
-    const ready = Promise.withResolvers<void>();
-    timelineCompletion = ready.promise;
     const pinnedTimeline = dayPinned && state.status !== null;
     if (!opts?.silent) {
       state.loading = true;
@@ -97,7 +94,6 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
               state.day === requestedDay
             ) {
               state.timeline = result;
-              ready.resolve();
               notify();
             }
             return result;
@@ -134,7 +130,6 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
         state.error = formatUiError(error);
       }
     } finally {
-      ready.resolve();
       if (client === current && generation === loadGeneration) {
         state.loading = false;
         notify();
@@ -222,9 +217,6 @@ export function createLogbook(initialClient: GatewayBrowserClient | null) {
       return projection.read();
     },
     load,
-    get timelineRead() {
-      return timelineCompletion;
-    },
     loadFrame(frameId: number): Promise<string | undefined> {
       const current = client;
       if (!current || state.framePreviewFailed.has(frameId)) {

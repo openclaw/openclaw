@@ -5,7 +5,6 @@ import {
   createMemo,
   createOptimistic,
   createSignal,
-  isPending,
   latest,
   onSettled,
 } from "solid-js";
@@ -131,31 +130,15 @@ export function ApprovalsPage() {
     { lazy: true },
   );
   type ReadReceipt = { generation: number; completion: Promise<void> };
-  const [historyReceipt, setHistoryReceipt] = createSignal<ReadReceipt | null>(null);
   const [grantsReceipt, setGrantsReceipt] = createSignal<ReadReceipt | null>(null);
   const requestGeneration = createMemo(() => view().requestGeneration);
   let presentationLifetime = Promise.withResolvers<void>();
   // Observe admitted work, leaving rows and request authority with the plain owner.
-  const historyRead = createMemo(() => {
-    const generation = requestGeneration();
-    const receipt = historyReceipt();
-    return receipt?.generation === generation ? receipt.completion : undefined;
-  });
   const grantsRead = createMemo(() => {
     const generation = requestGeneration();
     const receipt = grantsReceipt();
     return receipt?.generation === generation ? receipt.completion : undefined;
   });
-  const historyLoadingKey = createMemo(() => (view().items.length === 0 ? historyReceipt() : null));
-  const readHistory = () => {
-    // Suspend the first read; retained owner rows must stay live during refresh.
-    if (view().items.length === 0) {
-      historyRead();
-    } else {
-      latest(historyRead);
-    }
-    return null;
-  };
   const readGrants = () => {
     if (view().grantsLoaded) {
       latest(grantsRead);
@@ -164,7 +147,7 @@ export function ApprovalsPage() {
     }
     return null;
   };
-  const loadingMore = () => isPending(historyRead) && view().loadKind === "more";
+  const loadingMore = () => view().loadKind === "more";
   const revokePresentation = createMemo(() => {
     const generation = requestGeneration();
     const [saving, setSaving] = createOptimistic(false);
@@ -298,12 +281,7 @@ export function ApprovalsPage() {
     if (reset) {
       void loadGrants(client, isCurrent);
     }
-    const completion = applyPage(client);
-    setHistoryReceipt({
-      generation,
-      completion: Promise.race([completion, presentationLifetime.promise]),
-    });
-    return completion;
+    return applyPage(client);
 
     async function applyPage(admittedClient: GatewayBrowserClient) {
       try {
@@ -493,54 +471,56 @@ export function ApprovalsPage() {
               <SettingsSection
                 title={<span id="approval-history-title">{t("standingGrants.historyTitle")}</span>}
               >
-                <Loading
-                  on={historyLoadingKey()}
-                  fallback={<SettingsLoadingSkeleton label={t("approvalHistory.loading")} />}
-                >
-                  {readHistory()}
-                  {view().items.length === 0 ? (
-                    <SettingsEmpty
-                      message={t(
-                        view().error || !view().hasLoaded
-                          ? "approvalHistory.unknown"
-                          : "approvalHistory.empty",
-                      )}
-                    />
-                  ) : (
-                    <ul
-                      class="approval-log"
-                      aria-labelledby="approval-history-title"
-                      aria-busy={isPending(historyRead) ? "true" : "false"}
-                    >
-                      <For each={historyItems()} keyed={(item) => item.id}>
-                        {(item) => (
-                          <HistoryRow
-                            item={item()}
-                            time={formatResolvedAt().short(item().resolvedAtMs)}
-                            fullTime={formatResolvedAt().full(item().resolvedAtMs)}
-                          />
+                {view().items.length === 0 && view().loadKind !== null ? (
+                  <SettingsLoadingSkeleton label={t("approvalHistory.loading")} />
+                ) : (
+                  <>
+                    {view().items.length === 0 ? (
+                      <SettingsEmpty
+                        message={t(
+                          view().error || !view().hasLoaded
+                            ? "approvalHistory.unknown"
+                            : "approvalHistory.empty",
                         )}
-                      </For>
-                    </ul>
-                  )}
-                  <div class="data-table-pagination">
-                    <div class="data-table-pagination__info">{t("approvalHistory.retention")}</div>
-                    <div class="data-table-pagination__controls">
-                      {view().nextCursor ? (
-                        <button
-                          disabled={!view().connected || loadingMore()}
-                          onClick={() => void loadPage(false)}
-                        >
-                          {t(
-                            loadingMore()
-                              ? "approvalHistory.loadingMore"
-                              : "approvalHistory.loadMore",
+                      />
+                    ) : (
+                      <ul
+                        class="approval-log"
+                        aria-labelledby="approval-history-title"
+                        aria-busy={view().loadKind !== null ? "true" : "false"}
+                      >
+                        <For each={historyItems()} keyed={(item) => item.id}>
+                          {(item) => (
+                            <HistoryRow
+                              item={item()}
+                              time={formatResolvedAt().short(item().resolvedAtMs)}
+                              fullTime={formatResolvedAt().full(item().resolvedAtMs)}
+                            />
                           )}
-                        </button>
-                      ) : null}
+                        </For>
+                      </ul>
+                    )}
+                    <div class="data-table-pagination">
+                      <div class="data-table-pagination__info">
+                        {t("approvalHistory.retention")}
+                      </div>
+                      <div class="data-table-pagination__controls">
+                        {view().nextCursor ? (
+                          <button
+                            disabled={!view().connected || loadingMore()}
+                            onClick={() => void loadPage(false)}
+                          >
+                            {t(
+                              loadingMore()
+                                ? "approvalHistory.loadingMore"
+                                : "approvalHistory.loadMore",
+                            )}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                </Loading>
+                  </>
+                )}
               </SettingsSection>
             </>
           ) : null}

@@ -123,6 +123,25 @@ suite.define(() => {
           );
           if (archived) {
             const archivedSession = { ...selectedSession, archived: true };
+            // The Team-scale fixture also serves static history receipts. Update those
+            // alongside the canonical rows so reconnect cannot replay pre-archive facts.
+            for (const method of ["chat.startup", "chat.history"] as const) {
+              const history = fixture.scenario.methodResponses?.[method];
+              if (!isRecord(history) || !Array.isArray(history.cases)) {
+                throw new Error(`Expected case-based ${method} fixture`);
+              }
+              for (const entry of history.cases) {
+                if (
+                  isRecord(entry) &&
+                  isRecord(entry.response) &&
+                  isRecord(entry.response.sessionInfo) &&
+                  entry.response.sessionInfo.key === sessionKey
+                ) {
+                  entry.response.sessionInfo = archivedSession;
+                }
+              }
+              await gateway.setMethodResponse(method, history);
+            }
             await gateway.setSessionsListResponse(
               sessionsListResponse(
                 fixture.scenario.sessions!.map((row) =>

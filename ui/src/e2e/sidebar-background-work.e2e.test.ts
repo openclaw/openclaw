@@ -118,6 +118,14 @@ suite.define(() => {
       const toggle = parentRow.locator("[data-child-session-toggle]");
       await ui.visible(toggle);
       expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+      // Only a paused worker with pending commands contributes this parent summary;
+      // an ended worker's leftover processes belong on its own row.
+      await ui.visible(
+        parentRow.locator(".sidebar-session-indicator").getByRole("img", {
+          name: "Subagents working",
+          exact: true,
+        }),
+      );
       expect(
         await parentRow
           .locator(".sidebar-session-indicator .session-glyph__ring--background")

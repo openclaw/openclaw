@@ -37,19 +37,14 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     configSaving: false,
     configDirty: false,
     catalog: null,
-    readCatalog() {
-      return this.catalog;
+    get toolsCatalog() {
+      return { result: this.catalog, pending: false, failed: false };
     },
-    catalogRequest: null,
     onRetryCatalog: vi.fn(),
     effective: null,
-    readEffective() {
-      return this.effective;
+    get effectiveTools() {
+      return { result: this.effective, pending: false, failed: false };
     },
-    get effectivePreview() {
-      return this.effective;
-    },
-    effectiveRequest: null,
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
     githubIdentity,

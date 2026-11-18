@@ -10,6 +10,7 @@ import {
   isPending,
   latest,
   Loading,
+  onFlush,
   onSettled,
   refresh,
   Show,
@@ -96,7 +97,15 @@ export function ProfilePage() {
   const agents = projectOwner(context.agents, (source) => source.state.agentsList);
   const identities = projectOwner(context.agentIdentity, (source) => source);
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const state = new ProfileState(context, () => setRevision((value) => value + 1));
+  const publish = () => setRevision((value) => value + 1);
+  const state = new ProfileState(context, (resuming) => {
+    if (resuming) {
+      // Re-admission starts a new read; don't join the retained profile's held frame.
+      onFlush(publish);
+    } else {
+      publish();
+    }
+  });
   const view = () => {
     revision();
     return state;

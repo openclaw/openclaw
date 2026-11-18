@@ -2,7 +2,7 @@ import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coer
 import {
   cleanAgentActivityItem,
   isAgentActivityItem,
-} from "../lib/protocol-validators.generated/activity.js";
+} from "../lib/protocol-validators.generated/session.js";
 import type { SidebarToolActivity } from "./app-sidebar-session-types.ts";
 import { deriveSidebarNarrationLine } from "./sidebar-narration-line.ts";
 

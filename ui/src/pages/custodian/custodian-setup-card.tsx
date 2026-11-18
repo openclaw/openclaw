@@ -90,7 +90,6 @@ export function CustodianSetupCard(props: {
   const busy = () => {
     const current = setup();
     return (
-      props.actions.verifying ||
       props.actions.answering ||
       current.pending ||
       current.wizard.state.phase === "starting" ||
@@ -110,7 +109,7 @@ export function CustodianSetupCard(props: {
   };
   const title = () => {
     const current = setup();
-    if (props.actions.verifying || current.pending) {
+    if (current.pending) {
       return t("custodian.autoSetup.connecting");
     }
     const selected = current.result?.selected;
@@ -142,7 +141,7 @@ export function CustodianSetupCard(props: {
               <Icon name="x" />
             </button>
           </div>
-          <Show when={props.actions.verifying || setup().pending}>
+          <Show when={setup().pending}>
             <p class="custodian-setup__progress" role="status">
               <span class="btn__spinner" aria-hidden="true" />
               {t("custodian.autoSetup.verifying")}

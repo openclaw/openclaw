@@ -81,7 +81,7 @@ it("generates identical standalone validators across physical pnpm layouts witho
     const output = Object.fromEntries(
       files.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]),
     );
-    expect(output["ui/src/lib/protocol-validators.generated/activity.js"]).toContain(
+    expect(output["ui/src/lib/protocol-validators.generated/session.js"]).toContain(
       ".map(Hashing.Hash)",
     );
     outputs.push(output);
@@ -93,7 +93,7 @@ it("generates identical standalone validators across physical pnpm layouts witho
       fs.writeFileSync(reactions, source.replace("maxLength: 32", "maxLength: 31"));
       const stale = run("--check");
       expect(stale.status).toBe(1);
-      expect(stale.stderr).toContain("activity.js is stale");
+      expect(stale.stderr).toContain("session.js is stale");
       expect(fs.readFileSync(path.join(root, files[0]!), "utf8")).toBe(output[files[0]!]);
     }
   }

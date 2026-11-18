@@ -1,12 +1,4 @@
-import {
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  Errored,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
@@ -39,14 +31,12 @@ export function createWizardLogin(options: {
 }) {
   const [state, setState] = createSignal<ModelSetupWizardState>({ phase: "idle" });
   const [draft, setValue] = createSignal<unknown>();
-  const [cancelling, setCancelling] = createOptimistic(false);
-  const [cancellationAttempt, setCancellationAttempt] =
-    createSignal<Promise<"cancelled" | "running" | void>>();
-  const cancellationOutcome = createMemo(() => cancellationAttempt(), { loadingValue: undefined });
+  const [cancellationState, setCancellationState] = createSignal<
+    { phase: "pending" | "running" } | { phase: "failed"; error: unknown }
+  >();
   let stepId: string | null = null;
   let generation = 0;
   let cancellation: number | undefined;
-  let retireCancellation: (() => void) | undefined;
   let disposed = false;
   const runner = new ModelSetupWizardRunner({
     ...options,
@@ -59,9 +49,7 @@ export function createWizardLogin(options: {
       }
       if (next.phase !== "step") {
         cancellation = undefined;
-        retireCancellation?.();
-        retireCancellation = undefined;
-        setCancellationAttempt(undefined);
+        setCancellationState(undefined);
       }
       if (next.phase === "step" && next.step.id !== stepId) {
         setValue(() => initialWizardValue(next.step));
@@ -82,7 +70,6 @@ export function createWizardLogin(options: {
     disposed = true;
     generation += 1;
     cancellation = undefined;
-    retireCancellation?.();
     void runner.cancel();
   });
 
@@ -125,66 +112,58 @@ export function createWizardLogin(options: {
     };
   }
 
-  const presentCancellation = action(function* (
-    pending: ReturnType<ModelSetupWizardRunner["requestCancellation"]>,
-    retired: Promise<void>,
-  ) {
-    setCancelling(true);
-    const outcome: Awaited<typeof pending> | void = yield Promise.race([pending, retired]);
-    return outcome;
-  });
-
   function cancel(): void {
     if (cancellation !== undefined || runner.state.phase === "done") {
       return;
     }
     const currentGeneration = generation;
     cancellation = currentGeneration;
-    const lifetime = Promise.withResolvers<void>();
-    retireCancellation = lifetime.resolve;
-    const pending = runner
-      .requestCancellation()
-      .then((outcome) => {
-        if (currentGeneration === generation && outcome === "cancelled") {
+    // The runner publishes terminal state independently of this request. Keep
+    // cancellation feedback synchronous so it cannot hold that transition.
+    setCancellationState({ phase: "pending" });
+    void runner.requestCancellation().then(
+      (outcome) => {
+        if (currentGeneration !== generation) {
+          return;
+        }
+        if (outcome === "cancelled") {
           options.onCancelled?.();
           options.onClose();
-        }
-        return outcome;
-      })
-      .finally(() => {
-        if (currentGeneration === generation) {
+        } else if (cancellation === currentGeneration) {
           cancellation = undefined;
-          retireCancellation = undefined;
+          setCancellationState(outcome === "running" ? { phase: "running" } : undefined);
         }
-      });
-    const result = presentCancellation(pending, lifetime.promise);
-    void setCancellationAttempt(result);
-    // Retired dialogs still consume the admitted action's rejection.
-    void result.catch(() => {});
-  }
-
-  function CancellationFeedback() {
-    return (
-      <Show when={!cancelling()}>
-        <Errored
-          fallback={(error) => (
-            <InlineAlert tone="warning" role="alert">
-              {t("modelSetup.wizard.cancelFailed", {
-                error: formatUiError(error(), options.requestFailedMessage()),
-              })}
-            </InlineAlert>
-          )}
-        >
-          <Show when={cancellationOutcome() === "running"}>
-            <InlineAlert tone="warning" role="alert">
-              {options.finishingMessage?.() ?? t("modelProviders.login.finishing")}
-            </InlineAlert>
-          </Show>
-        </Errored>
-      </Show>
+      },
+      (error: unknown) => {
+        if (cancellation === currentGeneration) {
+          cancellation = undefined;
+          setCancellationState({ phase: "failed", error });
+        }
+      },
     );
   }
-  const cancellationFeedback = <CancellationFeedback />;
+
+  const cancellationMessage = () => {
+    const result = cancellationState();
+    if (result?.phase === "failed") {
+      return t("modelSetup.wizard.cancelFailed", {
+        error: formatUiError(result.error, options.requestFailedMessage()),
+      });
+    }
+    if (result?.phase === "running") {
+      return options.finishingMessage?.() ?? t("modelProviders.login.finishing");
+    }
+    return undefined;
+  };
+  const cancellationFeedback = (
+    <Show when={cancellationMessage()}>
+      {(message) => (
+        <InlineAlert tone="warning" role="alert">
+          {message()}
+        </InlineAlert>
+      )}
+    </Show>
+  );
   return {
     runner,
     state: () => {
@@ -192,8 +171,7 @@ export function createWizardLogin(options: {
       return runner.state;
     },
     get cancelling() {
-      cancelling();
-      return cancellation !== undefined;
+      return cancellationState()?.phase === "pending";
     },
     reset,
     viewProps,

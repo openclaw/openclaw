@@ -196,6 +196,7 @@ describe("DevicesPage gateway lifecycle", () => {
         page.container.querySelector<HTMLSelectElement>('select[aria-label="Device"]')?.value,
       ).toBe("draft-node"),
     );
+    expect(page.container.textContent).toContain("Retained Mac");
     invalidateConfigConnection(page.config);
     fixture.emitSnapshot({ ...snapshot, phase: "reconnecting", hello: null });
     expect(page.container.textContent).toContain("Retained Mac");

@@ -18,7 +18,7 @@ import { formatDateTimeMs, formatUnit } from "../../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isTextAttachment } from "../../../lib/media-file-extension.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
-import { isSessionFileReadMetadata } from "../../../lib/protocol-validators.generated/session-input.js";
+import { isSessionFileReadMetadata } from "../../../lib/protocol-validators.generated/session.js";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { TEXT_ATTACHMENT_PREVIEW_MAX_BYTES } from "./chat-attachment-text-reader.ts";

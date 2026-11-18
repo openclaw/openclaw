@@ -77,15 +77,15 @@ export class ProfileState {
   identityRequestId = 0;
   identityScope = {};
   presentationLifetime = Promise.withResolvers<void>();
-  identityReceipt = { result: Promise.resolve() };
+  identityReceipt: { result: Promise<void> | undefined } = { result: Promise.resolve() };
   hello: ApplicationGatewaySnapshot["hello"] | undefined;
 
   constructor(
     readonly context: ApplicationContext,
-    private readonly invalidate: () => void,
+    private readonly invalidate: (resuming: boolean) => void,
   ) {}
-  publish() {
-    this.invalidate();
+  publish(resuming = false) {
+    this.invalidate(resuming);
     this.publishTarget?.();
   }
   retirePresentation() {
@@ -122,6 +122,8 @@ export class ProfileState {
       nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
     const readAccessLost = nextConnected && this.canRead && !nextCanRead;
     const identitySourceChanged = clientChanged || selfProfileChanged || readAccessLost;
+    const resuming =
+      !this.identityReady && identityReady && !identitySourceChanged && this.ownProfile !== null;
     this.client = snapshot.client;
     this.connected = nextConnected;
     this.identityReady = identityReady;
@@ -139,7 +141,8 @@ export class ProfileState {
       this.retirePresentation();
       this.identityRequestId += 1;
       this.identityScope = {};
-      this.identityReceipt = { result: Promise.resolve() };
+      // An already visible profile must not suspend on an empty receipt.
+      this.identityReceipt = { result: this.ownProfile ? undefined : Promise.resolve() };
       this.identityLoading = false;
       this.identityBusy = null;
       this.identityError = null;
@@ -152,12 +155,12 @@ export class ProfileState {
       this.gitCoauthorOrganization = undefined;
       this.prAttributionEnabled = false;
     }
-    this.publish();
+    this.publish(resuming);
     if (!identityReady || !snapshot.client) {
       return;
     }
     if (identitySourceChanged || connectionChanged) {
-      this.loadIdentity();
+      this.loadIdentity(resuming);
     }
     void this.context.agents.ensureList().then((list) => {
       if (list) {
@@ -179,7 +182,7 @@ export class ProfileState {
     this.loadIdentity();
   }
 
-  loadIdentity() {
+  loadIdentity(resuming = false) {
     const client = this.client;
     if (!client || !this.identityReady || !this.canRead || this.identityLoading) {
       return;
@@ -195,7 +198,7 @@ export class ProfileState {
     this.attributionError = null;
     const result = this.readIdentity(client, requestId, hasUnsavedDisplayName, displayNameDraft);
     this.identityReceipt = { result };
-    this.publish();
+    this.publish(resuming);
   }
 
   private async readIdentity(

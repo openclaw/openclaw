@@ -285,7 +285,8 @@ export function MessageReactionPicker(props: {
                     <EmojiSearchPanel
                       inputRef={(input) => {
                         searchInput = input;
-                        onSettled(focusPicker);
+                        // Refs are unowned; focusPicker checks the live overlay and input.
+                        queueMicrotask(focusPicker);
                       }}
                       query={query()}
                       onQueryChange={search}

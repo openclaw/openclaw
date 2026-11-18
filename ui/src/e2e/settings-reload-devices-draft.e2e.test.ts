@@ -26,6 +26,7 @@ suite.define(() =>
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": snapshot,
+            "system-presence": [],
             "node.list": {
               nodes: ["disk-node", "new-node"].map((nodeId) => ({
                 nodeId,
@@ -41,8 +42,8 @@ suite.define(() =>
         });
         const binding = section.getByRole("combobox", { name: "Device", exact: true });
         const agentBinding = section.getByRole("combobox", { name: "Binding", exact: true });
-        const expectEditor = async (node: string, disabled: boolean) => {
-          await expect.poll(() => binding.isDisabled()).toBe(disabled);
+        const expectEditor = async (node: string, disabled: boolean, phase: string) => {
+          await expect.poll(() => binding.isDisabled(), { message: phase }).toBe(disabled);
           expect(await binding.inputValue()).toBe(node);
           expect(await agentBinding.isDisabled()).toBe(disabled);
         };
@@ -66,19 +67,19 @@ suite.define(() =>
           await gateway.waitForRequest("config.get", { after });
         };
         await startReload();
-        await expectEditor("new-node", true);
+        await expectEditor("new-node", true, "first reload locks the draft");
         expect(await gateway.getRequests("config.set")).toHaveLength(1);
         if (failFirstRead) {
           await gateway.rejectDeferred("config.get", {
             code: "UNAVAILABLE",
             message: "Synthetic config read failure",
           });
-          await expectEditor("new-node", false);
+          await expectEditor("new-node", false, "failed reload restores editing");
           await startReload();
-          await expect.poll(() => binding.isDisabled()).toBe(true);
+          await expectEditor("new-node", true, "retry locks the draft");
         }
         await gateway.resolveDeferred("config.get", snapshot);
-        await expectEditor("disk-node", false);
+        await expectEditor("disk-node", false, "successful reload restores the persisted draft");
         expect(await reload.count()).toBe(0);
 
         await gateway.deferNext("config.set");
@@ -94,7 +95,7 @@ suite.define(() =>
         await expect
           .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
           .toContain("Apply changes");
-        await expectEditor("new-node", false);
+        await expectEditor("new-node", false, "completed save leaves editing available");
       }),
   ),
 );

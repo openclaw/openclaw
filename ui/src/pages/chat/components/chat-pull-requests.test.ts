@@ -620,8 +620,13 @@ describe("CI job details", () => {
     expect(query('.chat-ci__notice[data-state="unavailable"]')).not.toBeNull();
     expect(container.textContent).toContain("GitHub request failed: token=[redacted]");
     expect(container.textContent).not.toContain("synthetic-secret");
-    h.request.mockResolvedValue(details());
+    const retry = createDeferred<ControlUiSessionPullRequestCheckDetails>();
+    h.request.mockReturnValueOnce(retry.promise);
     click(".chat-ci__retry");
+    await settle(h.element);
+    expect(query(".chat-ci__job")).toBeNull();
+    expect(container.textContent).not.toContain("Private build");
+    retry.resolve(details());
     await settle(h.element);
     expect(query(".chat-ci__notice")).toBeNull();
     expect(query(".chat-ci__job")).not.toBeNull();

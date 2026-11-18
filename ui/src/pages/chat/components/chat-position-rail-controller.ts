@@ -193,7 +193,7 @@ export function createPositionRail(props: PositionRailParams) {
     );
   }
 
-  function refreshWindow(): void {
+  function refreshWindow(revealOffset?: number): void {
     if (connected && session) {
       const scroller = scrollElement;
       const focused = scroller?.ownerDocument.activeElement;
@@ -203,15 +203,16 @@ export function createPositionRail(props: PositionRailParams) {
       void refresh(view);
       onSettled(() => {
         refreshingWindow = false;
+        if (!connected || !scroller || scroller !== scrollElement) {
+          return;
+        }
         // A virtual window change can move the retained marker out of DOM order.
         // Restore its focus after commit without treating it as new navigation.
         if (
-          connected &&
-          scroller === scrollElement &&
           !pendingFocusId &&
           focusedId &&
           focused instanceof HTMLElement &&
-          scroller?.contains(focused) &&
+          scroller.contains(focused) &&
           scroller.ownerDocument.activeElement === scroller.ownerDocument.body
         ) {
           interactionState.focusedId = focusedId;
@@ -221,6 +222,11 @@ export function createPositionRail(props: PositionRailParams) {
           } finally {
             restoringFocus = false;
           }
+        }
+        // The browser can recenter a retained focused marker when the keyed window
+        // commits. Apply the explicit reader destination to the committed window.
+        if (viewportOffset === revealOffset) {
+          scroller.scrollTop = revealOffset;
         }
       });
     }
@@ -475,6 +481,7 @@ export function createPositionRail(props: PositionRailParams) {
     // Reader offsets can move the anchor without changing any intersections.
     syncVisibleMarks();
     syncTabStop();
+    const offsetBeforeReveal = viewportOffset;
     if (initialize || reader.followActive) {
       // An older queued frame must retain navigation until its final viewport is measured.
       reader.followActive = viewportResizePending || observationPending;
@@ -492,7 +499,7 @@ export function createPositionRail(props: PositionRailParams) {
     }
     const indexes = windowIndexes();
     if (!transcriptArraysEqual(indexes, renderedIndexes)) {
-      refreshWindow();
+      refreshWindow(viewportOffset === offsetBeforeReveal ? undefined : viewportOffset);
       syncTabStop();
     }
     // Reserve only the trailing space needed to keep this offset when the viewport grows.
@@ -540,7 +547,6 @@ export function createPositionRail(props: PositionRailParams) {
       observationPending = true;
       resizeObserver = new ResizeObserver(observeLayout);
       resizeObserver.observe(scrollElement);
-      onSettled(syncVisibilityTargets);
       scheduleLayout();
     }
   };
@@ -674,6 +680,7 @@ export function createPositionRail(props: PositionRailParams) {
         : (interaction.hoveredId ?? interaction.focusedId),
       bindMarker,
       bindScroller,
+      syncVisibilityTargets,
       bindPreview,
       onScroll: () => {
         // Read once in the owned frame, after transcript mutations have settled.

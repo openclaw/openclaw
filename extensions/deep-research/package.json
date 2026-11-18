@@ -6,12 +6,12 @@
   "type": "module",
   "dependencies": {
     "typebox": "1.4.3",
-    "@solidjs/web": "2.0.0-rc.18",
-    "solid-js": "2.0.0-rc.18"
+    "@solidjs/web": "2.0.0",
+    "solid-js": "2.0.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@solidjs/compiler": "2.0.0-rc.18",
+    "@solidjs/compiler": "2.0.0",
     "esbuild": "0.28.2"
   },
   "openclaw": {

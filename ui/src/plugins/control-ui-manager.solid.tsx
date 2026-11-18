@@ -3,9 +3,7 @@ import {
   For,
   Loading,
   Show,
-  action,
   createMemo,
-  createOptimistic,
   createSignal,
   isPending,
   onSettled,
@@ -22,7 +20,6 @@ registerEnglishCatalog(registerPluginManagementEnglish);
 
 export function PluginManager() {
   const context = useApplication();
-  const [reloading, setReloading] = createOptimistic(false);
   const [operationRead, setOperationRead] = createSignal<{
     result: Promise<void>;
     revision: number;
@@ -51,15 +48,26 @@ export function PluginManager() {
     return read?.revision === connection.read() ? read.result.then(() => null) : null;
   });
   const refreshing = () => isPending(completion) && operationRead()?.kind === "refresh";
+  const [reloadPending, setReloadPending] = createSignal<{
+    revision: number;
+  } | null>(null);
+  const reloading = () => reloadPending()?.revision === connection.read();
   const observe = (result: Promise<void>, kind: "reload" | "refresh") => {
     // The surface can disappear before the admitted operation settles.
     void result.catch(() => undefined);
     setOperationRead({ result, kind, revision: context.gateway.connectionRevision });
   };
-  const reload = action(function* (result: Promise<void>, retired: Promise<void>) {
-    setReloading(true);
-    yield Promise.race([result, retired]);
-  });
+  function reload() {
+    const receipt = { revision: context.gateway.connectionRevision };
+    const retired = reloadLifetime.promise;
+    setReloadPending(receipt);
+    observe(
+      Promise.race([source.read().reload(), retired]).finally(() => {
+        setReloadPending((current) => (current === receipt ? null : current));
+      }),
+      "reload",
+    );
+  }
   const replacements = createMemo(() => source.read().registrations("replacements"));
   const surfaces = createMemo(() => [
     ...new Set(replacements().map((entry) => entry.value.surface)),
@@ -85,10 +93,7 @@ export function PluginManager() {
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
                     disabled={reloading()}
-                    onClick={() => {
-                      const retired = reloadLifetime.promise;
-                      observe(reload(source.read().reload(), retired), "reload");
-                    }}
+                    onClick={reload}
                   >
                     {t("pluginUi.reload")}
                   </button>
