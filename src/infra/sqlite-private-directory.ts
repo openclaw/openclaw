@@ -10,7 +10,10 @@ import {
   hasSqliteSnapshotCapacityCode,
   SqliteSnapshotCapacityError,
 } from "./sqlite-snapshot-capacity-error.js";
-import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
+import {
+  preflightOpenClawTempWorkspace,
+  resolvePreferredOpenClawTmpDir,
+} from "./tmp-openclaw-dir.js";
 import { createPrivateWindowsDirectory } from "./windows-private-directory.js";
 
 const SQLITE_DIRECTORY_MODE = 0o700;
@@ -40,14 +43,36 @@ export function resolvePrivateSqliteSnapshotStagingRoot(
   }
 }
 
-function resolveSnapshotStagingRoot(env: NodeJS.ProcessEnv): string {
+function updateSnapshotTmpDir(env: NodeJS.ProcessEnv): string | undefined {
   // Shipped update drivers already give their candidate helpers a private TMPDIR.
   // Keep disposable inspection images there, not beside retained recovery backups.
-  const updateTmp = env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? env.TMPDIR?.trim() : undefined;
-  if (updateTmp && path.isAbsolute(updateTmp)) {
+  const tmp = env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? env.TMPDIR?.trim() : undefined;
+  return tmp && path.isAbsolute(tmp) ? tmp : undefined;
+}
+
+export function preflightUpdateSqliteSnapshotWorkspace(
+  backupParent: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  if (process.platform === "win32" || process.platform === "android") {
+    return;
+  }
+  if (updateSnapshotTmpDir(env)) {
+    resolvePrivateSqliteSnapshotStagingRoot(env);
+  } else {
+    // The backup worker uses its private .databases directory as XDG_CACHE_HOME.
+    preflightOpenClawTempWorkspace(backupParent, resolveStateDir(env));
+  }
+}
+
+function resolveSnapshotStagingRoot(env: NodeJS.ProcessEnv): string {
+  const updateTmp = updateSnapshotTmpDir(env);
+  const stateDir = resolveStateDir(env);
+  if (updateTmp) {
     return resolvePreferredOpenClawTmpDir({
       preferredDir: path.join(updateTmp, "openclaw"),
       tmpdir: () => updateTmp,
+      stateDir,
     });
   }
   const appData = process.platform === "win32" ? env.LOCALAPPDATA?.trim() : undefined;
@@ -58,7 +83,6 @@ function resolveSnapshotStagingRoot(env: NodeJS.ProcessEnv): string {
     path.join(resolveRequiredOsHomeDir(env), platformRoot);
   // Cache roots can serve several installations. Only this namespace is eligible
   // for automatic retirement; older shared-cache staging remains operator-owned.
-  const stateDir = resolveStateDir(env);
   const installation = createHash("sha256").update(stateDir).digest("hex").slice(0, 24);
   // Admission needs the preferred root's parent; otherwise only the first
   // allocation falls back and its abandoned copies disappear from later sweeps.
@@ -66,6 +90,7 @@ function resolveSnapshotStagingRoot(env: NodeJS.ProcessEnv): string {
   const admittedRoot = resolvePreferredOpenClawTmpDir({
     preferredDir: path.join(cacheRoot, "openclaw"),
     tmpdir: () => cacheRoot,
+    stateDir,
   });
   // Doctor inspects a private state copy staged in its installation's namespace.
   // Copies taken through it stay there, where that installation's sweep finds them.

@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { SQLITE_SNAPSHOT_STABILIZATION_DETAILS } from "../infra/sqlite-snapshot-diagnostics.js";
 
 /** Extract closed causes; matches are fixed phrases and bounded numbers, never surrounding text. */
@@ -21,4 +22,42 @@ export function readPublicSupportCauses(value: string): string[] {
         /^Update database (?:backup|rollback|capture) volume: needs \d{1,8}(?:\.\d)? (?:MiB|GiB); available \d{1,8}(?:\.\d)? (?:MiB|GiB)$/gmu,
       ) ?? [],
     );
+}
+
+/** Render the worker refusal or its stored public projection using the caller's path context. */
+export function redactPublicTempWorkspaceRefusal(
+  value: string,
+  redactPath: (directory: string) => string | undefined,
+): string | undefined {
+  const ancestors = value.matchAll(
+    /\bTemp workspace ancestor ("(?:[^"\\\r\n]|\\.)*"|\[redacted-path\]) is group\/world writable without sticky protection(; have its owner run chmod \+t |\. Use chmod \+t for shared directories or chmod go-w for private directories\.)/gu,
+  );
+  let display: string | undefined;
+  for (const [, quoted, guidance] of ancestors) {
+    if (!quoted || !guidance) {
+      continue;
+    }
+    const directory = safeParseJson(quoted);
+    if (
+      quoted !== "[redacted-path]" &&
+      (typeof directory !== "string" || (guidance.startsWith(";") && !directory.startsWith("/")))
+    ) {
+      continue;
+    }
+    display = "[redacted-path]";
+    const redacted = typeof directory === "string" ? redactPath(directory) : undefined;
+    if (
+      redacted !== undefined &&
+      /^(?:~|\$OPENCLAW_STATE_DIR)(?:\/[\p{L}\p{N}_. /-]+)?$/u.test(redacted) &&
+      // Leave room for both chmod choices in the report's 200-byte field.
+      Buffer.byteLength(redacted) <= 48
+    ) {
+      display = JSON.stringify(redacted);
+      break;
+    }
+  }
+  if (display) {
+    return `Temp workspace ancestor ${display} is group/world writable without sticky protection. Use chmod +t for shared directories or chmod go-w for private directories.`;
+  }
+  return undefined;
 }

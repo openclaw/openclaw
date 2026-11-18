@@ -2,7 +2,13 @@ import { isDeepStrictEqual } from "node:util";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import { formatErrorMessage } from "./errors.js";
+import type {
+  StagedPackageInstall,
+  StagedPackageSwapParams,
+} from "./package-update-swap-contract.js";
+import { resolveStagedPackageSwapTarget } from "./package-update-swap-target.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { preflightUpdateSqliteSnapshotWorkspace } from "./sqlite-private-directory.js";
 import { isSqliteSchemaVersionError } from "./sqlite-user-version.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
@@ -15,6 +21,7 @@ import {
   createUpdateFailureFact,
   normalizeUpdateFailureFacts,
 } from "./update-failure-facts.js";
+import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export function createPackageVerificationFailureStep(
@@ -37,6 +44,41 @@ export function createPackageVerificationFailureStep(
       ),
     ),
   };
+}
+
+export async function validateStagedPackage(
+  stage: StagedPackageInstall,
+  params: Pick<StagedPackageSwapParams, "installTarget"> & {
+    validateCandidate?: (root: string) => Promise<UpdateStepResult[]>;
+    getDatabaseBackupEnv?: () => NodeJS.ProcessEnv | undefined;
+  },
+  steps: UpdateStepResult[],
+): Promise<UpdateStepResult | undefined> {
+  const validation = (await params.validateCandidate?.(stage.packageRoot)) ?? [];
+  steps.push(...validation);
+  const rejected = validation.find(isFailedUpdateStep);
+  if (rejected) {
+    return rejected;
+  }
+  const env = params.getDatabaseBackupEnv?.();
+  const backupParent =
+    env &&
+    resolveStagedPackageSwapTarget({ stage, installTarget: params.installTarget }).targetLayout
+      ?.globalRoot;
+  if (env && backupParent) {
+    try {
+      preflightUpdateSqliteSnapshotWorkspace(backupParent, env);
+    } catch (error) {
+      const failed = createPackageVerificationFailureStep(
+        backupParent,
+        [formatErrorMessage(error)],
+        env,
+      );
+      steps.push(failed);
+      return failed;
+    }
+  }
+  return undefined;
 }
 
 export type PackagePostInstallVerifier = (

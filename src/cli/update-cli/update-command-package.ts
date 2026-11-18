@@ -378,6 +378,7 @@ export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> &
   installTarget: ResolvedGlobalInstallTarget;
   beforeVerifyCandidate?: (root: string) => Promise<void>;
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
+  getDatabaseBackupEnv?: () => NodeJS.ProcessEnv | undefined;
   beforeActivate: () => Promise<void>;
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
@@ -446,6 +447,7 @@ export async function stagePackageInstallUpdate(
         return await requireActive().validateCandidate(root);
       },
       beforeActivate: () => requireActive().beforeActivate(),
+      getDatabaseBackupEnv: () => requireActive().getDatabaseBackupEnv?.(),
       assertCurrent: () => requireActive().assertCurrent?.(),
       reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
       getActivation: () => requireActive().getActivation?.(),
@@ -532,6 +534,7 @@ export async function runPackageInstallUpdate(
       }),
     },
     validateCandidate: params.validateCandidate,
+    getDatabaseBackupEnv: params.getDatabaseBackupEnv,
     beforeVerifyCandidate: params.beforeVerifyCandidate,
     resolveLifecycleNodeRunner: params.resolveLifecycleNodeRunner ?? (() => params.nodeRunner),
     beforeActivate: params.beforeActivate,

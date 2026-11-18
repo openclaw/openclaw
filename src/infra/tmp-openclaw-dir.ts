@@ -61,6 +61,7 @@ function loadResolveSecureTempRoot(): ResolveSecureTempRoot {
 function assertSafeTempAncestors(
   root: string,
   options: ResolvePreferredOpenClawTmpDirOptions,
+  includeRoot = false,
 ): void {
   const platform = options.platform ?? process.platform;
   // fs-safe owns Windows ACL admission and Android's trusted system/app-group policy.
@@ -74,7 +75,11 @@ function assertSafeTempAncestors(
     options.lstatSync && options.lstatSync !== fs.lstatSync
       ? path.resolve(root)
       : fs.realpathSync.native(root);
-  for (let directory = path.dirname(canonicalRoot); ; directory = path.dirname(directory)) {
+  for (
+    let directory = includeRoot ? canonicalRoot : path.dirname(canonicalRoot);
+    ;
+    directory = path.dirname(directory)
+  ) {
     const stat = lstat(directory);
     if (stat.mode !== undefined && (stat.mode & 0o022) !== 0 && (stat.mode & 0o1000) === 0) {
       const quoted = `'${directory.replaceAll("'", "'\\''")}'`;
@@ -92,6 +97,18 @@ function assertSafeTempAncestors(
 export function resolvePreferredOpenClawTmpDir(
   options: ResolvePreferredOpenClawTmpDirOptions = {},
 ): string {
+  return resolveOpenClawTmpDir(options);
+}
+
+/** Admit the ancestry of a private workspace before the caller creates it. */
+export function preflightOpenClawTempWorkspace(parent: string, stateDir: string): void {
+  resolveOpenClawTmpDir({ stateDir }, parent);
+}
+
+function resolveOpenClawTmpDir(
+  options: ResolvePreferredOpenClawTmpDirOptions,
+  workspaceParent?: string,
+): string {
   const resolveRoot = loadResolveSecureTempRoot();
   const rootOptions = {
     ...options,
@@ -101,13 +118,13 @@ export function resolvePreferredOpenClawTmpDir(
     unsafeFallbackLabel: "OpenClaw temp dir",
     skipPreferredOnWindows: true,
   };
-  const root = resolveRoot(rootOptions);
+  const root = workspaceParent ?? resolveRoot(rootOptions);
   if (options.purpose === "coordination") {
     return root;
   }
   let rejected: unknown;
   try {
-    assertSafeTempAncestors(root, options);
+    assertSafeTempAncestors(root, options, workspaceParent !== undefined);
     return root;
   } catch (error) {
     rejected = error;

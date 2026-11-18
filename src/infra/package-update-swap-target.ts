@@ -17,7 +17,9 @@ export async function assertSwapTargetUnowned(
   }
 }
 
-export function resolveStagedPackageSwapTarget(params: StagedPackageSwapParams) {
+export function resolveStagedPackageSwapTarget(
+  params: Pick<StagedPackageSwapParams, "stage" | "installTarget">,
+) {
   const native = params.stage.native;
   const targetLayout = native
     ? {

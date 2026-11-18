@@ -408,6 +408,13 @@ must contain the diagnostic repair; an older updater cannot gain it from a newer
 candidate alone. If capture refuses before the package changes, final recovery
 restarts and verifies the previous owned Gateway unless recorded data is at risk.
 
+Package updates check the database backup workspace before stopping the Gateway.
+If a temp directory ancestor is group- or world-writable without sticky
+protection and the private state fallback is also unsafe, the update refuses
+with `chmod` guidance. The public failure report retains the cause and uses
+home-relative or state-relative paths when possible. The installed updater must
+contain this check to catch the failure before shutdown.
+
 PostgreSQL update rollback uses a fresh prepared anchor on each attempt. After a
 prepublication refusal, correcting the reported obstruction allows the same native
 `update restore` request to retry without overwriting an earlier recovery preparation.

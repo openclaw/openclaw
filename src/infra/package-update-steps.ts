@@ -41,6 +41,7 @@ import {
 import { removePackageUpdatePath, swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageVerificationFailureStep,
+  validateStagedPackage,
   type PackagePostInstallVerifier,
 } from "./package-update-verification-step.js";
 import { realpathOrResolve } from "./path-existence.js";
@@ -97,6 +98,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   beforeVerifyCandidate?: (packageRoot: string) => Promise<void>;
   resolveLifecycleNodeRunner?: () => string | undefined;
   validateCandidate?: (packageRoot: string) => Promise<UpdateStepResult[]>;
+  getDatabaseBackupEnv?: () => NodeJS.ProcessEnv | undefined;
   beforeActivate?: () => Promise<void>;
   assertCurrent?: () => void;
   reserveInstallSlot?: (root: string) => void;
@@ -595,9 +597,7 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
     let failedVerification = verificationErrors.length > 0;
     if (verificationErrors.length === 0) {
-      const validation = (await params.validateCandidate?.(verificationPackageRoot)) ?? [];
-      steps.push(...validation);
-      const rejectedCandidate = validation.find(isFailedUpdateStep);
+      const rejectedCandidate = await validateStagedPackage(stagedInstall, params, steps);
       if (rejectedCandidate) {
         return await packageUpdateFailure(rejectedCandidate, steps);
       }
