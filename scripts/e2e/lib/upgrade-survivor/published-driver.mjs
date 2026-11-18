@@ -14,11 +14,7 @@ import {
 import { runCancelableCommand } from "../../../lib/cancelable-command.mts";
 import { toErrorObject } from "../../../lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "../../../lib/managed-child-process.mts";
-import {
-  classifyReleaseTrain,
-  compareReleaseVersions,
-  parseReleaseVersion,
-} from "../../../lib/release-version.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "../../../lib/release-version.mjs";
 import {
   packFailingDoctorUpdateFixture,
   packFirstHopUpdateFixture,
@@ -33,6 +29,10 @@ import {
   seedPublishedDriverLegacySqlite,
   seedPublishedDriverSessionSources,
 } from "./published-driver-sqlite.mjs";
+import {
+  publishedDriverFixtureVersion,
+  withPublishedDriverUpdate,
+} from "./published-driver-update.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
@@ -61,7 +61,9 @@ assert.equal(accountHome, "/home/appuser", "Expected the disposable E2E account"
 assert(candidateArg && artifactsArg, "Expected candidate tarball and artifact directory");
 const requestedDriver = parseReleaseVersion(driverTag);
 assert(
-  driverTag === "latest" || (requestedDriver && classifyReleaseTrain(requestedDriver) === "stable"),
+  driverTag === "latest" ||
+    (requestedDriver &&
+      ["stable", "extended-stable"].includes(classifyReleaseTrain(requestedDriver))),
   "Driver must be a published stable version",
 );
 const candidate = fs.realpathSync(candidateArg);
@@ -158,7 +160,7 @@ function describeLinkedRoot() {
   };
 }
 
-async function run(name, command, args, allowFailure = false) {
+async function run(name, command, args, allowFailure = false, commandEnv = env) {
   const started = Date.now();
   const diagnostic = name === "recorded-run" || name === "stop-service";
   const deadline = diagnostic ? cellDeadline - 5_000 : workDeadline;
@@ -178,7 +180,7 @@ async function run(name, command, args, allowFailure = false) {
       bin: command,
       args,
       cwd: root,
-      env,
+      env: commandEnv,
       stdio: ["ignore", out, err],
       signal: diagnostic ? undefined : commandSignal,
       timeoutMs,
@@ -292,8 +294,8 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     const driverRelease = parseReleaseVersion(driverVersion);
     assert(
-      driverRelease && classifyReleaseTrain(driverRelease) === "stable",
-      "npm latest must resolve to stable",
+      driverRelease && ["stable", "extended-stable"].includes(classifyReleaseTrain(driverRelease)),
+      "Driver must resolve to a final release",
     );
     const driverSeed = "/tmp/published-driver-cache/driver.tar";
     if (fs.existsSync(driverSeed)) {
@@ -322,13 +324,12 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
     let build = output("candidate-build");
     let candidatePackage = candidate;
-    // Between a release and its forward-port, main lags npm latest. The cell proves
-    // the update mechanics, not the version label: relabel the candidate to the
-    // driver version so the future-version guard sees an upgrade, not a downgrade.
-    if (compareReleaseVersions(build.version, driverVersion) < 0) {
-      candidatePackage = await relabelCandidate(build.version, driverVersion);
-      // Match the relabeled dist/build-info.json exactly; the installed bytes carry no source label.
-      build = { ...build, version: driverVersion };
+    // Main can lag its published driver between a release and its forward-port.
+    // Relabel only this synthetic fixture, preserving an actual selector upgrade.
+    const fixtureVersion = publishedDriverFixtureVersion(build.version, driverVersion);
+    if (fixtureVersion !== build.version) {
+      candidatePackage = await relabelCandidate(build.version, fixtureVersion);
+      build = { ...build, version: fixtureVersion };
     }
     const driverBuild = legacySqlite
       ? readJson(path.join(packageRoot, "dist/build-info.json"))
@@ -343,6 +344,21 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           }
         : {}),
     });
+
+    const updateTo = async (name, tarball, extra = []) => {
+      await run(name + "-target", "tar", ["-xOf", tarball, "package/dist/build-info.json"]);
+      return withPublishedDriverUpdate({
+        fromVersion: readJson(path.join(packageRoot, "package.json")).version,
+        toVersion: output(name + "-target").version,
+        tarball,
+        env,
+        runtime,
+        signal: commandSignal,
+        timeoutMs: Math.max(1, workDeadline - Date.now()),
+        extra,
+        run: (args, updateEnv) => run(name, "openclaw", args, true, updateEnv),
+      });
+    };
 
     const port = await freePort();
     const token = "published-driver-synthetic-token";
@@ -506,12 +522,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       writeJson("sqlite-before-update", sqliteBefore);
     }
     try {
-      update = await run(
-        "update",
-        "openclaw",
-        ["update", "--tag", candidatePackage, "--yes", "--json"],
-        true,
-      );
+      update = await updateTo("update", candidatePackage);
       if (update.exitCode !== 0) {
         updateFailure = Object.assign(new Error("Published updater failed"), {
           command: "update",
@@ -647,8 +658,6 @@ process.exitCode = await runCancelableCommand(async (signal) => {
 
     if (followUp) {
       // Each follow-up runs the installed updater, so it exercises the candidate's own code.
-      const updateTo = (name, tag, extra = []) =>
-        run(name, "openclaw", ["update", "--tag", tag, "--yes", "--json", ...extra], true);
       const releaseOf = (version) =>
         Object.entries(describeLinkedRoot().releases ?? {}).find(
           ([name, entry]) => !name.startsWith(".") && entry.version === version,
@@ -776,6 +785,14 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           fixture.targetVersion,
           "The selected release was not updated",
         );
+        // A release behind its link is replaced without a journal. The image has a
+        // system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The in-place replacement did not use the atomic exchange",
+        );
         assert.match(
           fs.readFileSync(path.join(artifacts, "follow-up-update.stdout"), "utf8") +
             fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
@@ -800,6 +817,19 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           JSON.stringify(output("follow-up-update").steps ?? []),
           /release layout was not used/u,
           "The fallback was not recorded",
+        );
+        // That swap publishes a plain directory through the publication journal. The image
+        // has a system perl, so the exchange publishes and the two moves do not run.
+        assert.match(
+          fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
+          /Package publication recovery: /u,
+          "The fallback swap prepared no publication journal",
+        );
+        assert.match(
+          (output("follow-up-update").steps ?? []).find(({ name }) => name === "package-swap")
+            ?.stdoutTail ?? "",
+          /published by an atomic exchange \(/u,
+          "The journaled publication did not use the atomic exchange",
         );
         assert.equal(
           fs.readlinkSync(path.join(bin, "openclaw")),

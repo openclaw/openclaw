@@ -91,18 +91,36 @@ export async function createNpmPackageRootLinkLifecycle(params: {
         };
       }
     },
-    async retire(assertCurrent = () => {}): Promise<string | null> {
+    /**
+     * `obsolete` means the filesystem refused to remove the link this update
+     * moved aside and that link is still in place. A changed, missing, or
+     * unreadable entry is not classified.
+     */
+    async retire(assertCurrent = () => {}): Promise<{ message: string; obsolete: boolean } | null> {
+      let removalAttempted = false;
       try {
         assertCurrent();
         await assertUnchanged(params.backupRoot);
         // This observation does not exclude concurrent writers. Non-recursive
         // removal protects a substituted directory and the external checkout.
         assertCurrent();
+        removalAttempted = true;
         await fs.unlink(params.backupRoot);
         return null;
       } catch (error) {
         assertCurrent();
-        return `Could not retire retained npm package link: ${formatErrorMessage(error)}; backup retained at ${params.backupRoot}`;
+        // A substituted entry also refuses unlink; only the same link is obsolete.
+        const obsolete =
+          removalAttempted &&
+          (await assertUnchanged(params.backupRoot).then(
+            () => true,
+            () => false,
+          ));
+        assertCurrent();
+        return {
+          message: `Could not retire retained npm package link: ${formatErrorMessage(error)}; backup retained at ${params.backupRoot}`,
+          obsolete,
+        };
       }
     },
   };

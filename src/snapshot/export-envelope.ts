@@ -36,6 +36,8 @@ const postgresEnvelope = z
     exportSchemaVersion: version,
     activeFragments: z.array(identifier),
     verification: z.strictObject({
+      // Absent in exports from builds before typed row digests.
+      digest: z.literal("typed-v1").optional(),
       tables: z.record(identifier, table),
       allocations: z.record(identifier, allocation),
     }),

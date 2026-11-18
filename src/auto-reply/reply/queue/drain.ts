@@ -54,11 +54,7 @@ import {
   updateFollowupRetryHeartbeats,
 } from "./lifecycle.js";
 import { followupQueueSources, followupSourceRunners } from "./state.js";
-import {
-  isFollowupOperatorAuthorityCurrent,
-  isFollowupRunAborted,
-  type FollowupRun,
-} from "./types.js";
+import { isFollowupRunAborted, type FollowupRun } from "./types.js";
 
 type AdmissionSessionRebind = { from: string; to: string };
 
@@ -347,7 +343,6 @@ async function executeClaim(
       claim.retryBeforeExecution && !pluginUnavailable
         ? sources.filter(
             (item) =>
-              isFollowupOperatorAuthorityCurrent(item) &&
               !isFollowupRunAborted(item) &&
               !item.controllerInput?.retirementRequested &&
               (!adoptionRefused || !item.controllerInput?.custody.adopted) &&

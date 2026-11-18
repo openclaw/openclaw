@@ -1415,6 +1415,7 @@
   "ui/src/i18n/locales/en-chat-media.ts",
   "ui/src/i18n/locales/en-chat-provider-review.ts",
   "ui/src/i18n/locales/en-chat-questions.ts",
+  "ui/src/i18n/locales/en-chat-system-notice.ts",
   "ui/src/i18n/locales/en-chat-tool-labels.ts",
   "ui/src/i18n/locales/en-code-blocks.ts",
   "ui/src/i18n/locales/en-file-preview.ts",

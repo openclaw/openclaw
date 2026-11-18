@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { SIDEBAR_NAVIGATION_VIEWS } from "../app-navigation.ts";
 import { captureBootRoster } from "../lib/sessions/session-boot-roster.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
@@ -31,6 +32,10 @@ function displayRow(key: string, label: string, pinned = false) {
   );
 }
 const parse = (patch: Record<string, unknown>) => parseSidebarSnapshot({ ...model, ...patch });
+
+it.each(SIDEBAR_NAVIGATION_VIEWS)("saves a sidebar snapshot taken on the %s view", (view) => {
+  expect(parse({ navigationView: view })?.navigationView).toBe(view);
+});
 
 it("preserves a pinned session's snooze deadline through the saved sidebar snapshot", () => {
   const row = { ...displayRow("agent:main:snoozed", "Snoozed pin", true), snoozedUntil: 20_000 };

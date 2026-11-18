@@ -84,7 +84,7 @@ async function runCase(
       }
       return openaiMediaUnderstandingProvider.analyzePdf!(req);
     });
-    await stubPdfToolInfra(agentDir, {
+    await stubPdfToolInfra({
       provider: "openai",
       input: ["text", "image"],
       baseUrl: "https://api.openai.com/v1",

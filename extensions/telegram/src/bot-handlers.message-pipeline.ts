@@ -56,6 +56,18 @@ const mediaLog = createSubsystemLogger("telegram/media");
 const HOUR_MS = 60 * 60_000;
 const SENDER_MEDIA_MAX_AGE_MS = 2 * 60_000;
 const SENDER_MEDIA_LIMIT = 4;
+// Two batches (attachments, then reply-chain media) fit inside the 5 min adoption watchdog.
+const TELEGRAM_MEDIA_BATCH_BUDGET_MS = 2 * 60_000;
+
+function createMediaBatchBudget(): AbortSignal {
+  const budget = new AbortController();
+  // Never cleared: the batch has no end hook, and an unref'd timer outliving it is harmless.
+  setTimeout(
+    () => budget.abort(new Error("Telegram media budget for this message ran out")),
+    TELEGRAM_MEDIA_BATCH_BUDGET_MS,
+  ).unref?.();
+  return budget.signal;
+}
 
 function resolveRetainedTelegramMedia(params: {
   media?: TelegramResolvedMedia;
@@ -112,6 +124,11 @@ export function createTelegramMessagePipeline({
   });
   // Resolve the ALS owner at operation time; buffered callers retain ownership
   // after that frame ends by passing their participant signals explicitly.
+  // Each runtime carries one budget shared by every fetch it serves. Inbound media is
+  // fetched before the update is adopted, and the ingress drain retries an update that
+  // has not been adopted after 5 min: that retry holds every later message in the chat.
+  // A batch (an album, a forwarded burst, one message's reply chain) therefore shares one
+  // budget, and the attachment fetch plus the reply-chain fetch stay inside the watchdog.
   const resolveMediaRuntime = (...explicitSignals: AbortSignal[]) => {
     const abortSignals = [
       opts.mediaAbortSignal,
@@ -122,6 +139,7 @@ export function createTelegramMessagePipeline({
     return {
       ...mediaRuntimeOptions,
       abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
+      budget: createMediaBatchBudget(),
     };
   };
   const sessionRuntime = createTelegramMessageSessionRuntime({
@@ -614,3 +632,4 @@ export function createTelegramMessagePipeline({
 }
 
 export type TelegramMessagePipeline = ReturnType<typeof createTelegramMessagePipeline>;
+export type TelegramMediaRuntime = ReturnType<TelegramMessagePipeline["resolveMediaRuntime"]>;

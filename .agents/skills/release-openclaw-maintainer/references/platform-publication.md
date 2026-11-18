@@ -281,9 +281,11 @@ verify a `latest` redirect before relying on it.
 
 ## Android
 
-Pin the train before tagging under [preparation](preparation.md). Approval,
-build and publication remain independent; record a skipped or failed Android
-child without masking npm/GitHub results.
+Current Android releases use the independent Play workflow. Current source has
+no Android version manifest, so Gateway publication skips Android. Legacy
+tagged-source recovery retains its existing pin eligibility, qualification,
+protected approval, signing, and verification requirements. APK builds without
+a legacy manifest derive their defaults from the root package version.
 
 ## Website
 

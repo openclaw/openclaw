@@ -41,7 +41,7 @@ async function runCase(params: {
     const native = vi.fn(async () =>
       params.unsupported ? undefined : { text: "native document" },
     );
-    await stubPdfToolInfra(agentDir, {
+    await stubPdfToolInfra({
       provider: "openai",
       input: params.input ?? ["text", "image"],
       baseUrl: "https://api.openai.com/v1",

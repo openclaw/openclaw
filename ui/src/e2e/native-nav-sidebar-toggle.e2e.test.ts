@@ -3,7 +3,10 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import {
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -128,12 +131,15 @@ suite.define(() => {
         ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/${file}`).source),
       ),
     ).toEqual({ titlebarRegistered: false, requested: [false, false] });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // The panel collapses itself; the Sessions rail item reopens it.
     const sidebarPanel = page.locator(".sidebar-shell");
     await visible(sidebarPanel);
-    await toggle.click();
+    await page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true })
+      .click();
     await visible(sidebarPanel, false);
-    await toggle.click();
+    await page.locator('[data-navigation-view="sessions"]').click();
     await visible(sidebarPanel);
 
     await page.locator(".sidebar-issues-button").click();
@@ -232,7 +238,12 @@ suite.define(() => {
                 : [...document.querySelectorAll<HTMLElement>('[aria-label="Expand sidebar"]')].find(
                     (element) => element.checkVisibility(),
                   )!
-              : document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!;
+              : // Sessions reopens a collapsed panel; while open it opens the agent menu.
+                shell.classList.contains("shell--nav-collapsed")
+                ? document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!
+                : document.querySelector<HTMLElement>(
+                    'openclaw-app-sidebar [aria-label="Collapse sidebar"]',
+                  )!;
             toggle.click();
           }
           await new Promise<void>((resolve) => {
@@ -359,13 +370,19 @@ suite.define(() => {
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // People is a view button with a tooltip; the panel's own button collapses it.
+    const toggle = page.locator('[data-navigation-view="online"]');
     const sidebarPanel = page.locator(".sidebar-shell");
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
+    await toggle.click();
+    await waitForControlUiRoute(page, { routeId: "activity" });
+    const collapse = page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true });
 
     // Safari tap leaves post-collapse focus restoration to the shell.
-    await toggle.evaluate((element) => {
+    await collapse.evaluate((element) => {
       for (const type of ["pointerdown", "pointerup"]) {
         element.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
       }
@@ -391,7 +408,7 @@ suite.define(() => {
       .poll(() =>
         openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
       )
-      .toBe("Sessions");
+      .toBe("People");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -435,7 +452,7 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await visible(toolbar);
     await visible(page.locator(".shell-chrome-controls"), false);
-    const newThread = page.locator(".sidebar-rail .sidebar-new-session");
+    const newThread = page.locator(".sidebar-session-toolbar .sidebar-new-session");
     await visible(newThread);
     await attr(newThread, "aria-disabled", null);
     await page.keyboard.press("Tab");
@@ -451,7 +468,8 @@ suite.define(() => {
 
     await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed");
-    await visible(newThread);
+    // New session lives in the Sessions panel header, so it closes with the panel.
+    await visible(newThread, false);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
     await page.evaluate(() => document.fonts.ready);
@@ -535,12 +553,13 @@ suite.define(() => {
         .toEqual([!canGoBack, canGoBack]);
     }
 
-    await newThread.click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    // New session lives in the Sessions panel header, so the titlebar reopens the panel first.
     await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed", false);
+    await newThread.click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
 
-    for (const view of ["sessions", "pages", "online"]) {
+    for (const view of ["sessions", "online"]) {
       await rail.locator(".sidebar-identity-card").click();
       await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
       await expectShellClass(page, "shell--settings");
@@ -675,7 +694,7 @@ suite.define(() => {
       }),
     ).toBe(false);
 
-    await navigation.locator('[data-navigation-view="sessions"]').click();
+    // The drawer opens on Sessions.
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.click({ button: "right" });
