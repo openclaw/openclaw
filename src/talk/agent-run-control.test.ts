@@ -217,6 +217,22 @@ describe("controlRealtimeVoiceAgentRun", () => {
     );
   });
 
+  it("steers with the paired device of the Talk caller", async () => {
+    const deps = createDeps({ activeSessionId: "session-active" });
+    await control(
+      {
+        text: "use the safer path",
+        mode: "steer",
+        getToolAuthorityOverlay: () => ({ approvalReviewerDeviceId: "device-a" }),
+      },
+      deps,
+    );
+    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync.mock.calls[0]?.[2]).toMatchObject({
+      isInboundUserMessage: true,
+      inputRequesterDeviceId: "device-a",
+    });
+  });
+
   it("reports unconfirmed followup without claiming success or sending again", async () => {
     const deps = createDeps({ activeSessionId: "session-active", unconfirmed: true });
     const result = await control({ text: "continue", mode: "followup" }, deps);
