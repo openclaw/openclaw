@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   MediaFetchError,
+  saveRemoteMedia,
   type unlinkIfExists as unlinkIfExistsType,
 } from "openclaw/plugin-sdk/media-runtime";
 import type { HostedOutboundMediaMetaRecord } from "openclaw/plugin-sdk/outbound-media";
@@ -14,6 +15,7 @@ import type {
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { SsrFBlockedError } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { loadWebMedia as loadWebMediaType } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -865,7 +867,7 @@ describe("SMS inbound MMS materialization", () => {
       expect.objectContaining({
         maxBytes: 5 * 1024 * 1024,
         requestInit: expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
+        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com", "mms.twiliocdn.com"] },
         timeoutMs: 60_000,
         responseHeaderTimeoutMs: 30_000,
         readIdleTimeoutMs: 30_000,
@@ -1000,5 +1002,67 @@ describe("SMS inbound MMS materialization", () => {
     await expect(pending).rejects.toBe(timeoutReason);
     expect(timeoutSpy).toHaveBeenCalledWith(4 * 60_000);
     timeoutSpy.mockRestore();
+  });
+
+  describe("through the production downloader", () => {
+    const PNG = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+      "base64",
+    );
+
+    async function materializeWithRedirect(location: string) {
+      const state = await createOpenClawTestState({ label: "sms-inbound-media-redirect" });
+      const hops: Array<{ host: string; authorization: string | null }> = [];
+      try {
+        const result = await materializeSmsInboundMedia({
+          account: createAccount(),
+          msg: createInboundMessage({
+            media: [{ url: twilioMediaUrl(), contentType: "image/png" }],
+          }),
+          mediaRuntime: {
+            media: {
+              saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) =>
+                await saveRemoteMedia({
+                  ...options,
+                  // The guard resolves each hop before the stubbed transport runs.
+                  lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+                  fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
+                    hops.push({
+                      host: new URL(String(input)).hostname,
+                      authorization: new Headers(init?.headers).get("authorization"),
+                    });
+                    return hops.length === 1
+                      ? new Response(null, { status: 307, headers: { location } })
+                      : new Response(PNG, { headers: { "content-type": "image/png" } });
+                  },
+                }),
+            },
+          } as never,
+        });
+        return { result, hops };
+      } finally {
+        await state.cleanup();
+      }
+    }
+
+    it("follows Twilio's redirect to the MMS CDN and drops the Twilio credentials", async () => {
+      const { result, hops } = await materializeWithRedirect(
+        `https://mms.twiliocdn.com/${ACCOUNT_SID}/${"1".repeat(32)}?Expires=1`,
+      );
+
+      expect(result.body).toBe("photo");
+      expect(result.media).toHaveLength(1);
+      expect(hops.map((hop) => hop.host)).toEqual(["api.twilio.com", "mms.twiliocdn.com"]);
+      expect(hops[0]?.authorization).toMatch(/^Basic /);
+      expect(hops[1]?.authorization).toBeNull();
+    });
+
+    it("still refuses a redirect to any other host", async () => {
+      const { result, hops } = await materializeWithRedirect("https://evil.example.com/photo.png");
+
+      expect(result.media).toEqual([]);
+      expect(result.body).toContain("[1 Twilio MMS attachment unavailable]");
+      expect(hops.map((hop) => hop.host)).toEqual(["api.twilio.com"]);
+    });
   });
 });
