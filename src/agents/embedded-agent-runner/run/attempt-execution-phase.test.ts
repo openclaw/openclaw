@@ -312,6 +312,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         await vi.importActual<typeof import("./attempt-stream.js")>("./attempt-stream.js");
       const guards = installEmbeddedAttemptStreamGuards(fixture.input, {
         onRejectedProviderReplayRepaired: vi.fn(),
+        isToolBoundarySafe: () => false,
         onIdleTimeout: vi.fn(),
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({
           runId: "async-fragment",
@@ -705,6 +706,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       session,
       contextTokenBudget: 8_000,
       reserveTokens: 2_000,
+      isToolBoundarySafe: () => true,
       timeoutMs: 1_000,
       assertActive: () => fixture.input.runAbortController.signal.throwIfAborted(),
       withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
@@ -726,7 +728,10 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       );
       await started.promise;
       await vi.advanceTimersByTimeAsync(25);
-      expect(await failure).toBeInstanceOf(MidTurnPrecheckSignal);
+      const signal = await failure;
+      expect(signal).toBeInstanceOf(MidTurnPrecheckSignal);
+      // The request still fits the 32k window: the fallback only schedules maintenance.
+      expect((signal as MidTurnPrecheckSignal).request.pressure).toBe("maintenance");
       expect(requestSignal?.aborted).toBe(true);
       expect(fixture.input.runAbortController.signal.aborted).toBe(false);
       expect(fixture.runAbort).not.toHaveBeenCalled();

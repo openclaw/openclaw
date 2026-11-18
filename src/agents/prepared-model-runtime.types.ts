@@ -95,6 +95,11 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     allowGatewaySubagentBinding: boolean;
     /** Reads accepted inventory without scheduling discovery or expiry renewal. */
     readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
+    /** Admission facts travel with run projections; never reread live inventory for a started turn. */
+    capturedModelCatalog?: Readonly<{
+      admitted: ModelCatalogSnapshot;
+      published: ModelCatalogSnapshot;
+    }>;
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
     /** Rechecks native CLI login availability without refreshing provider inventory. */
@@ -126,6 +131,7 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     inlineProviderModels: readonly InlineModelEntry[];
     createStores: (
       publishedModels?: ReadonlyMap<string, readonly Model[]>,
+      selectedModel?: { provider: string; modelId: string },
     ) => PreparedModelRuntimeStores;
     /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
     routeModelResolutionMemo?: Map<string, Promise<Model>>;
@@ -256,6 +262,8 @@ export type PreparedModelCatalogProviderFacts = {
 
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
+  /** Acquired scopes stay live-owned even when replacement auth discards their rows. */
+  acquiredProviderIds?: ReadonlySet<string>;
   /** An unscoped provider acquisition completed; retained across provider-local refreshes. */
   fullProviderDiscovery?: true;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;

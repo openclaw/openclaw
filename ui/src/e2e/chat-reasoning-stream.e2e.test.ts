@@ -162,14 +162,14 @@ suite.define(() => {
         await expect.poll(() => pane.locator(".chat-thinking").count()).toBe(visible ? 3 : 0);
       }
 
-      const rawDetails = pane.locator(".chat-activity-group__summary", {
-        hasText: "Raw details",
-      });
+      const toolSummary = pane.locator(
+        ".chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary",
+      );
       for (const index of [0, 1, 2]) {
         await persist(index);
         // Enabled persisted reasoning stays visible between tool steps.
         if (reasoningLevel === "on" && index === 1) {
-          await expect.poll(() => rawDetails.count()).toBe(0);
+          await expect.poll(() => toolSummary.count()).toBe(0);
         }
         await expect.poll(() => reasoning(index).count()).toBe(1);
         expect(await pane.locator(".chat-thinking").count()).toBe(3);
@@ -187,18 +187,18 @@ suite.define(() => {
       await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
       try {
         if (reasoningLevel === "on") {
-          await expect.poll(() => rawDetails.count()).toBe(0);
+          await expect.poll(() => toolSummary.count()).toBe(0);
           await expectStepOrder();
         } else {
-          await rawDetails.waitFor();
-          if ((await rawDetails.getAttribute("aria-expanded")) === "false") {
-            await rawDetails.click();
+          await toolSummary.waitFor();
+          if ((await toolSummary.getAttribute("aria-expanded")) === "false") {
+            await toolSummary.click();
           }
-          await expect.poll(() => rawDetails.getAttribute("aria-expanded")).toBe("true");
+          await expect.poll(() => toolSummary.getAttribute("aria-expanded")).toBe("true");
         }
       } catch (error) {
         await rethrowWithControlUiE2eFailureFacts(page, error, "reasoningFactsRead", () =>
-          rawDetails.evaluateAll((summaries) => {
+          toolSummary.evaluateAll((summaries) => {
             const paneElement = document.querySelector<HTMLElement & { state?: ChatState }>(
               'openclaw-chat-pane[aria-hidden="false"]',
             );

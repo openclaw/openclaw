@@ -5,6 +5,7 @@ import { resolveBrewExecutable } from "../../infra/brew.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { hasBinary } from "../loading/config.js";
 import {
@@ -265,6 +266,7 @@ describe("skills-install fallback edge cases", () => {
       runCommand.mockResolvedValueOnce(completed("installed go"));
       runCommand.mockResolvedValueOnce(completed("", 1, "prefix unavailable"));
 
+      using filesystem = observeMainThreadFs();
       const result = await install();
 
       expect(result.ok).toBe(true);
@@ -277,6 +279,9 @@ describe("skills-install fallback edge cases", () => {
       const finalCall = commandCallAt(-1);
       expect(finalCall?.[0]).toEqual(["go", "install", "example.com/tool@latest"]);
       expect(finalCall?.[1]?.env?.GOBIN).not.toBe(path.join(maliciousPrefix, "bin"));
+      expect(
+        filesystem.stacks().filter(({ stack }) => stack.includes("resolveBrewBinDir")),
+      ).toEqual([]);
     });
   });
 

@@ -8,7 +8,7 @@ import {
   createMessageMediaOptions,
   type MessageMediaOptions,
 } from "./chat-message-bubble-presentation.ts";
-import { projectMessageMedia } from "./chat-message-media.ts";
+import { projectMessageMedia } from "./chat-message-media-projection.ts";
 import type {
   TranscriptAttachmentEntry,
   TranscriptAttachments,

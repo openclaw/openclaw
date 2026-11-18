@@ -1,10 +1,22 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
+import { classifyUpdateRunCause } from "./update-run-cause.js";
+import type { UpdateRunDriverSchema } from "./update-run-driver-schema.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
+
+/**
+ * The process identity alone, as leases, recovery receipts and the public run carry
+ * it. It lives here, not beside the driver schema, so Control UI bundles stay zod-free.
+ */
+export function toUpdateRunDriver({ host, pid, startIdentity }: UpdateRunDriver): UpdateRunDriver {
+  return { host, pid, startIdentity };
+}
 
 export function updateStepDiagnostics(
   step: Pick<UpdateStepResult, "failureFacts" | "stdoutTail" | "stderrTail">,
@@ -107,6 +119,15 @@ export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecor
   delete origin.windowsUserSid;
   delete origin.managedHandoff;
   delete origin.packageStage;
+  delete origin.packageRelease;
+  delete origin.gitActivation;
+  // The wire driver is closed: recorded boot namespaces stay local.
+  if (origin.driver) {
+    origin.driver = toUpdateRunDriver(origin.driver);
+  }
+  if (origin.previousDrivers) {
+    origin.previousDrivers = origin.previousDrivers.map(toUpdateRunDriver);
+  }
   const verification = { ...record.verification };
   if (verification.recovery?.serviceRestartSafe === false) {
     verification.recovery = { ...verification.recovery };
@@ -202,6 +223,11 @@ export function finishUpdateRunRecord(
   if (result.nextAction !== undefined) {
     record.origin.nextAction = result.nextAction;
   }
+  record.origin.cause = classifyUpdateRunCause({
+    status: record.status,
+    reason: record.reason,
+    facts: record.steps.flatMap((step) => step.failureFacts ?? []),
+  });
   record.finishedAtMs = now;
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;

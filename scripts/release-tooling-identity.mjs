@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import childProcess from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { accountGithubRequest } from "./lib/plain-gh.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
@@ -124,12 +125,12 @@ export function resolveReleaseToolingIdentity({
   if (qualificationAdmission !== undefined) {
     if (
       !isRecord(qualificationAdmission) ||
-      candidateSha !== sha ||
+      !SHA_PATTERN.test(candidateSha) ||
       requested.ref !== ref ||
       requested.fullRef !== fullRef ||
       requested.sha !== sha
     ) {
-      fail("candidate qualification must bind the exact executing C=Q identity");
+      fail("candidate qualification must bind valid C and the exact executing Q identity");
     }
     return requested;
   }
@@ -318,7 +319,8 @@ function parseJson(raw, label) {
 }
 
 export function runReleaseToolingGh(args) {
-  return execFileSync("gh", args, {
+  accountGithubRequest(args);
+  return childProcess.execFileSync("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
     maxBuffer: 1024 * 1024,
@@ -728,6 +730,10 @@ async function main(argv = process.argv.slice(2)) {
 
 function handleMainError(error) {
   console.error(error instanceof Error ? error.message : String(error));
+  // Identity lookups wrap the gh failure; retain its diagnostic without dumping captured stdout.
+  if (error instanceof Error && error.cause instanceof Error) {
+    console.error(`Caused by: ${error.cause.message}`);
+  }
   process.exitCode = 1;
 }
 

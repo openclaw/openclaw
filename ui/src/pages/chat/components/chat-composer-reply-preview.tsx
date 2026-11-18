@@ -70,6 +70,7 @@ export function ComposerReplyPreview(view: {
         class="chat-reply-preview__dismiss composer-context-strip__dismiss"
         icon="x"
         label={t("chat.composer.cancelReply")}
+        tooltip={false}
         onClick={() => view.composer.onClearReply?.()}
       />
     </div>

@@ -1,2 +1,0 @@
-# Supply every bundled dependency license for the existing real AI declaration tests.
-2

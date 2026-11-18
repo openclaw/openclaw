@@ -7,6 +7,7 @@
  */
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { describeSystemAgentConfigConflict } from "../system-agent/setup-config-snapshot.js";
 import { buildPromisedWorkPromptSection } from "./promised-work-prompt.js";
 import type { ProviderSystemPromptContribution } from "./system-prompt-contribution.js";
 import { buildOpenClawControlSection } from "./system-prompt-control.js";
@@ -76,6 +77,7 @@ export function buildAgentHarnessBasePrompt(params: {
       controlToolsAvailable: availableTools.has("openclaw") || availableTools.has("gateway"),
     }),
     buildOpenClawControlSection({
+      setupIssue: params.config ? describeSystemAgentConfigConflict(params.config) : undefined,
       hasOpenClaw: availableTools.has("openclaw"),
       hasGateway: availableTools.has("gateway"),
       hasExec: availableTools.has("exec"),

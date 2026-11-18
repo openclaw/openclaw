@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { MessageInjectionClosedError } from "../../../auto-reply/reply/message-injection-authority.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
@@ -6,6 +7,7 @@ import {
   validateAgentRunDelegatedAuthority,
 } from "../../../infra/agent-run-registry.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import type { MessagePresentation } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { closeDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
@@ -26,8 +28,8 @@ import {
   createAgentRunSupersededAbortError,
   isAgentRunRestartAbortReason,
 } from "../../run-termination.js";
-import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
+import { readPreparedProviderRequest } from "../provider-prompt-state.js";
 import {
   getEmbeddedRunAttachment,
   isCurrentEmbeddedRunAttachment,
@@ -35,15 +37,10 @@ import {
 } from "../run-state.js";
 import {
   detachActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
   attachActiveEmbeddedRun,
 } from "../runs.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
-import {
-  requiresCompletionRequiredAsyncTaskWait,
-  type AsyncStartedToolMeta,
-} from "./attempt-async-tasks.js";
 import { readAttemptNestedToolActivity } from "./attempt-nested-tool-activity.js";
 import {
   claimEmbeddedPendingUserInputAnswer,
@@ -54,7 +51,10 @@ import {
   withEmbeddedAttemptSteeringAdmission,
   type EmbeddedAttemptSteeringAdmission,
 } from "./attempt-steering-admission.js";
-import type { PrepareEmbeddedAttemptStreamInput } from "./attempt-stream-prepare.types.js";
+import type {
+  PrepareEmbeddedAttemptStreamInput,
+  AttemptStreamQueueHandle,
+} from "./attempt-stream-prepare.types.js";
 import { createSubscribedToolSearchExecutor } from "./attempt-tool-search-executor.js";
 import {
   createEmbeddedAttemptDeferredLifecycleOwner,
@@ -66,11 +66,6 @@ import {
   resolveReportedModelRef,
 } from "./helpers.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
-
-type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
-  kind: "embedded";
-  cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
-};
 
 export function prepareEmbeddedAttemptStream(input: PrepareEmbeddedAttemptStreamInput) {
   return withEmbeddedAttemptSteeringAdmission(
@@ -89,6 +84,9 @@ function prepareStream(
   let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
+  let finalPresentationCandidate:
+    | { assistant: AssistantMessage; presentation: MessagePresentation }
+    | undefined;
   let activeQueueAdmissions = 0;
   const isSteeringAdmissionOpen = () => {
     const state = input.getRunState();
@@ -115,6 +113,7 @@ function prepareStream(
       ? async (
           event,
         ): Promise<void | { continueCurrentTurn: true } | { suppressTerminalDelivery: true }> => {
+          finalPresentationCandidate = undefined;
           if (
             beforeAgentFinalizeRevisionReason ||
             event.willRetry ||
@@ -186,6 +185,7 @@ function prepareStream(
                 event: bindAgentHarnessHookMessages(
                   {
                     runId: attempt.runId,
+                    supportsFinalPresentation: true,
                     sessionId: attempt.sessionId,
                     ...(attempt.sessionKey ? { sessionKey: attempt.sessionKey } : {}),
                     provider: reportedModelRef.provider,
@@ -226,7 +226,30 @@ function prepareStream(
                 hookRunner,
               });
             }
+            const acceptFinalPresentation = () => {
+              const current = input.getRunState();
+              if (
+                outcome.action !== "revise" &&
+                outcome.finalPresentation &&
+                lastAssistant &&
+                !event.hasPendingContinuation &&
+                !agentSession.hasDeliveredSourceReply() &&
+                !input.runAbortController.signal.aborted &&
+                !current.aborted &&
+                !current.timedOut &&
+                !current.promptError &&
+                !current.yieldDetected &&
+                !admission.closed &&
+                isCurrentRegistration()
+              ) {
+                finalPresentationCandidate = {
+                  assistant: lastAssistant,
+                  presentation: outcome.finalPresentation,
+                };
+              }
+            };
             if (outcome.action === "finalize") {
+              acceptFinalPresentation();
               return;
             }
             if (outcome.action === "revise") {
@@ -265,6 +288,7 @@ function prepareStream(
               activeSession.agent.hasQueuedMessages() ||
               !hasCurrentRegistration()
             ) {
+              acceptFinalPresentation();
               return;
             }
             // This is a same-prompt follow-up, not a replay or draft rewind.
@@ -296,7 +320,6 @@ function prepareStream(
       undefined,
       registration,
     );
-  let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
@@ -347,8 +370,11 @@ function prepareStream(
     codeModeExecToolNames: agentSession.codeModeExecToolNames,
     sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
     sideEffectToolOwners: agentSession.sideEffectToolOwners,
+    toolUsageRecorder: attempt.toolUsageRecorder,
+    toolUsageIdsByName: agentSession.toolUsageIdsByName,
     trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
     session: activeSession,
+    getUserTranscriptContexts: input.getUserTranscriptContexts,
     onModelUsage: input.onModelUsage,
     messageChannel: input.runtimeChannel,
     hookRunner: getGlobalHookRunner() ?? undefined,
@@ -369,22 +395,6 @@ function prepareStream(
         : undefined,
     onBeforeLifecycleTerminal: async () => {
       if (deferredLifecycleOwner) {
-        return;
-      }
-      let requiresTaskWait = false;
-      try {
-        requiresTaskWait = requiresCompletionRequiredAsyncTaskWait({
-          sessionKey: attempt.sessionKey,
-          toolMetas: toolMetasForTerminal,
-          abortSignal: input.runAbortController.signal,
-        });
-      } catch (error) {
-        if (!input.runAbortController.signal.aborted || !isRunnerAbortError(error)) {
-          throw error;
-        }
-        // Cancelling this observation must not defer cleanup past the terminal event.
-      }
-      if (deferredLifecycleOwner || requiresTaskWait) {
         return;
       }
       // Clear active-run state before terminal events and post-completion cleanup.
@@ -411,7 +421,6 @@ function prepareStream(
     return streamSubscription.unsubscribe();
   });
   const subscription = { ...streamSubscription, unsubscribe };
-  toolMetasForTerminal = subscription.toolMetas;
 
   const toolSearchCatalogExecutor = createSubscribedToolSearchExecutor({
     attempt,
@@ -492,7 +501,7 @@ function prepareStream(
     toolAuthorityPreparation,
     assertCurrent: () => {
       if (!composeInjectionGuard(assertCurrent)()) {
-        throw new Error("active session is finalizing");
+        throw new MessageInjectionClosedError();
       }
     },
   });
@@ -507,7 +516,7 @@ function prepareStream(
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
-      throw new Error("active session is finalizing");
+      throw new MessageInjectionClosedError();
     }
     activeQueueAdmissions++;
     try {
@@ -582,7 +591,7 @@ function prepareStream(
       claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
     cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
       cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
-  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
+  } satisfies NonNullable<AttemptStreamQueueHandle["messageInjectionV2"]>;
   const canApplyPermissionMode = () =>
     admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
   const applyPermissionMode = input.applyPermissionMode;
@@ -626,18 +635,8 @@ function prepareStream(
       }
       return {
         model: attempt.model,
-        systemPrompt: activeSession.systemPrompt,
-        tools: activeSession.agent.state.tools.map(({ name, description, parameters, async }) => ({
-          name,
-          description,
-          parameters,
-          ...(async === false ? { async } : {}),
-        })),
-        messages: activeSession.messages,
-        projectMessages: input.projectSessionForkMessages,
-        sessionVersion: activeSession.sessionManager.getHeader()?.version,
-        boundary: input.readSessionForkBoundary?.(),
-        blockImages: activeSession.settingsManager.getBlockImages(),
+        promptCacheKey: attempt.promptCacheKey,
+        preparedRequest: readPreparedProviderRequest(attempt.runId),
       };
     },
     isAborted: () => input.getRunState().aborted,
@@ -721,6 +720,10 @@ function prepareStream(
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,
+    getFinalPresentation: (assistant: AssistantMessage | undefined) =>
+      assistant && finalPresentationCandidate?.assistant === assistant
+        ? finalPresentationCandidate.presentation
+        : undefined,
     stopAcceptingSteerMessages: admission.stop,
   };
 }

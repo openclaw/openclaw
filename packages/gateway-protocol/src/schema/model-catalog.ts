@@ -244,6 +244,14 @@ export const ModelsListResultSchema = closedObject({
     ]),
   ),
   refreshFailed: Type.Optional(Type.Boolean()),
+  refreshFailures: Type.Optional(
+    Type.Array(
+      closedObject({
+        acquisition: Type.Union([Type.Literal("provider"), Type.Literal("native")]),
+        provider: Type.Optional(NonEmptyString),
+      }),
+    ),
+  ),
   pendingProviders: Type.Optional(Type.Array(NonEmptyString)),
   accountSelection: Type.Optional(ChatAccountSelectionSchema),
   providerOutcomes: Type.Optional(Type.Array(ModelCatalogProviderOutcomeSchema)),

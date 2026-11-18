@@ -104,6 +104,11 @@ export function assertControlUiE2eOwnership(
   });
 
   expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
+  expect(uiE2eRealGatewayTestFiles).toEqual(
+    expect.arrayContaining(
+      trackedUiE2eFiles.filter((file) => file.endsWith(".real-gateway.e2e.test.ts")),
+    ),
+  );
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
 
@@ -164,6 +169,8 @@ export function assertControlUiE2eOwnership(
     expect(selection.flat().toSorted()).toEqual(files);
   };
   const localSelected = select(config);
+  const readonlyHome = "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts";
+  expect(localSelected[2]).toContain(readonlyHome);
   expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
   assertPartition(localSelected, trackedUiE2eFiles);
   expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
@@ -188,6 +195,7 @@ export function assertControlUiE2eOwnership(
 
   const ordinaryConfig = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []);
   const ordinarySelected = select(ordinaryConfig);
+  expect(ordinarySelected.flat()).not.toContain(readonlyHome);
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
   assertPartition(ordinarySelected, ordinary);
 
@@ -225,6 +233,11 @@ export function assertControlUiE2eOwnership(
       .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
       .filter((file) => file === packagedWorkboard),
   ).toEqual([packagedWorkboard]);
+  expect(
+    createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [readonlyHome] }).e2e)
+      .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
+      .filter((file) => file === readonlyHome),
+  ).toEqual([readonlyHome]);
 
   const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
   const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");

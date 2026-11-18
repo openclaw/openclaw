@@ -180,10 +180,15 @@ export function resolveSessionCreateInheritance(params: {
   if (params.request.creation?.via !== "spawn") {
     return { creation: params.request.creation };
   }
+  const initiator = params.request.creation.actor?.delegatedBy;
   const ownerAssignment = inheritSpawnSessionOwner(
     params.parent.entry,
     params.request.creation.actor,
-    params.request.creation.requesterProfileId,
+    initiator
+      ? initiator.type === "human"
+        ? initiator.id
+        : undefined
+      : params.request.creation.requesterProfileId,
     Date.now(),
     resolveResidentProfileId,
   );

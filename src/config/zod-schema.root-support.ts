@@ -136,6 +136,8 @@ export const SkillEntrySchema = z.strictObject({
 
 export const PluginEntrySchema = z.strictObject({
   enabled: z.boolean().optional(),
+  /** Allow this plugin to publish its own diagnostic metrics. Off unless explicitly true. */
+  allowMetrics: z.boolean().optional(),
   hooks: z
     .strictObject({
       /** Controls plugin prompt modification, including hooks, guidance, and steering. */
@@ -147,6 +149,11 @@ export const PluginEntrySchema = z.strictObject({
        * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
        */
       allowConversationAccess: z.boolean().optional(),
+      /**
+       * Allows this plugin's before_model_request hook to rewrite or withhold the final
+       * provider request. Off unless explicitly true, for bundled plugins too.
+       */
+      allowModelRequest: z.boolean().optional(),
       /** Default timeout in milliseconds for this plugin's typed hooks. */
       timeoutMs: z.number().int().positive().max(600_000).optional(),
       /** Per typed-hook timeout overrides in milliseconds. */

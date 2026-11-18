@@ -87,6 +87,7 @@ suite.define(() => {
       let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
       let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
+        assistantAvatar: "",
         deferredMethods: ["agent.identity.get", "models.authStatus", "sessions.branches.list"],
         sessionKey: selectedKey,
         sessions: [selected, foreign],

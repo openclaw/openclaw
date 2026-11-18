@@ -911,7 +911,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     const sessionCall = hoisted.createAgentSession.mock.calls[0];
     expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
     expect(sessionCall?.[0]).toMatchObject({
-      beforeToolBatch: undefined,
+      toolRepeatPolicy: expect.objectContaining({ enabled: true }),
       contextOverflowRecoveryOwner: "caller",
       cleanupProviderSessionResourcesOnDispose: false,
     });
@@ -1092,7 +1092,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     await prepareEmbeddedAttemptAgentSession(fixture.input);
 
     expect(hoisted.createAgentSession.mock.calls[0]?.[0]).toMatchObject({
-      beforeToolBatch: undefined,
+      toolRepeatPolicy: expect.objectContaining({ enabled: true }),
       contextOverflowRecoveryOwner: "session",
     });
   });

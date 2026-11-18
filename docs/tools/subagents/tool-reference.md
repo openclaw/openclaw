@@ -98,7 +98,26 @@ model response, such as completed tool output, and respects compaction and reset
 boundaries. An oversized fork starts isolated with an explanatory note. Spawns
 also include resolved child model metadata:
 `resolvedModel` contains the applied model ref and `resolvedProvider` contains
-the provider prefix when the ref has one.
+the provider prefix when the ref has one. Native subagent and visible-session
+spawns also report `resolvedRuntime`, the runtime the child resolves to (for
+example `openclaw` or `claude-cli`), and `resolvedAuth`, the credential kind:
+`api-key`, `oauth`, `token`, `native` for a CLI runtime's own login (for
+example the Claude CLI's sign-in, which the CLI owns), `unavailable` when the
+selected route has no credential, or `unknown`. A harness login that reports
+its credential kind shows that kind, so a Codex child signed in with an API key
+reads `api-key`, as `session_status` does. `resolvedAuthProfile`
+names the auth profile that supplies the credential (`personal account` for
+personal account profiles). Together they show whether the child bills through
+an API key or a subscription login, with one exception: `native` does not tell
+a Claude CLI signed in with an API key, an `apiKeyHelper`, or a third-party
+provider login apart from a claude.ai subscription login, because the Claude
+CLI discovery reports one mode for every login method (`session_status` shows
+`native (claude-cli)` for all of them). They describe the primary model at spawn
+time; the run re-resolves credentials when it starts and may use a configured
+fallback. Before the Gateway has published its prepared model facts (for
+example right after startup), a CLI or harness runtime's own login is not
+visible, so those children read `unknown`. Cloud-placed visible sessions omit
+them because the worker's credentials are not visible to the Gateway.
 
 ### Cloud placement
 
@@ -107,7 +126,12 @@ execution explicitly with `{ "kind": "local" }`. Both forms support native
 subagents (including hidden review and test workers), visible sessions, and ACP
 runs under their existing runtime and visibility rules. Local placement does not
 accept cloud selectors. Do not supply dummy profile, OS, or machine identifiers.
-An existing local worktree needs only `cwd`, not `worktree: true`:
+An existing local worktree needs only `cwd`, not `worktree: true`, when the
+session's filesystem policy permits that location. With an explicit permission
+mode, changing a hidden native child's `cwd` does not widen its inherited
+recorded session root. For work outside that root, the operator must use a
+session whose recorded root includes the target repository. Required roots,
+sender restrictions, and container mount boundaries still apply. For example:
 
 ```json
 {
@@ -147,7 +171,20 @@ Cloud placement requires a live hosted Gateway session; standalone and local-emb
 
 An error with `childSessionKey` means the child was retained. `initialTaskStatus: "not-sent"` means the tool did not submit its initial task; `"unknown"` means task admission was attempted but not confirmed. Inspect that child and its placement before retrying. Do not repeat the spawn merely because provisioning or the initial reply timed out. An attempted task that cannot be registered is settled through exact-run cancellation; its session and worker are preserved for inspection.
 
-Selecting a cloud profile is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
+To run the child on one paired device instead, pass that device's node ID (the `nodeId` the `nodes` tool reports):
+
+```json
+{
+  "task": "Run the macOS UI tests and report failures",
+  "visible": true,
+  "worktree": true,
+  "placement": { "kind": "device", "deviceId": "<paired-device-id>" }
+}
+```
+
+The Gateway dispatches the child with the same checks as `sessions.dispatch` with `deviceId`: the device must be paired and connected, and it must support the child's runtime and execution mode. Otherwise the spawn returns an error naming the device and the reason, keeps the child with `initialTaskStatus: "not-sent"`, and runs nothing elsewhere. On success, the receipt's `placement` names the selected device. See [Placement and machine selection](/gateway/cloud-workers/placement-and-machine-selection) for device requirements.
+
+Selecting a cloud profile or paired device is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
 
 ### Delegation prompt mode
 
@@ -193,7 +230,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
 <ParamField path="cwd" type="string">
-  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. Workspace-contained OpenClaw file tools resolve paths against `cwd` and, on the host, also admit registered linked worktrees of the same repository, checking registration at each write. Other repositories and Git metadata remain excluded; container mount boundaries still apply. Codex-native edits require a worktree selected as the turn cwd, including through `worktree: true`. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used. For manually created linked worktrees outside the agent workspace, pass the repository as `cwd` at each spawn level. A repository path in `task` or an `exec` `workdir` does not bind file tools. If `apply_patch` reports a root escape because `cwd` was omitted, have the parent respawn the worker with the repository `cwd`; the existing worker cannot rebind itself.
+  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. Workspace-contained OpenClaw file tools resolve paths against `cwd`; configuration-only containment binds their root there. An explicit permission mode keeps the recorded session root, even when `cwd` changes. On the host, file tools also admit registered linked worktrees of the bound repository, checking registration at each write. Other repositories and Git metadata remain excluded; container mount boundaries still apply. Codex-native edits require a worktree selected as the turn cwd, including through `worktree: true`. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used. For manually created linked worktrees outside the agent workspace, pass the repository as `cwd` at each spawn level when the session and sender policy permit it. A repository path in `task` or an `exec` `workdir` does not bind file tools. For a configuration-only host root escape, use an existing worker bound to the authorized repository, or start one with that repository as `cwd`; the existing worker cannot rebind itself. A recorded-root rejection requires an operator-authorized session whose root includes the target. This does not lift sender, container mount, or required-root restrictions.
 </ParamField>
 <ParamField path="projectId" type="string">
   Select a registered project through the same managed-project flow as New session. Native sub-agents only; hidden children ignore this selector unless `worktree: true`. Mutually exclusive with `projectGitUrl` and `cwd` when selecting a project. Registry selection does not grant arbitrary host-path access or bypass sandbox containment.
@@ -220,7 +257,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Override thinking level for the sub-agent run. Not available with `visible: true`.
 </ParamField>
 <ParamField path="cyberAccessProgram" type='"standard" | "daybreak_blue" | "daybreak_red"'>
-  Select the child's OpenAI [cyber Access](/providers/openai/models#chat-access-control): `daybreak_blue` is Blue and `daybreak_red` is Red. When omitted, a same-agent child on the requester's model keeps the requester's saved session Access; a child on another agent or model starts at its model default. The value is saved on the child session like a chat Access selection, and both the OpenClaw runtime and the Codex runtime check it against the child's account and model before every model request, so an unavailable program fails the child run instead of downgrading. Native sub-agents only (hidden or `visible: true`); rejected with `runtime: "acp"`.
+  Select the child's OpenAI [cyber Access](/providers/openai/models#chat-access-control): `daybreak_blue` is Blue and `daybreak_red` is Red. When omitted, a same-agent child on the requester's model keeps the requester's saved session Access; a child on another agent or model starts at its model default. The value is saved on the child session like a chat Access selection, and both the OpenClaw runtime and the Codex runtime check it against the child's account and model before every model request, so an unavailable program fails the child run instead of downgrading. Native sub-agents only (hidden or `visible: true`); rejected with `runtime: "acp"`. Code-mode `agents.run(prompt, { cyberAccessProgram })` and plugin `runtime.subagent.native.spawn({ ..., cyberAccessProgram })` use the same native spawn owner and checks. Session status shows a saved Access selection; this is a selected control, not proof that an account or model can use it.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.
@@ -253,7 +290,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Create a persistent dashboard session only when the user requests a separate session or needs to return to and steer the work independently. Omit this flag or use `false` for internal QA, research, coding, review, and test workers supporting the parent task. Visible spawns support only `runtime: "subagent"` and always keep the created session.
 </ParamField>
 <ParamField path="placement" type="object">
-  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
+  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. For one paired device, use `{ kind: "device", deviceId }` with the same `visible: true` and `worktree: true`; an unavailable or incompatible device fails the spawn. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
 </ParamField>
 <ParamField path="group" type="string">
   Optional custom sidebar group for a visible session; a new name creates the group. Omitted, empty, and whitespace-only values mean ungrouped and are also accepted for hidden or ACP runs. A nonempty group requires `visible: true`.
@@ -319,8 +356,16 @@ announcing children before answering. It does not collect Swarm results:
 collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
 Code Mode, and do not send completion notifications.
 
+`sessions_yield` also awaits wake-armed background commands that the current
+run started: the exec running result says so. Their first exit resumes the
+yielded run with the exit result, bounded by the command's `timeoutSeconds`.
+This is how a hidden subagent or an isolated cron run waits for a command,
+because ending such a run's turn returns its final result instead of waiting.
+A yielded subagent resumes as its original task; a cron run resumes in place,
+and the resumed turn's reply is the run's result.
+
 In automation turns, including cron jobs and jobs running in an existing session,
-`sessions_yield` returns `status: "yielded"` and ends the current model turn.
+`sessions_yield` for children returns `status: "yielded"` and ends the current model turn.
 The scheduler delivers child output under the job's delivery policy; yielding
 does not register an interactive requester continuation or an incoming-message
 wait, even with `waitFor: "message"`.
@@ -374,7 +419,7 @@ message: those completions resume the session. There, `waitFor: "message"` is
 not applied. The yield is an ordinary child wait, the requester gets no pause
 notice, and the `yielded` result carries a `note` saying so. Omit `waitFor`
 when yielding for your own children.
-Without a real pending child/runtime completion or this explicit message intent,
+Without a real pending child/runtime completion, an awaited background command, or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
 the child run instead of completing it. For a child with announced completion,

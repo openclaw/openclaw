@@ -48,9 +48,9 @@ prefer TypeScript." It writes the note to the appropriate file.
 ## What goes where
 
 `USER.md` is the compact user-model layer. Write stable preferences and profile
-facts as imperative directives with observed-date and active/superseded
-metadata. When a preference changes, supersede it in place instead of appending
-a contradictory active directive. See [User model](/concepts/user-model).
+facts as current imperative directives without date/status metadata. When a
+preference changes, replace it in place instead of keeping contradictory
+directives. Preserve useful dated history in daily memory, not `USER.md`. See [User model](/concepts/user-model).
 
 `MEMORY.md` is the compact, curated layer for durable non-profile facts,
 standing decisions, and short summaries that should be available at the start
@@ -226,6 +226,11 @@ snippet (optionally scope `sessionKey` to the transcript ID), then pass its retu
 `sessionKey`, `messageId`, and `sessionId` to `sessions_history` for a bounded,
 sanitized excerpt. These tools enforce session visibility independently on each
 request. Memory-search line numbers are not session-history offsets.
+
+Session indexing excludes generated exec completion wakes and lost-process
+notices, including command output tails. Ordinary user messages and assistant
+replies remain eligible. Previously indexed output is removed on the next
+reindex.
 
 The recall prompt recommends only enabled tools. Without session-history tools,
 report the excerpt limitation instead of reading raw transcript files.

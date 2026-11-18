@@ -16,6 +16,22 @@ function expectInvalid(result: ReturnType<typeof parseTemplateManifest>, path: s
 }
 
 describe("portable Template schema conformance", () => {
+  it.each(["Brief me", [""], ["   "], [12]])(
+    "rejects invalid conversation starters %j",
+    (recommendedPrompts) => {
+      expectInvalid(
+        parseTemplateManifest({
+          ...baseManifest,
+          agent: { ...baseManifest.agent, recommendedPrompts },
+        }),
+        "$.agent.recommendedPrompts" +
+          (Array.isArray(recommendedPrompts) && typeof recommendedPrompts[0] !== "string"
+            ? "[0]"
+            : ""),
+      );
+    },
+  );
+
   it("preserves optional portable categories", () => {
     const result = parseTemplateManifest({ ...baseManifest, categories: ["travel", "personal"] });
     expect(result).toMatchObject({ ok: true, manifest: { categories: ["travel", "personal"] } });
@@ -36,32 +52,30 @@ describe("portable Template schema conformance", () => {
     ).toBe(true);
   });
 
-  it.each(["automations", "cronJobs"])("normalizes %s declarations to automations", (key) => {
+  it("accepts automations and rejects retired or mixed cronJobs declarations", () => {
     const job = {
       id: "daily",
       schedule: { cron: "0 9 * * *", timezone: "UTC" },
       session: "isolated",
       message: "Summarize status.",
     };
-    const result = parseTemplateManifest({ ...baseManifest, [key]: [job] });
-    expect(result).toMatchObject({ ok: true, manifest: { automations: [job] } });
-    if (result.ok) {
-      expect(result.manifest).not.toHaveProperty("cronJobs");
+    expect(parseTemplateManifest({ ...baseManifest, automations: [job] })).toMatchObject({
+      ok: true,
+      manifest: { automations: [job] },
+    });
+    for (const declarations of [{ cronJobs: [job] }, { automations: [], cronJobs: [] }]) {
+      expectInvalid(parseTemplateManifest({ ...baseManifest, ...declarations }), "$.cronJobs");
     }
-  });
-
-  it("rejects ambiguous automation declarations", () => {
-    expectInvalid(parseTemplateManifest({ ...baseManifest, automations: [], cronJobs: [] }), "$");
   });
 
   it("requires exact package versions", () => {
     const result = parseTemplateManifest({
       ...baseManifest,
-      packages: [{ kind: "skill", source: "clawhub", ref: "demo", version: "latest" }],
+      skills: [{ ref: "demo", version: "latest" }],
     });
 
     expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toBe("$.packages[0].version");
+    expect(result.diagnostics[0]?.path).toBe("$.skills[0].version");
   });
 
   it("requires pinned package-manager MCP commands and safe environment keys", () => {
@@ -123,6 +137,21 @@ describe("portable Template schema conformance", () => {
       ]).ok,
     ).toBe(true);
   });
+
+  it.each(["Avatars\\Agent.png", "Avatars/Agent.png"])(
+    "stores the declared destination for avatar %s",
+    (avatar) => {
+      const result = parseTemplateManifest({
+        ...baseManifest,
+        agent: { ...baseManifest.agent, identity: { avatar } },
+        workspace: { files: [{ source: "workspace/avatar.png", path: "avatars/agent.png" }] },
+      });
+      expect(result).toMatchObject({
+        ok: true,
+        manifest: { agent: { identity: { avatar: "avatars/agent.png" } } },
+      });
+    },
+  );
 
   it("requires portable cron timezone, session, field count, and delivery", () => {
     const valid = {

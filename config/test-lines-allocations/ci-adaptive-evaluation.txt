@@ -1,2 +1,0 @@
-# Exercise frozen predictions against later outcomes and reject inconsistent evidence.
-168

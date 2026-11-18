@@ -65,6 +65,7 @@ async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadPa
     sessionKey: params.sessionKey,
     agentId: target.agentId,
     allowMissing: true,
+    sessionAccessOnly: true,
   });
   let active = true;
   let source: AcpSessionControlConstraint["source"] | undefined;

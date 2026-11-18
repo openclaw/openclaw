@@ -118,8 +118,9 @@ existing conversation with `sessionTarget: "session:<same session key>"`. New
 jobs retain the original authenticated source privately, so the continuation can
 finish authorized work, such as inspecting and merging that conversation's PR,
 without another message from the operator. Each occurrence revalidates the
-original operator scopes, role, device, access grant, model restrictions, and exact
-session identity under current policy. This preserves the original operator
+original operator scopes, role, device, access grant, and model restrictions under
+current policy. The conversation is linked by key, so editing a message, switching a
+branch, or resetting the conversation keeps the continuation. This preserves the original operator
 scope ceiling; it is not a new PR-only permission or a blanket grant to automations.
 The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.
@@ -133,9 +134,10 @@ the next occurrence is refused with a message asking you to recreate the
 automation from an authenticated turn, and the job is disabled. A revocation
 during a run stops that run's remaining operator effects.
 
-If the creating conversation is reset, a linked detached job keeps running
-unbound, without that conversation's workspace or memory, and still rechecks the
-creator's device and grant. A removed or archived conversation pauses the job.
+The link names the creating conversation by key. After a message edit, branch
+switch, or reset, a linked detached job keeps that conversation's workspace,
+memory, and sandbox requirement, and still rechecks the creator's device and grant.
+A removed or archived conversation pauses the job.
 
 Stored jobs are unchanged: a source is never inferred for an existing job, so
 jobs created before this behavior keep their recorded ownership check. Binding
@@ -190,7 +192,12 @@ preserve the recorded source. Changes to model-facing names, prompts, tools, sch
 or other executable behavior need fresh source authorization and clear the old source
 when none is present. Remote management alone cannot supply local-source authorization,
 and older jobs without a provable origin remain blocked until reauthorized or recreated
-from a fresh authorized source.
+from a fresh authorized source. Blocked jobs are discoverable: `openclaw automations status`
+reports a `reauthorizationRequired` count, and each affected job's details and list entries
+carry a `reauthorizationRequired` flag. Re-saving the job's tool cap from the creator's
+authenticated turn records a fresh origin and unblocks the job without changing its
+account-scoped authority; recreating it from the intended account is the fallback when the
+creator turn is unavailable.
 
 Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
 Agent-created jobs use their recorded creator account and Discord's delegated
@@ -238,8 +245,16 @@ and compatible authentication route. OAuth and API keys can remain enabled toget
 changing interactive defaults, profile order, or the job’s plain model selection does
 not switch the job’s account or billing route. Automatic ownership remains distinct
 from an explicit user profile pin. Token refresh within the same authorization is
-allowed; deleting, replacing, or revoking that authorization stops the job rather
-than falling back to another account. Model and route compatibility still apply.
+allowed. Deleting, replacing, or revoking that authorization refuses the job's models on
+that provider instead of switching to another of its accounts. Model and route
+compatibility still apply.
+
+The recorded account governs only its own provider. Configured fallback models on other
+providers select their credentials live, the same way an interactive run does, so a job
+bound to one provider still fails over when that provider is out of quota or down. This
+also applies when the recorded account was replaced or removed: its provider is refused,
+and the rest of the fallback chain still runs. If a job has no model of its own and the
+default model moves to another provider, the job follows it with live credentials.
 
 At creation, account capture follows scheduled-model selection, including an
 allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed
@@ -528,13 +543,13 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
-    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, display names, sidebar placement, custom categories and icons, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+    A new transcript/session id per run. OpenClaw carries safe preferences (thinking/fast/verbose settings, labels, display names, sidebar placement, custom categories, icons and colors, dashboard face and presentation, explicit user-selected model/auth overrides), but does not inherit ambient conversation context from an older automation session row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
 
     Messages sent to the job's `cron:<jobId>` session, for example with `sessions_send`, address its latest run. A message still queued when that run ends can fail, and the next run reassigns the key, so later runs start without it. Put information that later runs need in the job payload or [scratch](#job-scratch-and-quiet-results).
 
   </Accordion>
   <Accordion title="Unattended run contract">
-    Scheduled turns on the OpenClaw runtime continue through unrelated MCP server configuration edits. The MCP owner still retires changed server connections; retained calls cannot use a retired connection. Other native runtimes that receive their own MCP configuration retain their configuration checks. Unstarted work can re-admit automatically after a relevant policy change; work that may already have produced effects fails visibly instead of replaying those effects.
+    A started scheduled turn finishes under the configuration it started with; configuration edits apply to the next run. The MCP owner still retires changed server connections; retained calls cannot use a retired connection. Unstarted work can re-admit automatically after a relevant policy change.
 
     Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent records `no_change` without a summary and returns `NO_REPLY` when nothing needs doing. Unchanged state and repeated known blockers stay quiet; new blockers and changes that need action get a concise result. Explicitly requested recurring reports and digests still run and deliver at their requested cadence. Execution failures remain visible rather than being treated as no change. For machine-checkable conditions, use an existing deterministic condition trigger or script to skip inference when nothing changed, instead of paying for a model turn to rediscover that fact.
 

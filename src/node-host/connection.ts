@@ -352,7 +352,10 @@ export function startNodeHostConnection({
                 ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT)
-                ? { workspaceResultVersion: NODE_WORKSPACE_RESULT_VERSION }
+                ? {
+                    workspaceResultVersion: NODE_WORKSPACE_RESULT_VERSION,
+                    publicationIntegration: 1 as const,
+                  }
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT)
                 ? { statusWait: NODE_WORKER_STATUS_WAIT_VERSION }

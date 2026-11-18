@@ -1,6 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
@@ -11,10 +10,18 @@ import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { lstatSync: vi.fn(actual.lstatSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
-  syncBuiltinESMExports();
+  vi.mocked(fs.lstatSync).mockReset();
 });
 
 function seed(filename: string) {
@@ -129,9 +136,9 @@ it.each(["symlink", "hardlink"])("does not admit a %s family as disposable", asy
 });
 
 it("requires a known bigint inode before omitting an image", async () => {
+  const { lstatSync: lstat } = await vi.importActual<typeof import("node:fs")>("node:fs");
   await owned(() => {
-    const lstat = fs.lstatSync;
-    vi.spyOn(fs, "lstatSync").mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
+    vi.mocked(fs.lstatSync).mockImplementation((...args: Parameters<typeof fs.lstatSync>) => {
       const stat = lstat(...args);
       if (String(args[0]) === f.agent && stat && typeof stat.ino === "bigint") {
         return new Proxy(stat, {
@@ -140,7 +147,6 @@ it("requires a known bigint inode before omitting an image", async () => {
       }
       return stat;
     });
-    syncBuiltinESMExports();
     const coverage = createDoctorRehearsalDatabaseCoverage(f.env)!;
     expect(coverage.admit([f.agent])).toEqual([]);
     expect(coverage.excludes(f.agent)).toBe(false);

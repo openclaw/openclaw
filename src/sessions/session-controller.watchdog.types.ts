@@ -6,6 +6,19 @@ import type {
 
 export type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
 
+export type DiagnosticToolAwaiting =
+  | Readonly<{
+      kind: "bridge";
+      method: string;
+      deadlineAtMs: number | null;
+      elapsedMs: number;
+    }>
+  | Readonly<{
+      kind: "exec";
+      phase: "preparing" | "running";
+      deadlineSource: "default" | "explicit" | "none";
+    }>;
+
 export type SessionWatchdogWait = {
   close: () => void;
   updateDeadline(deadlineAtMs: number): void;
@@ -14,13 +27,13 @@ export type SessionControllerWatchdogAttempt = {
   isCurrent(): boolean;
   progress(kind: SessionWatchdogProgress, reason?: string): boolean;
   progressModel(reason?: string): boolean;
-  observeStagnation(params: { active: boolean; existingOnly?: boolean }): void;
   progressTool(toolCallId: string, allowedNames: readonly string[]): boolean;
   beginWait(wait: OwnedWait): SessionWatchdogWait;
   beginTool(tool: {
     toolCallId: string;
     toolName: string;
     deadlineAtMs?: number;
+    awaiting?: readonly DiagnosticToolAwaiting[];
   }): (completed?: boolean) => void;
   toolEvent(event: {
     phase: "start" | "end";

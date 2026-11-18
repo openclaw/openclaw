@@ -19,6 +19,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -60,6 +61,7 @@ import {
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { applyDelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
+import { resolveGatewayExecAuthority } from "./execution-authority.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { buildHarnessHostRequester } from "./harness/host-requester.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
@@ -69,14 +71,13 @@ import {
   filterToolsByClientCaps,
   resolveSessionToolListingClientCaps,
 } from "./openclaw-tools.client-caps.js";
-import { applySwarmCollectorToolContract } from "./openclaw-tools.swarm.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
-import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
+import { applySwarmCollectorToolContract } from "./subagents/swarm/swarm-collector-capability.js";
 import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import type { ToolPolicyFilterEvent } from "./tool-policy-pipeline.js";
 import { expandToolGroups, normalizeToolPolicyName } from "./tool-policy.js";
@@ -291,7 +292,10 @@ export function* assembleOpenClawCodingTools(
               channelContext: options?.channelContext,
               accountId: options?.agentAccountId,
               approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
-              nonInteractiveApproval: options?.swarmCollector,
+              // A hidden fork has nobody to ask; a command that needs approval is denied.
+              nonInteractiveApproval:
+                options?.swarmCollector ||
+                readSessionForkSource(options?.inputProvenance) !== undefined,
               backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
@@ -347,9 +351,15 @@ export function* assembleOpenClawCodingTools(
     accountId: options?.agentAccountId,
     channel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
   });
+  let messageToolAvailable = true;
   const pluginToolOptions = {
     ...options,
     listingClientCaps,
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available: boolean) => {
+      messageToolAvailable = available;
+      options?.onMessageToolAvailability?.(available);
+    },
     agentSessionKey: options?.sessionKey,
     agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
     agentTo: options?.messageTo,
@@ -437,6 +447,8 @@ export function* assembleOpenClawCodingTools(
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
+            delegationExecAuthority: () =>
+              resolveGatewayExecAuthority(options, scheduledCoreTools, callableTools),
             execOverrides: {
               host: effectiveExecPolicy.host,
               mode: effectiveExecPolicy.mode,
@@ -476,6 +488,8 @@ export function* assembleOpenClawCodingTools(
             cronCreatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCronCreatorToolAuthority: cronCreatorAuthorityResolver,
             currentChatType: options?.chatType,
+            isTurnTainted: options?.isTurnTainted,
+            preparedModelRuntime: options?.preparedModelRuntime,
             computerTransport:
               options?.computerTransport === null
                 ? null
@@ -607,6 +621,7 @@ export function* assembleOpenClawCodingTools(
   const requester = buildHarnessHostRequester(options ?? {});
   const hookContext = {
     awaitSessionDiffBaseline: options?.awaitSessionDiffBaseline,
+    getRunAbortDeadlineAtMs: options?.getRunAbortDeadlineAtMs,
     agentId: executionAgentId,
     ...(options?.config ? { config: options.config } : {}),
     cwd: codingRoot,
@@ -628,13 +643,16 @@ export function* assembleOpenClawCodingTools(
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
     ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     onToolOutcome: options?.onToolOutcome,
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
   const finalizedTools = finalizeAgentTools({
     ...options,
-    tools: authorizedTools,
+    // Route omission is presentation, not a durable child or scheduled deny.
+    tools:
+      messageToolAvailable || options?.retainUnavailableMessageTool
+        ? authorizedTools
+        : authorizedTools.filter((tool) => tool.name !== "message"),
     wrapBeforeToolCallHook: preparedTools
       ? (tool) =>
           options?.wrapBeforeToolCallHook !== false &&

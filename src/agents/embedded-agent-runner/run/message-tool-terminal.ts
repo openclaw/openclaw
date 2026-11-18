@@ -25,6 +25,7 @@ import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../run
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
 import { createSourceReplyBatchCompletion } from "../../tool-source-reply-completion.js";
+import { isResumingAlreadyPendingSessionsYieldResult } from "../../tools/sessions-yield-tool.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 export function resolveMessageToolSameChannelThreadRequired(params: {
@@ -134,6 +135,8 @@ export function installMessageToolTerminalHook(
   },
 ): void {
   const finalReplyInputs = new Set<object>();
+  // Per input: a steered or queued input must deliver its own reply before its yield ends it.
+  const deliveredReplyInputs = new WeakSet<object>();
   const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
   // Let sibling tools settle, then finish without another model request.
@@ -187,12 +190,26 @@ export function installMessageToolTerminalHook(
     } finally {
       delivered ||= isDelivered(hookResult);
       if (delivered) {
+        if (inputScope) {
+          deliveredReplyInputs.add(inputScope);
+        }
         if (final && inputScope) {
           finalReplyInputs.add(inputScope);
         }
         params.onDeliveredSourceReply?.();
       }
     }
-    return delivered && final ? { ...hookResult, terminate: true } : hookResult;
+    // The visible reply already went out and an earlier turn's wake resumes this session.
+    const endsAfterPendingYield =
+      inputScope !== undefined &&
+      deliveredReplyInputs.has(inputScope) &&
+      !context.isError &&
+      isResumingAlreadyPendingSessionsYieldResult(toolName, context.result);
+    if (endsAfterPendingYield) {
+      finalReplyInputs.add(inputScope);
+    }
+    return (delivered && final) || endsAfterPendingYield
+      ? { ...hookResult, terminate: true }
+      : hookResult;
   };
 }

@@ -36,6 +36,7 @@ import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { initializeRepository } from "../server.sessions.create.projects.test-support.js";
 import { createGatewaySession } from "../session-create-service.js";
 import * as creationTarget from "../session-create-target.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import { resolveSessionMutationAuthorization } from "../session-sharing.js";
 import { startSessionMutationRequest } from "./sessions-mutations.native-consent.test-support.js";
 import * as patchDiscovery from "./sessions-patch-discovery.js";
@@ -265,6 +266,64 @@ export function registerSessionOperatorPreparationTests(fixture: {
           await running;
           spy.mockRestore();
           targetReadSpy?.mockRestore();
+        }
+      },
+    );
+    it.each([
+      ["sessions.patch", "model"],
+      ["sessions.patchMany", "model"],
+      ["sessions.patch", "label"],
+      ["sessions.patchMany", "label"],
+    ] as const)(
+      "keeps %s %s patches authorized while creating their own missing session database",
+      async (method, field) => {
+        const agentId = `cold-${method === "sessions.patch" ? "patch" : "batch"}-${field}`;
+        const storePath = resolveOpenClawAgentSqlitePath({ agentId });
+        try {
+          const { caller, context } = preparedOperator();
+          caller.connect.scopes = ["operator.write"];
+          const cfg = context.getRuntimeConfig();
+          cfg.agents!.entries![agentId] = {};
+          const key = `agent:${agentId}:dashboard:missing-store`;
+          const patch =
+            field === "model" ? { model: "openai/gpt-5.6-sol" } : { label: "Cold first session" };
+          const params =
+            method === "sessions.patchMany" ? { targets: [{ key }], patch } : { key, ...patch };
+          await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+          // Gateway admission retains registry facts before writer preparation begins.
+          const resolved = await resolveSessionMutationAuthorizationAsync({
+            method,
+            client: caller,
+            context,
+            requestParams: params,
+          });
+          using _ = {
+            [Symbol.dispose]: () => resolved.authorization?.release?.(),
+          };
+          expect(resolved.error).toBeNull();
+          expect(resolved.authorization).toBeDefined();
+          const { responses, running } = startSessionMutationRequest(method, params, {
+            client: caller,
+            context,
+            hasCurrentClientAuthority: () => !caller.invalidated,
+            sessionMutationAuthorization: resolved.authorization,
+          });
+          await running;
+          expect(responses).toHaveLength(1);
+          const response = responses[0]!;
+          expect(response[0], JSON.stringify(response)).toBe(true);
+          expect(response[2]).toBeUndefined();
+          expect(response[1]).toMatchObject(
+            method === "sessions.patchMany" ? { outcomes: [{ key, ok: true }] } : { key },
+          );
+          expect(loadSessionEntry({ agentId, sessionKey: key, storePath })).toMatchObject({
+            ...(field === "model"
+              ? { providerOverride: "openai", modelOverride: "gpt-5.6-sol" }
+              : { label: "Cold first session" }),
+            createdActor: { type: "human", id: fixture.profileId() },
+          });
+        } finally {
+          await disposeOpenClawAgentDatabaseByPath(storePath);
         }
       },
     );

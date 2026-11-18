@@ -1,9 +1,8 @@
-import type { AgentMessage } from "../../../../packages/agent-core/src/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
-import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
+import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 import type { createEmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
@@ -27,14 +26,17 @@ export type PrepareEmbeddedAttemptStreamInput = {
     | "sourceReplyCapableToolNames"
     | "sideEffectToolOwners"
     | "trustedLocalMediaToolNames"
-  >;
+  > & {
+    toolUsageIdsByName?: ReadonlyMap<string, string>;
+  };
   applyPermissionMode?: (
     mode: NonNullable<EmbeddedRunAttemptParams["permissionMode"]> | null,
     revokeApprovals: () => void,
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
-  readSessionForkBoundary?: () => LlmBoundaryOptions;
-  projectSessionForkMessages?: (messages: AgentMessage[]) => AgentMessage[];
+  getUserTranscriptContexts?: Parameters<
+    typeof subscribeEmbeddedAgentSession
+  >[0]["getUserTranscriptContexts"];
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -51,4 +53,9 @@ export type PrepareEmbeddedAttemptStreamInput = {
   trajectoryRecorder?: Parameters<
     typeof createEmbeddedAttemptDeferredLifecycleOwner
   >[0]["trajectoryRecorder"];
+};
+
+export type AttemptStreamQueueHandle = EmbeddedAgentQueueHandle & {
+  kind: "embedded";
+  cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
 };

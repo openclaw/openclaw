@@ -7,6 +7,7 @@ import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
 import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { sessionManagerReleaseTranscript } from "../../sessions/session-manager-core.js";
 import { clearToolSearchCatalog, type ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import type { retainEmbeddedSessionPromptState } from "../session-prompt-state.js";
@@ -63,6 +64,8 @@ export type EmbeddedAttemptSessionResources = {
   session?: AgentSession;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   sessionManager?: ReturnType<typeof guardSessionManager>;
+  /** False for a caller-supplied manager, whose owner keeps reading it after the attempt. */
+  ownsSessionManager?: boolean;
   removeToolResultContextGuard?: () => void;
   trajectoryRecorder: TrajectoryRecorder | null;
   buildAbortSettlePromise: () => Promise<void> | null;
@@ -123,6 +126,28 @@ export async function cleanupEmbeddedAttemptSessionPhase(
   const initialState = projectAgentRunAttemptTerminal(input.state.terminal);
   const restartAbort = isAgentRunRestartAbortReason(attempt.abortSignal?.reason);
   let cleanupError: unknown;
+  let transcriptDrained = false;
+  let resourcesDisposed = false;
+  const releaseSettledTranscript = () => {
+    if (!transcriptDrained || !resourcesDisposed) {
+      return;
+    }
+    const release = () => {
+      if (input.session) {
+        input.session.agent.state.messages = [];
+      }
+      if (input.ownsSessionManager) {
+        input.sessionManager?.[sessionManagerReleaseTranscript]();
+      }
+    };
+    // A bounded abort wait can end before the agent's terminal event. Its listeners may
+    // still read the transcript; release only after they settle, even on prompt failure.
+    if (input.session?.isStreaming) {
+      void input.session.agent.waitForIdle().then(release, release);
+    } else {
+      release();
+    }
+  };
   try {
     try {
       // The prompt's abort race can finish before the provider's terminal write.
@@ -175,7 +200,14 @@ export async function cleanupEmbeddedAttemptSessionPhase(
     } finally {
       // Drain accepted writes even when recording the terminal trajectory fails.
       clearToolSearchCatalog({ catalogRef: input.toolSearchCatalogRef });
-      await input.transcriptLifecycle.beginCleanup(clearTranscriptRunCallbacks);
+      await input.transcriptLifecycle.beginCleanup(() => {
+        transcriptDrained = true;
+        try {
+          clearTranscriptRunCallbacks?.();
+        } finally {
+          releaseSettledTranscript();
+        }
+      });
     }
   } catch (err) {
     recordAgentCleanupFailure();
@@ -216,6 +248,9 @@ export async function cleanupEmbeddedAttemptSessionPhase(
       recordAgentCleanupFailure();
       cleanupError ??= err;
     }
+    // Accepted writes may outlive the teardown budget. Whichever settles last owns release.
+    resourcesDisposed = true;
+    releaseSettledTranscript();
   }
 
   const finalState = projectAgentRunAttemptTerminal(input.state.terminal);

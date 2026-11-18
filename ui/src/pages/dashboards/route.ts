@@ -22,6 +22,7 @@ export function dashboardsRouteData(
     error: snapshot.error,
     basePath: context.basePath,
     fallbackAgentId: resolveSessionNavigationAgentId(context),
+    agents: context.agents.state.agentsList?.agents ?? [],
     globalScope: isUiGlobalScopeConfigured(sessionConfig),
     mainKey: resolveUiConfiguredMainKey(sessionConfig),
   };
