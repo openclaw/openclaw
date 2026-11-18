@@ -16,7 +16,10 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runManagedCommand, terminateManagedChild } from "../../../lib/managed-child-process.mts";
-import { packFirstHopUpdateFixture } from "../update-first-hop-package-fixtures.mjs";
+import {
+  packFirstHopUpdateFixture,
+  packFuturePluginFixture,
+} from "../update-first-hop-package-fixtures.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const [candidateArg, artifactsArg, driverVersion] = process.argv.slice(2);
@@ -207,19 +210,15 @@ function npmPack(spec, destination) {
   return path.join(destination, packed.filename);
 }
 
-function futurePlugin(sourceTgz, output) {
-  execFileSync(
-    process.execPath,
-    [
-      path.join(root, "scripts/e2e/lib/update-first-hop-package-fixtures.mjs"),
-      "future-plugin-tarball",
-      sourceTgz,
-      output,
-      "0",
-    ],
-    { timeout: remainingMs() },
+/** The provisioned config must still be the same link to the same unchanged managed file. */
+function assertProvisionedConfig(managed, bytes) {
+  assert(fs.lstatSync(configPath).isSymbolicLink(), "openclaw.json is still a link");
+  assert.equal(
+    fs.readlinkSync(configPath),
+    managed,
+    "openclaw.json still points at the managed file",
   );
-  return output;
+  assert.equal(fs.readFileSync(managed, "utf8"), bytes, "The managed config is unchanged");
 }
 
 /** What the update left: core, plugin records against their packages, history and serving. */
@@ -373,14 +372,16 @@ try {
   registries.pop();
   assert.equal(await run("install-service", "openclaw", ["gateway", "install", "--force"]), 0);
 
-  // A future core cut from the candidate, and the same future version of each plugin.
+  // A future core cut from the candidate, and each plugin stamped with that same core version, so
+  // the registry advertises exactly what the tarballs contain whatever the candidate's version.
   const core = path.join(fixtures, "openclaw-core.tgz");
   const target = packFirstHopUpdateFixture(candidate, core, 0).targetVersion;
-  const futures = plugins.flatMap((spec, index) => [
-    spec,
-    target,
-    futurePlugin(baseline[index * 3 + 2], path.join(fixtures, `${spec.split("/")[1]}-future.tgz`)),
-  ]);
+  const futures = plugins.flatMap((spec, index) => {
+    const output = path.join(fixtures, `${spec.split("/")[1]}-future.tgz`);
+    const stamped = packFuturePluginFixture(baseline[index * 3 + 2], output, 0, spec, target);
+    assert.equal(stamped.targetVersion, target, `${spec} fixture carries the advertised version`);
+    return [spec, target, output];
+  });
   // The corrupt fault serves a truncated target for one plugin on the first update only.
   const served = futures.map((entry, index) => {
     if (fault !== "corrupt-plugin" || futures[index - 2] !== corruptPlugin) {
@@ -399,10 +400,10 @@ try {
   registries.push(firstRegistry);
   const updateEnv = registryEnv(firstRegistry.url);
   const configBefore = fs.readFileSync(configPath, "utf8");
+  const managed = path.join(managedConfigDir, "openclaw.json");
   if (readOnlyConfig) {
     // A provisioned config: the update can read it, but cannot replace it.
     fs.mkdirSync(managedConfigDir);
-    const managed = path.join(managedConfigDir, "openclaw.json");
     fs.renameSync(configPath, managed);
     fs.symlinkSync(managed, configPath);
     fs.chmodSync(managed, 0o444);
@@ -433,7 +434,7 @@ try {
     // It failed because the requested channel write reached the config writer's refusal.
     const verification = first?.steps?.find((step) => step.name === "post-update verification");
     assert.match(verification?.stderrTail ?? "", /openclaw\.json is a symlink/);
-    assert.equal(fs.readFileSync(configPath, "utf8"), configBefore);
+    assertProvisionedConfig(managed, configBefore);
     assert.equal(afterFirst.servingVersion, target);
     assert.equal(afterFirst.readyz, 200);
     // The refusal came before plugin convergence: plugins stay at the driver's release.
@@ -459,8 +460,8 @@ try {
       "The corrupt plugin is reported as a plugin warning",
     );
   } else {
-    // Plugin convergence changed no config, so the update left the file untouched.
-    assert.equal(fs.readFileSync(configPath, "utf8"), configBefore);
+    // Plugin convergence changed no config, so the update left the link and its file untouched.
+    assertProvisionedConfig(managed, configBefore);
   }
   assertConverged(afterFirst, target, fault === "corrupt-plugin" ? corruptPlugin : undefined);
   assertRecorded(afterFirst, first.run, "succeeded");
