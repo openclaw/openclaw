@@ -56,6 +56,15 @@ version manifest, so Gateway publication skips Android; current Android
 releases use the independent Play workflow. Legacy tagged-source APK recovery
 retains its existing eligibility and protected approval requirements.
 
+## Update and pin bundled Codex (required)
+
+Before freezing **Code SHA** on every release track, update
+`extensions/codex/package.json` to the exact latest stable `@openai/codex`
+version (`npm view @openai/codex dist-tags.latest`). Backport the complete main
+update when available, including matching lockfile, protocol, and version pins;
+run the affected Codex checks. See [PR #200784](https://github.com/openclaw/openclaw/pull/200784).
+If already current, record the check. New versions after freeze do not reopen intake.
+
 ## Selected changes and compatibility
 
 When backport discovery is requested or part of planning, read
@@ -63,8 +72,8 @@ When backport discovery is requested or part of planning, read
 and obtain approval for the categorized ledger before mutating the branch.
 Include its selected-contract closure and CI-optimization dispositions; recheck
 closure against the final candidate before freezing or starting qualification.
-Backports stay optional and operator-selected. An unspecified target means the
-newest open release branch. Extended-stable preparation additionally uses
+Other product backports stay optional and operator-selected. An unspecified
+target means the newest open release branch. Extended-stable preparation additionally uses
 [its backport procedure](extended-stable-backports.md).
 
 Before branching and before final publish, inspect
