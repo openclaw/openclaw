@@ -2459,6 +2459,7 @@ tsconfig.json
 .github/security-review-policy.yml
 .github/workflows/security-review.yml
 scripts/github/dependency-guard.mjs
+scripts/github/dependency-manifests.mjs
 scripts/github/guard-review.mjs
 scripts/github/guard-shared.mjs
 scripts/github/security-review-policy.mjs
