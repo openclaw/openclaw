@@ -1,8 +1,10 @@
 [
   "claude-opus-5.5",
+  "gpt-6.2-sol",
   "gpt-6.1-sol",
   "gemini-4-argon",
   "gemini-4-carbon",
+  "gpt-6.2-astra",
   "gpt-6-astra",
   "claude-fable-5.2",
   "claude-sonnet-5.5",
