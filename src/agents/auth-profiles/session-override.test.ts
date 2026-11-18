@@ -41,6 +41,28 @@ async function persistSession(state: OpenClawTestState, initial: SessionEntry) {
 }
 
 describe("resolveSessionAuthProfileOverride", () => {
+  it.each(["user", "user-link", "auto"] as const)(
+    "recognizes runtime-owned native pins with %s provenance",
+    (source) =>
+      withAuthState(async (state) => {
+        const warn = vi.spyOn(authProfilesLog, "warn").mockImplementation(() => {});
+        const profileId = "anthropic:claude-cli";
+        const sessionEntry = automaticSession({
+          authProfileOverride: profileId,
+          authProfileOverrideSource: source,
+        });
+        const resolved = await resolveSession({
+          agentDir: state.agentDir(),
+          provider: "anthropic",
+          nativeAuthProfileIds: [profileId],
+          sessionEntry,
+        });
+        expect(resolved).toBe(source === "auto" ? undefined : profileId);
+        expect(sessionEntry.authProfileOverride).toBe(resolved);
+        expect(warn).not.toHaveBeenCalled();
+      }),
+  );
+
   it("returns early when no auth sources exist", () =>
     withAuthState(async (state) => {
       const agentDir = state.agentDir();

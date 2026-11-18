@@ -11,32 +11,74 @@
  * worker startup, then times the same recovery workload without blockers, GC,
  * encoder instrumentation, or sampling. Run five fresh-process alternating
  * baseline/candidate pairs; report elapsedMs median and mean plus host load.
+ * Hash memo census: hash-prepare creates 18,000-byte files (62,000 = 1.116 GB).
+ * hash-count/hash-alloc measure three unchanged computation-owner captures after
+ * a real worker-hash warmup. Run five alternating fresh processes per source and
+ * separate A/A controls. Hash counts times the fixed file size are logical bytes;
+ * Linux /proc/self/io reports physical process bytes (including libuv threads).
+ * Allocation sampling is a separate run; filesystem cache is uncontrolled unless
+ * argument 6 is "cold", which evicts only this Linux fixture before each capture.
+ * Argument 5 pins the hash-memo owner to a Git revision ("current" uses the worktree).
+ * Argument 7 labels a fresh-process arm (for example A1, B, or A2).
+ * hash-profile writes separate main-isolate CPU profiles beside the fixture;
+ * native fs-safe/libuv hashing CPU is included only in the process CPU counter.
  */
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { registerHooks } from "node:module";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setImmediate, setTimeout } from "node:timers/promises";
-import {
-  computeWorkspaceManifest,
-  prepareWorkspaceTreeInput,
-  serializeWorkspaceManifest,
-} from "../../src/gateway/worker-environments/workspace-manifest-worker.js";
+import { pathToFileURL } from "node:url";
 import type { WorkerWorkspaceManifestEntry } from "../../src/gateway/worker-environments/workspace-manifest.js";
-import { createWorkspacePatch } from "../../src/gateway/worker-environments/workspace-reconcile-recovery.js";
 import { resolveWorkerPoolSize } from "../../src/infra/worker-pool-sizing.js";
 import { createDeferredCore } from "../../src/shared/deferred.js";
 import {
   drainGlobalSingletonLifecycleState,
   readGlobalSingleton,
 } from "../../src/shared/global-singleton.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const scratch = path.resolve(process.argv[2]!);
 const mode = process.argv[3] ?? "recovery";
 const count = Number(process.argv[4] ?? 80_000);
+const revision = process.argv[5];
+const cold = process.argv[6] === "cold";
+const ownerPath = "src/gateway/worker-environments/workspace-hash-memo.ts";
+const source =
+  revision && revision !== "current"
+    ? execFileSync("git", ["show", `${revision}:${ownerPath}`], { encoding: "utf8" })
+    : readFileSync(ownerPath, "utf8");
+if (revision && revision !== "current") {
+  const ownerUrl = pathToFileURL(path.resolve(ownerPath)).href;
+  registerHooks({
+    load(url, context, nextLoad) {
+      return url === ownerUrl
+        ? { source, format: "module-typescript", shortCircuit: true }
+        : nextLoad(url, context);
+    },
+  });
+}
+const { computeWorkspaceManifest, prepareWorkspaceTreeInput, serializeWorkspaceManifest } =
+  await import("../../src/gateway/worker-environments/workspace-manifest-worker.js");
+const { createWorkspacePatch } =
+  await import("../../src/gateway/worker-environments/workspace-reconcile-recovery.js");
 assert.ok(Number.isSafeInteger(count) && count > 0);
-assert.ok(["prepare", "recovery", "owner", "latency"].includes(mode));
+assert.ok(
+  [
+    "prepare",
+    "recovery",
+    "owner",
+    "latency",
+    "hash-prepare",
+    "hash-count",
+    "hash-alloc",
+    "hash-profile",
+  ].includes(mode),
+);
 const root = path.join(scratch, "files");
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const filename = (index: number) =>
@@ -50,15 +92,129 @@ function entries(): WorkerWorkspaceManifestEntry[] {
     sha256: digest(""),
   }));
 }
-if (mode === "prepare") {
+if (mode === "prepare" || mode === "hash-prepare") {
+  const content = mode === "hash-prepare" ? Buffer.alloc(18_000, 65) : "";
   await fs.mkdir(root, { recursive: true });
   for (let index = 0; index < count; index++) {
     if (index % 1000 === 0) {
       await fs.mkdir(path.dirname(path.join(root, filename(index))), { recursive: true });
     }
-    await fs.writeFile(path.join(root, filename(index)), "", { mode: 0o644 });
+    await fs.writeFile(path.join(root, filename(index)), content, { mode: 0o644 });
   }
-  console.log(JSON.stringify({ prepared: count }));
+  console.log(JSON.stringify({ prepared: count, bytes: count * content.length }));
+} else if (mode === "hash-count" || mode === "hash-alloc" || mode === "hash-profile") {
+  const { Session } = await import("node:inspector/promises");
+  const { loadavg } = await import("node:os");
+  const { readActualWorkspaceManifestImpl } =
+    await import("../../src/gateway/worker-environments/workspace-actual-manifest.js");
+  const { executeWorkspaceManifestComputation } =
+    await import("../../src/gateway/worker-environments/workspace-manifest-computation.runtime.js");
+  const { serializeRemoteWorkspaceHashMemo, withWorkerWorkspaceHashMemo, pruneWorkspaceHashMemo } =
+    await import("../../src/gateway/worker-environments/workspace-hash-memo.js");
+  const hashes = new Map<string, string>();
+  const first = await withWorkerWorkspaceHashMemo(hashes, () =>
+    readActualWorkspaceManifestImpl({ root, baseCommit: null }),
+  );
+  assert.equal(first.manifest.entries.length, count);
+  assert(first.manifest.entries.every((entry) => entry.type === "file" && entry.size === 18_000));
+  const memo = new Map<string, string>(JSON.parse(serializeRemoteWorkspaceHashMemo(hashes)));
+  const workerHashes = memo.size;
+  hashes.clear();
+  const physicalReadBytes = async () => {
+    if (process.platform !== "linux") {
+      return undefined;
+    }
+    const contents = await fs.readFile("/proc/self/io", "utf8");
+    return Number(/^read_bytes: (\d+)$/mu.exec(contents)?.[1]);
+  };
+  const inspector = mode !== "hash-count" ? new Session() : undefined;
+  inspector?.connect();
+  if (mode === "hash-profile") {
+    await inspector!.post("Profiler.enable");
+  }
+  try {
+    for (let index = 0; index < 3; index++) {
+      if (cold) {
+        assert.equal(process.platform, "linux", "Cold reads require Linux posix_fadvise");
+        execFileSync("python3", [
+          "-c",
+          "import os,sys\nfor directory,_,names in os.walk(sys.argv[1]):\n for name in names:\n  fd=os.open(os.path.join(directory,name),os.O_RDONLY)\n  try:\n   os.fsync(fd)\n   os.posix_fadvise(fd,0,0,os.POSIX_FADV_DONTNEED)\n  finally: os.close(fd)",
+          root,
+        ]);
+      }
+      global.gc?.();
+      if (mode === "hash-alloc") {
+        await inspector!.post("HeapProfiler.startSampling", {
+          samplingInterval: 32768,
+          includeObjectsCollectedByMajorGC: true,
+          includeObjectsCollectedByMinorGC: true,
+        });
+      } else if (mode === "hash-profile") {
+        await inspector!.post("Profiler.start");
+      }
+      const readsBefore = await physicalReadBytes();
+      const cpuBefore = process.cpuUsage();
+      const start = performance.now();
+      pruneWorkspaceHashMemo(memo);
+      const result = await executeWorkspaceManifestComputation({
+        type: "workspace.manifest.reference",
+        input: {
+          payload: new TextEncoder().encode(
+            JSON.stringify({
+              root,
+              baseCommit: null,
+              hashes: { owner: "gateway", entries: [...memo] },
+            }),
+          ),
+        },
+      });
+      for (const [identity, sha256] of result.hashes) {
+        memo.set(identity, sha256);
+      }
+      pruneWorkspaceHashMemo(memo);
+      const elapsedMs = performance.now() - start;
+      const cpu = process.cpuUsage(cpuBefore);
+      const readsAfter = await physicalReadBytes();
+      const allocation =
+        mode === "hash-alloc" ? await inspector!.post("HeapProfiler.stopSampling") : undefined;
+      const profile = mode === "hash-profile" ? await inspector!.post("Profiler.stop") : undefined;
+      const profilePath = profile
+        ? path.join(scratch, `${process.argv[7] ?? "hash"}-${index}.cpuprofile`)
+        : undefined;
+      if (profilePath && profile) {
+        await fs.writeFile(profilePath, JSON.stringify(profile.profile));
+      }
+      assert.equal(result.value, first.manifestRef);
+      console.log(
+        JSON.stringify({
+          mode,
+          label: process.argv[7],
+          revision: revision ?? "current",
+          sourceSha256: digest(source),
+          cold,
+          index,
+          count,
+          workerHashes,
+          retainedHashes: memo.size,
+          ...result.metrics,
+          contentReadBytes: result.metrics.contentHashCount * 18_000,
+          physicalReadBytes:
+            readsBefore === undefined || readsAfter === undefined
+              ? undefined
+              : readsAfter - readsBefore,
+          cpuMs: (cpu.user + cpu.system) / 1000,
+          elapsedMs,
+          allocationBytes: allocation ? sumSampledHeapBytes(allocation.profile.head) : undefined,
+          profilePath,
+          manifestRef: result.value,
+          load: loadavg(),
+        }),
+      );
+    }
+  } finally {
+    inspector?.disconnect();
+    await drainGlobalSingletonLifecycleState();
+  }
 } else if (mode === "latency") {
   try {
     await serializeWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });

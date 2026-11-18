@@ -314,7 +314,8 @@ export function createDoctorPluginMigrationPreparation(params: {
           (plugin) =>
             hasOwner(inactivePluginIds, plugin.pluginId) &&
             !hasOwner(discoveryBlockedPluginIds, plugin.pluginId) &&
-            hasDeferredPluginMigrationConfig(sourceConfig, plugin),
+            (plugin.requiresStateMigration ||
+              hasDeferredPluginMigrationConfig(sourceConfig, plugin)),
         )
         .map((plugin) => plugin.pluginId);
       if (

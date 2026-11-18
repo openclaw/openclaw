@@ -75,6 +75,7 @@ export function parseStressOptions(args: string[]) {
       "worker-heap-snapshot": { type: "boolean" },
       "knowledge-worker-heap": { type: "boolean" },
       "worktree-tool-churn": { type: "boolean" },
+      "oldgen-workload": { type: "boolean" },
       "auth-availability-storm": { type: "boolean" },
       "exec-io-storm": { type: "boolean" },
       port: { type: "string" },
@@ -141,6 +142,7 @@ export function parseStressOptions(args: string[]) {
     workerHeapSnapshot: values["worker-heap-snapshot"] ?? false,
     knowledgeWorkerHeap: values["knowledge-worker-heap"] ?? false,
     worktreeToolChurn: values["worktree-tool-churn"] ?? false,
+    oldgenWorkload: values["oldgen-workload"] ?? false,
     authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     execIoStorm: values["exec-io-storm"] ?? false,
     port,
@@ -200,7 +202,7 @@ async function main() {
   [--mode both|timing|allocation|retention --poll-ms 25000 --list-weight 16 --round-ms 60000 --churn-ms 6000]
   [--warmup-ms 60000 --seed 1711 --transcript-mib 128]
   [--aa-pairs 0: insert a baseline/baseline control after each of the first N pairs]
-  [--operator-model-policy --auth-availability-storm]
+  [--operator-model-policy --auth-availability-storm --oldgen-workload]
   --smoke-seconds 30 is setup proof only, never performance evidence.
 Timing and allocation are separate fresh-fixture passes. Pairs run AB then BA.
 Without --base, run candidate once per mode. See team-shape-stress.md.`);
@@ -239,6 +241,20 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
     format: "openclaw-team-stress-v1",
     options,
     builds,
+    toolingSourceSha256: Object.fromEntries(
+      [
+        "team-shape-stress.ts",
+        "team-shape-stress-fixture.ts",
+        "transcript-broadcast-measure.ts",
+        "2312-oldgen-fixture.ts",
+        "2312-oldgen-preload.mjs",
+      ].map((name) => [
+        name,
+        createHash("sha256")
+          .update(readFileSync(path.join(root, "scripts/perf", name)))
+          .digest("hex"),
+      ]),
+    ),
     node: process.version,
     order: "serial counterbalanced AB/BA; no CPU affinity on macOS",
     runs,
@@ -270,6 +286,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             "./scripts/tsx.mjs",
             "scripts/perf/team-shape-stress.ts",
             "--fixture-only",
+            ...(options.oldgenWorkload ? ["--oldgen-workload"] : []),
             ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),
             "--output",
             state,
@@ -309,6 +326,7 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
             ...(options.gatewayPreload ? ["--gateway-preload", options.gatewayPreload] : []),
             "--mixed-rpc",
             "--stress-tools",
+            ...(options.oldgenWorkload ? ["--oldgen-workload", "--stress-tool-search"] : []),
             "--stress-subagents",
             ...(options.execIoStorm ? ["--exec-io-storm"] : []),
             ...(options.authAvailabilityStorm ? ["--auth-availability-storm"] : []),

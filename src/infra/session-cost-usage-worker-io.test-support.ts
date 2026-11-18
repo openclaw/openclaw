@@ -76,7 +76,7 @@ if (!isMainThread) {
           if (partitions) record({ kind: "partitions" });
           if (rollup) record({ kind: "cache" });
           if (watermark) record({ kind: "hot-watermark" });
-          if (stats) record({ kind: "transcript-stats" });
+          if (stats) record({ kind: "transcript-stats", bounded: /"seq" > /.test(sql) });
           if (!rollup && !partitions) return Reflect.apply(original, this, args);
           const observeRow = (row) => record({
             kind: rollup ? "cache-row" : "partition-row", key: row.key,
@@ -115,7 +115,8 @@ if (!isMainThread) {
         .map(
           (line) =>
             JSON.parse(line) as
-              | { kind: "transcript-stats" | "hot-watermark" | "cache" | "partitions" }
+              | { kind: "transcript-stats"; bounded: boolean }
+              | { kind: "hot-watermark" | "cache" | "partitions" }
               | { kind: "decompress"; outputLimit: number }
               | {
                   kind: "cache-row" | "partition-row";

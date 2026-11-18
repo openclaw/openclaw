@@ -5,12 +5,14 @@ import {
   validateTemplatesCatalogPreviewParams,
   validateTemplatesCatalogSearchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   ClawHubSourceError,
   listClawHubTemplates,
   readClawHubTemplateDetail,
   readClawHubTemplatePreview,
+  readClawHubTemplatesOverview,
   searchClawHubTemplates,
 } from "../../templates/clawhub-source.js";
 import {
@@ -27,7 +29,13 @@ function mapClawHubError(error: unknown) {
     return errorShape(ErrorCodes.FORBIDDEN, error.message);
   }
   const message =
-    error instanceof ClawHubSourceError ? error.message : "ClawHub catalog is unavailable.";
+    error instanceof ClawHubSourceError
+      ? error.message
+      : error instanceof ClawHubRequestError && error.status === 404
+        ? error.requestPath.includes("/versions/")
+          ? "This Template version is not on ClawHub. Choose another version."
+          : "This Template is not on ClawHub. Check the name or browse the catalog."
+        : "ClawHub catalog is unavailable.";
   log.error(
     `ClawHub Template request failed: ${error instanceof Error ? error.message : String(error)}`,
   );
@@ -40,6 +48,12 @@ export const templatesHandlers: GatewayRequestHandlers = {
     validateTemplatesCatalogSearchParams,
     async ({ params, respond, context }) => {
       assertTemplatesLabsEnabled(context.getRuntimeConfig());
+      if (params.overview && !params.query?.trim() && !params.category && !params.featured) {
+        const overview = await readClawHubTemplatesOverview({ limit: params.limit ?? 8 });
+        assertTemplatesLabsEnabled(context.getRuntimeConfig());
+        respond(true, { entries: [], ...(overview ? { overview } : {}) });
+        return;
+      }
       const entries = params.query?.trim()
         ? await searchClawHubTemplates({
             query: params.query,

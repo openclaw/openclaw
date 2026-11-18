@@ -1,0 +1,18 @@
+"$schema" = "schemas/schema.json"
+[default]
+description = """
+This permission set configures which kind of
+updater functions are exposed to the frontend.
+
+#### Granted Permissions
+
+The full workflow from checking for updates to installing them
+is enabled.
+
+"""
+permissions = [
+  "allow-check",
+  "allow-download",
+  "allow-install",
+  "allow-download-and-install",
+]

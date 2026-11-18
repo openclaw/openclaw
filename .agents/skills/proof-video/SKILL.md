@@ -5,7 +5,12 @@ description: Capture and annotate PR screenshots and videos with measured arrows
 
 # Proof video
 
-Use this developer skill for captioned Control UI recordings and native captures.
+For **PR screenshots**, start with the shared [visual-proof workflow](../openclaw-pr-maintainer/references/media.md#pr-visual-proof),
+then use [annotations](references/annotations.md#screenshot). Capture through the
+existing platform workflow; no recorder, video, or ffmpeg setup is needed for
+stills. These annotations are PR artifacts, not store/release screenshots.
+
+Use the recording sections below for captioned Control UI and native video.
 Captions are burned into an MP4; they are visual narration, not synthesized audio.
 Keep the raw video as evidence, attach the polished MP4, and never commit media or
 `.artifacts/` output. Inspect the entire capture for unrelated or private content
@@ -13,14 +18,8 @@ before publishing under the PR's existing authorization.
 
 ## Point out the claim
 
-Choose marks that demonstrate the change. Use arrows to locate a control, outlines
-to identify a region, alignment guides to compare edges or centers, and spacing
-brackets to measure gaps. Measurements come from `locator.boundingBox()` after the
-asserted layout settles; the renderer calculates the labels. Keep the reference
-element first and use the same viewport, crop, scale, and edge before and after.
-Keep marks sparse and labels in empty space. Preserve the raw capture.
-
-For screenshot markup or timed video marks, read [annotations](references/annotations.md).
+For target selection, native/web geometry, and inspection, read
+[annotations](references/annotations.md).
 Both paths use the same SVG geometry renderer. Annotations are composited before
 zoom, while narration stays fixed in the viewport. Re-measure and replace marks
 after scrolling or layout changes; a cue describes a stationary capture, not a
@@ -109,7 +108,7 @@ try {
   await page.waitForTimeout(8000);
   recording.speed(1);
   recording.caption("Return to the full session list.");
-  await page.getByRole("menuitemradio", { name: "All", exact: true }).click();
+  await page.getByRole("radio", { name: "All", exact: true }).click();
   await page.waitForFunction(() =>
     document
       .querySelector(".sidebar-session-sort")

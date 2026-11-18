@@ -1,0 +1,2 @@
+# Prove owner exit between liveness observations recovers only after death is proven; unverifiable ownership remains fail-closed. Exact net test growth.
+32

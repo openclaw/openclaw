@@ -33,6 +33,11 @@ export function readGlobalSingleton(key: symbol): unknown {
   return Object.hasOwn(globalStore, key) ? globalStore[key] : undefined;
 }
 
+/** Run an existing owner's cleanup without importing or initializing that owner. */
+export async function resetGlobalSingletonLifecycleState(key: symbol): Promise<void> {
+  await resolveGlobalSingletonResetRegistry().get(key)?.reset();
+}
+
 /** Resolves a process-local singleton for caches and registries that tolerate helper lookup. */
 export function resolveGlobalSingleton<T>(
   key: symbol,

@@ -240,7 +240,7 @@ it.each([false, true])("keeps placeholders until a real result arrives (%s)", as
     const running = { status: "running", sessionId: "job", aggregated: "working" };
     await appendMessage(scope, processResult("poll", running, false, "working"), "actual");
   }
-  const items = resolved ? [] : [{ status: "failed" }];
+  const items = resolved ? [] : [{ unpairedCall: true }];
   expect(await readDelta(scope, cursor)).toMatchObject({
     activity: [
       activity("call", ...items),

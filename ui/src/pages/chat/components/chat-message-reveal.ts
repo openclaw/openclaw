@@ -42,7 +42,8 @@ export class ChatMessageReveal {
         (candidate.dataset.entryId ?? candidate.dataset.messageId) === messageId,
     );
     const element = virtualizer.scrollElement;
-    if (!bubble || !element) {
+    // Parked DOM has no usable descendant geometry until its row becomes active.
+    if (!bubble || !element || bubble.closest(".chat-virtual-row[data-prepared-row]")) {
       return false;
     }
     this.clear();

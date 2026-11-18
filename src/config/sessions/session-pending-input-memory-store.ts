@@ -64,6 +64,7 @@ export function prepareMemoryPendingInputStore(
   return {
     sessionActor: binding,
     assertCurrent: assertOpen,
+    assertReadCurrent: assertOpen,
     withAdmission<T>(operation: () => Promise<T>, _reentrant: boolean): Promise<T> {
       assertOpen();
       return operation();
@@ -116,8 +117,11 @@ export function prepareMemoryPendingInputStore(
             { type: "session.pendingInput.mutate", input },
             {
               ...authority,
+              ...(input.kind === "finish" ? { assertCurrent: assertOpen } : {}),
               authorize(stage, hot, publication) {
-                binding.authority.authorize(stage, hot, publication);
+                if (input.kind !== "finish") {
+                  binding.authority.authorize(stage, hot, publication);
+                }
                 if (
                   isRecord(publication) &&
                   publication.kind === "pending-input-settlement-custody"

@@ -7,6 +7,7 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import {
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
@@ -51,6 +52,7 @@ import {
   resolveConfiguredMediaEntryCapabilities,
 } from "./entry-capabilities.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
+import { failedAttachmentDisposition } from "./media-attachment-outcomes.js";
 import {
   assertMediaExecutionCurrent,
   hasProviderAuthAvailable,
@@ -64,6 +66,7 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import {
   resolveModelEntries,
   resolveScopeDecision,
@@ -71,12 +74,10 @@ import {
 } from "./resolve.js";
 import {
   buildModelDecision,
-  formatDecisionSummary,
   runCliEntry,
   runProviderEntry,
   type MediaRequestOverrides,
 } from "./runner.entries.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 export {
   createMediaAttachmentCache,
@@ -106,7 +107,7 @@ type RunCapabilityResult = {
 };
 
 const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
-  ...(await import("../agents/model-catalog.js")),
+  ...(await import("../agents/model-catalog-lookup.js")),
   ...(await import("../agents/prepared-model-catalog.js")),
 }));
 
@@ -480,11 +481,24 @@ async function runAttachmentEntries(
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
   processing: MediaAttachmentProcessing;
+  failed?: MediaAttachmentDisposition;
 }> {
   const { entries, capability } = params;
   const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
   let processing: MediaAttachmentProcessing = "omitted";
+  // The first failure is the one the operator summary reports, so the marker keeps the same one.
+  let failed: MediaAttachmentDisposition | undefined;
+  const recordFailure = (
+    entry: MediaUnderstandingModelConfig,
+    entryType: "provider" | "cli",
+    error: unknown,
+  ) => {
+    failed ??= failedAttachmentDisposition(error);
+    attempts.push(
+      buildModelDecision({ entry, entryType, outcome: "failed", reason: String(error) }),
+    );
+  };
   for await (const candidate of entries) {
     const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
@@ -503,14 +517,7 @@ async function runAttachmentEntries(
         if (
           !(params.automaticAudio && isProviderAuthError(attempt.error, "missing-provider-auth"))
         ) {
-          attempts.push(
-            buildModelDecision({
-              entry,
-              entryType,
-              outcome: "failed",
-              reason: String(attempt.error),
-            }),
-          );
+          recordFailure(entry, entryType, attempt.error);
         }
         continue;
       }
@@ -550,14 +557,7 @@ async function runAttachmentEntries(
           logVerbose(`Skipping ${capability} model due to ${err.reason}: ${err.message}`);
         }
       } else {
-        attempts.push(
-          buildModelDecision({
-            entry,
-            entryType,
-            outcome: "failed",
-            reason: String(err),
-          }),
-        );
+        recordFailure(entry, entryType, err);
         if (shouldLogVerbose()) {
           logVerbose(`${capability} understanding failed: ${String(err)}`);
         }
@@ -568,7 +568,7 @@ async function runAttachmentEntries(
     }
   }
 
-  return { output: null, attempts, processing };
+  return { output: null, attempts, processing, failed };
 }
 
 export async function runCapability(
@@ -766,7 +766,7 @@ export async function runCapability(
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
   const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
   for (const attachment of selection.selected) {
-    const { output, attempts, processing } = await runAttachmentEntries({
+    const { output, attempts, processing, failed } = await runAttachmentEntries({
       ...params,
       attachment,
       providerRegistry,
@@ -790,7 +790,7 @@ export async function runCapability(
     attachmentDispositions[attachment.index] = output
       ? { kind: "handled" }
       : attempts.length > 0
-        ? { kind: "failed" }
+        ? (failed ?? { kind: "failed" })
         : { kind: "no-model" };
     attachmentDecisions.push({
       attachmentIndex: attachment.index,

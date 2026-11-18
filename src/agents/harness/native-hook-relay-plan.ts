@@ -3,15 +3,15 @@ import {
   buildNativeHookRelayCommandWithStateDatabase,
   resolveNativeHookRelayCommandTimeoutMs,
 } from "./native-hook-relay-command.js";
+import type {
+  NativeHookRelayRegistrationHandle,
+  RegisterNativeHookRelayParams,
+} from "./native-hook-relay-contexts.js";
 import {
   nativeHookRelayEventHasLocalWork,
   nativeHookRelayEventToolMatcher,
 } from "./native-hook-relay-events.js";
-import {
-  NATIVE_HOOK_RELAY_EVENTS,
-  type NativeHookRelayRegistrationHandle,
-  type RegisterNativeHookRelayParams,
-} from "./native-hook-relay-types.js";
+import { NATIVE_HOOK_RELAY_EVENTS } from "./native-hook-relay-types.js";
 
 export type NativeHookRelayCommandPlan = Pick<
   NativeHookRelayRegistrationHandle,
@@ -22,13 +22,7 @@ export type NativeHookRelayCommandPlan = Pick<
 export function buildNativeHookRelayCommandPlan(
   params: Pick<
     RegisterNativeHookRelayParams,
-    | "provider"
-    | "agentId"
-    | "sessionKey"
-    | "config"
-    | "preToolUseLoopDetection"
-    | "requirePreToolUse"
-    | "command"
+    "provider" | "agentId" | "sessionKey" | "config" | "requirePreToolUse" | "command"
   > & {
     relayId: string;
     generation: string;
@@ -38,7 +32,7 @@ export function buildNativeHookRelayCommandPlan(
   },
 ): NativeHookRelayCommandPlan {
   const stateDbPath = resolveOpenClawStateSqlitePath();
-  const policy = { ...params, preToolUseLoopDetection: params.preToolUseLoopDetection !== false };
+  const policy = params;
   const facts = new Map(
     NATIVE_HOOK_RELAY_EVENTS.map((event) => [
       event,

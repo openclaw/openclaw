@@ -4,6 +4,7 @@ import { evaluateStableRollbackDrill } from "./release-publish-gates.mts";
 import {
   classifyReleaseTrain,
   compareReleaseVersions,
+  isStableReleaseVersionAtLeast,
   parseReleaseVersion,
 } from "./release-version.mjs";
 
@@ -43,13 +44,6 @@ export function parseStableReleaseTag(tag) {
 export function requiresThinMacArtifacts(tag) {
   const { tagVersion } = parseStableReleaseTagDetails(tag);
   return compareReleaseVersions(tagVersion, THIN_MAC_RELEASE_MINIMUM) >= 0;
-}
-
-function isStableMainVersionAtLeast(mainVersion, shippedVersion) {
-  return (
-    parseReleaseVersion(mainVersion)?.channel === "stable" &&
-    (compareReleaseVersions(mainVersion, shippedVersion) ?? -1) >= 0
-  );
 }
 
 // GitHub commit list entries; the first `Refs #NNN` line (or the subject) is the reason.
@@ -164,7 +158,7 @@ export function verifyStableMainCloseout(params) {
     );
   }
 
-  if (mainVersion && !isStableMainVersionAtLeast(mainVersion, version)) {
+  if (mainVersion && !isStableReleaseVersionAtLeast(mainVersion, version)) {
     errors.push(
       `main package.json version is ${mainVersion}, expected shipped version ${version} or a later stable OpenClaw CalVer.`,
     );

@@ -170,7 +170,7 @@ export class DraftPlaceState {
         folder: this.folderValue,
         workspace: this.workspacePath(),
         workspaceGit: this.selectedAgent()?.workspaceGit === true,
-        gateway: this.read().context?.gateway.snapshot,
+        gateway: this.read().context?.gateway,
       }),
       {
         changed: callbacks.changed,
@@ -181,7 +181,7 @@ export class DraftPlaceState {
     );
     this.modelControl = new NewSessionModelControl(
       callbacks.changed,
-      (selection) => this.persistPreference(selection),
+      (selection) => void this.gateway.persistModelPreference(this.agentIdValue, selection),
       (catalogId) =>
         this.read().context?.navigate("new-session", {
           search: newSessionSearch(this.agentIdValue, { catalogId }),
@@ -233,14 +233,7 @@ export class DraftPlaceState {
   }
 
   get currentCheckoutUnavailableReason(): string | undefined {
-    const reason = this.repositoryState.currentCheckoutUnavailable;
-    return reason === "checking"
-      ? t("newSession.checkingPlace")
-      : reason === "worktree"
-        ? t("newSession.checkoutRequiresWorktree")
-        : reason === "unavailable"
-          ? t("newSession.checkoutCheckUnavailable")
-          : undefined;
+    return this.repositoryState.currentCheckoutUnavailableReason;
   }
 
   get checkoutVisible(): boolean {
@@ -249,7 +242,7 @@ export class DraftPlaceState {
       !this.hostedEnvironment &&
       !this.freshWorkspace &&
       (this.repository.kind !== "direct" || Boolean(this.browser.projectId)) &&
-      (this.worktreeAvailable() || this.worktree || Boolean(this.browser.projectId))
+      (this.repositoryState.checkoutVisible || Boolean(this.browser.projectId))
     );
   }
 

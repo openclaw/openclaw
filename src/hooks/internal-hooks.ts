@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
@@ -233,10 +234,33 @@ export function createInternalHookEvent(
     type,
     action,
     sessionKey,
-    context,
+    context:
+      "sessionEntry" in context || "previousSessionEntry" in context
+        ? omitHookContextOperatorSources(context)
+        : context,
     timestamp: new Date(),
     messages: [],
   };
+}
+
+/** Hook listeners receive session entries, never their recorded authentication sources. */
+export function omitHookSessionOperatorSources<T>(entry: T): T {
+  if (!isRecord(entry) || !Object.hasOwn(entry, "operatorSources")) {
+    return entry;
+  }
+  const { operatorSources: _private, ...rest } = entry;
+  // SAFETY: removing one private key keeps every other field of the caller's entry shape.
+  return rest as T;
+}
+
+function omitHookContextOperatorSources(context: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...context };
+  for (const key of ["sessionEntry", "previousSessionEntry"]) {
+    if (key in next) {
+      next[key] = omitHookSessionOperatorSources(next[key]);
+    }
+  }
+  return next;
 }
 
 function hasHookEventContext(

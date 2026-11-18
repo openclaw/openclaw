@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { installPluginDirectoryIntoExtensions as installDirectory } from "./install-shared.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
@@ -88,4 +88,34 @@ it("preserves the original consent rejection while rolling back the staged artif
     }),
   ).rejects.toBe(consentRejection);
   expect(fs.existsSync(options.targetDir)).toBe(false);
+});
+
+it("prepares final staged bytes without publication, commit callbacks or persistent effects", async () => {
+  const options = fixture();
+  const commit = vi.fn();
+  const effect = vi.fn();
+  let staged: string | undefined;
+  const inspect = vi.fn(async ({ stagedArtifactDir }: { stagedArtifactDir: string }) => {
+    staged = stagedArtifactDir;
+    expect(read(stagedArtifactDir)).toBe("resolved dependency scan completed");
+    expect(fs.existsSync(options.targetDir)).toBe(false);
+  });
+  expect(
+    await installDirectory({
+      ...options,
+      prepareOnly: true,
+      afterInstall: async (directory) => {
+        fs.writeFileSync(path.join(directory, "index.js"), "resolved dependency scan completed");
+        return null;
+      },
+      onPluginArtifactInspect: inspect,
+      onBeforePluginArtifactCommit: commit,
+      beforePersistentApply: effect,
+    }),
+  ).toMatchObject({ ok: true, outcome: "prepared" });
+  expect(inspect).toHaveBeenCalledOnce();
+  expect(commit).not.toHaveBeenCalled();
+  expect(effect).not.toHaveBeenCalled();
+  expect(fs.existsSync(staged!)).toBe(false);
+  expect(fs.readdirSync(path.dirname(options.targetDir))).toEqual([]);
 });

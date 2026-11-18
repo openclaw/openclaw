@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionEntryReads from "../../config/sessions/session-entry-read-runtime.js";

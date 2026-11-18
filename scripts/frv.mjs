@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   mkdirSync,
@@ -28,11 +28,13 @@ import {
   composeReleaseAttemptJobs,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
+  GHOST_JOBS_ADVICE,
   isReleaseGhArtifactMissingError,
   isReleaseGhServerError,
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
   readReleaseJobListing,
+  releaseWatcherJobName,
   releaseChildSpec,
   releaseChildSpecs,
   releaseGhRateLimitRetryAt,
@@ -67,7 +69,7 @@ import {
   tryReadReleaseDecisionArtifact,
 } from "./release-ci-summary.mjs";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(childProcess.execFile);
 const DEFAULT_REPOSITORY = "openclaw/openclaw";
 const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;
@@ -136,6 +138,11 @@ function remainingOperationTime(deadline, label = "FRV operation") {
 
 function parseArgs(argv) {
   const command = argv[0];
+  if (command === "recover") {
+    throw new Error(
+      "recover is retired; receipt-backed recovery is no longer supported. Run fresh qualification with pnpm ci:full-release for the same immutable candidate.",
+    );
+  }
   const options = {
     command,
     dryRun: false,
@@ -582,8 +589,8 @@ async function recheckArtifactProducers(
   }
 }
 
-const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate"]);
-const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker"]);
+const ARTIFACT_PRODUCER_STAGES = new Set(["npm", "docker", "candidate", "plugin-npm"]);
+const ARTIFACT_RECOVERY_STAGES = new Set(["npm", "docker", "plugin-npm"]);
 
 async function legacyNpmRecoveryProducers(plan, parentJobs, client, repository, workflow, options) {
   if (!workflow.includes("node scripts/full-release-artifacts.mjs resolve")) {
@@ -652,10 +659,14 @@ function artifactRecoveryJobs(workflow) {
       continue;
     }
     const childKind = job.env?.CHILD_WORKFLOW_KIND;
-    if (typeof childKind !== "string" || !childKind.startsWith("artifact-")) {
+    if (
+      typeof childKind !== "string" ||
+      (!childKind.startsWith("artifact-") && childKind !== "plugin-npm-preflight")
+    ) {
       continue;
     }
-    const stage = childKind.slice("artifact-".length);
+    const stage =
+      childKind === "plugin-npm-preflight" ? "plugin-npm" : childKind.slice("artifact-".length);
     if (!ARTIFACT_PRODUCER_STAGES.has(stage) || typeof job.name !== "string" || !job.name.trim()) {
       throw new Error("Source workflow artifact producer contract is unsupported");
     }
@@ -717,11 +728,39 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       continue;
     }
     const log = stripVTControlCharacters(await client.getJobLog(job.id, options));
-    const dispatches = [
-      ...log.matchAll(
-        /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
-      ),
-    ];
+    const plugin = stage === "plugin-npm";
+    const pluginDispatches = plugin
+      ? [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Dispatched plugin-npm-release\.yml: https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ]
+      : [];
+    const distTags = plugin
+      ? [
+          ...new Set(
+            [
+              ...log.matchAll(
+                /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?\s*NPM_DIST_TAG: (default|extended-stable)\r?(?=\n|$)/gu,
+              ),
+            ].map((match) => match[1]),
+          ),
+        ]
+      : [];
+    const dispatches = plugin
+      ? pluginDispatches.map((match) => [
+          match[0],
+          stage,
+          plan.targetSha,
+          match[1],
+          match[2],
+          match[3],
+        ])
+      : [
+          ...log.matchAll(
+            /(?:^|\n)(?:\d{4}-\d\d-\d\dT\S+ )?Artifact dispatch (npm|docker) target ([a-f0-9]{40}): https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/actions\/runs\/([1-9][0-9]*) \(attempt ([1-9][0-9]*)\)\r?(?=\n|$)/gu,
+          ),
+        ];
     if (
       dispatches.length === 0 &&
       plan.evidenceReuse?.requested === true &&
@@ -729,6 +768,9 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       job.conclusion === "success"
     ) {
       continue;
+    }
+    if (plugin && (distTags.length !== 1 || !log.includes(`TARGET_SHA: ${plan.targetSha}`))) {
+      throw new Error("Original plugin-npm dispatch inputs are unavailable or ambiguous");
     }
     if (
       dispatches.length !== 1 ||
@@ -758,7 +800,10 @@ async function artifactRecoveryProducers(plan, parentJobs, client, repository, w
       request: {
         stage,
         repository,
-        dispatchId: `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        dispatchId: plugin
+          ? `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-plugin-npm-preflight`
+          : `full-release-validation-${plan.parentRunId}-${plan.parentRunAttempt}-artifacts-${stage}`,
+        ...(plugin ? { sourceSha: plan.targetSha, npmDistTag: distTags[0] } : {}),
         toolingSha: plan.workflowSha,
         workflowRef: plan.workflowRef,
       },
@@ -1075,7 +1120,7 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      const passed = !active && terminalPolicyPass(policyChild);
+      const passed = !active && terminalPolicyPass(policyChild, plan.targetVersion, plan.targetSha);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
         conclusion: String(run.conclusion ?? ""),
@@ -1160,9 +1205,11 @@ async function inspectQualificationStatus(plan, runId, client) {
   const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
   const blockers = [
     ...parentJobBlockers(currentJobs, parent.run_attempt),
-    ...childJobBlockers(status.children, plan.targetVersion),
+    ...childJobBlockers(status.children, plan.targetVersion, plan.targetSha),
   ];
-  const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
+  const drainJobs = currentJobs.filter(
+    (job) => releaseWatcherJobName(job.name) === "Diagnostic Drain",
+  );
   const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
   const drain = {
     status: drainJob?.status ?? "unknown",
@@ -1184,7 +1231,10 @@ async function inspectQualificationStatus(plan, runId, client) {
       decision = validateReleaseStateArtifact(artifact, { executionPlan: plan }, "decision");
     } else if (
       parent.status === "completed" ||
-      currentJobs.some((job) => job.name === "Release Decision" && job.status === "completed")
+      currentJobs.some(
+        (job) =>
+          releaseWatcherJobName(job.name) === "Release Decision" && job.status === "completed",
+      )
     ) {
       observationErrors.push("Decision evidence unavailable");
     }
@@ -1962,7 +2012,8 @@ function duplicateJobNames(jobs) {
   return [...duplicates].toSorted((left, right) => left.localeCompare(right));
 }
 
-// A 5xx rerun storm can leave duplicate queued jobs without runners in the new attempt.
+// Any rerun request (single-job or batched) can leave duplicate queued jobs without
+// runners in the new attempt; such an attempt can never seal.
 async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadline) {
   const deadline = Math.min(
     operationDeadline,
@@ -1979,7 +2030,7 @@ async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadli
     if (remaining <= 0) {
       throw new Error(
         duplicates.length > 0
-          ? `${child.key} run ${child.runId} attempt ${runAttempt} is unsealable and holds duplicate jobs: ${duplicates.join(", ")}; cancel that attempt and start a fresh all-group FRV`
+          ? `${child.key} run ${child.runId} attempt ${runAttempt} is unsealable and holds duplicate jobs: ${duplicates.join(", ")}; ${GHOST_JOBS_ADVICE}`
           : `${child.key} run ${child.runId} attempt ${runAttempt} exposed no jobs; inspect it before another rerun`,
       );
     }
@@ -2034,6 +2085,10 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       return run;
     },
   };
+  const repositoryOption =
+    client.repository && client.repository !== DEFAULT_REPOSITORY
+      ? ` --repo ${client.repository}`
+      : "";
   const initial = await preflightContinuation(
     plan,
     rootRunId,
@@ -2244,10 +2299,6 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       }
       if (options.noFollow) {
         const receipt = reruns.at(-1);
-        const repositoryOption =
-          client.repository && client.repository !== DEFAULT_REPOSITORY
-            ? ` --repo ${client.repository}`
-            : "";
         return {
           action: "rerun-accepted",
           continueCommand: `pnpm frv continue --failed --run ${rootRunId}${repositoryOption}`,
@@ -2258,6 +2309,15 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
         };
       }
       continue;
+    }
+    // One invocation reruns a child once; report a repeat failure now instead of
+    // idling until unrelated siblings settle. The budget is re-derived from attempts.
+    const failedAgain = status.failed.find((child) => ownedAttempts.has(child.runId));
+    if (failedAgain) {
+      const used = failedAgain.effectiveRunAttempt - failedAgain.plannedRunAttempt + 1;
+      throw new Error(
+        `child ${failedAgain.key} failed again on attempt ${failedAgain.effectiveRunAttempt}; rerun budget remaining ${Math.max(0, DEFAULT_CHILD_MAX_ATTEMPTS - used)}; rerun pnpm frv continue --failed --run ${rootRunId}${repositoryOption} to retry a confirmed flake, otherwise start a fresh all-group FRV`,
+      );
     }
     if (status.active.length === 0 && !pendingArtifactProducers) {
       break;
@@ -3180,9 +3240,15 @@ async function inspectPublicationStatus(options) {
         );
         if (terminal.state === "available") {
           const nativeJobs = await reader.getAttemptJobs(String(run.id), run.run_attempt);
+          // Keep pre-split published runs readable through their artifact retention window.
+          const evidenceOwner = nativeJobs.some(
+            (job) => job.name === "Record detached Windows outcome",
+          )
+            ? "Record detached Windows outcome"
+            : "Promote signed Windows installers";
           const nativeOwner = requireArtifactUploadJob(
             nativeJobs,
-            "Promote signed Windows installers",
+            evidenceOwner,
             "Upload Windows promotion evidence",
           );
           observeWindowsMarker(
@@ -3329,10 +3395,10 @@ function parentJobBlockers(jobs, attempt) {
     }));
 }
 
-function childJobBlockers(children, targetVersion) {
+function childJobBlockers(children, targetVersion, targetSha) {
   return children.flatMap((child) =>
     child.jobs
-      ? evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+      ? evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
           owner: child.key,
           job: job.name,
           conclusion: job.conclusion,
@@ -3562,6 +3628,7 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           for (const job of evaluateReleaseChildPolicy({
             child: { key: child.key, jobs: composite.jobs },
             targetVersion: observation.plan?.targetVersion,
+            targetSha: observation.plan?.targetSha,
           }).blockingJobs) {
             const raw = attempts[job.acceptedRunAttempt - 1].jobs.find(
               (row) => row.name === job.name && row.conclusion !== "skipped",
@@ -3614,11 +3681,12 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           }
         }
         const duplicates = duplicateJobNames(jobs);
-        // Attempts briefly list overlapping jobs while GitHub materializes them.
+        // Attempts briefly list overlapping jobs while GitHub materializes them; only a
+        // final attempt that still holds duplicates is unsealable ghost-job evidence.
         if (duplicates.length > 0 && (final || pending.has(scanned))) {
           report(
-            `duplicates:${runId}:${attempt}`,
-            `${child.key} run ${runId} attempt ${attempt} holds duplicate jobs: ${duplicates.join(", ")}`,
+            `duplicates:${runId}:${attempt}${final ? ":final" : ""}`,
+            `${child.key} run ${runId} attempt ${attempt} holds duplicate jobs: ${duplicates.join(", ")}; ${final ? GHOST_JOBS_ADVICE : "they may still settle; recheck before rerunning"}`,
             run.html_url,
           );
         }

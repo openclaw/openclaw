@@ -17,11 +17,6 @@ export function LoadingState(
       aria-label={t("common.loading")}
     >
       <LoadingSkeleton messagesOnly={props.messagesOnly} composer={props.composer} />
-      {props.route ? (
-        <span class="connect-splash__status" aria-hidden="true">
-          {t("common.loading")}
-        </span>
-      ) : null}
     </section>
   );
 }

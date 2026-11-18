@@ -1,6 +1,7 @@
 import { For, Show, createMemo, type Element } from "solid-js";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { SessionCostTotal } from "../../../lib/session-context-report.ts";
 import { buildChatContextCategories } from "./chat-context-breakdown-model.ts";
 import {
   ChatContextReport,
@@ -91,6 +92,17 @@ export function ChatContextBreakdown(
           <Show when={result().blockedReason}>{(reason) => <p class="muted">{reason()}</p>}</Show>
         </div>
       )}
+    </ChatContextReport>
+  );
+}
+
+/** Shares the breakdown's usage read, so the popover issues one request for both. */
+export function ChatSessionCost(
+  props: ContextReportProps & { children: (cost: () => SessionCostTotal) => Element },
+) {
+  return (
+    <ChatContextReport {...props}>
+      {(result) => <Show when={result().cost}>{(cost) => props.children(cost)}</Show>}
     </ChatContextReport>
   );
 }

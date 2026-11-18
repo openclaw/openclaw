@@ -31,6 +31,7 @@ import {
 } from "./method-scopes.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   ADMIN_SCOPE,
   READ_SCOPE,
@@ -44,12 +45,14 @@ import {
   runWithOperatorToolGatewayAuthority,
   runOutsideOperatorToolGatewayAuthority,
 } from "./operator-tool-gateway-authority.js";
+import { resolvePluginSessionWorkDispatch } from "./plugin-session-work-authority.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type {
   DispatchGatewayMethodInProcessOptions,
   OperatorToolGatewayAuthority,
   ResolvedInProcessGatewayDispatch,
 } from "./server-plugin-in-process-dispatch.types.js";
+import { resolveSystemScopeCeiling } from "./server-plugin-in-process-system-ceiling.js";
 import {
   createSyntheticPluginRuntimeClient,
   mergePluginRuntimeClientInternal,
@@ -185,11 +188,10 @@ export function captureOperatorToolGatewayContinuationContextInternal(
         }
       : { syntheticScopeMode: "exact" as const }),
   });
-  return captureGatewayOperatorRunAuthority({
+  return captureGatewayOperatorContinuation({
     client: resolved.operatorSourceClient,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
-    independentContinuation: true,
   }).then((captured) => {
     try {
       captured?.authority.assertCurrent();
@@ -333,6 +335,13 @@ export function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
+  const service = resolvePluginSessionWorkDispatch({
+    method,
+    params,
+    context,
+    scopedPluginId: scope?.pluginId,
+    pluginRuntimeOwnerId: options?.pluginRuntimeOwnerId,
+  });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
     caller?.operatorAuthority ??
@@ -370,6 +379,9 @@ export function resolveInProcessGatewayDispatch(
     options.agentToolCaller?.agentId === caller.agentId &&
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
+    // Host-owned agent paths may omit the ambient invocation guard below, but
+    // none may outlive or broaden a recovered service operation's tool ceiling.
+    service?.assertCurrent,
     selection?.assertCurrent,
     runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
@@ -464,11 +476,7 @@ export function resolveInProcessGatewayDispatch(
   const delegatedToolPolicyHandoffId = options?.delegatedToolPolicyHandoff
     ? registerSubagentCompletionToolHandoff(options.delegatedToolPolicyHandoff)
     : undefined;
-  // Built-in requests retain the explicit ceiling of a positively scoped System caller.
-  const scopedSystemScopes =
-    options?.syntheticScopeMode !== undefined && scopedActor?.kind === "system"
-      ? (scope?.client?.connect.scopes ?? [])
-      : undefined;
+  const scopedSystemScopes = resolveSystemScopeCeiling(method, options, scope?.client, caller);
   const selectedScopes =
     selection && operatorRunAuthority && caller?.operatorAuthority
       ? intersectOperatorScopes(operatorRunAuthority.scopes, caller.operatorAuthority.scopes)
@@ -689,6 +697,7 @@ export function resolveInProcessGatewayDispatch(
     assertSourceCurrent,
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([
+      service?.assertCurrent,
       selection?.assertCurrent,
       runtimeAuthority?.assertCurrent,
       assertSourceCurrent,

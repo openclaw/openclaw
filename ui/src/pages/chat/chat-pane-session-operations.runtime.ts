@@ -1,15 +1,11 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
-import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_CREATE_FAILED_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-  preparePaneSessionHandoff,
-} from "./chat-pane-shared.ts";
+import { preparePaneSessionHandoff } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { canCreateChatSession } from "./chat-state-route.ts";
 
@@ -56,7 +52,7 @@ export async function createCapturedChatSession({
     return false;
   }
   if (!canCreateChatSession(state)) {
-    setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
+    setChatError(state, t("chat.sendErrors.newSessionBusy"));
     return false;
   }
   const currentAccess = readCreateAccess();
@@ -82,8 +78,8 @@ export async function createCapturedChatSession({
         state,
         state.sessionsError ??
           (state.sessionsLoading
-            ? NEW_SESSION_LIST_LOADING_MESSAGE
-            : NEW_SESSION_CREATE_FAILED_MESSAGE),
+            ? t("chat.sendErrors.newSessionLoading")
+            : t("chat.sendErrors.newSessionFailed")),
       );
     }
     return false;

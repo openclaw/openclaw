@@ -71,6 +71,7 @@ async function sendTlonOutbound(params: ChannelOutboundContext, kind: "text" | "
             assertDirectAdapterHandoff,
           },
           account.mediaMaxBytes,
+          params.mediaAccess,
         )
       : undefined;
   }

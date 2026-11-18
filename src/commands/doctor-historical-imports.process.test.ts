@@ -15,8 +15,8 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
-  createSourceRuntime,
-  runSourceRuntime,
+  createBuiltRuntime,
+  runBuiltRuntime,
 } from "./doctor-config-preflight.process.test-support.js";
 
 const childTimeout = 90_000;
@@ -37,7 +37,7 @@ it(
       let originalPlacements: Record<string, SQLOutputValue>[];
       {
         using db = new DatabaseSync(sharedPath);
-        db.exec(stateV21Schema());
+        db.exec(`BEGIN;\n${stateV21Schema()}`);
         db.exec(
           "PRAGMA user_version=21; INSERT INTO schema_meta(meta_key,role,schema_version,created_at,updated_at) VALUES ('primary','global',21,1,1);",
         );
@@ -48,6 +48,7 @@ it(
             "VALUES ('historical-image','synthetic','sandbox',?,'provision-image','destroyed',7,'[]',1,2,2)",
         ).run(original);
         originalPlacements = seedHistoricalPlacements(db);
+        db.exec("COMMIT;");
       }
       const agentPath = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(agentPath), { recursive: true });
@@ -55,7 +56,7 @@ it(
       let expectedInputs: Record<string, SQLOutputValue>[];
       {
         using db = new DatabaseSync(agentPath);
-        db.exec(OPENCLAW_AGENT_SCHEMA_V24_SQL);
+        db.exec(`BEGIN;\n${OPENCLAW_AGENT_SCHEMA_V24_SQL}`);
         db.exec(
           "ALTER TABLE session_pending_inputs ADD COLUMN recovery_intent_json TEXT; PRAGMA user_version=24;" +
             "INSERT INTO schema_meta(meta_key,role,schema_version,agent_id,created_at,updated_at) VALUES ('primary','agent',24,'main',1,1);" +
@@ -77,6 +78,7 @@ it(
           );
         }
         originalInputs = db.prepare("SELECT * FROM session_pending_inputs ORDER BY seq").all();
+        db.exec("COMMIT;");
         expectedInputs = structuredClone(originalInputs);
         for (const row of expectedInputs) {
           if (row.state === "queued") {
@@ -85,7 +87,7 @@ it(
           row.consumed_event_id = null;
         }
       }
-      const runtime = createSourceRuntime(state.root);
+      const runtime = createBuiltRuntime(state.root);
       const env: NodeJS.ProcessEnv = {
         ...state.env,
         OPENCLAW_SERVICE_REPAIR_POLICY: "external",
@@ -98,27 +100,10 @@ it(
         delete env[key];
       }
       {
-        const result = await runSourceRuntime(
+        const result = await runBuiltRuntime(
           runtime,
           env,
-          [
-            "--input-type=module",
-            "--eval",
-            [
-              'import { registerHooks } from "node:module";',
-              'import path from "node:path";',
-              "registerHooks({ resolve(specifier, context, nextResolve) {",
-              'if (specifier.endsWith("/doctor-health-contributions.js")) {',
-              'return { shortCircuit: true, url: "data:text/javascript," + encodeURIComponent(',
-              '"export async function runDoctorHealthContributions() {}\\n" +',
-              '"export async function resolveDoctorContributionHealthChecks() { return []; }") };',
-              "}",
-              "return nextResolve(specifier, context);",
-              "}});",
-              'process.argv = [process.execPath,path.resolve("src/entry.ts"),"doctor","--fix","--non-interactive","--no-workspace-suggestions"];',
-              'await import("./src/entry.ts");',
-            ].join("\n"),
-          ],
+          ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
           childTimeout,
         );
         const output = result.stdout + "\n" + result.stderr;

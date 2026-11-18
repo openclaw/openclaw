@@ -1072,22 +1072,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                   replyInThread,
                 }),
               );
+            } else if (mediaUrl) {
+              result = await sendMedia!({
+                ...outboundContext,
+                mediaUrl,
+                ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+                // Direct sends surface upload failures; thread replies retain
+                // their existing attachment fallback behavior.
+                ...(ctx.action === "send" ? { propagateMediaUploadFailure: true } : {}),
+              });
             } else {
-              if (mediaUrl) {
-                result = await sendMedia!({
-                  ...outboundContext,
-                  mediaUrl,
-                  ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
-                  // Direct sends surface upload failures; thread replies retain
-                  // their existing attachment fallback behavior.
-                  ...(ctx.action === "send" ? { propagateMediaUploadFailure: true } : {}),
-                });
-              } else {
-                const { target, ...delivery } = await (
-                  await resolveFeishuMessageSender("sendText")
-                )(outboundContext);
-                result = { ...delivery, chatId: target?.id };
-              }
+              const { target, ...delivery } = await (
+                await resolveFeishuMessageSender("sendText")
+              )(outboundContext);
+              result = { ...delivery, chatId: target?.id };
             }
             return jsonActionResult({
               ok: true,

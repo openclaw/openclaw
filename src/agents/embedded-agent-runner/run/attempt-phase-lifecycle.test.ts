@@ -25,17 +25,11 @@ import type { EmbeddedAttemptExecutionState } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   runAgentEndSideEffects: vi.fn(),
-  shouldWaitForCompletionRequiredAsyncTasks: vi.fn((): boolean => false),
-  waitForCompletionRequiredAsyncTasks: vi.fn(),
 }));
 
 // mock-isolation: Keep skill scheduling and plugin hooks outside phase-ordering tests.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
   runAgentEndSideEffectsAsync: hoisted.runAgentEndSideEffects,
-}));
-vi.mock("./attempt-async-tasks.js", () => ({
-  shouldWaitForCompletionRequiredAsyncTasks: hoisted.shouldWaitForCompletionRequiredAsyncTasks,
-  waitForCompletionRequiredAsyncTasks: hoisted.waitForCompletionRequiredAsyncTasks,
 }));
 
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
@@ -185,8 +179,6 @@ function finalizationInput(preparedState: ReturnType<typeof prepared>) {
 describe("embedded attempt phase lifecycle state", () => {
   beforeEach(() => {
     hoisted.runAgentEndSideEffects.mockReset();
-    hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReset().mockReturnValue(false);
-    hoisted.waitForCompletionRequiredAsyncTasks.mockReset();
   });
 
   it.each(["afterTurn", "ingestBatch", "ingest", "candidate"] as const)(
@@ -352,28 +344,6 @@ describe("embedded attempt phase lifecycle state", () => {
 
     expect(result.timedOutDuringCompaction).toBe(true);
     expect(sessionManager.removeTrailingEntriesAsync).toHaveBeenCalledOnce();
-  });
-
-  it("settles a user-aborted run whose async-task wait throws AbortError", async () => {
-    const abortError = Object.assign(new Error("This operation was aborted"), {
-      name: "AbortError",
-    });
-    hoisted.shouldWaitForCompletionRequiredAsyncTasks.mockReturnValue(true);
-    hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
-    const { input } = streamInput();
-    input.subscription.toolMetas = [{ toolName: "exec", asyncStarted: true }];
-    input.readLifecycleState = () => ({
-      aborted: true,
-      timedOut: false,
-      timedOutDuringCompaction: false,
-    });
-    input.runAbortSignal = AbortSignal.abort();
-    const result = await settleEmbeddedAttemptStream(input);
-
-    // The aborted run settles instead of unwinding the lane task, and its
-    // unfinished async tasks are not reclassified as a timeout failure.
-    expect(result.promptError).toBeNull();
-    expect(hoisted.waitForCompletionRequiredAsyncTasks).toHaveBeenCalledOnce();
   });
 
   it("keeps projected nested tool evidence from owning the model terminal (#118274)", async () => {
@@ -543,7 +513,7 @@ describe("embedded attempt phase lifecycle state", () => {
         },
       });
       expect(context?.config).toBe(config);
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         sessionManager.getSessionTarget()
           ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
           : undefined,
@@ -752,6 +722,12 @@ describe("embedded attempt phase lifecycle state", () => {
         makeAgentAssistantMessage({ content: [{ type: "text", text: "Suppressed terminal." }] }),
       );
 
+      const executionState: Pick<EmbeddedAttemptExecutionState, "terminal" | "agentTerminal"> = {
+        terminal:
+          tail === "interrupted tool result"
+            ? { kind: "aborted", source: "external" }
+            : { kind: "ok" },
+      };
       await completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager, true, [{ name: "skill_workshop" }])),
@@ -762,19 +738,19 @@ describe("embedded attempt phase lifecycle state", () => {
           } as never,
           agentDir: dir,
           setup: { effectiveWorkspace: dir, sessionAgentId: "main" },
-          state: {
-            terminal:
-              tail === "interrupted tool result"
-                ? { kind: "aborted", source: "external" }
-                : { kind: "ok" },
-          },
+          state: executionState,
         } as never,
         settled(target.sessionId) as never,
         prompt(transcriptLeafId),
       );
 
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
-      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
+      expect(executionState.agentTerminal).toMatchObject({
+        version: 1,
+        lastMessageRole: tail === "interrupted tool result" ? "tool_result" : "absent",
+        finalTextState: tail === "interrupted tool result" ? "not_assistant" : "unavailable",
+      });
+      expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].completedTurnSource).toEqual(
         tail === "interrupted tool result"
           ? { ...sessionManager.getSessionTarget(), entryId: toolResultEntryId }
           : undefined,

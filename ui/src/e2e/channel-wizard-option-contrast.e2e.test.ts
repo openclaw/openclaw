@@ -108,6 +108,7 @@ suite.define(() => {
         ).toBe(true);
         expect(await activeOption.getAttribute("aria-selected")).toBe("true");
         await page.keyboard.press("Enter");
+        await page.getByRole("button", { name: "Continue", exact: true }).click();
         const answer = await gateway.waitForRequest("wizard.next");
         expect(answer.params).toMatchObject({ answer: { value: "another" } });
       },

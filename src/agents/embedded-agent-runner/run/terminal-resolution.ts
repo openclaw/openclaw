@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   retainSilentFinalPayloads,
   setReplyPayloadMetadata,
@@ -15,6 +16,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { renderStorageFailureSummary } from "../../failover/assistant-request-failure-copy.js";
@@ -42,6 +44,7 @@ import {
 } from "./auth-profile-success.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { attachEmbeddedFinalPresentation } from "./final-presentation.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
 import {
   classifyAssistantTurn,
@@ -83,23 +86,6 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
-
-export function createTerminalToolPresentationTracker() {
-  let latestOrdinal = -1;
-  let nextOrdinal = 0;
-  let value: string | undefined;
-  return {
-    allocateOrdinal: () => nextOrdinal++,
-    observe: (observation: { terminalPresentation?: string; toolCallOrdinal?: number }): void => {
-      const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
-      if (ordinal >= latestOrdinal) {
-        latestOrdinal = ordinal;
-        value = observation.terminalPresentation;
-      }
-    },
-    read: () => value,
-  };
-}
 
 type TerminalResolution =
   | { action: "retry" }
@@ -184,7 +170,6 @@ export async function resolveEmbeddedRunTerminal(input: {
     | "activateCompactionContinuation"
     | "clearCompactionContinuation"
   >;
-  armPostCompactionGuard: () => void;
   readTerminalToolPresentation: () => string | undefined;
   resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
@@ -367,7 +352,6 @@ export async function resolveEmbeddedRunTerminal(input: {
       `compaction interrupted visible final answer: ${runLogContext} ` +
         `compactions=${input.attemptCompactionCount} — retrying ${retryState.compactionContinuationAttempts}/1 with compacted-transcript continuation`,
     );
-    input.armPostCompactionGuard();
     return { action: "retry" };
   }
   // Invisible retries return above; visible and terminal paths release this retained constraint.
@@ -480,6 +464,9 @@ async function completeEmbeddedRun(
       ? {
           kind: "incomplete_turn" as const,
           message: storageFailureText ?? formatErrorMessage(terminalFailure),
+          code:
+            extractErrorCode(terminalFailure) ??
+            resolveCurrentAttemptAssistant(input.attempt)?.errorCode,
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         }
@@ -586,13 +573,26 @@ async function completeEmbeddedRun(
     input.terminalToolPresentation && input.incompleteTurnText !== undefined
       ? input.terminalToolPresentation.concat("\n\n", input.incompleteTurnText)
       : (input.incompleteTurnText ?? (error ? storageFailureText : undefined));
+  const agentTerminal =
+    error &&
+    !terminalAborted &&
+    !terminalTimedOut &&
+    !input.terminalToolPresentation &&
+    !input.prepared.terminalToolFailure &&
+    !input.prepared.failureSignal &&
+    input.settledTurnFinalizationOutcome === "not-attempted"
+      ? input.attempt.agentTerminal
+      : undefined;
   const terminalPayloads = suppressMissingReplyNotice
     ? retainSilentFinalPayloads(input.payloadsForTerminalPath ?? [])
     : incompleteText !== undefined
       ? [
-          isMissingReplyNotice
-            ? createMissingReplyNotice(incompleteText)
-            : { text: incompleteText, isError: true },
+          withAgentTerminalPayloadSnapshot(
+            isMissingReplyNotice
+              ? createMissingReplyNotice(incompleteText)
+              : { text: incompleteText, isError: true },
+            agentTerminal,
+          ),
         ]
       : error
         ? input.payloadsForTerminalPath
@@ -626,12 +626,13 @@ async function completeEmbeddedRun(
           : input.prepared.preparedTerminalReply.terminalReply;
   return {
     action: "complete",
-    result: {
+    result: attachEmbeddedFinalPresentation(input, {
       payloads: terminalPayloads?.length ? terminalPayloads : undefined,
       ...(!error && input.attempt.diagnosticTrace
         ? { diagnosticTrace: freezeDiagnosticTraceContext(input.attempt.diagnosticTrace) }
         : {}),
       meta: {
+        agentTerminal,
         durationMs: Date.now() - input.startedAtMs,
         agentMeta: input.prepared.agentMeta,
         aborted: terminalAborted,
@@ -717,6 +718,6 @@ async function completeEmbeddedRun(
       },
       ...copyAttemptDeliveryState(input.attempt),
       sourceReplyDeliveryState: input.prepared.sourceReplyDeliveryState,
-    },
+    }),
   };
 }

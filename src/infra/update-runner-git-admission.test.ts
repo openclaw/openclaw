@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
+import fsPromises, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
@@ -67,24 +67,35 @@ function snapshotTree(root: string): string[] {
     });
 }
 
-it.each(
-  (["sha1", "sha256"] as const).flatMap((objectFormat) =>
-    [false, true].map((cached) => ({ objectFormat, cached })),
+it.each([
+  ...(["sha1", "sha256"] as const).flatMap((objectFormat) =>
+    [false, true].map((cached) => ({ objectFormat, cached, legacy: false })),
   ),
-)("fetches only missing commits ($objectFormat/$cached)", async ({ objectFormat, cached }) => {
-  const state = fixture(false, false, false, objectFormat);
-  if (cached) {
-    state.installedGit("fetch", "upstream.with.dots");
-  }
-  state.commit("2026.7.3", 15);
-  const result = await state.run({
-    channel: "dev",
-    devTarget: { mode: "detached", ref: state.target },
-  });
+  { objectFormat: "sha1" as const, cached: true, legacy: true },
+])(
+  "fetches only missing commits ($objectFormat/$cached/legacy=$legacy)",
+  async ({ objectFormat, cached, legacy }) => {
+    const state = fixture(false, false, false, objectFormat);
+    if (cached) {
+      state.installedGit("fetch", "upstream.with.dots");
+    }
+    state.commit("2026.7.3", 15);
+    const command: CommandRunner = (argv, options) =>
+      legacy && argv.includes("--no-lazy-fetch")
+        ? Promise.resolve({ code: 129, stdout: "", stderr: "unknown option: --no-lazy-fetch" })
+        : state.runCommand(argv, options);
+    const result = await state.run(
+      {
+        channel: "dev",
+        devTarget: { mode: "detached", ref: state.target },
+      },
+      command,
+    );
 
-  state.expectUpdated(result);
-  expect(state.calls.some((argv) => argv.includes("fetch"))).toBe(!cached);
-});
+    state.expectUpdated(result);
+    expect(state.calls.some((argv) => argv.includes("fetch"))).toBe(!cached);
+  },
+);
 
 it.each(["unsupported", "timeout-zero", "signal-zero"] as const)(
   "settles cached probes before discovery (%s)",
@@ -265,7 +276,14 @@ it.each([false, true])(
     const state = fixture();
     const published = path.join(state.root, "published");
     let repacked = false;
-    let descriptor: number | undefined;
+    let packHandle: FileHandle | undefined;
+    const openedHandles: FileHandle[] = [];
+    const open = fsPromises.open.bind(fsPromises);
+    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
+      const handle = await open(...args);
+      openedHandles.push(handle);
+      return handle;
+    });
     let keepName: string | undefined;
     const command: CommandRunner = async (argv, options) => {
       if (foreignKeep && argv[2] === state.install && argv[3] === "index-pack") {
@@ -280,7 +298,7 @@ it.each([false, true])(
       }
       const result = await state.runCommand(argv, options);
       if (argv[2] === state.install && argv[3] === "index-pack" && result.code === 0) {
-        descriptor = options.stdinFileDescriptor;
+        packHandle = openedHandles.find((handle) => handle.fd === options.stdinFileDescriptor);
         state.installedGit("repack", "-a", "-d");
         repacked = true;
         expect(state.installedGit("cat-file", "-t", state.target)).toBe("commit");
@@ -298,8 +316,9 @@ it.each([false, true])(
       command,
     );
     expect(repacked).toBe(true);
-    expect(descriptor).toBeTypeOf("number");
-    expect(() => fs.fstatSync(descriptor!)).toThrow();
+    assert(packHandle);
+    // Another file may reuse the numeric descriptor after the pack handle closes.
+    await expect(packHandle.stat()).rejects.toMatchObject({ code: "EBADF" });
     state.expectUpdated(result, state.target, published);
     const packs = path.join(published, ".git", "objects", "pack");
     expect(fs.readdirSync(packs).filter((name) => name.endsWith(".keep"))).toEqual(

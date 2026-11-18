@@ -1,3 +1,9 @@
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../../config/model-input.js";
+import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   providerSupportsNativePdfDocument,
@@ -14,7 +20,25 @@ import {
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
 import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
-import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
+
+type PdfModelConfig = Exclude<AgentModelConfig, string>;
+
+export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
+  const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
+  const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
+  const modelConfig: PdfModelConfig = {};
+  if (primary?.trim()) {
+    modelConfig.primary = primary.trim();
+  }
+  if (fallbacks.length > 0) {
+    modelConfig.fallbacks = fallbacks;
+  }
+  return modelConfig;
+}
+
+export function resolvePdfToolMaxTokens(modelMaxTokens: number | undefined) {
+  return Math.min(4096, asPositiveFiniteNumber(modelMaxTokens) ?? 4096);
+}
 
 export type PdfToolActiveModel = {
   provider: string;

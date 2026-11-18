@@ -6,10 +6,10 @@ import * as readline from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
-  ClientSideConnection,
   PROTOCOL_VERSION,
+  client as createClientApp,
+  methods,
   ndJsonStream,
-  type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
@@ -253,6 +253,19 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
   agent.on("error", (err) => {
     log(`agent error: ${String(err)}`);
   });
+  let startupSignalCode: number | undefined;
+  let termination: Promise<void> | undefined;
+  const terminate = () => (termination ??= terminateAcpServer(agent));
+  const interruptStartup = (code: number) => {
+    startupSignalCode ??= code;
+    permissions.abort();
+    // The handshake reader must settle before its owner can join shutdown.
+    void terminate().catch(() => {});
+  };
+  const onStartupSigint = () => interruptStartup(130);
+  const onStartupSigterm = () => interruptStartup(143);
+  process.on("SIGINT", onStartupSigint);
+  process.on("SIGTERM", onStartupSigterm);
 
   try {
     if (!agent.stdin || !agent.stdout) {
@@ -263,14 +276,13 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
     const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
     const stream = ndJsonStream(input, output);
 
-    const client = new ClientSideConnection(
-      () => ({
-        sessionUpdate: async (params: SessionNotification) => {
-          printSessionUpdate(params);
-        },
-        requestPermission: async (
-          params: RequestPermissionRequest,
-        ): Promise<RequestPermissionResponse> => {
+    const client = createClientApp()
+      .onNotification(methods.client.session.update, ({ params }) => {
+        printSessionUpdate(params);
+      })
+      .onRequest(
+        methods.client.session.requestPermission,
+        async ({ params }): Promise<RequestPermissionResponse> => {
           if (permissions.signal.aborted) {
             return { outcome: { outcome: "cancelled" } };
           }
@@ -325,13 +337,12 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
           );
           return { outcome: { outcome: "cancelled" } };
         },
-      }),
-      stream,
-    );
+      )
+      .connect(stream);
 
     void client.closed.then(() => permissions.abort());
     log("initializing");
-    await client.initialize({
+    await client.agent.request(methods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {
         fs: { readTextFile: true, writeTextFile: true },
@@ -339,12 +350,18 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
       },
       clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
     });
+    if (startupSignalCode !== undefined) {
+      permissions.signal.throwIfAborted();
+    }
 
     log("creating session");
-    const session = await client.newSession({
+    const session = await client.agent.request(methods.agent.session.new, {
       cwd,
       mcpServers: [],
     });
+    if (startupSignalCode !== undefined) {
+      permissions.signal.throwIfAborted();
+    }
 
     return {
       client,
@@ -355,15 +372,25 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
     };
   } catch (error) {
     permissions.abort();
-    await terminateAcpServer(agent);
+    await terminate();
     await closed;
+    if (startupSignalCode !== undefined) {
+      return { exitCode: startupSignalCode };
+    }
     throw error;
+  } finally {
+    process.off("SIGINT", onStartupSigint);
+    process.off("SIGTERM", onStartupSigterm);
   }
 }
 
 /** Runs until the interactive session and its owned server have closed. */
 export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<number> {
-  const { client, agent, sessionId, closed, cancelPermissions } = await createAcpClient(opts);
+  const connection = await createAcpClient(opts);
+  if (connection.exitCode !== undefined) {
+    return connection.exitCode;
+  }
+  const { client, agent, sessionId, closed, cancelPermissions } = connection;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let quitting = false;
   let shutdown: Promise<void> | undefined;
@@ -387,7 +414,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
         const activePrompt = promptTask;
         if (activePrompt) {
           await settlesWithin(
-            client.cancel({ sessionId }).catch(() => {}),
+            client.agent.notify(methods.agent.session.cancel, { sessionId }).catch(() => {}),
             ACP_SERVER_KILL_GRACE_MS,
           );
           await settlesWithin(activePrompt, ACP_SERVER_KILL_GRACE_MS);
@@ -433,7 +460,10 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
       }
       promptTask = (async () => {
         try {
-          const response = await client.prompt({ sessionId, prompt: [{ type: "text", text }] });
+          const response = await client.agent.request(methods.agent.session.prompt, {
+            sessionId,
+            prompt: [{ type: "text", text }],
+          });
           console.log(`\n[${response.stopReason}]\n`);
         } catch (err) {
           console.error(`\n[error] ${String(err)}\n`);

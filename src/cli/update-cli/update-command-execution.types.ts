@@ -36,8 +36,12 @@ export type UpdateCommandExecutionGuards = {
 export type MutableUpdateExecutionParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
-  updateInstallKind: "git" | "package";
   switchToGit: boolean;
+  /**
+   * A POSIX Git checkout update switches a release link: the serving Gateway keeps its
+   * own release until the service restarts, so nothing is verified, stopped or parked first.
+   */
+  gitRelease?: boolean;
   timeoutMs: number | undefined;
   updateStepTimeoutMs: number;
   startedAt: number;
@@ -51,7 +55,6 @@ export type MutableUpdateExecutionParams = {
   devTarget?: DevUpdateTarget;
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
-  packageInstallTarget?: ResolvedGlobalInstallTarget;
   stagedPackage?: StagedPackageInstallUpdate;
   packageTargetVersion?: string;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
@@ -71,4 +74,7 @@ export type MutableUpdateExecutionParams = {
     installTarget?: ResolvedGlobalInstallTarget,
   ) => Promise<void>;
   onActivation?: () => void;
-};
+} & (
+  | { updateInstallKind: "package"; packageInstallTarget: ResolvedGlobalInstallTarget }
+  | { updateInstallKind: "git"; packageInstallTarget?: ResolvedGlobalInstallTarget }
+);

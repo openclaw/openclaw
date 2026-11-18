@@ -5,9 +5,12 @@ import {
 } from "../../../../src/shared/chat-message-content.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
+import {
+  isKeyedAssistantStreamFallbackMessage,
+  transcriptRunId,
+} from "./chat-thread-run-identity.ts";
 import { assistantGroupIsIndependentBoundary } from "./chat-turn-boundary.ts";
-import { extractMessageMediaText } from "./components/chat-message-media.ts";
+import { extractMessageMediaText } from "./components/chat-message-media-projection.ts";
 import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
 /** Host-stamped provider speech is a call transcript, not a backing-agent answer. */
@@ -17,6 +20,16 @@ export function isProviderVoiceTranscript(message: unknown): boolean {
     record?.role === "assistant" &&
     asRecord(record["__openclaw"])?.voiceTranscript === "provider-owned"
   );
+}
+
+/** Run cancellation comes from its owner, not a provider's generic abort reason. */
+export function explicitlyAbortedRunId(message: unknown): string | undefined {
+  const disposition = readLiveTerminalDisposition(message);
+  if (disposition !== null) {
+    return disposition === "aborted" ? transcriptRunId(message) : undefined;
+  }
+  const abort = asRecord(asRecord(message)?.openclawAbort);
+  return abort?.aborted === true && typeof abort.runId === "string" ? abort.runId : undefined;
 }
 
 export function assistantMessageIsInterrupted(message: unknown): boolean {

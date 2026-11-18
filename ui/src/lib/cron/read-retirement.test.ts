@@ -9,6 +9,7 @@ import {
   createCronJob,
   cronJobsListResponse,
 } from "../../test-helpers/cron.ts";
+import * as gatewayErrors from "../gateway-errors.ts";
 import { createMethodRequest, createStateWithRequest } from "./cron.test-support.ts";
 import {
   addCronJob,
@@ -18,10 +19,9 @@ import {
   loadCronJobsPage,
   runCronJob,
   startCronEdit,
-  updateCronJobsFilter,
 } from "./index.ts";
 import { loadCronRuns, updateCronRunsFilter } from "./runs.ts";
-import { loadCronStatus } from "./state.ts";
+import { loadCronStatus, retireCronStatusFeedback } from "./state.ts";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
 
@@ -47,7 +47,7 @@ describe("cron controller", () => {
       cronJobsQuery: "old",
     });
     const pending = loadCronJobsPage(state, { tableFilters: true });
-    updateCronJobsFilter(state, { cronJobsQuery: "latest" });
+    state.cronJobsQuery = "latest";
     await loadCronJobsPage(state, { tableFilters: true });
     superseded.resolve(cronJobsListResponse([createCronJob("old", "Old result")]));
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -172,10 +172,8 @@ describe("cron controller", () => {
         : { cronJobsScheduleKindFilter: "cron", cronJobsLastStatusFilter: "unknown" },
     );
     const pending = loadCronJobsPage(state, { append: tableFilters, tableFilters });
-    updateCronJobsFilter(state, {
-      cronJobsScheduleKindFilter: "cron",
-      cronJobsLastStatusFilter: "unknown",
-    });
+    state.cronJobsScheduleKindFilter = "cron";
+    state.cronJobsLastStatusFilter = "unknown";
     await loadCronJobsPage(state, { tableFilters: true });
     if (!tableFilters) {
       await loadCronJobsPage(state);
@@ -350,4 +348,39 @@ describe("selected automation runtime refresh", () => {
       expect(state.cronEditingJob).toBe(job);
     },
   );
+});
+
+it("keeps newer action feedback while a permission message is loading", async () => {
+  const formatting = createDeferred();
+  const message = createDeferred<string>();
+  const format = vi
+    .spyOn(gatewayErrors, "formatMissingOperatorReadScopeMessage")
+    .mockImplementationOnce(() => {
+      formatting.resolve();
+      return message.promise;
+    });
+  const denial = new GatewayProtocolRequestError({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.read",
+    details: {
+      code: "MISSING_SCOPE",
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    },
+  });
+  const state = createStateWithRequest(vi.fn().mockRejectedValue(denial));
+  const status = { enabled: true, triggersEnabled: true, jobs: 2 };
+  state.cronStatus = status;
+  try {
+    const read = loadCronStatus(state);
+    await formatting.promise;
+    retireCronStatusFeedback(state);
+    state.cronError = "newer action feedback";
+    message.resolve("late permission message");
+    await expect(read).resolves.toBeUndefined();
+    expect(state.cronError).toBe("newer action feedback");
+    expect(state.cronStatus).toBe(status);
+  } finally {
+    format.mockRestore();
+  }
 });

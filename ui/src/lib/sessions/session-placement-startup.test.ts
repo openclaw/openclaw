@@ -380,7 +380,7 @@ describe("session placement startup", () => {
         status: "cleanup-rejected",
         error:
           observation === "pending"
-            ? "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent."
+            ? "Device setup is still in progress. Retry to check the existing device. Your message hasn’t been sent."
             : "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
       });
       expect(request).not.toHaveBeenCalledWith("sessions.reclaim", expect.anything());

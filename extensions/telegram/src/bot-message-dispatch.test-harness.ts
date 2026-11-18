@@ -128,7 +128,7 @@ const getSessionEntry = getSessionEntryHoisted;
 export const loadSessionStore = loadSessionStoreHoisted;
 export const readLatestAssistantTextByIdentity = readLatestAssistantTextByIdentityHoisted;
 const resolveStorePath = resolveStorePathHoisted;
-const generateTopicLabel = generateTopicLabelHoisted;
+export const generateTopicLabel = generateTopicLabelHoisted;
 const describeStickerImage = describeStickerImageHoisted;
 const resolveAgentDir = resolveAgentDirHoisted;
 const resolveHumanDelayConfig = resolveHumanDelayConfigHoisted;
@@ -276,7 +276,8 @@ vi.mock("./bot/delivery.replies.js", () => ({
   deliverStructuredReplies: deliverRepliesHoisted,
 }));
 
-vi.mock("./send.js", async () => ({
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
   buildInlineKeyboard: (await import("./inline-keyboard.js")).buildInlineKeyboard,
   editMessageReplyMarkupTelegram: editMessageReplyMarkupTelegramHoisted,
   editMessageTelegram: editMessageTelegramHoisted,

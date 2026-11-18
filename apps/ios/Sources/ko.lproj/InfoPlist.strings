@@ -1,11 +1,13 @@
+/* OpenClaw source: "OpenClaw uses Bluetooth to securely set up a nearby ESP device when you choose device setup." */
+"NSBluetoothAlwaysUsageDescription" = "OpenClaw는 기기 설정을 선택하면 Bluetooth를 사용하여 근처의 ESP 기기를 안전하게 설정합니다.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsFullAccessUsageDescription" = "OpenClaw는 캘린더 접근을 허용하면 캘린더를 사용하여 일정과 일정 관련 정보를 표시합니다.";
 /* OpenClaw source: "OpenClaw uses your calendars to show events and scheduling context when you enable calendar access." */
 "NSCalendarsUsageDescription" = "OpenClaw는 캘린더 접근을 허용하면 캘린더를 사용하여 일정과 일정 관련 정보를 표시합니다.";
 /* OpenClaw source: "OpenClaw uses your calendars to add events when you enable calendar access." */
 "NSCalendarsWriteOnlyAccessUsageDescription" = "OpenClaw는 캘린더 접근을 허용하면 캘린더를 사용하여 일정을 추가합니다.";
-/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
-"NSCameraUsageDescription" = "OpenClaw는 Gateway 설정 QR 코드를 스캔하거나 페어링된 Gateway 또는 어시스턴트에 이 iPhone으로 사진이나 짧은 동영상을 촬영하도록 요청할 때 카메라를 사용합니다. 예를 들어 Gateway에 연결하거나 어시스턴트에게 문서, 기기 화면 또는 작업 공간을 보여줄 때 사용됩니다.";
+/* OpenClaw source: "OpenClaw uses the camera when you scan a Gateway or device setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace." */
+"NSCameraUsageDescription" = "OpenClaw는 Gateway 또는 기기 설정용 QR 코드를 스캔하거나, 페어링된 Gateway 또는 어시스턴트에 이 iPhone으로 사진이나 짧은 동영상을 촬영해 달라고 요청할 때 카메라를 사용합니다. 예를 들어 Gateway에 연결하거나 어시스턴트에게 문서, 기기 화면 또는 작업 공간을 보여줄 때 사용됩니다.";
 /* OpenClaw source: "OpenClaw uses your contacts so you can search and reference people while using the assistant." */
 "NSContactsUsageDescription" = "OpenClaw는 어시스턴트 사용 중 사람을 검색하고 참조할 수 있도록 연락처를 사용합니다.";
 /* OpenClaw source: "OpenClaw reads your steps, sleep, resting heart rate, and workouts from the Apple Health app to create summaries you request and send them through your Gateway to your configured AI provider." */

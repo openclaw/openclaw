@@ -1,5 +1,5 @@
 import type { InputFile } from "grammy";
-import type { InlineKeyboardMarkup, Message } from "grammy/types";
+import type { InlineKeyboardMarkup, Message, MessageEntity } from "grammy/types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createChannelApiRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -213,10 +213,12 @@ export function createTelegramPreparedSender(config: {
         html: boolean,
         fallback?: TextFallback,
         label = "sendMessage",
+        entities?: MessageEntity[],
       ) => {
         const requestParams: Record<string, unknown> = {
           ...prepared.requestParams(fallback),
           ...(html ? { parse_mode: "HTML" as const } : {}),
+          ...(entities?.length ? { entities } : {}),
         };
         try {
           return await request(
@@ -246,7 +248,8 @@ export function createTelegramPreparedSender(config: {
         context: params.context,
         warn: config.warn,
         sender: {
-          sendPlain: (text, fallback, label) => sendPlainOrHtml(text, false, fallback, label),
+          sendPlain: (text, fallback, label, entities) =>
+            sendPlainOrHtml(text, false, fallback, label, entities),
           sendHtml: (text) => sendPlainOrHtml(text, true),
           sendRich: async (richMessage) => {
             const rawParams = prepared.requestParams();

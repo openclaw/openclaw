@@ -77,22 +77,37 @@ It is not a supervised child and does not send a completion event to the caller;
 do not yield expecting one.
 
 - Supply a nonblank `message` to start the first turn, or omit it to create an idle session.
-- Optional `label`, `agentId`, `cwd`, `group`, `model`, and `permissionMode` configure
+- Optional `label`, `agentId`, `cwd`, `group`, and `model` configure
   the new session. `user` selects the verified requester when needed, as described
-  above. `agentId` defaults to the requesting agent; omitted settings use destination
-  defaults. `group` selects a sidebar category, not execution parentage. The tool
+  above. `agentId` defaults to the requesting agent; model selection follows a
+  visible `sessions_spawn`. `group` selects a sidebar category, not execution parentage. The tool
   does not accept creator identity, role, key, parent, fork, spawn, or adoption fields.
 - The result identifies the new `sessionKey` and `sessionId`. `runStarted` reports
   whether the first turn started; `runId` is present when available. If creation
   succeeds but startup fails, `runError` reports the failure and the session remains
   available. Inspect that session before retrying creation.
 
-The `sessions_create` definition stays in the session's tool catalog across turns;
-execution requires live admitted `operator.sessions.write` authority. The existing
-`sessions` management tool does not create sessions, and senderless runs do not
-gain creation authority. The default sandbox surface for an
-admitted non-owner with session-write authority includes creation and renaming.
-Tool policy and execution-time authority checks still apply.
+`sessions_create` has the same authority as `sessions_spawn` with `visible: true`.
+Any turn that can start a visible spawn can create a session, including a channel
+turn from a sender without a linked operator profile. The new session records the
+requesting session as its parent. It inherits that turn's sandbox requirement, tool
+policy, and permission mode, so it is never less contained than the turn that
+created it. Agent targets, spawn depth, and child limits follow the same
+`subagents` admission rules. Unlike a visible spawn, the session is not registered
+as a supervised run.
+
+For an admitted, authenticated channel sender whose account and sender ID have no
+linked profile, `sessions_create` ignores a supplied `user` and uses the same
+contained creation path as an omitted `user`. It does not select the supplied
+profile, borrow a session owner’s authority, or link the sender to that person.
+Linked turns still validate explicit participants, including revocation. Missing
+source context, known bot input, and later system or delegated turns do not gain
+this fallback. Other session tools retain their existing selection rules.
+
+The `sessions_create` definition stays in the session's tool catalog across turns.
+The existing `sessions` management tool does not create sessions. The default
+sandbox surface for an admitted non-owner with session-write authority includes
+creation and renaming. Tool policy still applies.
 
 Use `sessions_spawn` for actual delegated helpers. Hidden children are the default;
 `visible: true` remains available for deliberately supervised child work the user
@@ -346,7 +361,7 @@ only the exact unconsumed pending input can be re-admitted.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to return after input admission without waiting for a reply.
 - **Wait for reply:** set a timeout and get the response inline.
-- **Message a busy session:** ordinary peer sends and `mode: "followup"` start separately admitted turns with their existing correlated completion. A zero-wait send to the caller's own busy child or an eligible run-scoped target retains the existing active-delivery exception; explicit `mode: "steer"` still requests active input under its existing access checks. An idle recipient starts a new turn. An uncertain acceptance never replays the input. Default self-sends start a new turn; explicit `mode: "steer"` can steer the active self-session.
+- **Message a busy session:** ordinary peer sends and `mode: "followup"` start separately admitted turns with their existing correlated completion. A default send to the caller's own busy child (a subagent or a session it created) steers the child's active run, whatever `timeoutSeconds` is, so new instructions reach the current work instead of starting a second turn after it ends; the result reports `targetDisposition: "steered"` without an inline reply. A zero-wait send to an eligible run-scoped target retains the existing active-delivery exception; explicit `mode: "steer"` still requests active input under its existing access checks. An idle recipient starts a new turn. An uncertain acceptance never replays the input. Default self-sends start a new turn; explicit `mode: "steer"` can steer the active self-session.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
 A new turn for your native child starts only after Gateway admission
@@ -474,7 +489,7 @@ Isolated scheduled jobs can wait for an inline reply, but receive no detached re
 
 Sends to an isolated job's `cron:<jobId>` session address only its latest run; see [What 'fresh session' means for isolated jobs](/automation/cron-jobs/payloads#what-fresh-session-means-for-isolated-jobs).
 
-These reply deliveries apply to newly started turns. Messages accepted by an active turn skip separate reply delivery and leave completion with that turn’s owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+These reply deliveries apply to newly started turns. Messages accepted by an active turn skip separate reply delivery and leave completion with that turn’s owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. The target's next turn adopts queued notifications and other passive notices, such as background exec completions, whether a channel message or a later `sessions_send` starts it. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
 An operator with `operator.sessions.write` can use `mode: "steer"` or `mode: "notify"` for an authorized session they created, including an owned child. Shared visibility and membership do not grant this creator-bound access. Both modes retain the requester's current authority and target-session checks before queueing. Notifications remain in memory and do not start a run.
 

@@ -7,7 +7,14 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import {
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  openAutomation,
+  openAutomationActivity,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "One-shot runtime schedule",
@@ -37,15 +44,17 @@ suite.define(() => {
           },
         });
         const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
           methodResponses: {
             "cron.list": cronList([job], "one-shot-proof"),
+            "cron.get": job,
             "cron.runs": cronRuns([]),
             "cron.status": { enabled: true, jobs: 1, triggersEnabled: true },
             "cron.update": { ...job, name: "Check the fictional build again" },
           },
         });
         await page.goto(suite.server.baseUrl + "cron");
-        await page.locator('[data-test-id="cron-row-one-shot-proof"] .cron-table__name').click();
+        await openAutomation(page, job.id);
         const input = page.locator("#cron-schedule-at");
         await input.waitFor({ state: "visible" });
         expect(await input.inputValue()).toBe("2026-10-30T12:00");
@@ -57,7 +66,7 @@ suite.define(() => {
         writeFileSync(artifacts + "/schedule.png", frame.png);
         const summaryText = await summary.textContent();
         writeFileSync(artifacts + "/observed.txt", summaryText ?? "");
-        expect(summaryText).toContain("Next run at 10/30/2026, 12:10 PM");
+        expect(summaryText).toContain("Next activity at 10/30/2026, 12:10 PM");
         expect(summaryText).not.toContain("Runs once at");
         await page.locator("#cron-name").fill("Check the fictional build again");
         await page.locator('[data-test-id="cron-submit"]').click();
@@ -68,11 +77,11 @@ suite.define(() => {
         expect(requests.at(-1)?.params).not.toHaveProperty("patch.schedule");
         expect(requests.at(-1)?.params).not.toHaveProperty("patch.state");
         await expect.poll(() => input.inputValue()).toBe("2026-10-30T12:00");
-        await page.locator('[data-test-id="cron-back"]').click();
-        await page.locator('[data-test-id="cron-row-one-shot-proof"] .cron-table__name').click();
+        await openAutomationActivity(page);
+        await openAutomation(page, job.id);
         await expect
           .poll(() => summary.textContent())
-          .toContain("Next run at 10/30/2026, 12:10 PM");
+          .toContain("Next activity at 10/30/2026, 12:10 PM");
       },
     );
   });

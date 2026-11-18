@@ -17,7 +17,7 @@ import {
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolvePreparedTtsProvider } from "../../tts/tts-provider-resolution.js";
 import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
-import { resolveTtsPersonaList, resolveTtsSettingsSnapshot } from "../../tts/tts-settings.js";
+import { resolveTtsPersonaList, resolveTtsSettingsSnapshotAsync } from "../../tts/tts-settings.js";
 import {
   isTtsProviderConfiguredAsync,
   listTtsPersonas,
@@ -35,7 +35,7 @@ import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 async function resolveTtsGatewayStatusFacts(cfg: OpenClawConfig) {
-  const settings = resolveTtsSettingsSnapshot({
+  const settings = await resolveTtsSettingsSnapshotAsync({
     cfg,
     preparedTtsPreferences: await prepareTtsPreferences(),
   });

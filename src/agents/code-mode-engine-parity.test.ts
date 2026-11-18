@@ -17,11 +17,42 @@ describe.each(["node", "quickjs"] as const)("%s guest contract across checkpoint
   afterEach(resetCodeModeTestState);
   afterEach(() => vi.restoreAllMocks());
 
+  it("executes division after optional keyword and contextual-name properties", async () => {
+    const h = createCatalogCodeModeHarness([], { codeMode: { executor } });
+    const result = await h.run(
+      `const value = { return: 12, of: 12, yield: 12 };
+       function* divide() { return value?.yield / 2 / 3; }
+       return [value?.return / 2 / 3, value?.of / 2 / 3, divide().next().value];`,
+      "optional-property-division",
+      { awaitResults: true },
+    );
+    expect(result).toMatchObject({ status: "completed", value: [2, 2, 2] });
+  });
+
+  it("preserves optional class and function property contexts", async () => {
+    const h = createCatalogCodeModeHarness([], { codeMode: { executor } });
+    const result = await h.run(
+      `const value = { class: 12, function() { return 12; } };
+       return [value?.class, value?.class, value?.class,
+               value?.function(), value?.function(), value?.function()];`,
+      "optional-property-context",
+      { awaitResults: true },
+    );
+    expect(result).toMatchObject({ status: "completed", value: [12, 12, 12, 12, 12, 12] });
+  });
+
   it("continues immediate required replies without serializing retained guest state", async () => {
     const fixture = jsonTool("fixture_echo", { value: 7 });
     const h = createCatalogCodeModeHarness([fixture], {
       codeMode: { executor, maxSnapshotBytes: 4 * 1024 * 1024 },
     });
+    // First-call middleware discovery is asynchronous; this case needs ready replies.
+    expect(
+      await h.run("return await fixture_echo({});", "required-ready-init", {
+        awaitResults: true,
+      }),
+    ).toMatchObject({ status: "completed" });
+    vi.mocked(fixture.execute).mockClear();
     const run = vi.spyOn(executorRuntime, "runCodeModeExecutor");
     const result = await h.run(
       `const retained = new Uint8Array(8 * 1024 * 1024); retained[0] = 42;

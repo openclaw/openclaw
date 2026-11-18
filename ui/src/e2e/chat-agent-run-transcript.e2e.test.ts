@@ -172,9 +172,7 @@ suite.define(() => {
     await assistant.getByText(text, { exact: true }).waitFor();
     expect(await assistant.getByText(commentary, { exact: true }).count()).toBe(1);
     expect(await assistant.getByText("Draft before reload.", { exact: true }).count()).toBe(0);
-    expect(
-      await page.getByRole("button", { name: "Stop generating", exact: true }).isVisible(),
-    ).toBe(true);
+    expect(await page.getByRole("button", { name: "Stop", exact: true }).isVisible()).toBe(true);
   });
 
   it("collapses nested tool activity after commentary across history reload", async () => {

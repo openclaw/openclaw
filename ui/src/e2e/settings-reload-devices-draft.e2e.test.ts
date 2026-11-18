@@ -22,6 +22,7 @@ suite.define(() =>
     "locks and restores bindings during Reload (read failure: %s)",
     (failFirstRead) =>
       suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
+        await page.clock.install();
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "config.get": snapshot,
@@ -36,16 +37,14 @@ suite.define(() =>
         });
         await page.goto(`${suite.server.baseUrl}settings/devices`);
         const section = page.locator(".settings-section").filter({
-          has: page.getByRole("heading", { name: "Exec node binding", exact: true }),
+          has: page.getByRole("heading", { name: "Device binding", exact: true }),
         });
-        const binding = section.getByRole("combobox", { name: "Node", exact: true });
+        const binding = section.getByRole("combobox", { name: "Device", exact: true });
         const agentBinding = section.getByRole("combobox", { name: "Binding", exact: true });
-        const save = section.getByRole("button", { name: "Save", exact: true });
-        const expectEditor = async (node: string, disabled: boolean, saveDisabled = disabled) => {
+        const expectEditor = async (node: string, disabled: boolean) => {
           await expect.poll(() => binding.isDisabled()).toBe(disabled);
-          expect(
-            await Promise.all([binding.inputValue(), agentBinding.isDisabled(), save.isDisabled()]),
-          ).toEqual([node, disabled, saveDisabled]);
+          expect(await binding.inputValue()).toBe(node);
+          expect(await agentBinding.isDisabled()).toBe(disabled);
         };
         await expect.poll(() => binding.inputValue()).toBe("disk-node");
         await gateway.deferNext("config.set");
@@ -60,6 +59,10 @@ suite.define(() =>
         const startReload = async () => {
           const after = await gateway.deferNext("config.get");
           await reload.click();
+          await page
+            .getByRole("dialog")
+            .getByRole("button", { name: "Discard changes", exact: true })
+            .click();
           await gateway.waitForRequest("config.get", { after });
         };
         await startReload();
@@ -75,22 +78,23 @@ suite.define(() =>
           await expect.poll(() => binding.isDisabled()).toBe(true);
         }
         await gateway.resolveDeferred("config.get", snapshot);
-        await expectEditor("disk-node", false, true);
+        await expectEditor("disk-node", false);
         expect(await reload.count()).toBe(0);
 
         await gateway.deferNext("config.set");
         await binding.selectOption("new-node");
-        const saved = requireRecord(
-          (await gateway.waitForRequest("config.set", { after: 1 })).params,
-        );
+        const savedRequest = await gateway.waitForRequest("config.set", { after: 1 });
+        const saved = requireRecord(savedRequest.params);
         expect(saved.baseHash).toBe("persisted-revision");
         expect(JSON.parse(String(saved.raw))).toEqual({
           ...config,
           tools: { exec: { node: "new-node" } },
         });
         await gateway.resolveDeferred("config.set");
-        await expect.poll(() => indicator.textContent()).toContain("Apply changes");
-        await expectEditor("new-node", false, true);
+        await expect
+          .poll(() => page.clock.runFor(1_000).then(() => indicator.textContent()))
+          .toContain("Apply changes");
+        await expectEditor("new-node", false);
       }),
   ),
 );

@@ -122,7 +122,7 @@ final class WatchRealtimeTransport: @unchecked Sendable {
         try await withTaskCancellationHandler {
             try Task.checkCancellation()
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                self.queue.async {
+                self.queue.async { [self] in
                     do {
                         let data = Data(answer.utf8)
                         try data.withUnsafeBytes { bytes in

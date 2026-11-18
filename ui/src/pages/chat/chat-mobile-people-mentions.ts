@@ -1,3 +1,4 @@
+import { formatUiError } from "../../lib/format-error.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import type {
   HumanMentionAccess,
@@ -58,7 +59,7 @@ export function createChatMobilePeopleMentions(
       }
       page.receipt = page.access?.read(query);
       page.status = "error";
-      page.error = error instanceof Error ? error.message : String(error);
+      page.error = formatUiError(error);
     }
   };
   return {

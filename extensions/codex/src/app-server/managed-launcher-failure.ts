@@ -1,11 +1,11 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { stripVTControlCharacters } from "node:util";
 import { recordCodexAppServerSpawnFailure } from "./spawn-error.js";
+import type { CodexStdioChild } from "./stdio-worker.js";
 import type { CodexAppServerTransport } from "./transport.js";
 
 /** The official npm launcher prints the native spawn error and exits before initialization. */
 export function observeManagedCodexLauncherFailure(
-  child: ChildProcessWithoutNullStreams,
+  child: CodexStdioChild,
   nativeCommand: string,
 ): void {
   let prefix = "";
@@ -26,6 +26,13 @@ export function observeManagedCodexLauncherFailure(
     if (
       /\bError: spawn\b/u.test(prefix) &&
       /syscall: ['"]spawn(?: [^'"\r\n]*)?['"]/u.test(prefix)
+    ) {
+      launchCode = /\bcode: ['"](ENOENT|EACCES|EBADARCH|Unknown system error -86)['"]/u.exec(
+        prefix,
+      )?.[1];
+    } else if (
+      /syscall: ['"]execve['"]/u.test(prefix) &&
+      /^\s+path: (['"])([^\r\n]*)\1,?\r?$/mu.exec(prefix)?.[2] === nativeCommand
     ) {
       launchCode = /\bcode: ['"](ENOENT|EACCES|EBADARCH|Unknown system error -86)['"]/u.exec(
         prefix,
