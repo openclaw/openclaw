@@ -12,9 +12,10 @@ import { beginSqliteConnectionExclusion } from "./sqlite-native-exclusion.js";
 import { runSqliteReadOnlyWorkerSync } from "./sqlite-readonly-worker.js";
 import { readSqliteSchemaCookie } from "./sqlite-schema-contract.js";
 import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
+import type { UpdateDatabaseGenerationObservation } from "./update-database-generations.js";
 
 export type UpdateDoctorMigrationCapture = {
-  expected(pathname: string): string | null | undefined;
+  expected(pathname: string): UpdateDatabaseGenerationObservation | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
   refuse(message: string): void;
@@ -29,10 +30,7 @@ export function runWithUpdateDoctorMigrationCapture<T>(
 }
 
 /** Raw descriptors stay in the child even while our native writer holds exclusion. */
-export function readUpdateDoctorGeneration(pathname: string): {
-  generation: string | null;
-  emptyReaderAlternate?: string;
-} {
+export function readUpdateDoctorGeneration(pathname: string): UpdateDatabaseGenerationObservation {
   const value: unknown = JSON.parse(
     runSqliteReadOnlyWorkerSync(pathname, undefined, "update-generation"),
   );
@@ -42,15 +40,31 @@ export function readUpdateDoctorGeneration(pathname: string): {
   const generation = value.generation;
   const emptyReaderAlternate =
     "emptyReaderAlternate" in value ? value.emptyReaderAlternate : undefined;
+  const rebuiltIndexAlternate =
+    "rebuiltIndexAlternate" in value ? value.rebuiltIndexAlternate : undefined;
+  const isFingerprint = (entry: unknown): entry is string =>
+    typeof entry === "string" && /^[a-f0-9]{64}$/u.test(entry);
   if (
-    (generation !== null &&
-      (typeof generation !== "string" || !/^[a-f0-9]{64}$/u.test(generation))) ||
-    (emptyReaderAlternate !== undefined &&
-      (typeof emptyReaderAlternate !== "string" || !/^[a-f0-9]{64}$/u.test(emptyReaderAlternate)))
+    (generation !== null && !isFingerprint(generation)) ||
+    (emptyReaderAlternate !== undefined && !isFingerprint(emptyReaderAlternate)) ||
+    (rebuiltIndexAlternate !== undefined && !isFingerprint(rebuiltIndexAlternate))
   ) {
     throw new Error("Database generation child returned an invalid observation.");
   }
-  return { generation, ...(emptyReaderAlternate !== undefined ? { emptyReaderAlternate } : {}) };
+  return { generation, emptyReaderAlternate, rebuiltIndexAlternate };
+}
+
+// The rebuilt form is directional: only the previously verified observation
+// can authorize the same WAL commit with a reset index.
+export function matchesUpdateDoctorGeneration(
+  expected: UpdateDatabaseGenerationObservation,
+  observed: UpdateDatabaseGenerationObservation,
+): boolean {
+  return (
+    expected.generation === observed.generation ||
+    expected.generation === observed.emptyReaderAlternate ||
+    expected.rebuiltIndexAlternate === observed.generation
+  );
 }
 
 /** Only a one-shot existing ledger writer opts in. Ordinary Doctor writes remain unknown. */
@@ -76,7 +90,7 @@ export function runUpdateDoctorAttributedStateWrite<T>(
     };
     assertCurrent();
     const expected = capture.expected(pathname);
-    if (typeof expected !== "string" || db.isTransaction) {
+    if (typeof expected?.generation !== "string" || db.isTransaction) {
       throw new Error(
         "Attributed update write requires an existing captured source and settled writer.",
       );
@@ -84,7 +98,7 @@ export function runUpdateDoctorAttributedStateWrite<T>(
     const identity = fs.lstatSync(pathname);
     const before = readUpdateDoctorGeneration(pathname);
     assertCurrent();
-    if (before.generation !== expected && before.emptyReaderAlternate !== expected) {
+    if (!matchesUpdateDoctorGeneration(expected, before)) {
       throw new Error("SQLite receipt source changed after update capture.");
     }
     // Attach WAL coordination in normal mode first, then retain exclusion through
@@ -112,10 +126,7 @@ export function runUpdateDoctorAttributedStateWrite<T>(
     }
     const locked = readUpdateDoctorGeneration(pathname);
     assertCurrent();
-    if (
-      locked.generation !== before.generation &&
-      locked.emptyReaderAlternate !== before.generation
-    ) {
+    if (!matchesUpdateDoctorGeneration(before, locked)) {
       throw new Error("SQLite receipt source changed before native exclusion.");
     }
     const value = operation();
@@ -139,7 +150,7 @@ export function runUpdateDoctorAttributedStateWrite<T>(
     ) {
       throw new Error("Receipt source was replaced during publication.");
     }
-    capture.accept(pathname, expected, after.generation);
+    capture.accept(pathname, expected.generation, after.generation);
     return value;
   } catch (error) {
     capture.refuse("Predecessor stop receipt publication could not be verified.");

@@ -142,6 +142,14 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+After the candidate's Doctor verifies a database, an outside read-only SQLite
+open can rebuild the WAL index over retained frames without writing to the
+database. Doctor can still attribute its predecessor-stop receipt write if the
+database identity, committed content, and last commit checksum match. A new
+commit that restores the same rows still invalidates automatic rollback. This
+repair belongs to the candidate's Doctor; earlier capture and restore checks are
+unchanged.
+
 Channel outages are warnings once the expected Gateway build is running and its
 core readiness is verified. Detailed `/readyz` responses report `coreReady`
 separately while preserving HTTP 503, `ready: false`, and failing channel names.

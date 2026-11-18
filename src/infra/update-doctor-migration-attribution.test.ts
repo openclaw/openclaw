@@ -231,6 +231,9 @@ it
     "last-close",
     "foreign",
     "reverted",
+    "rebuilt",
+    "rebuilt-readmit",
+    "rebuilt-reverted",
     "replacement",
     "authority",
     "missing-key",
@@ -238,7 +241,7 @@ it
     "ambiguous",
     "close",
   ])(
-  "one-shot attribution preserves empty-reader equivalence without blessing %s changes",
+  "one-shot attribution preserves read-only WAL transitions without blessing %s writes",
   async (transition) => {
     const root = directories.make("receipt-attribution-");
     const pathname = path.join(root, "source.sqlite");
@@ -248,8 +251,20 @@ it
         "PRAGMA journal_mode=WAL; CREATE TABLE retained(value); INSERT INTO retained VALUES(7)",
       );
     }
-    const reader = transition === "last-close" ? new DatabaseSync(pathname) : undefined;
-    reader?.prepare("SELECT * FROM retained").all();
+    const lastConnection = transition === "last-close" ? new DatabaseSync(pathname) : undefined;
+    lastConnection?.prepare("SELECT * FROM retained").all();
+    const rebuilt = transition.startsWith("rebuilt");
+    const read = (db: DatabaseSync) => db.prepare("SELECT value FROM retained").all();
+    const retainWal = (sql: string) => {
+      using reader = new DatabaseSync(pathname, { readOnly: true });
+      read(reader);
+      using writer = new DatabaseSync(pathname);
+      writer.exec(sql);
+    };
+    if (rebuilt) {
+      retainWal("INSERT INTO retained VALUES(8)");
+      expect(fs.readFileSync(pathname + "-shm").subarray(8, 12)).not.toEqual(Buffer.alloc(4));
+    }
     const aliasRoot = path.join(root, "alias");
     if (transition === "alias" || transition === "ambiguous") {
       fs.symlinkSync(root, aliasRoot, "dir");
@@ -277,7 +292,22 @@ it
       },
     )!;
     await capture.admit();
-    reader?.close();
+    lastConnection?.close();
+    if (rebuilt) {
+      if (transition === "rebuilt-reverted") {
+        retainWal(
+          "UPDATE retained SET value=99 WHERE value=8; UPDATE retained SET value=8 WHERE value=99",
+        );
+      }
+      {
+        using reader = new DatabaseSync(pathname, { readOnly: true });
+        expect(read(reader)).toEqual([{ value: 7 }, { value: 8 }]);
+      }
+      expect(fs.readFileSync(pathname + "-shm").subarray(8, 12)).toEqual(Buffer.alloc(4));
+      if (transition === "rebuilt-readmit") {
+        await capture.admit();
+      }
+    }
     if (transition === "reader") {
       using db = new DatabaseSync(pathname, { readOnly: true });
       db.prepare("SELECT * FROM retained").all();
@@ -329,6 +359,9 @@ it
     if (transition === "authority") {
       current = false;
     }
+    const attributed = ["reader", "last-close", "alias", "rebuilt", "rebuilt-readmit"].includes(
+      transition,
+    );
     try {
       const write = () =>
         scope.run(() =>
@@ -341,9 +374,12 @@ it
             }),
           ),
         );
-      if (transition === "reader" || transition === "last-close" || transition === "alias") {
+      if (attributed) {
         write();
         expect(operation).toHaveBeenCalledOnce();
+      } else if (transition === "rebuilt-reverted") {
+        expect(write).toThrow("SQLite receipt source changed after update capture.");
+        expect(operation).not.toHaveBeenCalled();
       } else {
         expect(write).toThrow();
         if (transition === "close") {
@@ -364,9 +400,7 @@ it
     expect(capture.receipt?.fromGenerations).toEqual(
       transition === "missing-key" ? {} : generations,
     );
-    expect(capture.receipt?.unchanged).toBe(
-      transition === "reader" || transition === "last-close" || transition === "alias",
-    );
+    expect(capture.receipt?.unchanged).toBe(attributed);
     if (transition === "reader") {
       expect(peerWrite().status).toBe(0);
     }
@@ -412,7 +446,7 @@ it.skipIf(process.platform === "win32")(
       let checks = 0;
       const accept = vi.fn();
       const capture = {
-        expected: () => expected,
+        expected: () => ({ generation: expected }),
         assertCurrent() {
           // The generation observation has completed; keep the reader live until exclusion starts.
           if (++checks === 2) {

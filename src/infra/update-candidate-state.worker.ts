@@ -36,7 +36,7 @@ async function snapshotCandidateState(): Promise<unknown> {
     | (Parameters<
         typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
       >[0] & { mode: "database-restore-preparation" })
-    | { mode: "database-generations"; paths: string[] };
+    | { mode: "database-generations"; paths: string[]; includeAlternates?: boolean };
   if ("stateDir" in input) {
     // Older installed drivers omit this from their restricted environment payload.
     // Metadata discovery must use the same installation as the inspected databases.
@@ -57,9 +57,13 @@ async function snapshotCandidateState(): Promise<unknown> {
       return prepareUpdateDatabaseRestoreSourceInProcess(input);
     }
     case "database-generations": {
-      const { readUpdatePhysicalDatabaseGenerations } =
-        await import("./update-physical-database-generations.js");
-      return readUpdatePhysicalDatabaseGenerations(input.paths);
+      const {
+        readUpdatePhysicalDatabaseGenerationObservations,
+        readUpdatePhysicalDatabaseGenerations,
+      } = await import("./update-physical-database-generations.js");
+      return input.includeAlternates
+        ? readUpdatePhysicalDatabaseGenerationObservations(input.paths)
+        : readUpdatePhysicalDatabaseGenerations(input.paths);
     }
     case "inventory": {
       const { databases, ...inventory } = await readUpdateCandidateStateInventoryInProcess({

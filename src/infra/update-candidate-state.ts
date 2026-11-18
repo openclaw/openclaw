@@ -3,7 +3,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
-import { resolveStateDir } from "../config/paths.js";
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
 import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
@@ -13,10 +12,6 @@ import {
   resolveOpenClawRegisteredAgentDatabasePath,
   resolveOpenClawStateDirForDatabasePath,
 } from "../state/openclaw-state-db.paths.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  maintenanceOwnerHasSourceCustody,
-} from "../state/openclaw-state-maintenance-context.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -61,11 +56,13 @@ import {
 import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
 import {
   readUpdateStateDatabaseSizes,
-  readUpdateStateDatabaseSizesInProcess,
   updateStateDatabaseExists,
 } from "./update-candidate-state.sizes.js";
-import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
-import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
+
+export {
+  readUpdateDatabaseGenerationObservationsIsolated,
+  readUpdateDatabaseGenerationsIsolated,
+} from "./update-candidate-state.generations.js";
 
 const UpdateStateSchemaVersionsSchema = z.array(
   z.object({
@@ -489,62 +486,6 @@ async function discoverLegacyUpdateStateSchemaInspection(
     };
     return { files: [...files], sharedVersion };
   });
-}
-
-/** Raw fingerprint reads need their own process so descriptor closes cannot release caller locks. */
-export async function readUpdateDatabaseGenerationsIsolated(
-  paths: readonly string[],
-  options: {
-    env?: NodeJS.ProcessEnv;
-    root?: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-    acquisition?: UpdateRecoveryCaptureAcquisition;
-    retryAdvice?: boolean;
-  } = {},
-): Promise<UpdateDatabaseGenerations> {
-  const scope = getOpenClawDatabaseMaintenanceScope();
-  const maintenanceOwner =
-    options.acquisition?.mode === "maintenance-owner" &&
-    paths.every((pathname) => maintenanceOwnerHasSourceCustody(scope, pathname));
-  const { root, timeoutMs, env: sourceEnv = process.env, signal: caller } = options;
-  const controller = new AbortController();
-  const signal = caller ? AbortSignal.any([caller, controller.signal]) : controller.signal;
-  const stagingRoot = await createSqliteSnapshotStagingDirectory(
-    resolvePrivateSqliteSnapshotStagingRoot(sourceEnv),
-    root !== undefined,
-    signal,
-  );
-  const inspection = withStateInspectionCleanup(stagingRoot, async () => {
-    const worker = { nodeRunner: process.execPath, sourceEnv, stagingRoot, timeoutMs, signal };
-    const generations = parseUpdateStateInspectionWorker(
-      await runUpdateStateInspectionWorker({
-        ...worker,
-        root,
-        retryAdvice: options.retryAdvice,
-        sources: paths,
-        ...(maintenanceOwner ? { ioBudget: "deadline" as const } : {}),
-        input: {
-          mode: "database-generations",
-          paths,
-          stateDir: resolveStateDir(sourceEnv),
-          config: {},
-        },
-        databases: maintenanceOwner
-          ? await readUpdateStateDatabaseSizesInProcess(paths, signal)
-          : await readUpdateStateDatabaseSizes(paths, worker),
-      }),
-      z.record(z.string(), z.nullable(z.string().regex(/^[a-f0-9]{64}$/u))),
-    );
-    if (
-      Object.keys(generations).length !== new Set(paths).size ||
-      paths.some((pathname) => !Object.hasOwn(generations, pathname))
-    ) {
-      throw new Error("Database generation worker did not return the supplied inventory.");
-    }
-    return generations;
-  });
-  return retainSnapshotWork(inspection, () => controller.abort());
 }
 
 /** Schema fencing reads private copies in candidate workers under size-aware deadlines. */

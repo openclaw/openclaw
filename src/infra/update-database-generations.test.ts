@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as fileGeneration from "./sqlite-file-generation.js";
 import {
   createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
@@ -13,6 +14,33 @@ import { readUpdateDatabaseGenerations } from "./update-database-generations.js"
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("reads the same retained WAL frames when a native reader rebuilds the index mid-observation", () => {
+  const file = path.join(dirs.make("update-generation-rebuild-"), "state.sqlite");
+  const writer = new DatabaseSync(file);
+  writer.exec(
+    "PRAGMA journal_mode=WAL; CREATE TABLE receipt(value); INSERT INTO receipt VALUES (7)",
+  );
+  const reader = new DatabaseSync(file, { readOnly: true });
+  reader.prepare("SELECT value FROM receipt").all();
+  writer.close();
+  reader.close();
+
+  const live = readUpdateDatabaseGenerations([file]);
+  expect(fs.readFileSync(file + "-shm").subarray(8, 12)).not.toEqual(Buffer.alloc(4));
+  const stable = fileGeneration.readStableSqliteFileGeneration;
+  vi.spyOn(fileGeneration, "readStableSqliteFileGeneration").mockImplementationOnce((...args) => {
+    const generation = stable(...args);
+    using rebuilt = new DatabaseSync(file, { readOnly: true });
+    expect(rebuilt.prepare("SELECT value FROM receipt").all()).toEqual([{ value: 7 }]);
+    expect(fs.readFileSync(file + "-shm").subarray(8, 12)).toEqual(Buffer.alloc(4));
+    return generation;
+  });
+
+  const rebuilt = readUpdateDatabaseGenerations([file]);
+  expect(rebuilt).not.toEqual(live);
+  expect(readUpdateDatabaseGenerations([file])).toEqual(rebuilt);
+});
 
 it("preserves update custody when database timestamps drift during hashing", () => {
   const file = path.join(dirs.make("update-generation-drift-"), "state.sqlite");

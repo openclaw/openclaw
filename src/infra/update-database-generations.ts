@@ -14,6 +14,11 @@ import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 
 export type UpdateDatabaseGenerations = Record<string, string | null>;
+export type UpdateDatabaseGenerationObservation = {
+  generation: string | null;
+  emptyReaderAlternate?: string;
+  rebuiltIndexAlternate?: string;
+};
 export type UpdateDatabaseWriteReceipt = {
   unchanged: boolean;
   fromGenerations?: UpdateDatabaseGenerations;
@@ -76,13 +81,27 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
+function sameWalIndexPublication(before: Buffer | null, after: Buffer | null) {
+  if (!before || !after) {
+    return before === after;
+  }
+  // Reopening a retained WAL can rebuild its index with iChange reset to zero.
+  // Frame count, commit checksum, and WAL salts still bind the same publication.
+  return (
+    before.equals(after) ||
+    (after.readUInt32LE(8) === 0 &&
+      after.readUInt32LE(16) !== 0 &&
+      before.subarray(0, 8).equals(after.subarray(0, 8)) &&
+      before.subarray(12, 40).equals(after.subarray(12, 40)))
+  );
+}
+
 /** Run only in an isolated process, after all source handles drain, or under a
  * schema-maintenance owner before live reads are admitted: raw close
  * can release this process's SQLite locks. Inspect only the supplied inventory. */
-export function readUpdateDatabaseGenerationObservation(pathname: string): {
-  generation: string | null;
-  emptyReaderAlternate?: string;
-} {
+export function readUpdateDatabaseGenerationObservation(
+  pathname: string,
+): UpdateDatabaseGenerationObservation {
   const entry = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!entry) {
     if (
@@ -105,7 +124,7 @@ export function readUpdateDatabaseGenerationObservation(pathname: string): {
   const after = readWalIndexHeader(pathname);
   if (
     !sameSqliteFileGeneration(generation, current) ||
-    (before === null ? after !== null : !after?.equals(before)) ||
+    !sameWalIndexPublication(before, after) ||
     (generation.wal && generation.wal.size > 0n && after?.[12] !== 1)
   ) {
     throw new Error(`SQLite WAL commit publication could not be verified: ${pathname}`);
@@ -128,6 +147,12 @@ export function readUpdateDatabaseGenerationObservation(pathname: string): {
     (after === null || (change === "00000000" && checksum === "0000000000000000"));
   return {
     generation: fingerprint(change, checksum),
+    ...(after !== null &&
+    after.readUInt32LE(16) !== 0 &&
+    (generation.wal?.size ?? 0n) > 0n &&
+    change !== "00000000"
+      ? { rebuiltIndexAlternate: fingerprint("00000000", checksum) }
+      : {}),
     ...(emptyReader
       ? {
           emptyReaderAlternate:

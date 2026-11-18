@@ -14,7 +14,6 @@ import {
   readUpdateDatabaseGenerationObservation,
   readUpdateDatabaseGenerations,
 } from "../infra/update-database-generations.js";
-import * as attribution from "../infra/update-doctor-migration-attribution.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
@@ -35,15 +34,19 @@ import * as nocow from "./doctor-sqlite-nocow.js";
 const settlement = await import("./doctor-maintenance.settlement.test-support.js");
 const { begin, boundary, cleanupBarrier, root, tempDirs } = settlement;
 
+function mockGenerationReads() {
+  vi.spyOn(updateState, "readUpdateDatabaseGenerationObservationsIsolated").mockImplementation(
+    async (paths) =>
+      Object.fromEntries(
+        paths.map((pathname) => [pathname, readUpdateDatabaseGenerationObservation(pathname)]),
+      ),
+  );
+}
+
 it("refuses rollback attribution for writes preceding Doctor admission", async () => {
   // This settlement unit harness forbids native processes; the real isolated
   // observation boundary is exercised by update-doctor-migration-attribution.test.
-  vi.spyOn(attribution, "readUpdateDoctorGeneration").mockImplementation(
-    readUpdateDatabaseGenerationObservation,
-  );
-  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
-    readUpdateDatabaseGenerations(paths),
-  );
+  mockGenerationReads();
   const pathname = path.join(settlement.tempDirs.make("doctor-write-receipt-"), "agent.sqlite");
   const missing = `${pathname}.missing`;
   const seed = new DatabaseSync(pathname);
@@ -79,12 +82,7 @@ it("refuses rollback attribution for writes preceding Doctor admission", async (
 });
 
 it("refuses automatic restore after a NOCOW physical replacement during Doctor maintenance", async () => {
-  vi.spyOn(attribution, "readUpdateDoctorGeneration").mockImplementation(
-    readUpdateDatabaseGenerationObservation,
-  );
-  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
-    readUpdateDatabaseGenerations(paths),
-  );
+  mockGenerationReads();
   const pathname = path.join(settlement.tempDirs.make("doctor-nocow-receipt-"), "agent.sqlite");
   const seed = new DatabaseSync(pathname);
   seed.exec("CREATE TABLE evidence(value INTEGER); INSERT INTO evidence VALUES (1)");
@@ -120,9 +118,7 @@ it("refuses automatic restore after a NOCOW physical replacement during Doctor m
 });
 
 it("keeps fingerprint failures advisory and publishes no database write proof", async () => {
-  vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async (paths) =>
-    readUpdateDatabaseGenerations(paths),
-  );
+  mockGenerationReads();
   const pathname = path.join(settlement.tempDirs.make("doctor-write-proof-unavailable-"), "db");
   fs.mkdirSync(pathname);
   const maintenance = await beginDoctorMaintenance({
@@ -149,13 +145,15 @@ it.each([
     const barrier = cleanupBarrier();
     const databaseGenerations = { "/synthetic/doctor-state/state/openclaw.sqlite": null };
     let reads = 0;
-    vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(async () => {
-      reads++;
-      if (reads === (phase === "admission" ? 1 : 2)) {
-        barrier.retain();
-      }
-      return databaseGenerations;
-    });
+    vi.spyOn(updateState, "readUpdateDatabaseGenerationObservationsIsolated").mockImplementation(
+      async () => {
+        reads++;
+        if (reads === (phase === "admission" ? 1 : 2)) {
+          barrier.retain();
+        }
+        return { "/synthetic/doctor-state/state/openclaw.sqlite": { generation: null } };
+      },
+    );
     let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
     const work = (async () => {
       maintenance = await beginDoctorMaintenance({

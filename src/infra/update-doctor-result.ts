@@ -16,6 +16,7 @@ import {
   type ResolvePreferredOpenClawTmpDirOptions,
 } from "./tmp-openclaw-dir.js";
 import type {
+  UpdateDatabaseGenerationObservation,
   UpdateDatabaseGenerations,
   UpdateDatabaseWriteReceipt,
 } from "./update-database-generations.js";
@@ -29,7 +30,7 @@ import type {
 } from "./update-doctor-config.js";
 import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
 import {
-  readUpdateDoctorGeneration,
+  matchesUpdateDoctorGeneration,
   runWithUpdateDoctorMigrationCapture,
   type UpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
@@ -200,7 +201,10 @@ export function createUpdateDoctorDatabaseWriteCapture(
   if (!input) {
     return undefined;
   }
-  let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
+  let expectedGenerations: Record<string, UpdateDatabaseGenerationObservation> | undefined =
+    Object.fromEntries(
+      Object.entries(input).map(([pathname, generation]) => [pathname, { generation }]),
+    );
   const fromGenerations = { ...input };
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
@@ -208,10 +212,11 @@ export function createUpdateDoctorDatabaseWriteCapture(
     if (!expectedGenerations) {
       return undefined;
     }
-    let generations: UpdateDatabaseGenerations;
+    let observations: Record<string, UpdateDatabaseGenerationObservation>;
     try {
-      const { readUpdateDatabaseGenerationsIsolated } = await import("./update-candidate-state.js");
-      generations = await readUpdateDatabaseGenerationsIsolated(
+      const { readUpdateDatabaseGenerationObservationsIsolated } =
+        await import("./update-candidate-state.js");
+      observations = await readUpdateDatabaseGenerationObservationsIsolated(
         Object.keys(expectedGenerations),
         options,
       );
@@ -228,7 +233,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
       return undefined;
     }
     options.assertCurrent?.();
-    return generations;
+    return observations;
   };
   const key = (pathname: string) => {
     const canonical = realpathSync.native(pathname);
@@ -253,25 +258,35 @@ export function createUpdateDoctorDatabaseWriteCapture(
     accept(pathname, before, after) {
       authority.assertCurrent();
       const originalKey = key(pathname);
-      if (!unchanged || !expectedGenerations || expectedGenerations[originalKey] !== before) {
+      if (
+        !unchanged ||
+        !expectedGenerations ||
+        expectedGenerations[originalKey]?.generation !== before
+      ) {
         throw new Error("Receipt no longer matches the original Doctor capture.");
       }
-      expectedGenerations[originalKey] = after;
+      expectedGenerations[originalKey] = { generation: after };
     },
     refuse(message) {
       unchanged = false;
       options.warn(message);
     },
   };
-  const matches = (generations: UpdateDatabaseGenerations) =>
-    Object.entries(expectedGenerations ?? {}).every(([pathname, generation]) => {
-      if (generations[pathname] === generation) {
-        return true;
+  const verify = (observations: Record<string, UpdateDatabaseGenerationObservation>) => {
+    if (!expectedGenerations || !unchanged) {
+      return;
+    }
+    for (const [pathname, expected] of Object.entries(expectedGenerations)) {
+      const observed = observations[pathname];
+      if (!observed || !matchesUpdateDoctorGeneration(expected, observed)) {
+        unchanged = false;
+        return;
       }
-      const observed = readUpdateDoctorGeneration(pathname);
-      authority.assertCurrent();
-      return observed.generation === generation || observed.emptyReaderAlternate === generation;
-    });
+    }
+    // Bind only verified observations. This carries the known rebuilt form into
+    // subsequent admissions without changing the original rollback baseline.
+    expectedGenerations = observations;
+  };
   return {
     get receipt() {
       return receipt;
@@ -281,19 +296,22 @@ export function createUpdateDoctorDatabaseWriteCapture(
     },
     async admit() {
       receipt = undefined;
-      const generations = await read();
-      if (generations && expectedGenerations) {
+      const observations = await read();
+      if (observations) {
         // Earlier receipts or another process's writes must never become our baseline.
-        unchanged &&= matches(generations);
+        verify(observations);
       }
       // Drift prevents automatic restoration, not forward repair under maintenance custody.
     },
     async settle() {
-      const generations = await read();
-      if (generations && expectedGenerations) {
+      const observations = await read();
+      if (observations) {
         // Maintenance excludes Gateway writers, not independent SQLite writers.
         // Without transaction attribution, even Doctor-time changes are unknown.
-        unchanged &&= matches(generations);
+        verify(observations);
+        const generations = Object.fromEntries(
+          Object.entries(observations).map(([pathname, { generation }]) => [pathname, generation]),
+        );
         receipt = { unchanged, fromGenerations, generations };
       }
     },

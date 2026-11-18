@@ -14,7 +14,10 @@ import {
   resetAutoMigrateLegacyStateDirForTest,
 } from "../infra/state-migrations.state-dir.js";
 import * as updateState from "../infra/update-candidate-state.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import {
+  readUpdateDatabaseGenerationObservation,
+  readUpdateDatabaseGenerations,
+} from "../infra/update-database-generations.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -163,8 +166,16 @@ describe("Doctor maintenance with shared-state workers", () => {
                 ? readUpdateDatabaseGenerations([databasePath])
                 : undefined;
               if (databaseGenerations) {
-                vi.spyOn(updateState, "readUpdateDatabaseGenerationsIsolated").mockImplementation(
-                  async (paths) => readUpdateDatabaseGenerations(paths),
+                vi.spyOn(
+                  updateState,
+                  "readUpdateDatabaseGenerationObservationsIsolated",
+                ).mockImplementation(async (paths) =>
+                  Object.fromEntries(
+                    paths.map((pathname) => [
+                      pathname,
+                      readUpdateDatabaseGenerationObservation(pathname),
+                    ]),
+                  ),
                 );
               }
               const log = vi.fn();
