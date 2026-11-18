@@ -41,7 +41,7 @@ export const splitTrailingDirective = (
 
   // Keep a possible final-reply MEDIA directive out of partial streaming
   // payloads. The final message parser still owns legacy MEDIA delivery.
-  const mediaLineStart = text.lastIndexOf("\n") + 1;
+  const mediaLineStart = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1;
   const lastLine = text.slice(mediaLineStart);
   if (/^\s*MEDIA:/i.test(lastLine) || /^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i.test(lastLine)) {
     bufferStart = Math.min(bufferStart, mediaLineStart);
@@ -160,7 +160,14 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
       audioAsVoice: parsed?.audioAsVoice ?? false,
     };
 
-    if (!hasReplyPayloadContent(combinedResult) && !combinedResult.audioAsVoice) {
+    // Whitespace after streamed text is content (line breaks, word gaps); dropping it
+    // corrupts every append-only consumer of these chunks.
+    const streamedWhitespace = hasReturnedText && text.length > 0;
+    if (
+      !streamedWhitespace &&
+      !hasReplyPayloadContent(combinedResult) &&
+      !combinedResult.audioAsVoice
+    ) {
       return null;
     }
 

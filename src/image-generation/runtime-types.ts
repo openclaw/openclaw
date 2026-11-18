@@ -1,8 +1,8 @@
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
+import type { ImageGenerationRequest } from "./provider-types.js";
 import type {
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
-  ImageGenerationRequest,
   ImageGenerationResolution,
   ImageGenerationResult,
 } from "./types.js";

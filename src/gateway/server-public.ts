@@ -68,8 +68,12 @@ export type GatewayServerOptions = {
   hostLifecycle?: GatewayHostLifecycle;
   /** Internal startup ownership; direct callers own their awaited startup work. */
   startupOperation?: GatewayStartupOperation;
+  /** Host decision after startup fails; only process-exiting rollback may retain cleanup. */
+  exitAfterStartupFailure?: (error: unknown) => boolean;
   /** Exact lifecycle generation projected to connected clients. */
   bootId?: string;
+  /** Pending crash lifetimes by physical agent owner, retained until recovery runs. */
+  restartResumeWindows?: import("../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindows;
   /**
    * Bind address policy for the Gateway WebSocket/HTTP server.
    * - loopback: 127.0.0.1

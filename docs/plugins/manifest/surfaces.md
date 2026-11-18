@@ -111,6 +111,47 @@ rebuildable artifact. This applies only to cleanup failures after import succeed
 Read, import, and verification failures still refuse the migration. Every plan
 consuming a shared source must opt in before its cleanup failures become advisory.
 
+### Explicit recovery CLI subtrees
+
+A plugin may declare optional recovery command paths in its separate Doctor
+contract, beneath a root already declared in `cliCommands`:
+
+```json
+{
+  "doctorContract": {
+    "recoveryCli": [["matrix", "doctor"]]
+  }
+}
+```
+
+Each path is nonempty and contains plain command names (letters, digits,
+underscores, or hyphens, starting with a letter or digit). Whitespace, flags,
+wildcards, and filesystem or evaluation syntax are rejected. Duplicate paths
+are coalesced. Omitting the declaration or using an empty array exposes no
+recovery CLI.
+
+Export one `registerRecoveryCli` function from `doctor-contract-api`, typed as
+`PluginDoctorRecoveryCliRegistrar` from
+`openclaw/plugin-sdk/runtime-doctor-migrations`. The host calls it once per
+declared subtree with `program` already mounted at that exact path, `parentPath`,
+selected `config`, `env`, `stateDir`, and
+`context.openPluginStateKeyedStore`. The store adapter is bound to this plugin;
+the registrar receives no full plugin API or Gateway runtime. Add child commands
+to `program`; do not create the declared path again.
+
+The existing CLI owner selects this surface only when a structured pending-state
+migration refusal withheld the selected enabled plugin's normal entrypoints.
+Disabled, denied, quarantined, missing, and otherwise failed plugins do not gain
+this route. An admitted normal root takes precedence. Doctor's existing artifact
+preparation retains source provenance and command callback lifetime.
+
+Discovery and registration must only install command metadata and handlers;
+they must not invoke a detector, migrate state, open a store, recover a snapshot,
+or start a client. Perform explicit recovery only inside its command action,
+with plugin-owned account selection, consent, locking and validation. Reuse that
+operation from the ordinary CLI. This export is separate from `stateMigrations`:
+Doctor repair flags and update repair never authorize it.
+
 The Codex plugin sets `doctorHealthChecks: true` when its public API exports
 health-check registration. Doctor checks the selected plugin's trust before
 loading this surface. Older installed versions without the declaration skip
@@ -184,7 +225,7 @@ plugin after changing its artwork.
 Declare portable themes in `openclaw.plugin.json` to make them available in
 Settings → Appearance and the agent's [theme tool](/tools/theme). The same
 catalog serves both surfaces. Theme discovery reads static JSON and does not
-execute plugin code or require the Custom plugin UI Labs setting.
+execute plugin code or depend on the advanced native UI opt-out.
 
 ```json
 {
@@ -390,7 +431,13 @@ Each entry is a closed object with exactly these fields:
 | `disposition`    | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
 | `scope`          | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
 | `relativePath`   | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| `profile`        | No       | `"local-companion"`          | Apply a regenerable exclusion only to local-companion checkpoints.                     |
 | `databaseFamily` | No       | `"state"`                    | Associate an included state-scoped resource with the shared-state database family.     |
+
+`profile: "local-companion"` is optional and valid only for `regenerable`
+resources. It limits that exclusion to `backup create --local-companion`; full
+archives still include the resource. Without `profile`, the declaration applies
+to both archive modes. Durable `include` resources cannot be profile-limited.
 
 `databaseFamily` requires `disposition: "include"` and `scope: "state"`.
 Port, backup, update capture, and Doctor discover database files within that
@@ -484,28 +531,47 @@ revision even when browser code is unchanged.
 ## controlUi reference
 
 `controlUi` declares a trusted native browser entry and optional stylesheets for
-the Control UI. Paths are relative to the plugin root and must name compiled
+the Control UI. Paths are relative to the plugin root. Entries and stylesheets must name compiled
 JavaScript and CSS. Assets follow the Gateway's authentication policy, are
 captured as immutable revisions, and refresh only through the explicit UI reload
 flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
 assets and reload hardlinked manifests under the shared plugin-file policy.
 Mutable external plugin roots and CLI packing still reject hardlinks.
 
-User-installed native UI requires **Settings → Labs → Custom plugin UI**
-(`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
-from enabled bundled plugins remains available. See
+Native UI is available by default for enabled plugins. The existing
+`gateway.controlUi.experimental.customPlugins: false` remains an advanced
+opt-out for user-installed native UI; enabled bundled views are unaffected. See
 [Enable custom plugin UI](/plugins/feature-plugins#enable-custom-plugin-ui) for
-restart and browser reload requirements. This gate does not disable the
-plugin's backend APIs or the sandboxed dashboard bindings below.
+upgrade behavior and browser reload requirements. This opt-out does not disable
+the plugin’s backend APIs or the sandboxed dashboard bindings below.
 
 ```json
 {
   "controlUi": {
     "entry": "dist/control-ui/<content-hash>/index.js",
-    "styles": ["dist/control-ui/<content-hash>/index.css"]
+    "styles": ["dist/control-ui/<content-hash>/index.css"],
+    "panelIcon": "assets/panel-icon.svg"
   }
 }
 ```
+
+`controlUi.panelIcon` optionally names a plugin-relative SVG file for every side-chat
+panel registered with `host.ui.registerPanel`. It appears in the new-side-chat picker,
+panel list, and panel tabs on desktop and mobile. This is separate from the plugin
+branding icon: use simple monochrome artwork with a `viewBox`, designed to remain
+clear at 16 px. Arbitrary SVG shapes are supported; no host icon-name enum is required.
+The host renders the SVG as an image mask in the surrounding UI’s `currentColor`,
+not as inline markup.
+
+Paths must stay inside the plugin package, use `/` separators, and end in `.svg`;
+URLs, absolute paths, and `..` segments are rejected. Ship the file with your package.
+Icons are limited to 16 KiB and must be self-contained, without scripts, embedded
+documents, or external references. Missing, unreadable, symlinked, oversized, or
+invalid artwork falls back to the panel's registered `icon` name, or the generic
+`plug` icon when that name is omitted or unknown, without disabling the panel.
+Manifest artwork takes precedence over the optional per-panel registry name.
+Icon bytes are captured with the browser revision; rebuild and reload the plugin UI
+after changing the declaration or artwork.
 
 Use `package.json.openclaw.controlUi` for the source entry and let
 `openclaw plugins build` generate this declaration. Native UI executes with the

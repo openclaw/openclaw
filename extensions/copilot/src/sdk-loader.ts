@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type * as Sdk from "@github/copilot-sdk";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import copilotPluginPackage from "../package.json" with { type: "json" };
@@ -100,10 +101,15 @@ async function importInstalledSdk(selectedEntry: string): Promise<LoadedCopilotS
       installedImports.delete(entryPath);
       throw error;
     })) as typeof Sdk;
-    if ((await fingerprintCopilotPackage(packageRoot)) !== fingerprint) {
-      throw new Error(
-        "Copilot SDK changed while loading. Restart OpenClaw before verifying inference.",
-      );
+    try {
+      if ((await fingerprintCopilotPackage(packageRoot)) !== fingerprint) {
+        throw new Error(
+          "Copilot SDK changed while loading. Restart OpenClaw before verifying inference.",
+        );
+      }
+    } catch (error) {
+      materializeErrorStack(error);
+      throw error;
     }
     return { sdk, identity: { entryPath, packageRoot, fingerprint } };
   })();

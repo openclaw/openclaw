@@ -166,11 +166,34 @@ suite.define(() => {
     expect(await distanceFromBottom(thread)).toBeLessThanOrEqual(8);
 
     const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
+    const retainedPane = page.locator(
+      ".chat-pane-cache__pane:not(.chat-pane-cache__pane--visible)",
+    );
+    const retainedElement = await retainedPane.elementHandle();
+    expect(await retainedPane.locator("*").count()).toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        retainedPane
+          .locator("*")
+          .evaluateAll((nodes) => nodes.filter((node) => node.checkVisibility()).length),
+      )
+      .toBe(0);
+    // A hidden resize must preserve the mounted transcript and its reader anchor.
+    await page.setViewportSize({ height: 720, width: 1100 });
+    await waitForChatScrollIdle(page);
+    await page.setViewportSize({ height: 720, width: 1280 });
+    await waitForChatScrollIdle(page);
     const finishReadingReturn = await watchNavigationFollowIntent(page, sessionA);
     await sessionLink(sessionA).click();
     await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionA));
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyRequestsBeforeReturn);
+    expect(
+      await page
+        .locator(".chat-pane-cache__pane--active")
+        .evaluate((node, retained) => node === retained, retainedElement),
+    ).toBe(true);
+    await retainedElement?.dispose();
 
     const restoredDistance = await distanceFromBottom(thread);
     const restoredAnchor = await readTopTranscriptAnchor(thread);
@@ -508,12 +531,15 @@ suite.define(() => {
       await expectTextContains(popover, "~190k / 200k · ~95%");
     } else {
       await expect.poll(() => popover.isVisible()).toBe(true);
-      for (const text of ["46k / 200k · 23%", "757.3k", "42.3k", "Cost", "$0.023"]) {
+      for (const text of ["46k / 200k · 23%", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
       }
-      const costBreakdown = await popover
-        .locator(".context-usage__stats > div[title]")
-        .getAttribute("title");
+      // The run's token counts live in its row label tooltip; the cost cell explains its parts.
+      const run = popover.locator('[data-chat-usage-row="run"]');
+      expect(await run.locator('[role="rowheader"]').getAttribute("title")).toBe(
+        "In 757.3k · Out 42.3k",
+      );
+      const costBreakdown = await run.locator('[role="cell"][title]').getAttribute("title");
       for (const amount of ["$0.0035", "$0.018", "$0.0015", "$0.0005"]) {
         expect(costBreakdown).toContain(amount);
       }
@@ -541,7 +567,7 @@ suite.define(() => {
       .poll(() => composer.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
-    await page.getByRole("button", { name: "Command palette" }).click();
+    await page.getByRole("button", { name: "Search", exact: true }).click();
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
     await expect
@@ -575,8 +601,8 @@ suite.define(() => {
     await composer.fill("");
 
     // The background hydrate must not take the shared sessions loading
-    // flag, which would disable New conversation for the whole request.
-    const newThread = page.getByRole("link", { name: "New conversation" }).first();
+    // flag, which would disable New session for the whole request.
+    const newThread = page.getByRole("link", { name: "New session" }).first();
     expect(await newThread.isEnabled()).toBe(true);
 
     await gateway.resolveDeferred("sessions.list");
@@ -586,7 +612,7 @@ suite.define(() => {
   it("keeps every sidebar session stable while selecting sessions and supports sort modes", async () => {
     const { page } = await newChatPage(suite);
     const createdSessionKeys = Array.from(
-      { length: 11 },
+      { length: 16 },
       (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
     );
     const pinnedSessionKey = "agent:main:session-pinned";
@@ -603,8 +629,10 @@ suite.define(() => {
     ]);
     await page.addInitScript(
       ({ storageKey, entry }) => {
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
         const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
         localStorage.setItem(storageKey, JSON.stringify({ ...settings, railShortcuts: [entry] }));
+        localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
       },
       {
         storageKey: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
@@ -620,14 +648,16 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Pinned rows sit above, and do not occupy, the ten-row Sessions page.
+    // Pinned rows sit above, and do not occupy, the fifteen-row Sessions page.
     const pinnedLink = page.locator(
       `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
-    await page.getByRole("button", { name: "Show more" }).click();
+    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 16));
+    const more = page.getByRole("button", { name: "Show more", exact: true });
+    await more.click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
+    expect(await more.count()).toBe(0);
 
     await page
       .locator(

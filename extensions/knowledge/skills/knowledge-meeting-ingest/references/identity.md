@@ -15,7 +15,7 @@ when Knowledge or the source already says.
    its namespaced alias (`email:<address>`, `github:<login>`, `discord:<user id>`,
    `slack:<user id>`); one key on two pages means a duplicate. Otherwise
    `knowledge_lookup` the full name or known alias. `found` is a candidate:
-   confirm it with `knowledge_record({id, view: "summary"})`.
+   confirm it with `knowledge_record({id, maxChars: 1000})`.
 2. Only on `missing` or `ambiguous`, `knowledge_grep` with the expected `type`
    and a small `limit` (about 5); try spelling variants and synonyms. A hit
    count is not an answer; confirm candidates with a summary read. Read a full
@@ -63,8 +63,8 @@ attention and degrades search.
 - **Never a page for:** a tool or platform merely used along the way; a garbled
   or unverified proper noun (write it in prose as `Name (unverified spelling)`);
   a low-confidence identification; bots or spam.
-- **Sub-features and small workstreams** (one plugin, one PR) go into the parent
-  project's Timeline.
+- **Sub-features and small workstreams** (one plugin, one PR) get a claim or a
+  source note on the parent project, not a page.
 - **Type:** pick the declared ontology type whose definition fits
   (`knowledge_ontology`), preferring a specific one when it exists. In the shipped
   ontology, ongoing initiatives (open-source projects, internal programs,
@@ -77,10 +77,10 @@ attention and degrades search.
 - Inside pages, link with wikilinks to observed paths or titles. These create
   References/Referenced-by navigation only. They are not typed relationships,
   `entities` or `dependencies`.
-- An authored source → entity link gives the entity a derived backlink. That
-  does not author the entity → source link. When both directions are required,
-  write both.
-- Link every identified entity that has a page to the source, and back. Never
+- An authored source → entity link gives the entity a derived backlink. The
+  entity's way back to the source is its source note
+  ([source notes](source-notes.md)), not a page link.
+- Link the source to every identified entity that has a page. Never
   link a garbled name or a low-confidence guess: a wrong link pollutes the graph
   more than a missing one.
 - Never hand-write References/Referenced-by lists. Never guess an ambiguous link

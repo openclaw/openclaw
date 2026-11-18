@@ -101,9 +101,7 @@ extension TalkModeRuntime {
                       realtimeSession == nil
                 else { return }
                 let fallbackConfig = await fetchTalkConfig()
-                if let locale = await MainActor.run(body: { self.state()?.voiceWakeLocaleID }) {
-                    self.commitTalkConfig(fallbackConfig, locale: locale)
-                }
+                await self.applyTalkConfig(fallbackConfig)
                 logger.error(
                     "talk realtime unavailable; using native fallback: " +
                         "\(error.localizedDescription, privacy: .public)")

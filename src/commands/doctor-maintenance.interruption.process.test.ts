@@ -298,7 +298,7 @@ it.skipIf(process.platform === "win32").each(interruptionCases)(
       } else {
         expect(stderr).toContain(
           interruption === "closed stdout"
-            ? "Doctor interrupted;"
+            ? "Doctor interrupted by output pipe closed (EPIPE);"
             : `Doctor interrupted by ${terminationSignal};`,
         );
       }

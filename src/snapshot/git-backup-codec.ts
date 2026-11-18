@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
 import { finished } from "node:stream/promises";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -18,6 +17,7 @@ import {
   quoteSqliteIdentifier as quoteIdentifier,
 } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
+import { decodeUtf8Chunks } from "../infra/utf8-input.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
@@ -500,7 +500,6 @@ async function loadGitBackupTable(
      VALUES (${columns.map(() => "?").join(", ")})`,
   );
   const input = fsSync.createReadStream(inputPath);
-  const lines = createInterface({ input, crlfDelay: Infinity });
   const hash = createHash("sha256");
   input.on("data", (chunk: Buffer) => hash.update(chunk));
   const pending: Array<ReturnType<typeof decodeSqliteValue>[]> = [];
@@ -525,23 +524,39 @@ async function loadGitBackupTable(
     pending.length = 0;
     pendingBytes = 0;
   };
-  try {
-    for await (const line of lines) {
-      if (!line) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      pending.push(columns.map((column) => decodeSqliteValue(parsed[column.name])));
-      pendingBytes += Buffer.byteLength(line);
-      rows += 1;
-      if (pendingBytes >= TABLE_BATCH_BYTES) {
-        flush();
-      }
+  const loadLine = (record: string) => {
+    const line = record.endsWith("\r") ? record.slice(0, -1) : record;
+    if (!line) {
+      return;
     }
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    pending.push(columns.map((column) => decodeSqliteValue(parsed[column.name])));
+    pendingBytes += Buffer.byteLength(line);
+    rows += 1;
+    if (pendingBytes >= TABLE_BATCH_BYTES) {
+      flush();
+    }
+  };
+  try {
+    let remainder = "";
+    // JSONL records end at LF. U+2028/U+2029 are valid JSON string contents.
+    for await (const decoded of decodeUtf8Chunks(input, inputPath)) {
+      remainder += decoded;
+      let start = 0;
+      for (
+        let newline = remainder.indexOf("\n");
+        newline !== -1;
+        newline = remainder.indexOf("\n", start)
+      ) {
+        loadLine(remainder.slice(start, newline));
+        start = newline + 1;
+      }
+      remainder = remainder.slice(start);
+    }
+    loadLine(remainder);
     flush();
     return { rows, sha256: hash.digest("hex") };
   } finally {
-    lines.close();
     input.destroy();
     await finished(input).catch(() => undefined);
   }

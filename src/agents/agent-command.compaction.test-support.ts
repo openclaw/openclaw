@@ -22,6 +22,7 @@ import { defaultRuntime } from "../runtime.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import type { runAgentAttempt } from "./command/attempt-execution.runtime.js";
 import { acceptCompactionSuccessor } from "./embedded-agent-runner/compaction-successor.js";
+import { claimAgentSessionWriter } from "./embedded-agent-runner/run/session-bootstrap.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent.js";
 import type { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelFallbackRunOptions } from "./model-fallback-attempt.js";
@@ -399,12 +400,13 @@ function readCompactionLifecyclePhases(): Array<string | undefined> {
 
 const COMPACTION_ERROR =
   "CLI transcript compaction failed for openai/gpt-5.5: Summarization failed: Connection error.";
-const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined, {}] as const;
+const GATEWAY_INGRESS_ARGS = [defaultRuntime, undefined] as const;
 
 // Vitest rewrites imported references, but not re-export specifiers. Materialize
 // these runtime bindings after its hoisted mocks register, or exports become undefined.
 const compactionTestRuntime = {
   acceptCompactionSuccessor,
+  claimAgentSessionWriter,
   loadSessionEntry,
   patchSessionEntryCore,
   appendTranscriptEvent,

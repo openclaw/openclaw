@@ -351,10 +351,10 @@ export async function runSessionDeferredPatch(
     });
     const error = host.readState().error;
     if (result === null && error) {
-      showToast({ message: error });
+      showToast({ severity: "error", message: error });
     }
   } catch (error) {
-    showToast({ message: formatUiError(error) });
+    showToast({ severity: "error", message: formatUiError(error) });
   } finally {
     releaseSessionPatchPreview(preview);
     options.onDeferredSettled?.();

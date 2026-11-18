@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import type { ChannelOutboundContext } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPollContext } from "../../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -22,7 +26,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
 import * as gatewayCallerContext from "./gateway-caller-context.js";
-import { createMessageTool } from "./message-tool-execution.js";
+import { createMessageTool, createMessageToolAsync } from "./message-tool-execution.js";
 import {
   messageGatewayContext,
   resolvedMessageSecrets,
@@ -48,7 +52,7 @@ const connection = (gatewayUrl: string, gatewayToken: string) => ({ gatewayUrl, 
 const partialError = (error: unknown, messageId: string) =>
   createChannelPartialDeliveryError(error, { messageIds: [messageId], visibleReplySent: true });
 
-it.each([
+it.for([
   ["provider", "send", "direct", "accepted", sent],
   ["target", "send", "direct", "rejected", {}],
   ["action", "set-presence", "direct", "accepted", actionDone],
@@ -69,7 +73,7 @@ it.each([
   ["poll-partial", "poll", "gateway", "partial", partiallyDelivered("poll-partial")],
 ] as const)(
   "settles %s revocation during %s via %s as %s",
-  async (revokeAt, action, deliveryMode, outcome, expected) => {
+  async ([revokeAt, action, deliveryMode, outcome, expected], { signal }) => {
     const accepted = outcome !== "rejected";
     const at = (...stages: string[]) => stages.includes(revokeAt);
     const viaGateway = deliveryMode === "gateway";
@@ -285,7 +289,7 @@ it.each([
           return resolvedMessageSecrets(resolvedConfig);
         },
       );
-      const tool = createMessageTool({
+      const tool = await createMessageToolAsync({
         config,
         ...identity,
         agentSessionKey: sessionKey,
@@ -337,15 +341,13 @@ it.each([
 
       pending = execute(existingGatewayJob ? "existing-job-message" : "accepted-before-revocation");
       void pending.catch(() => undefined);
-      await withTestTimeout(
-        Promise.race([
+      await withinTest(
+        awaitGateBeforeSettlement(
           boundaryEntered.promise,
-          pending.then(() => {
-            throw new Error("Scheduled message action completed before its provider boundary");
-          }),
-        ]),
-        5000,
-        "Scheduled provider boundary not reached",
+          pending,
+          "Scheduled message action completed before its provider boundary",
+        ),
+        signal,
       );
       if (revokeAt === "config") {
         currentConfig = {

@@ -1,12 +1,17 @@
 import { readFile } from "node:fs/promises";
+import { collectDependencyManifestChanges } from "./dependency-manifests.mjs";
 import {
   GitHubDiffDataError,
   GitHubRateLimitError,
+  GitHubReadTimeoutError,
+  GitHubStatusFailurePublishedError,
+  GitHubStatusPublicationError,
   SECURITY_REVIEW_CHECK_INTERVAL_MS,
   createGitHubApi,
   parseApprovalCommands,
   publishGuardStatus,
 } from "./guard-shared.mjs";
+import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 
 const requestMarker = "<!-- openclaw:approval-request ";
@@ -301,7 +306,7 @@ export async function readGuardReview(previousReview) {
   const pullPath = `/repos/${owner}/${repo}/pulls/${number}`;
   let review = null;
   let checkedAt = Date.now();
-  const api = createGitHubApi(GITHUB_TOKEN, {
+  const apiOptions = {
     userAgent: "openclaw-security-review",
     beforeRead: async (path) => {
       if (
@@ -316,7 +321,15 @@ export async function readGuardReview(previousReview) {
       await assertGuardUnchanged(review, { allowFileCountChange: true });
       checkedAt = Date.now();
     },
-  });
+  };
+  const api = createGitHubApi(GITHUB_TOKEN, apiOptions);
+  const membershipApi = process.env.GH_APP_TOKEN
+    ? createGitHubApi(process.env.GH_APP_TOKEN, apiOptions)
+    : {
+        request() {
+          throw new Error("SecOps membership requires the organization Members-read App token.");
+        },
+      };
   const pullRequest = await api.request(pullPath);
   if (previousReview) {
     // Diff counts may settle and merged reviews may finish across recovery.
@@ -362,6 +375,7 @@ export async function readGuardReview(previousReview) {
   let issueNotices;
   review = {
     api,
+    membershipApi,
     owner,
     repo,
     event,
@@ -416,22 +430,48 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
     return null;
   }
   // Invalidate previous approval before any fallible file or authority reads.
-  await publishGuardStatus(guard, "failure", "Security review has not completed");
-  if (review.fileSnapshot) {
-    await assertGuardUnchanged(review);
-  } else {
-    // Both guards must evaluate the same complete file list for this attempt.
-    review.fileSnapshot = readGuardFileSnapshot(review);
-  }
-  const { pullRequest, files } = await review.fileSnapshot;
-  review.pullRequest = pullRequest;
-  guard.pullRequest = pullRequest;
-  guard.files = files;
+  await publishGuardStatus(guard, "pending", "Security review has not completed");
   review.guards?.push(guard);
-  return guard;
+  try {
+    if (review.fileSnapshot) {
+      await assertGuardUnchanged(review);
+    } else {
+      // Both guards must evaluate the same complete file list for this attempt.
+      review.fileSnapshot = readGuardFileSnapshot(review);
+    }
+    const { pullRequest, files } = await review.fileSnapshot;
+    review.pullRequest = pullRequest;
+    guard.pullRequest = pullRequest;
+    guard.files = files;
+    return guard;
+  } catch (error) {
+    if (!prepared) {
+      await failGuard(guard, error, { terminal: true });
+    }
+    throw error;
+  }
 }
 
-async function maintainerRole(guard, user) {
+export async function failGuard(guard, error, { terminal = false } = {}) {
+  if (
+    error instanceof GitHubRateLimitError ||
+    (!terminal && error instanceof GitHubReadTimeoutError) ||
+    error instanceof GitHubStatusFailurePublishedError ||
+    error instanceof GitHubStatusPublicationError ||
+    error instanceof ObsoleteReviewError
+  ) {
+    return;
+  }
+  await publishGuardStatus(guard, "failure", "Security review failed; see workflow details").catch(
+    /** @param {unknown} publicationError */ (publicationError) => {
+      console.error(
+        publicationError instanceof Error ? publicationError.message : String(publicationError),
+      );
+    },
+  );
+}
+
+async function approverRole(guard, user, { author = false } = {}) {
   if (user?.type !== "User" || !user.login) {
     return null;
   }
@@ -441,12 +481,57 @@ async function maintainerRole(guard, user) {
       `/repos/${guard.owner}/${guard.repo}/collaborators/${encodeURIComponent(user.login)}/permission`,
     );
   } catch (error) {
-    if (error?.status === 404) {
-      return null;
+    if (error?.status !== 404) {
+      throw error;
     }
-    throw error;
   }
-  return permission.role_name === "maintain" || permission.role_name === "admin"
+  if (guard.approvalCommand === securityReviewContracts.dependency.approvalCommand) {
+    if (permission?.role_name === "admin") {
+      return "admin";
+    }
+    if (author && permission?.role_name === "maintain") {
+      const { isDependencyFile, isDependencyManifest } = loadSecurityReviewPolicy();
+      // Native merge admission has no workflow analysis; use the same pinned diff.
+      const files = guard.files ?? (await readGuardFileSnapshot(guard)).files;
+      if (
+        !files.some((file) =>
+          [file.filename, file.previous_filename].some(
+            (path) =>
+              typeof path === "string" &&
+              (isDependencyFile(path) ||
+                // Metadata-only manifests can be absent from the protected-field diff.
+                (isDependencyManifest(path) &&
+                  ["added", "removed", "copied"].includes(file.status))),
+          ),
+        )
+      ) {
+        guard.dependencyManifestChanges ??= await collectDependencyManifestChanges(guard.api, {
+          owner: guard.owner,
+          repo: guard.repo,
+          pullRequest: guard.pullRequest,
+          files,
+        });
+        if (
+          guard.dependencyManifestChanges.length > 0 &&
+          guard.dependencyManifestChanges.every((change) => change.releaseVersionOnly)
+        ) {
+          return "maintain";
+        }
+      }
+    }
+    try {
+      const membership = await guard.membershipApi.request(
+        `/orgs/${guard.owner}/teams/openclaw-secops/memberships/${encodeURIComponent(user.login)}`,
+      );
+      return membership.state === "active" ? "openclaw-secops" : null;
+    } catch (error) {
+      if (error?.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+  return permission?.role_name === "maintain" || permission?.role_name === "admin"
     ? permission.role_name
     : null;
 }
@@ -497,7 +582,7 @@ export function withApprovalRequest(guard, body) {
 export async function findMaintainerApproval(guard) {
   const { pullRequest } = guard;
   const sha = pullRequest.head.sha;
-  const authorRole = await maintainerRole(guard, pullRequest.user);
+  const authorRole = await approverRole(guard, pullRequest.user, { author: true });
   if (authorRole) {
     return { kind: "author", login: pullRequest.user.login, role: authorRole, sha };
   }
@@ -516,7 +601,7 @@ export async function findMaintainerApproval(guard) {
     ) {
       continue;
     }
-    const role = await maintainerRole(guard, comment.user);
+    const role = await approverRole(guard, comment.user);
     if (role) {
       return { kind: "comment", login: comment.user.login, role, sha, url: comment.html_url };
     }
@@ -531,8 +616,12 @@ export async function finishGuard(guard, { description, requiresApproval = false
   const allowed = !requiresApproval || approval !== null;
   await publishGuardStatus(
     guard,
-    allowed ? "success" : "failure",
-    allowed ? description : "A maintainer must approve the current PR revision",
+    allowed ? "success" : "pending",
+    allowed
+      ? description
+      : guard.approvalCommand === securityReviewContracts.dependency.approvalCommand
+        ? "An admin or SecOps member must approve the current PR revision"
+        : "A maintainer must approve the current PR revision",
   );
   guard.approval = approval;
   return allowed;

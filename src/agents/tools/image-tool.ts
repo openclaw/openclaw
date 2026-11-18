@@ -11,6 +11,7 @@ import {
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
+import { decodeDataUrl } from "../../media/image-data-url.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -30,7 +31,6 @@ import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageModelConfig,
-  decodeDataUrl,
   type ImageModelConfig,
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
@@ -248,7 +248,6 @@ export function createImageTool(options?: {
   agentId?: string;
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;

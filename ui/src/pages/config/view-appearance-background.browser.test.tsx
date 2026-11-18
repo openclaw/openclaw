@@ -101,6 +101,7 @@ describe("Appearance backgrounds", () => {
         },
       }),
     );
+    expect(mode("faded").getAttribute("aria-pressed")).toBe("true");
     expect(host.textContent).toContain("Both pages are off");
     expect(range().disabled).toBe(false);
     renderBackground(fixture({ preference: { ...DEFAULT_BACKGROUND_PREFERENCE, visibility: 0 } }));

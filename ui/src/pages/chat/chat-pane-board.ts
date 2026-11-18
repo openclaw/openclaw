@@ -1,6 +1,7 @@
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { isNativeMobileHost } from "../../app/native-web-chrome.ts";
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
@@ -20,7 +21,6 @@ import {
 } from "../../lib/board/provider.ts";
 import { updateBoardSessionView } from "../../lib/board/settings.ts";
 import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
@@ -174,12 +174,18 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       }
       // The session capability publishes the acknowledged metadata. Never turn
       // its value into a personal override or rearrange any active viewer.
-      showToast({ message: t("chat.sidePanel.defaultSaved"), anchor: this.element });
+      showToast({
+        severity: "success",
+        message: t("chat.sidePanel.defaultSaved"),
+        anchor: this.element,
+      });
     } catch (error) {
       if (isCurrent()) {
         this.publishHeaderError(error, scope.headerOutcomeOwner);
         showToast({
-          message: t("chat.sidePanel.defaultSaveError", { error: formatUiError(error) }),
+          severity: "error",
+          message: t("chat.sidePanel.defaultSaveError"),
+          detail: error,
           anchor: this.element,
         });
       }
@@ -200,6 +206,19 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     }
     const initialized = this.initializeBrowserSidebarLayout(layout);
     state.updateSidebarLayout(this.fitPaneSidebarLayout(initialized), options);
+    if (options?.automaticResource || options?.retireAutomaticResource) {
+      const mobile = this.mobileHost(state.sidebarLayout);
+      if (options.automaticResource && mobile && !mobile.open) {
+        // Fresh discovery reveals the resource; restoring a saved layout does not.
+        mobile.navigate({ area: "panels", slot: options.automaticResource });
+      } else if (
+        options.retireAutomaticResource &&
+        mobile?.destination.area === "panels" &&
+        !state.sidebarLayout.open
+      ) {
+        mobile.close();
+      }
+    }
   }
 
   private fitPaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
@@ -453,6 +472,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       this.observedBoardPresence.set(sessionKey, board.hasBoard);
       if (
         this.presented &&
+        !isNativeMobileHost() &&
         previous === false &&
         board.hasBoard &&
         board.face === "chat" &&
@@ -676,7 +696,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
   }
 
   protected handleBoardCommand(event: BoardCommandEvent): void {
-    if (!this.presented) {
+    if (!this.presented || isNativeMobileHost()) {
       return;
     }
     const board = this.resolveBoardView();

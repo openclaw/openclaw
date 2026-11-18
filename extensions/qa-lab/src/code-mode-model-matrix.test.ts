@@ -13,6 +13,7 @@ import {
   type CodeModeMatrixCellResult,
   type CodeModeMatrixTask,
 } from "../../../scripts/code-mode-model-matrix.ts";
+import { readMatrixModelAccounting } from "../../../scripts/lib/code-mode-matrix-usage.js";
 import {
   getEffectiveQaEvidenceEntries,
   projectQaEvidenceScenarioOutcomes,
@@ -580,6 +581,11 @@ describe("Code Mode model matrix artifacts", () => {
             ...(outerCalls !== undefined
               ? {
                   gateway: {
+                    modelAccounting: await readMatrixModelAccounting({
+                      file: path.join(params.outputDir, "absent-model-timeline.jsonl"),
+                      joined: false,
+                      foregroundRunIds: [],
+                    }),
                     outerCalls,
                     promptSha256: "prompt123",
                     fixtureSha256: "fixture123",
@@ -610,6 +616,7 @@ describe("Code Mode model matrix artifacts", () => {
                       taskReceipts: "task-receipts.json",
                       interviewReceipts: "interview-receipts.json",
                       log: "gateway.log",
+                      modelTimeline: "absent-model-timeline.jsonl",
                     },
                   },
                 }

@@ -129,15 +129,12 @@ describe("cron scratch worker service", () => {
     const updated = await withoutCallerSql(() => prepareCronAutomationPrompt(params));
     expect(updated.commandBody).toContain("Automation scratch (revision 2):\nupdated scratch");
 
-    // Standalone callers still select the current machine partition themselves.
+    // Standalone callers select the current machine partition through the worker too.
     const { cronStorePath: _, ...standalone } = params;
-    expect((await prepareCronAutomationPrompt(standalone)).commandBody).not.toContain(
-      "Automation scratch",
-    );
+    const prepareStandalone = () => withoutCallerSql(() => prepareCronAutomationPrompt(standalone));
+    expect((await prepareStandalone()).commandBody).not.toContain("Automation scratch");
     await writeConfigMachineStateAsync("cron.store", storePath);
-    expect((await prepareCronAutomationPrompt(standalone)).commandBody).toContain(
-      "updated scratch",
-    );
+    expect((await prepareStandalone()).commandBody).toContain("updated scratch");
   });
 
   it("initializes missing shared state for a heartbeat scratch read off the caller thread", async () => {

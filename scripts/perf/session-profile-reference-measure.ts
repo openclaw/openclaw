@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance, PerformanceObserver, type PerformanceEntry } from "node:perf_hooks";
@@ -10,6 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../src/config/sessions.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -76,19 +77,18 @@ async function writeJson(filename: string, value: unknown) {
   );
 }
 
-function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocatedBytes(child), 0);
-}
-
 try {
   const subagents = registry.createSubagentSessionListReadView({ env: process.env });
   await subagents.prepare();
-  owner = contexts.createSessionRowProjectionContext(subagents);
+  const cfg = { agents: { entries: { main: {}, ...(values.ordinary ? { secondary: {} } : {}) } } };
+  owner = contexts.createSessionRowProjectionContext(subagents, {
+    state: () => ({ cfg, epoch: 0, disposed: false }),
+    prepareRegistry: () => undefined,
+  });
   // Existing-only admission gives retained identities a real, empty durable fallback.
   catalog = await profiles.prepareUserProfileCatalog();
   const sqlitePath = path.join(stateDir, "state", "openclaw.sqlite");
   assert.equal(existsSync(sqlitePath), false, "preparation must not create profile storage");
-  const cfg = { agents: { entries: { main: {}, ...(values.ordinary ? { secondary: {} } : {}) } } };
   const context = owner.current;
   const identities = context.userProfileIdentityById;
   const identityId = (index: number) =>
@@ -105,7 +105,6 @@ try {
             profileId: canonical,
             label: `Person ${canonical}`,
             avatarUrl: `/avatar/${canonical}`,
-            hasUploadedAvatar: true,
           },
     );
   }
@@ -429,7 +428,9 @@ try {
     matchedEntries,
     cpuMsPerOperation: (cpu.user + cpu.system) / 1_000 / iterations,
     mode: values.mode,
-    allocationBytesPerOperation: profile ? allocatedBytes(profile.head) / iterations : undefined,
+    allocationBytesPerOperation: profile
+      ? sumSampledHeapBytes(profile.head) / iterations
+      : undefined,
     samplingInterval: allocations ? 32_768 : undefined,
     includesCollectedObjects: allocations ? true : undefined,
   };

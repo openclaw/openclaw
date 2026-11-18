@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../../../gateway/agent-runtime-approval-authority.js";
 import { callGateway } from "../../../gateway/call.js";
 import * as operatorCapture from "../../../gateway/operator-run-authority.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { GatewayRequestHandlerOptions } from "../../../gateway/server-methods/types.js";
 import { dispatchGatewayMethodInProcessRaw } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -21,7 +22,6 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { onAgentEvent, rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -42,6 +42,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import { createOperationalRunInstanceRef } from "../../operational-run-instance.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "../announce/subagent-announce-overrides.test-support.js";
@@ -63,7 +64,7 @@ import {
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { registerSubagentRegistrationOwnershipTests } from "./subagent-registry.registration-ownership.test-support.js";
-import { registerRequesterCompletionCustodyTests } from "./subagent-registry.requester-completion.test-support.js";
+import { registerRequesterAutomationCustodyTests } from "./subagent-registry.requester-automation-custody.test-support.js";
 import {
   releaseSubagentRun,
   resetSubagentRegistryForTests,
@@ -72,7 +73,7 @@ import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-re
 
 vi.mock("../../../config/config.js", { spy: true });
 vi.mock("../../../gateway/call.js", { spy: true });
-vi.mock("../../../gateway/server-recovery-runtime-context.js", { spy: true });
+vi.mock("../../../gateway/server-lifecycle-runtime-context.js", { spy: true });
 vi.mock("../../../infra/agent-events.js", { spy: true });
 
 function useConfig<T extends OpenClawConfig>(cfg: T) {
@@ -303,7 +304,7 @@ describe("registered completion source custody", () => {
     },
   );
 
-  it("keeps a committed registration restricted when its operator source expires before ACK", async () => {
+  it("publishes committed registration when its operator source expires before ACK", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       config.setRuntimeConfigSnapshot({});
       const { context, resolveGatewayContext, client, revoked, source } =
@@ -349,13 +350,9 @@ describe("registered completion source custody", () => {
         expect(competingRegistration.assertCurrent).toThrow();
         expect(source.authority.assertCurrent).toThrow();
         const ambient = vi.fn();
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, ambient)).toThrow(
-          "Subagent completion requester store was retired",
-        );
-        expect(() => subagentRuns.runWithCompletionBatchAuthority([entry], ambient)).toThrow(
-          "Subagent completion requester store was retired",
-        );
-        expect(ambient).not.toHaveBeenCalled();
+        subagentRuns.runWithCompletionAuthority(entry, ambient);
+        subagentRuns.runWithCompletionBatchAuthority([entry], ambient);
+        expect(ambient).toHaveBeenCalledTimes(2);
         expect(callGateway).not.toHaveBeenCalled();
         held.mockRestore();
         await updateRun(entry.runId, (draft) => {
@@ -363,11 +360,9 @@ describe("registered completion source custody", () => {
         });
         const current = subagentRuns.get(entry.runId)!;
         expect(current).not.toBe(entry);
-        expect(() => subagentRuns.runWithCompletionAuthority(current, ambient)).toThrow(
-          "Subagent completion requester store was retired",
-        );
+        subagentRuns.runWithCompletionAuthority(current, ambient);
         expect(getGatewayContextResolver(current)).toBe(resolveGatewayContext);
-        expect(ambient).not.toHaveBeenCalled();
+        expect(ambient).toHaveBeenCalledTimes(3);
       } finally {
         release.resolve();
         await outcome;
@@ -506,9 +501,9 @@ describe("registered completion source custody", () => {
             loadSubagentRegistryFromSqlite().get(runId),
             "retained result",
           );
-          expect(received).toEqual(authority === "current" ? [content] : []);
-          expect(sendText).toHaveBeenCalledTimes(authority === "current" ? 1 : 0);
-          expect(stored.delivery?.status === "delivered").toBe(authority === "current");
+          expect(received).toEqual([content]);
+          expect(sendText).toHaveBeenCalledOnce();
+          expect(stored.delivery?.status).toBe("delivered");
           expect(
             loadSessionEntry({ storePath: cfg.session.store, sessionKey: childSessionKey }),
           ).toMatchObject({ sessionId: "completion-child" });
@@ -538,7 +533,7 @@ describe("registered completion source custody", () => {
     },
   );
 
-  registerRequesterCompletionCustodyTests({ registration, updateRun });
+  registerRequesterAutomationCustodyTests({ registration, updateRun });
 
   it.each([
     "completed System parent",
@@ -627,26 +622,18 @@ describe("registered completion source custody", () => {
           { syntheticScopeMode: "exact" },
         ),
       );
-      await inGateway({ ...source, client }, async () => {
-        if (scenario === "completed System parent") {
-          for (const deliver of [
-            () => subagentRuns.runWithCompletionAuthority(entry, dispatch),
-            () => subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
-          ]) {
-            await expect(deliver()).resolves.toMatchObject({
-              ok: true,
-              payload: { scopes: ["operator.write"], runtime: undefined },
-            });
-          }
-        } else {
-          expect(() =>
-            subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
-          ).toThrow(
-            scenario === "mixed System scopes"
-              ? "Subagent completion batch has incompatible operator authority"
-              : /Subagent completion authority is no longer active|Gateway continuation authority is no longer active/,
-          );
-          expect(dispatch).not.toHaveBeenCalled();
+      // No ambient spawning operator survives into a requester settle wake.
+      await inGateway({ ...source }, async () => {
+        for (const deliver of [
+          ...(scenario === "completed System parent"
+            ? [() => subagentRuns.runWithCompletionAuthority(entry, dispatch)]
+            : []),
+          () => subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
+        ]) {
+          await expect(deliver()).resolves.toMatchObject({
+            ok: true,
+            payload: { scopes: ["operator.write"], runtime: undefined },
+          });
         }
       });
     });
@@ -782,6 +769,7 @@ describe("registered completion source custody", () => {
 
   it.each([
     "settle",
+    "non-announcing-settle",
     "revoke",
     "gateway-close",
     "replace",
@@ -791,7 +779,9 @@ describe("registered completion source custody", () => {
     "cancelled-with-requester-custody",
     "cancelled-with-missing-custody",
     "cancelled-with-distinct-custody",
+    "cancelled-with-independent-invocation",
     "mixed-cancellation-source",
+    "mixed-cancellation-independent-invocation",
     "mixed-cancellation-same-source",
     "stale-batch-member",
   ] as const)("outlives execution and closes on %s", async (ending) => {
@@ -800,12 +790,22 @@ describe("registered completion source custody", () => {
       const { context, resolveGatewayContext, client, revoked, source } =
         await retainedOperatorFixture("completion-owner");
       try {
+        const independentInvocation = () => ({
+          ...client,
+          internal: {
+            operatorRunAuthority: createAdmittedRunOperatorAuthority({
+              ...source.authority,
+              invocation: {},
+            }),
+          },
+        });
         const register = (runId = "child", actor = client) =>
           inGateway({ client: actor, context, resolveGatewayContext: () => context }, () =>
             registerSubagentRun(
               registration(runId, {
                 requesterAgentId: "main",
                 requesterTurnRunId: "parent",
+                expectsCompletionMessage: ending !== "non-announcing-settle",
                 ...(ending === "replace"
                   ? { childSessionKey: "global", childAgentId: "research" }
                   : {}),
@@ -829,7 +829,7 @@ describe("registered completion source custody", () => {
           expect(retained?.source).toBe(source.authority.source);
           expect(retained?.scopes).toEqual(["operator.write"]);
         });
-        if (ending === "settle") {
+        if (ending === "settle" || ending === "non-announcing-settle") {
           await updateRun(entry.runId, (draft) => {
             draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
             draft.cleanupCompletedAt = 1;
@@ -837,10 +837,17 @@ describe("registered completion source custody", () => {
           });
           expect(source.authority.assertCurrent).not.toThrow();
           await updateRun(entry.runId, (draft) => {
-            draft.requesterTurnRunId = undefined;
+            if (ending === "settle") {
+              draft.requesterTurnRunId = undefined;
+            }
             draft.requesterSettleWake = undefined;
-            draft.delivery = { status: "delivered" };
+            draft.delivery = {
+              status: ending === "settle" ? "delivered" : "not_required",
+            };
           });
+          if (ending === "non-announcing-settle") {
+            expect(subagentRuns.get(entry.runId)?.requesterTurnRunId).toBe("parent");
+          }
         } else if (ending === "cancelled-with-requester-custody") {
           await markCancelled(entry.runId);
           const observer = createOperatorClient({
@@ -861,9 +868,13 @@ describe("registered completion source custody", () => {
           await releaseSubagentRun(entry.runId);
         } else if (
           ending === "cancelled-with-missing-custody" ||
-          ending === "cancelled-with-distinct-custody"
+          ending === "cancelled-with-distinct-custody" ||
+          ending === "cancelled-with-independent-invocation"
         ) {
-          const other = operatorFixture("other-requester");
+          const other =
+            ending === "cancelled-with-independent-invocation"
+              ? { client: independentInvocation(), revoked: new AbortController() }
+              : operatorFixture("other-requester");
           await register("other", other.client);
           await markCancelled(entry.runId);
           await markCancelled("other");
@@ -896,24 +907,27 @@ describe("registered completion source custody", () => {
           await releaseSubagentRun(entry.runId);
         } else if (ending.startsWith("mixed-cancellation") || ending === "stale-batch-member") {
           const differentSource = ending === "mixed-cancellation-source";
+          const differentInvocation = ending === "mixed-cancellation-independent-invocation";
           await register(
             "other",
             differentSource
               ? createOperatorClient({ profileName: "other-owner", scopes: ["operator.write"] })
-              : client,
+              : differentInvocation
+                ? independentInvocation()
+                : client,
           );
           const other = subagentRuns.get("other")!;
           if (ending === "stale-batch-member") {
             await releaseSubagentRun(other.runId);
-            expect(() =>
-              subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "stale"),
-            ).toThrow(/authority/);
+            expect(
+              subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "baseline"),
+            ).toBe("baseline");
           } else {
             await markCancelled(other.runId);
-            if (differentSource) {
-              expect(() =>
-                subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "wrong caller"),
-              ).toThrow(/incompatible operator authority/);
+            if (differentSource || differentInvocation) {
+              expect(
+                subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "baseline"),
+              ).toBe("baseline");
             } else {
               subagentRuns.runWithCompletionBatchAuthority([other, entry], () =>
                 expect(completionAuthority()?.source).toBe(source.authority.source),
@@ -935,9 +949,7 @@ describe("registered completion source custody", () => {
           ).toBe(true);
           expect(subagentRuns.get("successor")?.childAgentId).toBe("research");
           expect(source.authority.assertCurrent).not.toThrow();
-          expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-            /authority/,
-          );
+          expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
           await releaseSubagentRun("successor");
         } else if (ending === "release-rejected") {
           rejectNextRegistryWrite("write refused");
@@ -957,12 +969,14 @@ describe("registered completion source custody", () => {
               requesterTurnRunId: "next-parent",
               assertCurrent: () => {},
             }),
-          ).rejects.toThrow(/authority/);
+          ).resolves.toEqual({
+            runId: entry.taskRunId ?? entry.runId,
+            childSessionKey: entry.childSessionKey,
+            expectsCompletionMessage: true,
+          });
         }
         expect(source.authority.assertCurrent).toThrow();
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-          /authority/,
-        );
+        expect(subagentRuns.runWithCompletionAuthority(entry, () => "baseline")).toBe("baseline");
       } finally {
         source.release();
         await resetSubagentRegistryForTests({ persist: false });

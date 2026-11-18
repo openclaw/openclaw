@@ -13,7 +13,10 @@ import {
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import type { SubagentLifecycleCompletionContext } from "./subagent-registry-lifecycle-context.js";
 import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
-import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
+import {
+  commitSubagentLifecycleMutation,
+  SubagentLifecycleOwnerChangedError,
+} from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
@@ -116,7 +119,7 @@ export async function completeTerminalEffects(
   const isProvisionalKill = entry.killReconciliation !== undefined;
 
   // Duplicate receipts drain cleanup without replaying best-effort timing writes.
-  if (!suppressSessionEffects && (mutated || completeParams.recoverInterrupted !== undefined)) {
+  if (!suppressSessionEffects && mutated) {
     try {
       const assertSessionEffectsOwnerCurrent = () => {
         if (!isCurrentSessionEffectsOwner()) {
@@ -152,15 +155,8 @@ export async function completeTerminalEffects(
   }
 
   const suppressedForSteerRestart = params.suppressAnnounceForSteerRestart(entry);
-  // Recovery persists its terminal state before draining this callback, so an
-  // unchanged row still needs its first session-status and progress events.
-  const shouldPublishTerminalStatus =
-    mutated ||
-    (completeParams.recoverInterrupted !== undefined &&
-      !isProvisionalKill &&
-      !context.progressEndedEntries.has(getSubagentRunRuntimeKey(entry)));
   if (
-    shouldPublishTerminalStatus &&
+    mutated &&
     !suppressedForSteerRestart &&
     !suppressSessionEffects &&
     isCurrentSessionEffectsOwner()
@@ -291,11 +287,13 @@ export async function completeTerminalEffects(
           // A newer terminal publication can retire this callback while its
           // cleanup claim waits for persistence. Only that pre-commit refusal
           // is harmless; persistence and unknown-outcome failures must propagate.
+          const rejection =
+            error instanceof SubagentRegistryWriteError && error.outcome === "not-committed"
+              ? error.cause
+              : error;
           if (
-            error === retiredOwner ||
-            (error instanceof SubagentRegistryWriteError &&
-              error.outcome === "not-committed" &&
-              error.cause === retiredOwner)
+            rejection === retiredOwner ||
+            rejection instanceof SubagentLifecycleOwnerChangedError
           ) {
             if (isCurrentTerminalCallback() && context.newerGenerationOwnsSession(entry)) {
               await retireSupersededSession(entry);

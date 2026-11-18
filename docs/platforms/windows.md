@@ -9,7 +9,8 @@ title: "Windows"
 
 The native **Windows Hub** is the recommended Windows desktop app. It includes
 setup, tray status, chat, Command Center diagnostics, and Windows node
-capabilities, with an app-owned WSL Gateway for local setup. The cross-platform
+capabilities. Its setup installs a local Gateway that runs natively on Windows
+when the PC supports it, or in an app-owned WSL distro otherwise. The cross-platform
 **Tauri desktop app** is the backup option, with local Gateways on Windows through
 bundled Bun or connections to remote Gateways. Terminal users can use the
 PowerShell installer or WSL2.
@@ -44,7 +45,7 @@ Check for Updates, and uninstall.
 ### What Windows Hub includes
 
 - System tray status and launch-at-login.
-- First-run setup for a local app-owned WSL Gateway.
+- First-run setup for a local native or app-owned WSL Gateway.
 - Connection settings for local, remote, and SSH-tunneled Gateways.
 - Native chat window plus access to the browser Control UI.
 - Command Center diagnostics for sessions, usage, channels, nodes, pairing,
@@ -57,12 +58,29 @@ Check for Updates, and uninstall.
 ### First launch
 
 On first launch, Windows Hub opens setup when there is no usable saved
-Gateway. The fastest path is **Set up locally**, which provisions an
-app-owned `OpenClawGateway` WSL distro, installs the Gateway inside it, and
-pairs the app. This does not export or mutate your existing Ubuntu distro.
+Gateway. Setup first checks whether this PC supports the native Gateway, then
+offers three choices:
 
-Choose **Advanced setup** or open the Connections tab when you already have a
-Gateway. You can connect to:
+| Choice                             | Choose it when                                                                                     | What setup does                                                                                                                                        |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Install a local native gateway** | Setup marks it **Recommended**. It is enabled only when Windows reports native support.            | Installs the OpenClaw Gateway package from Microsoft Store with WinGet and runs it directly on Windows in an isolated session. No WSL or Linux distro. |
+| **Install a local Gateway (WSL)**  | Native is unavailable on this PC, or you want the most Linux-compatible runtime.                   | Provisions an app-owned `OpenClawGateway` WSL distro and installs the Gateway inside it. Your existing Ubuntu or other distros are not changed.        |
+| **Connect to an existing Gateway** | You already run a Gateway on this PC, in your own WSL distro, on another machine, or in the cloud. | Connects without installing a Gateway on this PC.                                                                                                      |
+
+Native is recommended when available because it needs no Linux distro or
+virtualization setup, Microsoft Store installs and updates the Gateway package,
+and the Gateway runs isolated from your Windows user account. Setup pairs the
+app with whichever Gateway you choose.
+
+Native support depends on a Windows capability, not only the Windows version.
+Windows Server is not supported. When native support is unavailable or cannot be
+verified, native stays disabled at the bottom of the list and WSL is marked
+**Recommended**. Setup shows guidance for the detected condition, including
+Windows Update when the required capability is unavailable. Native setup uses its
+own profile, so an existing WSL Gateway or default OpenClaw profile is not replaced.
+
+Choose **Remote, local MCP or set up later** below the choices, or open the
+Connections tab later, for other connection types. You can connect to:
 
 - a local Gateway on this PC
 - a WSL Gateway on this PC
@@ -200,6 +218,8 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
+If PowerShell reports that running scripts is disabled, use [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) and leave the execution policy unchanged.
+
 Local `read`, `write`, and `edit` tools accept Git Bash (`/f/...`), Cygwin
 (`/cygdrive/f/...`), and WSL-style (`/mnt/f/...`) drive paths when the Gateway runs
 natively on Windows. These paths resolve to the corresponding Windows drive.
@@ -318,6 +338,8 @@ Doctor compares task definitions using Task Scheduler's defaults. An omitted
 `Enabled` element means `true` for both the task and its logon trigger, so XML
 export differences do not cause drift warnings or failed refresh verification.
 Explicitly disabled tasks and triggers are still reported.
+Status and Doctor also tolerate a scheduler-injected `UseUnifiedSchedulingEngine=true`.
+Replacement verification still protects that value from being silently discarded.
 
 The task check allows Windows PowerShell to inherit or create a console because
 some PowerShell 5.1 hosts fail inspection when console creation is disabled.
@@ -380,8 +402,9 @@ Gateway. Do not lower schema markers or run an older build against migrated data
 ## WSL2 Gateway
 
 WSL2 remains the most Linux-compatible Gateway runtime on Windows. Windows
-Hub can set up an app-owned WSL Gateway for you, or install manually inside
-your own distro.
+Hub can set up an app-owned WSL Gateway for you (see
+[First launch](#first-launch) for how it compares with the native Gateway), or
+install manually inside your own distro.
 
 Manual setup:
 
@@ -492,6 +515,35 @@ Notes:
 
 ## Troubleshooting
 
+<a id="powershell-execution-policy" />
+
+### PowerShell refuses to run `openclaw.ps1`
+
+Windows PowerShell with an effective execution policy of Restricted resolves a
+bare `openclaw` command to npm's `openclaw.ps1` shim and stops before OpenClaw
+starts. Leave the execution policy unchanged. The install also includes
+`openclaw.cmd` in that same directory. This is npm's global shim, not the
+desktop app launcher at `%USERPROFILE%\.openclaw\bin\openclaw.cmd`. For the
+default npm prefix:
+
+```powershell
+& "$env:APPDATA\npm\openclaw.cmd" --version
+& "$env:APPDATA\npm\openclaw.cmd" doctor --generate-gateway-token
+```
+
+If the error names a different `openclaw.ps1` path, that directory is the npm
+prefix. Run the `openclaw.cmd` beside it:
+
+```powershell
+$shim = (Get-Command openclaw.ps1).Source
+& (Join-Path (Split-Path $shim) "openclaw.cmd") doctor --generate-gateway-token
+```
+
+Doctor can ask to pause the managed Gateway while you review repairs. If you
+accept, Doctor restores the previous service state when it finishes. A new
+token, and the Gateway restart after it, disconnects clients that still use
+the previous secret.
+
 ### The Gateway Scheduled Task is disabled
 
 `openclaw gateway status` and Doctor name a registered but **DISABLED** task and
@@ -532,6 +584,11 @@ notepad "$env:LOCALAPPDATA\OpenClawTray\Logs\Setup\easy-setup-latest.txt"
 
 Common causes: disabled WSL, blocked virtualization, stale app-owned WSL
 state, or a network failure while installing the Gateway package.
+
+For native setup, common causes are a missing or blocked WinGet or Microsoft
+Store, or a Gateway that is slow to start the first time. The setup page offers
+**Collect Gateway diagnostics** for a redacted ZIP and **Open terminal** inside
+the isolated Gateway, then **Retry setup**.
 
 ### The app says pairing is required
 

@@ -22,7 +22,7 @@ const {
   executionParams,
   mocks,
   packageCandidate,
-  readyCanary,
+  readyCandidate,
   successfulUpdate,
 } = await import("./update-command-execution.test-support.js");
 
@@ -32,9 +32,11 @@ const execute = async (params = executionParams("git")) =>
 function gitCandidate(onValidated: (steps: unknown) => void = () => {}, gitMode = false) {
   mocks.runGitUpdate.mockImplementation(
     async ({
+      inspectGitTarget,
       validateCandidate,
     }: Parameters<typeof import("./update-command-git.js").updateGitInstall>[0]) => {
       expect(validateCandidate).toBeTypeOf("function");
+      await inspectGitTarget({ sha: "a".repeat(40), version: "1.0.1" });
       onValidated(await validateCandidate!("/candidate"));
       return gitMode ? { ...successfulUpdate, mode: "git" } : successfulUpdate;
     },
@@ -151,21 +153,35 @@ export function prepareBundledPluginRuntime({ repoRoot }) {
     }),
 );
 
-it("continues the update with its recorded readiness warning", async () => {
-  const message =
-    "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
-  const step = updateStep("candidate-gateway-startup", {
-    command: "gateway run",
+it("leaves the checkout's artifact lock to the developer during a Git release update", async () =>
+  withTestDir({ prefix: "release-artifact-admission-" }, async (root) => {
+    await fs.mkdir(path.join(root, ".git"));
+    // A developer build in the preserved checkout holds its artifact lock.
+    const lock = path.join(root, ".artifacts", "dist-artifacts.lock");
+    await fs.mkdir(lock, { recursive: true });
+    await fs.writeFile(
+      path.join(lock, "owner.json"),
+      JSON.stringify({ pid: 0x7fff_ffff, startedAt: "2026-09-20T01:00:00.000Z" }),
+    );
+    gitCandidate(undefined, true);
+
+    const execution = await execute({ ...executionParams("git"), root, gitRelease: true });
+
+    expect(execution?.result.reason).not.toBe("source-artifact-ownership");
+    expect(mocks.runGitUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceRuntimePrepared: false }),
+    );
+  }));
+
+it("continues the update with its recorded candidate advisory", async () => {
+  const message = "This version uses the current updater to finish installation";
+  const step = updateStep("candidate-recovery", {
+    command: "--check",
     cwd: "/candidate",
-    durationMs: 308_123,
     exitCode: null,
     advisory: { kind: "candidate-runtime-unavailable", message },
-    failureFacts: [{ check: "readyz", code: "candidate-readiness-probe-failed", message }],
   });
-  mocks.validateCanary.mockImplementation(async ({ onStep }) => {
-    await onStep(step);
-    return readyCanary([step], step.durationMs, [message]);
-  });
+  mocks.checkCandidate.mockResolvedValue(readyCandidate([step]));
   gitCandidate();
   const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>();
 
@@ -198,22 +214,17 @@ it("reports the post-stop activation checks as a timed step", async () => {
   expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining({ ...step }));
 });
 
-it("retains rejected Git canary findings in the terminal result", async () => {
+it("retains rejected candidate check findings in the terminal result", async () => {
   const fact = {
-    check: "core/doctor/config-readable",
-    code: "doctor-failed",
-    message: "The configured state directory is not readable.",
-    affectedKey: "stateDir",
+    check: "runtime",
+    code: "candidate-runtime-failed",
+    message: "The update could not load its recovery runtime (exit 1).",
   };
-  mocks.validateCanary.mockResolvedValue({
+  mocks.checkCandidate.mockResolvedValue({
     status: "error",
-    reason: "doctor-failed",
-    phase: "doctor",
-    durationMs: 1,
-    logTail: [fact.message],
     steps: [
-      updateStep("candidate-doctor", {
-        command: "openclaw doctor",
+      updateStep("candidate-recovery", {
+        command: "--check",
         cwd: "/candidate",
         exitCode: 1,
         stderrTail: fact.message,
@@ -227,7 +238,7 @@ it("retains rejected Git canary findings in the terminal result", async () => {
 
   expect(execution?.result).toMatchObject({
     status: "error",
-    reason: "doctor-failed",
+    reason: "runtime-verification-failed",
     steps: [{ failureFacts: [fact] }],
   });
   expect(mocks.serviceStopped).toBe(false);

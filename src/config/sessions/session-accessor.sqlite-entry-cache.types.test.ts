@@ -15,25 +15,12 @@ const providerReview = {
   model: "test-model",
   runtimeId: "codex",
 };
-const tombstone = {
-  cycleId: "recovery-cycle",
-  revision: 1,
-  chargedAttempts: 1,
-  tombstone: { reason: "recovery exhausted" },
-} satisfies NonNullable<InternalSessionEntry["mainRestartRecovery"]>;
-
 const workspacePending = "workspace is not ready";
 const cases: [string, Partial<InternalSessionEntry>, string?][] = [
   ["allowed session", {}],
   ["provider pause", { providerReview }, "paused as a precaution"],
   ["pending initialization", { initializationPending: true }, "still initializing"],
   ["incognito age despite recent activity", { incognito: true, createdAt: 1 }, "expired"],
-  ["restart tombstone", { mainRestartRecovery: tombstone }, "Use Resume in WebChat"],
-  [
-    "restart tombstone with model lock",
-    { mainRestartRecovery: tombstone, modelSelectionLocked: true },
-    "cannot be replaced while model selection is locked",
-  ],
   ["pending project", { pendingProjectGitUrl: "https://example.org/repo.git" }, workspacePending],
   ["pending worktree", { pendingWorktree: { titleSource: "New checkout" } }, workspacePending],
 ];
@@ -62,7 +49,6 @@ it("retains independent nested lifecycle records after the source entry changes"
       errorType: "misalignment_policy_violation",
     },
   } satisfies NonNullable<InternalSessionEntry["providerReview"]>;
-  const mainRestartRecovery = structuredClone(tombstone);
   const pendingWorktree = {
     titleSource: "New checkout",
     source: { kind: "project", id: "original-project" },
@@ -71,19 +57,35 @@ it("retains independent nested lifecycle records after the source entry changes"
     sessionId,
     updatedAt: 1,
     providerReview: review,
-    mainRestartRecovery,
     pendingWorktree,
+    templateInitialization: {
+      source: { packageName: "synthetic-template", version: "1.0.0" },
+      agentConfig: { name: "Original" },
+      workspaceIdentity: "synthetic-workspace",
+    },
+    owner: { actor: { type: "system" }, assignedBy: { type: "system", label: "Original" } },
   };
   const expected = structuredClone(entry);
   const retained = projectSessionSharingEntry(entry);
 
   review.review.continuation.message = "Changed continuation";
-  mainRestartRecovery.tombstone.reason = "Changed recovery";
   pendingWorktree.source.id = "replacement-project";
+  entry.templateInitialization!.agentConfig.name = "Changed";
+  entry.owner!.assignedBy!.label = "Changed";
 
-  for (const key of ["providerReview", "mainRestartRecovery", "pendingWorktree"] as const) {
+  for (const key of [
+    "providerReview",
+    "pendingWorktree",
+    "templateInitialization",
+    "owner",
+  ] as const) {
     expect(retained[key]).toEqual(expected[key]);
   }
+  expect(sessionSharingEntriesEqual(entry, retained)).toBe(false);
+  retained.templateInitialization!.source.version = "2.0.0";
+  retained.owner!.actor.label = "Retained";
+  expect(entry.templateInitialization!.source.version).toBe("1.0.0");
+  expect(entry.owner!.actor.label).toBeUndefined();
 });
 
 it("captures inherited tool policy once and keeps both sides independently mutable", () => {

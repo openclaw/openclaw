@@ -1,12 +1,4 @@
-import type {
-  Browser,
-  BrowserContext,
-  CDPSession,
-  Dialog,
-  Frame,
-  Page,
-  Request,
-} from "playwright-core";
+import type { Browser, BrowserContext, CDPSession, Dialog, Frame, Page } from "playwright-core";
 import type { BrowserDownloadCandidate, BrowserDownloadResult } from "./download-types.js";
 import type { BrowserEngineId } from "./engines/types.js";
 
@@ -75,7 +67,8 @@ export type PendingObservedDialog = BrowserObservedDialogRecord & {
 export type ArmedDialogResponse = {
   accept: boolean;
   promptText?: string;
-  expiresAt: number;
+  /** Process-local elapsed deadline, independent of wall-clock corrections. */
+  expiresAtMonotonicMs: number;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -89,6 +82,7 @@ export type ConnectedBrowser = {
 
 export type ActionDownloadCapture = {
   beforeSave?: (download: BrowserDownloadCandidate) => Promise<void> | void;
+  /** Monotonic reading (`performance.now()`), never comparable with wall-clock timestamps. */
   lastEventAtMs?: number;
   pending: Array<Promise<BrowserDownloadResult>>;
   waiters: Array<() => void>;
@@ -97,10 +91,7 @@ export type ActionDownloadCapture = {
 export type PageState = {
   console: BrowserConsoleMessage[];
   errors: BrowserPageError[];
-  requests: Map<string, BrowserNetworkRequest>;
-  // Strong Request keys would retain disposed Playwright page/context graphs.
-  requestIds: WeakMap<Request, string>;
-  nextRequestId: number;
+  readNetworkRequests?: (clear?: boolean) => BrowserNetworkRequest[];
   armIdUpload: number;
   armIdDownload: number;
   downloadWaiterDepth: number;

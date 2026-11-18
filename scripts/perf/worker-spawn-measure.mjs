@@ -4,12 +4,15 @@
 // --built --build-dir <checkout> measures shipped dist without a TypeScript loader in workers.
 // --worker <name> selects one owner. --compare-build-dir <base> alternates base/candidate
 // order per sample against --build-dir <candidate>, reporting both arms for each worker.
+// --prewarm-history measures foreground transcript workers' eager presentation imports.
+// --transcript-task prewarm includes explicit history presentation preparation in the first task.
 // Example: node --import ./scripts/tsx.mjs scripts/perf/worker-spawn-measure.mjs --built --build-dir . --samples 5 --output .local/spawn/built.json
 // Run arms in alternating order. Every sample owns a fresh isolate; one unmeasured preparation
 // isolate per owner caches transpiled source bytes in source mode. Built mode uses the shipped
 // chunk graph. Neither mode is a full Gateway load test. Census excludes this benchmark module.
 // State-read uses its admit handshake without opening a DB; transcript resolves an explicit
 // agent path. Git reads a real synthetic repository; Code Mode evaluates an arithmetic cell.
+// Catalog decodes 16 rows with 64 KiB previews (~1 MiB), beyond its owner's inline threshold.
 // Counters are exact isolate allocation/thread CPU (Node 26.12+), not process RSS or host CPU.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -71,6 +74,7 @@ function summarize(rows) {
             2,
           min: sorted[0],
           max: sorted.at(-1),
+          p95: sorted[Math.ceil(sorted.length * 0.95) - 1],
         },
       ];
     }),
@@ -138,6 +142,8 @@ if (!isMainThread) {
       // Census runs only after both measured intervals, so debugger allocations do not enter them.
       const inspector = new Session();
       inspector.connect();
+      await inspector.post("HeapProfiler.collectGarbage");
+      const retainedHeapBytes = getHeapStatistics().used_heap_size;
       const evaluated = new Map();
       inspector.on("Debugger.scriptParsed", ({ params }) => {
         if (params.url.startsWith("file:") && params.url !== import.meta.url) {
@@ -159,6 +165,7 @@ if (!isMainThread) {
           firstTask,
           evaluatedModules: new Set(evaluated.values()).size,
           parsedSourceBytes,
+          retainedHeapBytes,
           overlays: [...overlays],
         },
         [],
@@ -179,6 +186,8 @@ if (!isMainThread) {
       output: { type: "string" },
       samples: { type: "string", default: "10" },
       worker: { type: "string" },
+      "prewarm-history": { type: "boolean" },
+      "transcript-task": { type: "string", default: "sqlite-target" },
       "baseline-dir": { type: "string" },
       built: { type: "boolean" },
       "build-dir": { type: "string" },
@@ -194,6 +203,15 @@ if (!isMainThread) {
   const samples = Number(values.samples);
   assert(Number.isSafeInteger(samples) && samples > 0, "--samples must be positive");
   assert(!values.worker || Object.hasOwn(entries, values.worker), "Unknown --worker");
+  assert(
+    !values["prewarm-history"] || values.worker === "session-transcript",
+    "--prewarm-history requires --worker session-transcript",
+  );
+  assert(
+    ["sqlite-target", "prewarm"].includes(values["transcript-task"]) &&
+      (values["transcript-task"] === "sqlite-target" || values.worker === "session-transcript"),
+    "--transcript-task prewarm requires --worker session-transcript",
+  );
   const baselineDir = values["baseline-dir"] && path.resolve(values["baseline-dir"]);
   // Keep this parent-only directory walker outside the measured worker import graph.
   const { listDirectoryTreeStrictSync } = await import("../../src/infra/directory-walk.js");
@@ -311,7 +329,19 @@ if (!isMainThread) {
     if (name === "catalog-page") {
       const id = 2 ** 52 + 1;
       return {
-        bytes: Buffer.from(JSON.stringify({ id, result: { data: [], nextCursor: null } })),
+        bytes: Buffer.from(
+          JSON.stringify({
+            id,
+            result: {
+              data: Array.from({ length: 16 }, (_, index) => ({
+                id: `synthetic-${index}`,
+                preview: "Synthetic preview ".padEnd(64 * 1024, "x"),
+                source: "cli",
+              })),
+              nextCursor: null,
+            },
+          }),
+        ),
         route: { id, kind: "list" },
         remainingRows: 100,
       };
@@ -326,6 +356,13 @@ if (!isMainThread) {
       };
     }
     if (name === "session-transcript") {
+      if (values["transcript-task"] === "prewarm") {
+        return {
+          kind: "prewarm",
+          database: { agentId: "benchmark", path: path.join(state, "agent.sqlite") },
+          env: environment,
+        };
+      }
       return {
         kind: "sqlite-target",
         storePath: path.join(state, "agents", "benchmark", "sessions", "sessions.json"),
@@ -387,7 +424,13 @@ if (!isMainThread) {
       assert.equal(Buffer.from(reply).subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
     } else if (name === "catalog-page") {
       assert.deepEqual(reply.failures, []);
-      assert.deepEqual(reply.message.result.data, []);
+      assert.equal(reply.message.result.data.length, 16);
+      for (const [index, row] of reply.message.result.data.entries()) {
+        assert.equal(row.id, `synthetic-${index}`);
+        assert.equal(row.source, "cli");
+        assert(row.preview.startsWith("Synthetic preview "));
+        assert(row.preview.length <= 500);
+      }
     } else if (name === "code-mode-node") {
       assert.equal(reply.status, "completed", JSON.stringify(reply));
       assert.equal(reply.value.json, "8128");
@@ -397,6 +440,8 @@ if (!isMainThread) {
         assert.equal(reply.type, "admit");
       } else if (name === "git-operation") {
         assert.equal(reply.value.headBranch, "main");
+      } else if (name === "session-transcript" && values["transcript-task"] === "prewarm") {
+        assert.equal(reply.value.kind, "prewarm");
       } else {
         assert.equal(reply.value.target.agentId, "benchmark");
       }
@@ -487,6 +532,7 @@ if (!isMainThread) {
           ),
         ).href,
         built: values.built,
+        prewarmHistory: values["prewarm-history"] === true,
         cache,
         prepare,
         baselineFiles: prepare ? baselineFiles : undefined,
@@ -587,6 +633,7 @@ if (!isMainThread) {
         spawnToFirstReplyMs: spawnToReadyMs + firstRoundTripMs,
         evaluatedModules: result.evaluatedModules,
         parsedSourceBytes: result.parsedSourceBytes,
+        retainedHeapBytes: result.retainedHeapBytes,
         overlays: result.overlays,
         hostLoad: os.loadavg(),
       };
@@ -604,6 +651,8 @@ if (!isMainThread) {
     samples,
     baselineDir: values["baseline-dir"] ?? null,
     built: values.built === true,
+    prewarmHistory: values["prewarm-history"] === true,
+    transcriptTask: values["transcript-task"],
     buildRoot: values.built ? buildRoot : null,
     comparisonRoot: comparisonRoot ?? null,
     order: comparisonRoot ? "AB/BA per sample: base then candidate on even indices" : "single arm",
@@ -650,6 +699,8 @@ if (!isMainThread) {
             spawnToFirstReplyMs: summarize(rows.map((row) => ({ value: row.spawnToFirstReplyMs })))
               .value,
             parsedSourceBytes: rows.map((row) => row.parsedSourceBytes),
+            retainedHeapBytes: summarize(rows.map((row) => ({ value: row.retainedHeapBytes })))
+              .value,
             evaluatedModules: rows.map((row) => row.evaluatedModules),
             rows,
           },

@@ -5,11 +5,16 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
 import { createPluginStateOperation } from "./plugin-state-operation.js";
-import { assertPluginStatePublicationSettled } from "./plugin-state-publication.js";
+import {
+  assertPluginStatePublicationSettled,
+  isPluginStatePublicationUnavailable,
+  reconcilePluginStatePublication,
+} from "./plugin-state-publication.js";
 import {
   preparePluginStateJournalValue,
   type PluginStateSequencedJournalParams,
@@ -57,6 +62,7 @@ import {
 import {
   comparePluginStateDeleteInWorker,
   comparePluginStateUpdateInWorker,
+  confirmPluginStateCommittedInWorker,
   observePluginStateInWorker,
   clearPluginStateInWorker,
   consumePluginStateInWorker,
@@ -115,7 +121,15 @@ function createReadAvailabilityAssertion(
     assertCurrent?.();
     context ??= captureOpenClawStateWorkerContext({ env: options.env });
     (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-    assertPluginStatePublicationSettled(context.admission.identity.key, options);
+    const identity = context.admission.identity.key;
+    if (isPluginStatePublicationUnavailable(identity)) {
+      // This check still fails closed; a later check observes the re-validated committed state.
+      const captured = context;
+      void reconcilePluginStatePublication(identity, () =>
+        confirmPluginStateCommittedInWorker(captured, options),
+      );
+    }
+    assertPluginStatePublicationSettled(identity, options);
   };
 }
 
@@ -342,8 +356,12 @@ function createAsyncKeyedStore<T>(
       });
     },
     entries: async () => {
+      const entries = await listPluginStateInWorker({
+        ...scope,
+        signal: getAsyncWorkSignal(),
+      });
       // SAFETY: Entries come from this namespace and retain the caller's JSON value type.
-      return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
+      return entries as PluginStateEntry<T>[];
     },
     entriesInKeyRange: async (range) => {
       const params = {
@@ -619,7 +637,7 @@ export function createCorePluginStateKeyedStoreV2<T>(
 
 /** Bind a core catalog read and its later replacement to the same physical store. */
 export function prepareCorePluginStateReplacement<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+  options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ) {
   const prepared = prepareKeyedStoreOptions(options.ownerId, options);
   const context = captureOpenClawStateWorkerContext({ env: prepared.env });
@@ -629,11 +647,11 @@ export function prepareCorePluginStateReplacement<T>(
       // SAFETY: This namespace stores the core caller's serialized JSON value type.
       return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
     },
-    async replace(entries: ReadonlyMap<string, T>): Promise<void> {
+    async replace(entries: ReadonlyMap<string, T>, assertCurrent?: () => void): Promise<void> {
       const values = Array.from(entries, ([key, value]) =>
         prepareRegisterParams(key, value, prepared.defaultTtlMs, undefined, prepared.namespace),
       );
-      await replacePluginStateInWorker({ ...scope, entries: values });
+      await replacePluginStateInWorker({ ...scope, entries: values, assertCurrent });
     },
   };
 }

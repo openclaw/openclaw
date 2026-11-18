@@ -6,23 +6,15 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { appendNarrativeEntry, clampDreamDiaryContextEntry } from "./dreaming-dreams-file.js";
+import {
+  appendNarrativeEntry,
+  clampDreamDiaryContextEntry,
+  FALLBACK_NARRATIVE,
+} from "./dreaming-dreams-file.js";
+import type { NarrativePhaseData, PreparedDreamNarrative } from "./dreaming-phase-types.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export type DreamingCompletion = Pick<PluginRuntime["subagent"], "complete">;
-
-export type NarrativePhaseData = {
-  phase: "light" | "deep" | "rem";
-  /** Short memory snippets the phase processed. */
-  snippets: string[];
-  /** Concept tags / themes that surfaced (REM and light). */
-  themes?: string[];
-  /** Snippets that were promoted to durable memory (deep). */
-  promotions?: string[];
-  currentDate?: string;
-  recentDiaryEntries?: string[];
-  /** Tracked inputs that must still exist when generated text is published. */
-  sourceEntryKeys?: readonly string[];
-};
 
 type Logger = {
   info: (message: string) => void;
@@ -74,11 +66,9 @@ function formatFallbackWriteFailure(err: unknown): string {
   );
 }
 
-const REQUEST_SCOPED_FALLBACK_NARRATIVE =
-  "A memory trace surfaced, but details were unavailable in this run.";
-
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
@@ -88,9 +78,10 @@ export async function appendFallbackNarrativeEntry(params: {
   try {
     await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       // Raw snippets and promotions are pre-processing memory staging fragments.
       // Keep fallback diary text generic so DREAMS.md never leaks staging content.
-      narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
+      narrative: FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -177,16 +168,14 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
   return lines.join("\n");
 }
 
-export type DreamNarrativeRequest = {
+export type DreamNarrativeRequest = PreparedDreamNarrative & {
   /** Agent whose configured model and credentials own the completion. */
   agentId: string;
   timeoutMs: number;
   subagent: DreamingCompletion;
   workspaceDir: string;
-  data: NarrativePhaseData;
+  workspaceFileMode?: WorkspaceFileMode;
   nowMs?: number;
-  timezone?: string;
-  model?: string;
   logger: Logger;
   runInBackground?: <T>(run: () => Promise<T>) => Promise<T>;
 };
@@ -194,8 +183,6 @@ export type DreamNarrativeRequest = {
 export type DreamNarrativeOutcome = {
   status: "completed" | "pending" | "skipped" | "degraded";
 };
-
-export type PreparedDreamNarrative = Pick<DreamNarrativeRequest, "data" | "model" | "timezone">;
 
 async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
@@ -239,6 +226,7 @@ async function generateAndAppendDreamNarrative(
     }
     const dreamsPath = await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       narrative,
       nowMs,
       timezone: params.timezone,

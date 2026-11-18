@@ -10,7 +10,7 @@ export const input: ChatPendingInputsPage["items"][number] = {
   id: "input-1",
   runId: "run-queued",
   acceptedAt: 100,
-  state: "interrupted",
+  state: "cancelled",
   message: {
     role: "user",
     content: "Keep my accepted input",

@@ -13,14 +13,14 @@
  */
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
-import { registerHooks } from "node:module";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { writeHeapSnapshot } from "node:v8";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -46,33 +46,17 @@ process.env.OPENCLAW_CONFIG_PATH = path.join(root, "openclaw.json");
 writeFileSync(process.env.OPENCLAW_CONFIG_PATH, '{"plugins":{"enabled":false}}');
 const options = { path: path.join(root, "openclaw.sqlite") };
 const ownerUrl = new URL("../../src/state/user-profiles-avatar.ts", import.meta.url).href;
-let replaced = false;
-if (values.owner) {
-  const replacement = pathToFileURL(path.resolve(values.owner)).href;
-  registerHooks({
-    load(url, context, nextLoad) {
-      if (url !== ownerUrl) {
-        return nextLoad(url, context);
-      }
-      replaced = true;
-      const loaded = nextLoad(replacement, context);
-      return { format: loaded.format, source: loaded.source, shortCircuit: true };
-    },
-  });
-}
+const wasOwnerReplaced = registerPerfOwnerReplacement(ownerUrl, values.owner);
 const { ensureProfileForEmail } = await import("../../src/state/user-profiles.js");
 const { setAvatar } = await import("../../src/state/user-profile-writes.worker.js");
 const { prepareUserProfileCatalog } = await import("../../src/state/user-profile-list.js");
 const { createProfileAvatarReader } = await import("../../src/state/user-profiles-avatar.js");
 const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
-assert(!values.owner || replaced, "Baseline owner was not substituted");
+assert(!values.owner || wasOwnerReplaced(), "Baseline owner was not substituted");
 const inspector = new Session();
 const payloadBytes = 512 * 1024;
 let catalog: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 try {
   const profiles = Array.from({ length: 40 }, (_, index) => {
     const profile = ensureProfileForEmail(`avatar-${index}@example.test`, options);
@@ -146,7 +130,7 @@ try {
   const wallMs = performance.now() - started;
   const used = process.threadCpuUsage(cpu);
   const allocatedBytes = values.allocations
-    ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+    ? sumSampledHeapBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
     : undefined;
   console.log(
     JSON.stringify({

@@ -1,4 +1,5 @@
 /** Canonical configured-MCP mutations with OAuth credential lifecycle cleanup. */
+import { isDeepStrictEqual } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { mcpConfigInternal } from "../config/mcp-config.js";
 import { withMcpLifecycleLease } from "./mcp-lifecycle-lease.js";
@@ -46,6 +47,26 @@ async function clearReplacedMcpOAuth(mutation: {
   await clearMcpOAuthServer(identity);
 }
 
+/**
+ * Clear OAuth credentials that a committed config change retired. Every writer reaches the
+ * Gateway's committed reload, including direct system-agent writes and hand edits.
+ */
+export async function clearRetiredMcpOAuth(
+  previousServers: Record<string, Record<string, unknown>> | undefined,
+  nextServers: Record<string, Record<string, unknown>> | undefined,
+): Promise<void> {
+  for (const [name, previous] of Object.entries(previousServers ?? {})) {
+    const next = nextServers?.[name];
+    if (previous.auth !== "oauth" || isDeepStrictEqual(previous, next)) {
+      continue;
+    }
+    await withMcpLifecycleLease(name, {}, async (lease) => {
+      await lease.assertOwned();
+      await clearReplacedMcpOAuth({ name, previous, next });
+    });
+  }
+}
+
 async function withMcpLifecycleCoordination<
   T,
   Params extends {
@@ -55,7 +76,7 @@ async function withMcpLifecycleCoordination<
     assertCurrentAsync?: () => Promise<void>;
   },
 >(params: Params, run: (current: Params) => Promise<T>): Promise<T> {
-  // Claw Add already holds this non-reentrant lease.
+  // Template Add already holds this non-reentrant lease.
   const name = params.name.trim();
   if (!name || params.skipLifecycleLease) {
     return run(params);

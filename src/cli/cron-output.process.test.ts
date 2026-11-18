@@ -1,11 +1,11 @@
-import path from "node:path";
-import { afterAll, afterEach, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
-import { cliOutputScript } from "./cli-process-fixture.test-support.js";
+import { doctorOutputEntrypoints } from "./cli-entrypoint.test-support.js";
+import { cliChildEnv, cliOutputScript } from "./cli-process-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const childTempDir = useAutoCleanupTempDirTracker(afterAll).make("openclaw-cron-child-tmp-");
 const sentinel = "\nEND-CRON-SUMMARY\n";
 const summary = "x".repeat(128 * 1024 - sentinel.length) + sentinel;
 
@@ -17,7 +17,8 @@ it.each([
   "flushes cron %s output before exit",
   (_name, args, exitCode, kind) => {
     const root = tempDirs.make("openclaw-cron-output-");
-    const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
+    const moduleUrl = (relative: string) =>
+      new URL(relative, resolveRuntimeWorkerUrl(doctorOutputEntrypoints.oneShotExit)).href;
     const status = exitCode === 0 ? "ok" : "error";
     const completionStatus = exitCode === 0 ? "succeeded" : "failed";
     const run = { jobId: "job-1", runId: "run-1", status, completionStatus };
@@ -32,13 +33,13 @@ it.each([
       }
     `;
     const script = cliOutputScript({
-      registration: [sourceUrl("./cron-cli.ts"), "registerCronCli"],
-      exitUrl: sourceUrl("./one-shot-exit.ts"),
+      registration: [moduleUrl("./cron-cli.js"), "registerCronCli"],
+      exitUrl: moduleUrl("./one-shot-exit.js"),
       argv: ["cron", ...args],
       modules: { "/gateway-rpc.runtime.js": rpcSource },
       setup: `
-      const { applyResolvedCommandOutputMode } = await import(${JSON.stringify(sourceUrl("./json-output-mode.ts"))});
-      const { isCommandJsonOutputMode } = await import(${JSON.stringify(sourceUrl("./program/json-mode.ts"))});
+      const { applyResolvedCommandOutputMode } = await import(${JSON.stringify(moduleUrl("./json-output-mode.js"))});
+      const { isCommandJsonOutputMode } = await import(${JSON.stringify(moduleUrl("./program/json-mode.js"))});
           program.hook("preAction", (_parent, command) => {
             const jsonMode = isCommandJsonOutputMode(command, process.argv);
             if (!jsonMode) throw new Error("incorrect command output mode");
@@ -47,14 +48,12 @@ it.each([
     `,
     });
     const result = spawnNodeEvalSync(script, {
-      imports: ["tsx"],
       env: {
         ...process.env,
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-        TMPDIR: childTempDir,
-        TEMP: childTempDir,
-        TMP: childTempDir,
+        ...cliChildEnv(root),
+        TMPDIR: root,
+        TEMP: root,
+        TMP: root,
         NODE_DISABLE_COMPILE_CACHE: "1",
         NO_COLOR: "1",
         VITEST: undefined,

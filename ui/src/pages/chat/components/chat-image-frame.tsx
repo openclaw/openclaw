@@ -88,10 +88,17 @@ export function ImageFrame(props: {
             type="button"
             class="chat-message-image-button"
             aria-label={t("chat.imageLightbox.open", { title: title() })}
-            aria-disabled={props.model.previewUrl ? undefined : "true"}
+            aria-disabled={
+              props.options.mediaReadAllowed !== false && props.model.previewUrl
+                ? undefined
+                : "true"
+            }
             onFocus={() => props.presentation.admit()}
             onClick={(event) => {
               event.stopPropagation();
+              if (props.options.mediaReadAllowed === false) {
+                return;
+              }
               if (props.model.previewUrl) {
                 openMessageImage(image(), props.model.previewUrl, props.options);
               } else {
@@ -110,6 +117,7 @@ export function ImageFrame(props: {
       </Show>
       <Show when={!pending() && hasFileActions()}>
         <ChatImageActions
+          disabled={props.options.mediaReadAllowed === false}
           title={title()}
           readOriginalBlob={loadOriginal}
           overlay={!compact() && !smallPreview()}

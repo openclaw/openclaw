@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
-import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   controlUiSessionPath,
+  SESSION_LIST_DEFAULTS,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -28,20 +28,19 @@ suite.define(() => {
       const timeOrigin = await page.evaluate(() => performance.timeOrigin);
       const historyLength = await page.evaluate(() => window.history.length);
       const reads = (await gateway.getRequests("chat.history")).length;
-      await page.evaluate((sessionKey) => {
-        (window as MockGatewayWindow).openclawControlUiE2eGateway!.emit("sessions.changed", {
-          sessionKey,
-          reason: "title",
-          session: {
-            key: sessionKey,
-            sessionId: `session:${sessionKey}`,
-            kind: "direct",
-            updatedAt: Date.now(),
-            displayName: "Node version requirements",
-            derivedTitle: "Node version requirements",
-          },
-        });
-      }, key);
+      const session = {
+        ...(await gateway.getSessionRow(key)),
+        updatedAt: Date.now(),
+        displayName: "Node version requirements",
+        derivedTitle: "Node version requirements",
+      };
+      // Route verification must read the same committed title as the live event.
+      await gateway.setSessionsListResponse({ ...SESSION_LIST_DEFAULTS, sessions: [session] });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        sessionKey: key,
+        reason: "title",
+        session,
+      });
       await expect.poll(() => page.title()).toContain("Node version requirements");
       await expect
         .poll(() => new URL(page.url()).pathname)

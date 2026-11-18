@@ -12,21 +12,22 @@ export function createCrabboxWorkerBinaryResolver(dependencies: {
   const binaries = new Map<string, Promise<CrabboxBinary>>();
   const reportedFallbacks = new Set<string>();
   let defaultCandidate: string | undefined;
+  const discoverDefault = () =>
+    (defaultCandidate ??= resolveCrabboxBinary({
+      openclawRoot: dependencies.openclawRoot,
+      pathEnv,
+    }));
   return {
     async resolve(this: void, explicit?: string, signal?: AbortSignal): Promise<CrabboxBinary> {
       signal?.throwIfAborted();
-      const candidate =
-        explicit ??
-        (defaultCandidate ??= resolveCrabboxBinary({
-          openclawRoot: dependencies.openclawRoot,
-          pathEnv,
-        }));
+      const candidate = explicit ?? discoverDefault();
       // Completed acquisition remains usable by cleanup after provider disposal.
       let resolution = binaries.get(candidate);
       if (!resolution) {
         dependencies.signal.throwIfAborted();
         resolution = ensureManagedCrabboxBinary({
           binary: candidate,
+          ...(explicit ? { fallbackBinary: discoverDefault() } : {}),
           signal: dependencies.signal,
         })
           .then((resolved) => {

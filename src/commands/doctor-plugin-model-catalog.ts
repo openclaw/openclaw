@@ -20,6 +20,7 @@ import {
 } from "../agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { decodeUtf8Input, Utf8InputError } from "../infra/utf8-input.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -121,15 +122,24 @@ type RootModelsFile = Readonly<{
   providers: Record<string, unknown>;
 }>;
 
-function readRootModelsFile(agentDir: string, runtime: RuntimeEnv): RootModelsFile | undefined {
+function readRootModelsFile(
+  agentDir: string,
+  runtime: RuntimeEnv,
+  onReadError: () => void,
+): RootModelsFile | undefined {
   const pathname = path.join(agentDir, "models.json");
   try {
     const raw = decodeUtf8Input(fs.readFileSync(pathname), `Model catalog ${pathname}`);
     const root = parseModelCatalogJson(raw);
-    return isRecord(root) && isRecord(root.providers)
-      ? { raw, root, providers: root.providers }
-      : undefined;
+    if (isRecord(root) && isRecord(root.providers)) {
+      return { raw, root, providers: root.providers };
+    }
+    onReadError();
+    return undefined;
   } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      onReadError();
+    }
     if (error instanceof Utf8InputError) {
       runtime.error(`${error.message} Left source unchanged.`);
     }
@@ -174,7 +184,7 @@ function describeRootProviderCopies(agentDir: string, review: RootProviderCopyRe
   ];
 }
 
-/** Imports released sidecars and repairs persisted SQLite catalogs only with Doctor authority. */
+/** Imports with Doctor authority; reports catalog work or incomplete inspection to the caller. */
 export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -182,7 +192,11 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   prompter: DoctorPrompter;
   runtime: RuntimeEnv;
   reportFindings?: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
-}): Promise<void> {
+}): Promise<boolean> {
+  let inspectionIncomplete = false;
+  const onReadError = () => {
+    inspectionIncomplete = true;
+  };
   const warnings: string[] = [];
   const findings: HealthFinding[] = [];
   const report = (reported: readonly HealthFinding[], rawWarnings?: readonly string[]) => {
@@ -207,34 +221,37 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     file: RootModelsFile | undefined,
     catalogs: readonly PersistedPluginModelCatalog[],
   ): RootProviderCopyReview => {
-    if (!file || catalogs.length === 0) {
+    if (!file) {
       return { copies: [], keptPluginOwnedIds: [] };
     }
-    pluginMetadataSnapshot ??= resolvePluginMetadataSnapshot({
-      config: params.cfg,
-      env: params.env ?? process.env,
-    });
     // A root block is a copy only when config does not declare its id, it carries nothing but
     // generated keys, no other plugin owns the id, and it deep-equals a generated catalog block.
     const generated = readGeneratedBlocks(catalogs);
     const copies: RootProviderCopy[] = [];
     const keptPluginOwnedIds: string[] = [];
     for (const [providerId, block] of Object.entries(file.providers)) {
-      if (explicitProviderIds.has(normalizeProviderId(providerId))) {
+      if (!isRecord(block)) {
+        inspectionIncomplete = true;
         continue;
       }
+      if (catalogs.length === 0 || explicitProviderIds.has(normalizeProviderId(providerId))) {
+        continue;
+      }
+      pluginMetadataSnapshot ??= resolvePluginMetadataSnapshot({
+        config: params.cfg,
+        env: params.env ?? process.env,
+      });
       const owner = resolvePluginModelCatalogOwnerPluginId({
         providerId,
         pluginMetadataSnapshot,
       });
-      const match =
-        isRecord(block) && hasOnlyGeneratedProviderKeys(block)
-          ? generated.find(
-              (candidate) =>
-                (owner === undefined || owner === candidate.pluginId) &&
-                isDeepStrictEqual(candidate.block, block),
-            )
-          : undefined;
+      const match = hasOnlyGeneratedProviderKeys(block)
+        ? generated.find(
+            (candidate) =>
+              (owner === undefined || owner === candidate.pluginId) &&
+              isDeepStrictEqual(candidate.block, block),
+          )
+        : undefined;
       if (match) {
         copies.push({ providerId, pluginId: match.pluginId, catalogProviderId: match.providerId });
       } else if (owner !== undefined) {
@@ -250,10 +267,12 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
     const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
     const repairablePluginIds = persisted
       .filter(({ contents }) => {
-        return repairPluginModelCatalogTransportMetadata(contents).contents !== contents;
+        const repair = repairPluginModelCatalogTransportMetadata(contents);
+        inspectionIncomplete ||= repair.inspectionIncomplete;
+        return repair.contents !== contents;
       })
       .map(({ pluginId }) => pluginId);
-    const rootCopies = reviewRootFile(readRootModelsFile(agentDir, params.runtime), [
+    const rootCopies = reviewRootFile(readRootModelsFile(agentDir, params.runtime, onReadError), [
       ...persisted,
       ...migrations,
     ]);
@@ -325,7 +344,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
         },
       ]);
     }
-    return;
+    return inspectionIncomplete || detected > 0 || warnings.length > 0 || findings.length > 0;
   }
 
   let migrated = 0;
@@ -396,7 +415,7 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
       continue;
     }
     // Compare against the catalogs as they stand after migration, from the bytes being replaced.
-    const file = readRootModelsFile(agent.agentDir, params.runtime);
+    const file = readRootModelsFile(agent.agentDir, params.runtime, onReadError);
     const review = reviewRootFile(file, loadPersistedPluginModelCatalogsReadOnly(agent.agentDir));
     if (!file || review.copies.length === 0) {
       continue;
@@ -443,4 +462,13 @@ export async function maybeMigrateLegacyPluginModelCatalogs(params: {
   if (rootCopyChanges.length > 0) {
     note(rootCopyChanges.join("\n"), "Doctor changes");
   }
+  return (
+    inspectionIncomplete ||
+    detected > 0 ||
+    migrated > 0 ||
+    repairs.length > 0 ||
+    rootCopyChanges.length > 0 ||
+    warnings.length > 0 ||
+    findings.length > 0
+  );
 }

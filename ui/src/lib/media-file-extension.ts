@@ -6,13 +6,14 @@ const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
 ];
 
 /** Returns the final filename after decoding one URL path-segment layer. */
-function getMediaFileName(value: string): string | undefined {
+function getMediaFileName(value: string, decodeInbound = false): string | undefined {
   const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
   }
   const url =
     /^https?:\/\//i.test(trimmed) ||
+    (decodeInbound && trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) ||
     (trimmed.startsWith("/") &&
       SAME_ORIGIN_MEDIA_ROUTE_MARKERS.some((marker) => trimmed.includes(marker)))
       ? URL.parse(trimmed, "https://openclaw.invalid")
@@ -124,7 +125,7 @@ const MANAGED_INBOUND_UUID_SUFFIX_PATTERN =
 export function labelForMediaPath(mediaPath: string): string {
   const trimmed = mediaPath.trim();
   if (trimmed.startsWith(MANAGED_INBOUND_MEDIA_PREFIX)) {
-    const basename = trimmed.split("/").pop()?.trim() || trimmed;
+    const basename = getMediaFileName(trimmed, true)?.trim() || trimmed;
     return basename.replace(MANAGED_INBOUND_UUID_SUFFIX_PATTERN, "") || basename;
   }
   const parsed = /^https?:\/\//i.test(trimmed) ? URL.parse(trimmed) : null;

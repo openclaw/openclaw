@@ -49,6 +49,7 @@ describe("bundled plugin public surface runtime", () => {
       const builtRoot = path.join(root, "dist/extensions/demo");
       const source = writeArtifact(path.join(sourceRoot, "index.ts"));
       writeArtifact(path.join(sourceRoot, "api.ts"), 'export const family = "source";');
+      writeArtifact(path.join(builtRoot, "package.json"), '{"type":"module"}');
       const builtSource = writeArtifact(path.join(builtRoot, "index.js"));
       const builtSurface = writeArtifact(
         path.join(builtRoot, "api.js"),

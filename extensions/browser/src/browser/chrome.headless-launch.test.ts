@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
-const fixture = vi.hoisted(() => ({ root: "", spawn: vi.fn() }));
+const fixture = vi.hoisted(() => ({
+  root: "",
+  spawn: vi.fn(),
+  processListingBytes: undefined as number | undefined,
+}));
 vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/text-utility-runtime")>()),
   get CONFIG_DIR() {
@@ -21,10 +25,37 @@ vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>()),
   ensurePortAvailable: async () => {},
 }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: fixture.spawn,
+vi.mock("./chrome.diagnostics.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome.diagnostics.js")>()),
+  diagnoseChromeCdp: async () => ({ ok: true }),
 }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: fixture.spawn,
+    execFileSync: (...args: Parameters<typeof actual.execFileSync>) => {
+      if (
+        fixture.processListingBytes !== undefined &&
+        args[0] === "ps" &&
+        Array.isArray(args[1]) &&
+        args[1].includes("pid=,command=")
+      ) {
+        // Keep the real subprocess capture limit; only the process listing is synthetic.
+        return actual.execFileSync(
+          process.execPath,
+          [
+            "-e",
+            "process.stdout.write('123 /unrelated ' + 'x'.repeat(Number(process.argv[1])) + '\\n')",
+            String(fixture.processListingBytes),
+          ],
+          args[2],
+        );
+      }
+      return actual.execFileSync(...args);
+    },
+  };
+});
 
 import { launchOpenClawChrome, resolveOpenClawUserDataDir } from "./chrome.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
@@ -39,13 +70,102 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   fixture.spawn.mockReset();
+  fixture.processListingBytes = undefined;
 });
 
-it.each(["linux", "darwin", "win32"] as const)(
-  "seeds a fresh headless profile before its only launch on %s",
-  async (platform) => {
+it("prepares a managed launch without filesystem mutations on the calling thread", async () => {
+  const executablePath = path.join(fixture.root, "chrome");
+  fs.writeFileSync(executablePath, "");
+  const resolved = resolveBrowserConfig({ executablePath });
+  const profile = resolveProfile(resolved, "openclaw")!;
+  const proc = Object.assign(new EventEmitter(), {
+    pid: 4242,
+    exitCode: null,
+    signalCode: null,
+    stderr: new EventEmitter(),
+    kill: vi.fn(),
+  });
+  fixture.spawn.mockReturnValue(proc);
+  const mutations: string[] = [];
+  for (const method of ["mkdirSync", "rmSync", "renameSync"] as const) {
+    const original = fs[method].bind(fs);
+    vi.spyOn(fs, method).mockImplementation((...args: unknown[]) => {
+      if (String(args[0]).startsWith(fixture.root)) {
+        mutations.push(method);
+      }
+      return Reflect.apply(original, fs, args);
+    });
+  }
+  for (const method of ["fchmodSync", "writeSync", "fsyncSync"] as const) {
+    const original = fs[method].bind(fs);
+    vi.spyOn(fs, method).mockImplementation((...args: unknown[]) => {
+      mutations.push(method);
+      return Reflect.apply(original, fs, args);
+    });
+  }
+  const running = await launchOpenClawChrome(resolved, profile);
+  expect(running.proc).toBe(proc);
+  expect(fixture.spawn).toHaveBeenCalledTimes(1);
+  expect(mutations).toEqual([]);
+  const userDataDir = resolveOpenClawUserDataDir(profile.name);
+  expect(
+    JSON.parse(fs.readFileSync(path.join(userDataDir, "Default", "Preferences"), "utf8")),
+  ).toMatchObject({ net: { network_prediction_options: 2 }, profile: { name: "openclaw" } });
+  expect(JSON.parse(fs.readFileSync(path.join(userDataDir, "Local State"), "utf8"))).toMatchObject({
+    profile: { info_cache: { Default: { name: "openclaw" } } },
+  });
+});
+
+it("preserves filesystem error codes when the lifecycle lock cannot be created", async () => {
+  fs.writeFileSync(path.join(fixture.root, "browser"), "not a directory");
+  const resolved = resolveBrowserConfig({});
+  await expect(
+    launchOpenClawChrome(resolved, resolveProfile(resolved, "openclaw")!),
+  ).rejects.toMatchObject({ code: expect.stringMatching(/^(ENOTDIR|EEXIST)$/) });
+  expect(fixture.spawn).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    platform: "linux",
+    largeProcessListing: false,
+    preload: "/opt/libfirst.so:/usr/lib/x86_64-linux-gnu/libjemalloc.so.2 liblast.so",
+    expectedPreload: "/opt/libfirst.so:liblast.so",
+  },
+  {
+    platform: "darwin",
+    largeProcessListing: false,
+    preload: "libjemalloc.so",
+    expectedPreload: undefined,
+  },
+  {
+    platform: "win32",
+    largeProcessListing: false,
+    preload: "/opt/libjemalloc/custom.so",
+    expectedPreload: "/opt/libjemalloc/custom.so",
+  },
+  {
+    platform: "darwin",
+    largeProcessListing: true,
+    preload: "libjemalloc.so.2:libjemalloc.so.2.0.0",
+    expectedPreload: undefined,
+  },
+] as const)(
+  "seeds a fresh headless profile before its only launch on $platform (large listing: $largeProcessListing)",
+  async ({ platform, largeProcessListing, preload, expectedPreload }) => {
+    const allocatorConfig =
+      "background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:1000,prof:true";
+    const longTmpDir = `/tmp/${"gateway-".repeat(10)}`;
+    vi.stubEnv("TMPDIR", longTmpDir);
+    vi.stubEnv("MALLOC_CONF", allocatorConfig);
+    vi.stubEnv("LD_PRELOAD", preload);
+    if (largeProcessListing) {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      fixture.processListingBytes = 2 * 1024 * 1024;
+    }
     const executablePath = path.join(fixture.root, "chrome");
     fs.writeFileSync(executablePath, "");
     const resolved = resolveBrowserConfig({ executablePath });
@@ -60,8 +180,15 @@ it.each(["linux", "darwin", "win32"] as const)(
       stderr: new EventEmitter(),
       kill: vi.fn(),
     });
-    fixture.spawn.mockImplementation((_command, args: string[]) => {
+    fixture.spawn.mockImplementation((_command, args: string[], options) => {
+      expect(options.env.TMPDIR).toBe(process.platform === "linux" ? "/tmp" : longTmpDir);
+      expect(options.env).not.toHaveProperty("MALLOC_CONF");
+      expect(options.env.LD_PRELOAD).toBe(expectedPreload);
       expect(args).toContain("--headless=new");
+      expect(args).toContain("--disable-gpu");
+      expect(args).not.toEqual(expect.arrayContaining(["--use-angle=swiftshader"]));
+      expect(args).not.toContain("--enable-unsafe-swiftshader");
+      expect(args).not.toContain("--in-process-gpu");
       expect(args).not.toContain("--no-sandbox");
       expect(readPrefs()).toMatchObject({
         download: {
@@ -79,6 +206,9 @@ it.each(["linux", "darwin", "win32"] as const)(
       platform,
     });
     expect(fixture.spawn).toHaveBeenCalledTimes(1);
+    expect(process.env.TMPDIR).toBe(longTmpDir);
+    expect(process.env.MALLOC_CONF).toBe(allocatorConfig);
+    expect(process.env.LD_PRELOAD).toBe(preload);
     expect(running).toMatchObject({ headless: true, headlessSource: "default", proc });
     if (process.platform !== "win32") {
       expect(fs.statSync(preferencesPath).mode & 0o777).toBe(0o600);
@@ -98,4 +228,16 @@ it("rejects an actual headed launch of an explicit headless-only executable", as
     }),
   ).rejects.toThrow("cannot open a headed window");
   expect(fixture.spawn).not.toHaveBeenCalled();
+});
+
+it("refuses launch when the process listing exceeds the bounded capture", async () => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  fixture.processListingBytes = 5 * 1024 * 1024;
+  const resolved = resolveBrowserConfig({});
+  const profile = resolveProfile(resolved, "openclaw")!;
+  await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(
+    "Headless shell profile ownership could not be verified",
+  );
+  expect(fixture.spawn).not.toHaveBeenCalled();
+  expect(fs.existsSync(resolveOpenClawUserDataDir(profile.name))).toBe(false);
 });

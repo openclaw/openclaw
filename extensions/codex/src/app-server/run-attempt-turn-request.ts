@@ -1,4 +1,8 @@
-import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  formatErrorMessage,
+  runAgentHarnessLlmInputHook,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { CodexAccessProgramUnavailableError } from "./access-program.js";
 import {
   interruptCodexTurnAndWaitBestEffort,
@@ -31,6 +35,7 @@ import {
   withCodexAppServerFastModeServiceTier,
 } from "./run-attempt-lifecycle.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
+import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { buildCodexConversationTurnInstructions } from "./thread-prompt.js";
 import { recordCodexTrajectoryContext } from "./trajectory.js";
@@ -52,12 +57,8 @@ export async function prepareCodexAttemptTurnRequest(
   waitForActiveNativeTurnCompletion: () => Promise<boolean>,
 ) {
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
-  const {
-    context,
-    turnState,
-    buildRenderedCodexDeveloperInstructions,
-    nativeHistoryProvenancePrefix,
-  } = prompt;
+  const { context, turnState, buildRenderedCodexInstructions, nativeHistoryProvenancePrefix } =
+    prompt;
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
@@ -107,7 +108,7 @@ export async function prepareCodexAttemptTurnRequest(
     capture: codexModelContentCapture,
     tools,
     buildInputMessages: buildCodexModelInputMessages,
-    buildSystemPrompt: buildRenderedCodexDeveloperInstructions,
+    buildSystemPrompt: buildRenderedCodexInstructions,
     onErrorDiagnostic: (error) => {
       embeddedAgentLog.debug("codex app-server model call diagnostic ended with error", {
         error: formatErrorMessage(error),
@@ -274,27 +275,25 @@ export async function prepareCodexAttemptTurnRequest(
           }
         : undefined;
     if (inferenceRoute) {
-      if (!usesSupervisionConnection) {
-        prompt.setParentLocalEgress();
-      }
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
+      const inferenceInstructions = joinPresentSections(
+        usesSupervisionConnection
+          ? undefined
+          : (buildCodexParentLocalInstructions(runtimeParams, {
+              personaInstructions: workspaceBootstrapContext.personaInstructions,
+              skillsInstructions: context.skillsInstructions,
+              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
+            }) ?? undefined),
+        turnState.promptBuild.turnDeveloperInstructions,
+        buildCodexConversationTurnInstructions(
+          runtimeParams,
+          attemptTools.toolBridge.availableSpecs,
+        ),
+      );
       const registration = await inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
-        text: joinPresentSections(
-          usesSupervisionConnection
-            ? undefined
-            : (buildCodexParentLocalInstructions(runtimeParams, {
-                personaInstructions: workspaceBootstrapContext.personaInstructions,
-                skillsInstructions: context.skillsInstructions,
-                memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-              }) ?? undefined),
-          turnState.promptBuild.turnDeveloperInstructions,
-          buildCodexConversationTurnInstructions(
-            runtimeParams,
-            attemptTools.toolBridge.availableSpecs,
-          ),
-        ),
+        text: inferenceInstructions,
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();
@@ -310,6 +309,7 @@ export async function prepareCodexAttemptTurnRequest(
         },
       });
       resourceState.releaseInferenceContext = registration.release;
+      prompt.setInferenceInstructions(inferenceInstructions);
       turnStartParams.responsesapiClientMetadata = {
         ...turnStartParams.responsesapiClientMetadata,
         [CODEX_INFERENCE_GENERATION_KEY]: registration.generation,
@@ -331,12 +331,14 @@ export async function prepareCodexAttemptTurnRequest(
       assertCurrent: assertTurnCurrent,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    runAgentHarnessLlmInputHook({
+      event: buildLlmInputEvent(),
+      ctx: context.hookContext,
+      hookRunner: context.hookRunner,
+    });
     recordCodexTrajectoryContext(resources.trajectoryRecorder, {
       attempt: params,
-      developerInstructions: joinPresentSections(
-        buildRenderedCodexDeveloperInstructions(),
-        attemptTools.configuredMcp?.diagnosticNotice,
-      ),
+      developerInstructions: buildRenderedCodexInstructions(),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,
     });
@@ -359,6 +361,28 @@ export async function prepareCodexAttemptTurnRequest(
       .flatMap((item) => (item.type === "text" ? [item.text] : []))
       .join("\n");
     try {
+      const recorder = params.userTurnTranscriptRecorder;
+      if (
+        !params.skipPreparedUserTurnMessage &&
+        !recorder?.isBlocked() &&
+        recorder?.captureModelPromptProjection
+      ) {
+        const { prompt: builtPrompt, promptInputRange } = turnState.promptBuild;
+        if (!promptInputRange) {
+          throw new Error("Codex prompt input range is missing before provider dispatch");
+        }
+        // Freeze current user and hook context, not native history or workspace policy.
+        // Embedded fallback must replay this same projection after native acceptance.
+        const currentInput = prependCurrentInboundContext(
+          params.prompt,
+          params.currentInboundContext,
+        );
+        const text =
+          builtPrompt.slice(0, promptInputRange.start) +
+          currentInput +
+          builtPrompt.slice(promptInputRange.end);
+        await recorder.captureModelPromptProjection(text, assertTurnCurrent);
+      }
       const startedTurn = assertCodexTurnStartResponse(
         await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
@@ -394,6 +418,7 @@ export async function prepareCodexAttemptTurnRequest(
         error.name = "AbortError";
         throw error;
       }
+      resourceState.nativeHookRelay?.bindForegroundTurn(threadId, acceptedTurnId);
       await continuation?.accept(acceptedTurnId);
       return { turn: startedTurn, upstreamUserText };
     } catch (error) {
@@ -453,7 +478,7 @@ export async function prepareCodexAttemptTurnRequest(
   prepareWorkspaceReferences();
   const buildLlmInputEvent = () => ({
     ...buildModelCallIdentity(),
-    systemPrompt: buildRenderedCodexDeveloperInstructions(),
+    systemPrompt: buildRenderedCodexInstructions(),
     prompt: turnState.codexTurnPromptText,
     historyMessages: [],
     imagesCount:
@@ -471,5 +496,5 @@ export async function prepareCodexAttemptTurnRequest(
       ? { harnessId: params.runtimePlan.observability.harnessId }
       : {}),
   });
-  return { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent, buildLlmOutputEvent };
+  return { codexModelCallDiagnostics, startCodexTurn, buildLlmOutputEvent };
 }

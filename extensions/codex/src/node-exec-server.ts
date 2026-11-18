@@ -14,7 +14,7 @@ const CODEX_NODE_EXEC_SERVER_COMMAND = "codex.exec-server.stdio.v1";
 
 const CODEX_NODE_EXEC_SERVER_CAPABILITY = "codex.exec-server";
 
-function parseCodexNodePlacementWorkspace(value: unknown) {
+export function parseCodexNodePlacementWorkspace(value: unknown) {
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 5 ||

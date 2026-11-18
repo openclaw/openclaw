@@ -1,5 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  prepareSandboxStateOwnerPath,
+  type SandboxStateOwnerPath,
+} from "../agents/sandbox/state-owner-path.js";
+import { validateWorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
+import {
+  prepareSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
@@ -151,6 +160,7 @@ function gitExecutionArgv(
 
 export type GitCommandOptions = Pick<
   CommandOptions,
+  | "executionIntent"
   | "timeoutMs"
   | "noOutputTimeoutMs"
   | "baseEnv"
@@ -172,7 +182,8 @@ export type GitCommandOptions = Pick<
   /** Settle without the generic absolute deadline; an idle deadline may still apply. */
   waitForExit?: boolean;
   /** Recheck caller authority immediately before each attempt. */
-  beforeRun?: () => void;
+  beforeRun?: SessionSourceAssertion;
+  stateOwnerPath?: SandboxStateOwnerPath;
   /** Admit each attempt inside the caller's asynchronous credential owner. */
   startRun?: GitOperationStarter;
 };
@@ -269,28 +280,30 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   const env = gitReadOnlyEnvironment(args, options.env ?? {});
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = gitExecutionArgv(cwd, args, options);
-  const runAttempt = async (attemptOptions: CommandOptions) => {
-    if (options.maxPatchBytes === undefined) {
-      return await run(argv, attemptOptions);
-    }
-    const capture = createGitPatchCapture(options.maxPatchBytes);
-    const result = await run(argv, {
-      ...attemptOptions,
-      outputCapture: "discard",
-      tolerateOutputError: { stderr: true },
-      onOutputChunk: (chunk, stream) => {
-        if (stream === "stdout") {
-          capture.append(chunk);
-        }
-      },
+  const runAttempt = (attemptOptions: CommandOptions) =>
+    withGitAttemptSource(options, async () => {
+      if (options.maxPatchBytes === undefined) {
+        return await run(argv, attemptOptions);
+      }
+      const capture = createGitPatchCapture(options.maxPatchBytes);
+      const result = await run(argv, {
+        ...attemptOptions,
+        outputCapture: "discard",
+        tolerateOutputError: { stderr: true },
+        onOutputChunk: (chunk, stream) => {
+          if (stream === "stdout") {
+            capture.append(chunk);
+          }
+        },
+      });
+      return replaceStdout({ ...result, stdoutTruncatedBytes: undefined }, capture.finish());
     });
-    return replaceStdout({ ...result, stdoutTruncatedBytes: undefined }, capture.finish());
-  };
   if (options.waitForExit === true) {
     const start = () => {
       options.beforeRun?.();
       return runAttempt({
         ...options,
+        executionIntent: options.executionIntent ?? "gateway-internal",
         env,
         timeoutMs: undefined,
       });
@@ -304,6 +317,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
     (attemptTimeoutMs) =>
       runAttempt({
         ...options,
+        executionIntent: options.executionIntent ?? "gateway-internal",
         env,
         timeoutMs: attemptTimeoutMs,
       }),
@@ -314,7 +328,8 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
 export type GitBufferedCommandOptions = BufferedCommandOptions & {
   refMutationDirectory?: string;
   lowerPriority?: boolean;
-  beforeRun?: () => void;
+  beforeRun?: SessionSourceAssertion;
+  stateOwnerPath?: SandboxStateOwnerPath;
   startRun?: GitOperationStarter;
   operation?: GitProcessOperation;
 };
@@ -334,9 +349,41 @@ export async function executeGitCommandBuffered(
     withGitNetworkRetry(
       retryableGitNetworkOperation(args),
       { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
-      (timeoutMs) => runCommandBuffered(argv, { ...options, env, timeoutMs }),
+      (timeoutMs) =>
+        withGitAttemptSource(options, () =>
+          runCommandBuffered(argv, {
+            ...options,
+            executionIntent: options.executionIntent ?? "gateway-internal",
+            env,
+            timeoutMs,
+          }),
+        ),
     ),
   );
+}
+
+async function withGitAttemptSource<T>(
+  options: Pick<GitCommandOptions, "beforeRun" | "stateOwnerPath">,
+  run: () => Promise<T>,
+): Promise<T> {
+  const source = options.beforeRun?.prepareSessionSourceEffect
+    ? await prepareSessionSourceEffect(options.beforeRun)
+    : undefined;
+  try {
+    for (const evidence of source?.workspaceEvidence ?? []) {
+      await validateWorkspaceFilesystemEvidence(evidence);
+    }
+    if (options.stateOwnerPath) {
+      await prepareSandboxStateOwnerPath(options.stateOwnerPath);
+    }
+    // The existing attempt boundary follows credential/retry waits and precedes broker dispatch.
+    if (source || options.stateOwnerPath) {
+      (source?.assertCurrent ?? options.beforeRun)?.();
+    }
+    return await run();
+  } finally {
+    await source?.release?.();
+  }
 }
 
 export function createGitCommandError(
@@ -398,4 +445,9 @@ export function requireGitCommandOutput(
 // Config values such as core.hooksPath still accept os.devNull.
 export function gitNullConfigPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
+}
+
+/** Quote a Git config value without treating its contents as config syntax. */
+export function quoteGitConfig(value: string): string {
+  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
 }

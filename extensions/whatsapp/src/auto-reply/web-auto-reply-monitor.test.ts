@@ -91,6 +91,37 @@ function createBotGroupMessage(overrides: TestMessageOverrides) {
 }
 
 describe("applyGroupGating", () => {
+  it.each<[string, string[] | undefined, boolean]>([
+    ["Order 15551234567 is ready", undefined, false],
+    ["Invoice 9915551234567001 is overdue", undefined, false],
+    ["Meeting at 15:55, room 123, ext 4567", undefined, false],
+    ["Call +1 (555) 123-4567", undefined, false],
+    ["1555\n1234567", undefined, false],
+    ["order@15551234567.example", undefined, false],
+    ["cafe\u0301@15551234567.example", undefined, false],
+    ["@15551234567\u0301abc", undefined, false],
+    ["@9915551234567001", undefined, false],
+    ["@15551234567abc", undefined, false],
+    ["@15551234567", undefined, true],
+    ["Please (@+15551234567), help", undefined, true],
+    ["Please help", ["15551234567@s.whatsapp.net"], true],
+    ["@15550000000", ["15550000000@s.whatsapp.net"], false],
+  ])("dispatches %j with native mentions %j: %s", async (body, mentionedJids, shouldProcess) => {
+    const msg = createBotGroupMessage({ body, mentionedJids });
+    const { result, groupHistories } = await runGroupGating({
+      cfg: makeConfig(
+        { groupPolicy: "open", groups: { "*": { requireMention: true } } },
+        { messages: { groupChat: { mentionPatterns: [] } } },
+      ),
+      msg,
+    });
+    expect(result.shouldProcess).toBe(shouldProcess);
+    expect(msg.groupMention).toEqual({ wasMentioned: shouldProcess, requireMention: true });
+    expect(
+      groupHistories.get("whatsapp:default:group:123@g.us")?.map((entry) => entry.body),
+    ).toEqual(shouldProcess ? undefined : [body]);
+  });
+
   it.each([
     ["15551234567", false],
     ["15559999999", true],

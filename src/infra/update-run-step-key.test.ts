@@ -75,3 +75,20 @@ it("retains bounded informational diagnostics without warnings or raw process ou
   expect(recorded.steps.some((step) => step.step.startsWith("warning:"))).toBe(false);
   expect(JSON.stringify(recorded)).not.toContain("RAW_PROCESS_OUTPUT");
 });
+
+// Settlement clears warnings, not the original process classification.
+it.each([{ warnings: undefined }, { warnings: [] }])(
+  "projects an advisory with explicit warnings $warnings",
+  ({ warnings }) => {
+    const steps = updateRunStepsFromResultStep({
+      name: "package-doctor",
+      exitCode: 86,
+      warnings,
+      advisory: { kind: "package-post-install-doctor", message: "Doctor advisory." },
+    });
+    expect(steps[0]).toMatchObject({ status: "completed", exitCode: 86 });
+    expect(steps.filter((step) => step.step.startsWith("warning:"))).toEqual(
+      warnings ? [] : [expect.objectContaining({ detail: "Doctor advisory." })],
+    );
+  },
+);

@@ -39,7 +39,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { gatewayFixtureLifetime } from "../gateway-fixture-lifetime.test-support.js";
-import { getGatewayRecoveryRuntime } from "../server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "../server-lifecycle-runtime-context.js";
 import type { GatewayServerHarness } from "../server.e2e-ws-harness.js";
 import { removeSessionFixtureDirectory } from "../session-fixture-directory.test-support.js";
 import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
@@ -80,7 +80,7 @@ export async function settleGatewaySessionStoreFixture(dir: string) {
   }
   // Participant persistence outlives request roots; retain selectors until its FIFO settles.
   await drainOpenClawAgentWriteQueuesForTest(ownsPath);
-  const runtime = getGatewayRecoveryRuntime();
+  const runtime = getGatewayLifecycleRuntime();
   const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
   if (projection) {
     await waitForSessionTranscriptIndexReconcilesInStateDir(root);

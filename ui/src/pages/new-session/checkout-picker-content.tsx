@@ -1,6 +1,7 @@
 import { createMemo, createSignal, Errored, For, Loading, onSettled, type Element } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover } from "../../components/solid/popover.tsx";
+import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
@@ -50,7 +51,7 @@ function WorktreeFields(props: {
       return false;
     }
     const activeIndex = activeSuggestion ? rows.indexOf(activeSuggestion) : -1;
-    if (event.key === "Enter" && !event.isComposing && activeIndex >= 0) {
+    if (event.key === "Enter" && activeIndex >= 0) {
       activeSuggestion!.click();
       return true;
     }
@@ -72,6 +73,9 @@ function WorktreeFields(props: {
     return true;
   };
   const handleFieldKeydown = (event: KeyboardEvent) => {
+    if (isComposingKeyboardEvent(event)) {
+      return;
+    }
     if (handleBranchKeydown(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -85,7 +89,6 @@ function WorktreeFields(props: {
     }
     if (
       event.key !== "Enter" ||
-      event.isComposing ||
       (!props.params.place.remoteRepository && !isWorktreeNameValid(nameInput.value))
     ) {
       return;
@@ -126,7 +129,7 @@ function WorktreeFields(props: {
     />
   );
   return (
-    <>
+    <div class="new-session-page__checkout-fields">
       <div class="new-session-page__menu-field">
         <span>{t("newSession.worktreeBaseRef")}</span>
         {suggestions().length ? (
@@ -199,38 +202,35 @@ function WorktreeFields(props: {
         )}
       </div>
       <RepositoryRead read={props.params.place.repositoryState.repositoryRead}>
-        {() => (
-          <div class="new-session-page__menu-note">
-            {t(
-              branches()?.branchesUnavailable
-                ? "newSession.worktreeBranchesUnavailable"
-                : "newSession.worktreeBranchesLimited",
-            )}
-          </div>
-        )}
+        {() =>
+          branches()?.branchesUnavailable ? (
+            <div class="new-session-page__menu-note" role="status">
+              {t("newSession.worktreeBranchesUnavailable")}
+            </div>
+          ) : undefined
+        }
       </RepositoryRead>
       {props.params.place.remoteRepository ? undefined : (
-        <>
-          <label class="new-session-page__menu-field">
-            <span>{t("newSession.worktreeName")}</span>
-            <input
-              type="text"
-              data-worktree-name=""
-              disabled={props.params.submitting || props.params.pendingPlacement}
-              placeholder={t("newSession.worktreeNamePlaceholder")}
-              value={props.params.place.worktreeName}
-              onInput={(event) => props.params.place.setWorktreeName(event.currentTarget.value)}
-              ref={[(node) => (nameInput = node), nativeListener("keydown", handleFieldKeydown)]}
-            />
-          </label>
-          <div class="new-session-page__menu-note">
-            {branchName()
-              ? t("newSession.worktreeBranchNote", { branch: `openclaw/${branchName()}` })
-              : t("newSession.worktreeBranchFromTitleNote")}
-          </div>
-        </>
+        <label class="new-session-page__menu-field">
+          <span>{t("newSession.worktreeName")}</span>
+          <input
+            type="text"
+            data-worktree-name=""
+            disabled={props.params.submitting || props.params.pendingPlacement}
+            placeholder={t("newSession.worktreeNamePlaceholder")}
+            // The placeholder covers the blank case; a typed name maps to its branch on hover.
+            title={
+              branchName()
+                ? t("newSession.worktreeBranchNote", { branch: `openclaw/${branchName()}` })
+                : undefined
+            }
+            value={props.params.place.worktreeName}
+            onInput={(event) => props.params.place.setWorktreeName(event.currentTarget.value)}
+            ref={[(node) => (nameInput = node), nativeListener("keydown", handleFieldKeydown)]}
+          />
+        </label>
       )}
-    </>
+    </div>
   );
 }
 
@@ -241,11 +241,19 @@ export function CheckoutPickerContent(props: {
   onConfirm: () => void;
 }) {
   const worktreeAvailable = () => props.params.place.worktreeAvailable();
+  const repositoryNotice = () =>
+    props.params.place.repositoryState.refreshing
+      ? t("common.refreshing")
+      : repositoryIssueText(props.params.place.repository);
   const branches = () =>
     props.params.place.repository.kind === "git" ? props.params.place.repository : null;
   return (
     <div class="new-session-page__picker-root">
-      <div class="new-session-page__menu-title">{t("newSession.checkout")}</div>
+      {repositoryNotice() ? (
+        <div class="new-session-page__menu-note" role="status">
+          {repositoryNotice()}
+        </div>
+      ) : undefined}
       {props.params.place.remoteRepository ? undefined : (
         <RepositoryRead read={props.params.place.repositoryState.checkoutRead}>
           {() => (
@@ -256,7 +264,6 @@ export function CheckoutPickerContent(props: {
                   label: t("newSession.checkoutCurrent"),
                   icon: <Icon name="folder" />,
                   sub: branches()?.headBranch,
-                  description: props.params.place.currentCheckoutUnavailableReason,
                   checked: !props.params.place.worktree,
                   disabled:
                     props.params.place.remotePlacement ||
@@ -274,7 +281,6 @@ export function CheckoutPickerContent(props: {
                   value: "worktree",
                   label: t("newSession.checkoutWorktree"),
                   icon: <Icon name="gitBranch" />,
-                  sub: t("newSession.checkoutWorktreeSub"),
                   checked: props.params.place.worktree,
                   disabled: !worktreeAvailable(),
                   title: worktreeAvailable()

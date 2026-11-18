@@ -10,6 +10,14 @@ describe("cli json stdout contract", () => {
     { context: "ordinary fresh home", env: {}, reason: "never-asked" },
     { context: "automated fresh home", env: { CI: "1" }, reason: "automated-environment" },
     {
+      context: "automation with an explicit production endpoint",
+      env: {
+        CI: "1",
+        OPENCLAW_TELEMETRY_ENDPOINT: "https://telemetry.openclaw.ai/api/latest-version",
+      },
+      reason: "automated-environment",
+    },
+    {
       context: "automation with an explicit endpoint",
       env: {
         CI: "1",
@@ -65,6 +73,7 @@ describe("cli json stdout contract", () => {
             const payload = JSON.parse(result.stdout);
             expect(payload).toEqual({
               featureStatsEnabled: false,
+              installationCountEnabled: reason !== "automated-environment",
               reason,
               endpoint,
               lastPingAt: null,
@@ -83,6 +92,10 @@ describe("cli json stdout contract", () => {
             const lines = report.trimEnd().split("\n");
             expect(lines).toEqual([
               "Feature stats: disabled",
+              "Installation counting: " +
+                (reason === "automated-environment"
+                  ? "disabled"
+                  : "eligible after a fresh receiver capability"),
               `Reason: ${reason === "automated-environment" ? "disabled in an automated environment (CI is set)" : "consent has not been requested"}`,
               `Endpoint: ${endpoint}`,
               "Last ping: never",
@@ -437,8 +450,8 @@ describe("cli json stdout contract", () => {
             error: { type: "cli_error", message: conflict.message },
           });
           expect(result.stdout).not.toContain("[openclaw]");
-          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-          expect(result.stderr).not.toContain(conflict.message);
+          expect(result.stderr).not.toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).toContain(conflict.message);
         }
       },
       { prefix: "openclaw-qr-json-failure-e2e-" },
@@ -520,36 +533,6 @@ describe("cli json stdout contract", () => {
         expect(result.stderr).toBe(`${message}\n`);
       },
       { prefix: "openclaw-sandbox-json-failure-e2e-" },
-    );
-  });
-
-  it("returns one canonical document when docs search fails", async () => {
-    await withTempHome(
-      async (tempHome) => {
-        const preload = `data:text/javascript,${encodeURIComponent(
-          'globalThis.fetch = async () => { throw new Error("offline fixture"); };',
-        )}`;
-        const result = runBuiltCli(
-          tempHome,
-          ["docs", "offline", "--json"],
-          {},
-          {
-            execArgv: [`--import=${preload}`],
-          },
-        );
-
-        expect(result.status).toBe(1);
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: "Docs search failed: offline fixture",
-          },
-        });
-        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-        expect(result.stderr).not.toContain("Docs search failed: offline fixture");
-      },
-      { prefix: "openclaw-docs-json-failure-e2e-" },
     );
   });
 

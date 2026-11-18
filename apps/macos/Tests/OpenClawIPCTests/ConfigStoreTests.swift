@@ -164,32 +164,51 @@ struct ConfigStoreTests {
         }
     }
 
-    @Test func `local save can fall back to protected direct write when gateway is unavailable`() async throws {
+    @Test func `gateway save timeout does not write redacted secrets to the config file`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
         defer { try? FileManager().removeItem(at: stateDir) }
 
+        let redacted = "__OPENCLAW_REDACTED__"
+        let timeout = NSError(domain: "Gateway", code: 5, userInfo: [
+            NSLocalizedDescriptionKey: "gateway request timed out after 10000ms",
+        ])
         try await self.withOverrides(.init(
             isRemoteMode: { false },
-            loadLocal: { OpenClawConfigFile.loadDict() },
-            saveGateway: { _ in
-                throw NSError(domain: "Gateway", code: 0, userInfo: [
-                    NSLocalizedDescriptionKey: "gateway not configured",
-                ])
-            }), env: [
+            // The shape config.get returns: secrets replaced by the redaction sentinel.
+            loadLocal: { [
+                "gateway": ["mode": "local", "auth": ["mode": "token", "token": redacted]],
+                "channels": ["telegram": ["botToken": redacted]],
+                "browser": ["enabled": true],
+            ] },
+            saveGateway: { _ in throw timeout }), env: [
             "OPENCLAW_STATE_DIR": stateDir.path,
             "OPENCLAW_CONFIG_PATH": configPath.path,
         ]) {
-            try await self.saveLoadedDocument([
-                "gateway": ["mode": "local"],
-                "browser": ["enabled": false],
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": ["mode": "token", "token": "test-gateway-token"], // pragma: allowlist secret
+                ],
+                "channels": ["telegram": ["botToken": "test-bot-token"]], // pragma: allowlist secret
+                "browser": ["enabled": true],
             ])
+            let before = try String(contentsOf: configPath, encoding: .utf8)
+            var document = await ConfigStore.load()
+            document.root["browser"] = ["enabled": false]
+            var didThrow = false
+            do {
+                // Tailscale saves allow Gateway auth mutation; the file must stay intact either way.
+                try await ConfigStore.save(document, allowGatewayAuthMutation: true)
+            } catch {
+                didThrow = true
+                #expect(error as NSError == timeout)
+            }
 
-            let data = try Data(contentsOf: configPath)
-            let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-            #expect(((root?["browser"] as? [String: Any])?["enabled"] as? Bool) == false)
-            #expect((root?["meta"] as? [String: Any]) != nil)
+            #expect(didThrow)
+            let after = try String(contentsOf: configPath, encoding: .utf8)
+            #expect(after == before)
         }
     }
 

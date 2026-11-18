@@ -1,12 +1,10 @@
 // Proves preparation seeds saved history into a fresh Claude CLI session only for the native login that owns it.
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockClaudeManagedSettings } from "../../../test/helpers/claude-managed-settings.js";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
@@ -137,20 +135,6 @@ describe("native Claude login history on preparation", () => {
           message: { role: "user", content: "native canary", timestamp: 1 },
         }),
       );
-      // Interrupted input must obey the same history-replay boundary.
-      const pending = await stageSessionPendingInput(sessionTarget, {
-        runId: "interrupted-native-request",
-        message: {
-          role: "user",
-          content: "PRIVATE-INTERRUPTED",
-          timestamp: 2,
-          idempotencyKey: "interrupted-native-request:user",
-        },
-        assertCurrent: () => {},
-      });
-      const receipt = expectDefined(pending, "interrupted input receipt");
-      receipt.finish("interrupted");
-      await receipt.settled?.();
       login(expiresAt);
       profile.mockClear();
       const context = await fixture.prepare({
@@ -170,7 +154,6 @@ describe("native Claude login history on preparation", () => {
     const context = await prepareAfterTurn();
     expect(context.cliHistoryWriter).toBeDefined();
     expect(context.openClawHistoryPrompt).toContain("native canary");
-    expect(context.promptForHooks ?? context.params.prompt).toContain("PRIVATE-INTERRUPTED");
   });
 
   it("never sends the native token to Anthropic unless the operator opted in", async () => {
@@ -185,6 +168,5 @@ describe("native Claude login history on preparation", () => {
     const context = await prepareAfterTurn(attestNativeLogin, Date.now() + 60_000);
     expect(context.cliHistoryWriter?.replaysHistory).toBe(false);
     expect(context.openClawHistoryPrompt).toBeUndefined();
-    expect(context.promptForHooks ?? context.params.prompt).not.toContain("PRIVATE-INTERRUPTED");
   });
 });

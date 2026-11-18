@@ -75,6 +75,44 @@ imports stay retired; [upgrading very old versions](/install/updating#upgrading-
 describes the bridge-release path. Run the current Doctor after a direct binary
 replacement before starting the new Gateway.
 
+### Durable background processes
+
+The background-process registry owns `durable_background_processes` in the shared
+state database for Linux Gateway execution with systemd 250 or newer. Each row contains its opaque `id` primary key and registry-owned `record_json`.
+The typed record binds the systemd unit to
+an agent, session key, and exact session ID. It retains a generic command
+summary, working directory, log path, start and end times, terminal status, exit code,
+signal and reason, notification policy and settlement, cancellation intent, and the
+captured output and result-retention bounds. Environment values, command arguments,
+output, credentials, requester continuations, and approval grants are never stored
+in this table. Process output is a separate named log artifact under the state directory.
+
+The shared-state writer installs the canonical STRICT table on the first durable
+launch; reads of absent storage create nothing. This additive feature uses the existing
+schema owner and leaves state schema version 36 unchanged. PostgreSQL receives the
+equivalent first-use fragment. Existing databases need no row rewrite or backfill,
+and ordinary Doctor/update admission and integrity checks remain in place. Rollback
+to a binary without durable-process support leaves these rows and the units untouched;
+it cannot adopt or stop them through `process`. Stop units explicitly before such a
+rollback, or upgrade again to recover their handles. No automatic command replay occurs.
+
+On Gateway startup the registry consumes these facts through the shared read worker,
+reconciles each recorded unit, and records its real terminal or lost outcome before
+releasing unit metadata. Units use `ExitType=cgroup`, so a root exit with live
+descendants remains a running process. It never restores requester authority; completion is a new
+system input admitted under the owning session's current principal. Finished rows and
+their logs follow the registry's bounded result retention and explicit removal. A
+session reset invalidates completion eligibility through the recorded session ID.
+
+The same table also holds a best-effort row with `kind: "ordinary"` for each running
+ordinary (non-durable) background command whose exit would wake its conversation,
+except in incognito sessions. It carries the same bounded fields, with the generic
+command summary, no unit, and a `sandboxed` flag for sandbox commands. The registry writes it when the command is backgrounded and deletes it when
+the command exits while the Gateway runs. On startup the registry reports each remaining
+row as lost through the same completion path, then deletes it. The Gateway boot record
+tells it whether the previous Gateway shut down or crashed while the command ran. An older binary reads such a row as a durable process with a missing unit
+and reports it as lost, which remains accurate.
+
 ### Linux database page cache
 
 After readiness, the Gateway samples Linux file-cache residency and checks it again
@@ -163,6 +201,10 @@ Payload version 1 records the recap text, generation time, session ID and lifecy
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
 
+### Scheduled run parent receipts
+
+A child-placement scheduled run stores one optional, private `scheduledMemoryParent` object in its `:run:` row's existing `session_nodes.entry_json`. It records the parent session the occurrence was admitted against (key, session ID, lifecycle revision) and the occurrence's admitted owner bit, so sessions the run spawns resolve memory through that parent. Only cron run preparation writes it; it adds no SQL table, column, or schema-version change. See [scheduled run parent receipts](/reference/database-schemas/storage-changes#scheduled-run-parent-receipts) for its writer, lifetime, and upgrade and downgrade behavior.
+
 ### User-turn model prompt projections
 
 Stored user messages may include the optional private field
@@ -173,6 +215,16 @@ The ordinary `content` remains the original user transcript. Projection text is
 stored without secret masking and before rule-based timestamp and sender
 normalization. Both the first dispatch and replay use that recorded text, then
 apply the same normalization.
+
+If sandbox provisioning prevents an accepted media input from reaching its first
+provider request, the built-in runtime retains that input's already-prepared text
+through the same recorder before releasing its admission. A later continuation
+can therefore use the attachment context even though the original run failed.
+If a write hook changed the input text, retention uses the approved replacement
+instead of restoring the earlier prepared text. The comparison belongs to the
+original recorder admission and is not persisted.
+Successful attempts still capture after prompt hooks and finalization; an existing
+projection is never replaced by the failed attempt's earlier text.
 
 The existing transcript writer binds capture to the exact active user message
 and rechecks live authority before committing. Capture is immutable: repeats
@@ -207,12 +259,18 @@ The per-agent `session_transcript_cold_archives` table records cold transcript
 locations alongside `session_windows` and `transcript_events`. Each row belongs
 to a retained session window and identifies its generation, archive name, hash,
 counts, and sizes. The payload lives in an immutable compressed JSONL file, or
-in the row's blob when embedded by a supported backup. Schema 36 adds
+in the row's blob when embedded by a supported backup. Schema 37 adds
 `session_transcript_cold_archive_chunks`, keyed by session and ordered chunk index,
 with a cascading foreign key to the parent. Chunked parents retain window totals
 and the ordered manifest hash; each child records its sequence range, counts,
 file hash, and sizes. Backups embed each chunk in its own blob. Parents without
 children keep the original single-file representation.
+
+Interrupted file-archive cleanup is discovered incrementally: each maintenance
+pass examines at most 128 archive records and 65,536 transcript rows, resuming by
+session ID and event sequence. Discovery wraps after the final archive; restarting
+the process resets its position. Newly archived transcripts are cleaned immediately.
+Cleanup still commits in batches of at most 256 rows and yields between batches.
 
 The default archive directory is
 `~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
@@ -221,7 +279,7 @@ The default archive directory is
 These files contain authoritative history. See
 [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage)
 for retention and restoration, and
-[agent schema 36](/reference/database-schemas/agent-schema-history#agent-schema-36)
+[agent schema 37](/reference/database-schemas/agent-schema-history#agent-schema-37)
 for the schema and update contract.
 
 ### Plugin state listing index
@@ -413,6 +471,13 @@ That marker permanently excludes the run from automatic reconciliation, even
 if known parents later exit; existing recorded identities remain protected.
 A fresh run without identity follows the legacy explicit repair/supersession
 rules below.
+On Linux and macOS each adopter also stores an optional `namespace` string on
+its `origin.driver` entry, retained with it in `origin.previousDrivers`: the
+platform, kernel boot, Linux PID namespace, and digested machine identity it ran
+under, or `null` when they could not be read. A later `openclaw update` reads it
+only to show that a killed run's processes ended with an earlier boot of the
+same machine. Older readers drop the key; lease payloads, recovery receipts, and
+the public run record never carry it.
 This is additive JSON metadata;
 there are no new columns, tables, or schema versions. The separate
 `verification.pid` still identifies the Gateway service, not the updater.
@@ -424,6 +489,18 @@ write failures warn once per driver run and do not abort commands or finalizatio
 step and outcome writes retain their existing failure behavior. Encoding
 reserves space for exact identity bytes before bounding and redacting other
 origin diagnostics.
+
+An update of a source checkout that replaces the checkout's build in place
+records optional `origin.gitActivation` in the same `origin_json` column, before
+it reserves its plugin recovery: `sha` (the activated commit), `buildId` (the
+activated build) and `previousBuildId` (the build it replaced, or `null`). The
+next `openclaw update` reads it only for a killed run and only together with the
+checkout on disk; it never grants execution authority. It is an exact retained
+receipt like the driver identities: when the origin outgrows its byte budget,
+driver `namespace` values are dropped first and the activation stays exact.
+Public history projections omit it. This is
+additive JSON metadata with no new columns, tables, or schema versions; older
+readers drop the key, and runs without it keep the earlier behavior.
 
 The ledger owns abandonment classification and terminalization. Automatic
 recovery requires more than 30 minutes since both `updated_at_ms` and the latest
@@ -787,3 +864,33 @@ written. Subsequent preparation, activation, and recovery reject unsupported
 generations before drain. Status and preview do not adopt the policy or migrate
 the control database. The inventory does not enable collection, disk-space
 reclamation, or host-maintenance deletion.
+
+### Usage-ranked tool index
+
+Agent schema 42 adds `agent_tool_usage(tool_id, score, updated_at)` in the
+executing agent's database. It stores only aggregate successful-call scores and
+last-success timestamps. The existing `cache_entries` owner holds import coverage
+boundaries and a reset generation; it does not retain per-call IDs or payloads.
+
+The opt-in Labs feature reads at prompt boundaries. Run admission and accumulated
+counts share the existing transcript actor's transaction and authority grant when
+the transcript uses the executing agent's canonical database. Other transcript
+stores and late completions use the existing run-settlement writer. Tool-only
+mutations declare an empty session write scope, preserving unrelated session
+facts. Inactive rows expire after 90 days; reads exclude them
+and usage writes prune them. Reset fences pending batches, and agent retirement
+removes the counters. Incognito sessions never record usage. Schema migration
+creates an empty table, with SQLite scoped backup/rollback and PostgreSQL parity;
+it does not automatically scan or import existing transcripts.
+
+See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+for authenticated inspection, explicit transcript import, reset, and privacy.
+
+### Pending-input endings
+
+Agent schema 43 adds nullable `end_cause` and `origin_source_json` columns to
+`session_pending_inputs` on SQLite and PostgreSQL. The forward migration marks
+legacy cancelled inputs carrying a user Stop or dismissal marker as `user-stop`,
+without changing their message bytes. Stores without the optional pending-input
+table keep it absent until first use. `origin_source_json` reserves storage for
+the original input source; this migration does not populate it.

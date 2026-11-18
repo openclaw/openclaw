@@ -140,13 +140,24 @@ describe("canonical anonymous HTTP entry", () => {
     });
     expect(target.options.search).toContain("__openclawSessionKey=");
     expect(target.options.search).toContain("__openclawComposerFocus=1");
-    const response = await sendRequest(server(), {
+    const instance = server();
+    const response = await sendRequest(instance, {
       path: target.options.pathname + (target.options.search ?? ""),
       host: "gateway.lan:18789",
       remoteAddress: "192.168.1.25",
     });
     expect(response.res.statusCode).toBe(200);
     expect(response.getBody()).toContain("<openclaw-app>");
+    expect(resolveSession).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+
+    const returnPath = target.options.pathname + (target.options.search ?? "");
+    const entry = `/control/__openclaw__/session-entry?${new URLSearchParams({ path: returnPath })}`;
+    expect((await request(instance, entry + "&probe=1")).res.statusCode).toBe(401);
+    const app = await request(instance, entry);
+    expect(app.res.statusCode).toBe(200);
+    expect(app.getBody()).toContain("<openclaw-app>");
+    expect(app.getBody()).toContain(JSON.stringify(returnPath));
     expect(resolveSession).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
   });
@@ -324,10 +335,23 @@ describe("canonical anonymous HTTP entry", () => {
   it("rejects HEAD and malformed query work before reading any session", async () => {
     const instance = server();
     expect((await request(instance, route, undefined, "HEAD")).res.statusCode).toBe(405);
-    for (const suffix of ["?offset=-1", "?offset=0&offset=1", "?token=ignored", "?probe=1"]) {
+    for (const suffix of ["?offset=-1", "?offset=0&offset=1", "?dashboard=collapsed"]) {
       expect((await request(instance, route + suffix)).res.statusCode).toBe(404);
     }
     expect(resolveSession).not.toHaveBeenCalled();
     expect(reader).not.toHaveBeenCalled();
+  });
+  it("redirects away query parameters it does not know, keeping recognized ones", async () => {
+    const instance = server();
+    for (const [suffix, location] of [
+      ["?homescreen=1", route],
+      ["?token=ignored&probe=1", route],
+      ["?draft=Follow+up&homescreen=1&offset=100", `${route}?draft=Follow+up&offset=100`],
+    ]) {
+      const response = await request(instance, route + suffix);
+      expect(response.res.statusCode).toBe(302);
+      expect(response.setHeader).toHaveBeenCalledWith("Location", location);
+    }
+    expect(resolveSession).not.toHaveBeenCalled();
   });
 });

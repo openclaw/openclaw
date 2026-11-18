@@ -5,6 +5,12 @@
  * Repeat with fresh directories and --mode allocation or counts. Only timing mode
  * measures untraced CPU/transaction holds; counts instruments native iterator rows.
  * Defaults: 10,000 sessions, 30 events per cold session, a full 10 MiB hot window.
+ * --hot-sessions 21 interleaves full windows through the physical owner facts cache.
+ * --cold discards window facts before every append; --lifecycle-churn publishes
+ * an unrelated session removal. --cold-pages releases SQLite's page cache before
+ * each append (the OS cache remains warm). Use two hot sessions for competing windows.
+ * Acceptance: fewer payload-row visits and lower cold CPU/allocation and writer
+ * holds, identical retained sequence ranges, no material warm regression.
  * Use --iterations 2000 for longer passes. Alternate base/candidate launch order.
  * For a sparse baseline overlay, preserve changed modules at repository-relative
  * paths, set OPENCLAW_BENCH_BASELINE_DIR, and add
@@ -32,7 +38,11 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     iterations: { type: "string", default: "200" },
     sessions: { type: "string", default: "10000" },
+    "hot-sessions": { type: "string", default: "1" },
     variant: { type: "string", default: "candidate" },
+    cold: { type: "boolean", default: false },
+    "cold-pages": { type: "boolean", default: false },
+    "lifecycle-churn": { type: "boolean", default: false },
   },
 });
 assert(global.gc, "Use --expose-gc");
@@ -50,6 +60,13 @@ const sessions = parseStrictIntegerOption({
   min: 1,
   label: "--sessions",
 });
+const hotSessions = parseStrictIntegerOption({
+  raw: values["hot-sessions"],
+  fallback: 1,
+  min: 1,
+  label: "--hot-sessions",
+});
+assert(hotSessions <= sessions);
 const root = path.resolve(values["state-dir"]);
 assert(!fs.existsSync(root), "Refusing to reuse existing state");
 for (const name of ["home", "tmp"]) {
@@ -61,9 +78,9 @@ Object.assign(process.env, {
   OPENCLAW_STATE_DIR: root,
   OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-  TMPDIR: path.join(root, "tmp"),
 });
 const { replaceSessionEntry } = await import("../../src/config/sessions/session-accessor.js");
+const { sessionChanges } = await import("../../src/sessions/session-row-changes.js");
 const {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -72,7 +89,14 @@ const {
 const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
 const { appendSqliteTrajectoryRuntimeEventsWithWriter: append } =
   await import("../../src/trajectory/runtime-store.sqlite.js");
+const {
+  takeTrajectoryRuntimeWindowFacts: takeWindow,
+  publishTrajectoryRuntimeWindowFacts: publishWindow,
+} = await import("../../src/trajectory/runtime-window-facts.js");
 const sessionId = "synthetic-hot";
+const hotIds = Array.from({ length: hotSessions }, (_, index) =>
+  index === 0 ? sessionId : `synthetic-hot-${index}`,
+);
 const target = {
   agentId: "main",
   sessionId,
@@ -106,17 +130,23 @@ const bytes = Buffer.byteLength(line);
 const hotRows = Math.floor((10 * 1024 * 1024) / (bytes + 1));
 const maxRuntimeBytes = hotRows * (bytes + 1);
 const coldRowsPerSession = 30;
-const warmup = 10;
-let windowFacts: TrajectoryRuntimeWindowFacts = {
-  nextSeq: hotRows,
-  retainedBytes: maxRuntimeBytes,
+const warmup = hotSessions * 10;
+const identity = {
+  kind: "file" as const,
+  physicalIdentity: "synthetic",
+  nativeLocation: database.path,
 };
+const windows = new Map<string, TrajectoryRuntimeWindowFacts>();
+let appended = 0;
 let measured = false;
 let transactionStarted = 0;
 const holds: number[] = [];
 const sqlTimes: number[] = [];
 let iteratorRows = 0;
 let iteratorStatements = 0;
+let coldWindows = 0;
+let statements = 0;
+const nativePrepare = native.prepare.bind(native);
 // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the native receiver and restores this method.
 const nativeExec = DatabaseSync.prototype.exec;
 // oxlint-disable-next-line typescript/unbound-method -- The probe forwards the native receiver and restores this method.
@@ -151,13 +181,16 @@ try {
         "INSERT INTO trajectory_runtime_events(session_id,seq,run_id,event_json,created_at,event_utf8_bytes) VALUES(?,?,?,?,1,?)",
       );
       for (let index = 1; index < sessions; index++) {
-        const id = `synthetic-cold-${index}`;
+        const id = hotIds[index] ?? `synthetic-cold-${index}`;
         const key = `agent:main:${id}`;
         node.run(key, id, JSON.stringify({ sessionId: id, updatedAt: 1 }));
         window.run(id, key);
-        const coldLine = JSON.stringify({ ...event, sessionId: id, sessionKey: key, traceId: id });
+        const coldLine =
+          index < hotSessions
+            ? line
+            : JSON.stringify({ ...event, sessionId: id, sessionKey: key, traceId: id });
         const coldBytes = Buffer.byteLength(coldLine);
-        for (let seq = 0; seq < coldRowsPerSession; seq++) {
+        for (let seq = 0; seq < (index < hotSessions ? hotRows : coldRowsPerSession); seq++) {
           insert.run(id, seq, `synthetic-run-${seq % 3}`, coldLine, coldBytes);
         }
       }
@@ -169,12 +202,40 @@ try {
     { operationLabel: "trajectory.benchmark.seed" },
   );
 
+  if (values.mode === "counts") {
+    native.prepare = (sql) => {
+      const statement = nativePrepare(sql);
+      const get = statement.get.bind(statement);
+      const run = statement.run.bind(statement);
+      statement.get = (...bindings) => {
+        statements += Number(measured && sql.includes("trajectory_runtime_events"));
+        return Reflect.apply(get, statement, bindings);
+      };
+      statement.run = (...bindings) => {
+        statements += Number(measured && sql.includes("trajectory_runtime_events"));
+        return Reflect.apply(run, statement, bindings);
+      };
+      return statement;
+    };
+  }
   const run = () => {
-    windowFacts = append(
+    const selectedId = hotIds[appended++ % hotSessions]!;
+    if (values["lifecycle-churn"]) {
+      sessionChanges.emit({ sessionKey: "agent:main:unrelated", facts: { kind: "removed" } });
+    }
+    const retained = takeWindow(identity, selectedId);
+    const known = values.cold ? undefined : retained;
+    if (measured && !known) {
+      coldWindows++;
+    }
+    if (values["cold-pages"]) {
+      native.exec("PRAGMA shrink_memory");
+    }
+    const windowFacts = append(
       {
-        sessionId,
+        sessionId: selectedId,
         maxRuntimeBytes,
-        windowFacts,
+        windowFacts: known,
         events: [{ line, ts: event.ts, runId: event.runId }],
       },
       database,
@@ -192,6 +253,8 @@ try {
           { operationLabel },
         ),
     ).receipt.windowFacts;
+    publishWindow(identity, selectedId, windowFacts);
+    windows.set(selectedId, windowFacts);
   };
   for (let index = 0; index < warmup; index++) {
     run();
@@ -265,34 +328,67 @@ try {
     };
     fs.writeFileSync(path.join(root, "allocation.heapprofile"), JSON.stringify(profile));
   }
-  const persisted = native
-    .prepare(
-      "SELECT COUNT(*) AS count, MIN(seq) AS first, MAX(seq) AS last, SUM(event_utf8_bytes+1) AS bytes FROM trajectory_runtime_events WHERE session_id=?",
-    )
-    .get(sessionId);
-  assert.deepEqual(
-    { ...persisted },
-    {
-      count: hotRows,
-      first: warmup + iterations,
-      last: hotRows + warmup + iterations - 1,
-      bytes: maxRuntimeBytes,
-    },
-  );
-  assert.equal(windowFacts.retainedBytes, maxRuntimeBytes);
-  assert.equal(windowFacts.nextSeq, hotRows + warmup + iterations);
+  const persisted = hotIds.map((id, index) => {
+    const row = native
+      .prepare(
+        "SELECT COUNT(*) AS count, MIN(seq) AS first, MAX(seq) AS last, SUM(event_utf8_bytes+1) AS bytes FROM trajectory_runtime_events WHERE session_id=?",
+      )
+      .get(id);
+    const writes = Math.floor((warmup + iterations + hotSessions - 1 - index) / hotSessions);
+    assert.deepEqual(
+      { ...row },
+      { count: hotRows, first: writes, last: hotRows + writes - 1, bytes: maxRuntimeBytes },
+    );
+    assert.deepEqual(windows.get(id), {
+      retainedBytes: maxRuntimeBytes,
+      nextSeq: hotRows + writes,
+    });
+    return row;
+  });
   const plans = [
     ...["ASC", "DESC"].map(
       (direction) =>
         `SELECT seq, coalesce(event_utf8_bytes,octet_length(event_json)) AS event_bytes, NULL AS event_json FROM trajectory_runtime_events WHERE session_id=? ORDER BY seq ${direction}`,
     ),
     "DELETE FROM trajectory_runtime_events WHERE session_id=? AND seq<=0",
+    "SELECT MAX(seq) FROM trajectory_runtime_events WHERE session_id=?",
+    "SELECT SUM(coalesce(event_utf8_bytes,octet_length(event_json))+1) FROM trajectory_runtime_events WHERE session_id=?",
   ].map((sql) => ({ sql, plan: native.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(sessionId) }));
   const ownerRelative = "src/trajectory/runtime-store.sqlite.ts";
   const owner = path.join(
     process.env.OPENCLAW_BENCH_BASELINE_DIR ?? fileURLToPath(new URL("../../", import.meta.url)),
     ownerRelative,
   );
+  const cacheBehavior =
+    values.mode === "counts"
+      ? [
+          { sessions: 64, churn: false },
+          { sessions: 65, churn: false },
+          { sessions: 2, churn: true },
+        ].map(({ sessions: activeSessions, churn }) => {
+          const cacheOwner = { ...identity };
+          let misses = 0;
+          for (let round = 0; round < 11; round++) {
+            for (let index = 0; index < activeSessions; index++) {
+              if (churn) {
+                sessionChanges.emit({
+                  sessionKey: "agent:main:unrelated",
+                  facts: { kind: "removed" },
+                });
+              }
+              const facts = takeWindow(cacheOwner, String(index));
+              misses += Number(round > 0 && !facts);
+              publishWindow(cacheOwner, String(index), { nextSeq: 1, retainedBytes: bytes + 1 });
+            }
+          }
+          return {
+            sessions: activeSessions,
+            churn,
+            appends: activeSessions * 10,
+            coldWindows: misses,
+          };
+        })
+      : undefined;
   const result = {
     variant: values.variant,
     mode: values.mode,
@@ -300,7 +396,13 @@ try {
     ownerSha256: createHash("sha256").update(fs.readFileSync(owner)).digest("hex"),
     iterations,
     sessions,
-    seededRows: (sessions - 1) * coldRowsPerSession + hotRows,
+    hotSessions,
+    cold: values.cold,
+    coldPages: values["cold-pages"],
+    lifecycleChurn: values["lifecycle-churn"],
+    coldWindows,
+    cacheBehavior,
+    seededRows: (sessions - hotSessions) * coldRowsPerSession + hotRows * hotSessions,
     hotRows,
     maxRuntimeBytes,
     elapsedMs,
@@ -311,6 +413,7 @@ try {
     allocation,
     iteratorRows: values.mode === "counts" ? iteratorRows : undefined,
     iteratorStatements: values.mode === "counts" ? iteratorStatements : undefined,
+    statements: values.mode === "counts" ? statements + iteratorStatements : undefined,
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     memoryBefore,
@@ -324,6 +427,7 @@ try {
   measured = false;
   DatabaseSync.prototype.exec = nativeExec;
   StatementSync.prototype.iterate = nativeIterate;
+  native.prepare = nativePrepare;
   if (sampling) {
     await inspector.post("HeapProfiler.stopSampling");
   }

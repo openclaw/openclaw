@@ -1,6 +1,6 @@
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
-import { getRuntimeConfig } from "../../config/io.runtime.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { readRuntimeConfig as getRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeLlmFacade } from "./runtime-llm-facade.js";
 import { createRuntimeSystem } from "./runtime-system.js";
@@ -20,7 +20,9 @@ function unavailable(method: string): () => never {
 }
 
 /** Host-owned facades survive later path-loaded runtime materialization unchanged. */
-export function createRuntimeBase(): PluginRuntimeBase {
+export function createRuntimeBase(
+  enqueueForHost: Parameters<typeof createRuntimeSystem>[0],
+): PluginRuntimeBase {
   let system: PluginRuntime["system"] | undefined;
   return {
     capabilities: Object.freeze([
@@ -48,7 +50,7 @@ export function createRuntimeBase(): PluginRuntimeBase {
       openChannelIngressDrain: unavailable("openChannelIngressDrain"),
     },
     get system() {
-      return (system ??= createRuntimeSystem());
+      return (system ??= createRuntimeSystem(enqueueForHost));
     },
   };
 }

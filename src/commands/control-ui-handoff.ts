@@ -20,6 +20,7 @@ import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-f
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { inspectGatewayTlsCertificate } from "../infra/tls/gateway.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { sleep } from "../utils.js";
 
 const CONTROL_UI_DOCUMENT_REQUEST_TIMEOUT_MS = 2_000;
@@ -161,6 +162,8 @@ type ControlUiDocumentReadiness =
   | { ready: true; tlsFingerprint?: string }
   | { ready: false; reason: string; status?: number };
 
+const CONTROL_UI_READINESS_INTERRUPTED = "Control UI readiness check was interrupted.";
+
 /** Wait for a preparing or temporarily slow dashboard; fail immediately for terminal errors. */
 export async function waitForControlUiDocument(params: {
   url: string;
@@ -168,8 +171,10 @@ export async function waitForControlUiDocument(params: {
   timeoutMs?: number;
   waitForPending?: boolean;
   onPending?: () => void;
+  /** Command-owned cancellation; an aborted signal stops pending probe work. */
+  signal?: AbortSignal;
 }): Promise<ControlUiDocumentReadiness> {
-  const deadline = Date.now() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
+  const deadline = monotonicNow() + (params.timeoutMs ?? CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
   let tlsFingerprint: string | undefined;
   let tlsConnect: Record<string, unknown> | undefined;
 
@@ -215,10 +220,14 @@ export async function waitForControlUiDocument(params: {
       init: {
         method,
         headers: { Accept: "text/html", "Accept-Encoding": "identity" },
+        ...(params.signal ? { signal: params.signal } : {}),
       },
     });
   while (true) {
-    const remainingMs = deadline - Date.now();
+    if (params.signal?.aborted) {
+      return { ready: false, reason: CONTROL_UI_READINESS_INTERRUPTED };
+    }
+    const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return lastTransientError
         ? {
@@ -244,7 +253,7 @@ export async function waitForControlUiDocument(params: {
             // diagnostic; a failed request or body must preserve the HEAD result.
             const diagnostic = await requestDocument(
               "GET",
-              Math.max(1, deadline - Date.now()),
+              Math.max(1, deadline - monotonicNow()),
             ).catch(() => undefined);
             if (diagnostic) {
               try {
@@ -285,6 +294,9 @@ export async function waitForControlUiDocument(params: {
         await request.release();
       }
     } catch (error) {
+      if (params.signal?.aborted) {
+        return { ready: false, reason: CONTROL_UI_READINESS_INTERRUPTED };
+      }
       if (
         params.waitForPending === false ||
         !(error instanceof Error) ||
@@ -301,6 +313,13 @@ export async function waitForControlUiDocument(params: {
       pendingReported = true;
       params.onPending?.();
     }
-    await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - Date.now())));
+    try {
+      await sleep(Math.min(pendingDelayMs, Math.max(0, deadline - monotonicNow())), params.signal);
+    } catch (error) {
+      if (params.signal?.aborted) {
+        return { ready: false, reason: CONTROL_UI_READINESS_INTERRUPTED };
+      }
+      throw error;
+    }
   }
 }

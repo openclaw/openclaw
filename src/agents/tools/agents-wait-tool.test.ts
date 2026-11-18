@@ -217,7 +217,7 @@ describe("agents_wait", () => {
     const result = await runUntilCompleted({
       execTool,
       waitTool,
-      code: 'const [wait] = await catalog.search("agents_wait"); const description = await wait.describe(); const file = await API.read("tools/agents_wait.d.ts"); const result = await wait({ids:["ready"],timeoutSeconds:0}); return {description, file, ids:result.completed.map(item=>item.runId), structured:result.completed[0].structured};',
+      code: 'const [wait] = await catalog.search("agents_wait"); const description = await wait.describe({ includeRarelyNeededOutputSchema: true }); const file = await API.read("tools/agents_wait.d.ts"); const result = await wait({ids:["ready"],timeoutSeconds:0}); return {description, file, ids:result.completed.map(item=>item.runId), structured:result.completed[0].structured};',
     });
     expect(result).toMatchObject({
       status: "completed",
@@ -386,6 +386,25 @@ describe("agents_wait", () => {
       timestamp: 2,
     });
     records.clear();
+    // Settled facts survive the display-limit omission, including a child that failed.
+    const facts = { runId: "finished-child", sessionKey: "agent:worker:subagent:w", label: "W" };
+    const completed = [
+      { ...facts, status: "done", result: "x".repeat(40_000) },
+      { ...facts, runId: "not-finished", status: "failed" },
+    ];
+    const large = createNestedToolActivity({
+      ...activity.details,
+      result: { content: [{ type: "text", text: JSON.stringify({ completed }) }] },
+    });
+    expect(large.details.result.content).toEqual([
+      { type: "text", text: "[Nested tool output omitted: exceeds display limit]" },
+    ]);
+    const serialized = JSON.stringify(large);
+    const reread = readNestedToolActivity(JSON.parse(serialized));
+    expect(reread?.details.subagentCompletions).toEqual([
+      facts,
+      { ...facts, runId: "not-finished", outcome: "failed" },
+    ]);
     const persisted = JSON.stringify(activity);
     const history = projectAgentHistoryActivity([
       { messageId: "persisted-wait", message: JSON.parse(persisted) },
@@ -796,17 +815,19 @@ describe("agents_wait", () => {
     });
   });
 
-  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
-    const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
-
-    expect(result.details).toEqual({
-      completed: [],
-      pending: [],
-      errors: [{ runId: "missing", error: "not_found" }],
-      success: false,
-    });
+  it("fails missing batches and guides announcing-only waits without dropping results", async () => {
+    const child = { collect: undefined, expectsCompletionMessage: true };
+    records.set("announcing", { ...collectorRun("announcing", MAIN), ...child });
+    records.set("quiet", { ...collectorRun("quiet", MAIN), collect: undefined });
+    records.set("plain", { ...collectorRun("plain", "agent:other:main"), ...child });
+    addRun("done", { status: "done" });
+    await expect(executeWait(["announcing"])).rejects.toThrow("report back to this session");
+    const notFound = (ids: string[]) => ids.map((runId) => ({ runId, error: "not_found" }));
+    const mix = (await executeWait(["done", "announcing"])).details;
+    expect(mix).toMatchObject({ completed: [{ runId: "done" }], errors: notFound(["announcing"]) });
+    const result = await executeWait(["missing", "plain", "quiet"]);
+    const errors = notFound(["missing", "plain", "quiet"]);
+    expect(result.details).toEqual({ completed: [], pending: [], errors, success: false });
     expect(isToolResultError(result)).toBe(true);
   });
 

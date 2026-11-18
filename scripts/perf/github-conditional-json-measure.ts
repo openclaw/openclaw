@@ -16,6 +16,7 @@ import { loadavg } from "node:os";
 import { resolve } from "node:path";
 import { PerformanceObserver, performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const modulePath = process.argv[2];
 assert(modulePath);
@@ -88,12 +89,7 @@ try {
     return reviver ? parse(text, reviver) : parse(text);
   };
   if (allocations) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const latencies: number[] = [];
   const hostLoad = loadavg();

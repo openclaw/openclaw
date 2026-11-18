@@ -96,7 +96,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
   it.each([
     ["a joiner crossing the limit", 20, " ", "caption", true],
-    ["an exact-limit caption", 21, " ", "caption", false],
+    ["an authored separator at the limit", 20, " ", "\nphoto!", false],
     ["captionless media without another joiner", 15, "\n\n", undefined, false],
   ] as const)(
     "preserves delivery and metadata for %s",
@@ -115,7 +115,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
         {
           assistantMessageIndex: 7,
           assistantTranscriptMediaUrls: ["file:///photo.png"],
-          ...(caption ? { blockSourceText: "caption", blockSourceRange: [12, 19] as const } : {}),
+          ...(caption ? { blockSourceText: caption, blockSourceRange: [12, 19] as const } : {}),
         },
       );
       await send(
@@ -135,7 +135,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
             ]
           : [
               {
-                text: caption ? buffered + joiner + "caption" : buffered,
+                text: caption ? buffered + caption : buffered,
                 mediaUrls: ["file:///photo.png"],
               },
             ],

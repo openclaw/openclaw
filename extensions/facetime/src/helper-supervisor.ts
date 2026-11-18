@@ -168,8 +168,7 @@ export class FaceTimeHelperSupervisor {
     const timer = setTimeout(() => {
       this.#timers.delete(target);
       this.#enqueueInjection(target);
-    }, delayMs);
-    timer.unref?.();
+    }, delayMs).unref();
     this.#timers.set(target, timer);
   }
 
@@ -204,8 +203,7 @@ export class FaceTimeHelperSupervisor {
       state.attempts = 0;
       state.lastError = undefined;
       this.#schedule(target, 0);
-    }, 2_000);
-    timer.unref?.();
+    }, 2_000).unref();
     this.#timers.set(target, timer);
   }
 
@@ -225,8 +223,8 @@ export class FaceTimeHelperSupervisor {
   }
 
   async #waitForAuthenticatedConnection(target: FaceTimeHelperTarget): Promise<void> {
-    const deadline = Date.now() + 10_000;
-    while (this.#started && Date.now() < deadline) {
+    const deadline = performance.now() + 10_000;
+    while (this.#started && performance.now() < deadline) {
       this.#refreshConnections();
       const state = this.#states.get(target);
       if (!state || state.connected || state.stale) {

@@ -179,7 +179,7 @@ export async function withPreparedSessionResolve<T>(
               ...(sessionUrlCandidates(projection, selectionParams) ?? []),
             ];
             if (key) {
-              const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+              const agent = resolveRequestedSessionAgentId(cfg, key, p.agentId, "read");
               if (agent.ok) {
                 selected.push({ key, agentId: agent.agentId });
               }
@@ -244,7 +244,12 @@ export function resolveSessionKeyFromResolveParams(params: {
         !isIncognitoSessionKey(key) && Boolean(resolveSessionPublicShare(entry))
     : sharing.entryFilter &&
       ((key: string, _entry: SessionEntry, selected?: { agentId: string }) => {
-        const owner = resolveRequestedSessionAgentId(cfg, key, selected?.agentId ?? p.agentId);
+        const owner = resolveRequestedSessionAgentId(
+          cfg,
+          key,
+          selected?.agentId ?? p.agentId,
+          "read",
+        );
         if (!owner.ok) {
           return false;
         }
@@ -404,7 +409,7 @@ export function resolveSessionKeyFromResolveParams(params: {
   if (hasKey) {
     // Exact-key lookup follows the proof-of-knowledge read semantics of get/describe/history;
     // only discovery selectors use list visibility. Incognito keys are gated pre-dispatch.
-    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId, "read");
     if (!requestedAgent.ok) {
       return requestedAgent;
     }
@@ -462,7 +467,12 @@ export function resolveSessionKeyFromResolveParams(params: {
           const entry = agentMatches.find(
             ([matchKey]) => matchKey === agentSelection.sessionKey,
           )?.[1];
-          const owner = resolveRequestedSessionAgentId(cfg, agentSelection.sessionKey, agentId);
+          const owner = resolveRequestedSessionAgentId(
+            cfg,
+            agentSelection.sessionKey,
+            agentId,
+            "read",
+          );
           if (entry && owner.ok) {
             ownerTaggedMatches.set(`${owner.agentId}\0${agentSelection.sessionKey}`, {
               agentId: owner.agentId,
@@ -506,7 +516,12 @@ export function resolveSessionKeyFromResolveParams(params: {
     const selectedEntry = matches.find(([matchKey]) => matchKey === selection.sessionKey)?.[1];
     let selectedAgentId = parseAgentSessionKey(selection.sessionKey)?.agentId ?? p.agentId;
     if (!selectedAgentId) {
-      const resolvedOwner = resolveRequestedSessionAgentId(cfg, selection.sessionKey);
+      const resolvedOwner = resolveRequestedSessionAgentId(
+        cfg,
+        selection.sessionKey,
+        undefined,
+        "read",
+      );
       if (!resolvedOwner.ok) {
         return resolvedOwner;
       }

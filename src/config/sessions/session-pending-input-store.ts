@@ -6,7 +6,6 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -18,6 +17,7 @@ import { runSessionActorCommand } from "./session-actor-scope.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
+import type { SessionInputLifecycleAdmission } from "./session-input-lifecycle.js";
 import { prepareMemoryPendingInputStore } from "./session-pending-input-memory-store.js";
 import {
   readPendingInputMutationReceipt,
@@ -27,7 +27,7 @@ import {
   type PendingInputRead,
 } from "./session-pending-input-operations.types.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
-import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import {
   settleSessionWorkerReceipt,
   type SessionWorkerReceiptAdmission,
@@ -54,8 +54,11 @@ export async function preparePendingInputStore(
     throw new Error("Restart resume requires a durable session.");
   }
   if (memoryOwner) {
+    assertCurrent();
     const acquired = await acquireSessionActorStorage(scope, {
-      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      // The actor holds settlement custody after Stop ends execution authority.
+      // Stage, reads, and completion still use the caller's live authority.
+      lifetime: { assertCurrent() {}, assertReadable() {} },
       authority: { assertCurrent, authorize: assertCurrent },
     });
     if (!acquired) {
@@ -73,7 +76,7 @@ export async function preparePendingInputStore(
     throw new Error("Restart resume requires the current input actor.");
   }
   const logical = resolveSqliteScope({ ...captured, storePath: undefined });
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Pending input changed its captured database owner",
   );
@@ -97,7 +100,8 @@ export async function preparePendingInputStore(
   ) {
     throw new Error("Input actor changed the pending input's physical target");
   }
-  const readTarget = target.resolve(resolved);
+  const readTarget = await target.resolve(resolved);
+  assertCurrent();
   const identity = readTarget.identity;
   if (!identity.key.startsWith("file:")) {
     throw new Error("Pending input changed its captured database owner");
@@ -130,10 +134,13 @@ export async function preparePendingInputStore(
     },
     close: drain,
   });
-  const assertOpen = () => {
+  const assertLifetimeCurrent = () => {
     if (revoked) {
       throw new Error("Pending input database owner has closed");
     }
+  };
+  const assertOpen = () => {
+    assertLifetimeCurrent();
     assertSource();
   };
   const track = <T>(operation: Promise<T>): Promise<T> => {
@@ -169,6 +176,14 @@ export async function preparePendingInputStore(
   return {
     sessionActor: undefined,
     assertCurrent: assertOpen,
+    assertReadCurrent() {
+      assertLifetimeCurrent();
+      const operation = readTarget.assertCurrentAsync().then(assertLifetimeCurrent);
+      pending.add(operation);
+      const untrack = () => pending.delete(operation);
+      void operation.then(untrack, untrack);
+      return operation;
+    },
     async withAdmission<T>(operation: () => Promise<T>, reentrant: boolean): Promise<T> {
       let entered = false;
       const run = () =>
@@ -272,7 +287,9 @@ export async function preparePendingInputStore(
                 }
               },
             };
-            let expectedState: ReturnType<typeof buildRestartRecoveryExpectedState> | undefined;
+            let expectedState:
+              | ReturnType<typeof buildSessionTranscriptTurnExpectedState>
+              | undefined;
             let receipt: PendingInputMutationReceipt | undefined;
             const outcome = await runSessionActorCommand(
               inputActor.actor,
@@ -289,7 +306,8 @@ export async function preparePendingInputStore(
                 }
                 // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
                 const resume = input.expected.existing ? undefined : lifecycleAdmission;
-                expectedState ??= resume?.expectedState ?? buildRestartRecoveryExpectedState(entry);
+                expectedState ??=
+                  resume?.expectedState ?? buildSessionTranscriptTurnExpectedState(entry);
                 return inputActor.actor.acceptInput(
                   {
                     commandId: randomUUID(),

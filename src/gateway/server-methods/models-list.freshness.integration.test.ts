@@ -1,4 +1,5 @@
 import { createServer, type ServerResponse } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
@@ -16,12 +17,14 @@ import {
 import { serveModelsEndpoint, startModelsGateway } from "./models-integration.test-support.js";
 import * as modelsListResult from "./models-list-result.js";
 
+const RESPONSE_CACHE_TTL_MS = 500;
+
 it.for([
   { withSibling: true, getterBacked: false, initiallyEmpty: false },
   { withSibling: false, getterBacked: true, initiallyEmpty: false },
   { withSibling: true, getterBacked: false, initiallyEmpty: true },
 ])(
-  "models.list reuses inventory until explicit refresh (sibling: $withSibling, getter-backed: $getterBacked, empty: $initiallyEmpty)",
+  "models.list relists an aged provider listing in the background (sibling: $withSibling, getter-backed: $getterBacked, empty: $initiallyEmpty)",
   { timeout: 120_000 },
   async ({ withSibling, getterBacked, initiallyEmpty }, { signal }) => {
     await using state = await createCatalogState("catalog-freshness");
@@ -69,12 +72,11 @@ it.for([
           catalog: { order: "profile", async run(ctx) {
             const auth = ctx.resolveProviderAuth(provider);
             if (!auth.discoveryApiKey) return null;
-            const { buildLiveModelProviderConfig, clearLiveCatalogCacheForTests } = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
-            // The Gateway fixture controls inventory expiry; each acquisition crosses HTTP.
-            clearLiveCatalogCacheForTests();
+            const { buildLiveModelProviderConfig } = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
+            // A short response cache: the listing age floor, not this TTL, sets inventory expiry.
             const accepted = await buildLiveModelProviderConfig({
               providerId: provider, discoveryMode: "strict", discoveryApiKey: auth.discoveryApiKey,
-              endpoint: ${JSON.stringify(baseUrl)} + "/" + provider, ttlMs: 86_400_000,
+              endpoint: ${JSON.stringify(baseUrl)} + "/" + provider, ttlMs: ${RESPONSE_CACHE_TTL_MS},
               providerConfig: { baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions" }, models: [],
               fetchGuard: async ({ url, init }) => ({ response: await fetch(url, init), finalUrl: url, release: async () => {} }),
               readRows: body => body,
@@ -98,8 +100,15 @@ it.for([
     );
     const token = "catalog-freshness-gateway-token";
     const cfg = {
-      // A UI-only write must not also perform the fixture's first model-policy migration.
-      meta: { migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true } },
+      // A UI-only write must not also perform the fixture's first config migrations.
+      meta: {
+        migrations: {
+          modelPolicyAllowlist: true,
+          utilityModelSeparation: true,
+          skillWorkshopPlugin: true,
+          skillLibraryToolSplit: true,
+        },
+      },
       agents: catalogAgents(state, { modelPolicy: { allow: providers.map((id) => `${id}/*`) } }),
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },
@@ -113,7 +122,6 @@ it.for([
     );
     await using gateway = await startModelsGateway(state, cfg, token);
     const { client, server } = gateway;
-    let requestedRefresh: Promise<unknown> | undefined;
     try {
       await server.startupSettled;
       const list = (refresh = false) =>
@@ -142,6 +150,7 @@ it.for([
       }
       if (withSibling && !initiallyEmpty) {
         using projection = vi.spyOn(modelsListResult, "prepareModelsListResult");
+        const initialRows = initial.models.filter((row) => row.provider === provider);
         for (let index = 0; index < 6; index++) {
           const ack = await client.request<{ ok: boolean; config?: unknown }>("config.patch", {
             raw: JSON.stringify({ ui: { prefs: { chatShowToolCalls: index % 2 === 0 } } }),
@@ -150,9 +159,7 @@ it.for([
           expect(ack.ok).toBe(true);
           expect(ack).not.toHaveProperty("config");
           const after = await list();
-          expect(after.models.filter((row) => row.provider === provider)).toEqual(
-            initial.models.filter((row) => row.provider === provider),
-          );
+          expect(after.models.filter((row) => row.provider === provider)).toEqual(initialRows);
           expect(requests).toBe(initialRequests);
         }
         expect(projection.mock.calls.length).toBe(0);
@@ -168,15 +175,11 @@ it.for([
         throw new Error("Missing published freshness fixture inventory");
       }
       const readPublished = async () => owner.readFullModelCatalog!();
-      const expire = (providerIds: string[]) => {
-        for (const id of providerIds) {
-          const facts =
-            resolvePreparedModelRuntimeOwnerBySnapshot(owner)?.catalogInventory?.providers.get(id);
-          // Successful empty catalogs must carry the cache expiry too.
-          expect(facts?.expiresAt).toEqual(expect.any(Number));
-          facts!.expiresAt = 0;
-        }
-      };
+      const facts = (id: string) =>
+        resolvePreparedModelRuntimeOwnerBySnapshot(owner)?.catalogInventory?.providers.get(id);
+      // The listing ages out after the listing age floor, not the fixture's short HTTP cache TTL.
+      expect(facts(provider)?.expiresAt).toBeGreaterThan(Date.now() + 10 * 60_000);
+      expect(facts(provider)?.expiresAt).toBeLessThanOrEqual(Date.now() + 15 * 60_000);
       const acceptRenewal = async (start: () => unknown) => {
         const accepted = await readPublished();
         expect(accepted).toBeDefined();
@@ -197,26 +200,27 @@ it.for([
         expect(ids(await list())).toEqual([]);
         expect(requests).toBe(initialRequests);
       }
+      // Let the retained response cache expire, as it has by the time a listing reaches its age.
+      // A real wait: the cache runs on the catalog worker's clock, which fake timers cannot drive.
+      await delay(RESPONSE_CACHE_TTL_MS + 100);
       // Arm the response hold before making any accepted inventory due.
-      expire(withSibling && !initiallyEmpty ? providers : [provider]);
-      // Expiring a provider response cache does not invalidate the published Gateway view.
+      for (const id of withSibling && !initiallyEmpty ? providers : [provider]) {
+        facts(id)!.expiresAt = 0;
+      }
+      // An aged listing serves saved rows at once and relists once in the background, without
+      // showing pickers a pending check.
       const saved = await withinTest(list(), signal);
       expect(ids(saved)).toEqual(original);
       expect(siblingIds(saved)).toEqual(withSibling ? ["sibling"] : []);
-      expect(owner.readFullModelCatalog!()?.pendingProviders).toBeUndefined();
-      expect(requests).toBe(initialRequests);
-      requestedRefresh = list(true);
-      void requestedRefresh.catch(() => undefined);
       await withinTest(renewal.promise, signal);
       const concurrent = await withinTest(Promise.all([list(), list()]), signal);
       expect(concurrent.map(ids)).toEqual([original, original]);
+      expect(concurrent.map((result) => result.pendingProviders)).toEqual([undefined, undefined]);
       expect(requests).toBe(initialRequests + 1);
       const renewed = await acceptRenewal(release);
-      await requestedRefresh;
       expect(ids(renewed)).toEqual(["newly-published", ...original]);
     } finally {
       release();
-      await requestedRefresh?.catch(() => undefined);
     }
   },
 );

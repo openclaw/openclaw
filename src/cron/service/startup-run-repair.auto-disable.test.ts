@@ -107,9 +107,8 @@ it("buffers quiet-trigger repair notifications until the recovery commit", () =>
   });
   restore(
     { durationMs: undefined },
-    {
-      triggerEval: { fired: false, stateChanged: false, busy: true },
-    },
+    // A retired trigger writer keeps the error streak, so this replay disables the job.
+    { triggerEval: { fired: false, stateChanged: false }, triggerStateRetired: true },
   );
 
   expect(job.state.autoDisabled?.reason).toBe("schedule-errors");

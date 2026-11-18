@@ -51,7 +51,8 @@ vi.mock("../../infra/update-managed-service-handoff-database.js", () => ({
     parentIdentity: "directory",
   }),
 }));
-vi.mock("../../infra/update-install-root.js", () => ({
+vi.mock("../../infra/update-install-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-install-root.js")>()),
   resolveUpdateInstallRoot: (root: string) => root,
 }));
 vi.mock("./update-command-identity-warning.js", () => ({
@@ -72,6 +73,7 @@ type SettlementStore = Pick<
   | "cancelUpdate"
   | "current"
   | "owns"
+  | "ownsDelegation"
   | "isProcessIdentityCurrent"
   | "inspectProcessIdentity"
   | "acceptParentBoundExecutor"
@@ -202,6 +204,7 @@ beforeEach(() => {
         : null,
     current,
     owns: current,
+    ownsDelegation: (parents, receivers) => parents.every(current) && receivers.every(current),
     isProcessIdentityCurrent: () => true,
     inspectProcessIdentity: () => "live",
     acceptParentBoundExecutor: current,
@@ -346,13 +349,11 @@ it.each(cleanupCases)(
   },
 );
 afterEach(() => {
-  try {
-    expect(readers.size).toBe(0);
-  } finally {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    readers.clear();
-  }
+  const retainedReaders = readers.size;
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  readers.clear();
+  expect(retainedReaders).toBe(0);
 });
 
 it.each(kinds)("delivers a bounded %s timeout while its callback remains pending", async (kind) => {
@@ -444,9 +445,6 @@ it.each(cleanupResults)(
         alreadyCurrent: true,
         shouldRestart: true,
         service: {
-          stopped: false,
-          inspected: true,
-          runtimeInspected: true,
           running: true,
           serviceNodeRunner: "/synthetic/node",
           serviceUpdateVerdict: {
@@ -496,12 +494,8 @@ it("preserves activation timeout provenance without a cause cycle after uncertai
     (error) => error instanceof UpdateActivationTimeoutError,
   );
   expect(timeout).toBe(deadline.signal.reason);
-  expect(timeout).toMatchObject({ root, timeoutMs: 1000, reason: "update-activation-timeout" });
   expect(result).not.toBe(deadline.signal.reason);
   expect(hasCleanupError(result)).toBe(true);
-  expect(collectNestedErrorCandidates(result)).toEqual(
-    expect.arrayContaining([deadline.signal.reason, expect.any(CleanupError)]),
-  );
   const visit = (error: unknown, ancestors = new Set<unknown>()) => {
     if (!(error instanceof Error)) {
       return;

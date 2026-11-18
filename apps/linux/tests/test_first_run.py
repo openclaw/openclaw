@@ -4,6 +4,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -95,6 +97,7 @@ class OnboardingResourcesTests(unittest.TestCase):
                     files["package/old.js"] = "old-hash"
                 (runtime / "manifest.json").write_text(json.dumps({
                     "revision": "pinned", "files": files,
+                    "runtime": {"flavor": "jit", "executable": "bin/bun"},
                 }))
                 stage_onboarding_runtime(runtime)
                 manifest = json.loads((runtime / "manifest.json").read_text())
@@ -102,10 +105,21 @@ class OnboardingResourcesTests(unittest.TestCase):
                 content = (Path(__file__).parent / "fixtures/onboarding-cli.mjs").read_bytes()
                 self.assertEqual(manifest, {"revision": "pinned", "files": {
                     "bin/bun": "runtime-hash", entry: hashlib.sha256(content).hexdigest(),
-                }})
+                }, "runtime": {"flavor": "jit", "executable": "bin/bun", "entry": entry}})
                 self.assertEqual((runtime / entry).read_bytes(), b"OPENCLAW-BUN-RUNTIME-V1\n" + content)
                 self.assertFalse((package / "old.js").exists())
                 self.assertFalse(copied.exists())
+
+    def test_aot_fixture_is_rejected_without_mutating_resources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary) / "desktop-runtime"
+            runtime.mkdir()
+            original = json.dumps({"runtime": {"flavor": "aot"}, "files": {}})
+            (runtime / "manifest.json").write_text(original)
+            with self.assertRaisesRegex(ValueError, "requires the JIT runtime"):
+                stage_onboarding_runtime(runtime)
+            self.assertEqual((runtime / "manifest.json").read_text(), original)
+            self.assertFalse((runtime / "package").exists())
 
     def test_missing_runtime_resources_fail_before_launch(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -116,6 +130,128 @@ class OnboardingResourcesTests(unittest.TestCase):
                 fixture = GatewayOnboardingFixture.__new__(GatewayOnboardingFixture)
                 with self.assertRaises(FileNotFoundError):
                     fixture.stage_binary(binary)
+
+
+class OnboardingCliTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name).resolve()
+        self.launcher = self.home / ".openclaw/bin/openclaw"
+        self.launcher.parent.mkdir(parents=True)
+        self.launcher.write_text("#!/bin/sh\nexit 0\n")
+        self.launcher.chmod(0o755)
+        self.node = shutil.which("node")
+        self.assertIsNotNone(self.node, "The native fixture tests require Node")
+
+    def cli(self, *args):
+        fixture = Path(__file__).parent.resolve() / "fixtures/onboarding-cli.mjs"
+        return subprocess.run(
+            [self.node, str(fixture), *map(str, args)], cwd=self.home,
+            env={"HOME": str(self.home), "PATH": os.defpath, "PYTHONDONTWRITEBYTECODE": "1"},
+            capture_output=True, text=True, timeout=10,
+        )
+
+    def snapshot(self):
+        result = {}
+        for path in [self.home, *self.home.rglob("*")]:
+            info = path.lstat()
+            content = os.readlink(path) if path.is_symlink() else path.read_bytes() if path.is_file() else None
+            result[str(path.relative_to(self.home))] = (info.st_mode, info.st_uid, info.st_mtime_ns, content)
+        return result
+
+    def succeeds(self, *args):
+        result = self.cli(*args)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def rejects_without_writes(self, *args):
+        before = self.snapshot()
+        result = self.cli(*args)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_terminal_setup_then_baseline_and_retry_preserve_the_profile(self):
+        self.assertEqual(self.succeeds("setup", "--terminal-path", self.launcher), {"ok": True})
+        config = self.home / ".openclaw/openclaw.json"
+        for relative in (".openclaw/openclaw.json", "fixture-runtime-baseline.json",
+                         "fixture-runtime-installed.json", "fixture-runtime-install-attempts"):
+            self.assertFalse((self.home / relative).exists())
+        self.assertEqual(self.launcher.read_text(), "#!/bin/sh\nexit 0\n")
+        before = self.snapshot()
+        status = self.succeeds("gateway", "status", "--deep", "--json", "--no-probe")
+        self.assertEqual(status["service"]["runtimeIntent"]["status"], "migrationPending")
+        self.assertFalse(status["service"]["loaded"])
+        self.assertEqual(self.snapshot(), before)
+        for args in (("setup", "--baseline"), ("setup", "--baseline", "--json", "extra")):
+            with self.subTest(args=args):
+                self.rejects_without_writes(*args)
+        self.assertEqual(self.succeeds("setup", "--baseline", "--json"),
+                         {"ok": True, "configPath": str(config)})
+        self.assertEqual(json.loads(config.read_text()), {"gateway": {"mode": "local"}})
+        self.assertEqual(json.loads((self.home / "fixture-runtime-baseline.json").read_text()),
+                         {"configPath": str(config)})
+        self.rejects_without_writes("setup", "--baseline", "--json")
+        # A service-failure retry leaves a baseline but no installed runtime.
+        config.write_text('{"gateway":{"mode":"local"},"retained":true}\n')
+        retained = config.read_bytes()
+        self.succeeds("setup", "--terminal-path", self.launcher)
+        self.assertEqual(config.read_bytes(), retained)
+        self.succeeds("setup", "--baseline", "--json")
+        self.assertEqual(config.read_bytes(), retained)
+        self.assertFalse((self.home / "fixture-runtime-installed.json").exists())
+
+    def test_terminal_setup_rejects_wrong_arguments_before_writes(self):
+        for args in (
+            ("setup", "--terminal-path"),
+            ("setup", "--terminal-path", self.launcher, "--json"),
+            ("setup", "--terminal-path", self.home / "foreign/openclaw"),
+            ("setup", "--terminal-path", self.launcher.parent / "../bin/openclaw"),
+            ("setup", "--unknown-terminal-flag", self.launcher),
+        ):
+            with self.subTest(args=args):
+                self.rejects_without_writes(*args)
+
+    def test_terminal_setup_rejects_invalid_launcher_shapes_before_writes(self):
+        for kind in ("missing", "directory", "symlink", "not-executable"):
+            with self.subTest(kind=kind):
+                self.launcher.unlink()
+                if kind == "directory":
+                    self.launcher.mkdir()
+                elif kind == "symlink":
+                    target = self.home / "owned-executable"
+                    target.write_bytes(b"#!/bin/sh\nexit 0\n")
+                    target.chmod(0o755)
+                    self.launcher.symlink_to(target)
+                elif kind == "not-executable":
+                    self.launcher.write_text("not an executable launcher")
+                self.rejects_without_writes("setup", "--terminal-path", self.launcher)
+                if kind == "directory":
+                    self.launcher.rmdir()
+                elif self.launcher.is_symlink() or self.launcher.exists():
+                    self.launcher.unlink()
+                self.launcher.write_text("#!/bin/sh\nexit 0\n")
+                self.launcher.chmod(0o755)
+
+    def test_baseline_and_install_ordering_rejections_preserve_state(self):
+        self.rejects_without_writes("setup", "--baseline", "--json")
+        self.rejects_without_writes("gateway", "install")
+        self.succeeds("setup", "--terminal-path", self.launcher)
+        self.rejects_without_writes("gateway", "install")
+        self.succeeds("setup", "--baseline", "--json")
+        self.rejects_without_writes("gateway", "install")
+        (self.home / "fixture-runtime-installed.json").write_text("{}")
+        self.rejects_without_writes("setup", "--terminal-path", self.launcher)
+        self.rejects_without_writes("gateway", "install")
+
+    def test_other_commands_delegate_and_preserve_the_child_exit_status(self):
+        (self.home / "fixture-cli.py").write_text(
+            "import json, sys\nprint(json.dumps(sys.argv[1:]))\nsys.exit(7)\n")
+        before = self.snapshot()
+        result = self.cli("browser", "status", "argument with spaces")
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertEqual(json.loads(result.stdout), ["browser", "status", "argument with spaces"])
+        self.assertEqual(self.snapshot(), before)
 
 
 class RoleMatchingTests(unittest.TestCase):

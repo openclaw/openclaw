@@ -60,7 +60,12 @@ function seedCacheRows(db: CacheDatabase, unrelated = false) {
   );
   insert.run(USAGE_COST_ROLLUP_SCOPE, "current", current.value_json, current.blob);
   insert.run("session-cost-usage", "refresh-lock", "{}", null);
-  for (const scope of ["session-cost-usage-rollup-v1", "session-cost-usage-rollup-v2"]) {
+  for (const scope of [
+    "session-cost-usage-rollup-v1",
+    "session-cost-usage-rollup-v2",
+    // 2026.10.10 wrote NUL-keyed projection partitions under the retired v1 scope.
+    "session-cost-usage-projection-v1",
+  ]) {
     insert.run(scope, "retired", "{}", null);
   }
   insert.run("session-cost-usage", "cache", "{}", null);
@@ -251,7 +256,13 @@ describe("legacy usage-cost cache cleanup", () => {
     if (operation === "readdir") {
       vi.spyOn(fs, "readdir").mockRejectedValueOnce(error);
     } else {
-      vi.spyOn(fs, "stat").mockRejectedValueOnce(error);
+      const stat = fs.stat;
+      vi.spyOn(fs, "stat").mockImplementation((...args) => {
+        if (args[0] === tempFile) {
+          return Promise.reject(error);
+        }
+        return stat(...args);
+      });
     }
     await maybeRepairLegacyRuntimeFiles(shouldRepair, { OPENCLAW_STATE_DIR: root });
     if (diagnostic) {

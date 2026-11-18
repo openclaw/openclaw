@@ -63,6 +63,28 @@ function refuse(
 beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
+it("backs off repeated startup refusals without shortening server hints", async () => {
+  const { requests, sender, frames, frame } = fixture();
+  const result = requests.request(sender, "models.list", {}, { timeoutMs: 60_000 });
+  for (const delay of [500, 1_000, 2_000, 4_000, 8_000, 8_000]) {
+    const count = frames.length;
+    refuse(requests, frame(), "startup-sidecars", 500);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(frames).toHaveLength(count);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(frames).toHaveLength(count + 1);
+  }
+  refuse(requests, frame(), "startup-sidecars", 10_000);
+  const count = frames.length;
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(frames).toHaveLength(count);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(frames).toHaveLength(count + 1);
+  requests.handleResponse({ type: "res", id: frame().id, ok: true, payload: { models: [] } });
+  await expect(result).resolves.toEqual({ models: [] });
+  expectSettled(requests);
+});
+
 it.each([false, true])(
   "unblocks a ready agent after probing startup, newer pause=%s",
   async (newerPause) => {

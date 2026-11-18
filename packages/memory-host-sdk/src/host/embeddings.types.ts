@@ -2,6 +2,5 @@
 export type {
   EmbeddingProvider,
   EmbeddingProviderCallOptions,
-  EmbeddingProviderCreateOptions as EmbeddingProviderOptions,
   EmbeddingUsage,
-} from "../../../../src/plugins/embedding-provider-types.js";
+} from "../../../../src/plugins/embedding-provider-runtime-types.js";

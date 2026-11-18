@@ -4,6 +4,7 @@ import path from "node:path";
 import { visitJavaScriptStatements } from "./javascript-statements.mjs";
 const JS_FILE_RE = /\.(?:cjs|js|mjs)$/u;
 const TS_FILE_RE = /\.(?:cts|ts|mts)$/u;
+const CONTROL_UI_ROOT = "dist/control-ui/";
 const require = createRequire(import.meta.url);
 
 /** Strip types for import analysis only; distribution bytes remain unchanged. */
@@ -72,22 +73,27 @@ function sourceTypeFor(importerPath, packageJsons) {
   }
 }
 
-function resolvesCommonJs(importedPath, fileSet, packageJsons) {
+/** Resolve CommonJS imports using only the files admitted to the package. */
+export function resolvePackageDistCommonJs(importedPath, fileSet, packageJsons) {
   const extensions = ["", ".js", ".json", ".node"];
-  const loadFile = (target) => extensions.some((extension) => fileSet.has(target + extension));
+  const loadFile = (target) =>
+    extensions.map((extension) => target + extension).find((file) => fileSet.has(file));
   const loadIndex = (directory) =>
     extensions
       .slice(1)
-      .some((extension) => fileSet.has(path.posix.join(directory, "index" + extension)));
-  if (!importedPath.endsWith("/") && loadFile(importedPath)) {
-    return true;
+      .map((extension) => path.posix.join(directory, "index" + extension))
+      .find((file) => fileSet.has(file));
+  const file = !importedPath.endsWith("/") && loadFile(importedPath);
+  if (file) {
+    return file;
   }
   const manifest = packageJsons.get(path.posix.join(importedPath, "package.json"));
   const main = manifest === undefined ? undefined : JSON.parse(manifest).main;
   if (typeof main === "string" && main) {
     const target = path.posix.join(importedPath, main);
-    if (loadFile(target) || loadIndex(target)) {
-      return true;
+    const entry = loadFile(target) ?? loadIndex(target);
+    if (entry) {
+      return entry;
     }
   }
   return loadIndex(importedPath);
@@ -99,23 +105,28 @@ function appendImportEdges(
   imports,
   sourceType,
   includeTypeScript,
-  onNodeLoaderReference,
   onStaticImport,
+  onLiteralCall,
+  onImportOccurrence,
+  controlUiImports,
 ) {
+  const occurrences = onImportOccurrence ? [] : undefined;
   function visit(node) {
-    if (
-      onNodeLoaderReference &&
-      ((node.type === "Identifier" && (node.name === "require" || node.name === "createRequire")) ||
-        (node.type === "Literal" && (node.value === "require" || node.value === "createRequire")))
-    ) {
-      onNodeLoaderReference();
-    }
     // These leaves cannot contain import edges; avoid allocating property lists for them.
     if (node.type === "Identifier" || node.type === "Literal" || node.type === "TemplateElement") {
       return;
     }
+    // Pruning can conservatively retain resolvable literal targets without making
+    // ordinary path arguments required imports or performing full scope analysis.
+    if (onLiteralCall && node.type === "CallExpression") {
+      const argument = literal(node.arguments[0]);
+      if (argument?.startsWith(".")) {
+        onLiteralCall(argument);
+      }
+    }
     let kind;
     let specifier;
+    let occurrenceKind;
     if (
       node.type === "ImportDeclaration" ||
       node.type === "ExportNamedDeclaration" ||
@@ -123,6 +134,14 @@ function appendImportEdges(
       node.type === "ImportExpression"
     ) {
       specifier = literal(node.source);
+      if (node.source) {
+        occurrenceKind =
+          node.type === "ImportExpression"
+            ? "dynamic-import"
+            : node.type === "ImportDeclaration"
+              ? "static-import"
+              : "static-export";
+      }
       if (node.source?.type === "Literal" && typeof node.source.value === "string") {
         onStaticImport?.(node.source.value);
       }
@@ -132,6 +151,7 @@ function appendImportEdges(
       node.callee.name === "require"
     ) {
       kind = "require";
+      occurrenceKind = "require";
       specifier = literal(node.arguments[0]);
     } else if (
       node.type === "NewExpression" &&
@@ -150,19 +170,25 @@ function appendImportEdges(
         base.object.property.name === "meta"
       ) {
         kind = "import-meta-url";
+        occurrenceKind = "import-meta-url";
         specifier = literal(node.arguments[0]);
       }
     }
+    let packageEdge;
     if (
       specifier?.startsWith(".") &&
       (kind !== "import-meta-url" || hasRuntimeFileExtension(specifier, includeTypeScript))
     ) {
-      const importedPath = path.posix.normalize(
+      let importedPath = path.posix.normalize(
         path.posix.join(
           path.posix.dirname(importerPath),
           kind === "require" ? specifier : stripSpecifierSuffix(specifier),
         ),
       );
+      // Browser module imports use the document's map; require and URL assets do not.
+      if (kind === undefined && importerPath.startsWith(CONTROL_UI_ROOT)) {
+        importedPath = controlUiImports.get(importedPath) ?? importedPath;
+      }
       // stageManagedHandoffRuntime copies this entry and stages its private proc-safe
       // closure before launch; this URL belongs to that runtime, not the tarball.
       const stagedNativeUrl =
@@ -171,7 +197,18 @@ function appendImportEdges(
         importedPath === "dist/node_modules/@openclaw/proc-safe/dist/identity.js";
       if (!stagedNativeUrl && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
         imports.push({ importerPath, importedPath, ...(kind === "require" ? { kind } : {}) });
+        packageEdge = importedPath;
       }
+    }
+    if (occurrenceKind && occurrences) {
+      occurrences.push({
+        importerPath,
+        kind: occurrenceKind,
+        start: node.start,
+        end: node.end,
+        ...(specifier === undefined ? {} : { specifier }),
+        ...(packageEdge === undefined ? {} : { importedPath: packageEdge }),
+      });
     }
     for (const key in node) {
       const value = node[key];
@@ -201,18 +238,26 @@ function appendImportEdges(
     );
   if (sourceType) {
     scan(sourceType);
-    return;
-  }
-  // Node detects ESM syntax in .js files without an explicit package type.
-  const start = imports.length;
-  try {
-    scan("script");
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) {
-      throw error;
+  } else {
+    // Node detects ESM syntax in .js files without an explicit package type.
+    const start = imports.length;
+    try {
+      scan("script");
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) {
+        throw error;
+      }
+      imports.length = start;
+      if (occurrences) {
+        occurrences.length = 0;
+      }
+      scan("module");
     }
-    imports.length = start;
-    scan("module");
+  }
+  // Publish only the successful parse, preserving distinct static/dynamic uses
+  // of the same target. Existing packaging edges and callbacks stay unchanged.
+  for (const occurrence of occurrences ?? []) {
+    onImportOccurrence(occurrence);
   }
 }
 
@@ -228,7 +273,7 @@ export function collectPackageDistImportErrors(params) {
   for (const { importerPath, importedPath, kind } of imports) {
     const found =
       kind === "require"
-        ? resolvesCommonJs(importedPath, fileSet, packageJsons)
+        ? resolvePackageDistCommonJs(importedPath, fileSet, packageJsons) !== undefined
         : fileSet.has(importedPath);
     if (!found) {
       errors.push(`${importerPath} imports missing ${importedPath}`);
@@ -248,6 +293,23 @@ export function collectPackageDistImports(params) {
         );
   const imports = [];
   const packageJsons = packageJsonsFor(params, files);
+  const controlUiImports = new Map();
+  const controlUiIndex = `${CONTROL_UI_ROOT}index.html`;
+  if (files.includes(controlUiIndex)) {
+    const encoded = /<script\b[^>]*\btype="importmap"[^>]*>([\s\S]*?)<\/script>/iu.exec(
+      params.readText(controlUiIndex),
+    );
+    // The portable Control UI build emits exact document-relative mappings.
+    for (const [alias, target] of Object.entries(JSON.parse(encoded?.[1] ?? "{}").imports ?? {})) {
+      if (!alias.startsWith("./") || typeof target !== "string" || !target.startsWith("./")) {
+        throw new Error("Unsupported Control UI package import-map entry");
+      }
+      const importedPath = path.posix.join(CONTROL_UI_ROOT, target);
+      controlUiImports.set(path.posix.join(CONTROL_UI_ROOT, alias), importedPath);
+      // Also check mapped CSS/preload targets that have no JavaScript import edge.
+      imports.push({ importerPath: controlUiIndex, importedPath });
+    }
+  }
 
   for (const importerPath of files) {
     if (
@@ -264,8 +326,10 @@ export function collectPackageDistImports(params) {
       imports,
       sourceTypeFor(importerPath, packageJsons),
       params.includeTypeScript,
-      params.onNodeLoaderReference,
       params.onStaticImport,
+      params.onLiteralCall,
+      params.onImportOccurrence,
+      controlUiImports,
     );
   }
 

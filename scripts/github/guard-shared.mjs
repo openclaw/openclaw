@@ -49,6 +49,8 @@ export class GitHubStatusPublicationError extends Error {
   }
 }
 
+export class GitHubStatusFailurePublishedError extends Error {}
+
 export class GitHubNoticePublicationError extends Error {
   constructor(cause) {
     super(cause.message, { cause });
@@ -182,7 +184,9 @@ export async function publishGuardStatus(guard, state, description) {
         "failure",
         "Review status capacity is nearly exhausted; push a new commit",
       );
-      throw new Error("Review status capacity is nearly exhausted; push a new commit.");
+      throw new GitHubStatusFailurePublishedError(
+        "Review status capacity is nearly exhausted; push a new commit.",
+      );
     }
     if (!history.pullRequestNumbers.includes(guard.pullRequest.number)) {
       throw new Error("The current PR's security review status was not recorded.");
@@ -202,7 +206,7 @@ export async function publishGuardStatus(guard, state, description) {
           "failure",
           "Multiple PRs use this head; close duplicates or push a distinct commit",
         );
-        throw new Error(
+        throw new GitHubStatusFailurePublishedError(
           "Multiple open PRs use the same head. Close duplicate PRs or push a distinct commit; security review updates automatically.",
         );
       }

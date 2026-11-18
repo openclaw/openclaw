@@ -1,5 +1,7 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
@@ -19,10 +21,58 @@ vi.mock("node:fs", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.skipIf(process.platform === "win32")(
+  "rejects a raced FIFO before waiting for a writer or emitting its header",
+  async () => {
+    const source = path.join(tempDirs.make("backup-fifo-swap-"), "payload.txt");
+    await fs.writeFile(source, "original payload");
+    const nativeOpen = fs.open;
+    let writerNeeded = false;
+    let writerTimer: ReturnType<typeof setTimeout> | undefined;
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (args[0] === source) {
+        await fs.rename(source, `${source}.original`);
+        execFileSync("mkfifo", [source]);
+        // Release the old blocking reader so RED can fail without leaking a worker.
+        writerTimer = setTimeout(() => {
+          writerNeeded = true;
+          const writer = fsSync.openSync(
+            source,
+            fsSync.constants.O_WRONLY | fsSync.constants.O_NONBLOCK,
+          );
+          fsSync.closeSync(writer);
+        }, 500);
+      }
+      return await nativeOpen(...args);
+    });
+    const chunks: Buffer[] = [];
+    try {
+      await expect(collectArchive(source, chunks)).rejects.toThrow(
+        "Backup source changed while opening",
+      );
+      expect(writerNeeded).toBe(false);
+      expect(chunks).toEqual([]);
+    } finally {
+      clearTimeout(writerTimer);
+    }
+  },
+);
+
 async function collectArchive(
   source: string,
   chunks: Buffer[],
-  callbacks: Partial<Pick<Parameters<typeof walkBackupTar>[0], "onEntry" | "onVanished">> = {},
+  callbacks: Partial<
+    Pick<
+      Parameters<typeof walkBackupTar>[0],
+      | "onEntry"
+      | "onVanished"
+      | "contentChecks"
+      | "onContentVerified"
+      | "filter"
+      | "signal"
+      | "onProgress"
+    >
+  > = {},
 ) {
   for await (const chunk of walkBackupTar({
     tar,
@@ -223,4 +273,78 @@ it("refuses a required root removed during a descendant open", async () => {
   });
   expect(onVanished).toHaveBeenCalledWith(file);
   expect(Buffer.concat(chunks).length).toBeGreaterThan(0);
+});
+
+const content = (bytes: string | Buffer) => ({
+  sha256: createHash("sha256").update(bytes).digest("hex"),
+  sizeBytes: Buffer.byteLength(bytes),
+});
+it("checks the emitted digest and byte length independently", async () => {
+  const file = await writeSource(tempDirs.make("backup-content-"), "snapshot bytes");
+  const onContentVerified = vi.fn();
+  await collectArchive(file, [], {
+    contentChecks: new Map([[path.resolve(file), content("snapshot bytes")]]),
+    onContentVerified,
+  });
+  expect(onContentVerified).toHaveBeenCalledExactlyOnceWith(path.resolve(file));
+  for (const expected of [
+    content("snapshot bytez"),
+    { ...content("snapshot bytes"), sizeBytes: 15 },
+  ]) {
+    onContentVerified.mockClear();
+    await expect(
+      collectArchive(file, [], {
+        contentChecks: new Map([[path.resolve(file), expected]]),
+        onContentVerified,
+      }),
+    ).rejects.toThrow(/SQLite snapshot (hash|size) mismatch/);
+    expect(onContentVerified).not.toHaveBeenCalled();
+  }
+});
+it("refuses a mutation in unread bytes after the first archive chunk", async () => {
+  const bytes = Buffer.alloc(2 * 1024 * 1024, 0x61);
+  const file = await writeSource(tempDirs.make("backup-content-changing-"), "");
+  await fs.writeFile(file, bytes);
+  const onContentVerified = vi.fn();
+  let changed = false;
+  await expect(
+    collectArchive(file, [], {
+      contentChecks: new Map([[path.resolve(file), content(bytes)]]),
+      onContentVerified,
+      onProgress: (_source, count) => {
+        if (count && !changed) {
+          changed = true;
+          const fd = fsSync.openSync(file, "r+");
+          try {
+            fsSync.writeSync(fd, Buffer.from([0x62]), 0, 1, bytes.length - 1);
+          } finally {
+            fsSync.closeSync(fd);
+          }
+        }
+      },
+    }),
+  ).rejects.toThrow("SQLite snapshot hash mismatch");
+  expect(changed).toBe(true);
+  expect(onContentVerified).not.toHaveBeenCalled();
+});
+it("does not report filtered or interrupted content as verified", async () => {
+  const file = await writeSource(tempDirs.make("backup-content-incomplete-"), "snapshot bytes");
+  const onContentVerified = vi.fn();
+  const contentChecks = new Map([[path.resolve(file), content("snapshot bytes")]]);
+  await collectArchive(file, [], { contentChecks, onContentVerified, filter: () => false });
+  expect(onContentVerified).not.toHaveBeenCalled();
+  const controller = new AbortController();
+  await expect(
+    collectArchive(file, [], {
+      contentChecks,
+      onContentVerified,
+      signal: controller.signal,
+      onProgress: (_source, bytes) => {
+        if (bytes) {
+          controller.abort(new Error("interrupted archive"));
+        }
+      },
+    }),
+  ).rejects.toThrow("interrupted archive");
+  expect(onContentVerified).not.toHaveBeenCalled();
 });

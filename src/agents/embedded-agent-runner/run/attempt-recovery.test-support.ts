@@ -207,6 +207,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       globalLane: "test",
       agentDir: "/tmp/provider-recovery-test",
       fallbackConfigured: scenario.fallbackConfigured ?? false,
+      startedAtMs: Date.now(),
     },
     preparedRuntime: {
       provider,

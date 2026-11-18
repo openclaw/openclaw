@@ -20,6 +20,7 @@ import path from "node:path";
 import { PerformanceObserver, performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { sampledOwnerBytes } from "../lib/sampled-owner-allocation.mjs";
 
 const [baseRef, callsArg = "1000", pairsArg = "5", selected = "all", candidateRef = "WORKTREE"] =
   process.argv.slice(2);
@@ -156,23 +157,6 @@ const workloads = [
       ),
   },
 ];
-function sampleOwner(profile, url) {
-  const ids = new Set();
-  function visit(node, inherited = false) {
-    const owned = inherited || node.callFrame.url === url;
-    if (owned) {
-      ids.add(node.id);
-    }
-    return (
-      (owned ? node.selfSize : 0) +
-      node.children.reduce((sum, child) => sum + visit(child, owned), 0)
-    );
-  }
-  return {
-    bytes: visit(profile.head),
-    samples: profile.samples.filter((s) => ids.has(s.nodeId)).length,
-  };
-}
 let gcEntries = [];
 const observer = new PerformanceObserver((list) => gcEntries.push(...list.getEntries()));
 observer.observe({ entryTypes: ["gc"] });
@@ -250,7 +234,7 @@ try {
             const threadUsed = thread && process.threadCpuUsage(thread),
               memory = process.memoryUsage();
             const allocated = inspector
-              ? sampleOwner(
+              ? sampledOwnerBytes(
                   (await inspector.post("HeapProfiler.stopSampling")).profile,
                   owners[side][workload.key].url,
                 )

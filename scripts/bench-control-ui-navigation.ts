@@ -179,13 +179,9 @@ const allScenarios: Scenario[] = [
     id: routeId,
     routeId,
     selector:
-      routeId === "claws"
-        ? ".claws-catalog-header"
-        : routeId === "activity"
-          ? "openclaw-activity-page .content-header"
-          : routeId === "dashboards"
-            ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
-            : `openclaw-${routeId}-page`,
+      routeId === "dashboards"
+        ? "openclaw-dashboards-page .dashboard-preview openclaw-board-document .board-document__content"
+        : `openclaw-${routeId}-page`,
   })),
   {
     id: "new-session",
@@ -270,6 +266,7 @@ type Asset = {
 type Result = {
   profile: string;
   scenario: string;
+  routeId?: Scenario["routeId"];
   mode: string;
   pair: number;
   bundle: number;
@@ -322,11 +319,16 @@ function createFixture(buildId: string, version: string) {
   const fixture = createInteractionFixture(buildId, version);
   const config = {
     ...fixture.methodResponses["config.get"].config,
-    gateway: { controlUi: { experimental: { claws: true } } },
+    // Historical bundles called this catalog Claws before the Templates rename.
+    gateway: { controlUi: { experimental: { templates: true, claws: true } } },
   };
   return {
     ...fixture,
-    featureMethods: [...defaultControlUiFeatureMethods, "claws.catalog.search"],
+    featureMethods: [
+      ...defaultControlUiFeatureMethods,
+      "templates.catalog.search",
+      "claws.catalog.search",
+    ],
     methodResponses: {
       ...fixture.methodResponses,
       "config.get": {
@@ -335,6 +337,7 @@ function createFixture(buildId: string, version: string) {
         sourceConfig: config,
         raw: JSON.stringify(config),
       },
+      "templates.catalog.search": { entries: [] },
       "claws.catalog.search": { entries: [] },
       "sessions.usage": {
         updatedAt: 1_800_000_000_000,
@@ -376,17 +379,20 @@ async function rpcCounts(page: Page) {
     return counts;
   });
 }
-async function prepareTarget(page: Page, scenario: Scenario): Promise<Locator | undefined> {
+async function prepareTarget(
+  page: Page,
+  scenario: Scenario,
+): Promise<{ scenario: Scenario; target?: Locator }> {
   if (scenario.trigger) {
     const target = page.locator(scenario.trigger).first();
     await target.waitFor({ state: "visible" });
-    return target;
+    return { scenario, target };
   }
   if (scenario.shortcut || !scenario.routeId) {
-    return undefined;
+    return { scenario };
   }
   if (scenario.routeId === "new-session") {
-    return page.locator(".sidebar-rail .sidebar-new-session");
+    return { scenario, target: page.locator(".sidebar-rail .sidebar-new-session") };
   }
   const target = page.locator(`.sidebar-pages [data-sidebar-entry="route:${scenario.routeId}"] a`);
   if (!(await target.isVisible())) {
@@ -395,8 +401,23 @@ async function prepareTarget(page: Page, scenario: Scenario): Promise<Locator | 
       .getByRole("button", { name: "Pages", exact: true })
       .click();
   }
+  if (scenario.routeId === "sessions") {
+    // Historical bundles list Sessions in Pages; current bundles open it from its sidebar.
+    await page.locator(".sidebar-pages:visible").waitFor();
+    if ((await target.count()) === 0) {
+      await page.keyboard.press("Escape");
+      const filter = page.locator(".sidebar-session-toolbar .sidebar-session-sort");
+      if (!(await filter.isVisible())) {
+        await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
+      }
+      await filter.click();
+      const sessions = page.locator('.sidebar-session-filter-footer[href$="/sessions"]');
+      await sessions.waitFor({ state: "visible" });
+      return { scenario, target: sessions };
+    }
+  }
   await target.waitFor({ state: "visible" });
-  return target;
+  return { scenario, target };
 }
 
 try {
@@ -633,6 +654,7 @@ try {
           const row: Result = {
             profile: profile.id,
             scenario: scenario.id,
+            routeId: scenario.routeId,
             mode,
             pair,
             bundle,
@@ -885,7 +907,7 @@ try {
               await idle("reload-transcript");
             }
             for (const scenario of destinations) {
-              const target = await prepareTarget(page, scenario);
+              const { scenario: destination, target } = await prepareTarget(page, scenario);
               if (target && values.intent !== "none") {
                 if (values.intent === "hover") {
                   await target.hover();
@@ -895,20 +917,20 @@ try {
                 await page.waitForTimeout(intentMs);
               }
               try {
-                await measure(scenario, mode, () =>
-                  target ? target.click() : page.keyboard.press(scenario.shortcut!),
+                await measure(destination, mode, () =>
+                  target ? target.click() : page.keyboard.press(destination.shortcut!),
                 );
               } catch (error) {
                 console.error(String(error));
               }
-              if (scenario.routeId) {
+              if (destination.routeId) {
                 await page.goBack();
                 await waitForControlUiRoute(page, { routeId: "chat" });
               } else {
                 await page.keyboard.press(
-                  scenario.id === "debug-overlay" ? scenario.shortcut! : "Escape",
+                  destination.id === "debug-overlay" ? destination.shortcut! : "Escape",
                 );
-                await page.locator(scenario.selector).first().waitFor({ state: "hidden" });
+                await page.locator(destination.selector).first().waitFor({ state: "hidden" });
               }
             }
           }

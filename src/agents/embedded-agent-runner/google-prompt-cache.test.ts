@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
@@ -331,7 +332,10 @@ describe("google prompt cache", () => {
       name: "cachedContents/system-cache-1",
       expireTime,
     });
-    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn("stream", {
+      tools: [{ functionDeclarations: [{ name: "lookup" }] }],
+      toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+    });
     const providerMetadata = createPluginMetadataSnapshotFixture({
       plugins: [
         {
@@ -366,7 +370,11 @@ describe("google prompt cache", () => {
             {
               name: "lookup",
               description: "Look up a value",
-              parameters: { type: "object" },
+              parameters: {
+                type: "object",
+                properties: { from: { type: "string" } },
+                required: ["from"],
+              },
             },
           ],
         } as never,
@@ -398,7 +406,11 @@ describe("google prompt cache", () => {
             {
               name: "lookup",
               description: "Look up a value",
-              parametersJsonSchema: { type: "object" },
+              parametersJsonSchema: {
+                type: "object",
+                properties: { from_: { type: "string" } },
+                required: ["from_"],
+              },
             },
           ],
         },
@@ -411,7 +423,11 @@ describe("google prompt cache", () => {
     });
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
     expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
-    expect(streamContext(innerStreamFn).tools).toBeUndefined();
+    expect(streamContext(innerStreamFn).tools).toMatchObject([
+      { name: "lookup", parameters: { properties: { from: { type: "string" } } } },
+    ]);
+    expect(getCapturedPayload()).not.toHaveProperty("tools");
+    expect(getCapturedPayload()).not.toHaveProperty("toolConfig");
     expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
     expect(streamOptions(innerStreamFn).toolChoice).toBe("auto");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");
@@ -712,4 +728,87 @@ describe("google prompt cache", () => {
     expect(cancel).toHaveBeenCalledOnce();
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-overflow");
   });
+});
+
+it("propagates the caller abort reason without persisting failure or streaming", async () => {
+  const reason = new Error("caller cancelled");
+  const controller = new AbortController();
+  controller.abort(reason);
+  const entries: SessionCustomEntry[] = [];
+  const innerStreamFn = vi.fn();
+  const wrapped = await preparePromptCacheStream({
+    fetchMock: vi.fn(async () => {
+      throw new DOMException("fetch aborted", "AbortError");
+    }),
+    now: 1_000_000,
+    sessionManager: makeSessionManager(entries),
+    signal: controller.signal,
+    streamFn: innerStreamFn,
+  });
+
+  await expect(invoke(wrapped)).rejects.toBe(reason);
+  expect(entries).toHaveLength(0);
+  expect(innerStreamFn).not.toHaveBeenCalled();
+});
+it.each(["api-key", "header"])(
+  "keeps unregistered %s sentinel failures outside optional cache handling",
+  async (scope) => {
+    const unknownSentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
+    const innerStreamFn = vi.fn();
+    const fetchMock = vi.fn();
+    const model = makeGoogleModel();
+    const headers = { ...model.headers, Authorization: `Bearer ${unknownSentinel}` };
+    const wrapped = await preparePromptCacheStream({
+      apiKey: scope === "api-key" ? unknownSentinel : "gemini-api-key",
+      model: scope === "header" ? { ...model, headers } : model,
+      fetchMock,
+      now: 1_000_000,
+      sessionManager: makeSessionManager(),
+      streamFn: innerStreamFn,
+    });
+
+    await expect(
+      Promise.resolve().then(() =>
+        wrapped?.(
+          scope === "header" ? { ...model, headers } : model,
+          { systemPrompt: `Follow policy.${SYSTEM_PROMPT_CACHE_BOUNDARY}`, messages: [] },
+          {},
+        ),
+      ),
+    ).rejects.toThrow("is not registered in this process");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(innerStreamFn).not.toHaveBeenCalled();
+  },
+);
+it("propagates writer-claim rebound while recording cache failure", async () => {
+  const rebound = new SessionTranscriptWriterClaimReboundError();
+  const innerStreamFn = vi.fn();
+  const wrapped = await preparePromptCacheStream({
+    fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
+    now: 1_000_000,
+    sessionManager: {
+      appendCustomEntryAsync: vi.fn(async () => {
+        throw rebound;
+      }),
+      getEntries: () => [],
+    },
+    streamFn: innerStreamFn,
+  });
+
+  await expect(invoke(wrapped)).rejects.toBe(rebound);
+  expect(innerStreamFn).not.toHaveBeenCalled();
+});
+it("does not swallow primary stream failures after cache degradation", async () => {
+  const primaryFailure = new Error("primary stream failed");
+  const innerStreamFn = vi.fn(async () => {
+    throw primaryFailure;
+  }) as unknown as StreamFn;
+  const wrapped = await preparePromptCacheStream({
+    fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
+    now: 1_000_000,
+    sessionManager: makeSessionManager(),
+    streamFn: innerStreamFn,
+  });
+
+  await expect(invoke(wrapped)).rejects.toBe(primaryFailure);
 });

@@ -56,6 +56,23 @@ export function createSqliteWorkerLifecycle({
   ) => Promise<unknown>;
   fail: (slot: Slot, error: unknown) => void;
 }) {
+  function sealClients(
+    waiters: Iterable<Iterable<(error?: unknown) => void>>,
+    retainSharedState = false,
+  ): void {
+    // Seal clients and pending dispatch before the first await; accepted scopes still settle.
+    for (const waiting of waiters) {
+      for (const resume of waiting) {
+        resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));
+      }
+    }
+    for (const client of stores.values()) {
+      if (!retainSharedState || !client.actor.stateContext) {
+        client.sealed = true;
+      }
+    }
+  }
+
   async function closeHost({
     inputAdmission,
     operations,
@@ -65,15 +82,7 @@ export function createSqliteWorkerLifecycle({
     operations: Iterable<Promise<void>>;
     waiters: Iterable<Iterable<(error?: unknown) => void>>;
   }): Promise<void> {
-    // Seal clients and pending dispatch before the first await; accepted scopes still settle.
-    for (const waiting of waiters) {
-      for (const resume of waiting) {
-        resume(new SqliteWorkerError("SQLite worker host is closing", "overloaded"));
-      }
-    }
-    for (const client of stores.values()) {
-      client.sealed = true;
-    }
+    sealClients(waiters);
     const errors: unknown[] = [];
     try {
       await inputAdmission.joinOpens();
@@ -90,6 +99,7 @@ export function createSqliteWorkerLifecycle({
     if (errors.length) {
       throw new AggregateError(errors, "SQLite worker host cleanup failed");
     }
+    stores.clear();
   }
 
   async function acquireSlot(
@@ -101,9 +111,10 @@ export function createSqliteWorkerLifecycle({
     options.assertCurrent?.();
     options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
-    // Agent integrity scans are synchronous; keep durable channel intake on its own carrier.
-    const pool = [...slots].filter((slot) => slot.sharedState === options.sharedState);
-    const maxWorkers = options.sharedState ? 1 : limits.maxWorkers;
+    // Synchronous scans and external databases must not pin unrelated storage carriers.
+    const pool = [...slots].filter((slot) => slot.carrierClass === options.carrierClass);
+    const maxWorkers =
+      options.carrierClass && options.carrierClass !== "agent" ? 1 : limits.maxWorkers;
     const available = pool.filter(
       (slot) =>
         !slot.failed && !slot.retiring && slot.runtimeGeneration === options.runtimeGeneration,
@@ -182,7 +193,7 @@ export function createSqliteWorkerLifecycle({
   function createSlot(
     options: Pick<
       PreparedSqliteWorkerOpen,
-      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "sharedState"
+      "carrierUrl" | "runtimeGeneration" | "assertCurrent" | "signal" | "carrierClass"
     >,
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
@@ -198,19 +209,23 @@ export function createSqliteWorkerLifecycle({
     captureSqliteDatabaseAdmissions(databaseAdmissionCursor);
     const postgresPool = createPostgresPoolEndpoints();
     const { worker, exited } = runInDetachedAsyncContext(() => ({
-      worker: createCpuTrackedWorker(carrierUrl, {
-        // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
-        resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
-        env: resolveNodeCompileCacheEnv(),
-        execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
-        workerData: { postgresPool },
-        transferList: postgresPoolTransferList(postgresPool),
-      }),
+      worker: createCpuTrackedWorker(
+        carrierUrl,
+        {
+          // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
+          resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 16 },
+          env: resolveNodeCompileCacheEnv(),
+          execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
+          workerData: { postgresPool },
+          transferList: postgresPoolTransferList(postgresPool),
+        },
+        () => slot.current?.observation.requestClass,
+      ),
       exited: createDeferredCore(),
     }));
     trackSqliteDatabaseAdmissionWorker(worker);
     const slot: Slot = {
-      ...(options.sharedState ? { sharedState: true as const } : {}),
+      carrierClass: options.carrierClass,
       postgresPoolSent: postgresPool !== undefined,
       custody: new SqliteWorkerSlotCustody(),
       databaseAdmissionCursor,
@@ -270,6 +285,48 @@ export function createSqliteWorkerLifecycle({
     if (!actor.references) {
       actor.onReferencesDrained?.();
     }
+  }
+
+  /** Client references retire here before their last actor enters native close custody. */
+  function bindClientRelease({
+    actor,
+    client,
+    clientReservations,
+    releasePaths,
+    maintenanceScope,
+    resumeScheduledMaintenance,
+    readDraining,
+  }: {
+    actor: Actor;
+    client: object;
+    clientReservations: Set<object>;
+    releasePaths: () => void;
+    maintenanceScope: EnqueueOptions["maintenanceScope"];
+    resumeScheduledMaintenance: (() => void) | undefined;
+    readDraining: () => Promise<void> | undefined;
+  }): (store: object, reclaiming: boolean) => Promise<void> {
+    let referenceReleased = false;
+    return async (store, reclaiming) => {
+      if (!referenceReleased) {
+        referenceReleased = true;
+        resumeScheduledMaintenance?.();
+        releaseActorReference(actor);
+        stores.delete(store);
+        clientReservations.delete(client);
+        releasePaths();
+      }
+      const draining = readDraining();
+      if (draining && !reclaiming && !actor.stateContext) {
+        // Canonical shared-state close releases its clients before host drainage joins it.
+        await draining;
+      } else if (actor.slot.failed) {
+        // A nonlast client still joins the failed worker's native cleanup.
+        await actor.slot.exit;
+      }
+      if (!actor.references) {
+        await closeActor(actor, maintenanceScope);
+      }
+    };
   }
 
   async function rejectSlotAdmission(slot: Slot, error: unknown): Promise<never> {
@@ -453,11 +510,13 @@ export function createSqliteWorkerLifecycle({
   }
 
   return {
+    sealClients,
     closeHost,
     acquireSlot,
     createSlot,
     settleGeneration,
     releaseActorReference,
+    bindClientRelease,
     rejectSlotAdmission,
     rejectActorAdmission,
     retireActor,

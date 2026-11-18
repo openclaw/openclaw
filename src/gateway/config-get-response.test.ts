@@ -80,11 +80,14 @@ afterEach(() => {
 
 it("redacts cold config reads without building the form schema", async () => {
   mocks.config = withToken("cold");
+  mocks.config.env = { vars: { REDACTION_TEST_INLINE: "synthetic-inline-credential" } };
   mocks.snapshot.mockResolvedValue(makeSnapshot(mocks.config));
   const buildSchema = vi.spyOn(schema, "buildConfigSchemaCore");
 
   const response = await readWatched();
   expect(response.config.gateway?.auth?.token).toBe(REDACTED_SENTINEL);
+  expect(response.config.env?.vars?.REDACTION_TEST_INLINE).toBe(REDACTED_SENTINEL);
+  expect(JSON.stringify(response)).not.toContain("synthetic-inline-credential");
   expect(JSON.stringify(response)).not.toContain("synthetic-cold-token-canary");
   expect(buildSchema).not.toHaveBeenCalled();
 });

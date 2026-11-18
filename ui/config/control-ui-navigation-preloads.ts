@@ -9,9 +9,9 @@ const entries = {
     "pages/new-session/new-session-page-entry.ts",
     "pages/new-session/creation-composer-render.tsx",
   ],
-  claws: ["pages/claws/page.tsx"],
+  templates: ["pages/templates/page.tsx"],
   // Catalog search and detail are already loaded; avoid warming unrelated New Session code.
-  "claws-next": ["pages/claws/page.tsx"],
+  "templates-next": ["pages/templates/page.tsx"],
   dashboards: ["pages/dashboards/dashboards-page.tsx", "components/board/board-document.tsx"],
   usage: ["pages/usage/usage-page.tsx", "pages/usage/route-loader.ts"],
   cron: ["pages/cron/cron-page-entry.tsx", "pages/cron/cron-page.tsx"],

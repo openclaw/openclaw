@@ -4,6 +4,7 @@ import {
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -68,7 +69,7 @@ export function setupFeishuBroadcastTestHarness() {
         resolveStorePath: mocks.mockResolveStorePath,
         recordInboundSession: mocks.mockRecordInboundSession,
       },
-      commands: { shouldComputeCommandAuthorized: vi.fn(() => false) },
+      commands: { shouldComputeCommandAuthorized: vi.fn(() => false), isControlCommandMessage },
       inbound: {
         ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: (params: BuildChannelInboundEventContextParams) =>

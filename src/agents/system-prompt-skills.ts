@@ -12,16 +12,18 @@ export function buildSkillsSection(params: {
   deferredToolsDirectlyCallable?: boolean;
 }) {
   const { availableTools, visibleTools } = params;
+  const installedSkillRead = availableTools.has("skills_read");
   // CLI backends own native file tools outside OpenClaw's projected tool list.
   const canAccess = params.codeModeActive
-    ? visibleTools.has("exec")
-    : visibleTools.has("read") ||
-      availableTools.has("skills_read") ||
-      params.promptSurface === "cli_backend";
-  const skillsPrompt = canAccess ? (params.skillsPrompt?.trim() ?? "") : "";
-  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
+    ? visibleTools.has("exec") && installedSkillRead
+    : visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
   const installedSkillSearch = availableTools.has("skills_search");
-  const installedSkillRead = availableTools.has("skills_read");
+  // Code Mode searches the admitted skill catalog; listing it again only consumes context.
+  const skillsPrompt =
+    canAccess && !(params.codeModeActive && installedSkillSearch)
+      ? (params.skillsPrompt?.trim() ?? "")
+      : "";
+  const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
   if (!canAccess || (!hasListedSkills && !installedSkillSearch)) {
     return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };
   }
@@ -50,8 +52,8 @@ export function buildSkillsSection(params: {
           : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
       ...(installedSkillSearch
         ? [
-            `Before work involving files, specialized tools, or a reusable workflow, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} for an applicable skill. Read the best match before implementing the workflow yourself.`,
-            "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
+            `Before specialized or unfamiliar tasks or reusable workflows, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} for an applicable skill. Read the best match before implementing the workflow yourself.`,
+            "Search by the task goal and distinctive terms. Fully specified simple local file work and self-contained answers need no search unless another instruction requires it. Search covers installed skills; it does not install skills.",
           ]
         : []),
       "Several: most specific. No relevant skill: read none.",

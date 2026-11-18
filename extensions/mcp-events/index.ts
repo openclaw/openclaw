@@ -9,6 +9,16 @@ import { CALLBACK_PREFIX, MCP_EVENTS_PROFILE } from "./src/protocol.js";
 import { McpEventsService } from "./src/service.js";
 import type { EventCron } from "./src/types.js";
 
+const McpEventsParameters = {
+  type: "object",
+  properties: {
+    serverName: { type: "string", minLength: 1, maxLength: 256 },
+    cursor: { type: "string", minLength: 1, maxLength: 16384 },
+  },
+  required: ["serverName"],
+  additionalProperties: false,
+};
+
 function currentCron(context: OpenClawPluginServiceContextV2): EventCron {
   const cron = context.getCron?.();
   if (!cron?.readEventSources || !cron.runEvent) {
@@ -67,15 +77,7 @@ export default definePluginEntry({
           label: "MCP Events",
           description:
             "List webhook events and subscription argument schemas from a configured MCP server. Use the descriptors to create an Automation event source; this tool does not schedule or subscribe by itself. Pass nextCursor as cursor for another page.",
-          parameters: {
-            type: "object",
-            properties: {
-              serverName: { type: "string", minLength: 1, maxLength: 256 },
-              cursor: { type: "string", minLength: 1, maxLength: 16384 },
-            },
-            required: ["serverName"],
-            additionalProperties: false,
-          },
+          parameters: McpEventsParameters,
           execute: async (_id, input) => {
             context.assertInvocationCurrent();
             const params = record(input);

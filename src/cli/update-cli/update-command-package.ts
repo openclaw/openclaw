@@ -6,10 +6,12 @@ import {
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import type {
   PackageActivationOptions,
   PackageUpdateTransaction,
+  StagedPackageSwapParams,
 } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import { deferPackageStateVerification } from "../../infra/package-update-verification-step.js";
@@ -19,10 +21,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
-import {
-  getUpdateDoctorConfigFailureReason,
-  type UpdateDoctorConfigChange,
-} from "../../infra/update-doctor-config.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -34,7 +33,6 @@ import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   createGlobalInstallEnv,
   resolveGlobalInstallSpec,
-  resolveGlobalInstallTarget,
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
@@ -52,11 +50,11 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { CLI_NAME } from "../cli-name.js";
+import { createUpdateDoctorProgress } from "./progress.js";
 import {
   DEFAULT_PACKAGE_NAME,
   readPackageName,
   readPackageVersion,
-  resolveGlobalManager,
   resolveNodeRunner,
   runUpdateStep,
   UpdatePreMutationError,
@@ -78,7 +76,6 @@ type PackageDoctorContext = {
   executorFence: UpdateRecoveryFence;
   requester?: Readonly<UpdateRequester>;
   inputHash: string;
-  changes: UpdateDoctorConfigChange[];
   databaseBackup?: UpdateDatabaseBackup;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   assertCurrent: () => void;
@@ -127,7 +124,7 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   await createUpdateConfigSnapshot(doctorEnv);
   const candidateHostVersion = await readPackageVersion(params.root);
   const doctorResultPath = createUpdatePostInstallDoctorResultPath();
-  const sectionTiming = createUpdateDoctorSectionTiming();
+  const sectionTiming = createUpdateDoctorSectionTiming(process.env, createUpdateDoctorProgress());
   // Service ownership stays with the finalizer while the retained package
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
@@ -376,16 +373,16 @@ export type PackageInstallUpdateParams = Omit<PackageDoctorOptions, "results"> &
   installSpec?: string;
   timeoutMs: number;
   startedAt: number;
-  honorPackageRoot?: boolean;
   resolveLifecycleNodeRunner?: () => string | undefined;
   installEnv?: NodeJS.ProcessEnv;
-  installTarget?: ResolvedGlobalInstallTarget;
+  installTarget: ResolvedGlobalInstallTarget;
   beforeVerifyCandidate?: (root: string) => Promise<void>;
   validateCandidate: (root: string) => Promise<UpdateStepResult[]>;
   beforeActivate: () => Promise<void>;
   reserveInstallSlot?: (root: string) => void;
   onTransaction: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   getActivation?: () => PackageActivationOptions | undefined;
+  onPackageRelease?: StagedPackageSwapParams["onPackageRelease"];
 };
 
 /** Retain one staged target while its runtime initializes a fresh profile. */
@@ -453,6 +450,7 @@ export async function stagePackageInstallUpdate(
       reserveInstallSlot: (root) => requireActive().reserveInstallSlot?.(root),
       getActivation: () => requireActive().getActivation?.(),
       onTransaction: (transaction) => requireActive().onTransaction(transaction),
+      onPackageRelease: (release) => requireActive().onPackageRelease?.(release),
       onConfigSnapshot: (snapshot) => requireActive().onConfigSnapshot?.(snapshot),
     },
     () => requireActive(),
@@ -510,21 +508,7 @@ export async function runPackageInstallUpdate(
   params: PackageInstallUpdateParams,
   resolveDoctorOptions: () => PackageDoctorOptions = () => params,
 ): Promise<UpdateRunResult> {
-  let installTarget = params.installTarget;
-  if (!installTarget) {
-    const manager = await resolveGlobalManager({
-      root: params.root,
-      installKind: params.installKind,
-      timeoutMs: params.timeoutMs,
-    });
-    installTarget = await resolveGlobalInstallTarget({
-      manager,
-      runCommand: runCommandWithTimeout,
-      timeoutMs: params.timeoutMs,
-      pkgRoot: params.root,
-      honorPackageRoot: params.honorPackageRoot === true,
-    });
-  }
+  const { installTarget } = params;
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv(undefined, installTarget));
   const pkgRoot = installTarget.packageRoot;
   const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;
@@ -555,6 +539,8 @@ export async function runPackageInstallUpdate(
     reserveInstallSlot: params.reserveInstallSlot,
     onTransaction: params.onTransaction,
     getActivation: params.getActivation,
+    releaseLayout: true,
+    onPackageRelease: params.onPackageRelease,
     installTarget,
     installSpec,
     installCwd: params.invocationCwd,
@@ -599,7 +585,11 @@ export async function runPackageInstallUpdate(
           ? "error"
           : "ok",
     mode: installTarget.manager,
-    root: packageUpdate.activePackageRoot ?? undefined,
+    // A release replaced in place behind its link is the installation at the link.
+    root: packageUpdate.activePackageRoot
+      ? (resolvePackageReleaseSlotForRootSync(packageUpdate.activePackageRoot) ??
+        packageUpdate.activePackageRoot)
+      : undefined,
     reason:
       getUpdateDoctorConfigFailureReason(packageUpdate.failedStep?.configWriteRefusal) ??
       packageUpdate.reason ??

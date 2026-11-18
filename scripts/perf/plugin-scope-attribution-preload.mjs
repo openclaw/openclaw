@@ -14,6 +14,7 @@ import { registerHooks } from "node:module";
 import path from "node:path";
 import { compileFunction } from "node:vm";
 import { isMainThread } from "node:worker_threads";
+import { findBundledModuleRegion } from "../lib/bundled-module-regions.mjs";
 
 if (isMainThread) {
   const key = Symbol.for("openclaw.benchmark.pluginScope");
@@ -130,18 +131,21 @@ if (isMainThread) {
         ? "src/plugins/runtime/gateway-request-scope.ts"
         : "src/shared/async-work-scope.ts";
       // Public export barrels share the filename prefix but contain no owner implementation.
-      if (!source.includes(`//#region ${owner}`)) {
+      const bounds = findBundledModuleRegion(source, owner);
+      if (!bounds) {
         return result;
       }
+      const { start, end } = bounds;
+      let measured = source.slice(start, end);
       const census = 'globalThis[Symbol.for("openclaw.benchmark.pluginScope")]';
       function replace(name, declaration, replacement) {
-        const index = source.indexOf(declaration);
-        if (index < 0 || source.includes(declaration, index + declaration.length)) {
+        const index = measured.indexOf(declaration);
+        if (index < 0 || measured.includes(declaration, index + declaration.length)) {
           throw new Error(
             `Plugin scope instrumentation mismatch: ${name} in ${path.basename(url)}`,
           );
         }
-        source = source.replace(declaration, replacement);
+        measured = measured.replace(declaration, replacement);
         installed.set(name, path.basename(url));
       }
       if (url.includes("/gateway-request-scope-")) {
@@ -165,6 +169,7 @@ if (isMainThread) {
           );
         }
       }
+      source = source.slice(0, start) + measured + source.slice(end);
       return { ...result, source };
     },
   });

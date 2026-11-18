@@ -8,15 +8,23 @@
  * Run already-built baseline/candidate owners in counterbalanced order:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/sandbox-start-measure.ts \
  *   --owner <dist/docker-*.mjs exporting ensureSandboxContainer> --iterations 2000
+ * Built owners are preferred; source owners also work through the tsx loader:
+ *   --owner src/agents/sandbox/backend.ts --backend --engine podman --iterations 2000
+ * Record the source revision/diff for source runs; the owner hash covers its entry.
  * Add --allocations for a separate collected-object sampling pass. Setup, warmup
  * and forced GC are outside measurement. Each invocation owns and removes its
- * fixture under .local; never points at a running Gateway or real Docker.
+ * fixture under .local; never points at a running Gateway or real container engine.
  * Timing/GC values from the sampled pass are diagnostic only. Both revisions
  * use the same current-source sandbox config factory, whose hash is reported.
  * --cold-create makes the synthetic engine report each container absent, measuring
  * image admission/create/start work without real daemon latency or image pulls.
  * --backend selects an owner exporting createSandboxBackend instead, including
  * backend dispatch, daemon identity, filesystem-bridge setup and registry publication.
+ * --engine docker|podman selects the synthetic engine (default: docker); Podman
+ * models a local rootless engine, including its native target-resolution probes.
+ * --call-latency-ms injects per-call delay after warmup; --pause-cycle measures
+ * quiesce/resume with real registry custody. --workspace-fixture uses an existing
+ * synthetic scale workspace (read-only to the benchmark; never production data).
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -37,9 +45,15 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "cold-create": { type: "boolean", default: false },
     backend: { type: "boolean", default: false },
+    engine: { type: "string", default: "docker" },
+    "call-latency-ms": { type: "string", default: "0" },
+    "workspace-fixture": { type: "string" },
+    "pause-cycle": { type: "boolean", default: false },
   },
 });
-assert(values.owner, "--owner must select an already-built Docker owner");
+assert(values.owner, "--owner must select a built or source sandbox owner");
+const engine = values.engine;
+assert(engine === "docker" || engine === "podman", "--engine must be docker or podman");
 assert(global.gc, "Run with --expose-gc");
 const iterations = parseStrictIntegerOption({
   raw: values.iterations,
@@ -49,11 +63,23 @@ const iterations = parseStrictIntegerOption({
 });
 await fs.mkdir(".local", { recursive: true });
 const root = await fs.mkdtemp(path.resolve(".local/sandbox-start-measure-"));
-const workspaceDir = path.join(root, "workspace");
+const workspaceDir = values["workspace-fixture"]
+  ? path.resolve(values["workspace-fixture"])
+  : path.join(root, "workspace");
+const callLatencyMs = parseStrictIntegerOption({
+  raw: values["call-latency-ms"],
+  label: "--call-latency-ms",
+  min: 0,
+  fallback: 0,
+});
+assert(
+  !values["pause-cycle"] || (values.backend && !values["cold-create"]),
+  "--pause-cycle requires --backend without --cold-create",
+);
 const bin = path.join(root, "bin");
 const callsFile = path.join(root, "calls");
 const containerId = "c".repeat(64);
-await fs.mkdir(workspaceDir);
+await fs.mkdir(workspaceDir, { recursive: true });
 await fs.mkdir(bin);
 Object.assign(process.env, {
   OPENCLAW_STATE_DIR: path.join(root, "state"),
@@ -64,15 +90,35 @@ Object.assign(process.env, {
   SANDBOX_MEASURE_CONTAINER: path.join(root, "container"),
   SANDBOX_MEASURE_ID: containerId,
   SANDBOX_MEASURE_COLD: values["cold-create"] ? "1" : "0",
+  SANDBOX_MEASURE_ENGINE: engine,
 });
+for (const name of [
+  "DOCKER_CONTEXT",
+  "DOCKER_HOST",
+  "DOCKER_TLS",
+  "DOCKER_TLS_VERIFY",
+  "DOCKER_CERT_PATH",
+  "CONTAINER_HOST",
+  "CONTAINER_CONNECTION",
+  "CONTAINER_SSHKEY",
+]) {
+  delete process.env[name];
+}
 await fs.writeFile(
-  path.join(bin, "docker"),
+  path.join(bin, engine),
   `#!/bin/sh
+if [ "$1" = --remote=false ]; then shift; fi
 if [ "$1" = --host ]; then shift 2; fi
 printf '%s\n' "$1" >> "$SANDBOX_MEASURE_CALLS"
+if [ -n "$SANDBOX_MEASURE_LATENCY" ]; then sleep "$SANDBOX_MEASURE_LATENCY"; fi
 case "$1" in
   context) printf '{"Host":"unix:///synthetic-sandbox.sock"}\n' ;;
-  info) printf 'synthetic-daemon\n' ;;
+  info)
+    if [ "$SANDBOX_MEASURE_ENGINE" = podman ]; then
+      printf 'true\tfalse\t\t5.0.0\n'
+    else
+      printf 'synthetic-daemon\n'
+    fi ;;
   inspect)
     if [ "$3" = '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}' ]; then
       printf '{"Mounts":[],"Tmpfs":{}}\n'
@@ -88,6 +134,9 @@ case "$1" in
     fi
     read -r config_hash < "$SANDBOX_MEASURE_CONTAINER"
     case "$3" in
+      *'"State":{{json .State}}'*) printf '{"Id":"%s","State":{"Running":true,"Paused":false},"Labels":{"openclaw.configHash":"%s"},"ReadonlyRootfs":true,"Mounts":[],"Tmpfs":{}}\\n' "$SANDBOX_MEASURE_ID" "$config_hash" ;;
+      '{{.Id}} {{.State.Running}} {{.State.Paused}}') printf '%s true false\\n' "$SANDBOX_MEASURE_ID" ;;
+      '{{.State.Paused}}') if [ -f "$SANDBOX_MEASURE_CONTAINER.paused" ]; then printf 'true\\n'; else printf 'false\\n'; fi ;;
       '{{.State.Running}}') printf 'true\n' ;;
       '{{.Id}} {{.HostConfig.ReadonlyRootfs}}') printf '%s true\n' "$SANDBOX_MEASURE_ID" ;;
       *'.State.Running}'*'.HostConfig.ReadonlyRootfs}'*) printf '%s\ntrue\ntrue\n%s\n' "$SANDBOX_MEASURE_ID" "$config_hash" ;;
@@ -103,6 +152,8 @@ case "$1" in
     done
     printf '%s\n' "$SANDBOX_MEASURE_ID" ;;
   exec) printf '1 0 8:1 / / rw - ext4 /dev/synthetic rw\n' ;;
+  pause) touch "$SANDBOX_MEASURE_CONTAINER.paused" ;;
+  unpause) rm "$SANDBOX_MEASURE_CONTAINER.paused" ;;
   image|start) ;;
   *) printf 'Unsupported fixture operation\n' >&2; exit 2 ;;
 esac
@@ -152,7 +203,11 @@ try {
     readOnlyResourceMounts.push({ hostPath, containerPath: `/resources/skill-${index}` });
   }
   const cfg = resolveSandboxConfigForAgent({
-    agents: { defaults: { sandbox: { mode: "all", scope: "shared", workspaceAccess: "rw" } } },
+    agents: {
+      defaults: {
+        sandbox: { mode: "all", backend: engine, scope: "shared", workspaceAccess: "rw" },
+      },
+    },
   });
   const params = {
     scopeKey: "sandbox-start-measure",
@@ -161,22 +216,53 @@ try {
     readOnlyResourceMounts,
     cfg,
   };
-  const invoke = values.backend
+  let invoke = values.backend
     ? async () => {
         const { createSandboxBackend } =
           owner as typeof import("../../src/agents/sandbox/backend.js");
         const result = await createSandboxBackend({ ...params, sessionKey: params.scopeKey });
-        assert.equal(result.runtimeId, `${cfg.docker.containerPrefix}shared`);
+        assert.equal(
+          result.runtimeId,
+          `${cfg.docker.containerPrefix}${engine === "podman" ? "podman-" : ""}shared`,
+        );
       }
     : async () => {
-        const { ensureSandboxContainer, DOCKER_SANDBOX_ENGINE } =
+        const { ensureSandboxContainer, DOCKER_SANDBOX_ENGINE, PODMAN_SANDBOX_ENGINE } =
           owner as typeof import("../../src/agents/sandbox/docker.js");
-        const result = await ensureSandboxContainer({ ...params, engine: DOCKER_SANDBOX_ENGINE });
+        const result = await ensureSandboxContainer({
+          ...params,
+          engine: engine === "podman" ? PODMAN_SANDBOX_ENGINE : DOCKER_SANDBOX_ENGINE,
+        });
         assert.equal(result.containerId, containerId);
         assert.equal(result.currentConfig, true);
       };
+  if (values["pause-cycle"]) {
+    await invoke();
+    const { quiesceLocalWorkspace } = (await import(
+      pathToFileURL(path.resolve(path.dirname(values.owner), "local-workspace-quiescence.ts")).href
+    )) as typeof import("../../src/agents/sandbox/local-workspace-quiescence.js");
+    invoke = async () => {
+      let receipt: Array<{ name: string; id: string }> = [];
+      const control = await quiesceLocalWorkspace({
+        workspaceDir,
+        retained: receipt,
+        reason: "checkpoint",
+        persist: (rows) => {
+          receipt = rows;
+        },
+        assertCurrent: () => {},
+      });
+      assert.equal(receipt.length, 1);
+      await control.resume();
+      assert.equal(receipt.length, 0);
+    };
+  }
   for (let index = 0; index < 10; index++) {
     await invoke();
+  }
+  // Inject only after warmup: the delay models queue/CLI latency, not host CPU.
+  if (callLatencyMs) {
+    process.env.SANDBOX_MEASURE_LATENCY = String(callLatencyMs / 1000);
   }
   await fs.writeFile(callsFile, "");
   global.gc();
@@ -222,14 +308,16 @@ try {
   }
   const calls = (await fs.readFile(callsFile, "utf8")).trim().split("\n");
   const callsByOperation = Object.fromEntries(
-    ["inspect", "image", "create", "start", "context", "info", "exec"].map((operation) => [
-      operation,
-      calls.filter((call) => call === operation).length / iterations,
-    ]),
+    ["inspect", "image", "create", "start", "context", "info", "exec", "pause", "unpause"].map(
+      (operation) => [operation, calls.filter((call) => call === operation).length / iterations],
+    ),
   );
   if (values["cold-create"]) {
     assert.equal(callsByOperation.create, 1);
     assert.equal(callsByOperation.start, 1);
+  } else if (values["pause-cycle"]) {
+    assert.equal(callsByOperation.pause, 1);
+    assert.equal(callsByOperation.unpause, 1);
   } else {
     assert(
       calls.every((call) => ["inspect", "context", "info", "exec"].includes(call)),
@@ -250,7 +338,11 @@ try {
       resourceMounts: readOnlyResourceMounts.length,
       allocations: values.allocations,
       coldCreate: values["cold-create"],
+      pauseCycle: values["pause-cycle"],
+      callLatencyMs,
+      workspaceDir,
       backend: values.backend,
+      engine,
       callsByOperation,
       timingAndGcDiagnosticOnly: values.allocations,
       postWarmBarrierMs: 100,

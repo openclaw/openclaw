@@ -32,9 +32,11 @@ export type CronCompactJob = Pick<
   | "displayName"
   | "owner"
   | "agentId"
+  | "cyberAccessProgram"
   | "enabled"
   | "updatedAtMs"
   | "streamExecutionHost"
+  | "reauthorizationRequired"
 > &
   Pick<
     CronJob["state"],
@@ -43,6 +45,7 @@ export type CronCompactJob = Pick<
     | "lastTriggerEvalAtMs"
     | "runningAtMs"
     | "autoDisabled"
+    | "admissionDeferred"
     | "lastDelivered"
     | "lastDeliveryStatus"
     | "lastDeliveryError"

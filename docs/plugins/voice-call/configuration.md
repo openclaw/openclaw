@@ -142,6 +142,27 @@ non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials from
 that Region. See
 [Twilio's non-US REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 
+### Twilio call recording
+
+Recording is off by default. Set
+`plugins.entries.voice-call.config.twilio.record: true` to record **every outbound
+call** placed using the configured Twilio account, including notify and
+conversation calls. Omit the setting or set it to `false` to turn it off for new
+calls. Inbound calls are unaffected.
+
+<Warning>
+Recording starts when the call is answered. Obtain all required participant
+consent **before placing the call**, and comply with applicable recording laws.
+This setting does not play a recording announcement or wait for spoken consent.
+Leave it off if consent has not already been arranged for every outbound call.
+</Warning>
+
+The plugin sends Twilio's existing `Record=true` call-creation parameter.
+Twilio stores the audio; manage recording access, retention, deletion, and
+recording charges in your Twilio account. OpenClaw does not download recordings
+or retain recording links in call status. See the
+[Twilio Call resource](https://www.twilio.com/docs/voice/api/call-resource#record).
+
 ### Twilio voicemail detection tuning
 
 Set `voicemail.detection: "twilio"` to enable answering-machine detection.

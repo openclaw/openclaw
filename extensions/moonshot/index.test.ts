@@ -143,11 +143,6 @@ describe("moonshot provider plugin", () => {
         config: { thinkingConfig: { thinkingBudget: -1 } },
         reasoning_effort: "max",
       });
-      expect(provider.resolveThinkingProfile?.({ ...ref, reasoning: true })).toEqual({
-        levels: [{ id: "max", label: "max" }],
-        defaultLevel: "max",
-        preserveWhenCatalogReasoningFalse: true,
-      });
       expect(provider.isModernModelRef?.(ref)).toBe(true);
     },
   );

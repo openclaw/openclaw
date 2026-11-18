@@ -1,5 +1,9 @@
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
-import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
+import {
+  AVATAR_MAX_BYTES,
+  isAvatarImageMimeType,
+  isRenderableAvatarImageDataUrl,
+} from "../../../src/shared/avatar-limits.js";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   fetchGatewayContextResource,
@@ -223,6 +227,37 @@ export function resolveAvatarImageUrl(
     trusted,
     !authTokens.length && origin !== null && origin === globalThis.location?.origin,
   );
+}
+
+/** Resolve known display sources without admitting a new authenticated fetch. */
+export function readCachedAvatarImageUrl(value: string): string | null {
+  if (isRenderableAvatarImageDataUrl(value)) {
+    return value;
+  }
+  if (value.startsWith("blob:")) {
+    for (const entry of identityAvatarCache.values()) {
+      if (entry.blobUrl === value) {
+        return value;
+      }
+    }
+    return null;
+  }
+  const { authTokens, origin, resourceBasePath, storageScope } = readAvatarGatewayContext();
+  const trusted = resolveTrustedAvatarUrl(value, origin, resourceBasePath);
+  if (!trusted) {
+    return null;
+  }
+  const cached = identityAvatarCache.get(trusted);
+  if (cached) {
+    return cached.retryAt === undefined ? cached.blobUrl : null;
+  }
+  return !authTokens.length &&
+    origin !== null &&
+    origin === globalThis.location?.origin &&
+    storageScope &&
+    readKnownAvatarUrls().has(trusted)
+    ? trusted
+    : null;
 }
 
 /** A previously good direct image can disappear; share that miss with later views. */

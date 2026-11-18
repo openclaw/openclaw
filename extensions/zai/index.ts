@@ -224,8 +224,8 @@ export default defineSingleProviderPluginEntry({
     auth: [],
     extraAuth: manifest.providerAuthChoices.map(buildZaiApiKeyMethod),
     catalog: { allowExplicitBaseUrl: true, liveModelDiscovery: true, discoveryMode: "strict" },
-    resolveDynamicModel: (ctx) =>
-      resolveFamilyForwardCompatModel({
+    resolveDynamicModel: (ctx) => {
+      const model = resolveFamilyForwardCompatModel({
         providerId: PROVIDER_ID,
         ctx,
         cases: [
@@ -251,7 +251,12 @@ export default defineSingleProviderPluginEntry({
         ],
         preserveExisting: true,
         synthesize: true,
-      }),
+      });
+      // A retained general-API row cannot lend native Coding Plan route support.
+      // Keep its metadata, but bind the fallback to the connection selected during setup.
+      const baseUrl = ctx.providerConfig?.baseUrl;
+      return model && baseUrl && model.baseUrl !== baseUrl ? { ...model, baseUrl } : model;
+    },
     matchesContextOverflowError: ({ errorMessage }) =>
       /\b(?:tokens? in request more than max tokens? allowed|prompt exceeds max(?:imum)? length)\b/i.test(
         errorMessage,

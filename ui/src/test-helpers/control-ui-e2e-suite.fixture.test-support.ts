@@ -204,6 +204,7 @@ const acquire = async () => {
 return { chromium: { launch: acquire, connect: acquire } };
 });
 import { createControlUiE2eSuite, holdModuleResponse } from ${JSON.stringify(helperPath)};
+process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR = ${JSON.stringify(path.join(root, "diagnostics"))};
 const journalKeys = ["closeCalls", "arrived", "published", "browserAcquired", "browserClosed",
   "serverAcquired", "serverClosed", "events", "nativeAbortObserved", "firstCleanupEvent",
   "pendingCloseCalls", "fulfilledBeforeFetchRelease", "heldBodyErrorRetained",

@@ -1,5 +1,8 @@
 /* @vitest-environment jsdom */
 
+import fs from "node:fs";
+import { URL as NodeURL } from "node:url";
+import vm from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import "./chat-detail-panel.tsx";
@@ -28,12 +31,60 @@ async function mountAttachment(
   return panel;
 }
 
+const workerUrl = new NodeURL("../../../../public/pdf-preview-worker.js", import.meta.url);
+const workerProgram = fs.readFileSync(workerUrl, "utf8");
+
 function stubObjectUrls() {
-  class TestURL extends URL {}
-  const createObjectURL = vi.fn(() => "blob:pdf-preview");
+  // jsdom has no Worker. Keep its URL API separate: reverting to app-created PDF URLs must fail.
+  const createObjectURL = vi.fn(() => `blob:${location.origin}/pdf-preview`);
   const revokeObjectURL = vi.fn();
-  Object.defineProperty(TestURL, "createObjectURL", { value: createObjectURL });
-  Object.defineProperty(TestURL, "revokeObjectURL", { value: revokeObjectURL });
+  class TestWorker extends EventTarget {
+    stopped = false;
+    receive?: (event: { data: unknown }) => void;
+    realm: {
+      addEventListener(type: string, listener: (event: { data: unknown }) => void): void;
+      postMessage(data: unknown): void;
+      close(): void;
+    } = {
+      addEventListener: (_type, listener) => {
+        this.receive = listener;
+      },
+      postMessage: (data: unknown) => {
+        void Promise.resolve().then(() => {
+          if (!this.stopped) {
+            this.dispatchEvent(new MessageEvent("message", { data }));
+          }
+        });
+      },
+      close: () => {},
+    };
+    constructor() {
+      super();
+      vm.runInNewContext(workerProgram, {
+        self: this.realm,
+        URL: { createObjectURL, revokeObjectURL },
+        Blob,
+        ArrayBuffer,
+      });
+    }
+    postMessage(data: unknown) {
+      void Promise.resolve().then(() => {
+        if (!this.stopped) {
+          this.receive?.({ data });
+        }
+      });
+    }
+    terminate() {
+      this.stopped = true;
+    }
+  }
+  vi.stubGlobal("Worker", TestWorker);
+  class TestURL extends URL {
+    static override createObjectURL(): never {
+      throw new Error("The PDF preview must not create its URL in the app document realm");
+    }
+    static override revokeObjectURL = revokeObjectURL;
+  }
   vi.stubGlobal("URL", TestURL);
   return { createObjectURL, revokeObjectURL };
 }
@@ -108,7 +159,9 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
   expect(download).not.toHaveBeenCalled();
   expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
   expect(objectUrls.revokeObjectURL).not.toHaveBeenCalled();
-  expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:pdf-preview");
+  expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+    `blob:${location.origin}/pdf-preview`,
+  );
   expect(panel.querySelector("iframe")).toHaveProperty("title", "brief.pdf");
   expect(fetchMock).toHaveBeenCalledWith(
     source,
@@ -168,7 +221,9 @@ it("retires file PDF bytes and pending grants on replacement and closure", async
   await waitForSolid(() => {
     expect(download).toHaveBeenCalledTimes(2);
     expect(original.isConnected).toBe(false);
-    expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:pdf-preview");
+    expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith(
+      `blob:${location.origin}/pdf-preview`,
+    );
   });
   panel.remove();
   await waitForSolid(() => expect(download.mock.calls[1]?.[0].aborted).toBe(true));
@@ -182,7 +237,9 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
   "revalidates a PDF ticket without keeping a stale reader: %s",
   async (change) => {
     const urls = stubObjectUrls();
-    urls.createObjectURL.mockReturnValueOnce("blob:original").mockReturnValue("blob:replacement");
+    urls.createObjectURL
+      .mockReturnValueOnce(`blob:${location.origin}/original`)
+      .mockReturnValue(`blob:${location.origin}/replacement`);
     const bytes = "%PDF-1.7 original";
     const refreshed = Promise.withResolvers<Response>();
     const fetchMock = vi
@@ -190,27 +247,34 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       .mockResolvedValueOnce(new Response(bytes))
       .mockReturnValueOnce(refreshed.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const panel = await mountAttachment({ sourceIdentity: "attachment:brief" });
+    const download = async () => ({ url: source, filename: "brief.pdf" });
+    const file = { path: "brief.pdf", download };
+    const panel = await mountAttachment({
+      src: change === "unchanged" ? undefined : source,
+      sourceIdentity: "attachment:brief",
+      file: change === "unchanged" ? file : undefined,
+    });
     const query = (selector: string) => panel.querySelector(selector);
     const readerSource = () => query("iframe")?.getAttribute("src");
     const expectSource = (src: string) => waitForSolid(() => expect(readerSource()).toBe(src));
-    await expectSource("blob:original");
+    await expectSource(`blob:${location.origin}/original`);
     const frame = query("iframe")!;
 
     panel.content = {
       ...panel.content,
-      src: "/__openclaw__/assistant-media?mediaTicket=renewed",
+      src: change === "unchanged" ? undefined : "/__openclaw__/assistant-media?mediaTicket=renewed",
       sourceIdentity: change === "identity" ? "attachment:other" : "attachment:brief",
       sizeBytes: change === "oversized" ? PDF_PREVIEW_MAX_BYTES + 1 : undefined,
+      file: change === "unchanged" ? { ...file, download: () => file.download() } : undefined,
     };
     await panel.updateComplete;
     await waitForSolid(() => {
       if (change === "identity" || change === "oversized") {
         expect(frame.isConnected).toBe(false);
-        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
+        expect(urls.revokeObjectURL).toHaveBeenCalledWith(`blob:${location.origin}/original`);
       } else {
         expect(query("iframe")).toBe(frame);
-        expect(readerSource()).toBe("blob:original");
+        expect(readerSource()).toBe(`blob:${location.origin}/original`);
         expect(urls.revokeObjectURL).not.toHaveBeenCalled();
       }
     });
@@ -236,13 +300,17 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
         expect(query("iframe")).toBeNull();
         expect(query("a[download]")?.getAttribute("href")).toContain("renewed");
       } else {
-        expect(readerSource()).toBe(change === "unchanged" ? "blob:original" : "blob:replacement");
+        expect(readerSource()).toBe(
+          change === "unchanged"
+            ? `blob:${location.origin}/original`
+            : `blob:${location.origin}/replacement`,
+        );
         if (change !== "identity") {
           expect(query("iframe")).toBe(frame);
         }
       }
       if (change !== "unchanged") {
-        expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
+        expect(urls.revokeObjectURL).toHaveBeenCalledWith(`blob:${location.origin}/original`);
       }
     });
 
@@ -262,12 +330,48 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
       });
       recovered.resolve(new Response(bytes));
       await waitForSolid(() => {
-        expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+        expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+          `blob:${location.origin}/replacement`,
+        );
         expect(panel.querySelector("iframe")).not.toBe(frame);
         expect(urls.createObjectURL).toHaveBeenCalledTimes(2);
-        expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:original");
+        expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith(
+          `blob:${location.origin}/original`,
+        );
         expect(panel.querySelector("[role=alert]")).toBeNull();
       });
     }
   },
 );
+
+it("previews a local Blob without bypassing the file download owner", async () => {
+  const urls = stubObjectUrls();
+  const fetcher = vi.fn<typeof fetch>();
+  vi.stubGlobal("fetch", fetcher);
+  const download = vi.fn(async () => ({
+    blob: new Blob(["%PDF-1.7 local"]),
+    filename: "local.pdf",
+  }));
+  const panel = await mountAttachment({
+    src: undefined,
+    sourceIdentity: "file:local",
+    file: { path: "local.pdf", download },
+  });
+  await waitForSolid(() => expect(panel.querySelector("iframe")).not.toBeNull());
+  expect(download).toHaveBeenCalledOnce();
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(urls.createObjectURL).toHaveBeenCalledOnce();
+});
+
+it("retains Download when worker construction is refused", async () => {
+  const urls = stubObjectUrls();
+  vi.stubGlobal("Worker", function RefusedWorker() {
+    throw new DOMException("Blocked", "SecurityError");
+  });
+  vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(new Response("%PDF-1.7")));
+  const panel = await mountAttachment();
+  await waitForSolid(() => expect(panel.querySelector("[role=alert]")).not.toBeNull());
+  expect(panel.querySelector("iframe")).toBeNull();
+  expect(panel.querySelector("a[download]")?.getAttribute("href")).toBe(source);
+  expect(urls.createObjectURL).not.toHaveBeenCalled();
+});

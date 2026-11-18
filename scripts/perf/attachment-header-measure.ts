@@ -1,15 +1,21 @@
 /**
  * Attachment header owner benchmark; no Gateway, filesystem staging, or worker queue.
- * node --import ./scripts/tsx.mjs scripts/perf/attachment-header-measure.ts \
- *   --iterations 1000 --output "$PWD/.local/header-base.json"
+ * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/attachment-header-measure.ts \
+ *   --format jpeg --iterations 1000 --output "$PWD/.local/header-base.json"
  * Repeat with --allocations for a separate main-thread sampled-JS-allocation pass.
  * --owner-dir reads captured src/media/attachment-processor.runtime.ts, preserving
  * its original import URL. This direct-owner benchmark does not start workers.
- * Each message contains three deterministic 700x700 noise PNGs below the offload
- * threshold. Warm-up, fixture generation, and a separate exact base64 decode-byte
+ * Compare two captured owners with --owner-dir on BOTH arms: the global loader
+ * hook also participates in cached dynamic imports on the measured MIME path.
+ * --format png (default) preserves three 700x700 noise PNGs below the offload
+ * threshold. jpeg/webp use 1600x1200 noise encoded by Rastermill; gif uses a
+ * 1000x700 three-frame indexed animation. These formats use explicit inline
+ * storage, exercising metadata-only decoding even for multi-MB payloads.
+ * Warm-up, fixture generation, and a separate exact base64 decode-byte
  * count pass are excluded from timing and sampling. Buffer backing stores are not
  * represented by the sampled JS allocation count; report exact decoded bytes too.
- * --expose-gc adds an untimed post-GC memory snapshot after measurement.
+ * After restoring the decode counter, warm again before an untimed GC clears
+ * fixture garbage. --expose-gc also adds a post-GC snapshot after measurement.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -26,11 +32,14 @@ const { values } = parseArgs({
     output: { type: "string" },
     allocations: { type: "boolean", default: false },
     "owner-dir": { type: "string" },
+    format: { type: "string", default: "png" },
   },
 });
 assert(values.output, "--output is required");
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "--iterations must be positive");
+const format = values.format;
+assert(["png", "jpeg", "gif", "webp"].includes(format), "--format must be png, jpeg, gif, or webp");
 const ownerPath = "src/media/attachment-processor.runtime.ts";
 const ownerUrl = new URL(`../../${ownerPath}`, import.meta.url);
 const source = await fs.readFile(
@@ -66,28 +75,99 @@ if (values["owner-dir"]) {
   assert.equal(ownerReceipt.overlayLoads, 1, "captured owner must replace exactly one module");
 }
 const { encodePngRgb } = await import("../../src/media/png-encode.js");
-const pixels = Buffer.alloc(700 * 700 * 3);
 let seed = 547;
-for (let index = 0; index < pixels.length; index++) {
+function nextByte(): number {
   seed ^= seed << 13;
   seed ^= seed >>> 17;
   seed ^= seed << 5;
-  pixels[index] = seed & 255;
+  return seed & 255;
 }
-const png = encodePngRgb(pixels, 700, 700);
-assert(png.byteLength < 2_000_000, "fixture must remain inline");
+function animatedGif(width: number, height: number): Buffer {
+  const header = Buffer.from("47494638396100000000f70000", "hex");
+  header.writeUInt16LE(width, 6);
+  header.writeUInt16LE(height, 8);
+  const palette = Buffer.from(Array.from({ length: 768 }, nextByte));
+  const chunks = [header, palette];
+  for (let frame = 0; frame < 3; frame++) {
+    const descriptor = Buffer.from("2c000000000000000000", "hex");
+    descriptor.writeUInt16LE(width, 5);
+    descriptor.writeUInt16LE(height, 7);
+    chunks.push(Buffer.from("21f904000a000000", "hex"), descriptor, Buffer.from([8]));
+    // Reset before the dictionary reaches 512 entries, keeping every code 9 bits.
+    const pixels = width * height;
+    const codes = pixels + Math.ceil(pixels / 200) + 1;
+    const data = Buffer.alloc(Math.ceil((codes * 9) / 8));
+    let bits = 0;
+    let pending = 0;
+    let offset = 0;
+    const writeCode = (code: number) => {
+      pending |= code << bits;
+      bits += 9;
+      while (bits >= 8) {
+        data[offset++] = pending & 255;
+        pending >>>= 8;
+        bits -= 8;
+      }
+    };
+    for (let pixel = 0; pixel < pixels; pixel++) {
+      if (pixel % 200 === 0) {
+        writeCode(256);
+      }
+      writeCode(nextByte());
+    }
+    writeCode(257);
+    if (bits > 0) {
+      data[offset++] = pending & 255;
+    }
+    for (let start = 0; start < offset; start += 255) {
+      const block = data.subarray(start, Math.min(start + 255, offset));
+      chunks.push(Buffer.from([block.length]), block);
+    }
+    chunks.push(Buffer.from([0]));
+  }
+  return Buffer.concat([...chunks, Buffer.from([0x3b])]);
+}
+const width = format === "png" ? 700 : format === "gif" ? 1000 : 1600;
+const height = format === "png" || format === "gif" ? 700 : 1200;
+let bytes: Buffer;
+if (format === "gif") {
+  bytes = animatedGif(width, height);
+} else {
+  const pixels = Buffer.alloc(width * height * 3);
+  for (let index = 0; index < pixels.length; index++) {
+    pixels[index] = nextByte();
+  }
+  const png = encodePngRgb(pixels, width, height);
+  if (format === "png") {
+    bytes = png;
+  } else {
+    const { createRastermill } = await import("rastermill");
+    bytes = (
+      await createRastermill({ execution: "internal" }).encode(
+        png,
+        format === "jpeg" ? { format: "jpeg", quality: 95 } : { format: "webp" },
+      )
+    ).data;
+  }
+}
+assert(bytes.byteLength <= 6 * 1024 * 1024, "fixture must remain under the image limit");
+assert(
+  format !== "png" || bytes.byteLength < 2_000_000,
+  "PNG fixture must remain below offload threshold",
+);
 const files = Array.from({ length: 3 }, (_, index) => ({
-  base64: png.toString("base64"),
-  label: `synthetic-${index}.png`,
-  mime: "image/png",
+  base64: bytes.toString("base64"),
+  label: `synthetic-${index}.${format}`,
+  mime: `image/${format}`,
+  ...(format === "png" ? {} : { imageStorage: "inline" as const }),
 }));
 const run = async () => {
   for (const file of files) {
     const prepared = await prepareAttachment(file);
-    assert.equal(prepared.mime, "image/png");
-    assert.equal(prepared.width, 700);
-    assert.equal(prepared.height, 700);
-    assert.equal(prepared.sizeBytes, png.byteLength);
+    assert.equal(prepared.mime, `image/${format}`);
+    assert.equal(prepared.width, width);
+    assert.equal(prepared.height, height);
+    assert.equal(prepared.sizeBytes, bytes.byteLength);
     assert.equal(prepared.buffer, undefined);
   }
 };
@@ -113,6 +193,11 @@ try {
 } finally {
   Object.defineProperty(Buffer, "from", originalFrom);
 }
+// Restoring Buffer.from can invalidate optimized call sites; keep that outside timing.
+for (let index = 0; index < 10; index++) {
+  await run();
+}
+globalThis.gc?.();
 const inspector = values.allocations ? new Session() : undefined;
 inspector?.connect();
 await inspector?.post("HeapProfiler.startSampling", {
@@ -154,14 +239,31 @@ const result = {
   kind: "attachment-header-owner",
   iterations,
   allocations: values.allocations,
+  preMeasurementGc: Boolean(globalThis.gc),
   ownerReceipt,
-  fixture: { filesPerMessage: files.length, bytesPerMessage: png.byteLength * files.length },
+  fixture: {
+    format,
+    ...(format === "gif" ? { frames: 3 } : {}),
+    ...(format === "webp" ? { firstChunk: bytes.toString("ascii", 12, 16) } : {}),
+    width,
+    height,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    filesPerMessage: files.length,
+    bytesPerAttachment: bytes.byteLength,
+    bytesPerMessage: bytes.byteLength * files.length,
+  },
+  attachments: iterations * files.length,
   decodedBytesPerMessage: decodedBytes,
+  decodedBytesPerAttachment: decodedBytes / files.length,
   decodeCallsPerMessage: decodeCalls,
   mainThreadCpuMsPerMessage: (cpu.user + cpu.system) / 1000 / iterations,
   processCpuMsPerMessage: (processCpu.user + processCpu.system) / 1000 / iterations,
   sampledJsBytesPerMessage: sampledJsBytes === undefined ? undefined : sampledJsBytes / iterations,
+  mainThreadCpuMsPerAttachment: (cpu.user + cpu.system) / 1000 / iterations / files.length,
+  sampledJsBytesPerAttachment:
+    sampledJsBytes === undefined ? undefined : sampledJsBytes / iterations / files.length,
   latencyMs: {
+    unit: "three-attachment-message",
     count: timings.length,
     p50: timings[Math.ceil(iterations * 0.5) - 1],
     p99: timings[Math.ceil(iterations * 0.99) - 1],

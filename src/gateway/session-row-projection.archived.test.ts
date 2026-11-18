@@ -87,6 +87,41 @@ const waitForPage = (
     "Archive page settled before its preparation barrier",
   );
 
+it("shares worker admissions across interleaved agents in a cold archive walk", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const keys = Array.from({ length: 128 }, (_, index) => {
+      const agentId = index % 2 ? "work" : "main";
+      const key = `agent:${agentId}:cold-${index}`;
+      writeRow(key, { updatedAt: index + 1, archivedAt: 1, label: `Row ${index}` }, agentId);
+      return key;
+    });
+    const projection = await create({
+      cfg: { agents: { entries: { main: {}, work: {} } } },
+      modelCatalog: [],
+    });
+    await projection.ensureMaterialized();
+    const batches: string[][] = [];
+    watchRowFacts((owner) => (input) => {
+      batches.push([...input.sessionKeys]);
+      return owner.readRowFacts(input);
+    });
+    const rows = [];
+    for (let offset = 0; offset < keys.length; offset += 32) {
+      const page = await listRows(projection, {
+        archived: "all",
+        rowMode: "dashboard",
+        limit: 32,
+        offset,
+      });
+      rows.push(...page.sessions);
+    }
+    expect(rows.map((row) => row.key)).toEqual(keys.toReversed());
+    expect(rows.every((row) => row.archived && row.label?.startsWith("Row "))).toBe(true);
+    expect(batches.flat().toSorted()).toEqual(keys.toSorted());
+    expect(batches).toHaveLength(8);
+  }, true);
+});
+
 it("keeps archived rows cold at hydration and across broad refreshes", async () => {
   await withSessionRowProjectionState(async (create, _, cleanup) => {
     const live = 3;
@@ -332,9 +367,9 @@ it("bounds archived residency across pages and evicts the least recently read ro
       const refresh = createRefresh(owner);
       return {
         ...refresh,
-        prepareExactRows(queries) {
+        prepareExactRows(...args) {
           // All materialization slices finish here while the reader still holds archive pins.
-          const pending = refresh.prepareExactRows(queries);
+          const pending = refresh.prepareExactRows(...args);
           return pending
             ? pending.then(() => afterExactPreparation?.())
             : afterExactPreparation?.();
@@ -390,9 +425,10 @@ it("bounds archived residency across pages and evicts the least recently read ro
       };
       overlappingPage = listRows(projection, { archived: true, limit: 110, offset: 18 });
       await waitForPage(overlappingPage, secondPrepared, signal);
+      writeRow(query.key, { sessionId: "replacement", updatedAt: 128, archivedAt: 1 });
       releasePage.resolve();
-      const wholePage = await pendingPage;
-      expect(wholePage.sessions).toHaveLength(128);
+      const { sessions } = await pendingPage;
+      expect([sessions.length, sessions[0]?.sessionId]).toEqual([128, "replacement"]);
       expect(projection.selectEntries().filter(ready)).toHaveLength(110);
     } finally {
       releasePage.resolve();

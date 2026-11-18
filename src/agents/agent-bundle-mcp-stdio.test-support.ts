@@ -232,6 +232,7 @@ function handle(message) {
     });
   }
   if (message.method === "tools/call") {
+    log("call " + String(message.params?.name));
     if (hangToolCallsUntilRestart) {
       log("hang tools/call");
       keepAlive = setInterval(() => {}, 1000);

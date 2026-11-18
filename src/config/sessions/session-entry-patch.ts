@@ -15,6 +15,7 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionScope,
@@ -23,7 +24,10 @@ import type {
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { retainSessionEntryWorkerPublication } from "./session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
-import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  sqliteSessionEntriesEqual,
+  type SqliteLifecycleTargetSnapshot,
+} from "./session-accessor.sqlite-entry-equality.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import {
   withSessionEntryWorker,
@@ -31,6 +35,7 @@ import {
 } from "./session-accessor.sqlite-replacement-worker.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
 import { readSessionActorEntryFacts } from "./session-actor-replica.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
@@ -53,6 +58,11 @@ import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-aut
 import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
+type SessionEntryPatchResult = {
+  entry: Readonly<SessionEntry> | null;
+  writtenSource?: AgentDatabaseExecutionFileIdentity;
+};
+
 export async function patchSessionEntryInWorker(params: {
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
@@ -69,7 +79,7 @@ export async function patchSessionEntryInWorker(params: {
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: SessionEntryPatchCommitObserver;
   onCommittedSource?: (source: CapturedSessionEntryReadSource, entry: SessionEntry) => void;
-}): Promise<{ entry: Readonly<SessionEntry> | null; wrote: boolean }> {
+}): Promise<SessionEntryPatchResult> {
   let source = params.preparedSource;
   const sourceChecks = source?.checks ?? [];
   const releaseSource = () => {
@@ -83,11 +93,10 @@ export async function patchSessionEntryInWorker(params: {
   let commitRefusal: Error | undefined;
   let committing = false;
   let retainedEntry: SessionEntry | undefined;
-  return await runSessionEntryWorkerOperation<
-    SessionEntryPatchCommitted,
-    { entry: Readonly<SessionEntry> | null; wrote: boolean }
-  >({
+  return await runSessionEntryWorkerOperation<SessionEntryPatchCommitted, SessionEntryPatchResult>({
     ...params,
+    workspaceEvidence: source?.workspaceEvidence,
+    readCustody: source?.readCustody,
     releaseSource,
     candidateKind: "session-entry-patch",
     decodeCandidate(candidate) {
@@ -227,7 +236,7 @@ export async function patchSessionEntryInWorker(params: {
     async run(worker, commit, identity) {
       const prepared = input;
       if (!prepared) {
-        return { entry: null, wrote: false };
+        return { entry: null };
       }
       if (source) {
         prepared.sources = sourceChecks.map((check) => check.predicate);
@@ -238,6 +247,47 @@ export async function patchSessionEntryInWorker(params: {
         sessionKey: prepared.sessionKey,
       });
       retainedEntry = resident?.snapshots === "full" ? resident.entry : undefined;
+      // The FIFO and replica write token own this synchronous postimage check.
+      // Transaction predicates, side effects and commit observers still need the writer.
+      if (
+        retainedEntry &&
+        "operation" in prepared &&
+        prepared.preserveActivity &&
+        prepared.operation.kind !== "public-fields" &&
+        prepared.selection.kind === "entry" &&
+        collectSessionEntryLookupKeys(prepared.sessionKey).length === 1 &&
+        !prepared.consumePendingReset &&
+        !prepared.providerReviewMutation &&
+        !prepared.shouldCommitIf &&
+        !prepared.cliHistory &&
+        !prepared.conversation &&
+        !prepared.ensureIdentitySource &&
+        !sourceChecks.length &&
+        !source?.workspaceEvidence?.length &&
+        !source?.readCustody?.length &&
+        !source?.nativeSource &&
+        !params.onCommitted &&
+        !params.onCommittedSource
+      ) {
+        const next = projectSessionEntryPatch({
+          ...prepared,
+          existing: retainedEntry,
+          writeBase: retainedEntry,
+        });
+        if (!next || sqliteSessionEntriesEqual(next, retainedEntry)) {
+          params.assertCurrent();
+          params.assertCommitAllowed?.();
+          params.guard?.assertCurrent?.();
+          source?.assertCurrent();
+          params.guard?.assertMutationAllowed?.();
+          if (params.shouldCommit?.() === false) {
+            return { entry: null };
+          }
+          return {
+            entry: prepared.returnEntry === false ? null : structuredClone(retainedEntry),
+          };
+        }
+      }
       if (retainedEntry && resident) {
         prepared.retainedEntry = {
           writeToken: resident.writeToken,
@@ -263,7 +313,7 @@ export async function patchSessionEntryInWorker(params: {
         );
       }
     },
-    async onCommitted(committed, published, identity) {
+    async onCommitted(committed, published, identity, _context, fileIdentity) {
       try {
         if (committed.applied && committed.entry) {
           if (committed.lifecycleEffects) {
@@ -291,11 +341,14 @@ export async function patchSessionEntryInWorker(params: {
       }
       // This write may change its source; callers authorize subsequent effects separately.
       await releaseSource();
-      return { entry: committed.entry ?? null, wrote: Boolean(committed.publication) };
+      return {
+        entry: committed.entry ?? null,
+        writtenSource: committed.publication ? fileIdentity : undefined,
+      };
     },
   }).catch((error: unknown) => {
     if (error === commitRefusal) {
-      return { entry: null, wrote: false };
+      return { entry: null };
     }
     throw error;
   });
@@ -309,6 +362,8 @@ export async function runSessionEntryWorkerOperation<
   },
   Result,
 >(params: {
+  workspaceEvidence?: AgentDatabaseRequestExecutionSource["workspaceEvidence"];
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"];
   database: OpenClawAgentDatabaseOptions & { path: string };
   databaseIdentity?: string;
   expectedCreationIdentity?: DatabasePathIdentity;
@@ -566,5 +621,8 @@ export async function runSessionEntryWorkerOperation<
     params.releaseSource,
     "write",
     params.expectedCreationIdentity,
+    undefined,
+    params.workspaceEvidence,
+    params.readCustody,
   );
 }

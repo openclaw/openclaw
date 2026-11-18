@@ -81,7 +81,7 @@ export async function quiesceJobs(
       }
       cancelled = true;
       for (const job of jobs) {
-        requestActiveCronJobCancellation(job.id, "Claw agent removal.");
+        requestActiveCronJobCancellation(job.id, "Template agent removal.");
       }
     };
     await commitGuard(cancel);
@@ -138,6 +138,7 @@ export async function add(
         pluginCommand: opts?.pluginCommand,
         pluginCommandSourceDigest: opts?.pluginCommandSourceDigest,
         streamSandbox: opts?.streamSandbox,
+        streamOperatorSource: opts?.streamOperatorSource,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
@@ -282,6 +283,7 @@ async function updateLoadedJob(params: {
     patch,
     options: {
       streamSandbox: opts?.streamSandbox,
+      streamOperatorSource: opts?.streamOperatorSource,
       operatorSource: opts?.operatorSource,
       operatorSourceExecutionRevision: opts?.operatorSourceExecutionRevision,
       inferenceBinding: opts?.inferenceBinding,

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
+import { sessionNavigationTarget } from "../../ui/src/lib/sessions/route-navigation.ts";
 
 const workerSource = readFileSync(new URL("../../ui/public/sw.js", import.meta.url), "utf8");
 
@@ -55,6 +56,35 @@ function navigationWorker(basePath = "", proxySessionEntry = true) {
 }
 
 describe("operator browser chat document navigation", () => {
+  it.each(["", "/control"])(
+    "reloads in-app session navigation hints under %s",
+    async (basePath) => {
+      const worker = navigationWorker(basePath);
+      const sessionKey = "agent:main:dashboard:12345678-aaaa-4000-8000-000000000001";
+      const target = sessionNavigationTarget({
+        face: "chat",
+        sessionKey,
+        navigationKey: sessionKey,
+        focusComposer: true,
+        preferenceDerivedFace: true,
+        fallbackAgentId: "main",
+        basePath,
+      });
+      const path = target.options.pathname + target.options.search;
+      const app = new Response("app", { headers: { "X-OpenClaw-Session-Entry": "1" } });
+      worker.fetch.mockResolvedValueOnce(app);
+      expect(await worker.navigate(path)).toBe(app);
+      expect(worker.fetch).toHaveBeenCalledExactlyOnceWith(
+        `https://gateway.test${basePath}/__openclaw__/session-entry?${new URLSearchParams({ path })}`,
+        expect.objectContaining({
+          credentials: "same-origin",
+          redirect: "manual",
+          cache: "no-store",
+        }),
+      );
+    },
+  );
+
   it.each(["", "/control"])("loads one protected app document under %s", async (basePath) => {
     const worker = navigationWorker(basePath);
     const path = `${basePath}/chat/main/dashboard/12345678-aaaa-4000-8000-000000000001?dashboard=expanded&openclaw_mount_recovery=1791731984160`;
@@ -129,6 +159,17 @@ describe("operator browser chat document navigation", () => {
     ["/chat/main/topic?openclaw_mount_recovery=1&token=secret", true],
     ["/chat/main/topic?openclaw_mount_recovery=1&unknown=value", true],
     ["/chat/main?catalog=x&host=y&thread=z", true],
+    ["/chat/main?__openclawSessionKey=first&__openclawSessionKey=second", true],
+    ["/chat/main?__openclawSessionKey=", true],
+    ["/chat/main?__openclawSessionKey=+%20", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa%00", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa%1F", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa%7F", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa&token=secret", true],
+    ["/chat/main?__openclawSessionKey=agent%3Amain%3Aa&unknown=value", true],
+    ["/chat/main?__openclawComposerFocus=1&__openclawComposerFocus=1", true],
+    ["/chat/main?__openclawComposerFocus=0", true],
+    ["/chat/main?__openclawComposerFocus=", true],
   ] as const)(
     "fetches %s without rewriting it to a protected session entry",
     async (path, proxy) => {

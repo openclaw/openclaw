@@ -44,6 +44,7 @@ type SidebarAttachmentProps = {
   attachment?: FileSessionAttachment;
   back?: MobileFileBack;
   onOpenImage?: (item: ImageLightboxItem) => void;
+  onBrowseFiles?: () => void;
 };
 
 function prepareAttachment(input: SidebarAttachmentProps, onSourceChange: () => void) {
@@ -244,6 +245,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           label={props.content.title}
           mimeType={props.content.mimeType ?? ""}
           sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          onBrowseFiles={props.onBrowseFiles}
         />
       </Match>
       <Match when={model().kind === "video" && (model().src || model().pending)}>

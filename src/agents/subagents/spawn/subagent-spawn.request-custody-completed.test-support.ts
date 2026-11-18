@@ -20,6 +20,7 @@ import { handleChatAbortRequestWithLifecycle } from "../../../gateway/server-met
 import { requireLastRespondCall } from "../../../gateway/server-methods/chat.abort-authorization.test-helpers.js";
 import { invokeChatAbortHandler } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
+import { onAgentEvent } from "../../../infra/agent-events.js";
 import {
   captureExecRequestOwners,
   readExecRequestOwners,
@@ -55,13 +56,17 @@ import {
 import * as nativeSession from "../registry/subagent-control-session.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
-import { prepareSubagentRunsByRunIds } from "../registry/subagent-registry.js";
+import {
+  activateSubagentRegistry,
+  prepareSubagentRunsByRunIds,
+} from "../registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   collectFailure,
   sessionReader,
   visibleResult,
 } from "./subagent-spawn.fixtures.test-support.js";
+import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import {
   createBoundSpawnInvocation,
   recordSpawnBoundaryFinal,
@@ -161,6 +166,10 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
     async (mode, { signal }) => {
       const bound = await options.createBoundParent();
       const { runtime } = await options.createBoundGateway(bound);
+      if (mode !== "consumed-active-revoked") {
+        vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+        await activateSubagentRegistry(bound.resolveGatewayContext);
+      }
       const readSession = sessionReader(bound.storePath);
       const { original, owners, event } = await retainOriginalRequest(
         bound,
@@ -195,6 +204,37 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       let restorePreparation: (() => void) | undefined;
       let restoreProcess: (() => void) | undefined;
       let activeStop: ReturnType<typeof killAllControlledSubagentRuns> | undefined;
+      let modelPhase = "not-entered";
+      let nativeStatus = "pending";
+      let nativeResultError = false;
+      const lifecyclePhases: string[] = [];
+      const stopLifecycle = onAgentEvent((entry) => {
+        const phase = entry.data.phase;
+        if (
+          entry.runId === childRunId &&
+          entry.stream === "lifecycle" &&
+          typeof phase === "string" &&
+          ["start", "finishing", "end", "error"].includes(phase)
+        ) {
+          lifecyclePhases.push(phase);
+          if (lifecyclePhases.length > 4) {
+            lifecyclePhases.shift();
+          }
+        }
+      });
+      const reportNativeFailure = (error: unknown): never => {
+        console.error(
+          `Native child custody wait failed: ${JSON.stringify({
+            mode,
+            modelPhase,
+            nativeStatus,
+            nativeResultError,
+            lifecyclePhases,
+            ...readBoundExecutionState(bound, childRunId),
+          })}`,
+        );
+        throw error;
+      };
       if (mode === "consumed-active-revoked") {
         const supervisor = getProcessSupervisor();
         const spawn = supervisor.spawn.bind(supervisor);
@@ -232,6 +272,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       const model = vi
         .spyOn(loop, "runPreparedEmbeddedLoop")
         .mockImplementationOnce(async (_refresh, input) => {
+          modelPhase = "entered";
           const run = input.runParams;
           const sessionKey = expectDefined(run.sessionKey, "child run session key");
           const requestOwners = expectDefined(
@@ -263,18 +304,30 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             expect(readExecRequestOwners(independent)).toBeUndefined();
           }
           commandReady.resolve(command);
+          modelPhase = "held";
           await completeModel.promise;
+          modelPhase = "persisting-final";
           await recordSpawnBoundaryFinal({
             storePath: bound.storePath,
             sessionKey,
             runId: run.runId,
             text: "Completed child result",
           });
+          modelPhase = "returned";
           return visibleResult("Completed child result");
         });
       options.runEmbeddedAgent.mockImplementationOnce((params) => {
         const result = native.runEmbeddedAgent(params);
-        void result.catch(commandReady.reject);
+        void result.then(
+          (completed) => {
+            nativeStatus = "resolved";
+            nativeResultError = completed.meta.error !== undefined;
+          },
+          (error: unknown) => {
+            nativeStatus = "rejected";
+            commandReady.reject(error);
+          },
+        );
         return result;
       });
       const failures: unknown[] = [];
@@ -297,14 +350,16 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
         );
         childRunId = accepted.runId;
         childSessionKey = accepted.childSessionKey;
-        const runningCommand = await withinTest(commandReady.promise, signal);
+        const runningCommand = await withinTest(commandReady.promise, signal).catch(
+          reportNativeFailure,
+        );
         let receipt: ReturnType<typeof completionReceipt> | undefined;
         if (mode === "consumed-active-revoked") {
           expect(subagentRuns.get(childRunId)?.execution.endedAt).toBeUndefined();
         } else {
           completeModel.resolve();
           inspectTerminal();
-          const completed = await withinTest(terminal.promise, signal);
+          const completed = await withinTest(terminal.promise, signal).catch(reportNativeFailure);
           receipt = structuredClone(completionReceipt(completed));
           expect(completed).toMatchObject({
             execution: { outcome: { status: "ok" } },
@@ -552,6 +607,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       completeModel.resolve();
       releaseCleanup.resolve();
       restorePreparation?.();
+      stopLifecycle();
       stopObserving();
       consumeSelectedSystemEventEntries(original.sessionKey, [event]);
       for (const ownedProcess of [command, independent, laterHuman]) {

@@ -261,20 +261,24 @@ it.each(["local", "shared"])(
       const createAdmission = admission.createSqliteWorkerOperationAdmission;
       let refused = false;
       using spy = vi.spyOn(admission, "createSqliteWorkerOperationAdmission");
-      spy.mockImplementation((admit, attachment) => {
+      spy.mockImplementation((admit, attachment, prepare) => {
         let updating = false;
-        return createAdmission((request, grant) => {
-          updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
-          if (updating && request.stage === "commit") {
-            admit(request, () => {
-              expect(authority.assertCurrent).toThrow(expect.objectContaining(unavailableCode));
-              refused = true;
-              throw new Error("fixture auth commit refused");
-            });
-          } else {
-            admit(request, grant);
-          }
-        }, attachment);
+        return createAdmission(
+          (request, grant) => {
+            updating ||= isRecord(request.facts) && request.facts.kind === "auth-store-update";
+            if (updating && request.stage === "commit") {
+              admit(request, () => {
+                expect(authority.assertCurrent).toThrow(expect.objectContaining(unavailableCode));
+                refused = true;
+                throw new Error("fixture auth commit refused");
+              });
+            } else {
+              admit(request, grant);
+            }
+          },
+          attachment,
+          prepare,
+        );
       });
       await expect(
         writeProfile(profileId, "replacement", profileId === "local" ? root.agentDir : undefined),
@@ -293,7 +297,9 @@ it("enrolls an absent agent's inheritance tombstone through its native first-use
     using watcher = vi.spyOn(directoryObservation, "observeOwnedDirectory");
     watcher.mockImplementation((directory, onChange) =>
       // Native commit publication must not depend on a later filesystem notification.
-      directory === agentDir ? { close() {} } : observe(directory, onChange),
+      directory === agentDir
+        ? { close() {}, isWatching: () => false }
+        : observe(directory, onChange),
     );
     const authority = await root.capture("shared", agentDir);
     expect(

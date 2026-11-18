@@ -81,8 +81,11 @@ const expectRollback = (outcome: unknown, error: object) =>
   expect(outcome).toMatchObject({ kind: "rolled-back", error });
 const readById = (store: SessionActorStorage, sessionId = "session-1") =>
   read(store, "session.entry.readById", { sessionId });
-const pendingHistory = (store: SessionActorStorage, sessionId: string) =>
-  read(store, "session.pendingInput.history", { sessionKey, sessionId });
+const pendingHistory = (
+  store: SessionActorStorage,
+  sessionId: string,
+  liveInputIds?: readonly string[],
+) => read(store, "session.pendingInput.history", { sessionKey, sessionId, liveInputIds });
 const fields = (changes: Partial<SessionEntry>) => ({
   operation: { kind: "fields" as const, patch: changes },
 });
@@ -405,16 +408,24 @@ describe("actor-owned memory storage", () => {
       mutate(current, "session.pendingInput.mutate", {
         ...oldInput,
         kind: "finish",
+        endCause: "failed",
         inputId: "old-input",
         disposition: "interrupted",
       }),
     );
     const old = await pendingHistory(current, "session-1");
-    const fresh = await pendingHistory(current, "session-2");
+    const fresh = await pendingHistory(current, "session-2", ["new-input"]);
     expect(old).toMatchObject({
       currentSessionId: "session-2",
-      rows: [{ input_id: "old-input", state: "interrupted" }],
+      rows: [],
     });
+    expect(
+      await read(current, "session.pendingInput.receipts", {
+        sessionKey,
+        sessionId: "session-1",
+        runIds: [oldInput.runId],
+      }),
+    ).toEqual([{ runId: oldInput.runId, state: "pending" }]);
     expect(fresh).toMatchObject({
       currentSessionId: "session-2",
       rows: [{ input_id: "new-input", state: "queued" }],

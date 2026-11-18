@@ -24,6 +24,13 @@ Message authors, execution authority, initiating agents, and actual approval
 responses remain separate facts. Scheduled jobs and SDK/plugin runs without turn
 participants retain their existing session access rules.
 
+System continuations, including exec completion, subagent handoffs, and Goal turns,
+keep the originating caller's current authority and policy. A guest's continuation
+stays that guest; it never inherits the session owner's privileges. Unattributed
+host events, including restart resume, use the session principal's current authority.
+Access is checked again before effects. When no person has authority, a person must
+resume the work before selecting a user. Cron retains its own authority rules.
+
 ## Available tools
 
 | Tool                 | What it does                                                                |
@@ -70,22 +77,37 @@ It is not a supervised child and does not send a completion event to the caller;
 do not yield expecting one.
 
 - Supply a nonblank `message` to start the first turn, or omit it to create an idle session.
-- Optional `label`, `agentId`, `cwd`, `group`, `model`, and `permissionMode` configure
+- Optional `label`, `agentId`, `cwd`, `group`, and `model` configure
   the new session. `user` selects the verified requester when needed, as described
-  above. `agentId` defaults to the requesting agent; omitted settings use destination
-  defaults. `group` selects a sidebar category, not execution parentage. The tool
+  above. `agentId` defaults to the requesting agent; model selection follows a
+  visible `sessions_spawn`. `group` selects a sidebar category, not execution parentage. The tool
   does not accept creator identity, role, key, parent, fork, spawn, or adoption fields.
 - The result identifies the new `sessionKey` and `sessionId`. `runStarted` reports
   whether the first turn started; `runId` is present when available. If creation
   succeeds but startup fails, `runError` reports the failure and the session remains
   available. Inspect that session before retrying creation.
 
-The `sessions_create` definition stays in the session's tool catalog across turns;
-execution requires live admitted `operator.sessions.write` authority. The existing
-`sessions` management tool does not create sessions, and senderless runs do not
-gain creation authority. The default sandbox surface for an
-admitted non-owner with session-write authority includes creation and renaming.
-Tool policy and execution-time authority checks still apply.
+`sessions_create` has the same authority as `sessions_spawn` with `visible: true`.
+Any turn that can start a visible spawn can create a session, including a channel
+turn from a sender without a linked operator profile. The new session records the
+requesting session as its parent. It inherits that turn's sandbox requirement, tool
+policy, and permission mode, so it is never less contained than the turn that
+created it. Agent targets, spawn depth, and child limits follow the same
+`subagents` admission rules. Unlike a visible spawn, the session is not registered
+as a supervised run.
+
+For an admitted, authenticated channel sender whose account and sender ID have no
+linked profile, `sessions_create` ignores a supplied `user` and uses the same
+contained creation path as an omitted `user`. It does not select the supplied
+profile, borrow a session owner’s authority, or link the sender to that person.
+Linked turns still validate explicit participants, including revocation. Missing
+source context, known bot input, and later system or delegated turns do not gain
+this fallback. Other session tools retain their existing selection rules.
+
+The `sessions_create` definition stays in the session's tool catalog across turns.
+The existing `sessions` management tool does not create sessions. The default
+sandbox surface for an admitted non-owner with session-write authority includes
+creation and renaming. Tool policy still applies.
 
 Use `sessions_spawn` for actual delegated helpers. Hidden children are the default;
 `visible: true` remains available for deliberately supervised child work the user
@@ -97,12 +119,25 @@ to start work is not a suggestion request.
 
 `sessions_list` is a metadata inventory, not a transcript search. Rows include session key and ID, agent, kind, channel, title/label, sidebar group, current owner and original creator, stored project/workspace associations, visible parent/child links, archive/pin state, state version, model/token counts, and run status. Unknown associations remain absent; a stored worktree association does not prove that its checkout still exists.
 
+Check the row's `status` before replacing or steering existing work. `queued`
+and `running` indicate current work; `done` (success), `failed` (error),
+`timeout` (time limit), and `killed` (cancellation) describe the last run's
+outcome. A run outcome does not establish that the overall task is complete
+or that the session is unusable.
+
+For unfinished work, read `sessions_history` and consider continuing the existing
+session with `sessions_send` before spawning a replacement. Use `mode: "followup"`
+for a separate turn or `mode: "steer"` to guide active work. Current access and
+[messaging admission rules](/concepts/session-tool#sending-cross-session-messages)
+still apply; a listed session or its last-run status does not guarantee acceptance.
+
 Use the filters together to narrow the inventory before paging:
 
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.
 - `ownerId` and `creatorId`: exact resolved actor IDs. Relationship filters narrow visibility; they never grant access.
 - `projectId` and `workspaceDir`: exact persisted project and working-directory associations. Listing does not inspect the filesystem or run Git.
 - `group` and `pinned`: exact sidebar group and pin state. An empty group selects ungrouped sessions.
+- `hasBoard`: saved dashboard presence, without reading or returning dashboard content. `true` means persisted tabs exist, even without widgets; `false` means no persisted tabs. A saved dashboard face preference alone is not a dashboard. An omitted result is unknown, not proof of absence. The filter uses the same authorized Gateway inventory and runs before pagination.
 - `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent runs and ungrouped spawned sessions. Visible spawned conversations assigned to a custom group remain eligible under the normal visibility and archive filters.
 - `kinds`, `label`, `agentId`, and `search`: the existing classification, exact label/agent, and metadata-text filters. Kinds are `main`, `group`, `cron`, `hook`, `node`, and `other`.
 - `archived`: false or omitted selects unarchived sessions; true selects archived sessions; `"all"` includes both.
@@ -114,6 +149,8 @@ Pages are a live view, not a frozen snapshot. Concurrent updates, pinning, reass
 Transcript-derived fields are opt-in: `includeDerivedTitles`, `includeLastMessage`, or `messageLimit` (at most 20 messages per selected row). Metadata-only calls do not read transcripts or start sessions. Previews are hydrated only after session visibility filtering. If a row becomes inaccessible or its session is replaced while enrichment is in progress, it is omitted from the completed inventory. If the first enriched row cannot fit the result budget, the call returns metadata without inline messages or transcript-derived previews and sets `enrichmentOmitted: true`; use `sessions_history` for the full conversation. A metadata row that still exceeds 64 KiB fails explicitly rather than silently losing identity or associations.
 
 Use the returned `sessionId` as `expectedSessionId` when the `sessions` tool archives, restores, or deletes a session, so a stale key cannot target a replacement. Delivery routing, detailed runtime settings, cost estimates, and transcript paths remain omitted. Restricted inventories include `visibility` metadata explaining the effective session-tool scope.
+
+For conservative cleanup, combine explicit `hasBoard: false` with `updatedAt`, pin/archive state, visible parent/child links, and current run status. Confirm the session actually completed the associated work through permitted history/search and verify any PR is merged at its source; a title or PR mention alone is not proof. Preserve running or queued sessions, active descendants, pending inputs, and ambiguous work. Inventory rows and `activeOnly` are observations, not atomic archival preconditions: refresh candidates and active work immediately before archiving with the listed `sessionId` as `expectedSessionId`. This metadata does not grant archival permission or change existing session access checks.
 
 `sessions_history` fetches the conversation transcript for a specific session. By default, tool results are excluded; pass `includeTools: true` to see them. Use `limit` for the newest bounded tail. Pass `offset: 0` when you need pagination metadata, then pass returned `nextOffset` values to page backward through older OpenClaw transcript windows without reading raw transcript files. When an eligible bound external CLI transcript contributes messages, history returns a merged snapshot instead of a numeric offset page—even with an explicit `offset`. The Gateway treats these as terminal snapshots (`hasMore: false`); oversized snapshots remain byte-bounded, so terminal does not imply complete. Local offset paging applies when no external import survives. Unanchored reads stay the current reset-relative view. An explicit `messageId` that remains in that current view, including a pre-reset row kept after reset, keeps current-view behavior. An explicit `messageId` for a retained active-path row outside the current view opens that original closed interval and does not mix later post-reset turns; a missing or off-path `messageId` returns empty history rather than the newest messages.
 
@@ -327,7 +364,7 @@ only the exact unconsumed pending input can be re-admitted.
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to return after input admission without waiting for a reply.
 - **Wait for reply:** set a timeout and get the response inline.
-- **Message a busy session:** ordinary peer sends and `mode: "followup"` start separately admitted turns with their existing correlated completion. A zero-wait send to the caller's own busy child or an eligible run-scoped target retains the existing active-delivery exception; explicit `mode: "steer"` still requests active input under its existing access checks. An idle recipient starts a new turn. An uncertain acceptance never replays the input. Default self-sends start a new turn; explicit `mode: "steer"` can steer the active self-session.
+- **Message a busy session:** ordinary peer sends and `mode: "followup"` start separately admitted turns with their existing correlated completion. A default send to the caller's own busy child (a subagent or a session it created) steers the child's active run, whatever `timeoutSeconds` is, so new instructions reach the current work instead of starting a second turn after it ends; the result reports `targetDisposition: "steered"` without an inline reply. A zero-wait send to an eligible run-scoped target retains the existing active-delivery exception; explicit `mode: "steer"` still requests active input under its existing access checks. An idle recipient starts a new turn. An uncertain acceptance never replays the input. Default self-sends start a new turn; explicit `mode: "steer"` can steer the active self-session.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
 A new turn for your native child starts only after Gateway admission
@@ -371,6 +408,11 @@ budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 
 When that wait expires, eligible pending reply delivery continues observing the accepted
 run until it finishes; a wait interval does not discard a late reply. Nested
 inter-session replies use the same completion observation.
+On a Gateway, an eligible same-session follow-up retains its own accepted result;
+the guest does not need global `operator.write` permission to observe completion.
+An actual failed or cancelled run remains a failure, and any returned failure notice
+uses the same retained completion path. Current requester and session authority
+still govern the result.
 The low-level Gateway `sessions.send` RPC has a different contract: its JSON
 `timeoutMs` limits **receiver execution**, just like `chat.send`. Omit that field
 to keep the receiver's configured budget; bound the CLI wait separately with
@@ -448,7 +490,9 @@ A child report also goes to its recipient once, without an automatic acknowledgm
 
 Isolated scheduled jobs can wait for an inline reply, but receive no detached reply turns or failure notifications. A send from such a job does not generate a target announcement either; separately registered task completion retains its own delivery owner.
 
-These reply deliveries apply to newly started turns. Messages accepted by an active turn skip separate reply delivery and leave completion with that turn’s owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+Sends to an isolated job's `cron:<jobId>` session address only its latest run; see [What 'fresh session' means for isolated jobs](/automation/cron-jobs/payloads#what-fresh-session-means-for-isolated-jobs).
+
+These reply deliveries apply to newly started turns. Messages accepted by an active turn skip separate reply delivery and leave completion with that turn’s owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. The target's next turn adopts queued notifications and other passive notices, such as background exec completions, whether a channel message or a later `sessions_send` starts it. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
 An operator with `operator.sessions.write` can use `mode: "steer"` or `mode: "notify"` for an authorized session they created, including an owned child. Shared visibility and membership do not grant this creator-bound access. Both modes retain the requester's current authority and target-session checks before queueing. Notifications remain in memory and do not start a run.
 

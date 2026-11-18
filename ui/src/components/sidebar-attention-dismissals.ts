@@ -13,6 +13,10 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",
+  "openClawIdKeys",
+  "openClawIdRequest",
+  "openClawIdBrowserRequest",
+  "openClawIdRecoveryUse",
   "scopeUpgrade",
   "updateAvailable",
 ] as const;
@@ -111,7 +115,12 @@ export function resolveScopeUpgradeDismissal(params: {
   return (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
     ? {
         kind: "scopeUpgrade",
-        signature: JSON.stringify([params.state.phase, ...params.scopes.toSorted()]),
+        signature: JSON.stringify([
+          params.state.phase === "guidance" && params.state.reason === "role"
+            ? "role-guidance"
+            : params.state.phase,
+          ...params.scopes.toSorted(),
+        ]),
       }
     : null;
 }
@@ -168,6 +177,11 @@ export function reconcileSidebarAttentionDismissals(params: {
       continue;
     }
     const current = stored.filter((signature) => {
+      // A recovery use is an immutable event, not a nag that can recur. Other inventories
+      // and a pending owner history read cannot re-arm an already dismissed event.
+      if (kind === "openClawIdRecoveryUse") {
+        return true;
+      }
       // Selected-agent responses are partial: they may re-arm their own auth
       // warning, but only an all-agent cron inventory may re-arm cron entries.
       const authoritative =

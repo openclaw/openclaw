@@ -193,6 +193,7 @@ describe("registered guest publication target discovery", () => {
       const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
+      vi.spyOn(performance, "now").mockImplementation(() => now);
       for (let index = 0; index < 2; index++) {
         expectReply(await options(fixture), sharedOptions);
       }
@@ -327,7 +328,7 @@ describe("registered guest publication target discovery", () => {
     "preserves %s account discovery without a publication workspace",
     async (caller) => {
       await withReadFixture(async (fixture) => {
-        const target = vi.spyOn(availability, "hasSupportedGitHubPublicationTarget");
+        const target = vi.spyOn(availability, "qualifyGitHubPublicationSource");
         const respond = caller === "broad" ? await options(fixture) : vi.fn();
         if (caller === "internal") {
           await handleGatewayRequest({

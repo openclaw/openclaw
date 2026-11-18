@@ -21,6 +21,13 @@ export type PreparedSqliteReadOnlyLocation = {
   privateFamily?: SqlitePrivateSnapshotFamily;
 };
 
+/** Single-consumer custody of an exact image after its source observation settles. */
+export type PreparedSqliteSnapshotSource = {
+  sourcePath: string;
+  prepared: PreparedSqliteReadOnlyLocation;
+  family: SqlitePrivateSnapshotFamily;
+};
+
 export type AsyncPreparedSqliteReadOnlyLocation = Omit<PreparedSqliteReadOnlyLocation, "cleanup">;
 
 export type RetainedPreparedSqliteReadOnlyLocation = AsyncPreparedSqliteReadOnlyLocation & {

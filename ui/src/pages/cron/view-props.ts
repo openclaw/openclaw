@@ -2,11 +2,14 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
+import { profileDirectory } from "../../lib/profile-directory.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
@@ -86,7 +89,25 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
     deliveryToSuggestions = forDeliveryMode(deliveryTargets);
   }
-  const canManage = page.canManageCron();
+  const canManage =
+    cron.cronEditingJob || cron.cronCreateOpen
+      ? page.canManageCron()
+      : page.canCreateCron() || cron.cronJobs.some(page.canManageJob);
+  const directory = profileDirectory(page.context().gateway);
+  const selectedOwner = cron.cronForm.ownerProfileId;
+  const profiles = directory.result?.profiles.filter((profile) => !profile.mergedInto) ?? [];
+  const ownerOptions = profiles.map((profile) => ({
+    value: profile.id,
+    label:
+      userProfileDisplayName(profile.id, profile.displayName, profile.githubIdentity?.login) ||
+      profile.id,
+  }));
+  if (!selectedOwner || !profiles.some((profile) => profile.id === selectedOwner)) {
+    ownerOptions.unshift({
+      value: selectedOwner,
+      label: selectedOwner || t("cron.form.ownerUnassigned"),
+    });
+  }
   const eventSource = page.eventSource.view;
   const fieldErrors = {
     ...page.cron().cronFieldErrors,
@@ -97,29 +118,17 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     gateway: page.context().gateway,
     getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
-    loading: page.cron().cronLoading,
-    /** True once a cron.list response has completed (initial load finished). */
-    hasLoaded: page.cron().cronJobsSnapshotRevision !== null,
     listError: page.cron().cronJobsError,
     /** Canonical gateway capability for every mutation-capable cron control. */
     canManage,
+    ownerOptions,
     connected: page.cron().connected,
     status: page.cron().cronStatus,
     jobs: page.cron().cronJobs,
     reads: page.reads,
-    jobsLoadingMore: page.cron().cronJobsLoadingMore,
-    jobsTotal: page.cron().cronJobsTotal,
-    jobsHasMore: page.cron().cronJobsHasMore,
-    jobsQuery: page.cron().cronJobsQuery,
-    jobsEnabledFilter: page.cron().cronJobsEnabledFilter,
-    jobsScheduleKindFilter: page.cron().cronJobsScheduleKindFilter,
-    jobsLastStatusFilter: page.cron().cronJobsLastStatusFilter,
-    jobsTriggerFilter: page.cron().cronJobsTriggerFilter,
-    jobsSortBy: page.cron().cronJobsSortBy,
-    jobsSortDir: page.cron().cronJobsSortDir,
     editingJob: page.cron().cronEditingJob,
     createOpen: page.cron().cronCreateOpen,
-    listTab: page.listTab(),
+    activityOpen: page.activityOpen(),
     detailTab: page.detailTab(),
     error: page.cron().cronError ?? page.cron().cronRunsError ?? page.deliveryDirectory.error,
     notice: page.cron().cronNotice,

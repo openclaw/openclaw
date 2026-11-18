@@ -11,6 +11,12 @@ sidebarTitle: "Troubleshooting"
 
 Symptom-first checks for a Discord account that is not behaving.
 
+Discord attachment and sticker downloads do not inherit
+`browser.ssrfPolicy.allowPrivateNetwork` or `dangerouslyAllowPrivateNetwork`.
+CDN names resolving to private addresses need an explicit trusted hostname in
+`browser.ssrfPolicy.allowedHostnames`. RFC2544 proxy addresses remain supported;
+IPv6 fake-IP proxies can use `browser.ssrfPolicy.allowIpv6UniqueLocalRange`.
+
 Each account start logs `[account] starting account (reason: ...)` at info level.
 The reason distinguishes startup, manual starts, automatic retries, health recovery,
 config/plugin/secret reloads, and host-thaw recovery. A Discord socket reconnect or
@@ -86,6 +92,18 @@ openclaw logs --follow
     - `stuck session: sessionKey=agent:...:discord:... state=processing ...`
 
     Discord does not apply a channel-owned timeout to queued agent turns. Message listeners hand off immediately, and queued Discord runs preserve per-session ordering until the session/tool/runtime lifecycle completes or aborts the work.
+
+    Before a turn is adopted, durable ingress retries attempts that stall for five
+    minutes. A timed-out attempt releases its Discord dispatch slots so the retry
+    can run. After eight failed attempts, OpenClaw dead-letters the message and
+    attempts a short failure reply asking you to try again. The reply requires
+    fresh Discord access checks, current account authority, and automatic source
+    replies enabled by the reply visibility policy. If those checks
+    fail or the notice takes more than 15 seconds, OpenClaw logs the suppressed
+    or failed notice alongside the original failure cause. A process crash
+    between dead-lettering and sending the notice can still prevent the reply.
+    Queued notices recheck access and reply visibility before sending or retrying;
+    a notice already sent to Discord can finish after its deadline.
 
   </Accordion>
 

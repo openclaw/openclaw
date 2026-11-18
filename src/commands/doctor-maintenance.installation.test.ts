@@ -187,6 +187,7 @@ async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
   bun?: boolean;
+  launcherOverride?: boolean;
   installFails?: boolean;
   stopFailsWithPairedDevice?: boolean;
   tokenRecovery?: "success" | "writer-unavailable" | "no-consent";
@@ -205,7 +206,7 @@ async function runInstallationCase(params: {
   inspectionScenario?: "slow-admission" | "competing-update";
   invocationPort?: string;
   updateInProgress?: boolean;
-  definitionRepair?: "repaired" | "tampered" | "not-needed";
+  definitionRepair?: "repaired" | "tampered" | "not-needed" | "blocked";
   consent?: {
     aggressive: boolean;
     approved: boolean;
@@ -290,6 +291,13 @@ async function runInstallationCase(params: {
           ...(params.tokenRecovery ? { OPENCLAW_GATEWAY_TOKEN: "maintenance-fixture-token" } : {}),
         },
       };
+      if (params.launcherOverride) {
+        command = {
+          ...command,
+          managedDefinition: structuredClone(command),
+          managedOverrides: { launcher: "command" },
+        };
+      }
       const originalCommand = structuredClone(command);
       const expectOriginal = (expectedEvents: string[], expectedRunning: boolean) =>
         expect({ events, running, command }).toEqual({
@@ -329,6 +337,10 @@ async function runInstallationCase(params: {
         isAbsent: async () => false,
         isEnabled: params.nativePolicy === "unavailable-before" ? undefined : async () => enabled,
         isLoaded: async () => true,
+        readDefinitionMutationCapability: async () =>
+          params.definitionRepair === "blocked"
+            ? { kind: "unknown", reason: "unsafe-permissions", path: "/fixture/service.d" }
+            : { kind: "writable" },
         readCommand: async () => command,
         readRuntime: async (env, opts) => {
           if (params.definitionRepair === "tampered" && events.includes("install")) {
@@ -471,8 +483,17 @@ async function runInstallationCase(params: {
           },
         );
         const notes = mocks.note.mock.calls.flat().join("\n");
-        expect(notes).toContain(`${oldRoot} (2026.9.4)`);
-        expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
+        expect(notes).toContain(`Gateway service's 2026.9.4 at ${oldRoot}`);
+        expect(notes).toContain(`CLI 2026.9.17 at ${mocks.activeRoot}`);
+        expect(notes.match(/differs from the Gateway service's/g)).toHaveLength(1);
+        if (params.launcherOverride) {
+          expectOriginal([], true);
+          expect(notes).toContain("systemctl --user cat openclaw-gateway.service");
+          expect(notes).not.toContain("controlled by another owner");
+          expect(notes).not.toContain("openclaw doctor --fix");
+          expect(notes).not.toContain("openclaw gateway install --force");
+          return;
+        }
         expect(notes).toContain("openclaw doctor --fix");
         expect(notes).toContain("openclaw gateway install --force");
         if (params.bun) {
@@ -487,11 +508,9 @@ async function runInstallationCase(params: {
           return;
         }
         if (params.consent) {
+          const { interactive, aggressive, mixed } = params.consent;
           expect(mocks.confirm).toHaveBeenCalledTimes(
-            Number(
-              Boolean(params.consent.aggressive || params.consent.mixed) &&
-                params.consent.interactive,
-            ),
+            Number(interactive && Boolean(aggressive || mixed)),
           );
           if (params.consent.aggressive) {
             expect(notes).toContain("Service command does not include the gateway subcommand");
@@ -658,7 +677,14 @@ async function runInstallationCase(params: {
           finishError = error;
         }
         if (params.nativePolicy) {
-          if (params.nativePolicy === "disabled-before") {
+          if (params.nativePolicy === "disabled-before" && params.platform === "win32") {
+            // A disabled Scheduled Task cannot run; Doctor names the start command instead.
+            expect(finishError).toBeUndefined();
+            expectOriginal(["stop", "repair-state"], false);
+            expect(runtime.log).toHaveBeenCalledWith(
+              expect.stringContaining("Scheduled Task is disabled"),
+            );
+          } else if (params.nativePolicy === "disabled-before") {
             expect(finishError).toBeUndefined();
             expectOriginal(["stop", "repair-state", "restart"], true);
           } else {
@@ -698,7 +724,15 @@ async function runInstallationCase(params: {
           return;
         }
         if (params.definitionRepair) {
-          if (params.definitionRepair === "not-needed" || params.revoked) {
+          if (params.definitionRepair === "blocked") {
+            expectOriginal(["stop", "repair-state", "restart"], true);
+            expect(finishError).toBeUndefined();
+            expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("repair blocked"));
+            expect(runtime.log).toHaveBeenCalledWith(
+              "Gateway restarted and verified after Doctor maintenance.",
+            );
+            expect(mocks.health).toHaveBeenCalled();
+          } else if (params.definitionRepair === "not-needed" || params.revoked) {
             expect(command).toEqual(originalCommand);
             expect(events).toContain("restart");
             expect(finishError).toBeUndefined();
@@ -743,6 +777,9 @@ async function runInstallationCase(params: {
           ]);
           expect(maintenance?.warnings).toEqual([
             expect.stringContaining("openclaw gateway install --force --port 19989"),
+            ...(outcome === "recovery-pending"
+              ? [expect.stringContaining("Keep the Gateway stopped until Doctor")]
+              : []),
           ]);
           expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(outcome));
           expect(mocks.health).not.toHaveBeenCalled();
@@ -762,7 +799,7 @@ async function runInstallationCase(params: {
           expect(maintenance?.warnings?.[0]).toContain("state compatibility is unverified");
           expect(runtime.log).toHaveBeenCalledWith(maintenance?.warnings?.[0]);
           expect(runtime.log).not.toHaveBeenCalledWith(
-            "Gateway restarted and verified after Doctor repair.",
+            "Gateway restarted and verified after Doctor maintenance.",
           );
           expect(mocks.health).not.toHaveBeenCalled();
           return;
@@ -784,10 +821,10 @@ async function runInstallationCase(params: {
           ]);
           expect(maintenance?.warnings?.[0]).not.toContain("doctor --fix");
           expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining(`${oldRoot} (2026.9.4)`),
+            expect.stringContaining(`Gateway service's 2026.9.4 at ${oldRoot}`),
           );
           expect(runtime.log).toHaveBeenCalledWith(
-            expect.stringContaining(`${mocks.activeRoot} (2026.9.17)`),
+            expect.stringContaining(`CLI 2026.9.17 at ${mocks.activeRoot}`),
           );
           expect(mocks.health).not.toHaveBeenCalled();
           return;
@@ -838,6 +875,7 @@ it.each<InstallationCase>([
   { platform: "linux", definitionRepair: "repaired" },
   { platform: "linux", definitionRepair: "tampered" },
   { platform: "linux", definitionRepair: "not-needed" },
+  { platform: "linux", definitionRepair: "blocked" },
   { platform: "linux", definitionRepair: "repaired", revoked: "restored" },
   { platform: "linux", tokenRecovery: "success", installFails: false },
   { platform: "linux", tokenRecovery: "writer-unavailable", installFails: false },
@@ -876,9 +914,18 @@ it.each<InstallationCase>([
   { platform: "linux", inspectionFailure: "lost-before-install" },
   { platform: "linux", updateInProgress: true },
   { platform: "linux", bun: true },
+  { platform: "linux", launcherOverride: true },
 ])("repairs installation drift with doctor --fix (%j)", async (scenario) =>
   runInstallationCase({ ...scenario, mode: "direct" }),
 );
+
+it("leaves a disabled Windows Scheduled Task stopped and names the start command", async () =>
+  runInstallationCase({
+    platform: "win32",
+    mode: "maintenance",
+    definitionRepair: "not-needed",
+    nativePolicy: "disabled-before",
+  }));
 
 it.each([
   "disabled-before",

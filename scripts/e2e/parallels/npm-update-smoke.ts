@@ -46,7 +46,10 @@ import {
   type Provider,
   type ProviderAuth,
 } from "./common.ts";
-import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
+import {
+  runWindowsBackgroundPowerShell,
+  windowsBackgroundPowerShellTimeoutMs,
+} from "./guest-transports.ts";
 import { resolveMacosPrlctlInvocation, runMacosHostCommand } from "./macos-exec.ts";
 import { resolveMacosDesktopHome, resolveMacosDesktopUser } from "./macos-users.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
@@ -975,7 +978,13 @@ export class NpmUpdateSmoke {
         label,
         run: ({ signal }) => fn({ append, signal }),
         timeoutDescription: `${this.updateTimeouts.seconds}s plus cleanup backstop`,
-        timeoutMs: this.updateTimeouts.withCleanupMs,
+        timeoutMs:
+          platform === "windows"
+            ? (addTimerTimeoutGraceMs(
+                windowsBackgroundPowerShellTimeoutMs(this.updateTimeouts.timeoutMs),
+                updateCleanupBackstopMs,
+              ) ?? 1)
+            : this.updateTimeouts.withCleanupMs,
       });
     })().finally(() => {
       job.durationMs = Date.now() - job.startedAt;
@@ -1135,7 +1144,8 @@ export class NpmUpdateSmoke {
       beforeLaunchAttempt: () => ensureVmRunning(this.windowsVm),
       label: "Windows update",
       script,
-      timeoutMs,
+      commandTimeoutMs: timeoutMs,
+      timeoutMs: windowsBackgroundPowerShellTimeoutMs(timeoutMs),
       vmName: this.windowsVm,
     });
   }

@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import type { SqliteBackedMatrixSyncStore } from "../client/file-sync-store.js";
 import type { MatrixCryptoStoreOwnership } from "./crypto-store-ownership.js";
 
@@ -59,6 +60,7 @@ export function createMatrixCryptoInitializationGate() {
       return failure;
     },
     recordFailure(error: unknown): void {
+      materializeErrorStack(error);
       failure = { error };
     },
     async run(initialize: () => Promise<void>, abortSignal?: AbortSignal): Promise<void> {
@@ -147,6 +149,7 @@ export function createMatrixSdkStopGate() {
         stopped = true;
       } catch (error) {
         // A later SDK stop may silently skip unfinished closure. Keep custody until process exit.
+        materializeErrorStack(error);
         failure = { error };
         throw error;
       }

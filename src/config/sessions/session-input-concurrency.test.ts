@@ -170,7 +170,7 @@ it("stages input from published entry facts without fetching a full actor snapsh
       expect(read).not.toHaveBeenCalled();
     } finally {
       read.mockRestore();
-      recorder.finishPendingInput?.("interrupted");
+      recorder.finishPendingInput?.("interrupted", "failed");
       await recorder.waitForPendingInputSettlement?.();
       await input.actor.release();
     }
@@ -197,7 +197,7 @@ it.each(["before", "after"] as const)(
       });
       bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
       const completePrevious = () =>
-        patchSessionEntryCore(f.scope, () => ({ restartRecoveryTerminalRunIds: ["previous-run"] }));
+        patchSessionEntryCore(f.scope, () => ({ status: "done", abortedLastRun: false }));
       const run = actorScope.runSessionActorCommand;
       const accept = input.actor.acceptInput;
       const competingWrite =
@@ -242,7 +242,7 @@ it.each(["before", "after"] as const)(
         expect(await listSessionPendingInputs(f.scope)).toEqual({ items: [], total: 0 });
       } finally {
         competingWrite.mockRestore();
-        recorder.finishPendingInput?.("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
         await recorder.waitForPendingInputSettlement?.();
         await input.actor.release();
       }
@@ -336,7 +336,7 @@ it.each(["stage", "acceptInput", "adoptRun"] as const)(
           } finally {
             try {
               await participantSettlement;
-              recorder.finishPendingInput?.("interrupted");
+              recorder.finishPendingInput?.("interrupted", "failed");
               await recorder.waitForPendingInputSettlement?.();
             } finally {
               await input.actor.release();

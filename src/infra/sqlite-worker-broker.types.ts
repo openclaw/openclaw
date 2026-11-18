@@ -10,6 +10,7 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
+  SqliteWorkerExecuteOptions,
 } from "./sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type {
@@ -46,6 +47,7 @@ export type Job = {
   createAdmission?: SqliteWorkerAdmissionFactory;
   operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
+  finishing?: true;
   assertCurrent?: () => void;
   inputTransfer?: {
     id: number;
@@ -65,7 +67,7 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
-  sharedState?: true;
+  carrierClass?: "agent" | "shared-state" | "external";
   postgresPoolSent?: boolean;
   custody: SqliteWorkerSlotCustody;
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
@@ -139,7 +141,7 @@ export type StoreClient = {
   scopes: Set<Promise<void>>;
   execute(
     command: { type: PropertyKey; input: unknown },
-    options: { signal?: AbortSignal },
+    options: SqliteWorkerExecuteOptions,
     scope?: OperationScope,
   ): Promise<unknown>;
 };
@@ -150,12 +152,14 @@ export type SqliteWorkerStoreOptions = {
   databasePath: string;
   input: unknown;
   existingOnly?: boolean;
+  /** External databases use separate admission and worker capacity. */
+  isolation?: "external";
   admission?: { identity: string; birthtime?: string; assertCurrent(): void };
 };
 
 export type PreparedSqliteWorkerOpen = {
-  /** Shared-state intake must not share a carrier with synchronous agent preparation. */
-  sharedState?: true;
+  /** Agent preparation must not block shared-state intake or unrelated plugin actors. */
+  carrierClass?: Slot["carrierClass"];
   /** The caching owner synchronously seals an idle client, or declines reclamation. */
   retireIdle?: () => Promise<void> | undefined;
   onNativeLost?: (reason: Error) => void;
@@ -190,6 +194,15 @@ export type SqliteWorkerAdmissionCleanup = {
   close(): Promise<void>;
 };
 
+export type SqliteWorkerClientBinding = Pick<
+  PreparedSqliteWorkerOpen,
+  "maintenanceScope" | "cleanupAccess" | "retireIdle"
+> & {
+  releasePaths: () => void;
+  databaseIdentity: Extract<RequestBody, { type: "execute" }>["databaseIdentity"];
+  resumeScheduledMaintenance: (() => void) | undefined;
+};
+
 export type SqliteWorkerOpenCustody = Pick<
   PreparedSqliteWorkerOpen,
   | "maintenanceScope"
@@ -201,7 +214,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "onNativeLost"
   | "signal"
   | "retireIdle"
-  | "sharedState"
+  | "carrierClass"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

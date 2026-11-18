@@ -1,7 +1,6 @@
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { ReplyMessageInjectionAttempt } from "../../sessions/session-controller.contracts.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
@@ -23,6 +22,7 @@ export type StartChatDispatchParams = {
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
   toolsAllow?: string[];
+  deferWorkspaceBootstrap?: true;
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   skillLibrary: { owner: SkillLibraryRequestOwner; isHumanTurn: boolean; sessionKey: string };
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
@@ -35,9 +35,6 @@ export type StartChatDispatchParams = {
   };
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
-  terminalizeRestartSafeAdmission: (
-    terminalState: RestartSafeChatTerminalState,
-  ) => Promise<boolean>;
   timing: {
     chatSendAckedAtMs: number;
     chatSendTiming: ChatRunTiming | undefined;

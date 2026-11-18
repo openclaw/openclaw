@@ -223,7 +223,6 @@ export async function executeGeminiSearch(
       normalizeOptionalString(geminiConfig?.providerBaseUrl),
   );
   const operatorHeaders = resolveGeminiWebSearchHeaders(geminiConfig);
-  const headersCacheKey = sha256Hex(JSON.stringify([apiKey, operatorHeaders]));
   const cacheKey = buildSearchCacheKey([
     "gemini",
     query,
@@ -232,7 +231,7 @@ export async function executeGeminiSearch(
     freshness,
     dateAfter,
     dateBefore,
-    headersCacheKey,
+    sha256Hex(JSON.stringify([apiKey, operatorHeaders])),
   ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
@@ -259,13 +258,9 @@ export async function executeGeminiSearch(
       transport: "http",
     }),
   };
-  let requestHeaders: HeadersInit = providerHeaders;
-  if (operatorHeaders) {
-    const mergedHeaders = new Headers(operatorHeaders);
-    for (const [name, value] of Object.entries(providerHeaders)) {
-      mergedHeaders.set(name, value);
-    }
-    requestHeaders = mergedHeaders;
+  const requestHeaders = new Headers(operatorHeaders);
+  for (const [name, value] of Object.entries(providerHeaders)) {
+    requestHeaders.set(name, value);
   }
 
   const result = await withTrustedWebSearchEndpoint(
@@ -362,7 +357,7 @@ export async function executeGeminiSearch(
         const detail = reason ? ` (${truncateErrorDetail(reason, 120)})` : "";
         throw new Error(`Gemini search returned no final answer${detail}.`);
       }
-      const rawCitations = (groundingChunks ?? []).flatMap((chunk) => {
+      const citations = (groundingChunks ?? []).flatMap((chunk) => {
         if (!isRecord(chunk) || !isRecord(chunk.web) || typeof chunk.web.uri !== "string") {
           return [];
         }
@@ -374,15 +369,12 @@ export async function executeGeminiSearch(
         ];
       });
 
-      const citations: Array<{ url: string; title?: string }> = [];
-      for (let index = 0; index < rawCitations.length; index += 10) {
-        const batch = rawCitations.slice(index, index + 10);
-        const resolved = await Promise.all(
-          batch.map(async (citation) =>
-            Object.assign({}, citation, { url: await resolveCitationRedirectUrl(citation.url) }),
-          ),
+      for (let index = 0; index < citations.length; index += 10) {
+        await Promise.all(
+          citations.slice(index, index + 10).map(async (citation) => {
+            citation.url = await resolveCitationRedirectUrl(citation.url, signal);
+          }),
         );
-        citations.push(...resolved);
       }
 
       return { content, citations };

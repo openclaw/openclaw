@@ -85,6 +85,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `gatewayMethodDispatch`          | `string[]` | Reserved entitlement for authenticated plugin HTTP routes that dispatch Gateway methods in-process.                                  |
 | `commandRuntimeCapabilities`     | `string[]` | Command runtime capabilities a command may request: `subagents` and `scheduledTurns`.                                                |
 | `sessionScheduledTurns`          | `string[]` | Scheduled command turns the plugin may request; currently `requester-command`.                                                       |
+| `conversationAccess`             | `string[]` | `["read"]` requests raw conversation reads (conversation hooks and session forks); approving the plugin's capabilities grants it.    |
 | `subagentProfiles`               | `string[]` | Plugin-local native subagent profile IDs registered through `api.agent.registerSubagentProfile`.                                     |
 | `tools`                          | `string[]` | Agent tool names this plugin owns.                                                                                                   |
 
@@ -129,6 +130,8 @@ Worker providers must declare each `api.registerWorkerProvider(...)` id in `cont
 
 `contracts.gatewayMethodDispatch` accepts a single value, `"authenticated-request"`. It is an API hygiene gate for authenticated native plugin HTTP routes and registered RPC handlers that intentionally dispatch Gateway methods in-process, not a sandbox against malicious native plugins. Dispatch retains the original authenticated client and profile, applies the target method’s scopes, and never creates a synthetic caller. Use it only for tightly reviewed surfaces. RPC handlers still pass ordinary Gateway admission; this contract adds no suspension bypass. An entitled route remains reachable while Gateway root-work admission is closed only when it also declares `auth: "gateway"` and the route-specific `gatewayRuntimeScopeSurface: "trusted-operator"`; ordinary sibling routes from the same plugin remain behind the admission boundary. This keeps suspension status and resume reachable without granting the whole plugin an admission bypass. Keep parsing and response shaping bounded outside dispatch; substantive or mutating work must go through Gateway method dispatch, which owns admission and scope enforcement.
 
+`contracts.conversationAccess` accepts a single value, `"read"`. It puts conversation access in the capability review shown when the plugin is installed or enabled, and approving that review grants it: no `plugins.entries.<id>.hooks.allowConversationAccess` config change is needed. The grant binds to the approved install, so it applies only while that install is what loads, including through a `plugins.load.paths` entry that points at it. A workspace plugin, a load path that is not the recorded install, or a plugin whose approval is missing or edited still needs the config setting. An explicit `allowConversationAccess` value always wins, so `false` revokes the grant. A later version that adds the request re-prompts like any widened capability.
+
 Worker providers may set `allowsDesktopResize: true` when their desktop endpoints are safe to resize, such as dedicated virtual displays. Omission or `false` does not grant permission. An endpoint can further restrict this provider-wide permission with `allowsResize: false`, for example for a native display. Core carries this fact as optional `canResize` in desktop observation results for both SSH and node transports. It is permission to request a resize, not negotiated VNC support. The viewer must also hold control and complete authentication before requesting a resize.
 
 ## Decision models reference
@@ -164,6 +167,14 @@ loading the provider runtime or resolving credentials.
 Each entry requires a provider ID, model ID, and display name. The selector uses
 `example-decisions/fast`. Disabled plugins are excluded from the decision picker;
 saved unavailable selections remain visible for the operator to repair.
+
+The hosted model catalog publishes only canonical `modelCatalog` rows. A bundled
+plugin with a fixed Decision model list declares it under `modelCatalog.providers`
+with `inference.chat: false` and an `inference.decision` block (see
+[task-specific inference metadata](/plugins/manifest/models#task-specific-inference-metadata)),
+and leaves `modelCatalog.discovery` unset for that provider: the Gateway lists
+`runtime` and `refreshable` providers from their runtime listing, not hosted rows.
+`decisionModels` entries stay local to the installed manifest.
 
 `capabilities` is optional static metadata. It describes provider support for
 discovery and guidance; it does not prove that credentials or the runtime are
@@ -232,7 +243,7 @@ model descriptor.
 
 - `profiles`: built-in tool profiles that expose the plugin tool by default. Valid values are `minimal`, `coding`, `messaging`, and `full`. These contributions merge into the corresponding profile allowlist; explicit operator allowlists and deny rules remain authoritative.
 - `optional`: marks the tool as non-required for plugin activation.
-- `replaySafe`: marks tool execution as safe to repeat after an incomplete model turn.
+- `replaySafe`: marks tool execution as safe to repeat during live model retry or overflow handling in the same process. It does not enable execution replay after a Gateway restart.
 - `sideEffecting`: marks execution as potentially changing durable or external state.
 
 These fields supplement the shared `configSignals` and `authSignals` fields above.

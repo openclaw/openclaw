@@ -33,6 +33,15 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
   expect(inspected.tables.session_transcript_cold_archives?.rows).toBe(0);
   expect(inspected.tables.session_transcript_cold_archive_chunks).toBeUndefined();
   using restored = openNodeSqliteDatabase(":memory:");
+  expect(descriptor.preData).not.toContain('"end_cause"');
+  expect(descriptor.expectedCatalog).not.toContainEqual(
+    expect.objectContaining({
+      table: "session_pending_inputs",
+      kind: "column",
+      value: expect.objectContaining({ name: "end_cause" }),
+    }),
+  );
+  expect(descriptor.sqlite).not.toContain("end_cause");
   restored.exec(descriptor.sqlite);
   expect(
     restored
@@ -40,6 +49,68 @@ it("backs up a schema-36 store without requiring the later cold archive chunk ta
       .get("session_transcript_cold_archive_chunks"),
   ).toBeUndefined();
 });
+
+it.each([37, 38])(
+  "keeps cold archive chunks and the prior payload CHECK in schema %s backups",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const table = "session_transcript_cold_archive_chunks";
+    expect(descriptor.version).toBe(version);
+    expect(descriptor.tables.map(({ name }) => name)).toContain(table);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === table)).toBe(true);
+    expect(descriptor.preData).toContain(`CREATE TABLE "${table}"`);
+    expect(descriptor.preData).not.toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+    expect(descriptor.sqlite).not.toContain("event_json IS NULL AND event_zstd IS NULL");
+  },
+);
+
+it.each([39, 40, 41, 42, 43])(
+  "keeps companion tables and deletion indexes at schema %s",
+  async (version) => {
+    const descriptor = await loadAgentPortDescriptor(version);
+    const usage = "agent_tool_usage";
+    for (const column of ["end_cause", "origin_source_json"]) {
+      expect(descriptor.preData.includes(`"${column}"`)).toBe(version >= 43);
+      expect(descriptor.sqlite.includes(`${column} TEXT`)).toBe(version >= 43);
+      expect(
+        descriptor.tables
+          .find(({ name }) => name === "session_pending_inputs")!
+          .columns.some(({ name }) => name === column),
+      ).toBe(version >= 43);
+      expect(
+        descriptor.expectedCatalog.some(
+          (fact) =>
+            fact.table === "session_pending_inputs" &&
+            fact.kind === "column" &&
+            typeof fact.value === "object" &&
+            fact.value !== null &&
+            "name" in fact.value &&
+            fact.value.name === column,
+        ),
+      ).toBe(version >= 43);
+    }
+    expect(descriptor.tables.some(({ name }) => name === usage)).toBe(version >= 42);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === usage)).toBe(version >= 42);
+    expect(descriptor.preData.includes(`CREATE TABLE "${usage}"`)).toBe(version >= 42);
+    const receipt = "session_creation_operations";
+    expect(descriptor.tables.some(({ name }) => name === receipt)).toBe(version >= 40);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === receipt)).toBe(version >= 40);
+    expect(descriptor.preData.includes('CREATE TABLE "session_creation_operations"')).toBe(
+      version >= 40,
+    );
+    expect(descriptor.postData.includes('"idx_agent_session_input_completions_session_key"')).toBe(
+      version >= 40,
+    );
+    const activeFacts = "session_transcript_active_event_facts";
+    expect(descriptor.tables.some(({ name }) => name === activeFacts)).toBe(version >= 41);
+    expect(descriptor.expectedCatalog.some((fact) => fact.table === activeFacts)).toBe(
+      version >= 41,
+    );
+    expect(descriptor.preData.includes(`CREATE TABLE "${activeFacts}"`)).toBe(version >= 41);
+    expect(descriptor.postData.includes(`ALTER TABLE "${activeFacts}"`)).toBe(version >= 41);
+    expect(descriptor.preData).toContain('"event_json" IS NULL AND "event_zstd" IS NULL');
+  },
+);
 
 it.each([21, currentVersion])(
   "migrates only the private v%s copy, retiring legacy usage partitions",
@@ -99,6 +170,42 @@ it.each([21, currentVersion])(
   },
 );
 
+it("migrates v42 user endings on the private port copy", async () => {
+  const root = tempDirs.make("agent-port-legacy-endings-");
+  const source = path.join(root, "source.sqlite");
+  const copy = path.join(root, "private.sqlite");
+  const descriptor = await loadAgentPortDescriptor();
+  const predecessor = await loadAgentPortDescriptor(42);
+  const message = JSON.stringify({
+    role: "user",
+    content: "Stopped before upgrade",
+    __openclaw: { pendingInputCancelledByUser: true },
+  });
+  {
+    using db = openNodeSqliteDatabase(source);
+    db.exec(`${predecessor.sqlite}
+      PRAGMA user_version = 42;
+      INSERT INTO schema_meta VALUES ('primary', 'agent', 42, 'main', NULL, 1, 1);
+      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+        VALUES ('agent:main:retained', 'retained', '{"sessionId":"retained"}', 1);
+      INSERT INTO session_windows (session_id, session_key, created_at, updated_at)
+        VALUES ('retained', 'agent:main:retained', 1, 1);`);
+    db.prepare(`INSERT INTO session_pending_inputs
+      (input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+       message_json, lifecycle_generation, state, accepted_at)
+      VALUES ('stopped', 'agent:main:retained', 'retained', 'stopped', 'stopped',
+        'hash', ?, 'old', 'cancelled', 1)`).run(message);
+  }
+  const original = await fs.readFile(source);
+  await fs.copyFile(source, copy);
+  await migrateDatabasePortSource(copy, descriptor, 42, () => {});
+  using migrated = openNodeSqliteDatabase(copy);
+  expect(
+    migrated.prepare("SELECT end_cause, message_json FROM session_pending_inputs").get(),
+  ).toEqual({ end_cause: "user-stop", message_json: message });
+  expect(await fs.readFile(source)).toEqual(original);
+});
+
 it.each(["vector", "text"])("omits rebuildable %s indexes", async (kind) => {
   const descriptor = await loadAgentPortDescriptor();
   using db = openNodeSqliteDatabase(":memory:", { allowExtension: kind === "vector" });
@@ -126,4 +233,36 @@ it("preserves raw trajectories and refuses malformed compressed values", async (
   expect(() =>
     decode({ ...legacy, event_codec: "br", event_payload: "not a blob", event_utf8_bytes: 20 }),
   ).toThrow("Invalid compressed trajectory payload");
+});
+
+it("ports retained cold navigation without decoding absent payloads", async () => {
+  const descriptor = await loadAgentPortDescriptor();
+  const row = {
+    session_id: "cold",
+    seq: 0,
+    event_json: null,
+    event_zstd: null,
+    event_utf8_bytes: 123,
+    navigation_json: '{"version":1}',
+    navigation_type: "message",
+  };
+  expect(descriptor.decodeSqlite!.transcript_events!(row)).toBe(row);
+  const omitted = descriptor.projections!.flatMap(({ tables }) => tables);
+  expect(omitted).toContain("session_transcript_active_event_facts");
+  expect(omitted).not.toContain("session_transcript_active_events");
+  expect(omitted).not.toContain("session_transcript_index_state");
+  using source = openNodeSqliteDatabase(":memory:");
+  source.exec(`${descriptor.sqlite}
+    INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at)
+      VALUES ('agent:main:retained','retained','{"sessionId":"retained","updatedAt":1}',1);
+    INSERT INTO session_windows (session_id,session_key,created_at,updated_at)
+      VALUES ('retained','agent:main:retained',1,1);
+    INSERT INTO transcript_events (session_id,seq,event_json,created_at)
+      VALUES ('retained',1,'{"type":"message","message":{"role":"user"}}',1);
+    INSERT INTO session_transcript_active_events (session_id,active_position,event_seq,context_eligible)
+      VALUES ('retained',0,1,1);
+    INSERT INTO session_transcript_active_event_facts VALUES ('retained',1,46,'{}');`);
+  const inspected = await inspectDatabasePort({ engine: "sqlite", db: source }, descriptor);
+  expect(inspected.tables.session_transcript_active_events?.rows).toBe(1);
+  expect(inspected.tables.session_transcript_active_event_facts).toBeUndefined();
 });

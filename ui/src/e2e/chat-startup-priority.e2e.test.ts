@@ -48,8 +48,8 @@ async function installStartupGateway(page: Page) {
     sessionKey,
     sessions: [ownedSession(sessionKey, "Selected conversation")],
     historyMessages: [{ role: "assistant", content: historyText }],
-    deferredMethods: ["chat.startup"],
-    heldMethods: bulkMethods,
+    // Keep replacement startup reads held across visibility changes.
+    heldMethods: ["chat.startup", ...bulkMethods],
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.catalog.list",
@@ -150,7 +150,7 @@ async function expectProgress(page: Page, text: string) {
 }
 
 async function openNewSession(page: Page) {
-  await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
+  await page.locator("openclaw-app-sidebar .sidebar-session-toolbar .sidebar-new-session").click();
   await page.waitForURL((url) => url.pathname === "/new");
   await page.locator("openclaw-new-session-page").waitFor();
 }

@@ -11,7 +11,6 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeConceptToken } from "./concept-vocabulary.js";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
@@ -31,7 +30,14 @@ import {
   type DailyIngestionState,
 } from "./dreaming-ingestion-state.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
-import type { NarrativePhaseData, PreparedDreamNarrative } from "./dreaming-narrative.js";
+import type {
+  DreamingPhasePreparation,
+  DreamingPhaseRunParams,
+  DreamingSweepParams,
+  LightDreamingConfig,
+  PreparedDreamNarrative,
+  RemDreamingConfig,
+} from "./dreaming-phase-types.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
 import { dedupeEntries, prioritizeLightEntriesByDiaryCoverage } from "./dreaming-snippet-dedupe.js";
 import { findForgottenMemorySessionIds } from "./memory-entry-origins.js";
@@ -69,31 +75,6 @@ import {
   recordShortTermRecalls,
   type ShortTermRecallEntry,
 } from "./short-term-promotion.js";
-
-type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
-type LightDreamingConfig = ReturnType<typeof resolveMemoryLightDreamingConfig>;
-type RemDreamingConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
-type DreamingSweepParams = {
-  agentId?: string;
-  workspaceDir: string;
-  pluginConfig?: Record<string, unknown>;
-  cfg?: OpenClawConfig;
-  logger: Logger;
-  nowMs?: number;
-};
-type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> =
-  DreamingSweepParams & {
-    config: TConfig;
-    nowMs: number;
-    admissionPolicy?: SessionAdmissionPolicy;
-  };
-type DreamingPhasePreparation = {
-  bodyLines: string[];
-  keys: string[];
-  consideredKeys?: string[];
-  logMessage: string;
-  data?: NarrativePhaseData;
-};
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
@@ -515,6 +496,7 @@ async function collectSessionIngestionBatches(params: {
     const corpus = await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       config: params.cfg,
       includeRetainedSqlite: true,
+      includeContentRevision: false,
     });
     const forgottenSessionIds = await findForgottenMemorySessionIds({
       agentId,
@@ -1099,7 +1081,7 @@ async function prepareLightDreaming(
   });
   const entries = prioritizeLightEntriesByDiaryCoverage(rankedEntries, recentDiaryEntries);
   const capped = entries.slice(0, params.config.limit);
-  let data: NarrativePhaseData | undefined;
+  let data: DreamingPhasePreparation["data"];
   if (capped.length > 0) {
     const themes = uniqueStrings(capped.flatMap((e) => e.conceptTags).filter(Boolean));
     data = {
@@ -1138,7 +1120,7 @@ async function prepareRemDreaming(
     limit: params.config.limit,
     minPatternStrength: params.config.minPatternStrength,
   });
-  let data: NarrativePhaseData | undefined;
+  let data: DreamingPhasePreparation["data"];
   if (entries.length > 0) {
     const snippets = preview.candidateTruths.map((t) => t.snippet).filter(Boolean);
     const themes = preview.reflections.filter(
@@ -1193,6 +1175,7 @@ export async function runDreamingSweepPhases(
         const publication = { workspaceDir: params.workspaceDir, phase, nowMs: sweepNowMs };
         await writeDailyDreamingPhaseBlock({
           ...publication,
+          workspaceFileMode: params.workspaceFileMode,
           bodyLines: prepared.bodyLines,
           hasContent: prepared.data !== undefined,
           timezone: config.timezone,

@@ -15,6 +15,7 @@ import {
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -62,6 +63,7 @@ describe("Doctor historical row repair", () => {
     const stateDir = tempDirs.make("openclaw-automatic-upgrade-integrity-");
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
     const { db: initial, path: pathname } = openOpenClawStateDatabase(options);
+    restorePreTemplateStateIdentifiersForTest(requireNativeSqliteDatabase(initial));
     addPreCutoverClientCredentialTablesForTest(requireNativeSqliteDatabase(initial));
     initial.exec("PRAGMA foreign_keys = OFF;");
     initial

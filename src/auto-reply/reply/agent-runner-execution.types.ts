@@ -4,7 +4,7 @@ import type {
 } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/preparation.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -126,6 +126,8 @@ export type ReplyAgentTurnContext = {
 
 /** Inputs shared by direct and queued agent-turn execution. */
 export type AgentTurnParams = ReplyAgentTurnContext & {
+  /** Shared by fallback candidates; required preflight already attempted its checkpoint. */
+  recoveryMemoryFlushAttempted?: boolean;
   /** The admitted queued delivery owner settles every terminal outcome. */
   completionSource?: "reply-dispatch";
   replyThreading?: TemplateContext["ReplyThreading"];
@@ -140,7 +142,6 @@ export type AgentTurnParams = ReplyAgentTurnContext & {
   activeSessionStore?: Record<string, SessionEntry>;
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => Promise<boolean>;
 };
 
 export type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;

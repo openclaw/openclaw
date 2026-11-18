@@ -90,7 +90,10 @@ it.for(["empty", "materialized", "scoped"])(
       await request("sessions.list", { spawnedBy: parentKey, ...(scoped ? { limit: 1 } : {}) })
     ).payload;
     if (scoped) {
-      expect(result).toEqual({ ...page, sessions: [{ ...child, snapshotAt: expect.any(Number) }] });
+      expect(result).toEqual({
+        ...page,
+        sessions: [{ ...child, workspaceReadDisabledReason: null, snapshotAt: expect.any(Number) }],
+      });
     } else {
       expect(result).toMatchObject({
         count: children.length,

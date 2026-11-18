@@ -287,6 +287,13 @@ export function createSlackDurableIngress(
         releaseChannel?.();
         lifecycle.abortSignal.removeEventListener("abort", settleTurn);
       };
+      const settleRoutedTurn = async (settle: () => void | Promise<void>) => {
+        try {
+          await settle();
+        } finally {
+          settleTurn();
+        }
+      };
       const retainChannelTurn = () => {
         if (releaseChannel) {
           return;
@@ -351,27 +358,19 @@ export function createSlackDurableIngress(
           await previousTurn;
           lifecycle.abortSignal.throwIfAborted();
         },
-        onAdopted: async () => {
-          try {
-            await lifecycle.onAdopted();
-          } finally {
-            settleTurn();
-          }
-        },
+        onAdopted: () => settleRoutedTurn(() => lifecycle.onAdopted()),
         onDeferred: () => {
           lifecycle.onDeferred();
           // Reply handoff releases session order; migration remains fenced
-          // until the durable turn is actually adopted or abandoned.
+          // until the durable turn is adopted, abandoned, or dropped.
           settleSession();
           monitor.requestDrain();
         },
-        onAbandoned: async () => {
-          try {
-            await lifecycle.onAbandoned();
-          } finally {
-            settleTurn();
-          }
-        },
+        onAbandoned: () => settleRoutedTurn(() => lifecycle.onAbandoned()),
+        onDropped: (reason) =>
+          settleRoutedTurn(() =>
+            lifecycle.onDropped ? lifecycle.onDropped(reason) : lifecycle.onAbandoned(),
+          ),
       };
       try {
         const event = raw.kind === "events-api" ? asOptionalRecord(raw.body)?.event : undefined;
@@ -441,16 +440,21 @@ export function createSlackDurableIngress(
 
   const acceptReceiverEvent = async (event: ReceiverEvent): Promise<void> => {
     if (!isSlackEventCallback(event.body)) {
-      if (!app) {
+      const receiverApp = app;
+      if (!receiverApp) {
         throw new Error("Slack ingress receiver is not attached to a Bolt app.");
       }
-      await app.processEvent({
-        ...event,
-        customProperties: {
-          ...event.customProperties,
-          [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
-        },
-      });
+      // Bolt listeners acknowledge before awaiting policy, routing, or dispatch.
+      // Hold the receiver's work until Bolt has joined all matching listeners.
+      await monitor.dispatchDirect(() =>
+        receiverApp.processEvent({
+          ...event,
+          customProperties: {
+            ...event.customProperties,
+            [SLACK_NATIVE_INGRESS_CONTEXT_KEY]: nativeIngress,
+          },
+        }),
+      );
       return;
     }
     await monitor.admit({

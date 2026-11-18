@@ -8,13 +8,15 @@ const scriptPath = ".agents/skills/openclaw-secret-scanning-maintainer/scripts/s
 const { createTempDir } = createScriptTestHarness();
 const notificationArgs = ["notify", "123", "contributor", "issue_body", "Discord Bot Token"];
 
-function run(args: string[], env?: NodeJS.ProcessEnv) {
+function run(args: string[], env: NodeJS.ProcessEnv) {
   return execFileSync(process.execPath, [scriptPath, ...args], { encoding: "utf8", env });
 }
 
 function ghEnv(root: string) {
   return {
-    ...process.env,
+    HOME: root,
+    GH_CONFIG_DIR: root,
+    GH_TOKEN: "synthetic-test-token",
     OPENCLAW_GH_BIN: path.join(root, "gh"),
     PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
   };
@@ -117,6 +119,58 @@ it.each([false, true])("notifies only for changed redaction: %s", (changed) => {
   }
 });
 
-it("requires redaction metadata before notifying", () => {
-  expect(() => run(notificationArgs)).toThrow(/Body notifications require a redaction result file/);
-});
+it.each([
+  { args: notificationArgs, error: /Body notifications require a redaction result file/ },
+  { args: ["resolve"], error: /Usage:/ },
+  { args: ["resolve", "123"], error: /Usage:/ },
+  { args: ["resolve", "123", "pattern_deleted"], error: /Invalid resolution:/ },
+  { args: ["resolve", "123", "rotated"], error: /Invalid resolution:/ },
+])(
+  "refuses incomplete or unsupported maintenance requests before invoking GitHub: $args",
+  ({ args, error }) => {
+    const root = createTempDir("openclaw-secret-scan-resolution-");
+    const ghLog = path.join(root, "gh.log");
+    fs.writeFileSync(path.join(root, "gh"), `#!/bin/sh\ntouch "${ghLog}"\necho '{}'\n`, {
+      mode: 0o755,
+    });
+    expect(() => run(args, ghEnv(root))).toThrow(error);
+    expect(fs.existsSync(ghLog)).toBe(false);
+  },
+);
+
+it.each([
+  { resolution: "revoked", comment: "Issuer confirmed revocation." },
+  { resolution: "false_positive", comment: "Detection reviewed as a false positive." },
+  { resolution: "used_in_tests", comment: "Confirmed synthetic test credential." },
+  { resolution: "wont_fix" },
+])(
+  "forwards the explicit $resolution resolution without inventing evidence",
+  ({ resolution, comment }) => {
+    const root = createTempDir("openclaw-secret-scan-resolution-");
+    const ghLog = path.join(root, "gh.json");
+    fs.writeFileSync(
+      path.join(root, "gh"),
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] !== "api") process.exit(1);
+fs.writeFileSync(${JSON.stringify(ghLog)}, JSON.stringify(args));
+console.log(JSON.stringify({ number: 123, state: "resolved", resolution: ${JSON.stringify(resolution)} }));
+`,
+      { mode: 0o755 },
+    );
+    const output = run(["resolve", "123", resolution, ...(comment ? [comment] : [])], ghEnv(root));
+    expect(JSON.parse(output)).toEqual({ ok: true, number: 123, state: "resolved", resolution });
+    expect(JSON.parse(fs.readFileSync(ghLog, "utf8"))).toEqual([
+      "api",
+      "repos/openclaw/openclaw/secret-scanning/alerts/123",
+      "-X",
+      "PATCH",
+      "-f",
+      "state=resolved",
+      "-f",
+      `resolution=${resolution}`,
+      ...(comment ? ["-f", `resolution_comment=${comment}`] : []),
+    ]);
+  },
+);

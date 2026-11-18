@@ -3,11 +3,17 @@
  * Keeps optional tool gating separate from tool construction so config and execution contracts decide exposure.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
 import { isPrimaryBootstrapRun } from "./bootstrap-routing.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
+import {
+  isToolExplicitlyAllowedByFactoryPolicy,
+  mergeFactoryPolicyList,
+} from "./openclaw-tools.media-factory-plan.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -127,8 +133,38 @@ export function shouldIncludeProgressCardToolForOpenClawTools(
   );
 }
 
+export function resolveOptionalToolRegistrationPolicy(
+  options: OpenClawToolsOptions | undefined,
+  embedded: boolean,
+): { includeMessageTool: boolean; scheduledWidgetExplicitlyAllowed: boolean } {
+  const denylist = mergeFactoryPolicyList(
+    options?.config?.tools?.deny,
+    options?.pluginToolDenylist,
+  );
+  return {
+    includeMessageTool:
+      !embedded ||
+      options?.sourceReplyDeliveryMode === "message_tool_only" ||
+      isToolExplicitlyAllowedByFactoryPolicy({
+        toolName: "message",
+        allowlist: mergeFactoryPolicyList(
+          options?.config?.tools?.allow,
+          options?.config?.tools?.alsoAllow,
+          options?.pluginToolAllowlist,
+        ),
+        denylist,
+      }),
+    scheduledWidgetExplicitlyAllowed: isToolExplicitlyAllowedByFactoryPolicy({
+      toolName: "show_widget",
+      allowlist: options?.runtimeToolAllowlist,
+      denylist,
+    }),
+  };
+}
+
 type PrimarySessionToolRegistrationParams = {
   questionInputMode?: ReturnType<typeof resolveConversationQuestionInputMode>;
+  listingClientCaps?: string[];
   config?: OpenClawConfig;
   agentSessionKey?: string;
   pluginToolDenylist?: string[];
@@ -140,8 +176,8 @@ export function shouldIncludePrimarySessionToolForOpenClawTools(
 ): boolean {
   if (
     toolName === "ask_user" &&
-    params.questionInputMode !== "native" &&
-    params.questionInputMode !== "buttons"
+    ((params.questionInputMode !== "native" && params.questionInputMode !== "buttons") ||
+      params.listingClientCaps?.includes(GATEWAY_CLIENT_CAPS.NO_QUESTION_INPUT))
   ) {
     return false;
   }

@@ -2,7 +2,6 @@ import type { ModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import type { Model } from "../llm/types.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { ProviderServingContextLimits } from "./model-serving-context.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
@@ -46,7 +45,6 @@ export type PreparedModelRuntimeCatalogFacts = {
   templateModelRegistry: ModelRegistry;
   modelCatalog: ModelCatalogSnapshot;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-  inlineProviderModels: readonly InlineModelEntry[];
 };
 
 export type PreparedModelRuntimeCatalogSource = Readonly<{

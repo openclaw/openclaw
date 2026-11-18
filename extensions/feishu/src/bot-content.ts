@@ -194,11 +194,11 @@ function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string): boolea
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {
-  return text
-    .replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ")
-    .replace(/(^|\s)@[^/\s]+(?=\s|$|\/)/gu, "$1")
-    .replace(/\s+/g, " ")
-    .trim();
+  // Real Feishu mentions are normalized to <at> transport markup before this probe.
+  // Plain @name text is user content, not addressing that may expose a command.
+  const body = text.replace(/<at\b[^>]*>[^<]*<\/at>/giu, " ").trim();
+  // Multiline command arguments must survive mention removal before core dispatch.
+  return body.startsWith("/") && /[\r\n]/.test(body) ? body : body.replace(/\s+/g, " ");
 }
 
 function parseMediaResource(

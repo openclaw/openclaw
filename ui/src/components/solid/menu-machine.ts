@@ -5,6 +5,7 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
@@ -33,8 +34,9 @@ export function createMenuControls(): MenuControls {
 }
 
 export type MenuBinding = {
+  isOpen(): boolean;
   itemRef(): (element: HTMLElement) => void;
-  items(): HTMLElement[];
+  items(ordered?: boolean): HTMLElement[];
   highlightedValue(): string | null;
   highlightedValueNow(): string | null;
   setHighlightedValue(value: string | null): void;
@@ -85,7 +87,11 @@ export function useMenuMachine(
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
-  let pending: Array<{ run: (loaded: MenuRuntime) => void; keyboard?: boolean }> = [];
+  let pending: Array<{
+    run: (loaded: MenuRuntime) => void;
+    keyboard?: boolean;
+    highlightedValue?: string | null;
+  }> = [];
   const [revision, setRevision] = createSignal(0);
   const [error, setError] = createSignal<unknown>();
   const notify = () => setRevision((value) => value + 1);
@@ -103,11 +109,11 @@ export function useMenuMachine(
     },
     { lazy: true },
   );
-  const run = (intent: (loaded: MenuRuntime) => void) => {
+  const run = (intent: (loaded: MenuRuntime) => void, highlightedValue?: string | null) => {
     if (runtime) {
       intent(runtime);
     } else if (overlay.open && loading) {
-      pending.push({ run: intent });
+      pending.push({ run: intent, highlightedValue });
     }
   };
   const load = async () => {
@@ -294,8 +300,12 @@ export function useMenuMachine(
   const keydown = (event: KeyboardEvent) =>
     runtime ? runtime.keydown(event) : deferKey(event, "input");
   const setHighlightedValue = (value: string | null) =>
-    run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }));
+    run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }), value);
   return {
+    isOpen: () => {
+      revision();
+      return overlay.open;
+    },
     runtime: current,
     items,
     itemRef,
@@ -326,9 +336,13 @@ export function useMenuMachine(
         "data-valuetext": label,
         tabIndex: -1,
         ...rendered?.runtime.item(rendered.api, value, disabled, type, checked, label),
-        // Preserve cold entry focus without echoing machine-owned focus into its queue.
+        // A repeated cold focus must not replay an old highlight after queued keys.
+        // Keep distinct focus changes ordered, including entry focus before returning to the trigger.
         onFocusIn: () => {
-          if (runtime?.service.context.get("highlightedValue") !== value) {
+          const highlighted = runtime
+            ? runtime.service.context.get("highlightedValue")
+            : pending.findLast((intent) => intent.highlightedValue !== undefined)?.highlightedValue;
+          if (highlighted !== value) {
             setHighlightedValue(value);
           }
         },
@@ -385,8 +399,8 @@ export function useMenuMachine(
             return;
           }
           const focus = event.detail === 0 || options.pointerFocus?.() !== "trigger";
-          if (!focus) {
-            overlay.trigger?.focus({ preventScroll: true });
+          if (!focus && overlay.trigger) {
+            focusProgrammatically(overlay.trigger, { preventScroll: true });
           }
           overlay.request(parentBinding ? true : !overlay.open, focus ? "first" : "none");
         },

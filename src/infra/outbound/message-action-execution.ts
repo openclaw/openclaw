@@ -1,8 +1,6 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
-import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
@@ -26,14 +24,13 @@ import {
 } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./deliver-handoff.js";
+import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
 import {
   createChannelActionContext,
   type MessageActionInput,
@@ -43,6 +40,8 @@ import {
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
 import {
+  GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS,
+  isUnsettledGatewayRequestTimeout,
   loadMessageGatewayRuntime,
   resolveGatewayIdempotencyKey,
   resolveOutboundMessageGatewayOptions,
@@ -53,15 +52,6 @@ import {
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction } from "./outbound-send-service.js";
-import {
-  beginTerminalSourceReplyDelivery,
-  cancelTerminalSourceReplyDelivery,
-  reconcileTerminalSourceReplyDelivery,
-} from "./source-reply-mirror.js";
-
-const log = createSubsystemLogger("outbound/message-action");
-
-const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
 
@@ -95,29 +85,6 @@ export async function beforeMessageDeliveryAttempt(input: MessageActionInput): P
   assertMessageDeliveryCurrent(input);
   await deliveryAttempt.beforeAttempt();
   assertMessageDeliveryCurrent(input);
-}
-
-function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
-  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return false;
-  }
-  const requestError = error as Error & { details?: unknown; gatewayCode?: unknown };
-  if (typeof requestError.gatewayCode !== "string" || requestError.gatewayCode.length === 0) {
-    return false;
-  }
-  if (requestError.gatewayCode !== ErrorCodes.UNAVAILABLE) {
-    // Authorization, scope, validation, and unknown-method errors are emitted
-    // before message.action enters its provider dispatch path.
-    return true;
-  }
-  const details = requestError.details;
-  // Gateway startup/suspension rejection carries the method name. Provider
-  // exceptions use an unstructured UNAVAILABLE response and remain ambiguous.
-  return (
-    details !== null &&
-    typeof details === "object" &&
-    (details as { method?: unknown }).method === "message.action"
-  );
 }
 
 export function projectMessageActionPartialDelivery(error: unknown) {
@@ -231,10 +198,6 @@ export async function executeGatewayAction(
   const idempotencyKey = await resolveGatewayIdempotencyKey(
     normalizeOptionalString(ctx.params.idempotencyKey),
   );
-  const callerOwnsTerminalReceipt =
-    ctx.gateway.terminalSourceReplyReceiptOwner === "caller" && ctx.input.sourceReplyFinal === true;
-  // Resolve local capability/auth preflight before arming a durable send intent.
-  // A failure here proves the RPC never reached the gateway.
   const requestContext = {
     sourceReplyFinal: ctx.input.sourceReplyFinal,
     sourceReplyToolCallId: ctx.input.sourceReplyToolCallId,
@@ -242,31 +205,6 @@ export async function executeGatewayAction(
   const agentRuntimeIdentityToken = ctx.gateway.request
     ? undefined
     : await ctx.gateway.resolveAgentRuntimeIdentityToken?.(requestContext);
-  const sourceReplyMirror = {
-    action: params.action,
-    channel: ctx.channel,
-    actionParams: ctx.params,
-    cfg: ctx.cfg,
-    accountId: ctx.accountId,
-    currentAccountId:
-      ctx.input.messageActionAuthorization?.requesterAccountId ?? ctx.input.defaultAccountId,
-    sessionKey: ctx.input.sourceReplySessionKey ?? ctx.input.sessionKey,
-    sessionId: ctx.input.sessionId,
-    agentId: ctx.agentId,
-    toolContext: ctx.input.messageActionAuthorization?.toolContext,
-    replyToIsExplicit: params.reply?.source === "explicit",
-    idempotencyKey,
-    sourceReplyFinal: ctx.input.sourceReplyFinal,
-    toolCallId: ctx.input.sourceReplyToolCallId,
-  };
-  const terminalDeliveryStart = callerOwnsTerminalReceipt
-    ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
-    : undefined;
-  if (terminalDeliveryStart && "outcome" in terminalDeliveryStart) {
-    return params.result(terminalDeliveryStart.result);
-  }
-  const terminalDeliveryReceipt = terminalDeliveryStart;
-  let hadUnknownDeliveryOutcome = false;
   let payload: unknown;
   try {
     const messageGateway = ctx.gateway;
@@ -286,8 +224,7 @@ export async function executeGatewayAction(
       ...(conversationReadOrigin === "direct-operator" ? { conversationReadOrigin } : {}),
       idempotencyKey,
     };
-    const { callGatewayLeastPrivilege, isGatewayTransportError } =
-      await loadMessageGatewayRuntime();
+    const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
     const gateway = resolveOutboundMessageGatewayOptions(messageGateway);
     // A timed-out send is reattached with the same idempotency key. Cap only the
     // initial wait so the 9-minute join remains inside Codex's 10-minute tool envelope.
@@ -319,18 +256,10 @@ export async function executeGatewayAction(
         { checkAfter: false },
       );
     } catch (error) {
-      if (
-        !(
-          (isGatewayTransportError(error) && error.kind === "timeout") ||
-          (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent)
-        ) ||
-        actionParams.action !== "send"
-      ) {
+      if (actionParams.action !== "send" || !(await isUnsettledGatewayRequestTimeout(error))) {
         throw error;
       }
       // The Gateway may still finish the first request after the local timer.
-      // Nothing learned by a later reattach can prove that attempt did not send.
-      hadUnknownDeliveryOutcome = true;
       throwIfAborted(abortSignal);
 
       const reconciliationSignal = abortSignal
@@ -343,7 +272,7 @@ export async function executeGatewayAction(
         // reconnecting every minute or inheriting the run's much longer lifetime.
         timeoutMs: abortSignal
           ? null
-          : Math.max(call.timeoutMs, MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS),
+          : Math.max(call.timeoutMs, GATEWAY_SEND_RECONCILIATION_TIMEOUT_MS),
         signal: reconciliationSignal,
       };
       // A caller-side timeout does not cancel Gateway work. Reattach once with the
@@ -357,33 +286,7 @@ export async function executeGatewayAction(
     if (partialDelivery !== undefined) {
       payload = partialDelivery;
     } else {
-      if (
-        callerOwnsTerminalReceipt &&
-        !hadUnknownDeliveryOutcome &&
-        (error instanceof OutboundHandoffRejectedError ||
-          isConfirmedGatewayMessageActionRejection(error))
-      ) {
-        await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
-      }
       throw error;
-    }
-  }
-  if (callerOwnsTerminalReceipt) {
-    try {
-      await reconcileTerminalSourceReplyDelivery({
-        deliveredPayload: payload,
-        mirror: sourceReplyMirror,
-        receipt: terminalDeliveryReceipt,
-        ...(hadUnknownDeliveryOutcome ? { preservePendingOnExplicitFailure: true } : {}),
-      });
-    } catch (error) {
-      // The pre-send intent remains durable. Return the provider result so the
-      // model cannot retry an external effect with an unknown outcome.
-      log.warn("Terminal source reply receipt reconciliation failed.", {
-        channel: ctx.channel,
-        sessionKey: ctx.input.sessionKey,
-        error: formatErrorMessage(error),
-      });
     }
   }
   const result = params.result(payload);

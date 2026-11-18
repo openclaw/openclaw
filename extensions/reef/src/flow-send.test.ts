@@ -72,15 +72,20 @@ describe("ReefMessageFlow send recovery", () => {
     const rules = resendDisabled ? undefined : { outbound: "Never mention project Nightjar." };
     const { flow, trusted, trustedPeer, relay, guardMock, policyVersion } = await fixture(rules);
     const text = resendDisabled ? " rephrased coordination " : "meeting at ten";
+    const startedAt = Date.now();
     const id = await flow.send("bob", text, { resendDisabled });
+    const finishedAt = Date.now();
     if (resendDisabled) {
-      expect((await trusted.readOutboundDelivery("bob", id))?.delivery).toEqual({
-        bodyHash: expect.any(String),
+      const delivery = (await trusted.readOutboundDelivery("bob", id))?.delivery;
+      expect(delivery).toEqual({
+        bodyHash: "44d4b2f2632d2133b1289c24b32a715064283bbc7ff233af31d5ce0c42be87fe",
         textHash: reefMessageTextHash("rephrased coordination"),
         recipient: reefPeerIdentity(trustedPeer),
         resendDisabled: true,
         sentAt: expect.any(Number),
       });
+      expect(delivery?.sentAt).toBeGreaterThanOrEqual(startedAt);
+      expect(delivery?.sentAt).toBeLessThanOrEqual(finishedAt);
     } else {
       expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
       expect(guardMock.classify).toHaveBeenCalledWith(expect.objectContaining({ policyVersion }));

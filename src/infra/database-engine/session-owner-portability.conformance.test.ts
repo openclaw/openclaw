@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { everySessionTranscriptUserInputFrom } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import { appendTranscriptEventsInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-store.js";
@@ -8,6 +7,7 @@ import {
   createTranscriptPayloadUpdater,
   prepareTranscriptPayload,
 } from "../../config/sessions/transcript-payload.js";
+import { scanJsonObjectFields } from "../../state/json-predicate-fields.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -15,7 +15,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
-import { jsonObjectFieldsForScan } from "./json-values.js";
+import { jsonObjectFieldsForScan, jsonScannedValue } from "./json-values.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 for (const engine of ["sqlite", "postgres"] as const) {
@@ -230,7 +230,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
           }
         }));
 
-      it("streams exact user control facts with typed provenance and first-member selection", () =>
+      it("extracts compact SQL control facts with typed provenance and first-member selection", () =>
         withEngineStoreAdmission(() => {
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           const scope = {
@@ -285,21 +285,33 @@ for (const engine of ["sqlite", "postgres"] as const) {
             },
             { agentId: "main", path: database.path },
           );
-          const compact = executeSqliteQuerySync(
-            database.db,
-            getNodeSqliteKysely<DB>(database.db)
-              .selectFrom("transcript_events")
-              .select((eb) => [
-                jsonObjectFieldsForScan(database.db, eb.fn.coalesce("event_json", eb.val("{}")), {
-                  message: { role: true },
-                }).as("facts"),
-                eb
-                  .fn<number>("length", [eb.fn.coalesce("event_json", eb.val(""))])
-                  .as("stored_chars"),
-              ])
-              .where("session_id", "=", scope.sessionId)
-              .where("seq", "=", 1),
-          ).rows[0];
+          const read = () =>
+            executeSqliteQuerySync(
+              database.db,
+              getNodeSqliteKysely<DB>(database.db)
+                .selectFrom("transcript_events")
+                .select((eb) => [
+                  jsonObjectFieldsForScan(database.db, eb.fn.coalesce("event_json", eb.val("{}")), {
+                    message: { role: true },
+                  }).as("facts"),
+                  jsonObjectFieldsForScan(database.db, eb.fn.coalesce("event_json", eb.val("{}")), {
+                    message: {
+                      role: true,
+                      idempotencyKey: true,
+                      __openclaw: { runId: true },
+                      provenance: true,
+                    },
+                  }).as("controls"),
+                  eb
+                    .fn<number>("length", [eb.fn.coalesce("event_json", eb.val(""))])
+                    .as("stored_chars"),
+                ])
+                .where("session_id", "=", scope.sessionId)
+                .where("seq", "in", [1, 3])
+                .orderBy("seq", "asc"),
+            ).rows;
+          const rows = read();
+          const compact = rows[0];
           expect(compact?.stored_chars).toBeGreaterThan(10_000);
           expect(compact?.facts.length).toBeLessThan(100);
           expect(JSON.parse(compact?.facts ?? "null")).toEqual({ message: { role: "user" } });
@@ -317,40 +329,53 @@ for (const engine of ["sqlite", "postgres"] as const) {
             id: "real",
             "id\0hidden": "alias",
           });
+          const aliasFields = scanJsonObjectFields(aliases?.facts ?? "null", ["id", "id\0hidden"]);
+          expect(jsonScannedValue(aliasFields.first.get("id"))).toBe("real");
+          expect(jsonScannedValue(aliasFields.last.get("id\0hidden"))).toBe("alias");
           const expected = [
             {
               role: "user",
               idempotencyKey: "source:user",
-              __openclaw: { runId: "source-run" },
+              runId: "source-run",
               provenance,
             },
             {
               role: "user",
               idempotencyKey: "later:user",
-              __openclaw: { runId: null },
+              runId: null,
               provenance: null,
             },
           ];
-          const read = () => {
-            const facts: unknown[] = [];
-            expect(
-              everySessionTranscriptUserInputFrom(scope, "source:user", (message) => {
-                facts.push(message);
-                return true;
-              }),
-            ).toBe(true);
-            return facts;
+          const expectControls = (selected: ReturnType<typeof read>) => {
+            expect(selected).toHaveLength(expected.length);
+            expect(selected.reduce((bytes, row) => bytes + row.controls.length, 0)).toBeLessThan(
+              500,
+            );
+            for (const [index, row] of selected.entries()) {
+              const message = scanJsonObjectFields(row.controls, ["message"]).first.get("message");
+              expect(message?.kind).toBe("object");
+              const fields = scanJsonObjectFields(message?.text ?? "{}", [
+                "role",
+                "idempotencyKey",
+                "__openclaw",
+                "provenance",
+              ]).first;
+              const internal = fields.get("__openclaw");
+              const runId = scanJsonObjectFields(internal?.text ?? "{}", ["runId"]).first.get(
+                "runId",
+              );
+              const expectedMessage = expected[index]!;
+              expect(jsonScannedValue(fields.get("role"))).toEqual(expectedMessage.role);
+              expect(jsonScannedValue(fields.get("idempotencyKey"))).toEqual(
+                expectedMessage.idempotencyKey,
+              );
+              expect(jsonScannedValue(runId)).toEqual(expectedMessage.runId);
+              expect(jsonScannedValue(fields.get("provenance"))).toEqual(
+                expectedMessage.provenance,
+              );
+            }
           };
-          expect(read()).toEqual(expected);
-          expect(everySessionTranscriptUserInputFrom(scope, "absent:user", () => true)).toBe(false);
-          let visited = 0;
-          expect(
-            everySessionTranscriptUserInputFrom(scope, "source:user", () => {
-              visited++;
-              return false;
-            }),
-          ).toBe(false);
-          expect(visited).toBe(1);
+          expectControls(rows);
           runOpenClawAgentWriteTransaction(
             () => {
               // Imported JSON may contain duplicate members; refresh its real stored predicates too.
@@ -365,7 +390,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
             },
             { agentId: "main", path: database.path },
           );
-          expect(read()).toEqual(expected);
+          expectControls(read());
         }));
     },
   );

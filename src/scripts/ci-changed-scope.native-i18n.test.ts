@@ -6,7 +6,6 @@ const { assertNativeGeneratedArtifactsIsolated, shouldRunNativeI18n, shouldStric
 const nativeSource = "apps/.i18n/native-source.json";
 const androidLookup =
   "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
-const mainActivity = "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt";
 const canonicalArtifacts = [
   "apps/.i18n/native/sv.json",
   "apps/android/app/src/main/res/values-sv/strings.xml",
@@ -66,7 +65,7 @@ describe("native i18n changed scope", () => {
     expectMixed([...generatedPaths, ...generatedCompanionPaths, nativeSource]);
   });
 
-  it("allows only the owner-complete one-time native v2 artifact migration", () => {
+  it("rejects mixed source and generated artifacts shaped like the completed v2 migration", () => {
     const migration = [
       ".gitattributes",
       ...sharedOwners,
@@ -76,12 +75,10 @@ describe("native i18n changed scope", () => {
       ...canonicalArtifacts,
     ];
 
-    expectAllowed(migration);
-    expectMixed(migration.slice(1));
-    expectMixed([...migration, androidLookup]);
+    expectMixed(migration);
   });
 
-  it("admits the Android projection retirement only with its complete input migration", () => {
+  it("rejects mixed artifacts shaped like the completed Android projection retirement", () => {
     const migration = [
       androidLookup,
       ".github/workflows/native-app-locale-refresh.yml",
@@ -92,14 +89,6 @@ describe("native i18n changed scope", () => {
       "apps/.i18n/native/de.json",
       "apps/android/app/src/main/res/values-de/strings.xml",
     ];
-    expectAllowed(migration);
-    for (const incomplete of [
-      migration.slice(1),
-      migration.filter((filePath) => filePath !== "apps/android/app/build.gradle.kts"),
-      [...migration, "apps/ios/Resources/Localizable.xcstrings"],
-      [...migration, mainActivity],
-    ]) {
-      expectMixed(incomplete);
-    }
+    expectMixed(migration);
   });
 });

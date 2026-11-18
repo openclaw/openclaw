@@ -3,7 +3,10 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import {
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -39,20 +42,6 @@ const visible = (target: Locator, value = true) =>
 const count = (target: Locator, value: number) => expect.poll(() => target.count()).toBe(value);
 const attr = (target: Locator, name: string, value: string | null) =>
   expect.poll(() => target.getAttribute(name)).toBe(value);
-async function expectStyles(target: Locator, expected: Record<string, string>, length = 1) {
-  await expect
-    .poll(() =>
-      target.evaluateAll(
-        (elements, names) =>
-          elements.map((element) => {
-            const style = getComputedStyle(element);
-            return Object.fromEntries(names.map((name) => [name, style.getPropertyValue(name)]));
-          }),
-        Object.keys(expected),
-      ),
-    )
-    .toEqual(Array.from({ length }, () => expected));
-}
 async function expectBelow(lower: Locator, upper: Locator, inclusive: boolean) {
   await expect
     .poll(async () => {
@@ -142,12 +131,15 @@ suite.define(() => {
         ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/${file}`).source),
       ),
     ).toEqual({ titlebarRegistered: false, requested: [false, false] });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // The panel collapses itself; the Sessions rail item reopens it.
     const sidebarPanel = page.locator(".sidebar-shell");
     await visible(sidebarPanel);
-    await toggle.click();
+    await page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true })
+      .click();
     await visible(sidebarPanel, false);
-    await toggle.click();
+    await page.locator('[data-navigation-view="sessions"]').click();
     await visible(sidebarPanel);
 
     await page.locator(".sidebar-issues-button").click();
@@ -246,7 +238,12 @@ suite.define(() => {
                 : [...document.querySelectorAll<HTMLElement>('[aria-label="Expand sidebar"]')].find(
                     (element) => element.checkVisibility(),
                   )!
-              : document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!;
+              : // Sessions reopens a collapsed panel; while open it opens the agent menu.
+                shell.classList.contains("shell--nav-collapsed")
+                ? document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!
+                : document.querySelector<HTMLElement>(
+                    'openclaw-app-sidebar [aria-label="Collapse sidebar"]',
+                  )!;
             toggle.click();
           }
           await new Promise<void>((resolve) => {
@@ -293,15 +290,99 @@ suite.define(() => {
     },
   );
 
+  it.each(["session", "new-session"] as const)(
+    "uncovers the selected %s before the next drawer frame",
+    async (destination) => {
+      const page = await openPage({
+        nativeNav: false,
+        width: 400,
+        scenario: { methodResponses: { "sessions.list": chatSessionListResponse() } },
+      });
+      await navigationDrawerToggle(page).click();
+      const drawer = page.locator(".shell-nav");
+      await page.waitForFunction(() =>
+        document
+          .querySelector(".shell-nav")!
+          .getAnimations()
+          .every((animation) => animation.playState !== "running"),
+      );
+      await page.evaluate(() => {
+        Reflect.set(
+          window,
+          "selectedNavigationFrame",
+          new Promise((resolve) => {
+            document.addEventListener(
+              "click",
+              () => {
+                const shell = document.querySelector(".shell")!;
+                const observer = new MutationObserver(() => {
+                  if (shell.classList.contains("shell--nav-drawer-open")) {
+                    return;
+                  }
+                  observer.disconnect();
+                  requestAnimationFrame(() => {
+                    const navDrawer = document.querySelector<HTMLElement>(".shell-nav")!;
+                    const backdrop = document.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+                    resolve({
+                      open: navDrawer
+                        .closest(".shell")!
+                        .classList.contains("shell--nav-drawer-open"),
+                      inert: navDrawer.inert,
+                      drawerOpacity: getComputedStyle(navDrawer).opacity,
+                      backdropOpacity: getComputedStyle(backdrop).opacity,
+                      moving: [navDrawer, backdrop]
+                        .flatMap((element) => element.getAnimations())
+                        .some((animation) => animation.playState === "running"),
+                    });
+                  });
+                });
+                observer.observe(shell, { attributes: true, attributeFilter: ["class"] });
+              },
+              { once: true, capture: true },
+            );
+          }),
+        );
+      });
+      const target =
+        destination === "session"
+          ? drawer.locator(
+              '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
+            )
+          : drawer.getByRole("link", { name: "New session", exact: true }).first();
+      await target.click();
+      expect(await page.evaluate(() => Reflect.get(window, "selectedNavigationFrame"))).toEqual({
+        open: false,
+        inert: true,
+        drawerOpacity: "0",
+        backdropOpacity: "0",
+        moving: false,
+      });
+      const composer = page.locator(
+        destination === "session"
+          ? ".chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea"
+          : ".new-session-page__message",
+      );
+      await composer.click();
+      await page.keyboard.type("Chosen destination is ready");
+      expect(await composer.inputValue()).toBe("Chosen destination is ready");
+    },
+  );
+
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // People is a view button with a tooltip; the panel's own button collapses it.
+    const toggle = page.locator('[data-navigation-view="online"]');
     const sidebarPanel = page.locator(".sidebar-shell");
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
+    await toggle.click();
+    await waitForControlUiRoute(page, { routeId: "activity" });
+    const collapse = page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true });
 
     // Safari tap leaves post-collapse focus restoration to the shell.
-    await toggle.evaluate((element) => {
+    await collapse.evaluate((element) => {
       for (const type of ["pointerdown", "pointerup"]) {
         element.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
       }
@@ -327,7 +408,7 @@ suite.define(() => {
       .poll(() =>
         openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
       )
-      .toBe("Sessions");
+      .toBe("People");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -371,37 +452,24 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await visible(toolbar);
     await visible(page.locator(".shell-chrome-controls"), false);
-    const sidebarNewThread = page.locator(".sidebar-rail .sidebar-new-session");
-    await visible(sidebarNewThread);
-    await expectStyles(sidebarNewThread, { "border-top-style": "none", "box-shadow": "none" });
-    await attr(sidebarNewThread, "aria-disabled", null);
+    const newThread = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+    await visible(newThread);
+    await attr(newThread, "aria-disabled", null);
     await page.keyboard.press("Tab");
-    await sidebarNewThread.focus();
-    await expect
-      .poll(() =>
-        sidebarNewThread.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return {
-            focusVisible: element.matches(":focus-visible"),
-            outlineStyle: style.outlineStyle,
-            outlineWidth: style.outlineWidth,
-          };
-        }),
-      )
-      .toEqual({ focusVisible: true, outlineStyle: "solid", outlineWidth: "2px" });
+    await newThread.focus();
+    await expectFocused(newThread);
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
-    const search = page.locator(".sidebar-brand__search");
-    const newThread = page.locator(".sidebar-rail__create a, .sidebar-rail__create button");
+    const search = toolbar.locator(".macos-titlebar-controls__search");
     await expect.poll(() => back.isDisabled()).toBe(true);
     await expect.poll(() => forward.isDisabled()).toBe(true);
     await visible(search);
-    await visible(newThread);
     await page.locator(".sidebar-issues-button__count").waitFor();
 
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed");
-    await visible(newThread);
+    // New session lives in the Sessions panel header, so it closes with the panel.
+    await visible(newThread, false);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
     await page.evaluate(() => document.fonts.ready);
@@ -412,17 +480,9 @@ suite.define(() => {
     const toolbarBox = await toolbar.boundingBox();
     const rail = page.locator(".sidebar-rail");
     const attention = rail.locator(".sidebar-issues-button");
-    const attentionBox = await attention.boundingBox();
     const railBox = await rail.boundingBox();
-    expect(toolbarBox).not.toBeNull();
-    expect(attentionBox).not.toBeNull();
-    expect(railBox).not.toBeNull();
-    expect(railBox!.width).toBe(52);
     expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
     expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
-    expect(attentionBox!.x).toBeGreaterThanOrEqual(railBox!.x);
-    expect(attentionBox!.x + attentionBox!.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
-    expect(attentionBox!.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
     const titleBox = await page
       .locator(".chat-pane-cache__pane--visible .chat-pane__crumbs:visible")
       .first()
@@ -436,7 +496,7 @@ suite.define(() => {
         return box.top + box.height / 2;
       }),
     );
-    expect(centerlines).toHaveLength(2);
+    expect(centerlines).toHaveLength(4);
     for (const centerline of centerlines.slice(1)) {
       expect(centerline).toBeCloseTo(centerlines[0]!, 1);
     }
@@ -451,7 +511,8 @@ suite.define(() => {
     );
     expect(footerBoxes).toHaveLength(3);
     for (const [index, box] of footerBoxes.entries()) {
-      expect(box.x + box.width / 2).toBeCloseTo(railBox!.x + (railBox!.width - 1) / 2, 1);
+      expect(box.x).toBeGreaterThanOrEqual(railBox!.x);
+      expect(box.x + box.width).toBeLessThanOrEqual(railBox!.x + railBox!.width);
       expect(box.y).toBeGreaterThanOrEqual(toolbarBox!.y + toolbarBox!.height + 4);
       expect(box.y + box.height).toBeLessThanOrEqual(railBox!.y + railBox!.height);
       if (index > 0) {
@@ -459,35 +520,15 @@ suite.define(() => {
         expect(box.y - (previous.y + previous.height)).toBeGreaterThanOrEqual(4);
       }
     }
-    const shellControls = page.locator(
-      ".macos-titlebar-controls button:visible, .sidebar-rail__bottom .sidebar-issues-button:visible",
-    );
     await page.mouse.move(600, 400);
     await capture(page, railProofDir, "native-web-top-left-controls.png");
-    await expectStyles(
-      shellControls,
-      {
-        "border-top-width": "0px",
-        "background-color": "rgba(0, 0, 0, 0)",
-        "box-shadow": "none",
-      },
-      3,
-    );
     const inbox = attention;
-    await inbox.hover();
-    await expect
-      .poll(() => inbox.evaluate((button) => getComputedStyle(button).backgroundColor))
-      .not.toBe("rgba(0, 0, 0, 0)");
     // Home is unavailable in this narrow feature catalog; enter Inbox from the profile button.
     await rail.locator(".sidebar-identity-card").focus();
     await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
       .toBe(true);
-    await expectStyles(inbox, { "outline-style": "solid", "outline-width": "2px" });
-    expect(await inbox.evaluate((button) => getComputedStyle(button).outlineColor)).not.toBe(
-      "rgba(0, 0, 0, 0)",
-    );
     await page.keyboard.press("Enter");
     await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");
@@ -512,10 +553,25 @@ suite.define(() => {
         .toEqual([!canGoBack, canGoBack]);
     }
 
+    // New session lives in the Sessions panel header, so the titlebar reopens the panel first.
+    await page.locator(".macos-titlebar-controls__sidebar").click();
+    await expectShellClass(page, "shell--nav-collapsed", false);
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-    await page.locator(".shell-chrome-controls__nav-toggle").click();
-    await expectShellClass(page, "shell--nav-collapsed", false);
+
+    for (const view of ["sessions", "online"]) {
+      await rail.locator(".sidebar-identity-card").click();
+      await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+      await expectShellClass(page, "shell--settings");
+      const toggle = toolbar.locator(".macos-titlebar-controls__sidebar");
+      await expect.poll(() => toggle.isDisabled()).toBe(true);
+      const target = rail.locator(`[data-navigation-view="${view}"]`);
+      await attr(target, "aria-pressed", "false");
+      await target.click();
+      await expectShellClass(page, "shell--settings", false);
+      await expectShellClass(page, "shell--nav-collapsed", false);
+      await attr(target, "aria-pressed", "true");
+    }
   });
 
   it.each([
@@ -541,7 +597,7 @@ suite.define(() => {
       webChrome: true,
       width: 1280,
     });
-    await page.locator(".sidebar-session-toolbar__collapse").click();
+    await page.locator(".macos-titlebar-controls__sidebar").click();
     await openChatSidePanelType(page, "Side chat");
     await focusChatSidePanel(page);
 
@@ -605,7 +661,7 @@ suite.define(() => {
     await attr(navigation, "inert", "");
     await count(page.locator(".shell-nav-backdrop"), 1);
     await visible(dialog, false);
-    await page.locator(".shell-skip-link").focus();
+    await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("Tab");
     await expect
       .poll(() => page.evaluate(() => document.activeElement?.closest(".shell-nav") !== null))
@@ -638,7 +694,7 @@ suite.define(() => {
       }),
     ).toBe(false);
 
-    await navigation.locator('[data-navigation-view="sessions"]').click();
+    // The drawer opens on Sessions.
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.click({ button: "right" });
@@ -699,7 +755,7 @@ suite.define(() => {
     await count(debugOverlay, 0);
 
     await trigger.click();
-    await page.mouse.click(899, 450);
+    await page.locator(".shell-nav-backdrop").click();
     await visible(dialog, false);
     await expectFocused(trigger);
 
@@ -750,11 +806,13 @@ suite.define(() => {
       await toast.waitFor();
       await expect.poll(() => toast.textContent()).toContain("Codex hidden");
       const drawerToastGeometry = await host.evaluate((node) => {
-        const toastElement = node.querySelector<HTMLElement>(".app-toast");
+        // Toasts stack inside a fixed lane container; that container owns placement.
+        let lane = node.querySelector<HTMLElement>(".app-toast");
+        while (lane && getComputedStyle(lane).position !== "fixed") {
+          lane = lane.parentElement;
+        }
         return {
-          computedTop: toastElement
-            ? Math.round(Number.parseFloat(getComputedStyle(toastElement).top))
-            : null,
+          computedTop: lane ? Math.round(Number.parseFloat(getComputedStyle(lane).top)) : null,
           placement: node.dataset.toastPlacement,
         };
       });

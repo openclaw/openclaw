@@ -5,7 +5,6 @@ import type {
 import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { createAssistantReasoningMessage } from "./event-projector-assistant-message.js";
 import type { CodexAssistantProjection } from "./event-projector-assistant.js";
 import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -15,7 +14,7 @@ export function buildCodexMessagesSnapshot(params: {
   runParams: EmbeddedRunAttemptParams;
   turnId: string;
   upstreamUserText: string | undefined;
-  reasoningText: string | undefined;
+  reasoningMessages: readonly AssistantMessage[];
   asyncMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   commentaryMessages: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
   assistantMessages?: ReadonlyArray<{ itemId: string; message: AssistantMessage }>;
@@ -35,6 +34,7 @@ export function buildCodexMessagesSnapshot(params: {
     attachCodexMirrorIdentity(message, `${params.turnId}:async:${itemId}`),
   );
   const visibleWorkMessages = [
+    ...params.reasoningMessages,
     ...commentaryMessages,
     ...asyncMessages,
     ...(params.assistantMessages ?? []).map(({ itemId, message }) =>
@@ -47,14 +47,6 @@ export function buildCodexMessagesSnapshot(params: {
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
   );
   messages.push(...visibleWorkMessages);
-  if (params.reasoningText) {
-    messages.push(
-      attachCodexMirrorIdentity(
-        createAssistantReasoningMessage(params.runParams, params.reasoningText),
-        `${params.turnId}:reasoning`,
-      ),
-    );
-  }
   if (params.lastAssistant) {
     const assistant = applyCodexTranscriptTaint(params.lastAssistant, {
       tainted: params.turnTainted === true,
@@ -76,6 +68,7 @@ export function buildCodexSteeringMessagesSnapshot(params: {
   turnId: string;
   upstreamUserText: string | undefined;
   completedItemIds: ReadonlySet<string>;
+  reasoningMessages: readonly AssistantMessage[];
   assistantProjection: CodexAssistantProjection;
   toolMessages: readonly AgentMessage[];
 }): AgentMessage[] {
@@ -93,7 +86,7 @@ export function buildCodexSteeringMessagesSnapshot(params: {
     runParams: params.runParams,
     turnId: params.turnId,
     upstreamUserText: params.upstreamUserText,
-    reasoningText: undefined,
+    reasoningMessages: params.reasoningMessages,
     asyncMessages,
     commentaryMessages,
     assistantMessages,

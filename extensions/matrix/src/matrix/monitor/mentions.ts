@@ -13,12 +13,95 @@ function decodeVisibleHtmlEntities(value: string): string {
   });
 }
 
+/**
+ * Replaces each `<[^>]+>` with a space. No tag can end after the last `>`, so the
+ * regex only runs on that prefix and an unterminated `<` run stays linear.
+ */
+function stripHtmlTags(value: string): string {
+  const end = value.lastIndexOf(">") + 1;
+  return value.slice(0, end).replace(/<[^>]+>/g, " ") + value.slice(end);
+}
+
+/**
+ * `href` and label of each anchor, matching the captures of
+ * `/<a\b[^>]*href=(["'])(https:\/\/matrix\.to\/#[^"']+)\1[^>]*>(.*?)<\/a>/gis`: the last
+ * usable `href=` inside the opening tag wins, the quoted value may contain `>`, and the
+ * label ends at the first `</a>`. Each `<a` start is resolved from precomputed next-`>`,
+ * next-quote and next-`</a>` positions plus a forward-only candidate cursor, so the scan
+ * is linear in the length of sender-controlled HTML.
+ */
+function* matrixToAnchors(html: string): Generator<{ href: string; label: string }> {
+  const length = html.length;
+  const nextGt = new Int32Array(length + 1).fill(length);
+  const nextQuote = new Int32Array(length + 1).fill(length);
+  for (let index = length - 1; index >= 0; index -= 1) {
+    const char = html[index];
+    nextGt[index] = char === ">" ? index : nextGt[index + 1]!;
+    nextQuote[index] = char === '"' || char === "'" ? index : nextQuote[index + 1]!;
+  }
+  const closes = Array.from(html.matchAll(/<\/a>/gi), (match) => match.index);
+  let nextClose = 0;
+  // A usable href needs a non-empty value, its own closing quote, a later `>` and a
+  // `</a>` after that `>`, whichever `<a` it ends up inside.
+  const candidates: Array<{ start: number; href: string; labelStart: number; labelEnd: number }> =
+    [];
+  for (const match of html.matchAll(/href=(["'])https:\/\/matrix\.to\/#/gi)) {
+    const valueStart = match.index + "href=".length + 1;
+    const restStart = match.index + match[0].length;
+    const valueEnd = nextQuote[restStart]!;
+    if (valueEnd === restStart || valueEnd === length || html[valueEnd] !== match[1]) {
+      continue;
+    }
+    const tagEnd = nextGt[valueEnd + 1]!;
+    if (tagEnd === length) {
+      continue;
+    }
+    while (nextClose < closes.length && closes[nextClose]! <= tagEnd) {
+      nextClose += 1;
+    }
+    if (nextClose === closes.length) {
+      // Later candidates end their tags no earlier, so none of them can close either.
+      break;
+    }
+    candidates.push({
+      start: match.index,
+      href: html.slice(valueStart, valueEnd),
+      labelStart: tagEnd + 1,
+      labelEnd: closes[nextClose]!,
+    });
+  }
+  let resumeAt = 0;
+  // Count of candidates starting at or before the current tag's last usable index. That
+  // index never decreases from one `<a` to the next, so the cursor only moves forward.
+  let candidatesBefore = 0;
+  for (const open of html.matchAll(/<a\b/gi)) {
+    if (open.index < resumeAt) {
+      continue;
+    }
+    // `[^>]*` before `href=`: any characters except `>`.
+    const firstStart = open.index + open[0].length;
+    const lastStart = nextGt[firstStart]! - 1;
+    while (
+      candidatesBefore < candidates.length &&
+      candidates[candidatesBefore]!.start <= lastStart
+    ) {
+      candidatesBefore += 1;
+    }
+    const candidate = candidates[candidatesBefore - 1];
+    if (candidate && candidate.start >= firstStart) {
+      yield {
+        href: candidate.href,
+        label: html.slice(candidate.labelStart, candidate.labelEnd),
+      };
+      resumeAt = candidate.labelEnd + "</a>".length;
+    }
+  }
+}
+
 function extractVisibleMentionText(value?: string): string {
   return normalizeLowercaseStringOrEmpty(
     decodeVisibleHtmlEntities(
-      (value ?? "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
+      stripHtmlTags(value ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
     ).replace(/\s+/g, " "),
   );
 }
@@ -148,14 +231,7 @@ export function resolveMentions(params: {
     if (!formattedBody || !userId) {
       return false;
     }
-    const anchorPattern =
-      /<a\b[^>]*href=(["'])(https:\/\/matrix\.to\/#[^"']+)\1[^>]*>(.*?)<\/a>/gis;
-    for (const match of formattedBody.matchAll(anchorPattern)) {
-      const href = match[2];
-      const visibleLabel = match[3] ?? "";
-      if (!href) {
-        continue;
-      }
+    for (const { href, label: visibleLabel } of matrixToAnchors(formattedBody)) {
       try {
         const parsed = new URL(href);
         const fragmentTarget = decodeURIComponent(parsed.hash.replace(/^#\/?/, "").trim());

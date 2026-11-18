@@ -6,13 +6,14 @@ import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harn
 import { prepareAgentWorkspaceAttachments } from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import {
+  activatePluginForTest,
   loadUserTurnTranscriptRecorderFactoryForTest,
   createMockPluginRegistry,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
 import {
   createAttemptParams,
@@ -70,7 +71,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     resolveAgentHarnessBeforePromptBuildResult: resolvePromptMock,
     prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
     prepareWatchedSessionsHarnessContext: watchedSessionsContextMock,
-    embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
+    embeddedAgentLog: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
     clearActiveEmbeddedRun: vi.fn(),
@@ -254,11 +255,13 @@ it("keeps ordinary context but grants no Gateway tool authority when forwarding 
   );
 });
 
-it("continues without transcript access when no prompt hook needs history", async () => {
+it("does not create an empty native conversation when prior history cannot be loaded", async () => {
   const fixture = await createFixture();
-  openModelContextAsyncMock.mockRejectedValue(new Error("History is unavailable"));
-  await fixture.run();
-  expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
+  const error = new Error("History is unavailable");
+  openModelContextAsyncMock.mockRejectedValue(error);
+  await expect(fixture.run()).rejects.toBe(error);
+  expect(fixture.requests).toEqual([]);
+  expect(promptFixture.turnInputs).toEqual([]);
 });
 
 it.each([
@@ -404,6 +407,13 @@ it("routes workspace memory through callable Gateway memory tools and plugin gui
 });
 
 it("includes shared policies for the admitted Gateway tools in the initial instructions", async () => {
+  // The skill-workshop plugin's tool registers the Workshop prompt section.
+  onTestFinished(
+    await activatePluginForTest({
+      config: { plugins: { enabled: true, allow: ["skill-workshop"] } },
+      pluginId: "skill-workshop",
+    }),
+  );
   const fixture = await createFixture({
     sessionKey: "agent:main:main",
     gitCoauthorPrompt: "Fixture Git co-authors: Example <example@example.test>.",
@@ -419,6 +429,8 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   await fixture.run();
   const instructions = fixture.requests[0]?.agent.instructions;
   expect(instructions).toContain("## UI Presentation");
+  expect(instructions).toContain("Permission blocks:");
+  expect(instructions).toContain("Omit unverified remediation advice");
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
   expect(instructions).toContain("Use or store credentials the user supplies as requested");

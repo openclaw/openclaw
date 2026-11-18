@@ -13,6 +13,7 @@ import {
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
@@ -78,7 +79,7 @@ function companionTargetIsVisible(
   client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
   prepared: {
-    target: Pick<SessionSharingTarget, "storeKey" | "entry"> | null;
+    target: SessionSharingTarget | null;
     membership: ReadonlySet<string>;
     profiles?: PreparedSessionSharingProfiles;
   },
@@ -89,7 +90,7 @@ function companionTargetIsVisible(
   const cfg = context.getRuntimeConfig();
   const sharingTarget = prepared.target;
   if (!sharingTarget) {
-    return cfg.gateway?.roles === undefined;
+    return !isNamedOperatorRoleEnforcementEnabled(cfg);
   }
   const sharing = prepareProjectedSessionSharing({
     client,
@@ -97,7 +98,7 @@ function companionTargetIsVisible(
     profiles: prepared.profiles,
     isMember: (_target, id) => prepared.membership.has(id),
   });
-  return sharing.entryFilter?.(sharingTarget.storeKey, sharingTarget.entry) !== false;
+  return sharing.canReadTarget(sharingTarget);
 }
 
 export const sessionCompanionHandlers: GatewayRequestHandlers = {
@@ -178,6 +179,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       try {
         const profiles = await prepareSessionSharingProfiles(client);
         let readSharingFacts: () => PreparedSessionMutationFacts;
+        let followRegistration: Parameters<typeof companion.ask>[0]["followRegistration"];
         if (actorFacts) {
           readSharingFacts = actorFacts.readCurrent;
         } else {
@@ -187,6 +189,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
             allowMissing: true,
           });
           releaseSharing = preparedFacts.release;
+          followRegistration = preparedFacts.followRegistration;
           readSharingFacts = () => preparedFacts.readCurrent(context.getRuntimeConfig());
         }
         const initialSharingFacts = readSharingFacts();
@@ -311,6 +314,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           connId,
           ownerId: resolveSessionCompanionOwnerId(client),
           assertSourceCurrent,
+          followRegistration,
           ...(assertInputCurrent ? { assertInputCurrent } : {}),
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
           ...(signal ? { signal } : {}),

@@ -9,11 +9,8 @@ import {
   type ProviderModelRouteMaterializationAuthMode,
 } from "../provider-model-route-auth.js";
 import { materializePreparedRuntimeModel, type RuntimeRouteModel } from "./materialize-model.js";
-import {
-  agentRuntimeAuthPlanMatchesTarget,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "./prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "./types.js";
+import { agentRuntimeAuthPlanMatchesTarget } from "./prepare-auth.js";
+import type { PreparedAgentRuntimeAuthAttempt, AgentRuntimeAuthPlan } from "./types.js";
 
 export function providerUsesCredentialScopedModelMetadata(params: {
   provider: string;

@@ -42,7 +42,7 @@ import { copyChannelParticipantAdmissionEvidence } from "../message-access/admis
 import { resolveMessageReceiptPrimaryId } from "../message/receipt.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import { recordInboundSession } from "../session.js";
-import { bindChannelDeliveryOwner } from "./delivery-owner.js";
+import { bindChannelDeliveryOwner, bindChannelReplyOptionsOwner } from "./delivery-owner.js";
 import {
   createSuppressedChannelDeliveryResult,
   isChannelPartialDeliveryError,
@@ -144,9 +144,10 @@ function resolveAssembledReplyPipeline(
   params: AssembledChannelTurn | RoutedAssembledChannelTurn,
 ): Pick<AssembledChannelTurn, "dispatcherOptions" | "replyOptions"> {
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
+  const channelReplyOptions = bindChannelReplyOptionsOwner(params.replyOptions);
   let replyOptions = adoption
-    ? { ...params.replyOptions, turnAdoptionLifecycle: adoption }
-    : params.replyOptions;
+    ? { ...channelReplyOptions, turnAdoptionLifecycle: adoption }
+    : channelReplyOptions;
   if (params.routeSessionKey !== params.ctxPayload.SessionKey) {
     replyOptions = withReplySystemEventContext(replyOptions ?? {}, {
       sessionKey: params.routeSessionKey,
@@ -550,7 +551,10 @@ async function dispatchChannelTurnWithDeliveryOwner(
           const custody = await createDirectPendingFinalCustody(effectivePayload, params.storePath);
           releaseCustody = custody?.release;
           await custody?.onPlatformSendDispatch();
-          result = await operation.deliver(effectiveValue, toCoreManagedDeliveryInfo(info));
+          result = await operation.deliver(
+            effectiveValue,
+            toCoreManagedDeliveryInfo(info, effectivePayload),
+          );
         }
       }
     } catch (error: unknown) {

@@ -57,7 +57,7 @@ it.each(["loading", "open"] as const)(
       mounted.getByRole<HTMLButtonElement>("button", { name: "Update Gateway…" });
     const confirmButton = () =>
       document.body.querySelector<HTMLButtonElement>(
-        "openclaw-modal-dialog .exec-approval-actions .btn.danger",
+        "openclaw-modal-dialog openclaw-modal-actions .btn.danger",
       );
     const updateCalls = (calls: typeof requestA.mock.calls) =>
       calls.filter(([method]) => method === "update.run");

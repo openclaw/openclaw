@@ -42,6 +42,8 @@ let firstInputUuid;
 let injectedContext;
 let injectedRerunContext;
 const priorResponses = {};
+const limitResponses = {};
+const hostFrames = [];
 let credentialProof;
 let shutdownDescendant;
 if (scenario === "shutdown-ignore" || scenario === "shutdown-eof") {
@@ -88,7 +90,7 @@ const stoppedFinalPreToolUse = (id, name, input) => preTool(id, name, input, id 
   cwd: process.cwd(), tool_use_id: id + "-tool",
 });
 const result = (detail = {}) => nativeResult(
-  JSON.stringify({ pid: process.pid, turn, user, synthetic, privateContext, injectedRerunContext, initialize, argv: process.argv.slice(2), ...detail }), {
+  JSON.stringify({ pid: process.pid, turn, user, synthetic, privateContext, injectedRerunContext, initialize, hostFrames, argv: process.argv.slice(2), ...detail }), {
   ...(detail.injectedContext ? { user_message_uuid: pendingInputUuid } : {}),
   ...((!replayReceipts || scenario === "background-bash-overlap") && detail.finalBackgroundAnswer ? {
     origin: { kind: "task-notification", producer: "session-task" }, num_turns: 1, stop_reason: "end_turn",
@@ -96,6 +98,7 @@ const result = (detail = {}) => nativeResult(
 });
 for await (const line of createInterface({ input: process.stdin })) {
   const message = JSON.parse(line);
+  hostFrames.push(message.type === "control_request" ? message.type + ":" + message.request.subtype : message.type);
   if (message.type === "control_request" && message.request.subtype === "initialize") {
     initialize = message.request;
     hooks = initialize.hooks;
@@ -114,6 +117,11 @@ for await (const line of createInterface({ input: process.stdin })) {
     user = message.message.content;
     synthetic = message.isSynthetic === true;
     writeFileSync("user.received", user);
+    if (turn === 1 && process.env.CLAUDE_FIXTURE_MCP_SERVERS) system("init", { mcp_servers: JSON.parse(process.env.CLAUDE_FIXTURE_MCP_SERVERS) });
+    if (scenario === "revoked-prompt") {
+      ready("prompt.ready");
+      while (!existsSync("prompt.release")) await delay(5);
+    }
     if ((capturedStopped || backgroundAgent) && turn > 1) {
       result();
       continue;
@@ -323,6 +331,14 @@ for await (const line of createInterface({ input: process.stdin })) {
       });
       continue;
     }
+    if (scenario === "hook-context-limit") {
+      // Claude Code runs every registered prompt hook and caps each additionalContext string.
+      for (const [index, callback_id] of hooks.UserPromptSubmit[0].hookCallbackIds.entries()) {
+        request("limit-" + index, { subtype: "hook_callback", callback_id,
+          input: { hook_event_name: "UserPromptSubmit", prompt: user } });
+      }
+      continue;
+    }
     if (scenario === "large-split-record") {
       const record = JSON.stringify({ type: "assistant", message: { role: "assistant",
         content: [{ type: "text", text: "🦞" + "x".repeat(300_000) + "🦞" }] } });
@@ -447,6 +463,23 @@ for await (const line of createInterface({ input: process.stdin })) {
       if (Object.keys(priorResponses).length === 3) {
         lifecycle("started", pendingInputUuid);
         result({ matchedInputUuid: pendingInputUuid, priorResponses });
+      }
+    } else if (id.startsWith("limit-")) {
+      limitResponses[id] = response.hookSpecificOutput?.additionalContext;
+      const callbackCount = hooks.UserPromptSubmit[0].hookCallbackIds.length;
+      if (Object.keys(limitResponses).length === callbackCount) {
+        const hookContexts = [...Array(callbackCount).keys()]
+          .map((index) => limitResponses["limit-" + index])
+          .filter((value) => value !== undefined);
+        // Native caps values, sanitizes reminder tags, then renders hook-named reminders.
+        const modelContext = hookContexts.map((value) => {
+          const capped = value.length > 10000
+            ? "Output too large. Full output saved to: tool-results/additionalContext.txt\n" + value.slice(0, 2000)
+            : value;
+          const sanitized = capped.replaceAll(/<(?=\s*(?:\/\s*)?system-reminder\b)/gi, "&lt;").replace(/<(?=\s*(?:\/\s*)?$)/, "&lt;");
+          return "<system-reminder>\nUserPromptSubmit hook additional context: " + sanitized + "\n</system-reminder>";
+        }).join("\n");
+        result({ hookContexts, modelContext });
       }
     } else if (id === "late-approval") {
       lateDecision = response;

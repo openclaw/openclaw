@@ -1,17 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { readClawManifestFile } from "../claws/reader.js";
+import { readTemplateManifestFile } from "../templates/reader.js";
 import { listAgentRoles, loadAgentRole, loadAgentTeamPreset } from "./agent-roles.js";
 
 describe("bundled agent roles", () => {
-  it("parses every preset role through the real Claw reader and schema", async () => {
+  it("parses every preset role through the real Template reader and schema", async () => {
     const preset = await loadAgentTeamPreset();
     const roles = new Set([preset.coordinator.role, ...preset.specialists.map(({ role }) => role)]);
     expect(roles).toEqual(new Set(listAgentRoles()));
     for (const role of roles) {
       const source = path.resolve("docs/reference/templates/roles", role, "CLAW.md");
-      const read = await readClawManifestFile(source);
+      const read = await readTemplateManifestFile(source);
       expect(read).toMatchObject({ ok: true, manifest: { agent: { id: role } } });
     }
   });

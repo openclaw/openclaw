@@ -232,7 +232,13 @@ export const operatorContext = (
 /** Pinned access for direct storage calls, from a feature context. */
 export function accessFor(context: unknown, write = false, operatorAgent = "main"): VaultAccess {
   const pinned = pinPrincipal(
-    featurePrincipal(context as Parameters<typeof featurePrincipal>[0], true, write, operatorAgent),
+    featurePrincipal(
+      context as Parameters<typeof featurePrincipal>[0],
+      true,
+      write,
+      operatorAgent,
+      () => undefined,
+    ),
   );
   return { ...pinned.principal, assertCurrent: () => pinned.assertSame() };
 }
@@ -283,9 +289,9 @@ export function childEvalArgs(source: string): string[] {
       loader.push(arg, value);
     }
   });
-  const hooks = `import { registerHooks } from "node:module";
+  const hooks = `import nodeModule from "node:module";
     const sdk = ${JSON.stringify(sdkUrls())};
-    registerHooks({ resolve(specifier, context, next) {
+    nodeModule.registerHooks({ resolve(specifier, context, next) {
       const url = sdk[specifier];
       return url ? { url, shortCircuit: true } : next(specifier, context);
     } });`;

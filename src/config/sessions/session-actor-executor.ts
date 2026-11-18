@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
   SessionActor,
   SessionActorAuthority,
@@ -54,7 +54,7 @@ export function createSessionActorWithExecutor(params: {
   lifetime: SessionActorLifetime;
   createExecutor(guards: SessionActorExecutorGuards): SessionActorExecutor;
 }): SessionActor {
-  const target = freezeJsonSnapshot(structuredClone(params.target));
+  const target = freezeTrustedJsonSnapshot(structuredClone(params.target));
   const accepted = new Set<Promise<unknown>>();
   let closing = false;
   let release: Promise<void> | undefined;
@@ -184,8 +184,6 @@ export function createSessionActorWithExecutor(params: {
       command("appendTranscriptEvent", input, authority, observer, phase),
     completeTurn: (input, authority, observer) =>
       command("completeTurn", input, authority, observer, phase),
-    deliveryPending: (input, authority, observer) =>
-      command("deliveryPending", input, authority, observer, phase),
     deliverySettled: (input, authority, observer) =>
       command("deliverySettled", input, authority, observer, phase),
     patch: (input, authority, observer) => command("patch", input, authority, observer, phase),

@@ -23,6 +23,7 @@ import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardSessionsBoardService } from "./sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./store-lifecycle.js";
+import { assertSupportedMetadataKeys } from "./store-metadata-keys.js";
 import { WorkboardCardConflictError, WorkboardStore } from "./store.js";
 import {
   assertWorkboardWorkspaceMutationAccess,
@@ -334,7 +335,7 @@ export function registerWorkboardGatewayMethods(params: {
     if (CLI_OWNER_METHODS.has(method)) {
       api.registerGatewayMethod(
         `${method}.owner`,
-        (request) => {
+        async (request) => {
           if (
             typeof request.params?.expectedOwnerId !== "string" ||
             !request.params.expectedOwnerId.trim()
@@ -346,7 +347,7 @@ export function registerWorkboardGatewayMethods(params: {
             });
             return;
           }
-          return requestHandler(request);
+          await requestHandler(request);
         },
         { scope },
       );
@@ -449,6 +450,7 @@ export function registerWorkboardGatewayMethods(params: {
   for (const method of ["create", "captureSession"] as const) {
     register(`workboard.cards.${method}`, WRITE_SCOPE, async (request) => {
       const prepared = await prepareWorkspaceInput(request, request.params, "create");
+      assertSupportedMetadataKeys(prepared.metadata);
       return redactCardResult(
         method === "create"
           ? store.create(prepared, undefined, request.sessionMutationCommitGuard)
@@ -458,6 +460,7 @@ export function registerWorkboardGatewayMethods(params: {
   }
   register("workboard.cards.update", WRITE_SCOPE, async (request) => {
     const patch = await prepareWorkspaceInput(request, readPatch(request.params), "patch");
+    assertSupportedMetadataKeys(patch.metadata);
     const expectedUpdatedAt = readExpectedUpdatedAt(request.params);
     return redactCardResult(store.update(readId(request.params), patch, { expectedUpdatedAt }));
   });

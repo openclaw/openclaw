@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { chatSessionListResponse, waitForTranscriptScrollIdle } from "./chat-flow.test-support.ts";
 import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -135,6 +135,7 @@ suite.define(() => {
                   text: JSON.stringify({
                     completed: children.map((child, index) => ({
                       runId: child.sessionId,
+                      sessionKey: child.key,
                       status: viewport.failure && index === viewport.count - 1 ? "timeout" : "done",
                       result:
                         viewport.failure && index === viewport.count - 1
@@ -174,37 +175,45 @@ suite.define(() => {
         await gateway.setMethodResponse("sessions.list", chatSessionListResponse([retiredParent]));
         await page.reload();
         await pane.getByText("Now look at the next change.", { exact: true }).waitFor();
-        // Opening the turn disclosure mounts its nested raw tool disclosure.
+        // Open retained work, then any aggregates; standalone launches need no second group.
         await pane.locator(".chat-work-group .chat-activity-group__summary").click();
         const closedGroups = pane.locator(
           '.chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary[aria-expanded="false"]',
         );
-        await closedGroups.first().waitFor();
         while (await closedGroups.count()) {
           await closedGroups.first().click();
         }
+        // Launches share one lifecycle row; the hidden wait becomes a row per outcome.
         const tools = pane.locator(".chat-tool-msg-summary");
-        await expect.poll(() => tools.count()).toBe(viewport.count + 1);
-        await tools.first().click();
+        await expect.poll(() => tools.count()).toBe(2);
+        await tools
+          .first()
+          .locator(".chat-tool-row__toggle")
+          .click({ position: { x: 4, y: 4 } });
+        if (viewport.count > 1) {
+          // The shared row opens to one row per launch; each keeps its own receipt.
+          await tools
+            .nth(1)
+            .locator(".chat-tool-row__toggle")
+            .click({ position: { x: 4, y: 4 } });
+        }
         const launchResult = pane.locator(".chat-tool-msg-body").first();
         await expect.poll(() => launchResult.textContent()).toContain("accepted");
         expect(await launchResult.textContent()).toContain(children[0]!.key);
-        await tools.last().click();
-        const collectorResult = pane.locator(".chat-tool-msg-body").last();
-        await expect
-          .poll(() => collectorResult.textContent())
-          .toContain(
-            viewport.failure
-              ? "Review timed out before completion."
-              : "Review completed without findings.",
-          );
-        expect(await collectorResult.textContent()).toContain(
-          viewport.failure ? "timeout" : "done",
+        expect(await tools.last().textContent()).toContain(
+          viewport.failure ? "An agent timed out" : `${viewport.count} agents finished`,
         );
         expect(await pane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
-        expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(0);
+        expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
         // The retained tool stays with the completed request, before the next user turn.
         const next = pane.getByText("Now look at the next change.", { exact: true });
+        // Expanded results can push the next turn past the mounted transcript window on a phone.
+        const thread = pane.locator(".chat-thread");
+        await waitForTranscriptScrollIdle(thread);
+        await thread.hover({ position: { x: 16, y: 16 } });
+        await page.mouse.wheel(0, await thread.evaluate((element) => element.scrollHeight));
+        await waitForTranscriptScrollIdle(thread);
+        await next.waitFor();
         const collectorBounds = await tools.last().boundingBox();
         const nextBounds = await next.boundingBox();
         expect(collectorBounds).not.toBeNull();

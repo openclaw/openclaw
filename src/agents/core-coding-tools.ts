@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
+import { canAccess } from "../infra/path-existence.js";
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import {
@@ -114,7 +114,7 @@ function wrapWorkspaceSkillRead(
       const physicalMatch =
         physicalMatches.length === 1 &&
         physicalPath &&
-        !fs.existsSync(physicalPath) &&
+        !(await canAccess(physicalPath)) &&
         !localSkills.some(
           (candidate) => relativePathInsideSandboxRoot(candidate.baseDir, physicalPath) !== null,
         )
@@ -219,19 +219,20 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
   const hostReadRoots = [
     ...(skillReadRoots ?? []),
-    ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
+    ...(attachmentReadRoot ? [attachmentReadRoot] : []),
   ];
   const needsReadOnlyWorkspaceSkillMounts =
     options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
     sandbox && needsReadOnlyWorkspaceSkillMounts
-      ? resolveReadOnlyWorkspaceSkillMounts({
+      ? (sandbox.fsPreparation?.readOnlyWorkspaceSkillMounts ??
+        resolveReadOnlyWorkspaceSkillMounts({
           workspaceDir: sandbox.workspaceDir,
           agentWorkspaceDir: sandbox.agentWorkspaceDir,
           skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
           workdir: sandbox.containerWorkdir,
           workspaceAccess: sandbox.workspaceAccess,
-        })
+        }))
       : [];
 
   // Older external SDK bridges predate pathMappings. Only absence selects
@@ -268,6 +269,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 resolutionCwd: options.codingRoot,
+                containmentSource: options.applyPatchContainmentSource,
                 normalizeGuardedPathParams: true,
                 allowLinkedWorktrees: tool.name !== "ls",
               },
@@ -341,6 +343,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
+                containmentSource: options.applyPatchContainmentSource,
                 allowLinkedWorktrees: true,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,

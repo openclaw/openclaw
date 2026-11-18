@@ -39,7 +39,7 @@ const failure = (key: string, error: unknown) => ({ ok: false, key, error });
 const expectOutcomes = (respond: ReturnType<typeof vi.fn>, outcomes: unknown[]) =>
   expect(respond.mock.calls[0]).toEqual([true, { outcomes }, undefined]);
 
-async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
+async function checkAliasConflict(batch: boolean, signal: AbortSignal, requestCanonical = false) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const prefix = batch ? "session-alias-race" : "session-single-alias-race";
     const siblings = batch ? ["agent:main:alias-race-before", "agent:main:alias-race-after"] : [];
@@ -50,6 +50,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     setRuntimeConfigSnapshot(cfg);
     const canonicalKey = "agent:main:work";
     const conflictingAlias = "agent:main:main";
+    const requestedKey = requestCanonical ? canonicalKey : conflictingAlias;
     await seedEntry(canonicalKey, `${prefix}-canonical`);
     for (const [index, sessionKey] of siblings.entries()) {
       await seedEntry(sessionKey, `session-alias-race-sibling-${index}`);
@@ -99,7 +100,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     const request = sessionMutationHandlers[batch ? "sessions.patchMany" : "sessions.patch"]!({
       params: batch
         ? {
-            targets: [{ key: siblings[0]! }, { key: conflictingAlias }, { key: siblings[1]! }],
+            targets: [{ key: siblings[0]! }, { key: requestedKey }, { key: siblings[1]! }],
             patch: { unread: false },
           }
         : { key: conflictingAlias, pinned: true },
@@ -124,7 +125,7 @@ async function checkAliasConflict(batch: boolean, signal: AbortSignal) {
     if (batch) {
       expectOutcomes(respond, [
         { ok: true, key: siblings[0] },
-        { ok: false, key: conflictingAlias, error: unavailableError },
+        { ok: false, key: requestedKey, error: unavailableError },
         { ok: true, key: siblings[1] },
       ]);
     } else {
@@ -271,11 +272,12 @@ describe("sessions.patchMany orchestration", () => {
     });
   });
 
-  it("rejects an alias conflict introduced after preflight without blocking siblings", async ({
-    signal,
-  }) => {
-    await checkAliasConflict(true, signal);
-  });
+  it.for([false, true])(
+    "rejects an alias conflict without blocking siblings (canonical request: %s)",
+    async (requestCanonical, { signal }) => {
+      await checkAliasConflict(true, signal, requestCanonical);
+    },
+  );
 
   it("rejects an alias inserted after single-patch preflight while waiting for the writer", async ({
     signal,

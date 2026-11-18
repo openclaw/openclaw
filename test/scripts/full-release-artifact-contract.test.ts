@@ -340,6 +340,9 @@ globalThis.fetch = async (input, options) => {
   if (url.href === "https://registry.npmjs.org/openclaw") {
     return Response.json({ versions: { "2026.9.8": {} }, "dist-tags": { latest: "2026.9.8", beta: "2026.9.8" } });
   }
+  if (url.href === "https://registry.npmjs.org/openclaw/2026.9.9") {
+    return new Response("{}", { status: 404 });
+  }
   if (url.origin !== "https://api.github.com" || new Headers(options?.headers).get("authorization") !== "Bearer artifact-fixture-token") {
     throw new Error("Unexpected publication fixture transport");
   }
@@ -430,6 +433,11 @@ function registryBudgetFixture(warningCount = 0, validationInputs: Record<string
     releaseProfile,
     rerunGroup: "all",
     resolveTargetResult: "success",
+    npmPreparationResult: "success",
+    npmQualificationResult: "success",
+    pluginNpmPreflightRequired: false,
+    pluginNpmPreparationResult: "skipped",
+    dockerPreparationResult: "success",
   };
   const built = buildReleaseExecutionPlan(inputs);
   const plan = buildPlanArtifact({
@@ -549,8 +557,8 @@ it("separates immutable observation bytes from post-upload admission and ZIP dig
 });
 
 it.each([
-  ["2026-09-13T14:05:00.000Z", true],
-  ["2026-09-13T14:05:00.001Z", false],
+  ["2026-09-13T14:05:01.000Z", true],
+  ["2026-09-13T14:05:01.001Z", false],
   ["2026-09-13T13:59:59.999Z", false],
 ])("checks actual post-upload admission time %s (accepted=%s)", (time, accepted) => {
   const { source, observations, descriptor } = registryEvidence();
@@ -560,6 +568,16 @@ it.each([
   } else {
     expect(finalize).toThrow(/time|freshness/u);
   }
+});
+
+it("keeps collection and post-upload admission in separate bounded windows", () => {
+  const { source, observations, descriptor } = registryEvidence();
+  observations.collectionCompletedAt = "2026-09-13T14:05:00.000Z";
+  const admission = createAdmission(source, observations, descriptor, "2026-09-13T14:10:00.000Z");
+  expect(admission.binding.admittedAt).toBe("2026-09-13T14:10:00.000Z");
+  expect(() =>
+    createAdmission(source, observations, descriptor, "2026-09-13T14:10:00.001Z"),
+  ).toThrow(/freshness/u);
 });
 
 function retainedEvidenceFixture() {
@@ -806,6 +824,36 @@ it("retains distinct root publication history in the actual reused manifest writ
   expect(() => serializeArtifact(current.record)).not.toThrow();
   expect(() => buildManifest({ plan: combined, context })).toThrow(/size limit/u);
   expect(() => assertBudget(combined, context)).toThrow(/size limit/u);
+});
+
+it("budgets compact retry plans with their revalidated root manifest", () => {
+  const { plan, context } = registryBudgetFixture();
+  const current = registryEvidence("123", 132);
+  const root = registryEvidence("99", 132);
+  const compact = {
+    ...plan,
+    ...current.record,
+    evidenceReuse: {
+      changedPaths: [],
+      evidenceSha: root.source.candidateSha,
+      policy: "exact-target-full-validation-v1",
+      requested: true,
+      rootRunId: "99",
+      runUrl: "https://example.invalid/runs/99",
+      selectedRunId: "99",
+      sourceArtifact: {
+        digest: "d".repeat(64),
+        id: "901",
+        name: "full-release-manifest-99-1",
+        runAttempt: 1,
+        sizeInBytes: 4096,
+      },
+      sourceWorkflow: { ref: "release-ci/test", sha: SHA },
+    },
+  };
+
+  expect(() => serializeArtifact(compact)).not.toThrow();
+  expect(() => assertBudget(compact, context, root.record)).toThrow(/size limit/u);
 });
 
 it("reserves JSON escaping of pending bounded fields without truncating later job evidence", () => {

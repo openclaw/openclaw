@@ -1,4 +1,5 @@
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import type {
   ControlUiSessionPullRequestCheckDetails,
   ControlUiSessionPullRequest,
@@ -92,7 +93,7 @@ export async function loadControlUiSessionPullRequestChecks(
   ]);
   let entry = checkDetailsCache.get(key);
   let releaseReader: (() => void) | undefined;
-  if (!entry || entry.expiresAt <= Date.now() || entry.access.signal.aborted) {
+  if (!entry || entry.expiresAt <= monotonicNow() || entry.access.signal.aborted) {
     if (activeCheckDetails >= MAX_CHECK_DETAIL_REQUESTS) {
       return { ...unavailable("CI details are busy; retry shortly"), retryAfterMs: 5_000 };
     }
@@ -110,12 +111,12 @@ export async function loadControlUiSessionPullRequestChecks(
     });
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
-      const deadline = Date.now() + 25_000;
+      const deadline = monotonicNow() + 25_000;
       const signal = AbortSignal.timeout(25_000);
       let requests = 0;
       const request = async (url: string, maxBytes?: number) => {
         transportRead.assertCurrent();
-        if (++requests > 64 || Date.now() > deadline) {
+        if (++requests > 64 || monotonicNow() > deadline) {
           throw new gitHubPublicApi.ControlUiGitHubError(
             502,
             "CI details exceeded the request budget; open the job on GitHub",
@@ -181,7 +182,8 @@ export async function loadControlUiSessionPullRequestChecks(
     };
     pending.promise = load()
       .then((result) => {
-        pending.expiresAt = Date.now() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
+        pending.expiresAt =
+          monotonicNow() + Math.max(CHECK_DETAILS_CACHE_MS, result.retryAfterMs ?? 0);
         return result;
       })
       .finally(() => {
@@ -198,7 +200,7 @@ export async function loadControlUiSessionPullRequestChecks(
       ...result,
       ...(result.retryAfterMs === undefined
         ? {}
-        : { retryAfterMs: Math.max(0, entry.expiresAt - Date.now()) }),
+        : { retryAfterMs: Math.max(0, entry.expiresAt - monotonicNow()) }),
     });
   } finally {
     release();

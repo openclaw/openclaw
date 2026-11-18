@@ -35,7 +35,7 @@ beforeEach(async () => {
   handlers.clear();
   const originalOn = process.on.bind(process);
   vi.spyOn(process, "on").mockImplementation((event, listener) => {
-    if (event === "SIGINT" || event === "SIGTERM") {
+    if (event === "SIGINT" || event === "SIGTERM" || event === "SIGHUP") {
       handlers.set(event, listener as () => void);
       return process;
     }
@@ -46,12 +46,12 @@ beforeEach(async () => {
   diagnostic = vi.spyOn(console, "error").mockImplementation(() => {});
   restore = () => {
     Object.defineProperty(process, "platform", platform);
-    process.exitCode = previousExitCode;
+    process.exitCode = previousExitCode ?? 0;
     vi.restoreAllMocks();
   };
   scheduler = await import("../../scripts/test-docker-all.mts");
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-  process.exitCode = undefined;
+  process.exitCode = 0;
   spawnSyncMock.mockReset();
   child = new EventEmitter() as ChildProcess;
   Object.defineProperty(child, "pid", { value: 42 });
@@ -97,6 +97,20 @@ function start(logFile?: string) {
 }
 
 describe("Docker scheduler Windows child shutdown", () => {
+  it("acknowledges SIGHUP only after observed child completion", async () => {
+    vi.useFakeTimers();
+    const result = start();
+    handlers.get("SIGHUP")!();
+    expect(childKill).toHaveBeenCalledWith("SIGHUP");
+    await vi.advanceTimersByTimeAsync(5);
+    expect(process.exitCode).not.toBe(129);
+    closeChild(child);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await result).toMatchObject({ status: 0, signal: null });
+    expect(process.exitCode).toBe(129);
+    expect(diagnostic).not.toHaveBeenCalled();
+  });
+
   it.each(["observed exit", "still live", "signal failure", "signal after failure"] as const)(
     "requires observed Windows child completion after SIGINT: %s",
     async (completion) => {
@@ -124,7 +138,7 @@ describe("Docker scheduler Windows child shutdown", () => {
       } else {
         await vi.advanceTimersByTimeAsync(1_200);
         if (completion === "signal after failure") {
-          expect(process.exitCode).toBeUndefined();
+          expect(process.exitCode).toBe(0);
           expect(diagnostic).not.toHaveBeenCalled();
           handlers.get("SIGINT")!();
           await vi.advanceTimersByTimeAsync(0);

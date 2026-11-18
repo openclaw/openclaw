@@ -18,6 +18,10 @@ import {
   WorktreeCapacityContentionError,
   WORKTREE_CAPACITY_RESERVATION_SCOPE,
 } from "./capacity.js";
+import {
+  createWorktreeCapacityStatfs,
+  useInProcessWorktreeCapacityTransport,
+} from "./capacity.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const roots = useWorktreeStateRoots();
@@ -162,6 +166,64 @@ it("preserves typed capacity contention across the worker result boundary", asyn
   });
   expect(f.debts()).toEqual([]);
 });
+
+it("settles completed byte debt on refusal without reserving refused increases", async () => {
+  const f = fixture();
+  useInProcessWorktreeCapacityTransport();
+  const GiB = 1024 ** 3;
+  const stats = fs.statfsSync(f.root);
+  let available = 100 * GiB;
+  vi.spyOn(fs, "statfsSync").mockImplementation(() =>
+    createWorktreeCapacityStatfs(stats, available),
+  );
+  await withWorktreeMutationLease({ env: f.env, id: "first" }, async (first) => {
+    await withWorktreeMutationLease({ env: f.env, id: "second" }, async (second) => {
+      await reserve(first, f.root, 1024 ** 2, false);
+      await reserve(second, f.root, 1024 ** 2, false);
+      available = 4 * GiB;
+      await expect(reserve(first, f.root, 0, false)).rejects.toBeInstanceOf(
+        WorktreeCapacityContentionError,
+      );
+      await expect(reserve(second, f.root, 0, false)).resolves.toBeUndefined();
+      await expect(reserve(first, f.root, 1, false)).rejects.toThrow(/disk space/i);
+      await expect(reserve(second, f.root, 0, false)).resolves.toBeUndefined();
+      expect(f.debts()).toHaveLength(2);
+    });
+  });
+  expect(f.debts()).toEqual([]);
+});
+
+it.for(["pending bytes", "stronger reserve"] as const)(
+  "waits on the peer contributing %s instead of an earlier debt-free peer",
+  async (blocking) => {
+    const f = fixture();
+    useInProcessWorktreeCapacityTransport();
+    const GiB = 1024 ** 3;
+    const stats = fs.statfsSync(f.root);
+    let available = 100 * GiB;
+    vi.spyOn(fs, "statfsSync").mockImplementation(() =>
+      createWorktreeCapacityStatfs(stats, available),
+    );
+    await withWorktreeMutationLease({ env: f.env, id: "planning" }, async (planning) => {
+      await reserve(planning, f.root, 0);
+      const [empty] = f.debts();
+      await withWorktreeMutationLease({ env: f.env, id: "blocking" }, async (writer) => {
+        await reserve(writer, f.root, blocking === "pending bytes" ? 1024 ** 2 : 0, false);
+        const held = f.debts().find((row) => row.lease_key !== empty?.lease_key);
+        available = blocking === "pending bytes" ? 4 * GiB : 2 * GiB;
+        await expect(
+          withWorktreeMutationLease({ env: f.env, id: "contender" }, (contender) =>
+            reserve(contender, f.root, 1, blocking === "stronger reserve"),
+          ),
+        ).rejects.toMatchObject({
+          name: WorktreeCapacityContentionError.name,
+          reservationKey: held?.lease_key,
+        });
+      });
+    });
+    expect(f.debts()).toEqual([]);
+  },
+);
 
 it.each([true, false])(
   "reclaims an exited disk reservation only with its recorded namespace (namespace: %s)",

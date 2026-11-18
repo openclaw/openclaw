@@ -1,5 +1,4 @@
 import {
-  isMissingEmbeddingApiKeyError,
   mapBatchEmbeddingsByIndex,
   sanitizeEmbeddingCacheHeaders,
 } from "openclaw/plugin-sdk/embedding-provider-adapter";
@@ -26,8 +25,6 @@ export const voyageMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
   transport: "remote",
   authProviderId: "voyage",
   autoSelectPriority: 40,
-  allowExplicitWhenConfiguredAuto: true,
-  shouldContinueAutoSelection: isMissingEmbeddingApiKeyError,
   create: async (options) => {
     const preparedOptions: MemoryEmbeddingProviderCreateOptions = {
       ...options,

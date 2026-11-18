@@ -21,6 +21,7 @@ const readFile = vi.mocked(fs.readFile);
 const executor = vi.mocked(prepareHostedStopExecutor);
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 let cgroup = "/system.slice/openclaw-test.service";
+let subgroup = "";
 const executorPid = 4321;
 const execute = vi.fn<Awaited<ReturnType<typeof prepareHostedStopExecutor>>["execute"]>();
 const dispose = vi.fn<() => Promise<void>>();
@@ -55,17 +56,18 @@ beforeEach(() => {
   dispose.mockResolvedValue(undefined);
   processOwner.supervisor = "systemd";
   cgroup = "/system.slice/openclaw-test.service";
+  subgroup = "";
   vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", undefined);
   vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.test");
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
   systemctl.mockImplementation(async () => identityResult());
-  readFile.mockImplementation(async () => `0::${cgroup}\n`);
+  readFile.mockImplementation(async () => `0::${cgroup}${subgroup}\n`);
   executor.mockImplementation(async (params) => {
     const scope = params.scopeArgs?.find((arg) => arg.startsWith("--unit="))?.slice(7);
     readFile.mockImplementation(async (file) =>
       file === `/proc/${executorPid}/cgroup`
         ? `0::${cgroup.slice(0, cgroup.lastIndexOf("/"))}/${scope}\n`
-        : `0::${cgroup}\n`,
+        : `0::${cgroup}${subgroup}\n`,
     );
     await params.verifyPlacement?.(executorPid);
     return { execute, dispose };
@@ -109,10 +111,11 @@ async function expectScopeStop(scope: "--user" | "--system") {
   await stop.dispose();
 }
 
-it.skipIf(typeof process.getuid !== "function")(
-  "keeps a user service on its exact user manager",
-  async () => {
+it.skipIf(typeof process.getuid !== "function").each(["", "/gateway"])(
+  "keeps a user service with subgroup %s on its exact user manager",
+  async (leaf) => {
     cgroup = `/user.slice/user-${process.getuid!()}.slice/user@${process.getuid!()}.service/app.slice/openclaw-test.service`;
+    subgroup = leaf;
     await expectScopeStop("--user");
   },
 );
@@ -132,6 +135,32 @@ it.each([
   await stop.dispose();
 });
 it("acknowledges system stop only at execution", () => expectScopeStop("--system"));
+
+it("stops the owning system service from its delegated Gateway leaf", async () => {
+  subgroup = "/gateway";
+  await expectScopeStop("--system");
+});
+
+it.each(["/agent-exec", "/other", "/other/gateway"])(
+  "does not grant service stop to the %s subgroup",
+  async (leaf) => {
+    subgroup = leaf;
+    await expect(prepare()).rejects.toThrow("not the main process");
+    expect(executor).not.toHaveBeenCalled();
+  },
+);
+
+it("requires the stop executor to leave the entire delegated service", async () => {
+  subgroup = "/gateway";
+  executor.mockImplementationOnce(async (params) => {
+    const scope = params.scopeArgs!.find((arg) => arg.startsWith("--unit="))!.slice(7);
+    readFile.mockResolvedValue(`0::${cgroup}/agent-exec/${scope}\n`);
+    await params.verifyPlacement!(executorPid);
+    return { execute, dispose };
+  });
+  await expect(prepare()).rejects.toThrow("did not leave the Gateway service cgroup");
+  expect(execute).not.toHaveBeenCalled();
+});
 
 it.each([
   ["Id", "other.service"],

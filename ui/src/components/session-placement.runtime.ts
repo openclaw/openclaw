@@ -107,9 +107,10 @@ export async function changeSessionPlacement(params: {
   try {
     if (abandonSource) {
       const confirmed = await showConfirmDialog({
-        message: t("sessionsView.continueOnGatewayConfirm", {
+        title: t("sessionsView.continueOnGatewayTitle", {
           session: params.row.label || params.row.key,
         }),
+        message: t("sessionsView.continueOnGatewayConfirm"),
         confirmLabel: t("sessionsView.continueOnGatewayAction"),
         danger: true,
       });
@@ -198,9 +199,11 @@ export async function changeSessionPlacement(params: {
         loadCatalog: async () => {
           const catalog = await requestPlaceCatalog(client, runtime?.id);
           return {
-            profiles: hasOperatorAdminAccess(selectedGatewaySnapshot.hello?.auth ?? null)
-              ? catalog.profiles
-              : [],
+            profiles:
+              selectionMode !== "move" ||
+              hasOperatorAdminAccess(selectedGatewaySnapshot.hello?.auth ?? null)
+                ? catalog.profiles
+                : [],
             devices: projectDevicePlacements(catalog.environments, runtime?.devicePlacement),
           };
         },
@@ -271,7 +274,8 @@ export async function changeSessionPlacement(params: {
   const currentAccess = readSessionMethodAccess(snapshot, {
     method,
     params: targetParams,
-    requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
+    requiredScope:
+      method === "sessions.move" && target.kind === "profile" ? "operator.admin" : "operator.write",
   });
   const requiredProfile = params.requiredProfile();
   const unavailableNow =

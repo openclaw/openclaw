@@ -17,7 +17,7 @@
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import {
@@ -31,6 +31,7 @@ import { parseArgs } from "node:util";
 import type { ExecApprovalsFile } from "../../src/infra/exec-approvals-core.js";
 import type { ExecAllowlistEntry } from "../../src/infra/exec-approvals.types.js";
 import type { ExecutableResolution } from "../../src/infra/exec-command-resolution.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -99,9 +100,6 @@ const targets: ExecutableResolution[] = [
 const targetArgv = targets.map((target) =>
   target.rawExecutable === "python3" ? ["python3", "--version"] : undefined,
 );
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 const inspector = new Session();
 let sink = 0;
 let cleanup = async () => {};
@@ -241,7 +239,9 @@ try {
         fixture: { agents: 40, entriesPerAgent: 64, mcpGrantsPerAgent: 8 },
         elapsedMs: ended - started,
         mainThreadCpuUsPerOperation: (used.user + used.system) / iterations,
-        allocatedBytesPerOperation: profile ? allocated(profile.head) / iterations : undefined,
+        allocatedBytesPerOperation: profile
+          ? sumSampledHeapBytes(profile.head) / iterations
+          : undefined,
         gc: {
           byKind,
           count: pauses.length,

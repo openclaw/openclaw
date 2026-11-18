@@ -47,7 +47,7 @@ function workflowRun(id: number, status: string, display_title: string, run_atte
   };
 }
 const runInventory = (
-  workflow_runs: ReturnType<typeof workflowRun>[],
+  workflow_runs: (ReturnType<typeof workflowRun> & { head_branch?: string })[],
   total_count = workflow_runs.length,
 ) => JSON.stringify({ total_count, workflow_runs });
 const pluginOptions = {
@@ -68,6 +68,32 @@ const pluginOptions = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("release publication state", () => {
+  it("revalidates a version omitted from stale abbreviated registry metadata", async () => {
+    const requested: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) => {
+        requested.push(input);
+        return input.endsWith(`/${version}`)
+          ? Response.json({ name: "openclaw", version, dist: { integrity: "sha512-fixture" } })
+          : registry("openclaw", ["2026.9.4"]);
+      }),
+    );
+
+    const result = await observeReleaseNpmState(npmOptions);
+
+    expect(requested).toEqual([
+      "https://registry.npmjs.org/openclaw",
+      `https://registry.npmjs.org/openclaw/${version}`,
+    ]);
+    expect(result.publishedPackages).toEqual([pkg("openclaw")]);
+    expectGate(result.gates, {
+      id: "npm.package.openclaw",
+      status: "WARN",
+      message: expect.stringContaining("already published (npm-readback)"),
+    });
+  });
+
   it.each<[string, string, string[], string | undefined, number | undefined]>([
     ["2026.9.4", version, [version], undefined, undefined],
     [
@@ -83,7 +109,11 @@ describe("release publication state", () => {
     async (latest, beta, versions, message, published) => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => registry("@openclaw/example", versions, distTags(latest, beta))),
+        vi.fn(async (input: string) =>
+          input.endsWith(`/${version}`)
+            ? new Response("{}", { status: 404 })
+            : registry("@openclaw/example", versions, distTags(latest, beta)),
+        ),
       );
       const result = await observeReleaseNpmState(pluginOptions);
       expectGate(result.gates, {
@@ -121,7 +151,7 @@ describe("release publication state", () => {
         ],
       });
       expect(fetch).not.toHaveBeenCalled();
-      expect(result.corePublished).toBe(decision !== "plan");
+      expect(result.publishedPackages.length).toBe(decision === "plan" ? 0 : 1);
       expect(result.gates.some((gate) => gate.status === "FAIL")).toBe(false);
       expect(result.gates.find((gate) => gate.id === "npm.package.openclaw")?.message).toContain(
         decision === "plan"
@@ -194,7 +224,6 @@ describe("release publication state", () => {
     expect(requested.toSorted()).toEqual(
       ["openclaw", ...corePackages.map((entry) => entry.packageName)].toSorted(),
     );
-    expect(result.corePublished).toBe(true);
     expect(result.publishedPackages).toEqual([pkg("openclaw"), ...corePackages]);
     expect(result.gates.some((gate) => gate.status === "FAIL")).toBe(false);
   });
@@ -219,7 +248,7 @@ function observeRuns(params: { workflow: string; title?: string; log?: string; c
       const selected =
         endpoint.includes(`/${params.workflow}/`) && endpoint.includes("status=waiting");
       return runInventory(
-        selected ? [workflowRun(123, "waiting", params.title ?? "Plugin ClawHub Release", 2)] : [],
+        selected ? [workflowRun(123, "waiting", params.title ?? "Plugin NPM Release", 2)] : [],
         selected ? (params.count ?? 1) : 0,
       );
     }
@@ -237,6 +266,61 @@ function observeRuns(params: { workflow: string; title?: string; log?: string; c
 }
 
 describe("release concurrency observations", () => {
+  it.each([
+    {
+      title: `ClawHub registry update [v${version}]`,
+      branch: "release-publish/aaaaaaaaaaaa-123",
+      status: "PASS",
+    },
+    {
+      title: `Core release [v${version}]`,
+      branch: "release-publish/aaaaaaaaaaaa-123",
+      status: "FAIL",
+    },
+    { title: `ClawHub registry update [v${version}]`, branch: "main", status: "FAIL" },
+  ])(
+    "excludes only protected detached ClawHub owners: $title on $branch",
+    ({ title, branch, status }) => {
+      const runGh = vi.fn((args: string[]) => {
+        const endpoint = args[1] ?? "";
+        if (endpoint.includes("/releases/tags/")) {
+          throw new Error("HTTP 404: Not Found");
+        }
+        if (endpoint.includes("/releases?")) {
+          return "[]";
+        }
+        if (endpoint === "repos/openclaw/openclaw") {
+          return JSON.stringify({ permissions: { push: true } });
+        }
+        if (endpoint.includes("/actions/workflows/")) {
+          const active =
+            endpoint.includes("status=waiting") && !endpoint.includes("/plugin-npm-release.yml/");
+          return runInventory(
+            active ? [{ ...workflowRun(123, "waiting", title), head_branch: branch }] : [],
+          );
+        }
+        if (endpoint.endsWith("/attempts/1/jobs?per_page=100")) {
+          return JSON.stringify({ jobs: [{ id: 456, status: "completed" }] });
+        }
+        if (endpoint.endsWith("/jobs/456/logs")) {
+          return "2026-09-18T01:02:03Z   RELEASE_NPM_DIST_TAG: latest";
+        }
+        throw new Error(`Unexpected endpoint: ${endpoint}`);
+      });
+      const result = observeGitHub(runGh);
+      expectGate(result.gates, {
+        id: `concurrency.openclaw-release-publish.yml.${status === "PASS" ? "clear" : "123"}`,
+        status,
+      });
+      expect(runGh.mock.calls.some(([args]) => args[1]?.includes("/plugin-clawhub-"))).toBe(false);
+      if (status === "PASS") {
+        expect(runGh.mock.calls.some(([args]) => args[1]?.includes("/actions/runs/123/"))).toBe(
+          false,
+        );
+      }
+    },
+  );
+
   it("bounds slow GitHub reads and names every uninspected inventory with its exact command", () => {
     let now = 0;
     const runGh = vi.fn((args: string[], options?: { timeoutMs?: number }) => {
@@ -312,15 +396,14 @@ describe("release concurrency observations", () => {
     title,
     count,
   });
-  const conflictingLog = `${log()}\n2026-09-18T01:02:04Z   TARGET_REF: ${"b".repeat(40)}\n2026-09-18T01:02:05Z   DRY_RUN: false`;
+  const conflictingLog = `${log()}\n2026-09-18T01:02:04Z   TARGET_REF: ${"b".repeat(40)}`;
   it.each`
     evidence                        | status    | scenario                                                          | message
     ${"exact npm preflight title"}  | ${"FAIL"} | ${npmRun(`Plugin NPM Artifact Preflight [default] ${sourceSha}`)} | ${"exact workflow run title"}
-    ${"terminal parent"}            | ${"FAIL"} | ${{ log: log("DRY_RUN: false", "RELEASE_PUBLISH_RUN_ID: 789") }}  | ${"Parent 789 is terminal (failure)"}
+    ${"terminal parent"}            | ${"FAIL"} | ${{ log: log("RELEASE_PUBLISH_RUN_ID: 789") }}                    | ${"Parent 789 is terminal (failure)"}
     ${"missing job log"}            | ${"WARN"} | ${{}}                                                             | ${undefined}
-    ${"missing dry-run input"}      | ${"WARN"} | ${{ log: log() }}                                                 | ${undefined}
+    ${"missing target ref"}         | ${"WARN"} | ${{ log: "" }}                                                    | ${undefined}
     ${"conflicting input evidence"} | ${"WARN"} | ${{ log: conflictingLog }}                                        | ${undefined}
-    ${"isolated ClawHub dry run"}   | ${"PASS"} | ${{ log: log("DRY_RUN: true") }}                                  | ${undefined}
     ${"truncated active inventory"} | ${"WARN"} | ${npmRun(`Plugin NPM Release [default] ${"b".repeat(40)}`, 101)}  | ${"bounded first page"}
   `(
     "qualifies concurrency evidence: $evidence",
@@ -337,7 +420,7 @@ describe("release concurrency observations", () => {
     }) => {
       const gates = observeRuns({
         ...scenario,
-        workflow: scenario.workflow ?? "plugin-clawhub-release.yml",
+        workflow: scenario.workflow ?? "plugin-npm-release.yml",
       });
       expect(gates).toMatchObject([
         { status, ...(message ? { message: expect.stringContaining(message) } : {}) },

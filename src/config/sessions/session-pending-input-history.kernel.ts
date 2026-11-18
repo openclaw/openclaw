@@ -1,5 +1,5 @@
+import { expressionBuilder } from "kysely";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import { jsonPathValue } from "../../infra/database-engine/json-values.js";
 import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   hasPendingInputConsumptionColumn,
@@ -18,6 +19,16 @@ import type {
   PendingInputHistorySnapshot,
 } from "./session-pending-input-history.types.js";
 import { resolvePendingInputHistoryLimit } from "./session-pending-input-value.js";
+
+function pendingInputHistoryEligibility(query: PendingInputHistoryQuery) {
+  const eb = expressionBuilder<Pick<DB, "session_pending_inputs">, "session_pending_inputs">();
+  return query.queuedOnly
+    ? eb.and([
+        eb("state", "=", "queued"),
+        ...(query.liveInputIds?.length ? [eb("input_id", "not in", [...query.liveInputIds])] : []),
+      ])
+    : eb("state", "in", ["cancelled", "queued"]);
+}
 
 /** The admitted reader owns the snapshot; process-held incognito uses the same kernel. */
 export function readPendingInputHistoryInDatabase(
@@ -40,7 +51,8 @@ export function readPendingInputHistoryInDatabase(
     let base = db
       .selectFrom("session_pending_inputs")
       .where("session_key", "=", query.sessionKey)
-      .where("session_id", "=", query.sessionId);
+      .where("session_id", "=", query.sessionId)
+      .where(pendingInputHistoryEligibility(query));
     if (hasConsumption) {
       base = base.where("consumed_event_id", "is", null);
     }
@@ -75,25 +87,7 @@ function readPendingInputPageInDatabase(
           .where("session_key", "=", query.sessionKey)
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
-          .$if(query.sessionSendRecovery === true, (selection) =>
-            selection.where("state", "in", ["queued", "interrupted"]).where((eb) =>
-              eb.or([
-                // Crash-left rows need reconciliation even without replayable custody.
-                eb("state", "=", "queued"),
-                ...["sessionSendDelivery", "chatInputRecovery"].map((field) =>
-                  eb(
-                    jsonPathValue(
-                      database.db,
-                      eb.ref("message_json"),
-                      eb.val(`$.__openclaw.${field}`),
-                    ),
-                    "is not",
-                    null,
-                  ),
-                ),
-              ]),
-            ),
-          )
+          .where(pendingInputHistoryEligibility(query))
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),
           )
@@ -129,6 +123,8 @@ function readPendingInputPageInDatabase(
         "input.lifecycle_generation",
         "input.state",
         "input.accepted_at",
+        "input.end_cause",
+        "input.origin_source_json",
       ])
       .select((eb) => [
         (hasConsumption ? eb.ref("input.consumed_event_id") : eb.val(null)).as("consumed_event_id"),

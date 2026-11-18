@@ -1,12 +1,12 @@
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-  ProviderPlugin,
+import {
+  resolveDefaultModelMaxTokens,
+  type ModelDefinitionConfig,
+  type ModelProviderConfig,
+  type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
-  SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import {
   asPositiveSafeInteger,
@@ -24,7 +24,6 @@ import {
   buildLmstudioReasoningEffortMap,
   LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
   LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS,
-  normalizeLmstudioTransportReasoningCompat,
 } from "./model-reasoning.js";
 
 export type LmstudioModelWire = {
@@ -195,11 +194,11 @@ function normalizeLmstudioConfiguredCompat(
   const { supportedReasoningEfforts, reasoningEffortMap, ...compat } = value;
   const normalizedEfforts = normalizeReasoningOptions(supportedReasoningEfforts);
   const normalizedMap = normalizeConfiguredReasoningEffortMap(reasoningEffortMap);
-  return normalizeLmstudioTransportReasoningCompat({
+  return {
     ...compat,
     ...(normalizedEfforts.length > 0 ? { supportedReasoningEfforts: normalizedEfforts } : {}),
     ...(normalizedMap ? { reasoningEffortMap: normalizedMap } : {}),
-  });
+  };
 }
 
 export function toFetchableLmstudioBaseUrl(value: string): string {
@@ -363,7 +362,6 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
   // serves: a loaded instance is authoritative for its own context, while an
   // unloaded model is budgeted at the length JIT loading will request — the
   // same clamp ensureLmstudioModelLoaded applies when it triggers the load.
-  const effectiveContextWindow = loadedContextWindow ?? contextWindow;
   const contextTokens =
     loadedContextWindow ?? Math.min(contextWindow, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   const rawDisplayName = entry.display_name?.trim();
@@ -390,7 +388,8 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     compat,
     contextWindow,
     contextTokens,
-    maxTokens: Math.max(1, Math.min(effectiveContextWindow, SELF_HOSTED_DEFAULT_MAX_TOKENS)),
+    // Size the output default to the served context so the prompt keeps room.
+    maxTokens: resolveDefaultModelMaxTokens(contextTokens),
   };
 }
 

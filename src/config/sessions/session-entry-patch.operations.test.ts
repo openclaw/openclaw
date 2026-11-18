@@ -35,6 +35,29 @@ const delivery = getSessionEntryPatchDelivery();
 const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
   withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
 
+const applyFields = (
+  f: ReturnType<typeof fixture>,
+  patch: Partial<SessionEntry>,
+  options: Parameters<typeof patchSessionEntryCore>[2] = {},
+) =>
+  applySessionEntryOperation(
+    f.scope,
+    { kind: "fields", patch },
+    { skipMaintenance: true, ...options },
+  );
+
+function collectDeliveredBytes(): number[] {
+  const bytes: number[] = [];
+  const collect = transfer.createSqliteWorkerTransferCollector;
+  vi.spyOn(transfer, "createSqliteWorkerTransferCollector").mockImplementation((kind, consume) =>
+    collect(kind, (value) => {
+      bytes.push(serialize(value).byteLength);
+      consume(value);
+    }),
+  );
+  return bytes;
+}
+
 it.each(["entry", "target"] as const)(
   "prepares %s callback patches from complete current owner facts without another entry reply",
   async (selection) => {
@@ -103,11 +126,7 @@ it("accepts hydrated owner ordering but rejects a changed owner during callback 
       assignedAt: 20,
     });
     await readSessionEntryInWorker(f.scope);
-    await applySessionEntryOperation(
-      f.scope,
-      { kind: "fields", patch: { pinnedAt: 30 } },
-      { skipMaintenance: true },
-    );
+    await applyFields(f, { pinnedAt: 30 });
     const result = await patchSessionEntryCore(
       f.scope,
       (entry) => {
@@ -234,14 +253,21 @@ it.each(["inbound", "route"] as const)(
         });
       };
       const ctx = { Provider: "reef", From: "reef:alice", ChatType: "direct", SenderName: "Alice" };
-      const result =
+      const assertMutationAllowed = vi.fn();
+      const writeMetadata = () =>
         kind === "inbound"
-          ? await recordInboundSessionMeta({ ...f.scope, ctx })
-          : await updateSessionLastRouteInScope(f.scope, {
+          ? recordInboundSessionMeta({
+              ...f.scope,
+              ctx,
+              assertCommitAllowed: assertMutationAllowed,
+            })
+          : updateSessionLastRouteInScope(f.scope, {
               channel: "reef",
               to: "user:alice",
               ctx,
+              workerGuard: { assertMutationAllowed },
             });
+      const result = await writeMetadata();
       expect(result).toMatchObject({
         label: "concurrent label",
         updatedAt: original.updatedAt + 100,
@@ -249,6 +275,14 @@ it.each(["inbound", "route"] as const)(
       });
       expect(f.read()).toEqual(result);
       expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+      delivery.commands.length = 0;
+      expect(await writeMetadata()).toEqual(result);
+      expect(delivery.commands).toEqual([]);
+      assertMutationAllowed.mockImplementationOnce(() => {
+        throw new Error("revoked");
+      });
+      await expect(writeMetadata()).rejects.toThrow("revoked");
+      expect(f.read()).toEqual(result);
     });
   },
 );
@@ -304,14 +338,7 @@ it("acknowledges no-result patches without transferring the entry and keeps fina
       ...f.read()!,
       skillsSnapshot: { prompt, skills: [] },
     });
-    const deliveredBytes: number[] = [];
-    const collect = transfer.createSqliteWorkerTransferCollector;
-    vi.spyOn(transfer, "createSqliteWorkerTransferCollector").mockImplementation((kind, consume) =>
-      collect(kind, (value) => {
-        deliveredBytes.push(serialize(value).byteLength);
-        consume(value);
-      }),
-    );
+    const deliveredBytes = collectDeliveredBytes();
     const operation = {
       kind: "fields" as const,
       expected: { sessionId: "retired" },
@@ -390,19 +417,8 @@ it("reuses unchanged resident entry fields across patches without losing result 
       { kind: "fields", patch: { label: "warm" } },
       { result: "none", skipMaintenance: true },
     );
-    const deliveredBytes: number[] = [];
-    const collect = transfer.createSqliteWorkerTransferCollector;
-    vi.spyOn(transfer, "createSqliteWorkerTransferCollector").mockImplementation((kind, consume) =>
-      collect(kind, (value) => {
-        deliveredBytes.push(serialize(value).byteLength);
-        consume(value);
-      }),
-    );
-    const result = await applySessionEntryOperation(
-      f.scope,
-      { kind: "fields", patch: { label: "changed", pinnedAt: undefined } },
-      { skipMaintenance: true },
-    );
+    const deliveredBytes = collectDeliveredBytes();
+    const result = await applyFields(f, { label: "changed", pinnedAt: undefined });
     expect(result).toMatchObject({ label: "changed", skillsSnapshot: { prompt, skills } });
     expect(result?.pinnedAt).toBeUndefined();
     expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
@@ -414,11 +430,15 @@ it("reuses unchanged resident entry fields across patches without losing result 
     expect(() => result!.skillsSnapshot!.skills[0]!.requiredEnv!.push("CALLER_ADDED")).toThrow();
     expect(() => result!.skillsSnapshot!.skills.push({ name: "caller-added" })).toThrow();
     expect((await readSessionEntryInWorker(f.scope))?.label).toBe("changed");
-    const next = await applySessionEntryOperation(
-      f.scope,
-      { kind: "fields", patch: { label: "next" } },
-      { skipMaintenance: true },
-    );
+    const patchLabel = (label: string) => applyFields(f, { label }, { preserveActivity: true });
+    delivery.commands.length = 0;
+    const [next] = await Promise.all([
+      patchLabel("next"),
+      patchLabel("next"),
+      patchLabel("ordered-last"),
+    ]);
+    expect(delivery.commands).toEqual(["session.entry.patch.commit", "session.entry.patch.commit"]);
+    expect(f.read()).toMatchObject({ label: "ordered-last", updatedAt: resident!.updatedAt });
     expect(next?.skillsSnapshot).toMatchObject({ prompt, skills });
     expect(deliveredBytes.at(-1)).toBeLessThan(prompt.length / 4);
     delivery.beforeCommit = () => {
@@ -428,112 +448,93 @@ it("reuses unchanged resident entry fields across patches without losing result 
         skillsSnapshot: { prompt: "newer persisted instructions", skills: [] },
       });
     };
-    const latest = await applySessionEntryOperation(
-      f.scope,
-      { kind: "fields", patch: { label: "after concurrent write" } },
-      { skipMaintenance: true },
-    );
+    const latest = await applyFields(f, { label: "after concurrent write" });
     expect(latest?.skillsSnapshot?.prompt).toBe("newer persisted instructions");
     expect(f.read()).toEqual(latest);
   });
 });
 
-it("commits cron state in one request while preserving concurrent metadata and cleared policy", async () => {
-  await withFixture(async (f) => {
-    const initial: SessionEntry = {
-      ...f.read()!,
-      lifecycleRevision: "admitted",
-      elevatedLevel: "full",
-      inheritedToolAllow: ["exec"],
-      sendPolicy: "allow",
-    };
-    replaceSessionEntrySync(f.scope, initial);
-    delivery.beforeCommit = () => {
-      delivery.beforeCommit = undefined;
-      const current: SessionEntry = {
-        ...initial,
-        label: "Renamed during the run",
-        pinnedAt: 20,
-        updatedAt: 20,
-        sendPolicy: "deny",
+it.each([false, true])(
+  "commits cron create=%s in one request, preserving concurrent metadata and cleared policy",
+  async (create) => {
+    await withFixture(async (f) => {
+      const scope = create ? { ...f.scope, sessionKey: "agent:main:cron:created" } : f.scope;
+      const initial: SessionEntry = {
+        ...f.read()!,
+        lifecycleRevision: "admitted",
+        elevatedLevel: "full",
+        inheritedToolAllow: ["exec"],
+        sendPolicy: "allow",
       };
-      delete current.elevatedLevel;
-      delete current.inheritedToolAllow;
-      replaceSessionEntrySync(f.scope, current);
-    };
-    const result = await applySessionEntryOperation(
-      f.scope,
-      {
-        kind: "cron-session",
-        sessionKey: f.scope.sessionKey,
-        initial,
-        next: { ...initial, status: "done", totalTokens: 42, updatedAt: 10 },
-        creation: { createdVia: "cron", createdAt: 10 },
-      },
-      { replaceEntry: true, skipMaintenance: true },
-    );
-    expect(result).toMatchObject({
-      label: "Renamed during the run",
-      pinnedAt: 20,
-      updatedAt: 20,
-      sendPolicy: "deny",
-      status: "done",
-      totalTokens: 42,
+      const next: SessionEntry = create
+        ? {
+            sessionId: "cron-created",
+            updatedAt: 20,
+            label: "Cron: initial state",
+            lifecycleRevision: "admitted",
+            thinkingLevel: "high",
+            modelProvider: "openai",
+            model: "gpt-5.4",
+          }
+        : { ...initial, status: "done", totalTokens: 42, updatedAt: 10 };
+      const creation = {
+        createdVia: "cron" as const,
+        createdActor: { type: "system" as const },
+        createdAt: 10,
+      };
+      if (!create) {
+        replaceSessionEntrySync(f.scope, initial);
+        delivery.beforeCommit = () => {
+          delivery.beforeCommit = undefined;
+          const current: SessionEntry = {
+            ...initial,
+            label: "Renamed during the run",
+            pinnedAt: 20,
+            updatedAt: 20,
+            sendPolicy: "deny",
+          };
+          delete current.elevatedLevel;
+          delete current.inheritedToolAllow;
+          replaceSessionEntrySync(f.scope, current);
+        };
+      }
+      const result = await applySessionEntryOperation(
+        scope,
+        {
+          kind: "cron-session",
+          sessionKey: scope.sessionKey,
+          initial: create ? undefined : initial,
+          next,
+          creation,
+        },
+        { fallbackEntry: create ? next : undefined, replaceEntry: true, skipMaintenance: true },
+      );
+      expect(result).toMatchObject(
+        create
+          ? { ...next, ...creation }
+          : {
+              label: "Renamed during the run",
+              pinnedAt: 20,
+              updatedAt: 20,
+              sendPolicy: "deny",
+              status: "done",
+              totalTokens: 42,
+            },
+      );
+      expect(result?.elevatedLevel).toBeUndefined();
+      expect(result?.inheritedToolAllow).toBeUndefined();
+      expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toEqual(result);
+      expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
     });
-    expect(result?.elevatedLevel).toBeUndefined();
-    expect(result?.inheritedToolAllow).toBeUndefined();
-    expect(f.read()).toEqual(result);
-    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
-  });
-});
-
-it("creates the full initial cron session in one owner command", async () => {
-  await withFixture(async (f) => {
-    const scope = {
-      ...f.scope,
-      sessionKey: "agent:main:cron:created",
-      sessionId: "cron-created",
-    };
-    const next: SessionEntry = {
-      sessionId: "cron-created",
-      updatedAt: 20,
-      label: "Cron: initial state",
-      lifecycleRevision: "admitted",
-      thinkingLevel: "high",
-      modelProvider: "openai",
-      model: "gpt-5.4",
-    };
-    const result = await applySessionEntryOperation(
-      scope,
-      {
-        kind: "cron-session",
-        sessionKey: scope.sessionKey,
-        next,
-        creation: { createdVia: "cron", createdActor: { type: "system" }, createdAt: 10 },
-      },
-      { fallbackEntry: next, replaceEntry: true, skipMaintenance: true },
-    );
-    expect(result).toMatchObject({
-      ...next,
-      createdVia: "cron",
-      createdActor: { type: "system" },
-      createdAt: 10,
-    });
-    expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toEqual(result);
-    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
-  });
-});
+  },
+);
 
 it("rechecks conversation authority before a fixed patch commits", async () => {
   await withFixture(async (f) => {
     const conversation = await conversationGuard(f, "patch-peer");
     const workerGuard = { conversation };
     const onCommitted = vi.fn();
-    const accepted = await applySessionEntryOperation(
-      f.scope,
-      { kind: "fields", patch: { label: "authorized" } },
-      { skipMaintenance: true, workerGuard, onCommitted },
-    );
+    const accepted = await applyFields(f, { label: "authorized" }, { workerGuard, onCommitted });
     expect(accepted).toMatchObject({ label: "authorized" });
     expect(f.read()).toEqual(accepted);
     expect(onCommitted).toHaveBeenCalledExactlyOnceWith(accepted);
@@ -541,11 +542,7 @@ it("rechecks conversation authority before a fixed patch commits", async () => {
 
     replaceRouteBeforeCommit(f, conversation.conversationRef);
     await expect(
-      applySessionEntryOperation(
-        f.scope,
-        { kind: "fields", patch: { label: "must not persist" } },
-        { skipMaintenance: true, workerGuard, onCommitted },
-      ),
+      applyFields(f, { label: "must not persist" }, { workerGuard, onCommitted }),
     ).rejects.toThrow("Conversation is no longer available");
     expect(f.read()).toEqual(accepted);
     expect(onCommitted).not.toHaveBeenCalled();

@@ -1,11 +1,13 @@
 // Control UI modal presents approvals after an explicit operator action.
-import { For, Show, createSignal, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import {
   ApprovalCountdown,
@@ -27,6 +29,8 @@ export type ExecApprovalProps = {
   canGrant: boolean;
   errors: ReadonlyMap<string, string>;
   nodeNames?: ReadonlyMap<string, string>;
+  sessions?: readonly GatewaySessionRow[];
+  currentSessionKey?: string;
   onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
@@ -121,6 +125,12 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
       (previous) => queue().length > 0 && (previous ?? false),
     );
     const active = () => queue().find((entry) => entry.id === selectedApprovalId()) ?? queue()[0];
+    const sourceSession = createMemo(() => {
+      const key = active()?.sourceSessionKey ?? active()?.request.sessionKey;
+      return key
+        ? bridgeProps.props?.sessions?.find((row) => areUiSessionKeysEquivalent(row.key, key))
+        : undefined;
+    });
     let decide: ExecApprovalProps["onDecision"] | undefined;
     let deciding = () => false;
     controls.set(host, {
@@ -181,6 +191,8 @@ export const ExecApproval = defineSolidBridge<{ props?: ExecApprovalProps }, Met
               <ExecApprovalCard
                 props={{
                   approval: active()!,
+                  sourceSession: sourceSession(),
+                  currentSessionKey: bridgeProps.props!.currentSessionKey,
                   nodeDisplayName: bridgeProps.props!.nodeNames?.get(
                     active()!.request.nodeId ?? "",
                   ),

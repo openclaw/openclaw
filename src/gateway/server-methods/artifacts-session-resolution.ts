@@ -173,10 +173,11 @@ export async function prepareArtifactSessionResolution(
           });
           const visibilityDenied = Boolean(
             target &&
-            createSessionListEntryFilter({ client, cfg: currentConfig })?.(
-              target.storeKey,
-              target.entry,
-            ) === false,
+            createSessionListEntryFilter({
+              client,
+              cfg: currentConfig,
+              membership: current.membership,
+            })?.(target.storeKey, target.entry) === false,
           );
           if (!error && !visibilityDenied) {
             return current;

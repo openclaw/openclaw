@@ -1,14 +1,10 @@
 // Synthetic owner workload. Run on alternating source roots with --expose-gc.
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ToolSearchCatalogRef } from "../../src/agents/tool-search-types.js";
-
-function allocatedBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocatedBytes(child), 0);
-}
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const root = path.resolve(process.argv[2] ?? ".");
 const source = (file: string) => pathToFileURL(path.join(root, "src", file)).href;
@@ -78,7 +74,7 @@ try {
       );
       const cachedMs = performance.now() - cached;
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      const sampledAllocatedBytes = allocatedBytes(profile.head);
+      const sampledAllocatedBytes = sumSampledHeapBytes(profile.head);
       assert.deepEqual(first, { value: "retained", networkContent: false });
       assert.deepEqual(second, first);
       console.log(

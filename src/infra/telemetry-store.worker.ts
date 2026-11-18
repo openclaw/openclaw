@@ -1,5 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { updateConfigMachineStateInDatabase } from "../state/config-machine-state-write.js";
+import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
+import {
+  updateConfigMachineStateInDatabase,
+  writeConfigMachineStateInDatabase,
+} from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -9,11 +13,36 @@ import type {
   WorkerOperations,
 } from "../state/worker-operation-registry.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  installationCountStateKey,
+  buildInstallationCountHeader,
+} from "./telemetry-installation-count.js";
 import type { SuccessfulTelemetryState, TelemetryState } from "./telemetry-worker-contract.js";
 
 const TELEMETRY_STATE_KEY = "telemetry.updateCheck";
 
 export const telemetryOperations = {
+  "telemetry.claimInstallationCount": (
+    input: { endpoint: string; day: number },
+    { open, stateOptions },
+  ): string | null =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const key = installationCountStateKey(input.endpoint);
+        const row = readConfigMachineStateRowInDatabase(db, key);
+        const header = buildInstallationCountHeader(
+          input.day,
+          row ? JSON.parse(row.value_json) : undefined,
+        );
+        if (header !== null) {
+          // Claim before HTTP: failed or ambiguous delivery must never retry today's count.
+          writeConfigMachineStateInDatabase(db, key, input.day);
+        }
+        return header;
+      },
+      { database: open(), ...stateOptions() },
+      { operationLabel: "telemetry.claimInstallationCount" },
+    ),
   "telemetry.readState": (_input: undefined, { stateOptions }): TelemetryState => {
     const state = readConfigMachineState<TelemetryState>(TELEMETRY_STATE_KEY, stateOptions());
     return state && isRecord(state) ? state : {};

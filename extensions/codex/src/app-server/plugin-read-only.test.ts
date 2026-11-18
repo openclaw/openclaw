@@ -32,6 +32,16 @@ const tool = (name: string, isReadOnly: boolean, extra: Partial<Tool> = {}): Too
   disabledReason: null,
   ...extra,
 });
+function runtimeTool(action: string, readOnly: boolean, title: string) {
+  return {
+    title,
+    annotations: { readOnlyHint: readOnly },
+    _meta: {
+      connector_id: "sample-app",
+      _codex_apps: { resource_uri: `/sample-app/link/${action}` },
+    },
+  };
+}
 const expectApp = (patch: JsonObject | undefined, expected: JsonObject) =>
   expect(patch?.apps).toMatchObject({ "sample-app": expected });
 const readOnlyTools = (enabled: string[], disabled: string[]): JsonObject => ({
@@ -61,6 +71,7 @@ function fixture(
     tool("read_alias", true, { title: "shared" }),
     tool("write_alias", false, { title: "shared" }),
   ];
+  let runtime: Record<string, ReturnType<typeof runtimeTool>> | Error | undefined;
   const nativeConfig = {
     apps: {
       "sample-app": {
@@ -73,6 +84,27 @@ function fixture(
     },
   };
   const request = async (method: string, params?: unknown) => {
+    if (method === "mcpServerStatus/list") {
+      if (runtime instanceof Error) {
+        throw runtime;
+      }
+      return {
+        data: [
+          {
+            name: "codex_apps",
+            tools:
+              runtime ??
+              Object.fromEntries(
+                (tools ?? []).map((t) => [
+                  t.name,
+                  runtimeTool(t.name, t.isReadOnly, t.title ?? t.name),
+                ]),
+              ),
+          },
+        ],
+        nextCursor: null,
+      };
+    }
     if (method === "config/read") {
       return { config: nativeConfig, layers: [] };
     }
@@ -100,6 +132,9 @@ function fixture(
     setNativeTools(value: Record<string, { enabled?: boolean; approval_mode?: string }>) {
       Object.assign(nativeConfig.apps["sample-app"].tools, value);
     },
+    setRuntime(value: Record<string, ReturnType<typeof runtimeTool>> | Error) {
+      runtime = value;
+    },
     setTools(value: Tool[] | undefined) {
       tools = value;
     },
@@ -121,6 +156,31 @@ function fixture(
 }
 
 describe("plugin read_only policy", () => {
+  it("grants only the exact hosted MCP action, even with name collisions and a misleading title", async () => {
+    const f = fixture(true);
+    f.setTools([tool("search", true), tool("trash", false)]);
+    f.setNativeTools({ search: { approval_mode: "prompt" } });
+    f.setRuntime({
+      "documents_01234567.search": runtimeTool("search", true, "search"),
+      // Codex falls back to title when the raw name has no entry.
+      "documents.trash": runtimeTool("trash", false, "documents_01234567.search"),
+      "documents.new_tool": runtimeTool("new_tool", true, "search"),
+    });
+    const { configPatch } = await f.build();
+    const effective = mergeCodexThreadConfigs(f.nativeConfig, configPatch);
+    for (const [name, title, enabled] of [
+      ["documents_01234567.search", "search", true],
+      ["documents.trash", "documents_01234567.search", false],
+      ["documents.new_tool", "search", false],
+    ] as const) {
+      expect(readCurrentToolPolicy(effective!, "sample-app", name, { title })).toMatchObject({
+        enabled,
+        ...(enabled ? { approvalMode: "prompt" } : {}),
+      });
+    }
+    expectApp(configPatch, { tools: { search: { enabled: false } } });
+  });
+
   it.each([
     [{ Browse: { approval_mode: "prompt" } }, "prompt", true],
     [{ Browse: { approval_mode: "writes" } }, "writes", true],
@@ -223,13 +283,25 @@ describe("plugin read_only policy", () => {
         destructive_enabled: destructive !== false,
         ...readOnlyTools(
           ["browse"],
-          ["manage", "stale", "admin_disabled", "native_disabled", "shared"],
+          ["manage", "stale", "admin_disabled", "native_disabled", "write_alias"],
         ),
       };
       expectApp(result.configPatch, expected);
       expectApp(buildCodexPluginAppsConfigPatchFromPolicyContext(result.policyContext), expected);
     },
   );
+
+  it("revokes saved read grants when runtime tool discovery fails on replay", async () => {
+    const f = fixture(true);
+    const initial = await f.build();
+    f.setRuntime(new Error("hosted MCP inventory unavailable"));
+    const replay = await refreshCodexPluginAppApprovalPolicy({
+      policyContext: initial.policyContext,
+      request: f.request,
+    });
+    expect(replay.diagnostics).toContainEqual(expect.objectContaining({ code: "app_not_ready" }));
+    expectApp(replay.configPatch, readOnlyTools([], ["browse", "manage", "stale"]));
+  });
 
   it.each([undefined, false])(
     "preserves existing destructive policy when read_only is %s",

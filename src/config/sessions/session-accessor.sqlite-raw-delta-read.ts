@@ -10,7 +10,10 @@ import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
 } from "./session-accessor.sqlite-contract.js";
-import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
+import {
+  readProjectionTranscriptPayload,
+  type CurrentTranscriptProjection,
+} from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import {
@@ -24,7 +27,6 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { readTranscriptPayload } from "./transcript-payload.js";
 
 /** Read inside the caller's validated projection snapshot on its exact connection. */
 export function readTranscriptRawDeltaFromProjection(
@@ -43,7 +45,11 @@ export function readTranscriptRawDeltaFromProjection(
     maxEvents,
     maxBytes,
     beforeEventSeq,
-    { generation: projection.generation, indexedSeq: projection.state.indexedSeq },
+    {
+      generation: projection.generation,
+      indexedSeq: projection.state.indexedSeq,
+      readColdPayload: projection.readColdPayload,
+    },
   );
 }
 
@@ -55,7 +61,11 @@ export function readRawDeltaInTransaction(
   maxEvents: number,
   maxBytes: number,
   beforeEventSeq: number | undefined,
-  snapshot?: { generation: string | undefined; indexedSeq: number },
+  snapshot?: {
+    generation: string | undefined;
+    indexedSeq: number;
+    readColdPayload?: (seq: number) => string;
+  },
 ): SessionTranscriptRawDeltaResult {
   const watermark = snapshot
     ? undefined
@@ -139,6 +149,7 @@ export function readRawDeltaInTransaction(
       }
     }
   }
+  const payloadSource = snapshot ?? {};
   const rows =
     selectedCount === 0
       ? []
@@ -151,7 +162,10 @@ export function readRawDeltaInTransaction(
               .where("seq", "<=", lastSeq)
               .orderBy("seq", "asc"),
           ),
-          (row) => ({ event: JSON.parse(readTranscriptPayload(row)), seq: sqliteNumber(row.seq) }),
+          (row) => ({
+            event: JSON.parse(readProjectionTranscriptPayload(payloadSource, row, row.seq)),
+            seq: sqliteNumber(row.seq),
+          }),
         );
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
   return {

@@ -40,11 +40,11 @@ async function expectCollapsed(work: Locator) {
   const summary = work.locator(":scope > .chat-activity-group__summary");
   expect(await summary.getAttribute("aria-expanded")).toBe("false");
   expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
-    "1 command · 1 read",
+    "Commands, read files",
   );
-  expect((await summary.textContent())?.match(/1 failed/g)).toHaveLength(1);
+  // The wrapper returned, but the failed child keeps its own outcome inside the group.
+  expect(await summary.textContent()).not.toContain("Some actions failed");
   expect(await summary.textContent()).not.toContain("/workspace/README.md");
-  expect(await summary.getByText("1 failed", { exact: true }).isVisible()).toBe(true);
   expect(await work.textContent()).not.toContain("gh: command not found");
 }
 
@@ -76,7 +76,7 @@ function nestedHistory() {
 }
 
 suite.define(() => {
-  it("keeps failed child diagnostics behind disclosure, including after reload", async () => {
+  it("keeps a child failure on its own row, including after reload", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         methodResponses: {
@@ -112,29 +112,29 @@ suite.define(() => {
       const summary = work.locator(":scope > .chat-activity-group__summary");
       await summary.waitFor();
       await expectCollapsed(work);
-      const failure = summary.getByText("1 failed", { exact: true });
       expect(await work.textContent()).not.toContain("Sign in to GitHub");
       await summary.click();
       const activityBody = work.locator(".chat-activity-group__body");
-      expect(await activityBody.locator(".chat-tool-row").count()).toBe(1);
-      const wrapper = activityBody.locator(".chat-tool-msg-summary", {
-        hasText: "Start GitHub authentication",
-      });
-      await wrapper.waitFor();
-      expect(await wrapper.textContent()).toContain("1 failed");
-      await wrapper.click();
-      const children = activityBody.locator(".chat-tool-children");
-      const login = children.locator(".chat-tool-msg-summary", { hasText: "GitHub sign-in" });
+      expect(await activityBody.locator(".chat-tool-row").count()).toBe(2);
+      expect(
+        await activityBody.getByText("Start GitHub authentication", { exact: true }).count(),
+      ).toBe(0);
+      const login = activityBody.locator(".chat-tool-msg-summary", { hasText: "gh auth login" });
       await login.waitFor();
+      await login.locator(".chat-tool-failure").waitFor();
       expect(await activityBody.getByText("gh: command not found").count()).toBe(0);
       await login.click();
       await activityBody.getByText(command, { exact: true }).first().waitFor();
       const diagnostics = activityBody.locator(".chat-tool-msg-body", {
         hasText: "gh: command not found",
       });
-      expect(await diagnostics.isVisible()).toBe(true);
-      await activityBody.locator(".chat-tool-wrapper-details > summary").click();
-      await activityBody.getByText(wrapperCode, { exact: false }).first().waitFor();
+      await diagnostics.waitFor({ state: "visible" });
+      await diagnostics.getByText("gh: command not found", { exact: true }).waitFor();
+      await activityBody.getByRole("button", { name: "Execution details", exact: true }).click();
+      const execution = page.locator(".chat-tool-output");
+      await execution.locator("summary", { hasText: "Tool input" }).click();
+      await execution.getByText(wrapperCode, { exact: false }).waitFor();
+      await execution.getByText("Child operations finished.", { exact: true }).waitFor();
       await summary.click();
       expect(await summary.getAttribute("aria-expanded")).toBe("false");
       await page.reload();
@@ -144,8 +144,7 @@ suite.define(() => {
       await page.emulateMedia({ reducedMotion: "reduce" });
       await page.setViewportSize({ width: 390, height: 844 });
       await page.locator('.shell-nav[aria-hidden="true"]').waitFor({ state: "attached" });
-      await failure.waitFor();
-      expect(await failure.isVisible()).toBe(true);
+      await expectCollapsed(work);
       expect(await work.textContent()).not.toContain("gh: command not found");
     });
   });
@@ -170,11 +169,12 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Runtime checked.", { exact: true }).waitFor();
-      const call = page.locator(".chat-tool-msg-summary", { hasText: "Check runtime version" });
+      const call = page.locator(".chat-tool-msg-summary", { hasText: "node --version" });
       await call.waitFor();
       await call.click();
       const body = page.locator(".chat-tool-msg-body");
-      await showText(body, "node --version");
+      expect(await call.textContent()).toContain("node --version");
+      await body.getByText("node --version", { exact: true }).waitFor({ state: "visible" });
       await showText(body, "v24.7.0");
       expect(await page.getByText("Code Mode", { exact: true }).count()).toBe(0);
     });

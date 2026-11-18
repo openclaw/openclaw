@@ -6,6 +6,7 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { createBlockReplySource, setBlockReplyDelivery } from "./block-reply-delivery.js";
@@ -106,6 +107,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           ...payload,
           text: text.trim() ? text : undefined,
         });
+        setReplyPayloadMetadata(cleanedPayload, { ttsDirectivesParsed: true });
       }
       const sendPrepared = async (preparedPayload: ReplyPayload, terminal = false) => {
         let visiblePayload = preparedPayload;
@@ -220,7 +222,7 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           if (isDispatchOperationAborted()) {
             return;
           }
-          const tail = buildCaptionedFinalTextFallback(payload);
+          const tail = buildCaptionedFinalTextFallback(cleanedPayload);
           tail.text = text;
           source?.setComplete(true);
           await sendWithSource(tail, true);

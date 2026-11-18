@@ -82,7 +82,7 @@ export function prepareClaudeCliTransportArgs(context: CliBackendExecuteContext)
   }
   let approvedTools = [...new Set(allowedTools)];
   if (context.toolAvailability) {
-    tools = [...context.toolAvailability.native];
+    tools = [...context.toolAvailability.native, ...(context.toolAvailability.discovery ?? [])];
     approvedTools = context.toolAvailability.openClaw
       .map((name) => `mcp__openclaw__${name}`)
       .filter((name) => allowedTools.includes(name) || allowedTools.includes("mcp__openclaw__*"));

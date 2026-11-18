@@ -49,7 +49,7 @@ export class PlaywrightDiffScreenshotter {
     outputPath: string;
     theme: DiffTheme;
     image: DiffRenderOptions["image"];
-  }): Promise<string> {
+  }): Promise<number> {
     let lease: BrowserLease;
     try {
       lease = await acquireSharedBrowser(this.config);
@@ -202,7 +202,7 @@ export class PlaywrightDiffScreenshotter {
               });
             },
           });
-          return params.outputPath;
+          return params.image.scale;
         }
 
         const dpr = await page.evaluate(() => window.devicePixelRatio || 1);
@@ -227,9 +227,9 @@ export class PlaywrightDiffScreenshotter {
             const maxScaleForPixels = Math.sqrt(params.image.maxPixels / (cssWidth * cssHeight));
             const reducedScale = Math.max(
               1,
-              Math.round(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
+              Math.floor(Math.min(currentScale, maxScaleForPixels) * 100) / 100,
             );
-            if (reducedScale < currentScale - 0.01 && attempt < maxRetries) {
+            if (reducedScale < currentScale && attempt < maxRetries) {
               await page.close().catch(() => {});
               page = undefined;
               currentScale = reducedScale;
@@ -256,7 +256,7 @@ export class PlaywrightDiffScreenshotter {
             });
           },
         });
-        return params.outputPath;
+        return dpr;
       }
       throw new Error(IMAGE_SIZE_LIMIT_ERROR);
     } finally {

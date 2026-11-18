@@ -270,6 +270,9 @@ it.each([false, true])(
         expect(button(modal, ".image-quality-status button").textContent).toBe("Retry"),
       );
       expect(image.src).toBe("blob:preview");
+      expect(modal.querySelector(".image-quality-status")?.textContent).toContain(
+        "Couldn’t load a sharper image. Try again.",
+      );
       button(modal, ".image-quality-status button").click();
     } else {
       full.resolve(original);
@@ -394,8 +397,6 @@ it.each(["open", "closed", "reopened"] as const)(
   "reports failed downloads only in their mounted view: %s",
   async (state) => {
     const toast = container.appendChild(document.createElement("openclaw-toast-host"));
-    toast.toast = null;
-    toast.active = false;
     const original = createDeferred<Blob>();
     const readOriginalBlob = vi.fn(() => original.promise);
     const { modal } = await renderLightbox({ readOriginalBlob });
@@ -423,11 +424,10 @@ it.each(["open", "closed", "reopened"] as const)(
     original.reject(new Error("Image unavailable"));
     await vi.advanceTimersByTimeAsync(0);
     flush();
-    expect(toast.active).toBe(state === "open");
-    expect(toast.toast).toEqual(
+    expect(toast.toasts.map((entry) => entry.options)).toEqual(
       state === "open"
-        ? expect.objectContaining({ message: "Could not download this image. Try again." })
-        : null,
+        ? [expect.objectContaining({ message: "Couldn’t download this image. Try again." })]
+        : [],
     );
     if (state === "open") {
       expect(download.disabled).toBe(false);
@@ -437,14 +437,15 @@ it.each(["open", "closed", "reopened"] as const)(
 );
 
 it.each([
-  ["blob:untrusted-svg", "image/svg+xml", false],
-  ["blob:safe-png", "image/png", true],
-] as const)("downloads only inert image bytes on request: %s", async (src, type, allowed) => {
+  ["blob:original-svg", "image/svg+xml", "application/octet-stream"],
+  ["blob:safe-png", "image/png", "image/png"],
+  ["blob:untrusted-html", "text/html", undefined],
+] as const)("downloads only inert bytes on request: %s", async (src, type, downloadType) => {
   fetchImage.mockResolvedValueOnce({
     ok: true,
     blob: async () => new Blob(["image"], { type }),
   });
-  const { modal } = await renderLightbox({ src });
+  const { modal } = await renderLightbox({ src, imageTitle: "parcel flow.svg" });
   expect(fetchImage).not.toHaveBeenCalled();
   expect(modal.querySelector(".open-original")).toBeNull();
   const click = interceptDownload();
@@ -453,8 +454,15 @@ it.each([
     expect(modal.querySelector(".download-image")?.hasAttribute("disabled")).toBe(false),
   );
   expect(fetchImage).toHaveBeenCalledExactlyOnceWith(src);
-  expect(createObjectUrl).toHaveBeenCalledTimes(allowed ? 1 : 0);
-  expect(click).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  expect(createObjectUrl).toHaveBeenCalledTimes(downloadType ? 1 : 0);
+  expect(click).toHaveBeenCalledTimes(downloadType ? 1 : 0);
+  if (downloadType) {
+    expect(createObjectUrl.mock.calls[0]?.[0]).toHaveProperty("type", downloadType);
+    expect(click.mock.contexts[0]).toHaveProperty(
+      "download",
+      type === "image/svg+xml" ? "parcel flow.svg" : "parcel flow.png",
+    );
+  }
 });
 
 it.each(["url", "blob", "gallery"] as const)(

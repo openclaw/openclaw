@@ -593,6 +593,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
             deferredPluginMigrations: params.deferredPluginMigrations,
             configPath: params.snapshot.path,
             includePath,
+            includeBoundaryPath: boundaryPath,
             allowedRoots,
             expectedTargetPath: expectedIncludeTarget,
             value: includedValueToWrite,
@@ -604,7 +605,7 @@ async function tryWriteIncludeOwnedConfigMutation(params: {
               },
               targets: {
                 ...params.writeOptions?.includeFileTargetsForWrite,
-                [params.snapshot.path]: fsNode.realpathSync(params.snapshot.path),
+                [params.snapshot.path]: fsNode.realpathSync.native(params.snapshot.path),
               },
             },
             assertIncludeGraphForWrite,

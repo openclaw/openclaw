@@ -18,11 +18,10 @@ import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.m
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { waitForDead } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
-  materializeTypeChecker,
   overrideNativeFixtureExecutable,
   resolveInstalledNativeCompiler,
 } from "./native-boundary-fixture.js";
@@ -77,35 +76,6 @@ function expectOwnership(root: string, owner: boolean, unjoined: boolean) {
 
 function expectFile(root: string, name: string, expected: string | boolean) {
   expect(typeof expected === "string" ? read(root, name) : exists(root, name), name).toBe(expected);
-}
-
-function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
-  // Crash cases deliberately remove the compiler's owner. Its checkpoint socket
-  // closes before death, so only a PID observation can certify the orphan's exit.
-  return new Promise((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (error?: Error) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    };
-    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
-    const check = () => {
-      if (!isProcessAlive(pid)) {
-        finish();
-      } else if (signal.aborted) {
-        abort();
-      } else {
-        timer = setTimeout(check, 5);
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    check();
-  });
 }
 
 function write(root: string, relative: string, content: string) {
@@ -233,7 +203,7 @@ async function runWithProcesses(
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
       const orphans = await Promise.allSettled(
-        [...checkpointPids].map((pid) => waitForForeignProcessExit(pid, signal)),
+        [...checkpointPids].map((pid) => waitForDead(pid, signal, "reject")),
       );
       for (const socket of sockets) {
         socket.destroy();
@@ -451,6 +421,83 @@ describe("native check launchers in paths with spaces", () => {
 // Native TypeScript emits the declarations. Only
 // process completion is gated; ordering never depends on sleeps or host speed.
 describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
+  it("retires a signaled entry claim only after verified join", async ({ signal }) => {
+    await withProcesses(async ({ pause, start, waitEvent }) => {
+      const root = createCheckout();
+      const compiler = writeModule(root, "compiler.mts", pause("compiler-running"), [
+        requireImport,
+      ]);
+      const parent = writeModule(
+        root,
+        "parent.mts",
+        `
+        import { runDistArtifactChild } from ${scriptUrl("lib/dist-artifact-ownership.mts")};
+        const abort = new AbortController();
+        const observed = runDistArtifactChild(process.cwd(), ${json(compiler)}, [], { native: true, signal: abort.signal })
+          .catch(error => { if (error.code !== 'ABORT_ERR') throw error; });
+        ${pause("cancel-owner")}
+        abort.abort();
+        await observed;
+        await withDistArtifactOwnership(process.cwd(), async () => fs.writeFileSync('reacquired', 'yes'));
+      `,
+        [ownershipImport, requireImport, fsImport],
+      );
+      const owner = start(root, parent);
+      await owner.event("compiler-running");
+      (await waitEvent("cancel-owner")).write("continue");
+      const result = await owner.done;
+      expect(result.code, result.output).toBe(0);
+      expectFile(root, "reacquired", "yes");
+      expect(fs.readdirSync(resolveDistArtifactLockPath(root))).toEqual([]);
+    }, signal);
+  });
+
+  it("retires only the joined invocation claim after cancellation", async ({ signal }) => {
+    await withProcesses(async ({ pause, start, waitEvent }) => {
+      const root = createCheckout();
+      const compiler = writeModule(
+        root,
+        "compiler.mts",
+        `
+        process.on('SIGTERM', () => {});
+        ${pause("compiler-running")}
+        fs.writeFileSync('last-write', 'done');
+      `,
+        [requireImport, fsImport],
+      );
+      const parent = writeModule(
+        root,
+        "parent.mts",
+        `
+        import { runDistArtifactChild } from ${scriptUrl("lib/dist-artifact-ownership.mts")};
+        const abort = new AbortController();
+        const running = withDistArtifactOwnership(process.cwd(), () =>
+          runDistArtifactChild(process.cwd(), ${json(compiler)}, [], { native: true, signal: abort.signal }));
+        const observed = running.catch(error => { if (error.code !== 'ABORT_ERR') throw error; });
+        ${pause("cancel-owner")}
+        abort.abort();
+        ${pause("cancel-requested")}
+        await observed;
+        await withDistArtifactOwnership(process.cwd(), async () => fs.writeFileSync('reacquired', 'yes'));
+      `,
+        [ownershipImport, requireImport, fsImport],
+      );
+      const owner = start(root, parent);
+      const compilerGate = await owner.event("compiler-running");
+      (await waitEvent("cancel-owner")).write("continue");
+      const cancelledGate = await owner.event("cancel-requested");
+      expectOwnership(root, true, false);
+      expectFile(root, "last-write", false);
+      compilerGate.write("continue");
+      cancelledGate.write("continue");
+      const result = await owner.done;
+      expect(result.code, result.output).toBe(0);
+      expectFile(root, "last-write", "done");
+      expectFile(root, "reacquired", "yes");
+      expect(fs.readdirSync(resolveDistArtifactLockPath(root))).toEqual([]);
+    }, signal);
+  });
+
   it.for([
     { signalName: "SIGINT" as const, exitCode: 130 },
     { signalName: "SIGTERM" as const, exitCode: 143 },
@@ -817,8 +864,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     async ({ owner, unjoined }, { signal }) => {
       await withProcesses(async ({ start }) => {
         const root = createCheckout();
-        materializeNativeCompiler(root, { javaScriptApi: false });
-        materializeTypeChecker(root);
+        installCompiler(root);
         const ownerPath = write(root, ".artifacts/dist-artifacts.lock/owner.json", owner);
         if (unjoined) {
           write(root, ".artifacts/dist-artifacts.lock/unjoined", "unverified cleanup");
@@ -871,7 +917,6 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
   it.for([
     { directory: ".", nested: false },
     { directory: "src", nested: false },
-    { directory: "src", nested: true },
     { directory: "linked-src", nested: true },
   ])(
     "keeps declarations alive from $directory (nested=$nested) until their writer joins and keeps ownership across dist cleanup",
@@ -1017,7 +1062,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
           expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
         } finally {
           compilerGate.write("continue");
-          await waitForForeignProcessExit(compiler.pid, signal);
+          await waitForDead(compiler.pid, signal, "reject");
         }
       }, signal);
     },

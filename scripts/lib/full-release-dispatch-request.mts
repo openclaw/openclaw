@@ -82,6 +82,7 @@ export type DispatchRequest = {
 export type QualificationAdmissionDispatch = {
   request: ReturnType<typeof buildQualificationAdmissionRequest>;
   workflowSha: string;
+  workflowShaPolicy?: "advance-with-main" | "pinned";
   workflowRef: string;
   workflowId: number;
   phase: "prepared" | "attempted" | "observed" | "rejected";
@@ -109,10 +110,17 @@ export function dispatchInputsDigest(inputs: DispatchInputs): string {
 }
 
 export function formatDispatchSelection(
-  request: Pick<DispatchRequest, "targetSha" | "workflowSha" | "inputs" | "effectiveSoak">,
+  request: Pick<
+    DispatchRequest,
+    "targetSha" | "workflowSha" | "inputs" | "effectiveSoak" | "trustedWorkflowRef"
+  >,
 ): string {
   const { inputs } = request;
-  return `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
+  const selection = `Frozen validation selection: candidate=${request.targetSha} tooling=${request.workflowSha} release_profile=${inputs.release_profile} rerun_group=${inputs.rerun_group} soak=${request.effectiveSoak}`;
+  if (request.targetSha === request.workflowSha || request.trustedWorkflowRef === "candidate") {
+    return selection;
+  }
+  return `${selection}\nWARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts. Release verification may fail even when workloads succeed. Use the admitted candidate route for publication qualification, with Q=C by default or an explicit reviewed Q.`;
 }
 
 function validateDispatchRecord(value: unknown): asserts value is DispatchRecord {
@@ -166,9 +174,7 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       /^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(request.targetVersion) &&
       typeof request.targetContextRef === "string" &&
       typeof request.trustedWorkflowRef === "string" &&
-      ((value.kind === CANDIDATE_REQUEST_KIND &&
-        request.trustedWorkflowRef === "candidate" &&
-        request.targetSha === request.workflowSha) ||
+      ((value.kind === CANDIDATE_REQUEST_KIND && request.trustedWorkflowRef === "candidate") ||
         request.trustedWorkflowRef === "main" ||
         TRUSTED_WORKFLOW_TAG_PATTERN.test(request.trustedWorkflowRef)) &&
       typeof request.workflowRef === "string" &&
@@ -244,21 +250,25 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
   }
   if (value.kind === CANDIDATE_REQUEST_KIND) {
     requireDispatch(
-      request.trustedWorkflowRef === "candidate" && request.workflowSha === request.targetSha,
-      "Candidate request cannot change its qualification mode or C=Q identity",
+      request.trustedWorkflowRef === "candidate",
+      "Candidate request cannot change its admitted qualification mode",
     );
     const admission = value.admission;
+    const admissionKeys = [
+      "request",
+      "workflowSha",
+      "workflowRef",
+      "workflowId",
+      "phase",
+      "run",
+      "descriptor",
+    ];
     requireDispatch(
-      exactKeys(admission, [
-        "request",
-        "workflowSha",
-        "workflowRef",
-        "workflowId",
-        "phase",
-        "run",
-        "descriptor",
-      ]) &&
+      (exactKeys(admission, admissionKeys) ||
+        exactKeys(admission, [...admissionKeys, "workflowShaPolicy"])) &&
         SHA_PATTERN.test(stringValue(admission.workflowSha)) &&
+        (admission.workflowShaPolicy === undefined ||
+          ["advance-with-main", "pinned"].includes(stringValue(admission.workflowShaPolicy))) &&
         (admission.workflowRef === "main" ||
           TRUSTED_WORKFLOW_TAG_PATTERN.test(stringValue(admission.workflowRef))) &&
         Number.isSafeInteger(admission.workflowId) &&
@@ -433,7 +443,7 @@ export function observeQualificationAdmission(
       isDeepStrictEqual(authenticated.request, admission.request),
       "Retained admission differs from the original frozen request",
     );
-    return { descriptor: admission.descriptor, run: admission.run };
+    return { descriptor: admission.descriptor, run: admission.run, authenticated };
   }
   const inventory: unknown = JSON.parse(
     client.readApi("repos/" + REPOSITORY + "/actions/workflows/" + admission.workflowId + "/runs", [
@@ -508,7 +518,7 @@ export function observeQualificationAdmission(
     isDeepStrictEqual(authenticated.request, admission.request),
     "Admission returned a different frozen request",
   );
-  return { descriptor, run: { id: Number(run.id), attempt: 1 } };
+  return { descriptor, run: { id: Number(run.id), attempt: 1 }, authenticated };
 }
 
 export async function qualifyAdmission(
@@ -541,6 +551,7 @@ export async function qualifyAdmission(
       }
       requireDispatch(
         admission.workflowRef === "main" &&
+          admission.workflowShaPolicy !== "pinned" &&
           client.verifyMainAdvance &&
           SHA_PATTERN.test(currentSha) &&
           advances < MAX_ADMISSION_MAIN_ADVANCES,
@@ -613,13 +624,22 @@ export async function qualifyAdmission(
   do {
     const observed = observeQualificationAdmission(record, client);
     if (observed) {
+      if (admission.phase === "observed") {
+        // Reauthenticate without repacking the already frozen workflow input bytes.
+        return { record, authenticated: observed.authenticated };
+      }
       const envelope = decodePublicationDispatchEnvelope(
         String(record.request.inputs.trusted_workflow_json),
       );
       const packed = JSON.stringify({ ...envelope, qualificationAdmission: observed.descriptor });
       record = {
         ...record,
-        admission: { ...admission, ...observed, phase: "observed" },
+        admission: {
+          ...admission,
+          descriptor: observed.descriptor,
+          run: observed.run,
+          phase: "observed",
+        },
         request: {
           ...record.request,
           inputs: { ...record.request.inputs, trusted_workflow_json: packed },
@@ -627,7 +647,7 @@ export async function qualifyAdmission(
         },
       };
       retain(record);
-      return record;
+      return { record, authenticated: observed.authenticated };
     }
     await sleep(15_000);
   } while (Date.now() < deadline);

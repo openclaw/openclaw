@@ -360,6 +360,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       void statusReactionController.setQueued();
     }
 
+    const sendTyping = async (stop?: true) => {
+      if (ctxPayload.To) {
+        const { baseUrl, account, accountId } = deps;
+        await sendTypingSignal(ctxPayload.To, { cfg, baseUrl, account, accountId, stop });
+      }
+    };
     const { onModelSelected, typingCallbacks, ...replyPipeline } =
       createChannelMessageReplyPipeline({
         cfg,
@@ -367,17 +373,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         accountId: route.accountId,
         typing: {
-          start: async () => {
-            if (!ctxPayload.To) {
-              return;
-            }
-            await sendTypingSignal(ctxPayload.To, {
-              cfg,
-              baseUrl: deps.baseUrl,
-              account: deps.account,
-              accountId: deps.accountId,
-            });
-          },
+          start: () => sendTyping(),
+          // Without a stop, Signal keeps showing typing until its own timeout.
+          stop: () => sendTyping(true),
           onStartError: (err) => {
             logTypingFailure({
               log: logVerbose,
@@ -797,18 +795,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     const accessDecision = await resolveChannelIngress();
     const { senderAccess, commandAccess } = accessDecision;
-    const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
-      });
-    if (quoteText && !visibleQuoteText && isGroup) {
+    const quoteContext = resolveSignalQuoteContext({
+      cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow: senderAccess.effectiveGroupAllowFrom,
+    });
+    const { visibleQuoteText, visibleQuoteSender } = quoteContext;
+    if (quoteContext.quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
-        `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
+        `signal: drop quote context (mode=${quoteContext.contextVisibilityMode}, sender_allowed=${quoteContext.quoteSenderAllowed ? "yes" : "no"})`,
       );
     }
     const hasBodyContent =

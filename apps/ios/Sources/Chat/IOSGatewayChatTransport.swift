@@ -446,6 +446,16 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, ifCurrentRoute: nil)
     }
 
+    func requestHistory(sessionKey: String, cursor: String) async throws -> OpenClawChatHistoryPayload {
+        guard let route = await self.gateway.currentRoute() else { throw CancellationError() }
+        let target = self.sessionTarget(for: sessionKey)
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: target.sessionKey, agentID: target.agentID, cursor: cursor, maxBytes: 256 * 1024)
+        let data = try await self.gateway.request(request, ifCurrentRoute: route)
+        guard await self.gateway.currentRoute() == route else { throw CancellationError() }
+        return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: data)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let route = await currentSessionMutationRoute() else { return nil }
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
@@ -647,15 +657,25 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
-        let res = try await gateway.request(OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs))
+        // Health probes must not spend their request budget waiting for a reconnect.
+        // The session owns reconnects; a later probe can use its new live route.
+        guard let route = await gateway.currentRoute() else { throw CancellationError() }
+        let res = try await gateway.request(
+            OpenClawChatGatewayRequests.health(timeoutMs: timeoutMs),
+            ifCurrentRoute: route)
         return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: res))?.ok ?? true
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
         AsyncStream { continuation in
             let task = Task {
-                let stream = await self.gateway.subscribeServerEvents()
-                for await evt in stream {
+                let subscription = await self.gateway.makeServerEventSubscription(
+                    matching: { OpenClawChatGatewayPayloadCodec.acceptsEvent($0) })
+                defer {
+                    subscription.cancel()
+                    continuation.finish()
+                }
+                for await evt in subscription.events {
                     if Task.isCancelled {
                         return
                     }

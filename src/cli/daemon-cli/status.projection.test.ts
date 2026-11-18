@@ -18,7 +18,13 @@ vi.mock("./status.runtime-intent.js", () => {
 });
 
 it("keeps fast status lazy and preserves the deep runtime projections", async () => {
-  const env = { HOME: "/fixture", OPENCLAW_PROFILE: "caller" };
+  const env = {
+    HOME: "/fixture",
+    OPENCLAW_PROFILE: "caller",
+    OPENCLAW_HOME: "/caller-home",
+    OPENCLAW_STATE_DIR: "/caller-state",
+    OPENCLAW_CONFIG_PATH: "/caller-config.json",
+  };
   const argv = ["/fixture/node", " /fixture/entry.js "];
   vi.stubGlobal("process", { ...process, env, argv });
   const params = {
@@ -26,7 +32,7 @@ it("keeps fast status lazy and preserves the deep runtime projections", async ()
     state: {
       command: {
         programArguments: ["/fixture/node", "/fixture/entry.js"],
-        environment: { OPENCLAW_PROFILE: "work" },
+        environment: { HOME: "/fixture", OPENCLAW_PROFILE: "work" },
       },
       loadState: { status: "not-loaded" as const },
     },

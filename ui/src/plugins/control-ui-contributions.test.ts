@@ -42,7 +42,7 @@ it("renders customization inline and recovers reload controls after failure or s
   const diagnostics: PluginControlUiDiagnostic[] = [
     {
       pluginId: "custom-review",
-      message: "Disabled by Labs",
+      message: "Disabled by Gateway configuration",
       code: "custom-plugin-ui-disabled",
     },
   ];
@@ -86,10 +86,11 @@ it("renders customization inline and recovers reload controls after failure or s
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
     expect(manager.querySelector('[role="alert"]')).toBeNull();
     expect(manager.querySelector('[role="status"]')?.textContent).toContain("custom-review");
-    const labs = manager.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
-    expect(labs?.textContent?.trim()).toBe("Open Labs");
-    labs?.click();
-    expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
+    expect(manager.querySelector('a[href="/console/settings/labs"]')).toBeNull();
+    expect(manager.querySelector('[role="status"]')?.textContent).toContain(
+      "Disabled by the Gateway configuration",
+    );
+    expect(navigate).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
 
     const select = manager.querySelector<HTMLSelectElement>("select");
@@ -400,6 +401,31 @@ describe("native plugin session actions", () => {
       "view has ended",
     );
     expect(request.mock.calls.filter(([method]) => method === "fixture.retired-owner")).toEqual([]);
+    await element.updateComplete;
+  });
+
+  it("binds composer actions to the invoking pane's live draft until the pane retires", async () => {
+    const { element, run } = await mountActions({ placement: "composer" });
+    let draft = "fix the bug";
+    const setDraft = vi.fn((text: string) => {
+      draft = text;
+    });
+    element.composer = { draft: "stale render", getDraft: () => draft, onDraftChange: setDraft };
+    element.querySelector<HTMLButtonElement>("button")?.click();
+    const composer = run.mock.calls[0]?.[0].composer;
+    if (!composer) {
+      throw new Error("Expected the composer action to receive its pane draft");
+    }
+    draft = "fix the login bug";
+    expect(composer.draft).toBe("fix the login bug");
+    composer.setDraft(composer.draft.toUpperCase());
+    expect(draft).toBe("FIX THE LOGIN BUG");
+
+    element.sessionKey = "agent:main:other";
+    expect(() => composer.draft).toThrow("view has ended");
+    expect(() => composer.setDraft("stale")).toThrow("view has ended");
+    expect(setDraft).toHaveBeenCalledOnce();
+    expect(draft).toBe("FIX THE LOGIN BUG");
     await element.updateComplete;
   });
 

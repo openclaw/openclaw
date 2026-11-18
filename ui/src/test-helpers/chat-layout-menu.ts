@@ -1,5 +1,8 @@
-import type { Locator, Page } from "playwright";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import type { JSHandle, Locator, Page } from "playwright";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import { observeChatLayoutMenu } from "./chat-layout-menu-diagnostics.ts";
+import { rethrowWithControlUiE2eFailureFacts } from "./control-ui-e2e-diagnostics.ts";
 
 const button = (scope: Locator, name: string | RegExp) =>
   scope.getByRole("button", { name, exact: true });
@@ -69,7 +72,8 @@ export async function openChatPanels(
     await mobileHeader(pane).waitFor({ state: "visible" });
     const trigger = panelsToggle(pane, true);
     if (await trigger.isVisible()) {
-      if (!(await pane.locator(".chat-mobile-host").isVisible())) {
+      // A closing sheet is already hidden while it slides out; only an open one counts.
+      if (!(await pane.locator(".chat-mobile-host:not([hidden])").isVisible())) {
         await trigger.click();
       }
       return trigger;
@@ -86,19 +90,70 @@ export async function openChatPanels(
   return trigger;
 }
 
+const stopMenuObservation = (observation: JSHandle<ReturnType<typeof observeChatLayoutMenu>>) =>
+  withTimeout(
+    observation
+      .evaluate((recorder) => recorder?.stop())
+      .catch(() => {})
+      .then(() => observation.dispose()),
+    500,
+  ).catch(() => {});
+
 async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<void> {
-  await menu
+  let abandoned = false;
+  const pendingObservation = menu.evaluateHandle(observeChatLayoutMenu);
+  void pendingObservation
+    .then(async (late) => {
+      if (abandoned) {
+        await stopMenuObservation(late);
+      }
+    })
+    .catch(() => {});
+  const observation = await withTimeout(pendingObservation, 500).catch(() => {
+    abandoned = true;
+    return null;
+  });
+  const item = menu
     .getByRole("menuitem", { name, exact: true })
-    .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
-    .click();
-  await menu.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
+    .or(menu.getByRole("menuitemcheckbox", { name, exact: true }));
+  let beforeClickRead = false;
+  try {
+    if (observation) {
+      beforeClickRead = await withTimeout(
+        item.evaluate((target, recorder) => {
+          recorder?.captureBeforeClick(target);
+          return recorder !== null;
+        }, observation),
+        500,
+      ).catch(() => false);
+    }
+    await item.click();
+    await menu.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
+  } catch (error) {
+    await rethrowWithControlUiE2eFailureFacts(
+      menu.page(),
+      error,
+      "layoutMenuFactsRead",
+      async () => ({
+        // A late diagnostic evaluation must not be mistaken for a pre-click sample.
+        layoutMenuBeforeClickRead: beforeClickRead,
+        layoutMenu: observation
+          ? await observation.evaluate((recorder) => recorder?.read() ?? null)
+          : null,
+      }),
+    );
+  } finally {
+    if (observation) {
+      await stopMenuObservation(observation);
+    }
+  }
 }
 
 async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): Promise<void> {
   await waitForPanelLayout(pane);
   const matches = (label: string) => (typeof name === "string" ? name === label : name.test(label));
   const mobile = await mobileHeader(pane).isVisible();
-  const host = pane.locator(".chat-mobile-host");
+  const host = pane.locator(".chat-mobile-host:not([hidden])");
   const side = pane.locator('[data-region-header="side"]');
   const toggle = panelsToggle(pane, mobile);
 

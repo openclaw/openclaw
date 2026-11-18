@@ -226,40 +226,19 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
   };
 }
 
-type PullRequestFixture = {
-  state?: string;
-  baseRefName?: string;
-  baseRepository?: string;
-  mergeCommitOid?: string;
-  mergedBy?: string;
-};
-
-function mergedPullRequest(value: PullRequestFixture = {}) {
-  return {
-    state: value.state ?? "MERGED",
-    baseRefName: value.baseRefName ?? "release/2026.7.1",
-    baseRepository: { nameWithOwner: value.baseRepository ?? "openclaw/openclaw" },
-    mergeCommit: { oid: value.mergeCommitOid ?? SOURCE_SHA },
-    mergedBy: { login: value.mergedBy ?? "release-maintainer" },
-  };
-}
-
 function runCandidateProvenance(
   provenanceBlock: ProvenanceBlock,
   params: {
     branchHeads?: string[];
     releaseCompareStatus?: "ahead" | "behind" | "diverged" | "identical";
     candidateVersion?: string;
-    messageHeadline?: string;
-    directPullRequest?: PullRequestFixture;
-    mergedPullRequests?: PullRequestFixture[];
     openPr?: boolean;
     permission?: "admin" | "maintain" | "write";
     remoteSha?: string;
     signature?: "invalid" | "maintainer" | "missing" | "web-flow";
     targetContextRef?: string;
     targetRef?: string;
-    unrelatedOpenPullRequests?: number;
+    webFlowMerge?: boolean;
   } = {},
 ) {
   const candidateSha = SOURCE_SHA;
@@ -284,7 +263,6 @@ function runCandidateProvenance(
       repository: {
         object: {
           oid: candidateSha,
-          messageHeadline: params.messageHeadline ?? "release fixture",
           signature:
             signature === "missing"
               ? null
@@ -306,12 +284,16 @@ function runCandidateProvenance(
                     },
                   ]
                 : []),
-              ...Array.from({ length: params.unrelatedOpenPullRequests ?? 0 }, (_, index) => ({
-                state: "OPEN",
-                headRefOid: `${index + 1}`.repeat(40),
-                headRepository: { nameWithOwner: "openclaw/openclaw" },
-              })),
-              ...(params.mergedPullRequests ?? []).map(mergedPullRequest),
+              ...(params.webFlowMerge
+                ? [
+                    {
+                      state: "MERGED",
+                      baseRefName: normalizedContextRef,
+                      baseRepository: { nameWithOwner: "openclaw/openclaw" },
+                      mergeCommit: { oid: candidateSha },
+                    },
+                  ]
+                : []),
             ],
           },
         },
@@ -322,7 +304,6 @@ function runCandidateProvenance(
     join(fakeBin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
-if [[ "$*" == *"number="* ]]; then printf '%s\\n' "$FAKE_DIRECT_PR"; exit 0; fi
 if [[ "$*" == *"api graphql"* ]]; then printf '%s\\n' "$FAKE_METADATA"; exit 0; fi
 if [[ "$*" == *"/branches-where-head"* ]]; then printf '%s\\n' "$FAKE_BRANCH_HEADS"; exit 0; fi
 if [[ "$*" == *"/compare/"* ]]; then printf '%s\\n' "behind"; exit 0; fi
@@ -357,15 +338,6 @@ exit 64
       ...process.env,
       FAKE_BRANCH_HEADS: (params.branchHeads ?? ["release/2026.7.1"]).join("\n"),
       FAKE_METADATA: JSON.stringify(metadata),
-      FAKE_DIRECT_PR: JSON.stringify({
-        data: {
-          repository: {
-            pullRequest: params.directPullRequest
-              ? mergedPullRequest(params.directPullRequest)
-              : null,
-          },
-        },
-      }),
       FAKE_PERMISSION: JSON.stringify({
         permission: params.permission === "admin" ? "admin" : "write",
         role_name: params.permission ?? "maintain",
@@ -394,7 +366,7 @@ type ProvenanceCase = NonNullable<Parameters<typeof runCandidateProvenance>[1]> 
   stderr?: string;
 };
 
-// Share the signature/PR matrix; keep checkout-context admission at both workflow entry points.
+// Share the signature matrix; keep checkout-context admission at both workflow entry points.
 function checkProvenance(
   { exit = 0, stdout, stderr, ...params }: ProvenanceCase,
   block: ProvenanceBlock = PROVENANCE_BLOCKS[0],
@@ -563,19 +535,36 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("keeps exact release candidates trusted when the canonical branch advances", () => {
+  it("accepts a maintainer signature or exact GitHub merge when the branch advances", () => {
     for (const targetContextRef of ["release/2026.7.35", "extended-stable/2026.7.33"]) {
-      for (const signature of ["maintainer", "web-flow", "missing"] as const) {
-        checkProvenance({
-          candidateVersion: "2026.7.35",
-          remoteSha: "b".repeat(40),
-          releaseCompareStatus: "ahead",
-          targetContextRef,
-          signature,
-          mergedPullRequests: [{ baseRefName: targetContextRef }],
-          stdout: "Telegram candidate trust reason: release-branch",
-        });
-      }
+      const common = {
+        candidateVersion: "2026.7.35",
+        remoteSha: "b".repeat(40),
+        releaseCompareStatus: "ahead" as const,
+        targetContextRef,
+      };
+      checkProvenance({
+        ...common,
+        stdout: "Telegram candidate trust reason: release-branch",
+      });
+      checkProvenance({
+        ...common,
+        signature: "web-flow",
+        webFlowMerge: true,
+        stdout: "Telegram candidate trust reason: release-branch",
+      });
+      checkProvenance({
+        ...common,
+        signature: "missing",
+        exit: "nonzero",
+        stderr: "requires a valid maintainer signature",
+      });
+      checkProvenance({
+        ...common,
+        signature: "web-flow",
+        exit: "nonzero",
+        stderr: "requires one exact merge into a canonical release branch",
+      });
     }
   });
 
@@ -586,9 +575,6 @@ describe("release Telegram QA workflow", () => {
       { targetRef: "extended-stable/2026.7.33" },
       { remoteSha: "" },
       { openPr: true },
-      { mergedPullRequests: [] },
-      { mergedPullRequests: [{ mergeCommitOid: "c".repeat(40) }] },
-      { mergedPullRequests: [{ baseRepository: "fork/openclaw" }] },
     ];
 
     for (const params of cases) {
@@ -597,8 +583,6 @@ describe("release Telegram QA workflow", () => {
         remoteSha: "b".repeat(40),
         releaseCompareStatus: "ahead",
         targetContextRef: "extended-stable/2026.7.33",
-        signature: "web-flow",
-        mergedPullRequests: [{ baseRefName: "extended-stable/2026.7.33" }],
         ...params,
         exit: "nonzero",
       });
@@ -633,58 +617,14 @@ describe("release Telegram QA workflow", () => {
     }
   });
 
-  it("verifies an exact merged PR directly when commit associations omit it", () => {
-    for (const signature of ["web-flow", "missing"] as const) {
-      checkProvenance({
-        candidateVersion: "2026.7.33",
-        targetContextRef: "extended-stable/2026.7.33",
-        signature,
-        permission: signature === "missing" ? "admin" : "maintain",
-        messageHeadline: "fix(release): keep survivor sessions inside retention (#149710)",
-        directPullRequest: {},
-        unrelatedOpenPullRequests: 2,
-        stdout: "Telegram candidate trust reason: release-branch",
-      });
-    }
-  });
-
-  it("uses one exact associated merge without consulting the PR hint", () => {
+  it("rejects signed candidates whose signer lacks maintainer authority", () => {
     checkProvenance({
       candidateVersion: "2026.7.33",
-      directPullRequest: { state: "OPEN" },
-      mergedPullRequests: [{}],
-      messageHeadline: "fixture (#149710)",
-      signature: "web-flow",
       targetContextRef: "extended-stable/2026.7.33",
-      unrelatedOpenPullRequests: 2,
+      permission: "write",
+      exit: "nonzero",
+      stderr: "lacks maintain/admin access",
     });
-  });
-
-  it("never treats a commit's PR hint as release authorization", () => {
-    const cases = [
-      { label: "missing PR", directPullRequest: undefined },
-      { label: "open PR", directPullRequest: { state: "OPEN" } },
-      { label: "foreign base repository", directPullRequest: { baseRepository: "fork/openclaw" } },
-      { label: "different merge SHA", directPullRequest: { mergeCommitOid: "b".repeat(40) } },
-      { label: "missing merger", directPullRequest: { mergedBy: "" } },
-      { label: "insufficient merger permission", permission: "write" as const },
-      { label: "invalid signature", signature: "invalid" as const },
-      { label: "open candidate head", openPr: true },
-      { label: "no canonical PR suffix", messageHeadline: "claimed #149710 elsewhere" },
-      { label: "ambiguous existing associations", mergedPullRequests: [{}, {}] },
-    ];
-
-    for (const { label: _label, ...params } of cases) {
-      checkProvenance({
-        candidateVersion: "2026.7.33",
-        targetContextRef: "extended-stable/2026.7.33",
-        signature: "web-flow",
-        messageHeadline: "fixture (#149710)",
-        directPullRequest: {},
-        ...params,
-        exit: "nonzero",
-      });
-    }
   });
 
   it("binds every release context to candidate version and SHA", () => {

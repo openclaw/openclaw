@@ -50,11 +50,13 @@ const { createTempDir, createVault } = createMemoryWikiTestHarness();
 const EMPTY_SOURCE_GENERATION = hashMemoryWikiVaultSources([]);
 let blobStateDir = "";
 let blobStoreEnv: NodeJS.ProcessEnv = {};
+let cacheStoreOptions: OpenBlobStoreOptions;
 
 function createCacheStore() {
-  return createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) =>
-    createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv),
-  );
+  return createMemoryWikiCompiledCacheStore(<T>(options: OpenBlobStoreOptions) => {
+    cacheStoreOptions = options;
+    return createPluginBlobStoreForTests<T>("memory-wiki", options, blobStoreEnv);
+  });
 }
 
 async function createPersistentVault(
@@ -210,6 +212,58 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     );
     await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
   });
+
+  it.each(["warm", "cold", "source", "unprojected-source", "missing", "corrupt", "output"])(
+    "retains only valid unchanged publications on explicit compile (%s)",
+    async (change) => {
+      const { rootDir, config, sourcePath } = await createSourceVault();
+      const blobs = createPluginBlobStoreForTests<unknown>(
+        "memory-wiki",
+        cacheStoreOptions,
+        blobStoreEnv,
+      );
+      const before = await loadMemoryWikiVaultIdentity(rootDir);
+      const [row] = await blobs.entries();
+      assert(row && before.compiledCachePublicationId);
+      const persisted = await blobs.lookup(row.key);
+      const compiled = await loadMemoryWikiCompiledCache(config);
+      if (change === "cold") {
+        restartCache();
+      } else if (change === "source") {
+        await fs.writeFile(sourcePath, "# Alpha changed\n\nUpdated source.\n");
+      } else if (change === "unprojected-source") {
+        await fs.appendFile(sourcePath, "\n");
+      } else if (change === "missing") {
+        await blobs.delete(row.key);
+      } else if (change === "corrupt") {
+        await blobs.register(row.key, Buffer.from("invalid gzip"), row.metadata);
+      } else if (change === "output") {
+        await createCacheStore().write(
+          config,
+          snapshot("outdated output"),
+          before.compiledCachePublicationId,
+        );
+      }
+
+      const result = await compileMemoryWikiVault(config);
+      const after = await loadMemoryWikiVaultIdentity(rootDir);
+      if (change === "warm" || change === "cold") {
+        expect(result.updatedFiles).toEqual([]);
+        expect(after.compiledCachePublicationId).toBe(before.compiledCachePublicationId);
+        expect(await blobs.entries()).toEqual([row]);
+        expect(await blobs.lookup(row.key)).toEqual(persisted);
+      } else {
+        expect(after.compiledCachePublicationId).not.toBe(before.compiledCachePublicationId);
+        expect(await blobs.lookup(row.key)).toBeUndefined();
+        if (change === "source") {
+          expect(await loadMemoryWikiCompiledCache(config)).not.toEqual(compiled);
+        } else {
+          expect(await loadMemoryWikiCompiledCache(config)).toEqual(compiled);
+        }
+      }
+      await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({ state: "ready" });
+    },
+  );
 
   it.each([false, true])(
     "reconciles an external publication before source sync (source changed: %s)",

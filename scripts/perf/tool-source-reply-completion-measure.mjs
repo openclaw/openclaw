@@ -24,6 +24,7 @@ import path from "node:path";
 import { PerformanceObserver, performance } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { sampledOwnerBytes } from "../lib/sampled-owner-allocation.mjs";
 
 const [baseRoot, candidateRoot, callsArg = "5000"] = process.argv.slice(2);
 assert(baseRoot && candidateRoot, "expected BASE_ROOT CANDIDATE_ROOT");
@@ -42,9 +43,13 @@ async function load(root, side) {
     path.join(root, "src/agents/tool-source-reply-completion.ts"),
     "utf8",
   );
+  // Baseline revisions can predate the move into agent-core.
+  const provenanceModule = source.includes('from "./runtime/internal-hooks.js";')
+    ? "./runtime/internal-hooks.js"
+    : "../../packages/agent-core/src/internal-hooks.js";
   const imports = [
     'import { getAgentToolInputScope } from "../../packages/agent-core/src/tool-execution-context.js";',
-    'import {\n  attachInternalToolResultProvenance,\n  getInternalToolResultProvenance,\n} from "./runtime/internal-hooks.js";',
+    `import {\n  attachInternalToolResultProvenance,\n  getInternalToolResultProvenance,\n} from "${provenanceModule}";`,
   ];
   let transformed = source;
   for (const statement of imports) {
@@ -103,24 +108,6 @@ for (const owner of Object.values(owners)) {
   for (let index = 0; index < Math.min(200, calls); index++) {
     operation(owner);
   }
-}
-
-function sampledOwnerBytes(profile, url) {
-  const ids = new Set();
-  function visit(node, inherited = false) {
-    const owned = inherited || node.callFrame.url === url;
-    if (owned) {
-      ids.add(node.id);
-    }
-    return (
-      (owned ? node.selfSize : 0) +
-      node.children.reduce((sum, child) => sum + visit(child, owned), 0)
-    );
-  }
-  return {
-    bytes: visit(profile.head),
-    samples: profile.samples.filter((sample) => ids.has(sample.nodeId)).length,
-  };
 }
 
 let gcEntries = [];

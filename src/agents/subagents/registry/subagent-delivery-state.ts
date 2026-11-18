@@ -1,6 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type {
   PendingFinalDeliveryPayload,
   SubagentCompletionDeliveryState,
@@ -21,7 +22,6 @@ export function resetRequesterSettleWakeRetry(
     status: "pending",
     attemptCount: 0,
     privateInput: undefined,
-    replayCount: undefined,
     nextAttemptAt: undefined,
     lastError: undefined,
   };
@@ -41,67 +41,48 @@ export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
 export function projectSubagentRunForSessionList(entry: SubagentRunRecord): SubagentRunReadRecord {
   return {
     runId: entry.runId,
-    ...(entry.taskRunId !== undefined ? { taskRunId: entry.taskRunId } : {}),
-    ...(entry.pauseReason ? { pauseReason: entry.pauseReason } : {}),
-    ...(entry.swarmRunId ? { swarmRunId: entry.swarmRunId } : {}),
-    ...(entry.schedulerSlotId ? { schedulerSlotId: entry.schedulerSlotId } : {}),
-    ...(entry.swarmLaunchReplayKey ? { swarmLaunchReplayKey: entry.swarmLaunchReplayKey } : {}),
+    taskRunId: entry.taskRunId,
+    pauseReason: entry.pauseReason || undefined,
+    swarmRunId: entry.swarmRunId || undefined,
+    schedulerSlotId: entry.schedulerSlotId || undefined,
+    swarmLaunchReplayKey: entry.swarmLaunchReplayKey || undefined,
     childSessionKey: entry.childSessionKey,
-    ...(entry.childAgentId ? { childAgentId: entry.childAgentId } : {}),
-    ...(entry.controllerSessionKey ? { controllerSessionKey: entry.controllerSessionKey } : {}),
+    childAgentId: entry.childAgentId || undefined,
+    controllerSessionKey: entry.controllerSessionKey || undefined,
     requesterSessionKey: entry.requesterSessionKey,
     requesterStorePath: entry.requesterStorePath,
     controllerStorePath: entry.controllerStorePath,
-    ...(entry.collect
-      ? {
-          collect: true,
-          groupId: entry.groupId,
-          swarmRequesterSessionKey: entry.swarmRequesterSessionKey,
-        }
-      : {}),
-    ...(entry.collectorCompletion
-      ? { collectorCompletion: { status: entry.collectorCompletion.status } }
-      : {}),
-    ...(entry.requesterAgentId ? { requesterAgentId: entry.requesterAgentId } : {}),
-    ...(entry.model ? { model: entry.model } : {}),
-    ...(entry.generation !== undefined ? { generation: entry.generation } : {}),
+    collect: entry.collect || undefined,
+    groupId: entry.collect ? entry.groupId : undefined,
+    swarmRequesterSessionKey: entry.collect ? entry.swarmRequesterSessionKey : undefined,
+    collectorCompletion: entry.collectorCompletion && { status: entry.collectorCompletion.status },
+    requesterAgentId: entry.requesterAgentId || undefined,
+    model: entry.model || undefined,
+    generation: entry.generation,
     createdAt: entry.createdAt,
     execution: {
       status: entry.execution.status,
-      ...(entry.execution.interruptionReason
-        ? { interruptionReason: entry.execution.interruptionReason }
-        : {}),
-      ...(entry.execution.startedAt !== undefined ? { startedAt: entry.execution.startedAt } : {}),
-      ...(entry.execution.endedAt !== undefined ? { endedAt: entry.execution.endedAt } : {}),
-      ...(entry.execution.outcome ? { outcome: { status: entry.execution.outcome.status } } : {}),
+      startedAt: entry.execution.startedAt,
+      endedAt: entry.execution.endedAt,
+      outcome: entry.execution.outcome && { status: entry.execution.outcome.status },
     },
-    ...(entry.sessionStartedAt !== undefined ? { sessionStartedAt: entry.sessionStartedAt } : {}),
-    ...(entry.accumulatedRuntimeMs !== undefined
-      ? { accumulatedRuntimeMs: entry.accumulatedRuntimeMs }
-      : {}),
-    ...(entry.runTimeoutSeconds !== undefined
-      ? { runTimeoutSeconds: entry.runTimeoutSeconds }
-      : {}),
-    ...(entry.endedReason ? { endedReason: entry.endedReason } : {}),
-    ...(entry.cleanupCompletedAt !== undefined
-      ? { cleanupCompletedAt: entry.cleanupCompletedAt }
-      : {}),
-    ...(entry.delivery
-      ? {
-          delivery: {
-            status: entry.delivery.status,
-            ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
-            ...(entry.delivery.suspendedAt !== undefined
-              ? { suspendedAt: entry.delivery.suspendedAt }
-              : {}),
-          },
-        }
-      : {}),
+    sessionStartedAt: entry.sessionStartedAt,
+    accumulatedRuntimeMs: entry.accumulatedRuntimeMs,
+    runTimeoutSeconds: entry.runTimeoutSeconds,
+    endedReason: entry.endedReason || undefined,
+    cleanupCompletedAt: entry.cleanupCompletedAt,
+    delivery: entry.delivery && {
+      status: entry.delivery.status,
+      requesterDelivery: entry.delivery.requesterDelivery,
+      disposition: entry.delivery.disposition || undefined,
+      suspendedAt: entry.delivery.suspendedAt,
+    },
   };
 }
 
 export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
-  if (entry.killReconciliation || entry.killIntent) {
+  if (entry.killReconciliation || entry.killIntent || entry.requesterSettleWake) {
+    // Requester settlement still reads child policy after child cleanup has completed.
     // Reconciliation tombstones own provider results until completion or cancellation settles.
     return true;
   }
@@ -127,6 +108,9 @@ export function projectSubagentRunForMaintenance(
     requesterSessionKey: entry.requesterSessionKey,
     createdAt: entry.createdAt,
     cleanupCompletedAt: entry.cleanupCompletedAt,
+    requesterSettleWake: entry.requesterSettleWake
+      ? { status: entry.requesterSettleWake.status }
+      : undefined,
     expectsCompletionMessage: entry.expectsCompletionMessage,
     killIntent: entry.killIntent ? { ...entry.killIntent } : entry.killIntent,
     killReconciliation: entry.killReconciliation
@@ -152,14 +136,6 @@ export function normalizeSubagentRunState(entry: SubagentRunRecord): SubagentRun
     ? entry.deleteCleanupDispatchedAt
     : undefined;
   entry.suppressCompletionDelivery = entry.suppressCompletionDelivery === true ? true : undefined;
-  entry.terminalOwner =
-    entry.terminalOwner === "interrupted-recovery" &&
-    Number.isFinite(entry.execution.endedAt) &&
-    entry.execution.outcome?.status === "error" &&
-    entry.endedReason === "subagent-error" &&
-    entry.pauseReason !== "sessions_yield"
-      ? "interrupted-recovery"
-      : undefined;
   if (entry.completion) {
     entry.completion.terminalReply = normalizeAgentRunTerminalReplySnapshot(
       entry.completion.terminalReply,
@@ -238,6 +214,74 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
   };
 }
 
+export function recordRequesterDelivery(
+  entry: SubagentRunRecord,
+  fact: NonNullable<SubagentCompletionDeliveryState["requesterDelivery"]>,
+): void {
+  const delivery = ensureDeliveryState(entry);
+  if (delivery.requesterDelivery?.state !== "consumed") {
+    delivery.requesterDelivery = fact;
+  }
+  if (delivery.status === "pending" || delivery.status === "in_progress") {
+    delivery.disposition = undefined;
+    delivery.lastError = undefined;
+  }
+}
+
+/** A result committed to the requester transcript is never replayed. */
+export function hasConsumedRequesterInput(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.requesterDelivery?.state === "consumed";
+}
+
+/** A private result is delivered by its committed input; a yielded final also owes an answer. */
+export function hasConsumedPrivateRequesterInput(entry: SubagentRunRecord): boolean {
+  return (
+    hasConsumedRequesterInput(entry) &&
+    entry.requesterSettleWake?.yieldedFinalDeliverable !== true &&
+    (entry.completionTarget === "parent" || entry.requesterSettleWake?.privateInput !== undefined)
+  );
+}
+
+// The requester turn itself stopped; no answer exists to deliver.
+const REQUESTER_TURN_FAILURES = new Set<SubagentAnnounceDeliveryResult["reason"]>([
+  "requester_aborted",
+  "requester_timed_out",
+  "requester_preparation_changed",
+  "requester_state_conflict",
+  "requester_transcript_conflict",
+]);
+
+/**
+ * A committed result is delivered when its turn failed before answering. A turn that answered,
+ * or ended for a recorded reason, keeps its own outcome: a missed send stays a failure.
+ */
+export function resolveRequesterDeliveryOutcome(
+  entries: readonly SubagentRunRecord[],
+  outcome: SubagentAnnounceDeliveryResult | undefined,
+): SubagentAnnounceDeliveryResult | undefined {
+  const turnFailedBeforeAnswer =
+    outcome?.finalAssistantVisibleText === undefined &&
+    (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
+  return outcome &&
+    !outcome.delivered &&
+    entries.length > 0 &&
+    entries.every(
+      (entry) =>
+        hasConsumedPrivateRequesterInput(entry) ||
+        (turnFailedBeforeAnswer && hasConsumedRequesterInput(entry)),
+    )
+    ? { delivered: true, path: "direct" }
+    : outcome;
+}
+
+export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?: string): void {
+  recordRequesterDelivery(entry, {
+    ...entry.delivery?.requesterDelivery,
+    state: "waiting",
+    blockingRunId: blockingRunId ?? entry.delivery?.requesterDelivery?.blockingRunId,
+  });
+}
+
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
@@ -251,37 +295,6 @@ export function isCompletedRequesterDeliveryBlocked(
     entry.delivery?.suspendedReason === "permanent_failure" &&
     (entry.delivery.lastDropReason === "message_tool_delivery_missing" ||
       entry.delivery.lastDropReason === "visible_reply_missing")
-  );
-}
-
-/** Returns true when required delivery still owns the row after its child session is gone. */
-export function hasRetainedRequiredCompletionDelivery(
-  entry: Pick<
-    SubagentRunRecord,
-    "completion" | "delivery" | "expectsCompletionMessage" | "suppressCompletionDelivery"
-  >,
-): boolean {
-  const delivery = entry.delivery;
-  if (
-    entry.expectsCompletionMessage !== true ||
-    entry.suppressCompletionDelivery === true ||
-    entry.completion?.required !== true ||
-    !delivery?.payload
-  ) {
-    return false;
-  }
-  if (isDeliverySuspended(entry)) {
-    return true;
-  }
-  if (delivery.status === "in_progress") {
-    // The correlated session queue owns this delivery and resumes it separately.
-    return true;
-  }
-  return (
-    delivery.status === "pending" &&
-    delivery.disposition !== "ambiguous" &&
-    delivery.disposition !== "intentional_non_delivery" &&
-    delivery.disposition !== "permanent_failure"
   );
 }
 
@@ -307,6 +320,9 @@ export const markRequesterSettleWakePending = (
 
 export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   const delivery = ensureDeliveryState(entry);
+  if (delivery.requesterDelivery?.state === "waiting") {
+    delivery.requesterDelivery = undefined;
+  }
   delivery.payload = undefined;
   delivery.createdAt = undefined;
   delivery.lastAttemptAt = undefined;

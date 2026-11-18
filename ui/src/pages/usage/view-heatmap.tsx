@@ -1,6 +1,7 @@
 import { createMemo, createProjection, For, Show } from "solid-js";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { createMsFormatter, formatNumber } from "../../lib/reactive/format.ts";
+import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { formatFullDate } from "./metrics.ts";
 import type { CostDailyEntry } from "./types.ts";
 
@@ -9,8 +10,6 @@ type UsageHeatmapCell = {
   tokens: number;
   /** 0 = no activity, 1-4 = nonzero-quartile intensity buckets. */
   level: 0 | 1 | 2 | 3 | 4;
-  /** An interrupted response that day leaves its recorded tokens as a lower bound. */
-  partial: boolean;
   column: number;
   row: number;
 };
@@ -67,9 +66,6 @@ function buildUsageHeatmap(
   const endMs = dateToUtcNoon(rangeEndDate);
   const startMs = Math.max(dateToUtcNoon(rangeStartDate), endMs - (MAX_HEATMAP_DAYS - 1) * DAY_MS);
   const tokensByDate = new Map(daily.map((entry) => [entry.date, entry.totalTokens]));
-  const partialDates = new Set(
-    daily.filter((entry) => entry.usageReport?.state === "unavailable").map((entry) => entry.date),
-  );
   const nonZero = daily
     .filter((entry) => {
       const entryMs = dateToUtcNoon(entry.date);
@@ -80,7 +76,7 @@ function buildUsageHeatmap(
 
   const startWeekday = new Date(startMs).getUTCDay();
   const gridStartMs = startMs - startWeekday * DAY_MS;
-  const monthFormat = new Intl.DateTimeFormat(undefined, { month: "short", timeZone: "UTC" });
+  const monthFormat = createMsFormatter({ month: "short", timeZone: "UTC" });
   const cells: UsageHeatmapCell[] = [];
   const monthLabels: string[] = [];
   let previousMonth = -1;
@@ -99,14 +95,13 @@ function buildUsageHeatmap(
         date,
         tokens,
         level: levelFor(tokens, thresholds),
-        partial: partialDates.has(date),
         column,
         row: weekday,
       });
     }
     const labelMs = firstVisibleMs ?? dateToUtcNoon(rangeEndDate);
     const month = new Date(labelMs).getUTCMonth();
-    monthLabels.push(month === previousMonth ? "" : monthFormat.format(new Date(labelMs)));
+    monthLabels.push(month === previousMonth ? "" : monthFormat(labelMs));
     previousMonth = month;
   }
   return { cells, monthLabels };
@@ -132,8 +127,7 @@ function HeatmapSvg(props: UsageHeatmapProps) {
   const cells = createProjection(() => heatmap().cells, [], { key: "date" });
   const width = () => HEATMAP_LEFT + heatmap().monthLabels.length * HEATMAP_PITCH;
   const height = HEATMAP_TOP + 7 * HEATMAP_PITCH;
-  const numberFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
-  const weekdayFormat = new Intl.DateTimeFormat(undefined, {
+  const weekdayFormat = createMsFormatter({
     weekday: "short",
     timeZone: "UTC",
   });
@@ -161,18 +155,20 @@ function HeatmapSvg(props: UsageHeatmapProps) {
             x={HEATMAP_LEFT - 6}
             y={HEATMAP_TOP + row * HEATMAP_PITCH + HEATMAP_CELL - 2}
           >
-            {weekdayFormat.format(new Date(utcDay))}
+            {weekdayFormat(utcDay)}
           </text>
         )}
       </For>
       <For each={cells}>
         {(day) => {
+          const dateLabel = createMemo(() => {
+            getLocale();
+            return formatFullDate(day.date);
+          });
           const tooltip = createMemo(
             () =>
-              `${formatFullDate(day.date)} · ${t("usage.heatmap.cellTokens", {
-                tokens: day.partial
-                  ? t("usage.common.atLeast", { value: numberFormat.format(day.tokens) })
-                  : numberFormat.format(day.tokens),
+              `${dateLabel()} · ${t("usage.heatmap.cellTokens", {
+                tokens: formatNumber(day.tokens, { maximumFractionDigits: 0 }),
               })}`,
           );
           return (

@@ -8,31 +8,19 @@ import {
 describe("buildSandboxContainerName", () => {
   it("preserves scope identity when a custom prefix exceeds the Docker name limit", () => {
     const commonPrefix = "custom-prefix-".repeat(6);
-    const first = buildSandboxContainerName(
-      `${commonPrefix}first`,
-      slugifySessionKey("session:first"),
-    );
-    const second = buildSandboxContainerName(
-      `${commonPrefix}second`,
-      slugifySessionKey("session:second"),
-    );
-    const sameScopeDifferentPrefix = buildSandboxContainerName(
-      `${commonPrefix}second`,
-      slugifySessionKey("session:first"),
-    );
-    const oversizedSlug = buildSandboxContainerName(
-      commonPrefix,
-      slugifySessionKey("session:".concat("x".repeat(200))),
-    );
+    const nameFor = (suffix: string, sessionKey: string) =>
+      buildSandboxContainerName(`${commonPrefix}${suffix}`, slugifySessionKey(sessionKey));
+    const first = nameFor("first", "session:first");
+    const second = nameFor("second", "session:second");
+    const sameScopeDifferentPrefix = nameFor("second", "session:first");
+    const oversizedSlug = nameFor("", "session:".concat("x".repeat(200)));
 
     expect(first).not.toBe(second);
     expect(first).not.toBe(sameScopeDifferentPrefix);
-    expect(first).toHaveLength(63);
-    expect(second).toHaveLength(63);
-    expect(oversizedSlug).toHaveLength(63);
-    expect(first).toMatch(/-[0-9a-f]{12}$/);
-    expect(second).toMatch(/-[0-9a-f]{12}$/);
-    expect(oversizedSlug).toMatch(/-[0-9a-f]{12}$/);
+    for (const name of [first, second, oversizedSlug]) {
+      expect(name).toHaveLength(63);
+      expect(name).toMatch(/-[0-9a-f]{12}$/);
+    }
   });
 
   it("preserves workspace identity when a custom prefix exceeds the Docker name limit", () => {
@@ -41,13 +29,12 @@ describe("buildSandboxContainerName", () => {
     const second = buildSandboxContainerName("custom-prefix-two-that-is-far-too-long-", slug);
 
     expect(slug).toMatch(/^workspace-[a-f0-9]{32}$/);
-    expect(first).toHaveLength(63);
-    expect(second).toHaveLength(63);
     expect(first).not.toBe(second);
-    expect(first).toContain(slug);
-    expect(second).toContain(slug);
-    expect(first).toMatch(/-[a-f0-9]{12}$/);
-    expect(second).toMatch(/-[a-f0-9]{12}$/);
+    for (const name of [first, second]) {
+      expect(name).toHaveLength(63);
+      expect(name).toContain(slug);
+      expect(name).toMatch(/-[a-f0-9]{12}$/);
+    }
   });
 });
 
@@ -55,7 +42,11 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
   const sessionKey = "agent:poly:msteams:channel-1";
   const workspaceA = "/tmp/openclaw-customers/atica/agents/poly/workspace";
   const workspaceB = "/tmp/openclaw-customers/polytopic/agents/poly/workspace";
-  const createLayout = (scope: "session" | "agent" | "shared", workspaceDir: string) =>
+  const createLayout = (
+    scope: "session" | "agent" | "shared",
+    workspaceDir: string,
+    context: { rawSessionKey?: string; agentId?: string } = {},
+  ) =>
     resolveSandboxWorkspaceLayoutPaths({
       cfg: {
         scope,
@@ -64,6 +55,7 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
       },
       rawSessionKey: sessionKey,
       workspaceDir,
+      ...context,
     });
 
   it.each(["session", "agent"] as const)("qualifies %s scope by resolved workspace", (scope) => {
@@ -81,15 +73,9 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
   });
 
   it("uses the prepared agent owner for a bare agent-scoped session key", () => {
-    const layout = resolveSandboxWorkspaceLayoutPaths({
-      cfg: {
-        scope: "agent",
-        workspaceAccess: "rw",
-        workspaceRoot: "/tmp/openclaw-sandboxes",
-      },
+    const layout = createLayout("agent", workspaceA, {
       rawSessionKey: "global",
       agentId: "research",
-      workspaceDir: workspaceA,
     });
 
     expect(layout.scopeKey).toMatch(/^agent:research:workspace:[a-f0-9]{32}$/);
@@ -98,28 +84,22 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
   it.each(["agent", "session", "shared"] as const)(
     "isolates different required-sandbox principals with %s scope",
     (scope) => {
-      const layoutForPrincipal = (sandboxPrincipalId: string) => {
-        const layout = resolveSandboxWorkspaceLayoutPaths({
+      const layoutForPrincipal = (sandboxPrincipalId: string) =>
+        resolveSandboxWorkspaceLayoutPaths({
           cfg: { scope, workspaceAccess: "ro", workspaceRoot: "/tmp/openclaw-sandboxes" },
           rawSessionKey: `agent:shared:${sandboxPrincipalId}`,
           agentId: "shared",
           isolationSubject: { kind: "profile", profileId: sandboxPrincipalId },
           workspaceDir: workspaceA,
         });
-        return {
-          ...layout,
-          containerName: buildSandboxContainerName(
-            "openclaw-sbx-",
-            slugifySessionKey(layout.scopeKey),
-          ),
-        };
-      };
+      const containerNameFor = (scopeKey: string) =>
+        buildSandboxContainerName("openclaw-sbx-", slugifySessionKey(scopeKey));
 
       const guestA = layoutForPrincipal("guest-a");
       const guestB = layoutForPrincipal("guest-b");
 
       expect(guestA.scopeKey).not.toBe(guestB.scopeKey);
-      expect(guestA.containerName).not.toBe(guestB.containerName);
+      expect(containerNameFor(guestA.scopeKey)).not.toBe(containerNameFor(guestB.scopeKey));
       expect(guestA.workspaceDir).not.toBe(guestB.workspaceDir);
       expect(guestA.workspaceDir).not.toBe(guestA.agentWorkspaceDir);
       expect(guestB.workspaceDir).not.toBe(guestB.agentWorkspaceDir);
@@ -128,12 +108,7 @@ describe("resolveSandboxWorkspaceLayoutPaths", () => {
 
   it("preserves the shared writable agent workspace without a required-sandbox principal", () => {
     const layoutForSession = (rawSessionKey: string) =>
-      resolveSandboxWorkspaceLayoutPaths({
-        cfg: { scope: "agent", workspaceAccess: "rw", workspaceRoot: "/tmp/openclaw-sandboxes" },
-        rawSessionKey,
-        agentId: "shared",
-        workspaceDir: workspaceA,
-      });
+      createLayout("agent", workspaceA, { rawSessionKey, agentId: "shared" });
 
     const firstSession = layoutForSession("agent:shared:first-session");
     const secondSession = layoutForSession("agent:shared:second-session");

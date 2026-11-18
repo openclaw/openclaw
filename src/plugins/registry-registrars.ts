@@ -19,6 +19,7 @@ import {
 } from "./agent-tool-result-middleware.js";
 import {
   resolveConversationAccessAllowed,
+  resolveModelRequestAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
@@ -75,6 +76,9 @@ function normalizeHookEligibility<T>(value: unknown, isEligible: (item: unknown)
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
   return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
 }
+
+// Transferred services must not capture their original registration's registry.
+function startDecisionProviderService() {}
 
 /** Compose domain registrars over one explicit mutable registry state. */
 export function createPluginRegistrars(state: PluginRegistryState) {
@@ -146,7 +150,8 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     const host = new DecisionProviderHost(provider, record, canonical);
     registry.decisionProviders.push({ pluginId: record.id, host });
     record.services.push(`decisions:${id}`);
-    getPluginInstance(record)?.lifecycle.onDispose(() => host.stop());
+    const stop = host.stop.bind(host);
+    getPluginInstance(record)?.lifecycle.onDispose(stop);
     // The service is a physical-settlement owner. Reload also closes admission
     // before earlier sidecar and memory drains can wait on decision work.
     registry.services.push({
@@ -154,7 +159,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       id: `decisions:${id}`,
       origin: record.origin,
       source: record.source,
-      service: { id: `decisions:${id}`, start() {}, stop: () => host.stop() },
+      service: { id: `decisions:${id}`, start: startDecisionProviderService, stop },
     });
   };
 
@@ -241,7 +246,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `compaction provider "${id}" registration missing summarize`);
       return;
     }
-    const existing = registry.compactionProviders.find((entry) => entry.provider.id === id);
+    const existing = registry.compactionProviders.find((entry) => entry.provider.id.trim() === id);
     if (existing) {
       const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
       reportRegistrationError(
@@ -276,13 +281,11 @@ export function createPluginRegistrars(state: PluginRegistryState) {
         capability.providerRuntime !== undefined ||
         capability.recallToolNames !== undefined ||
         capability.deterministicRecallToolName !== undefined ||
-        capability.supportsPrivateTranscriptRecall !== undefined ||
-        capability.learnToolNames !== undefined ||
-        capability.learnGuidanceBuilder !== undefined);
+        capability.supportsPrivateTranscriptRecall !== undefined);
     if (dropsSlotOwnerFacts) {
       reportRegistrationWarning(
         record,
-        "memory plugin not selected for the memory slot; skipping its indexing runtime, recall and learn registration (consolidation lifecycle preserved)",
+        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
       );
     }
     const {
@@ -291,8 +294,6 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       recallToolNames: _droppedRecallToolNames,
       deterministicRecallToolName: _droppedRecallToolName,
       supportsPrivateTranscriptRecall: _droppedPrivateRecall,
-      learnToolNames: _droppedLearnToolNames,
-      learnGuidanceBuilder: _droppedLearnGuidanceBuilder,
       ...consolidationCapability
     } = capability;
     if (memorySlotSelected && capability.runtime) {
@@ -482,6 +483,16 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    const promptGuidance = opts?.promptGuidance?.trim();
+    if (opts?.promptGuidance !== undefined && (!promptGuidance || normalized.length === 0)) {
+      // Guidance is gated on the registration's declared names; a factory that names its
+      // tools only at run time could never show it.
+      reportRegistrationError(
+        record,
+        "tool promptGuidance must be non-empty text on a registration with name or names",
+      );
+      return;
+    }
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
@@ -523,6 +534,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
         optional,
         workspaceAccess:
           opts?.workspaceAccess ?? (typeof tool !== "function" && !versioned ? "execute" : true),
+        ...(promptGuidance ? { promptGuidance } : {}),
         origin: record.origin,
       }),
       // Host-owned membership must not re-enter the callable wrapper's graph walk.
@@ -631,20 +643,34 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationWarning(record, `unknown typed hook "${String(hookName)}" ignored`);
       return;
     }
-    if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
+    if (hookName === "before_model_request" && !resolveModelRequestAllowed(policy)) {
+      // Gateway startup logs registration warnings, so the ignored hook is not silent.
       reportRegistrationWarning(
         record,
-        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        `typed hook "before_model_request" ignored: it is off by default; set ` +
+          `plugins.entries.${record.id}.hooks.allowModelRequest=true to enable it`,
       );
       return;
     }
-    const conversationAccessAllowed = resolveConversationAccessAllowed(record.origin, policy);
+    if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
+      reportRegistrationWarning(
+        record,
+        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
+      );
+      return;
+    }
+    const conversationAccessAllowed = resolveConversationAccessAllowed(
+      record.origin,
+      policy,
+      record.trust?.conversationAccessAccepted,
+    );
     if (PLUGIN_HOOK_METADATA[hookName].conversationAccess && !conversationAccessAllowed) {
       if (record.origin !== "bundled") {
         reportRegistrationWarning(
           record,
-          `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
-            `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
+          `typed hook "${hookName}" blocked because non-bundled plugins need conversation access: ` +
+            `declare contracts.conversationAccess ["read"] and approve the plugin's capabilities, ` +
+            `or set plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         );
         return;
       }

@@ -4,7 +4,10 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { sqliteSessionIdWriteScope } from "../../infra/sqlite-database-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
-import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  OpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution-contract.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
 import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
@@ -121,11 +124,23 @@ export async function projectSessionEntryLifecycleMutationInWorker(
       archiveRecovery: prepared.archiveRecovery,
     };
   }
-  return runSessionLifecyclePlanningInWorker(params, "finish", {
-    ...prepared,
+  // The former finish round trip detached caller-owned metadata at this boundary.
+  for (const preparedUpsert of upsertedEntries) {
+    if (preparedUpsert.routeContext) {
+      preparedUpsert.routeContext = structuredClone(preparedUpsert.routeContext);
+    }
+    if (preparedUpsert.resetBoundary) {
+      preparedUpsert.resetBoundary = structuredClone(preparedUpsert.resetBoundary);
+    }
+  }
+  return {
+    ...(await runSessionLifecyclePlanningInWorker(params, "finish", {
+      store: prepared.store,
+      selected: prepared.selected,
+      archiveDirectory: params.input.archiveDirectory,
+    })),
     upsertedEntries,
-    archiveDirectory: params.input.archiveDirectory,
-  });
+  };
 }
 
 export function commitSessionLifecycleProjectionInWorker(params: {
@@ -138,7 +153,7 @@ export function commitSessionLifecycleProjectionInWorker(params: {
     candidate: SessionLifecycleProjectionCommitted,
     operation: RetainedWorkerTransactionAdmission,
   ) => void;
-  onLifecycleCommitted?: () => void;
+  onLifecycleCommitted?: (source?: AgentDatabaseExecutionFileIdentity) => void;
   afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
 }) {
   return runSessionEntryWorkerOperation<
@@ -154,8 +169,8 @@ export function commitSessionLifecycleProjectionInWorker(params: {
     candidateKind: "session-lifecycle-projection",
     run: (worker, commit) =>
       commit(() => worker.execute({ type: "session.lifecycle.project", input: params.input })),
-    onAcknowledged(candidate) {
-      params.onLifecycleCommitted?.();
+    onAcknowledged(candidate, fileIdentity) {
+      params.onLifecycleCommitted?.(fileIdentity);
       for (const sessionId of candidate.projectionReconcileSessionIds) {
         startSessionTranscriptIndexReconcile({ ...params.database, preferredSessionId: sessionId });
       }

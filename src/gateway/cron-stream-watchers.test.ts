@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import type { CronJob } from "../cron/types.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import type {
   ManagedRun,
   ProcessSupervisor,
@@ -25,6 +27,7 @@ import {
 } from "./cron-stream-watchers.test-helpers.js";
 
 describe("cron stream watchers", () => {
+  const createBroker = useSpawnBrokerTestFixture(afterEach);
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -200,6 +203,8 @@ describe("cron stream watchers", () => {
   });
 
   it("preserves historical stream ownership and settlement after the creating request closes", async () => {
+    const broker = await createBroker();
+    const retainedBroker: boolean[] = [];
     vi.useFakeTimers();
     const creatorContext = new AsyncLocalStorage<string>();
     const creatorWork = new AsyncWorkScope();
@@ -210,31 +215,34 @@ describe("cron stream watchers", () => {
     const persistedStatuses: Array<CronJob["state"]["streamStatus"]> = [];
     const delivered: Array<{ agentId: string | undefined; batch: string }> = [];
     const fake = fakeSupervisor();
-    const watchers = createWatchers({
-      getDefaultAgentId: () => "research",
-      getProcessSupervisor: () => ({
-        ...fake.supervisor,
-        spawn: async (input: SpawnInput) => {
-          observedContexts.push(creatorContext.getStore());
-          return await fake.spawn(input);
-        },
-      }),
-      minIntervalMs: 1,
-      updateState: async (_jobId, patch) => {
-        await trackAsyncWork(() => {
-          observedContexts.push(creatorContext.getStore());
-          persistedStatuses.push(patch.streamStatus);
-        });
-      },
-      recordFailure: vi.fn(async () => {}),
-      fireBatch: async (current, batch) =>
-        await trackAsyncWork(() => {
-          observedContexts.push(creatorContext.getStore());
-          delivered.push({ agentId: current.agentId, batch });
-          return "fired" as const;
+    const watchers = runWithSpawnBroker(broker, () =>
+      createWatchers({
+        getDefaultAgentId: () => "research",
+        getProcessSupervisor: () => ({
+          ...fake.supervisor,
+          spawn: async (input: SpawnInput) => {
+            observedContexts.push(creatorContext.getStore());
+            retainedBroker.push(getSpawnBroker() === broker);
+            return await fake.spawn(input);
+          },
         }),
-      logger: { info: vi.fn(), warn: vi.fn() },
-    });
+        minIntervalMs: 1,
+        updateState: async (_jobId, patch) => {
+          await trackAsyncWork(() => {
+            observedContexts.push(creatorContext.getStore());
+            persistedStatuses.push(patch.streamStatus);
+          });
+        },
+        recordFailure: vi.fn(async () => {}),
+        fireBatch: async (current, batch) =>
+          await trackAsyncWork(() => {
+            observedContexts.push(creatorContext.getStore());
+            delivered.push({ agentId: current.agentId, batch });
+            return "fired" as const;
+          }),
+        logger: { info: vi.fn(), warn: vi.fn() },
+      }),
+    );
     try {
       await inCreator(() => watchers.start(job({ agentId: "ops" })));
       await creatorWork.drain();
@@ -247,6 +255,7 @@ describe("cron stream watchers", () => {
       expect(delivered).toEqual([{ agentId: "ops", batch: "owned output" }]);
       expect(persistedStatuses).toEqual(expect.arrayContaining(["starting", "running", "stopped"]));
       expect(observedContexts.every((context) => context === undefined)).toBe(true);
+      expect(retainedBroker).toEqual([true]);
       expect(watchers.activeJobIds()).toEqual([]);
       expect(fake.runs[0]?.cancel).toHaveBeenCalled();
       await expect(inCreator(() => trackAsyncWork(() => undefined))).rejects.toThrow(

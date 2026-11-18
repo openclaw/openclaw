@@ -2,7 +2,7 @@ import path from "node:path";
 import type { Result } from "@openclaw/normalization-core/result";
 import {
   AgentDatabaseAdmissionError,
-  readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -38,7 +38,7 @@ export function loadInheritedAuthProfileStore(
       ? resolveAuthProfileDatabasePath(agentDir)
       : resolveSharedAuthStorePath(env);
     const ownerId = resolveAuthProfileDatabaseOwnerId(agentDir ?? path.dirname(databasePath));
-    const refusal = readAgentDatabaseAdmissionRefusal(ownerId, { env });
+    const refusal = readAgentDatabaseReadAdmissionRefusal(ownerId, { env });
     const isOwnerPath = (pathname: string) =>
       isSameOpenClawAgentDatabasePath(pathname, databasePath);
     if (

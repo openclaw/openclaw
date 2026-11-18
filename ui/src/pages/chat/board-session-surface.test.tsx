@@ -40,7 +40,7 @@ describe("board session shell", () => {
         if (parent === "parked") {
           owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
         } else {
-          setCurrent(next ? props : { ...props, active: false });
+          setCurrent({ ...props, active: next, session: { ...props.session } });
         }
         flush();
       };
@@ -51,6 +51,7 @@ describe("board session shell", () => {
       );
       const board = container.querySelector("openclaw-board-view");
       expect(board?.active).toBe(true);
+      const session = board?.session;
 
       present(false);
       const hiddenSurface = container.querySelector<HTMLElement>(".board-session-surface");
@@ -58,11 +59,13 @@ describe("board session shell", () => {
       expect(hiddenSurface?.hasAttribute("inert")).toBe(true);
       expect(container.querySelector("openclaw-board-view")).toBe(board);
       expect(board?.active).toBe(false);
+      expect(board?.session).toBe(session);
 
       present(true);
       expect(container.querySelector("openclaw-board-view")).toBe(board);
       expect(container.querySelector<HTMLElement>(".board-session-surface")?.hidden).toBe(false);
       expect(board?.active).toBe(true);
+      expect(board?.session).toBe(session);
       if (parent === "parked") {
         mounted.unmount();
         active = false;

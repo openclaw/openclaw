@@ -66,7 +66,7 @@ afterEach(async () => {
   );
 });
 
-it("applies all Labs switches through config.patch without restarting the Gateway", async () => {
+it("hot-applies Labs and the native UI opt-out through config.patch without restarting", async () => {
   state = await createOpenClawTestState({
     label: "labs-hot-reload",
     env: {
@@ -130,12 +130,12 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
       }, { scope: "operator.read" });
     } };`,
   );
-  const labsPatch = (enabled: boolean) => ({
+  const labsPatch = (enabled: boolean, customPluginUi: boolean | null = enabled) => ({
     tools: {
       codeMode: { enabled: enabled ? "auto" : false },
       toolSearch: { enabled, mode: "directory" },
     },
-    gateway: { controlUi: { experimental: { customPlugins: enabled } } },
+    gateway: { controlUi: { experimental: { customPlugins: customPluginUi } } },
     desktop: { host: { enabled } },
     cloudWorkers: { desktop: enabled },
   });
@@ -160,6 +160,7 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
   const connected = createDeferredCore<HelloOk>();
   const hellos: HelloOk[] = [];
   const connectionClosed = vi.fn();
+  const pluginUiChanges: string[] = [];
   client = new GatewayClient({
     url: `ws://127.0.0.1:${port}`,
     token: TOKEN,
@@ -180,6 +181,11 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     },
     onConnectError: (error) => connected.reject(error),
     onClose: connectionClosed,
+    onEvent: (event) => {
+      if (event.event === "plugins.controlUi.changed") {
+        pluginUiChanges.push(event.event);
+      }
+    },
   });
   client.start();
   const hello = await withTestTimeout(connected.promise, 10_000, "Gateway connect timeout");
@@ -246,15 +252,21 @@ it("applies all Labs switches through config.patch without restarting the Gatewa
     message: expect.stringContaining("disabled"),
   });
   let activeObserver: WebSocket | undefined;
-  for (const enabled of [true, false, true]) {
+  for (const customPluginUi of [true, false, null]) {
+    const enabled = customPluginUi !== false;
+    const previousUiChanges = pluginUiChanges.length;
     const config = await gateway.request<{ hash: string }>("config.get", {});
     const patch = await gateway.request<{
       restart?: unknown;
       sentinel: { payload: { stats: { requiresRestart: boolean } } };
-    }>("config.patch", { raw: JSON.stringify(labsPatch(enabled)), baseHash: config.hash });
+    }>("config.patch", {
+      raw: JSON.stringify(labsPatch(enabled, customPluginUi)),
+      baseHash: config.hash,
+    });
     expect(patch.sentinel.payload.stats.requiresRestart).toBe(false);
     expect(patch.restart).toBeUndefined();
     await assertPluginUi(enabled);
+    await expect.poll(() => pluginUiChanges.length).toBe(previousUiChanges + 1);
     await assertWorkerDesktop(enabled);
     if (enabled) {
       const observed = await observeHost();

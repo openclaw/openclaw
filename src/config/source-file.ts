@@ -14,6 +14,7 @@ import {
   resolveFsObservationIntervalMs,
 } from "../infra/fs-observation-mode.js";
 import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { resolveIncludeRoots } from "./paths.js";
 import {
   admitConfigObservationRoots,
@@ -30,6 +31,7 @@ type Source = {
   scopes: WatchScope[];
   ready: boolean;
   subscription: WatchSubscription;
+  events: Map<string, ReturnType<typeof observeOwnedDirectory>>;
 };
 
 export function createConfigFileAdapter(opts: {
@@ -84,6 +86,57 @@ export function createConfigFileAdapter(opts: {
       () => {},
     );
     return closing;
+  };
+
+  const refreshEvents = (next: Watcher, source: Source) => {
+    const directories = new Set(
+      next.mode === "poll"
+        ? []
+        : source.scopes.map((scope) =>
+            nodePath.dirname(nodePath.resolve(source.root.rootDir, scope.path)),
+          ),
+    );
+    for (const [directory, events] of source.events) {
+      if (!directories.has(directory)) {
+        events.close();
+        source.events.delete(directory);
+      }
+    }
+    for (const directory of directories) {
+      if (source.events.has(directory)) {
+        continue;
+      }
+      // Transport stays beside each file; the wider pinned Root only supplies
+      // guarded reconciliation and detects replaced directories and aliases.
+      source.events.set(
+        directory,
+        observeOwnedDirectory(
+          directory,
+          () => {
+            if (isCurrent(next) && source.events.has(directory)) {
+              if (!source.events.get(directory)!.isWatching()) {
+                handleWatcherError(
+                  next,
+                  new Error("Config directory notifications unavailable"),
+                  true,
+                );
+                return;
+              }
+              void source.subscription.reconcile().catch((error: unknown) => {
+                if (source.events.has(directory)) {
+                  handleWatcherError(next, error);
+                }
+              });
+            }
+          },
+          { recursive: false, reconcileIntervalMs: FS_RECONCILE_MS },
+        ),
+      );
+      if (!source.events.get(directory)!.isWatching()) {
+        handleWatcherError(next, new Error("Config directory notifications unavailable"), true);
+        return;
+      }
+    }
   };
 
   const refresh = async (next: Watcher) => {
@@ -143,6 +196,10 @@ export function createConfigFileAdapter(opts: {
     const updates: Promise<void>[] = [];
     for (const [key, source] of next.sources) {
       if (!plans.has(key)) {
+        for (const events of source.events.values()) {
+          events.close();
+        }
+        source.events.clear();
         updates.push(
           source.subscription.close().then(() => {
             next.sources.delete(key);
@@ -155,6 +212,7 @@ export function createConfigFileAdapter(opts: {
       if (existing) {
         const changed = JSON.stringify(existing.scopes) !== JSON.stringify(plan.scopes);
         Object.assign(existing, plan);
+        refreshEvents(next, existing);
         if (changed) {
           existing.ready = false;
           updates.push(
@@ -167,12 +225,13 @@ export function createConfigFileAdapter(opts: {
       }
       const source: Source = {
         ...plan,
+        events: new Map(),
         ready: false,
         subscription: watch(plan.root, {
           scopes: plan.scopes,
-          mode: next.mode,
+          mode: "poll",
           intervalMs: FS_RECONCILE_MS,
-          pollIntervalMs: resolveFsObservationIntervalMs(),
+          pollIntervalMs: next.mode === "poll" ? resolveFsObservationIntervalMs() : FS_RECONCILE_MS,
           signal: next.lifetime.signal,
           onInvalidate: (hint) =>
             runWithMainThreadTask("fs-watch:config", () => {
@@ -211,16 +270,13 @@ export function createConfigFileAdapter(opts: {
             }),
           onHealth: (health) => {
             if (health.state === "unavailable") {
-              handleWatcherError(
-                next,
-                health.failure!.error,
-                health.mode === "events" && health.failure?.operation === "watch",
-              );
+              handleWatcherError(next, health.failure!.error);
             }
           },
         }),
       };
       next.sources.set(key, source);
+      refreshEvents(next, source);
       updates.push(
         source.subscription.ready.then(() => {
           source.ready = true;
@@ -263,6 +319,12 @@ export function createConfigFileAdapter(opts: {
       close() {
         if (!closing) {
           lifetime.abort();
+          for (const source of next.sources.values()) {
+            for (const events of source.events.values()) {
+              events.close();
+            }
+            source.events.clear();
+          }
           closing = Promise.allSettled([
             next.work,
             next.stability.close(),
@@ -299,8 +361,6 @@ export function createConfigFileAdapter(opts: {
       });
     let backoff = WATCHER_RECREATE_BACKOFF_MS[retries];
     if (backoff === undefined) {
-      // Explicit legacy overrides retain their bounded retry policy, while
-      // fs-safe still selects the available backend at subscription creation.
       if (eventWatchFailed && source.mode === "auto" && source.allowPollingRecovery) {
         degradedToPolling = true;
         retries = 0;
@@ -311,7 +371,7 @@ export function createConfigFileAdapter(opts: {
       } else {
         status = "disabled";
         opts.log.error(
-          `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_BACKOFF_MS.length} re-create attempts in ${source.mode === "poll" ? "polling" : "native"} mode: ${String(error)}`,
+          `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_BACKOFF_MS.length} re-create attempts: ${String(error)}`,
         );
         return;
       }

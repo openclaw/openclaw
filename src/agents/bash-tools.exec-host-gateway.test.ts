@@ -37,11 +37,9 @@ import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { expectNoCalls } from "../test-utils/mock-call-assertions.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import type { ExecApprovalFollowupOutcome } from "./bash-tools.exec-result.types.js";
 import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
-import type {
-  ExecApprovalFollowupFactory,
-  ExecApprovalFollowupOutcome,
-} from "./bash-tools.exec-types.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 import { captureSecurityEvents } from "./test-helpers/security-events.js";
 
 type SendExecApprovalFollowupResult =
@@ -320,21 +318,15 @@ describe("processGatewayAllowlist", () => {
     });
   }
 
-  function mockApprovedDetachedExec(params: {
-    outcome: ExecApprovalFollowupOutcome;
-    sessionId?: string;
-  }) {
+  function mockApprovedDetachedExec(outcome: ExecApprovalFollowupOutcome) {
     approvalDecisionMock.mockResolvedValueOnce("allow-once");
-    runExecProcessMock.mockResolvedValue({
-      session: { id: params.sessionId ?? "sess-1" },
-      promise: Promise.resolve(params.outcome),
-    });
+    mockCompletedProcess(outcome);
   }
 
-  function mockCompletedProcess(aggregated = "done", sessionId = "sess-1") {
+  function mockCompletedProcess(outcome = completedOutcome(), sessionId = "sess-1") {
     runExecProcessMock.mockResolvedValue({
       session: { id: sessionId },
-      promise: Promise.resolve(completedOutcome(aggregated)),
+      promise: Promise.resolve(outcome),
     });
   }
 
@@ -917,7 +909,7 @@ describe("processGatewayAllowlist", () => {
     });
   });
 
-  it("offers allow-always for shell-wrapper misses with reusable executable patterns", async () => {
+  it("preserves detached launch options while recording reusable shell approvals", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -931,6 +923,11 @@ describe("processGatewayAllowlist", () => {
         allowedHosts: ["api.example.com"],
       },
     ];
+    const durable = {
+      durable: { notifyOnExit: true, notifyOnExitEmptySuccess: true },
+      agentId: "main",
+      sessionId: "origin-session",
+    };
     await configurePlanBackedCommand({ command, env });
     const approval = createDeferredCore<"allow-always">();
     approvalDecisionMock.mockReturnValue(approval.promise);
@@ -943,6 +940,7 @@ describe("processGatewayAllowlist", () => {
       env,
       secretEgressBindings,
       autoReview: false,
+      ...durable,
     });
     const expectedGitArgPattern = buildCwdBoundHashedArgPattern(
       ["/usr/bin/git", "status"],
@@ -956,9 +954,7 @@ describe("processGatewayAllowlist", () => {
     expect(runExecProcessMock).not.toHaveBeenCalled();
     approval.resolve("allow-always");
     await waitForFollowup();
-    expect(runExecProcessMock).toHaveBeenCalledWith(
-      expect.objectContaining({ env, secretEgressBindings }),
-    );
+    expectCall(runExecProcessMock, { env, secretEgressBindings, ...durable, notifyOnExit: false });
     expectCall(commitAuthorizationMock, {
       authorization: expect.objectContaining({ source: "explicit-approval" }),
       allowAlwaysDecision: {
@@ -1047,8 +1043,8 @@ describe("processGatewayAllowlist", () => {
   });
 
   it("keeps webchat diagnostics approvals as direct pasteable followups", async () => {
-    mockApprovedDetachedExec({
-      outcome: completedOutcome(
+    mockApprovedDetachedExec(
+      completedOutcome(
         JSON.stringify({
           path: "/tmp/openclaw-diagnostics.zip",
           bytes: 1234,
@@ -1067,7 +1063,7 @@ describe("processGatewayAllowlist", () => {
           },
         }),
       ),
-    });
+    );
 
     const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(
       async () => "Synthetic harness diagnostics: thread-1",
@@ -1105,7 +1101,7 @@ describe("processGatewayAllowlist", () => {
     const unhandledRejections = captureProcessUnhandledRejections();
     const outcome = completedOutcome("completed output");
     const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(() => undefined);
-    mockApprovedDetachedExec({ outcome });
+    mockApprovedDetachedExec(outcome);
     followupMock.mockRejectedValueOnce(
       new Error("synchronous runtime-handoff registration failure"),
     );
@@ -1269,7 +1265,7 @@ describe("processGatewayAllowlist", () => {
         fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
         return "allow-once";
       });
-      mockCompletedProcess("approved", "sess-script-binding");
+      mockCompletedProcess(completedOutcome("approved"), "sess-script-binding");
 
       await runDetached({
         command,
@@ -1382,7 +1378,7 @@ describe("processGatewayAllowlist", () => {
 
   it("does not spawn or send a detached followup after cancellation during startup", async () => {
     const controller = new AbortController();
-    mockApprovedDetachedExec({ outcome: completedOutcome() });
+    mockApprovedDetachedExec(completedOutcome());
     const runtime = await vi.importActual<typeof import("./bash-tools.exec-runtime.js")>(
       "./bash-tools.exec-runtime.js",
     );

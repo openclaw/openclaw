@@ -54,7 +54,7 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
   const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
     Boolean(
       resolveSpeechProviderApiKey(
-        readVydraSpeechConfig(providerConfig).apiKey,
+        normalizeOptionalString(providerConfig.apiKey),
         process.env.VYDRA_API_KEY,
       ),
     );

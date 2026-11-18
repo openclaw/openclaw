@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -166,6 +167,7 @@ export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly stri
           const prefix = value.slice(0, 498);
           const complete =
             prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:\s+\[[^\]\r\n]+\]/u)?.[0] ??
             prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
           return complete
             ? `${complete.trimEnd()} …`
@@ -184,15 +186,23 @@ export type DoctorConfigCapture = {
   configChanges: UpdateDoctorConfigChange[];
   configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
   deferredInspectionCheckIds?: string[];
+  warnings?: string[];
 };
+/** Runs a policy check under Doctor's held maintenance owner and its open scope. */
+type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
 export type UpdateDoctorWriteAuthority = {
+  /** An optional work profile; config preparation still proves eligibility. */
+  retirementOnly?: true;
   /** Parent Doctor phase deadline for nested managed-service inspection. */
   serviceInspectionDeadlineAtMs?: number;
   inputHash: string;
   assertCurrent: () => void;
+  /** Doctor lends its held maintenance owner to `assertCurrent`; see doctor-policy-custody. */
+  lendPolicyCustody?: (owner: DoctorPolicyCustodyOwner | undefined) => void;
   commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
   databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
   originalRecoveryCapture?: {
     runId: string;
@@ -295,7 +305,14 @@ export function createUpdateDoctorDatabaseWriteCapture(
         () => historicalScans.run(operation),
       );
     },
-    async admit() {
+    async admit(interval?: "predecessor-stop") {
+      if (interval === "predecessor-stop") {
+        const maintenance = getOpenClawDatabaseMaintenanceScope();
+        if (!maintenance?.ownsSchemaMaintenance) {
+          throw new Error("Predecessor stop admission requires schema maintenance custody.");
+        }
+        maintenance.assertAdmission();
+      }
       receipt = undefined;
       historicalScans.observe(Object.keys(expectedGenerations ?? {}));
       const observation = await read();
@@ -310,6 +327,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
           physical = true;
           expectedGenerations = observation.committed;
         }
+        const first = !admitted;
         admitted = true;
         const generations = observation.committed;
         historicalScans.admit(generations);
@@ -317,8 +335,22 @@ export function createUpdateDoctorDatabaseWriteCapture(
         acceptEmptyReaderTransitions(observation);
         const matches = isDeepStrictEqual(generations, expectedGenerations);
         fromGenerations ??= matches ? incoming : generations;
-        // Earlier receipts or another process's writes must never become our baseline.
+        // A changed rollback baseline stays ineligible after forward admission.
         unchanged &&= matches;
+        if (!matches && (first || interval === "predecessor-stop")) {
+          // A stale rollback baseline does not make the current state unmigratable.
+          // Keep unchanged=false so the parent cannot restore over newer data, while
+          // Doctor attributes its own writes from this admission's observed state.
+          // Accepted edge: foreign writes before predecessor-stop custody also
+          // continue forward, but can never make the stale backup restorable.
+          // Changes after this admission still fail the existing migration checks.
+          expectedGenerations = { ...generations };
+          options.warn(
+            interval === "predecessor-stop"
+              ? "Captured SQLite databases changed while stopping the predecessor Gateway before maintenance custody; continuing Doctor with current state, but automatic database restoration is unavailable for this update."
+              : "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
+          );
+        }
       }
     },
     async settle() {
@@ -356,6 +388,10 @@ const doctorConfigWrites = new AsyncLocalStorage<{
   capture: DoctorConfigCapture;
   authority?: UpdateDoctorWriteAuthority;
 }>();
+
+export function getUpdateDoctorConfigCapture(): DoctorConfigCapture | undefined {
+  return doctorConfigWrites.getStore()?.capture;
+}
 
 /** Deferral requires an owned result channel, not just an inherited marker. */
 export function recordUpdateDoctorDeferredInspectionChecks(

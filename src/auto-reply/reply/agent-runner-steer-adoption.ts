@@ -18,10 +18,7 @@ import {
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
-import {
-  hasReplySteeringRequesterMismatch,
-  prepareReplyMessageJoin,
-} from "../../sessions/session-controller.message-join.js";
+import { prepareReplyMessageJoin } from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
   isCurrentSessionControllerOperation,
@@ -35,6 +32,7 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import type { MessageInjectionRuntimeReason } from "./message-injection-authority.js";
 import {
   admitFollowupRunLifecycle,
   reserveSteerCandidate,
@@ -66,7 +64,7 @@ type ActiveReplySteerParams = {
   queueKey: string;
   replyOperationRunState: ReplyOperationRunState | undefined;
   resolvedQueue: RunReplyAgentParams["resolvedQueue"];
-  restartRecoverySourceTurnId: string | undefined;
+  sourceTurnId: string | undefined;
   runFollowup: (run: FollowupRun) => Promise<void>;
   sessionCtx: RunReplyAgentParams["sessionCtx"];
   sessionKey: string | undefined;
@@ -79,7 +77,7 @@ type ActiveReplySteerParams = {
 function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
   const { followupRun, sessionCtx } = params;
   return expectDefined(
-    params.restartRecoverySourceTurnId ??
+    params.sourceTurnId ??
       buildChannelSourceTurnId({
         provider:
           followupRun.originatingChannel ?? followupRun.run.messageProvider ?? sessionCtx.Provider,
@@ -141,7 +139,6 @@ export async function runActiveReplySteer(
   };
   let delivery: ReturnType<typeof prepareSteeringDelivery> | undefined;
   let releaseToolAuthority: (() => void) | undefined;
-  let steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   const parked = reserveSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     return "handled";
@@ -162,6 +159,7 @@ export async function runActiveReplySteer(
     reason: ActiveReplySteerFallbackReason,
     activeRunId?: string,
     error?: string,
+    runtimeReason?: MessageInjectionRuntimeReason,
   ): Promise<"handled"> => {
     assertReadCurrent();
     parked.fallback();
@@ -173,22 +171,25 @@ export async function runActiveReplySteer(
       replyOperationRunState.admission = {
         status: "accepted",
         mode: "followup",
-        ...(reason === "requester-mismatch"
-          ? { reason }
-          : isInboundUserMessage
-            ? { reason: "steering-unavailable" as const }
-            : {}),
+        ...(reason === "collaborative_steering_disabled"
+          ? { reason: "collaborative-steering-disabled" as const }
+          : reason === "requester-mismatch"
+            ? { reason }
+            : isInboundUserMessage
+              ? { reason: "steering-unavailable" as const }
+              : {}),
       };
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
-      ...(error ? { error } : {}),
+      ...(runtimeReason ? { runtimeReason } : {}),
+      ...(error ? { error: error.slice(0, 512) } : {}),
       disposition: queueCapRejected ? "skipped-queue-cap" : "followup-policy",
       channel:
         followupRun.originatingChannel ??
         followupRun.run.messageProvider ??
         params.sessionCtx.Provider,
-      sessionId: steerSessionId,
+      sessionKey: sessionKey ?? followupRun.run.sessionKey,
       runId: params.opts?.runId,
       activeRunId,
     });
@@ -223,7 +224,7 @@ export async function runActiveReplySteer(
     ) {
       return await fallback("reply-owner-ended");
     }
-    steerSessionId = activeReplyOperation.sessionId;
+    const steerSessionId = activeReplyOperation.sessionId;
     if (!backendAtArrival) {
       // The exact operation survived startup; capture its first available backend
       // before policy preparation can yield or replace that attachment.
@@ -233,26 +234,10 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
-    if (
-      isInboundUserMessage &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
-      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
-    ) {
-      if (!canInjectReplyMessageTarget(injectionTarget)) {
-        return await fallback("injection_unavailable", injectionTarget.runId);
-      }
-      await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
-        custodyFinished = true;
-        parked.consume("consumed");
-      });
-      return "handled";
-    }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,
       sessionKey,
       storePath: params.storePath,
-      sessionId: steerSessionId,
-      sourceTurnId: injectionTarget.sourceTurnId,
       entry: params.sessionEntry,
       assertCurrent: assertReadCurrent,
     });
@@ -269,8 +254,6 @@ export async function runActiveReplySteer(
           operatorAuthority: followupRun.operatorAuthority,
           toolsAllow: followupRun.toolsAllow,
           disableTools: followupRun.disableTools === true,
-          forceRestartSafeTools: followupRun.forceRestartSafeTools,
-          forceCodeModeTools: followupRun.forceCodeModeTools,
         })
       : undefined;
     const collaborativeCaller =
@@ -311,6 +294,23 @@ export async function runActiveReplySteer(
           : undefined,
     });
     if (steeringAuthority.kind === "deferred") {
+      if (
+        steeringAuthority.reason === "requester-mismatch" &&
+        isInboundUserMessage &&
+        followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true
+      ) {
+        if (!canInjectReplyMessageTarget(injectionTarget)) {
+          return await fallback("injection_unavailable", injectionTarget.runId);
+        }
+        if (followupRun.run.config.messages?.queue?.collaborativeSteeringFallback !== "reject") {
+          return await fallback("collaborative_steering_disabled", injectionTarget.runId);
+        }
+        await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
+          custodyFinished = true;
+          parked.consume("consumed");
+        });
+        return "handled";
+      }
       return await fallback(
         steeringAuthority.reason,
         injectionTarget.runId,
@@ -370,6 +370,7 @@ export async function runActiveReplySteer(
       ),
       steeringMode: "all",
       isInboundUserMessage,
+      allowPendingUserInputAnswer: steeringAuthority.allowPendingUserInputAnswer,
       terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
       toolAuthorityFingerprint: steeringAuthority.toolAuthorityFingerprint,
       ...(steeringAuthority.collaborativeCaller
@@ -377,6 +378,9 @@ export async function runActiveReplySteer(
             toolAuthorityOverlay: steeringAuthority.collaborativeCaller,
             allowCollaborativeSteering: true,
           }
+        : {}),
+      ...(followupRun.run.approvalReviewerDeviceId
+        ? { inputRequesterDeviceId: followupRun.run.approvalReviewerDeviceId }
         : {}),
       personalToolParticipant: {
         operatorAuthority: followupRun.operatorAuthority,
@@ -399,7 +403,10 @@ export async function runActiveReplySteer(
       ...(followupRun.run.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
         : {}),
-      taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
+      // Omission inherits the captured execution; followup custody keeps the incoming setting.
+      ...(steeringAuthority.continuationKind
+        ? {}
+        : { taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode }),
       ...(followupRun.userTurnTranscriptRecorder
         ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
         : {}),
@@ -422,16 +429,12 @@ export async function runActiveReplySteer(
       shouldAbortOnAdoptionError: isIngressAdoptionLostError,
     });
     if (finalization.status === "rejected") {
-      if (followupRun.controllerInput?.injection?.accepted !== true) {
-        return await fallback(finalization.outcome.reason, injectionAttempt.targetRunId);
-      }
-      // A negative final receipt cannot undo earlier native acceptance.
-      parked.consume("consumed");
-      custodyFinished = true;
-      if (replyOperationRunState) {
-        replyOperationRunState.admission = { status: "accepted", mode: "steer" };
-      }
-      return "handled";
+      return await fallback(
+        finalization.outcome.reason,
+        injectionAttempt.targetRunId,
+        finalization.outcome.errorMessage,
+        finalization.outcome.runtimeReason,
+      );
     }
     // Accepted or indeterminate input cannot be abandoned for replay, even
     // when the source's later adoption callback rejects.
@@ -476,15 +479,10 @@ export async function runActiveReplySteer(
             replayForbidden = true;
           }
         }
-        if (replayForbidden || followupRun.controllerInput?.injection?.accepted === true) {
+        if (replayForbidden) {
           parked.consume("consumed");
         } else {
-          try {
-            assertReadCurrent();
-            parked.fallback();
-          } catch {
-            parked.consume();
-          }
+          parked.fallback();
         }
       }
     } finally {

@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-preparation.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 import {
   type PluginDoctorMigrationResourceCollectionParams,
@@ -30,13 +31,15 @@ async function bundledMigrations(pluginIds: string[]) {
 beforeAll(async () => {
   const ids = new Set([
     "crabbox-warm-profile-v3",
+    "discord-legacy-state",
+    "line-pre-drain-spool-rows",
     "workboard-28-kv-to-sqlite",
     "memory-core-qmd-workspace-retired",
     "memory-core-qmd-file-locks-to-sqlite-leases",
   ]);
-  noDataMigrations = (await bundledMigrations(["crabbox", "workboard", "memory-core"])).filter(
-    ({ migration }) => ids.has(migration.id),
-  );
+  noDataMigrations = (
+    await bundledMigrations(["crabbox", "discord", "line", "workboard", "memory-core"])
+  ).filter(({ migration }) => ids.has(migration.id));
   recoveryMigrations = await bundledMigrations(["codex", "voice-call"]);
 });
 
@@ -107,12 +110,21 @@ it.each([
   },
 );
 
-it("does not claim missing recovery coverage for bundled core-only and disposable migrations", async () => {
-  expect(noDataMigrations).toHaveLength(4);
-  const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
-  expect(result.resources).toEqual([]);
-  expect(input.warnings).toEqual([]);
-});
+it.each([false, true])(
+  "does not claim missing recovery coverage for bundled core-only and disposable migrations (Discord cache present: %s)",
+  async (cachePresent) => {
+    expect(noDataMigrations).toHaveLength(6);
+    const cachePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+    if (cachePresent) {
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, '{"legacy":"cache"}');
+    }
+    const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
+    expect(result.resources).toEqual([]);
+    expect(input.warnings).toEqual([]);
+    expect(fs.existsSync(cachePath)).toBe(cachePresent);
+  },
+);
 
 it.each(["absent", "default", "configured"] as const)(
   "declares Codex sidecars and Voice Call SQLite recovery resources for %s state",
@@ -267,28 +279,46 @@ it.each(["undeclared", "declared", "malformed"] as const)(
       }],
     };`,
     );
-    const result = preparePluginDoctorMigrationBackupResources({
-      ...input,
-      config: {
-        plugins: {
-          allow: [pluginId],
-          load: { paths: [pluginRoot] },
-          entries: { [pluginId]: { enabled: true } },
+    const work = new AsyncWorkScope();
+    let current = true;
+    const result = work.track(() =>
+      preparePluginDoctorMigrationBackupResources({
+        ...input,
+        config: {
+          plugins: {
+            allow: [pluginId],
+            load: { paths: [pluginRoot] },
+            entries: { [pluginId]: { enabled: true } },
+          },
         },
-      },
-      env: { ...input.env, HOME: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-    });
-    if (declaration === "malformed") {
-      await expect(result).rejects.toThrow("collectBackupResources");
-      expect(input.warnings).toEqual([]);
-    } else if (declaration === "declared") {
-      expect((await result).resources).toEqual([{ path: resourcePath, kind: "sqlite" }]);
-      expect(input.warnings).toEqual([]);
-    } else {
-      expect((await result).resources).toEqual([]);
-      expect(input.warnings).toEqual([
-        expect.objectContaining({ kind: "undeclared-migration-resources", pluginId }),
-      ]);
+        env: { ...input.env, HOME: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        assertCurrent() {
+          if (!current) {
+            throw new Error("Caller authority expired");
+          }
+        },
+      }),
+    );
+    try {
+      if (declaration === "malformed") {
+        await expect(result).rejects.toThrow("collectBackupResources");
+        expect(input.warnings).toEqual([]);
+      } else if (declaration === "declared") {
+        const prepared = await result;
+        expect(prepared.resources).toEqual([{ path: resourcePath, kind: "sqlite" }]);
+        expect(input.warnings).toEqual([]);
+        await work.drain();
+        expect(() => prepared.assertCurrent()).not.toThrow();
+        current = false;
+        expect(() => prepared.assertCurrent()).toThrow("Caller authority expired");
+      } else {
+        expect((await result).resources).toEqual([]);
+        expect(input.warnings).toEqual([
+          expect.objectContaining({ kind: "undeclared-migration-resources", pluginId }),
+        ]);
+      }
+    } finally {
+      await work.drain();
     }
   },
 );

@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
+import { resolveConfigPath } from "../config/paths.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import type { UpdateDoctorConfigWriteRefusal } from "../infra/update-doctor-config.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../infra/update-doctor-result.js";
-import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
+import { resolveGlobalInstallTarget } from "../infra/update-global.js";
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -148,7 +149,6 @@ describe("update-cli", () => {
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expectNoSideEffects(resolveGlobalManager, replaceConfigFile, updateGitCheckout);
-    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getErrorOutput()).toContain("openclaw update --channel dev");
   });
@@ -229,11 +229,18 @@ describe("update-cli", () => {
       return commandResult({ code: 1, stderr: "Doctor failed after rewriting the managed config" });
     });
     const { runPackageInstallUpdate } = await import("./update-cli/update-command-package.js");
+    const installTarget = await resolveGlobalInstallTarget({
+      manager: "npm",
+      runCommand: runCommandWithTimeout,
+      timeoutMs: 30_000,
+      pkgRoot,
+    });
     let transaction: PackageUpdateTransaction | undefined;
     const result = await withEnvAsync({ OPENCLAW_CONFIG_PATH: callerConfig }, async () => {
       const packageResult = await runPackageInstallUpdate({
         root: pkgRoot,
         installKind: "package",
+        installTarget,
         tag: candidateVersion,
         timeoutMs: 30_000,
         startedAt: Date.now(),
@@ -303,11 +310,15 @@ describe("update-cli", () => {
   });
 
   it("fails package activation when Doctor reports requester-revoked", async () => {
+    await useFileBackedConfig();
     const target = "2026.9.4";
     const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
       tempDirs.make("openclaw-update-doctor-failure-"),
       "2026.9.3",
     );
+    const packageBefore = await fs.readFile(path.join(pkgRoot, "package.json"));
+    const configPath = resolveConfigPath();
+    const configBefore = await fs.readFile(configPath);
     primeNpmChannelTag("latest", target);
     mockFileBackedPathExists();
     const refusal: UpdateDoctorConfigWriteRefusal = {
@@ -317,6 +328,11 @@ describe("update-cli", () => {
     };
     mockNpmGlobalCommands(nodeModules, async (argv, options) => {
       if (argv[1] === entryPath && argv[2] === "doctor") {
+        expect(
+          JSON.parse(await fs.readFile(path.join(pkgRoot, "package.json"), "utf8")),
+        ).toMatchObject({
+          version: target,
+        });
         const env = typeof options === "number" ? undefined : options.env;
         const resultPath = requireValue(
           env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
@@ -341,6 +357,8 @@ describe("update-cli", () => {
       reason: "requester-revoked",
       steps: expect.arrayContaining([expect.objectContaining({ configWriteRefusal: refusal })]),
     });
+    expect(await fs.readFile(path.join(pkgRoot, "package.json"))).toEqual(packageBefore);
+    expect(await fs.readFile(configPath)).toEqual(configBefore);
   });
 
   it("continues package post-core work for explicit post-update doctor advisories", async () => {
@@ -439,6 +457,84 @@ describe("update-cli", () => {
       }),
     );
     expect(renderUpdateRunReport(record).lines.join("\n")).toContain(warning);
+  });
+
+  it("keeps a package update whose previous npm link cannot be removed", async () => {
+    const tempDir = tempDirs.make("openclaw-update-retained-link-");
+    const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
+      tempDir,
+      "2026.4.20",
+    );
+    // A dev-channel install: the package path is an npm link to the operator's checkout.
+    const checkout = path.join(tempDir, "operator-checkout");
+    await fs.rename(pkgRoot, checkout);
+    await fs.symlink(checkout, pkgRoot, process.platform === "win32" ? "junction" : "dir");
+    const linkTarget = await fs.readlink(pkgRoot);
+    readPackageVersion.mockImplementation(async (root: string) => {
+      const manifest: { version: string } = JSON.parse(
+        await fs.readFile(path.join(root, "package.json"), "utf8"),
+      );
+      return manifest.version;
+    });
+    primeNpmChannelTag("latest", VERSION);
+    mockFileBackedPathExists();
+    mockNpmGlobalCommands(nodeModules, async (argv, options) => {
+      if (argv[1] === entryPath && argv[2] === "doctor") {
+        const env = options && typeof options !== "number" ? options.env : undefined;
+        await writeUpdatePostInstallDoctorResult({
+          resultPath: requireValue(
+            env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
+            "Doctor receipt path",
+          ),
+          result: { status: "ok" },
+        });
+        return commandResult({ code: 0 });
+      }
+      if (argv[0] === "npm" && argv[1] === "i") {
+        await writeNpmPackageInstall(argv, pkgRoot, VERSION);
+      }
+      return undefined;
+    });
+    const unlink = fs.unlink.bind(fs);
+    let retainedLink: string | undefined;
+    vi.spyOn(fs, "unlink").mockImplementation(async (...args) => {
+      const target = String(args[0]);
+      if (
+        path.dirname(target) === nodeModules &&
+        /^\.openclaw\.package-backup-\d+-\d+$/u.test(path.basename(target))
+      ) {
+        retainedLink = target;
+        throw Object.assign(new Error("fixture link removal denied"), { code: "EACCES" });
+      }
+      return unlink(...args);
+    });
+
+    await updateCommand({ yes: true, restart: false, json: true });
+
+    const link = requireValue(retainedLink, "retained link path");
+    const result = lastWriteJsonCall() as UpdateRunResult;
+    expect(result).toMatchObject({ status: "ok", after: { version: VERSION } });
+    const retention = result.steps.find((step) => step.name === "package-backup-retention");
+    expect(retention?.advisory).toEqual({
+      kind: "recoverable-maintenance",
+      message: expect.stringContaining(
+        `fixture link removal denied; backup retained at ${link} (a link to a checkout: remove the link itself, never recursively)\npre-migration database snapshots also retained at ${link}.databases`,
+      ),
+    });
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    const record = requireValue(getUpdateRun(requireValue(result.runId, "run id")), "update run");
+    expect(record.status).toBe("succeeded");
+    expect(renderUpdateRunReport(record).lines.join("\n")).toContain(link);
+    // The new package is installed; the link, its checkout, and the snapshots stay.
+    expect((await fs.lstat(pkgRoot)).isDirectory()).toBe(true);
+    await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf8")).resolves.toContain(
+      `"version":"${VERSION}"`,
+    );
+    expect(await fs.readlink(link)).toBe(linkTarget);
+    await expect(fs.readFile(path.join(checkout, "package.json"), "utf8")).resolves.toContain(
+      '"version":"2026.4.20"',
+    );
+    expect((await fs.stat(`${link}.databases`)).isDirectory()).toBe(true);
   });
 
   it("retains the Windows autostart failure outcome through outer cleanup", async () => {

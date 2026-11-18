@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import type { WorkerSessionPlacementIdentity } from "./worker-environments/placement-record.js";
 import type {
   PlacementSessionEvidence,
   PlacementSessionEvidenceResolver,
@@ -13,14 +13,14 @@ import type {
 const log = createSubsystemLogger("gateway/placement-session-evidence");
 
 type PlacementSessionIdentity = {
-  placement: WorkerSessionPlacementRecord;
+  placement: WorkerSessionPlacementIdentity;
   agentId: string;
   sessionKey: string;
 };
 
 function resolvePlacementSessionIdentities(
   cfg: OpenClawConfig,
-  placement: WorkerSessionPlacementRecord,
+  placement: WorkerSessionPlacementIdentity,
 ): PlacementSessionIdentity[] {
   const requestedAgentId = normalizeAgentId(placement.agentId);
   const parsedKey = parseAgentSessionKey(placement.sessionKey);
@@ -46,7 +46,7 @@ function resolvePlacementSessionIdentities(
 }
 
 export async function createWorkerPlacementSessionEvidenceResolver(
-  placements: readonly WorkerSessionPlacementRecord[],
+  placements: readonly WorkerSessionPlacementIdentity[],
   signal?: AbortSignal,
 ): Promise<PlacementSessionEvidenceResolver> {
   try {
@@ -55,7 +55,7 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       resolvePlacementSessionIdentities(cfg, placement),
     );
     const subjects = new Map<
-      WorkerSessionPlacementRecord,
+      WorkerSessionPlacementIdentity,
       { agentId: string; sessionId: string; sessionKey: string; evidence: PlacementSessionEvidence }
     >(
       placements.map((placement) => [

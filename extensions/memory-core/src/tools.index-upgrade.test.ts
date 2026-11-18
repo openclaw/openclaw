@@ -13,7 +13,6 @@ import { MEMORY_INDEX_PROVENANCE_VERSION } from "./memory/manager-reindex-state.
 import { testing } from "./tools.js";
 import { createMemorySearchToolOrThrow } from "./tools.test-helpers.js";
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
-const { MemoryIndexManager } = await import("./memory/manager.js");
 describe("memory_search index versions", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
@@ -33,6 +32,12 @@ describe("memory_search index versions", () => {
   }
 
   const indexHit = expect.objectContaining({ path: "memory/2026-01-12.md" });
+  // Rebuilds reuse published vectors for unchanged chunks; embedding-failure paths need new input.
+  const reviseMemory = () =>
+    fs.writeFile(
+      path.join(fixture.paths.memory, "2026-01-12.md"),
+      "Alpha memory revised so the rebuild must embed it.",
+    );
   const providerCost = expect.stringContaining("provider cost");
   const toolFor = (config: Parameters<typeof fixture.getFreshManager>[0]) =>
     createMemorySearchToolOrThrow({ config, agentId: "main" });
@@ -106,7 +111,7 @@ describe("memory_search index versions", () => {
     expect(result.details).not.toHaveProperty("unavailable");
     const after = readMemoryDatabaseRevision(db);
     expect(after).toBeGreaterThan(before);
-    expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
+    expect(fixture.provider.embedBatchCalls).toBe(embedded);
     for (const response of responses) {
       expect(response.details).toHaveProperty("warning", providerCost);
     }
@@ -114,7 +119,7 @@ describe("memory_search index versions", () => {
     const repeat = await tool.execute("provenance-current", query);
     expect(readMemoryDatabaseRevision(db)).toBe(after);
     expect(repeat.details).not.toHaveProperty("warning");
-    expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
+    expect(fixture.provider.embedBatchCalls).toBe(embedded);
   });
   it("keeps the rebuild cost warning when subsequent query embedding fails", async () => {
     const { cfg, embedded } = await seedIndex({ provenanceVersion: 0 });
@@ -126,7 +131,7 @@ describe("memory_search index versions", () => {
       error: expect.stringContaining("synthetic query failure"),
       warning: providerCost,
     });
-    expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
+    expect(fixture.provider.embedBatchCalls).toBe(embedded);
   });
 
   it("discloses search rebuilding an older empty index after a file gains content", async () => {
@@ -139,22 +144,13 @@ describe("memory_search index versions", () => {
     expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
   });
 
-  it("discloses a full retry handed to detached maintenance before embedding finishes", async () => {
+  it("reports a failed index while timer-owned recovery waits for embedding", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const cfg = uncachedConfig();
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     let failSync = false;
     let holdSync = false;
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
-    const acquire = createDeferred<void>();
-    const getManager = MemoryIndexManager.get.bind(MemoryIndexManager);
-    const get = vi.spyOn(MemoryIndexManager, "get").mockImplementation(async (params) => {
-      if (params.purpose === "maintenance") {
-        await acquire.promise;
-      }
-      return await getManager(params);
-    });
     fixture.provider.beforeEmbedBatch = async () => {
       if (failSync) {
         throw Object.assign(new Error("HTTP 400: synthetic reindex failure"), { status: 400 });
@@ -166,45 +162,41 @@ describe("memory_search index versions", () => {
     };
     try {
       const manager = await publishIndex(cfg);
+      await reviseMemory();
       failSync = true;
       await expect(manager.sync({ reason: "cli", force: true })).rejects.toThrow("HTTP 400");
       failSync = false;
-      clock.mockReturnValue(now + 30_000);
       holdSync = true;
       const embedded = fixture.provider.embedBatchCalls;
       const tool = toolFor(cfg);
       expect((await tool.execute("detached-rebuild", query)).details).toMatchObject({
         results: [indexHit],
-        warning: providerCost,
+        stale: true,
+        warning: expect.stringContaining("synthetic reindex failure"),
+        action: providerCost,
       });
-      // The next search starts after the request notice but before the detached writer admits it.
-      const queryEntered = createDeferred<void>();
-      fixture.provider.beforeEmbedQuery = async () => {
-        queryEntered.resolve();
-        await entered.promise;
-      };
-      const concurrent = tool.execute("detached-admission", query);
-      await queryEntered.promise;
-      acquire.resolve();
-      const concurrentResult = await concurrent;
-      expect(concurrentResult.details).toHaveProperty("warning", providerCost);
+      await vi.advanceTimersByTimeAsync(300_000);
+      await entered.promise;
+      expect((await tool.execute("during-recovery", query)).details).toMatchObject({
+        results: [indexHit],
+        stale: true,
+        action: providerCost,
+      });
       expect(fixture.provider.embedBatchCalls).toBe(embedded);
       release.resolve();
       await manager.close();
       expect(fixture.provider.embedBatchCalls).toBe(embedded + 1);
     } finally {
-      acquire.resolve();
       release.resolve();
-      fixture.provider.beforeEmbedQuery = null;
       await closeAllMemorySearchManagers();
-      get.mockRestore();
-      clock.mockRestore();
+      vi.useRealTimers();
       fixture.provider.beforeEmbedBatch = null;
     }
   });
 
   it("keeps the rebuild cost warning when a search deadline expires during embedding", async () => {
     const { cfg } = await seedIndex({ provenanceVersion: 0 }, uncachedConfig("batch-test"));
+    await reviseMemory();
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     fixture.provider.providerRuntimeBatchGate = release.promise;
@@ -234,6 +226,7 @@ describe("memory_search index versions", () => {
     };
     try {
       const manager = await publishIndex(cfg);
+      await reviseMemory();
       fixture.provider.embedBatchPermanentFailure = Object.assign(
         new Error("HTTP 400: synthetic embedding provider unavailable"),
         { status: 400 },

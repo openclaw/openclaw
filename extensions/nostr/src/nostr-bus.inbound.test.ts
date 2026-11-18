@@ -232,11 +232,14 @@ describe("startNostrBus inbound guards", () => {
     mocks.subscriptionClose.mockImplementationOnce(() => subscriptionClosed.promise);
     const bus = await startBus({ relays, onDisconnect, onError });
     const closing = bus.close();
-    expect(mocks.subscriptionClose).toHaveBeenCalledWith("closed by caller");
-    expect(mocks.close).not.toHaveBeenCalled();
-
-    subscriptionClosed.resolve();
-    await closing;
+    try {
+      expect(mocks.subscriptionClose).toHaveBeenCalledWith("closed by caller");
+      expect(mocks.close).not.toHaveBeenCalled();
+    } finally {
+      // Failed ordering assertions must not strand close during fixture teardown.
+      subscriptionClosed.resolve();
+      await closing;
+    }
     expect(mocks.close).toHaveBeenCalledWith(relays);
     expect(onDisconnect).not.toHaveBeenCalled();
     expect(onError).not.toHaveBeenCalled();

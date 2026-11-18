@@ -11,11 +11,13 @@ import { formatDeferredPluginMigration } from "../infra/deferred-plugin-migratio
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import { DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING } from "../infra/update-deferred-model-retirement.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
 } from "../infra/update-doctor-result.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -41,6 +43,8 @@ const mocks = vi.hoisted(() => {
       vi.fn<
         typeof import("../infra/deferred-plugin-migrations.js").readDeferredPluginMigrationsAsync
       >(),
+    doctorUpdateRun:
+      vi.fn<typeof import("../infra/update-deferred-model-retirement.js").resolveDoctorUpdateRun>(),
     stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
   };
   const partials = {
@@ -49,6 +53,9 @@ const mocks = vi.hoisted(() => {
     // This worker-thread lane lacks the shared-state ledger's host broker.
     "../infra/deferred-plugin-migrations.js": {
       readDeferredPluginMigrationsAsync: handles.pendingPluginMigrations,
+    },
+    "../infra/update-deferred-model-retirement.js": {
+      resolveDoctorUpdateRun: handles.doctorUpdateRun,
     },
     "../config/config.js": { CONFIG_PATH: "/tmp/openclaw.json" },
   };
@@ -155,8 +162,35 @@ beforeEach(async () => {
   mocks.outro.mockClear();
   mocks.runContributions.mockReset().mockResolvedValue(undefined);
   mocks.pendingPluginMigrations.mockReset().mockResolvedValue([]);
+  mocks.doctorUpdateRun.mockReset();
   mocks.stateMigrationReceipts = [];
 });
+
+it.each(["completed", "skipped"] as const)(
+  "publishes warnings against the Doctor run's retirement receipt (%s)",
+  async (status) => {
+    await withResult(async (_state, resultPath) => {
+      const env = { ...process.env, OPENCLAW_UPDATE_RUN_ID: "selected-update" };
+      const warnings = [DEFERRED_UPDATE_MODEL_RETIREMENT_WARNING, "Unrelated advisory"];
+      mocks.doctorUpdateRun.mockReturnValue(
+        createUpdateRunRecordFixture("selected-update", {
+          status: "running",
+          steps: [{ step: "finalize:doctor:model-retirement", status }],
+        }),
+      );
+      mocks.runContributions.mockImplementation(async (ctx) => {
+        ctx.env = env;
+        ctx.updateWarnings = warnings;
+      });
+
+      await runDoctor();
+
+      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
+      expect(result?.warnings).toEqual(status === "completed" ? warnings.slice(1) : warnings);
+      expect(mocks.doctorUpdateRun).toHaveBeenCalledWith(env);
+    });
+  },
+);
 
 it("publishes include input and final write hashes", async () => {
   await withResult(async (state, resultPath) => {

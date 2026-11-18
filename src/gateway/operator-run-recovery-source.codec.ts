@@ -1,16 +1,18 @@
 import { z } from "zod";
-import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway.js";
+import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway-roles.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
+import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal-schema.js";
 
-export const MAX_RECOVERY_SOURCE_BYTES = 65_536;
+const MAX_RECOVERY_SOURCE_BYTES = 65_536;
 const boundedString = z.string().min(1).max(4096);
 const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
 });
-const operatorRunRecoverySnapshotSchema = z.strictObject({
+const handshakeRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
+  openclawIdPrincipal: openClawIdRecoveryPrincipalSchema.optional(),
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),
   githubLogin: boundedString.nullable(),
@@ -36,6 +38,7 @@ const operatorRunRecoverySnapshotSchema = z.strictObject({
         requestHost: boundedString.optional(),
         origin: boundedString.optional(),
         isLocalClient: z.boolean().optional(),
+        openclawIdTunnel: z.boolean().optional(),
       })
       .optional(),
   }),
@@ -43,30 +46,81 @@ const operatorRunRecoverySnapshotSchema = z.strictObject({
   device: z
     .strictObject({ deviceId: boundedString, key: z.string().regex(/^[a-f0-9]{64}$/) })
     .optional(),
+  // Optional for persisted pre-native-parity sources; browser grants keep their original meaning.
+  automationAdmin: z.boolean().optional(),
   controlUiAdmin: z.boolean(),
   localOperator: z.boolean(),
   sourceIngress: z.enum(["control-ui", "internal"]),
 });
-const sourceSchema = z.strictObject({
+const principalRecoverySnapshotSchema = handshakeRecoverySnapshotSchema.extend({
+  sourceIngress: z.literal("principal"),
+  ingress: z.strictObject({
+    pluginId: boundedString,
+    audienceId: boundedString,
+    recoveryId: boundedString,
+  }),
+  authPolicy: z.undefined().optional(),
+  sharedGeneration: z.undefined().optional(),
+  device: z.undefined().optional(),
+  automationAdmin: z.undefined().optional(),
+  controlUiAdmin: z.literal(false),
+  localOperator: z.literal(false),
+});
+const operatorRunRecoverySnapshotSchema = z.discriminatedUnion("sourceIngress", [
+  handshakeRecoverySnapshotSchema,
+  principalRecoverySnapshotSchema,
+]);
+const parentSourceSchema = z.strictObject({
+  kind: z.undefined().optional(),
   version: z.literal(1),
   agentId: boundedString,
   sessionKey: boundedString,
-  sessionId: boundedString,
+  // Older sources also recorded the conversation's transcript id and revision; both are ignored.
+  sessionId: boundedString.optional(),
   lifecycleRevision: boundedString.optional(),
   sourceRunId: boundedString,
   snapshot: operatorRunRecoverySnapshotSchema,
 });
 
+// Existing parent-bound sources retain their stored shape. Device-backed jobs need no parent.
+const sourceSchema = z.union([
+  parentSourceSchema,
+  z.strictObject({
+    version: z.literal(1),
+    kind: z.literal("gateway"),
+    agentId: boundedString,
+    sourceRunId: boundedString,
+    snapshot: operatorRunRecoverySnapshotSchema,
+  }),
+]);
+
 const channelSnapshotSchema = z.strictObject({
   reference: userChannelAuthorizationReferenceSchema,
   profileId: boundedString,
-  scopes: operatorRunRecoverySnapshotSchema.shape.scopes,
-  modelPolicy: operatorRunRecoverySnapshotSchema.shape.modelPolicy,
+  scopes: handshakeRecoverySnapshotSchema.shape.scopes,
+  modelPolicy: handshakeRecoverySnapshotSchema.shape.modelPolicy,
 });
+const recoveryUnavailableReasonSchema = z.enum([
+  "remote-ingress-no-source",
+  "unauthenticated",
+  "no-auth-method",
+  "no-grant",
+  "device-no-token",
+  "shared-auth-no-generation",
+  "model-policy",
+  "channel-model-policy",
+  "decode-failed",
+  "no-source",
+]);
+export type OperatorRecoveryUnavailableReason = z.infer<typeof recoveryUnavailableReasonSchema>;
+
 const queuedSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("gateway"), snapshot: operatorRunRecoverySnapshotSchema }),
   z.strictObject({ kind: z.literal("channel"), snapshot: channelSnapshotSchema }),
-  z.strictObject({ kind: z.literal("unavailable") }),
+  z.strictObject({
+    kind: z.literal("unavailable"),
+    reason: recoveryUnavailableReasonSchema.optional(),
+  }),
 ]);
 
 /** Private accepted-input basis; only its current input owner may restore authority. */
@@ -114,4 +168,13 @@ export function normalizeGatewayOperatorRecoverySnapshot(
   // reloads; canonicalization belongs here, not in a permissive comparison.
   const parsed = operatorRunRecoverySnapshotSchema.safeParse(JSON.parse(json));
   return parsed.success ? freezeJsonSnapshot(parsed.data) : undefined;
+}
+
+/** Legacy browser sources retain delegation; other historical sources never gain it. */
+export function hasAutomationAdminDelegation(snapshot: OperatorRunRecoverySnapshot): boolean {
+  return (
+    snapshot.sourceIngress !== "principal" &&
+    (snapshot.automationAdmin ?? snapshot.controlUiAdmin) &&
+    snapshot.scopes.includes("operator.admin")
+  );
 }

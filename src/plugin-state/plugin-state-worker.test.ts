@@ -20,6 +20,7 @@ import {
   mixedAgentConnection,
   useMixedAgentPair,
 } from "../infra/database-engine/mixed-agent.conformance.test-support.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { PostgresSyncConnection } from "../infra/postgres-sync/connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
@@ -28,12 +29,15 @@ import {
   appendMemoryHostEvent,
   readMemoryHostEventRecords,
 } from "../plugin-sdk/memory-host-events.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWriter from "../state/openclaw-state-worker-store.js";
 import { VERSION } from "../version.js";
 import {
   keyedStores,
@@ -121,28 +125,12 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-it("keeps reads behind earlier writes", async ({ state }) => {
-  const scope = { pluginId: "reader-fixture", namespace: "reconnect", env: state.env };
-  const store = createPluginStateKeyedStoreV2<string>(
-    scope.pluginId,
-    { ...scope, maxEntries: 10 },
-    { assertCurrent() {} },
-  );
-  const pendingWrite = store.register("b", "second");
-  await expect(store.lookup("b")).resolves.toBe("second");
-  await pendingWrite;
-});
-
 it.for([false, true])(
   "inspects durable plugin-state bytes with a warm resident view: %s",
   async (warm, { state }) => {
     const pluginId = "inspection-fixture";
     const namespace = "inspection-source";
-    const store = createPluginStateKeyedStore<string>(pluginId, {
-      namespace,
-      maxEntries: 1,
-      env: state.env,
-    });
+    const store = openStore<string>(pluginId, namespace, { maxEntries: 1, env: state.env });
     await store.register("key", "persisted");
     if (warm) {
       expect(await store.lookup("key")).toBe("persisted");
@@ -346,45 +334,80 @@ it("opens cold state and cleans expiry off-thread on reopen", async ({ state }) 
   expect(persisted.lookup("live")).toEqual({ live: true });
 });
 
-it("revalidates cold observe after namespace loading", async ({ state }) => {
-  const revoked = new Error("plugin owner revoked after namespace loading");
-  const owner = authority(revoked);
-  const store = createPluginStateKeyedStore<string>(
-    "memory-core",
-    { namespace: "read-authority", retention: "retained", env: state.env },
-    owner.assertCurrent,
-  );
-  await store.register("workspace", "owner");
-  const loaded = createDeferredCore();
-  const release = createDeferredCore();
-  observePluginStateReads(async () => {
-    loaded.resolve();
-    await release.promise;
-  });
-  const pending = store.observe("workspace").then(
-    (value) => ({ ok: true, value }) as const,
-    (error: unknown) => ({ ok: false, error }) as const,
-  );
-  try {
-    await Promise.race([
-      loaded.promise,
-      pending.then(() => {
-        throw new Error("Plugin observation settled before namespace loading");
-      }),
-    ]);
-    owner.revoke();
-    release.resolve();
-    await expect(pending).resolves.toMatchObject({
-      ok: false,
-      error: { code: "PLUGIN_STATE_READ_FAILED", cause: revoked },
+it.for(["revoked", "closing"])(
+  "settles cold plugin observation while %s",
+  async (mode, { state }) => {
+    const host = new LegacyPluginSdkResourceHost();
+    const scheduler = new GatewayScheduler();
+    host.bindScheduler(scheduler);
+    const instance = createOwnedTestInstance("memory-core");
+    const events: string[] = [];
+    host.adopt(
+      {},
+      {
+        release: async () => {
+          events.push("retired");
+        },
+      },
+    );
+    let closing: Promise<void> | undefined;
+    const revoked = new Error("plugin owner revoked after namespace loading");
+    const owner = authority(revoked);
+    const store = createPluginStateKeyedStore<string>(
+      "memory-core",
+      { namespace: "read-authority", retention: "retained", env: state.env },
+      owner.assertCurrent,
+    );
+    await store.register("workspace", "owner");
+    const loaded = createDeferredCore();
+    const release = createDeferredCore();
+    observePluginStateReads(async () => {
+      loaded.resolve();
+      await release.promise;
+      events.push("read");
     });
-  } finally {
-    release.resolve();
-    await pending;
-    owner.restore();
-  }
-  expect(await store.observe("workspace")).toMatchObject({ value: "owner" });
-});
+    const pending = host
+      .run(() => instance.run(() => store.observe("workspace")))
+      .then(
+        (value) => ({ ok: true, value }) as const,
+        (error: unknown) => ({ ok: false, error }) as const,
+      );
+    try {
+      await Promise.race([
+        loaded.promise,
+        pending.then(() => {
+          throw new Error("Plugin observation settled before namespace loading");
+        }),
+      ]);
+      if (mode === "revoked") {
+        owner.revoke();
+      } else {
+        scheduler.beginClose();
+        closing = host.close();
+        await expect(
+          host.run(() => instance.run(() => store.register("late", "refused"))),
+        ).rejects.toMatchObject({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" });
+      }
+      release.resolve();
+      await expect(pending).resolves.toMatchObject(
+        mode === "revoked"
+          ? { ok: false, error: { code: "PLUGIN_STATE_READ_FAILED", cause: revoked } }
+          : { ok: true, value: { value: "owner" } },
+      );
+      await closing;
+      if (mode === "closing") {
+        expect(events).toEqual(["read", "retired"]);
+      }
+    } finally {
+      release.resolve();
+      await pending;
+      await host.close();
+      await scheduler.stop();
+      owner.restore();
+    }
+    expect(await store.observe("workspace")).toMatchObject({ value: "owner" });
+  },
+);
 
 it("revalidates contended compareDelete and rolls back refused transactions", async ({ state }) => {
   const revoked = new Error("plugin owner revoked after dispatch");
@@ -653,14 +676,34 @@ it("returns complete entries and bulk values beyond a broker frame", async ({ st
   expectNoSql(observation.calls);
 });
 
-it("preserves scalar equality, expiry, and corrupt JSON errors", async ({ state: _state }) => {
+it("preserves ordered claims, scalar equality, expiry, and corrupt JSON errors", async ({
+  state: _state,
+}) => {
   const options = {
     namespace: "conditional",
     maxEntries: 1,
     overflowPolicy: "reject-new" as const,
   };
   const { sync: legacy, store } = keyedStores<unknown>("slack", options);
+  const pendingWrite = store.registerIfAbsent("entry", 1);
+  await expect(store.lookup("entry")).resolves.toBe(1);
+  await expect(pendingWrite).resolves.toBe(true);
+  const original = await store.entries();
+  const claims = vi.spyOn(stateWriter, "runOpenClawStateWorkerOperation");
+  expect(await store.registerIfAbsent("entry", 2, { ttlMs: 60_000 })).toBe(false);
+  expect(await store.entries()).toEqual(original);
+  expect(claims.mock.calls.length).toBe(0);
+  await expect(
+    store.registerIfAbsent("entry", 2, { ttlMs: Number.MAX_SAFE_INTEGER }),
+  ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
+  seed("slack", options.namespace, [{ key: "expired", value: 0, expiresAt: 1 }]);
+  expect(await store.registerIfAbsent("entry", 2)).toBe(false);
+  const db = openOpenClawStateDatabase().db;
+  expect(db.prepare("SELECT 1 FROM plugin_state_entries WHERE expires_at = 1").all()).toEqual([]);
+  claims.mockRestore();
+  const deletion = store.delete("entry");
   expect(await store.registerIfAbsent("entry", 1)).toBe(true);
+  await deletion;
   expect(await store.deleteIfEqual("entry", "1")).toBe(false);
   seed("slack", options.namespace, [{ key: "entry", value: 1, expiresAt: Date.now() - 1 }]);
   expect(await store.deleteIfEqual("entry", 1)).toBe(false);
@@ -767,10 +810,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL complete plugin-state views",
       undefined,
       { resolve: () => module },
     );
-    const sync = createPluginStateSyncKeyedStore<string>(scope.pluginId, {
-      namespace: scope.namespace,
-      maxEntries: 10,
-    });
+    const sync = syncKeyedStore<string>(scope.pluginId, scope.namespace);
     expect(await store.lookup("a")).toBe("live");
     const reads = observePluginStateReads();
     withEngineStoreAdmission(() => sync.register("a", "sync"));
@@ -795,10 +835,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL complete plugin-state views",
     ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT" });
     expect(reads).not.toHaveBeenCalled();
 
-    const oversized = createPluginStateKeyedStore<string>(scope.pluginId, {
-      namespace: "oversized",
-      maxEntries: 10,
-    });
+    const oversized = openStore<string>(scope.pluginId, "oversized");
     const largeValue = "x".repeat(840_000);
     withEngineStoreAdmission(() =>
       seed(

@@ -103,45 +103,6 @@ export function resolveSubagentChildAuthority(
   };
 }
 
-// New runs record ownership; report unsettled legacy work once per process.
-let warnedLegacyAuthority = false;
-export function warnLegacySubagentAuthority(
-  entries: Iterable<SubagentRunRecord>,
-  warn: (message: string, meta?: Record<string, unknown>) => void,
-): void {
-  if (warnedLegacyAuthority) {
-    return;
-  }
-  const runIds = new Set<string>();
-  const sampleRunIds: string[] = [];
-  for (const entry of entries) {
-    if (
-      !entry.requesterSettleWake &&
-      (entry.cleanupCompletedAt !== undefined ||
-        (entry.execution.status === "terminal" && entry.suppressCompletionDelivery))
-    ) {
-      continue;
-    }
-    if (
-      !runIds.has(entry.runId) &&
-      resolveSubagentChildAuthority(entry).status === "legacy-unverified"
-    ) {
-      runIds.add(entry.runId);
-      if (sampleRunIds.length < 3) {
-        sampleRunIds.push(entry.runId);
-      }
-    }
-  }
-  if (runIds.size === 0) {
-    return;
-  }
-  warnedLegacyAuthority = true;
-  warn(
-    "Subagent original session identity or lifecycle revision is unavailable; requester work continues with child-session effects suppressed.",
-    { count: runIds.size, sampleRunIds },
-  );
-}
-
 // Leaf module: registry memory, queries, and generation helpers import this, so it
 // must not depend on config or agent-scope (that closes an import cycle).
 export function matchesSubagentChildSessionOwner(

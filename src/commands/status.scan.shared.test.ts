@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
@@ -178,24 +179,25 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it.each(["plugin-errors", "probe-failed"])(
-    "does not claim current local health from %s",
-    async (observation) => {
-      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
-        healthy: true,
-        waitOutcome: "healthy",
-        ...(observation === "plugin-errors"
-          ? { activatedPluginErrors: ["fixture plugin failed"] }
-          : {}),
-      });
-      mocks.probeGateway.mockResolvedValue({
-        ...unreachableProbe(),
-        ok: observation !== "probe-failed",
-      });
-      const result = await resolveGatewayProbeSnapshot();
-      expect(result.localGatewayHealthy).toBe(false);
-    },
-  );
+  it.each([
+    { observation: "plugin-errors", healthy: true },
+    { observation: "probe-failed", healthy: false },
+  ])("reports local health with $observation", async ({ observation, healthy }) => {
+    mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+      healthy: true,
+      waitOutcome: "healthy",
+      // Plugin load errors are notices; the Gateway still serves.
+      ...(observation === "plugin-errors"
+        ? { activatedPluginErrors: ["fixture plugin failed"] }
+        : {}),
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ...unreachableProbe(),
+      ok: observation !== "probe-failed",
+    });
+    const result = await resolveGatewayProbeSnapshot();
+    expect(result.localGatewayHealthy).toBe(healthy);
+  });
 
   it.each([true, false])(
     "uses bounded local fallback with explicit credentials=%s",
@@ -235,14 +237,20 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it("does not use the local status RPC fallback for dotted localhost", async () => {
-    gatewayTarget("ws://localhost.:18789");
-    mocks.probeGateway.mockResolvedValue(unreachableProbe("ws://localhost.:18789"));
-
+  it.each([
+    ["local", "ws://localhost.:18789"],
+    ["remote", "wss://gateway.example/ws"],
+  ] as const)("does not use the status RPC fallback for a %s probe of %s", async (mode, url) => {
+    gatewayTarget(url);
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode,
+      gatewayMode: mode,
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue(unreachableProbe(url));
     const result = await resolveGatewayProbeSnapshot();
-
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(result.gatewayProbe?.ok).toBe(false);
+    expect(result.gatewayReachable).toBe(false);
   });
 
   it("gives the fallback status RPC only the remaining explicit CLI timeout", async () => {
@@ -259,20 +267,12 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbe).toMatchObject({ ok: false, error: "timeout; warn" });
   });
 
-  it("does not use the status RPC fallback for remote probe failures", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockResolvedValue(unreachableProbe("wss://gateway.example/ws"));
-
-    const result = await resolveGatewayProbeSnapshot({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } },
-    });
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(result.gatewayReachable).toBe(false);
+  it("stops an interrupted command instead of reporting its aborted probe", async () => {
+    mocks.probeGateway.mockResolvedValue(unreachableProbe());
+    const work = new AsyncWorkScope();
+    work.beginClose();
+    await expect(work.run(() => resolveGatewayProbeSnapshot())).rejects.toBe(work.signal.reason);
+    expect(readProbeCall().signal?.aborted).toBe(true);
   });
 });
 
@@ -302,7 +302,6 @@ function memoryManager(
 describe("resolveSharedMemoryStatusSnapshot", () => {
   const getMemorySearchManager = mocks.getMemorySearchManager;
   beforeEach(() => getMemorySearchManager.mockReset().mockResolvedValue({ manager: null }));
-
   function memorySnapshot(
     overrides: Partial<Parameters<typeof resolveSharedMemoryStatusSnapshot>[0]> = {},
   ) {
@@ -314,7 +313,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       ...overrides,
     });
   }
-
   it("reports native provider health instead of returning a silent null", async () => {
     const close = vi.fn().mockResolvedValue(undefined);
     const health = vi.fn().mockResolvedValue({ status: "ready", message: "connected" });
@@ -322,14 +320,12 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       providerId: "records",
       provider: { health, close },
     });
-
     const result = await memorySnapshot({
       cfg: { plugins: { slots: { memory: "records" } } },
       memoryPlugin: { enabled: true, slot: "records" },
       isMemoryProviderNative: () => true,
       getMemoryProvider,
     });
-
     expect(getMemoryProvider).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "main",
@@ -345,7 +341,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(getMemorySearchManager).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledOnce();
   });
-
   it.each(["unconfigured", "unowned fleet", "cold store"])("skips memory for %s", async (kind) => {
     const isMemoryProviderNative = vi.fn(() => false);
     const resolveMemoryConfig = vi.fn();
@@ -366,7 +361,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
-
   it.each(["explicit config", "shipped tables"])("inspects memory with %s", async (source) => {
     const databasePath = path.join(makeTempDir(tempDirs, "status-memory-"), "memory.sqlite");
     if (source === "shipped tables") {
@@ -389,39 +383,45 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     );
     expect(result).toMatchObject({ provider: "local", files: 1, dirty: true });
   });
-
-  it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
-    const manager = memoryManager({
-      provider: "memory-lancedb-pro",
-      files: 66,
-      chunks: 128,
-    });
+  it.each(["healthy", "store", "semantic"])("reports custom legacy %s probes", async (probe) => {
+    const vector = {
+      enabled: true,
+      storeAvailable: true,
+      semanticAvailable: true,
+      available: true,
+    };
+    const manager = memoryManager({ provider: "memory-lancedb-pro", vector });
+    const failedProbe =
+      probe === "store" ? "probeVectorStoreAvailability" : "probeVectorAvailability";
+    if (probe !== "healthy") {
+      manager[failedProbe].mockRejectedValue(new Error("offline"));
+    }
+    if (probe === "semantic") {
+      Reflect.deleteProperty(manager, "probeVectorStoreAvailability");
+    }
     const resolveMemoryConfig = vi.fn(() => null);
+    const requireDefaultDatabasePath = vi.fn(() => "/unused-memory.sqlite");
     getMemorySearchManager.mockResolvedValue({ manager });
-    const requireDefaultDatabasePath = vi.fn(
-      () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
-    );
-
     const result = await memorySnapshot({
-      cfg: {
-        plugins: { slots: { memory: "memory-lancedb-pro" } },
-        memory: { search: { enabled: false } },
-      },
+      cfg: { plugins: { slots: { memory: "memory-lancedb-pro" } } },
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
       requireDefaultDatabasePath,
     });
-
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(requireDefaultDatabasePath).not.toHaveBeenCalled();
-    expect(manager.probeVectorStoreAvailability).toHaveBeenCalled();
-    expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
-    expect(manager.close).toHaveBeenCalled();
+    expect(manager.close).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
-      agentId: "main",
-      provider: "memory-lancedb-pro",
-      files: 66,
-      chunks: 128,
+      vector:
+        probe === "healthy"
+          ? vector
+          : {
+              ...vector,
+              storeAvailable: probe !== "store",
+              semanticAvailable: false,
+              available: false,
+              loadError: "offline",
+            },
     });
   });
 });

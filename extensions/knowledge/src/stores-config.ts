@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
-import { AGENT_ID, STORE_KEY } from "./stores-contract.js";
+import { DEFAULT_HUB_PERCENTILE } from "./page-budget.js";
+import { parseRecallGate, RecallGateConfig, type RecallGatePolicy } from "./recall-gate.js";
+import { AGENT_ID, STORE_KEY, type GrantAccess } from "./stores-contract.js";
 export const agentIdPattern = new RegExp(AGENT_ID);
-const storeKeyPattern = new RegExp(STORE_KEY);
 
 const NamedStore = Type.Object(
   {
@@ -22,9 +23,24 @@ export type StoresSection = Static<typeof StoresSection>;
  * everything else is a plugin-wide gate. */
 export const PluginConfig = Type.Object(
   {
-    operatorRead: Type.Optional(Type.Boolean()),
-    writesEnabled: Type.Optional(Type.Boolean()),
+    operatorRead: Type.Optional(Type.Boolean({ default: true })),
+    writesEnabled: Type.Optional(Type.Boolean({ default: true })),
     stores: Type.Optional(StoresSection),
+    pageBudgets: Type.Optional(
+      Type.Object(
+        {
+          hubPercentile: Type.Optional(
+            Type.Number({
+              minimum: 50,
+              maximum: 99.9,
+              description:
+                "Authored-link degree percentile, within each store partition, at which a page counts as a hub and gets the smaller body budget. Default 90.",
+            }),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     maintenance: Type.Optional(
       Type.Object(
         {
@@ -53,6 +69,7 @@ export const PluginConfig = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    recallGate: Type.Optional(RecallGateConfig),
   },
   { additionalProperties: false },
 );
@@ -67,7 +84,10 @@ type MaintenanceSettings = {
 export type Policy = {
   operatorRead: boolean;
   writesEnabled: boolean;
+  hubPercentile: number;
   maintenance: MaintenanceSettings;
+  /** Decision-model recall gate; undefined when not configured or off. */
+  recallGate?: RecallGatePolicy;
 };
 const DEFAULT_MAINTENANCE_SCHEDULE = "30 3 * * *";
 
@@ -81,14 +101,17 @@ export function parsePolicy(config: Record<string, unknown> | undefined): Policy
     throw new Error("Knowledge configuration is invalid; review plugins.entries.knowledge.config.");
   }
   const maintenance = value.maintenance ?? {};
+  const recallGate = parseRecallGate(value.recallGate);
   return {
     operatorRead: value.operatorRead ?? true,
     writesEnabled: value.writesEnabled ?? true,
+    hubPercentile: value.pageBudgets?.hubPercentile ?? DEFAULT_HUB_PERCENTILE,
     maintenance: {
       enabled: maintenance.enabled ?? true,
       schedule: maintenance.schedule ?? DEFAULT_MAINTENANCE_SCHEDULE,
       timezone: maintenance.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
     },
+    ...(recallGate ? { recallGate } : {}),
   };
 }
 
@@ -139,7 +162,7 @@ export function parseMembership(raw: unknown): Membership {
     issues: string[] = [];
   const assigned = new Map<string, string>(),
     invalid = new Set<string>();
-  if (!Check(StoresSection, raw) || Object.keys(raw).some((key) => !storeKeyPattern.test(key))) {
+  if (!Check(StoresSection, raw)) {
     // Salvage agent names so the affected agents are reported, never defaulted.
     const entries: unknown[] = Object.values(raw && typeof raw === "object" ? raw : {});
     for (const entry of entries) {
@@ -191,4 +214,30 @@ export function effectiveBinding(membership: Membership, agentId: string): Bindi
   }
   const key = membership.assigned.get(agentId);
   return key === undefined ? `agent:${agentId}` : `named:${key}`;
+}
+
+/** Owner grants keyed by a conversation's stable session key. */
+export type ConversationGrants = Record<string, GrantAccess>;
+/** Revision operators edit grants against: a hash of the grants only. */
+export const grantsRevision = (grants: ConversationGrants) => storesRevision(grants);
+
+/** The grant covering a conversation: its own key's, else the nearest
+ * `:`-delimited ancestor's. Thread, topic and other key-denoted child sessions
+ * extend their conversation's key, so they inherit its grant; a more specific
+ * grant wins. Session keys are read as structure only, never as authority: the
+ * key comes from the host-minted audience. */
+export function coveringGrant(
+  grants: ConversationGrants,
+  sessionKey: string,
+): GrantAccess | undefined {
+  for (let key = sessionKey; ;) {
+    if (Object.hasOwn(grants, key)) {
+      return grants[key];
+    }
+    const at = key.lastIndexOf(":");
+    if (at <= 0) {
+      return undefined;
+    }
+    key = key.slice(0, at);
+  }
 }

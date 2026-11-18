@@ -1,14 +1,17 @@
 import { afterEach, expect, it, vi } from "vitest";
-
 const mocks = {
   check: vi.fn(),
   run: vi.fn(),
+  list: vi.fn(async () => []),
   writeJson: vi.fn(),
   log: vi.fn(),
 };
 const overrides = {
   "../../runtime.js": { defaultRuntime: mocks },
   "./shared.js": { resolveUpdateRoot: async () => "/fixture/openclaw" },
+  "./update-command-database-engine.js": {
+    withUpdateDatabaseEngine: async (_env: NodeJS.ProcessEnv, run: () => Promise<unknown>) => run(),
+  },
   "../../config/config.js": {
     readSourceConfigBestEffort: async () => ({ gateway: { mode: "remote" } }),
   },
@@ -21,9 +24,16 @@ const overrides = {
   "../../infra/update-check.js": {
     checkUpdateStatus: mocks.check,
     formatGitInstallLabel: () => undefined,
-    compareSemverStrings: () => 0,
   },
-  "../../infra/update-run-status.js": { readUpdateRunStatus: mocks.run },
+  "../../infra/update-run-status.js": {
+    // History settles first; owed-step enrichment may outlive it.
+    readUpdateRunStatusWithOwedSteps: async (onStatus: (status: unknown) => void) => {
+      const status = await mocks.run();
+      onStatus(status);
+      await mocks.list();
+      return status;
+    },
+  },
   "../../infra/update-recovery-backup-status.js": { inspectUpdateRecoveryBackups: async () => [] },
   "../../infra/deferred-plugin-migrations.js": {
     readDeferredPluginMigrationsAsync: async () => [],
@@ -45,12 +55,11 @@ vi.doMock("../../state/openclaw-state-db-readonly.js", async (original) => ({
   ...(await import("../../state/artifact-preserving-state-reads.js")),
 }));
 const { updateStatusCommand } = await import("./status.js");
-
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  mocks.list.mockResolvedValue([]);
 });
-
 const lastRun = { runId: "completed-run", status: "succeeded" };
 const delayed = <T>(value: T, ms: number) =>
   new Promise<T>((resolve) => {
@@ -67,6 +76,49 @@ it("keeps history available when a short update-check timeout expires first", as
   expect(mocks.check).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
   expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
   expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
+});
+
+it.each(["2147483", "2147484", "9007199254740"])(
+  "retains available inspection results with a %s-second allowance",
+  async (timeout) => {
+    const update = {
+      root: "/fixture/openclaw",
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: "2026.11.9" },
+    };
+    mocks.check.mockImplementation(() => delayed(update, 100));
+    mocks.run.mockResolvedValue({ lastRun });
+    vi.useFakeTimers();
+    const pending = updateStatusCommand({ json: true, timeout });
+    await vi.advanceTimersByTimeAsync(250);
+    await pending;
+    expect(mocks.writeJson).toHaveBeenCalledOnce();
+    expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ update, lastRun });
+    expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("inspectionErrors");
+  },
+);
+
+it("retains completed history when owed-step enrichment exceeds the overall deadline", async () => {
+  const started = Promise.withResolvers<void>();
+  mocks.check.mockResolvedValue({ installKind: "unknown" });
+  mocks.run.mockResolvedValue({ lastRun });
+  mocks.list.mockImplementation(() => {
+    started.resolve();
+    return new Promise(() => {});
+  });
+  vi.useFakeTimers();
+  const pending = updateStatusCommand({ json: true });
+  await started.promise;
+  await vi.advanceTimersByTimeAsync(30_001);
+  await pending;
+  expect(mocks.writeJson).toHaveBeenCalledOnce();
+  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({ lastRun });
+  expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
+  expect(mocks.writeJson.mock.lastCall?.[0].inspectionErrors).toContainEqual({
+    section: "update history",
+    message: expect.stringMatching(/timed out.*30.*second/i),
+  });
 });
 
 it.each(["installation", "update history"])(

@@ -21,8 +21,8 @@ import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { resolveFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
 import {
   QUALIFIED_NPM_PREFLIGHT_SCHEMA,
-  validatePreparedNpmBundleDescriptor,
   sameJobExecution,
+  validatePreparedNpmBundleDescriptor,
   verifyNpmBundleProducer,
 } from "./npm-prepared-bundle.mjs";
 import { runReleaseToolingGh } from "./release-tooling-identity.mjs";
@@ -42,8 +42,20 @@ function requireValue(condition, message) {
   }
 }
 
-function api(repository, path) {
-  return JSON.parse(runReleaseToolingGh(["api", `repos/${repository}/${path}`]));
+function api(repository, path, runGh = runReleaseToolingGh) {
+  const args = ["api", `repos/${repository}/${path}`];
+  let response;
+  try {
+    response = runGh(args);
+  } catch (error) {
+    if (!isRecord(error) || String(error.stderr).trim() !== "unexpected end of JSON input") {
+      throw error;
+    }
+    // Replay this GET once when gh could not decode its response; a successful
+    // command's invalid JSON and all producer identity failures remain fatal.
+    response = runGh(args);
+  }
+  return JSON.parse(response);
 }
 
 function artifactRequest(env) {
@@ -131,18 +143,23 @@ export function validateArtifactProducerRun(
   { allowNewerAttempts = false, allowFailure = false } = {},
 ) {
   validateArtifactProducerTuple(runId, runAttempt);
+  const plugin = request.stage === "plugin-npm";
+  const workflow = plugin ? ".github/workflows/plugin-npm-release.yml" : WORKFLOW;
+  const title = plugin
+    ? `Plugin NPM Artifact Preflight [${request.npmDistTag}] ${request.sourceSha} (${request.dispatchId})`
+    : `Full Release Artifacts ${request.dispatchId}`;
   requireValue(
     String(run.id) === String(runId) &&
       (allowNewerAttempts
         ? DECIMAL.test(String(run.run_attempt)) && BigInt(run.run_attempt) >= BigInt(runAttempt)
         : String(run.run_attempt) === String(runAttempt)) &&
       run.event === "workflow_dispatch" &&
-      String(run.path).split("@", 1)[0] === WORKFLOW &&
+      String(run.path).split("@", 1)[0] === workflow &&
       run.repository?.full_name === request.repository &&
       run.head_repository?.full_name === request.repository &&
       run.head_sha === request.toolingSha &&
       run.head_branch === request.workflowRef &&
-      run.display_title === `Full Release Artifacts ${request.dispatchId}`,
+      run.display_title === title,
     "Artifact producer run identity changed.",
   );
   requireValue(
@@ -152,11 +169,11 @@ export function validateArtifactProducerRun(
   return run;
 }
 
-function readArtifactRun(request, runId, runAttempt, options) {
+function readArtifactRun(request, runId, runAttempt, options, runGh) {
   validateArtifactProducerTuple(runId, runAttempt);
   return validateArtifactProducerRun(
     request,
-    api(request.repository, `actions/runs/${runId}`),
+    api(request.repository, `actions/runs/${runId}`, runGh),
     runId,
     runAttempt,
     options,
@@ -244,11 +261,12 @@ function retainedArtifactGh(args) {
   return response;
 }
 
-function findArtifact(request, runId, name, { retained = false } = {}) {
+function findArtifact(request, runId, name, { retained = false, runGh } = {}) {
   const scope = runId ? `actions/runs/${runId}` : "actions";
   const response = api(
     request.repository,
     `${scope}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
+    runGh,
   );
   requireValue(
     Array.isArray(response.artifacts) &&
@@ -269,8 +287,14 @@ function findArtifact(request, runId, name, { retained = false } = {}) {
   return metadata;
 }
 
-async function readArtifact(request, runId, name, fileName, { retained = false } = {}) {
-  const metadata = findArtifact(request, runId, name, { retained });
+async function readArtifact(
+  request,
+  runId,
+  name,
+  fileName,
+  { retained = false, runGh, retryMetadataNotFound = false, deadlineMs } = {},
+) {
+  const metadata = findArtifact(request, runId, name, { retained, runGh });
   if (!metadata) {
     return undefined;
   }
@@ -287,6 +311,8 @@ async function readArtifact(request, runId, name, fileName, { retained = false }
     },
     maxArchiveBytes: MAX_ARCHIVE_BYTES,
     token: process.env.GH_TOKEN,
+    retryMetadataNotFound: !retained && retryMetadataNotFound,
+    outerDeadlineMs: deadlineMs,
   }).catch((/** @type {unknown} */ error) => {
     if (
       retained &&
@@ -319,29 +345,36 @@ function verifyRetainedArtifact({
   workflowRef,
   workflowPath,
   job,
+  runGh = retainedArtifactGh,
 }) {
   const metadata = JSON.parse(
-    retainedArtifactGh(["api", `repos/${repository}/actions/artifacts/${artifact.id}`]),
+    runGh(["api", `repos/${repository}/actions/artifacts/${artifact.id}`]),
   );
-  const run = api(repository, `actions/runs/${producer.runId}/attempts/${producer.runAttempt}`);
+  const run = api(
+    repository,
+    `actions/runs/${producer.runId}/attempts/${producer.runAttempt}`,
+    runGh,
+  );
+  const expected = {
+    repository,
+    artifactId: Number(artifact.id),
+    artifactName: artifact.name,
+    artifactDigest: artifact.digest.startsWith("sha256:")
+      ? artifact.digest
+      : "sha256:" + artifact.digest,
+    artifactSizeBytes: artifact.sizeBytes ?? metadata.size_in_bytes,
+    runId: Number(producer.runId),
+    runAttempt: Number(producer.runAttempt),
+    workflowSha: producer.workflowSha,
+    workflowHeadBranch: workflowRef,
+    workflowPath,
+    workflowEvent: "workflow_dispatch",
+    runStatePolicy: job ? "completed-producer-success" : "completed-success",
+    ...(job ? { producerJobName: job } : {}),
+    artifactExpiresAt: metadata.expires_at,
+  };
   validateActionsArtifactBinding({
-    expected: {
-      repository,
-      artifactId: Number(artifact.id),
-      artifactName: artifact.name,
-      artifactDigest: artifact.digest.startsWith("sha256:")
-        ? artifact.digest
-        : "sha256:" + artifact.digest,
-      artifactSizeBytes: artifact.sizeBytes ?? metadata.size_in_bytes,
-      runId: Number(producer.runId),
-      runAttempt: Number(producer.runAttempt),
-      workflowSha: producer.workflowSha,
-      workflowHeadBranch: workflowRef,
-      workflowPath,
-      workflowEvent: "workflow_dispatch",
-      runStatePolicy: job ? "completed-producer-success" : "completed-success",
-      ...(job ? { producerJobName: job } : {}),
-    },
+    expected,
     artifactMetadata: metadata,
     workflowRun: { ...run, path: String(run.path).split("@", 1)[0] },
   });
@@ -353,7 +386,6 @@ async function reusePublicationArtifacts(env) {
     env.EVIDENCE_REUSE !== "true" ||
     env.EVIDENCE_POLICY !== "exact-target-full-validation-v1" ||
     env.EVIDENCE_SHA !== env.TARGET_SHA ||
-    env.TARGET_SHA !== env.PARENT_WORKFLOW_SHA ||
     !source?.qualificationAdmission
   ) {
     output({ publication_artifacts_reused: "false" });
@@ -426,10 +458,12 @@ async function reusePublicationArtifacts(env) {
     output({ publication_artifacts_reused: "false" });
     return;
   }
+  const runGh = retainedArtifactGh;
+  const readOptions = { retained: true, runGh };
   const baseRequest = {
     repository: env.GITHUB_REPOSITORY,
-    sourceSha: env.TARGET_SHA,
-    toolingSha: env.PARENT_WORKFLOW_SHA,
+    sourceSha: root.targetSha,
+    toolingSha: root.workflowSha,
     workflowRef: root.workflowRef,
     releaseTag: env.RELEASE_TAG,
     preflightPhase: "all",
@@ -440,7 +474,7 @@ async function reusePublicationArtifacts(env) {
       stage,
       dispatchId: `full-release-validation-${root.runId}-${root.sourceParentRunAttempt}-artifacts-${stage}`,
     };
-    const run = readArtifactRun(request, runId, runAttempt);
+    const run = readArtifactRun(request, runId, runAttempt, undefined, runGh);
     requireValue(
       run.status === "completed" && run.conclusion === "success",
       "Reused artifact producer must be successful.",
@@ -450,7 +484,7 @@ async function reusePublicationArtifacts(env) {
       runId,
       `full-release-artifact-receipt-${runId}-${runAttempt}`,
       "artifact-receipt.json",
-      { retained: true },
+      readOptions,
     );
     if (!receipt) {
       throw new PublicationArtifactUnavailable(
@@ -466,7 +500,7 @@ async function reusePublicationArtifacts(env) {
     runAttempt: root.runAttempt,
     sourceSha: baseRequest.sourceSha,
     toolingSha: baseRequest.toolingSha,
-    runGh: retainedArtifactGh,
+    runGh,
   });
   const npmReceipt = await receiptFor("npm", qualified.producer.runId, String(npm.run.run_attempt));
   requireValue(
@@ -479,8 +513,10 @@ async function reusePublicationArtifacts(env) {
     repository: baseRequest.repository,
     toolingSha: baseRequest.toolingSha,
     requireCompletedParent: true,
+    runGh,
   });
   verifyRetainedArtifact({
+    runGh,
     repository: baseRequest.repository,
     artifact: raw.artifact,
     producer: raw.producer,
@@ -492,12 +528,13 @@ async function reusePublicationArtifacts(env) {
     baseRequest,
     qualified.producer.runId,
     `plugin-sdk-api-release-diff-${qualified.producer.runId}-${qualified.producer.runAttempt}`,
-    { retained: true },
+    readOptions,
   );
   if (!sdk) {
     throw new PublicationArtifactUnavailable("Original Plugin SDK evidence is unavailable.");
   }
   verifyRetainedArtifact({
+    runGh,
     repository: baseRequest.repository,
     artifact: sdk,
     producer: qualified.producer,
@@ -530,7 +567,7 @@ async function reusePublicationArtifacts(env) {
     docker.preparedRunId,
     docker.preparedArtifactName,
     "manifest.json",
-    { retained: true },
+    readOptions,
   );
   if (!prepared) {
     throw new PublicationArtifactUnavailable("Original Docker manifest is unavailable.");
@@ -551,6 +588,7 @@ async function reusePublicationArtifacts(env) {
   const dockerRun = api(
     baseRequest.repository,
     `actions/runs/${docker.preparedRunId}/attempts/${docker.preparedRunAttempt}`,
+    runGh,
   );
   requireValue(
     dockerManifest.toolingSha === baseRequest.toolingSha &&
@@ -567,7 +605,7 @@ async function reusePublicationArtifacts(env) {
       ),
     "Reused Docker producer did not execute the exact qualification preparation workflow.",
   );
-  const seal = api(baseRequest.repository, `actions/jobs/${dockerManifest.producer.jobId}`);
+  const seal = api(baseRequest.repository, `actions/jobs/${dockerManifest.producer.jobId}`, runGh);
   requireValue(
     String(seal.id) === dockerManifest.producer.jobId &&
       String(seal.run_id) === docker.preparedRunId &&
@@ -580,6 +618,7 @@ async function reusePublicationArtifacts(env) {
   );
   for (const entry of dockerManifest.architectures) {
     verifyRetainedArtifact({
+      runGh,
       repository: baseRequest.repository,
       artifact: entry.artifact,
       producer: { ...dockerManifest.producer, workflowSha: dockerManifest.toolingSha },
@@ -599,12 +638,13 @@ async function reusePublicationArtifacts(env) {
           `plugin-npm-prepared-${baseRequest.sourceSha}-${plugin.runId}-${plugin.runAttempt}`,
       "Reused plugin npm producer differs from the root.",
     );
-    const current = api(baseRequest.repository, `actions/runs/${plugin.runId}`);
+    const current = api(baseRequest.repository, `actions/runs/${plugin.runId}`, runGh);
     requireValue(
       current.run_attempt === plugin.runAttempt,
       "Reused plugin npm producer attempt changed.",
     );
     verifyRetainedArtifact({
+      runGh,
       repository: baseRequest.repository,
       artifact: {
         id: plugin.artifactId,
@@ -698,56 +738,103 @@ function artifactAttemptJobs(request, runId, attempt, run) {
         response.total_count <= 1000,
       "Artifact producer job inventory is incomplete.",
     );
+    requireValue(
+      response.jobs.every(
+        (job) =>
+          String(job.run_id) === String(runId) &&
+          String(job.run_attempt) === String(attempt) &&
+          job.head_sha === request.toolingSha,
+      ),
+      "Artifact producer job identity changed.",
+    );
     jobs.push(...response.jobs);
     if (jobs.length === response.total_count) {
       break;
+    }
+    // A live reusable workflow can expose its expanded count before all jobs
+    // appear. Leave this observation pending; never admit a partial inventory.
+    if (
+      run &&
+      run.status !== "completed" &&
+      response.jobs.length < 100 &&
+      jobs.length < response.total_count
+    ) {
+      return [];
     }
     requireValue(
       response.jobs.length === 100 && page < 10 && jobs.length < response.total_count,
       "Artifact producer job inventory is incomplete.",
     );
   }
-  requireValue(
-    jobs.every(
-      (job) =>
-        String(job.run_id) === String(runId) &&
-        String(job.run_attempt) === String(attempt) &&
-        job.head_sha === request.toolingSha,
-    ),
-    "Artifact producer job identity changed.",
-  );
   return jobs;
 }
 
-// Retried checks may reuse bytes, but cannot replace bytes already consumed by
-// the immutable candidate and its successful diagnostic children.
-function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
+// GitHub reruns carry successful jobs forward. The prepared descriptor artifact
+// is the durable producer identity; display names are presentation only.
+async function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
   readArtifactRun(request, runId, runAttempt);
   requireValue(BigInt(runAttempt) <= 100n, "Artifact producer attempt history exceeds its limit.");
-  let selected;
+  const successfulAttempts = [];
   for (let attempt = 1; attempt <= Number(runAttempt); attempt += 1) {
-    const matches = artifactAttemptJobs(request, runId, attempt).filter(
-      (job) => job.name === "Prepare npm artifacts / Prepare publishable npm package",
-    );
-    requireValue(matches.length <= 1, "Artifact preparation job is ambiguous.");
-    if (!matches.length) {
+    const name = `openclaw-npm-package-descriptor-${runId}-${attempt}`;
+    if (!findArtifact(request, runId, name)) {
       continue;
     }
-    // A carried-forward copy of the successful job keeps its frozen bytes.
-    if (selected?.conclusion === "success" && sameJobExecution(selected, matches[0])) {
-      continue;
-    }
+    const descriptor = (await readArtifact(request, runId, name, "prepared-npm-bundle.json"))
+      ?.value;
+    validatePreparedNpmBundleDescriptor({
+      descriptor,
+      repository: request.repository,
+      sourceSha: request.sourceSha,
+      toolingSha: request.toolingSha,
+    });
     requireValue(
-      !selected || selected.conclusion !== "success",
-      "Successful npm preparation was replaced; its frozen bytes cannot be adopted.",
+      descriptor.producer.runId === String(runId) &&
+        descriptor.producer.runAttempt === String(attempt),
+      "Raw npm producer identity changed.",
     );
-    selected = matches[0];
+    const matches = artifactAttemptJobs(request, runId, attempt).filter(
+      (job) =>
+        String(job.id) === descriptor.producer.jobId && job.name === descriptor.producer.jobName,
+    );
+    requireValue(matches.length === 1, "Raw npm bundle requires its unique exact producer job.");
+    if (matches[0].status === "completed" && matches[0].conclusion === "success") {
+      successfulAttempts.push(String(attempt));
+    }
   }
   requireValue(
-    selected && (selected.status !== "completed" || selected.conclusion === "success"),
+    successfulAttempts.length <= 1,
+    "Successful npm preparation was replaced; its frozen bytes cannot be adopted.",
+  );
+  return successfulAttempts[0] ?? String(runAttempt);
+}
+
+function assertNpmPreparationExecutionPreserved(request, runId, runAttempt, producer) {
+  const sourceAttempt = Number(producer.runAttempt);
+  const sourceJobs = artifactAttemptJobs(request, runId, sourceAttempt);
+  const sourceMatches = sourceJobs.filter(
+    (job) => String(job.id) === producer.jobId && job.name === producer.jobName,
+  );
+  requireValue(
+    sourceMatches.length === 1 &&
+      sourceMatches[0].status === "completed" &&
+      sourceMatches[0].conclusion === "success",
     "Raw npm bundle requires its unique exact completed producer job.",
   );
-  return String(selected.run_attempt);
+  for (let attempt = sourceAttempt + 1; attempt <= Number(runAttempt); attempt += 1) {
+    const matches = artifactAttemptJobs(request, runId, attempt).filter(
+      (job) => job.name === producer.jobName,
+    );
+    requireValue(matches.length <= 1, "Artifact preparation job is ambiguous.");
+    if (matches.length === 0 || sameJobExecution(sourceMatches[0], matches[0])) {
+      continue;
+    }
+    if (matches[0].status !== "completed") {
+      return false;
+    }
+    throw new Error("Successful npm preparation was replaced; its frozen bytes cannot be adopted.");
+  }
+  return true;
 }
 
 async function waitForArtifact(request, env) {
@@ -759,7 +846,7 @@ async function waitForArtifact(request, env) {
   const rawAttempt = raw
     ? String(runAttempt) === "1"
       ? "1"
-      : effectiveNpmPreparationAttempt(request, runId, runAttempt)
+      : await effectiveNpmPreparationAttempt(request, runId, runAttempt)
     : undefined;
   const name = raw
     ? `openclaw-npm-package-descriptor-${runId}-${rawAttempt}`
@@ -776,6 +863,7 @@ async function waitForArtifact(request, env) {
           runId,
           name,
           raw ? "prepared-npm-bundle.json" : "artifact-receipt.json",
+          { retryMetadataNotFound: raw, deadlineMs: deadline },
         )
       )?.value;
       if (receipt && raw) {
@@ -796,17 +884,20 @@ async function waitForArtifact(request, env) {
             repository: request.repository,
             toolingSha: request.toolingSha,
           });
-          values = { prepared_bundle_json: JSON.stringify(receipt) };
+          if (
+            assertNpmPreparationExecutionPreserved(request, runId, runAttempt, receipt.producer)
+          ) {
+            console.error(
+              `Artifact preparation npm identity: job ${receipt.producer.jobId} (attempt ${receipt.producer.runAttempt})`,
+            );
+            values = { prepared_bundle_json: JSON.stringify(receipt) };
+          }
         }
       } else if (receipt) {
         values = validateArtifactReceipt(receipt, request, runId, runAttempt);
         if (request.stage === "npm") {
           const prepared = JSON.parse(values.prepared_bundle_json);
-          requireValue(
-            prepared.producer.runAttempt ===
-              effectiveNpmPreparationAttempt(request, runId, runAttempt),
-            "Raw npm preparation attempt changed.",
-          );
+          readArtifactRun(request, runId, runAttempt);
           verifyNpmBundleProducer({
             producer: prepared.producer,
             repository: request.repository,
@@ -844,11 +935,11 @@ async function waitForArtifact(request, env) {
     if (run.status !== "completed") {
       const failedJob = artifactAttemptJobs(request, runId, runAttempt, run).find(
         (job) =>
+          (!raw || job.name === "Prepare npm artifacts / Prepare publishable npm package") &&
           job.status === "completed" &&
           ["failure", "cancelled", "timed_out", "action_required", "startup_failure"].includes(
             job.conclusion,
-          ) &&
-          (!raw || job.name === "Prepare npm artifacts / Prepare publishable npm package"),
+          ),
       );
       if (failedJob) {
         readArtifactRun(request, runId, runAttempt);

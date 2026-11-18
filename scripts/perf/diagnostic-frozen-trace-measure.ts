@@ -16,6 +16,7 @@ import {
   type DiagnosticEventInput,
 } from "../../src/infra/diagnostic-events.js";
 import { freezeDiagnosticTraceContext } from "../../src/infra/diagnostic-trace-context.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -115,12 +116,7 @@ if (values.mode === "counts") {
 }
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 1024,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 1024);
 }
 const hostLoad = loadavg();
 const cpuStart = process.cpuUsage();

@@ -23,7 +23,7 @@ import {
   deleteSessionDeliveryArtifacts,
   deleteSessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
+import { readSessionReferenceOwners } from "./session-accessor.sqlite-references.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
@@ -60,6 +60,7 @@ export function deleteSessionEntryRows(
     deliveryCleanupKeys?: readonly string[];
     validatedEntry?: SessionEntry;
     postimages?: SessionEntryWritePostimages;
+    preparedReferenceOwners?: () => Map<string, string> | undefined;
   } = {},
 ): boolean {
   // Lifecycle deletion reuses its transaction snapshot; Doctor also supplies validated legacy rows.
@@ -73,35 +74,32 @@ export function deleteSessionEntryRows(
     database.db,
     db.selectFrom("session_windows").select("session_id").where("session_key", "=", sessionKey),
   ).rows;
-  // Skip the survivor scan when maintenance reclaimed every window. Otherwise, project
-  // reference metadata before acquiring rows to avoid loading unrelated saved prompts.
-  const survivingNodes =
-    windows.length > 0
-      ? executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("session_nodes")
-            .select([
-              "current_session_id",
-              "entry_json",
-              "session_key",
-              "entry_valid",
-              "updated_at",
-            ])
-            .where("session_key", "!=", sessionKey)
-            .orderBy("session_key", "asc"),
-        ).rows
-      : [];
+  // Project references once for all retained windows; only winning successors need
+  // their full entry for publication. Unrelated payloads stay out of the writer.
+  const survivingOwners =
+    options.preparedReferenceOwners?.() ??
+    readSessionReferenceOwners(
+      database,
+      new Set([sessionKey]),
+      windows.map((window) => window.session_id),
+    );
+  const survivingNodes = new Map(
+    [...new Set(survivingOwners.values())].map((key) => [
+      key,
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["current_session_id", "entry_json", "session_key", "entry_valid", "updated_at"])
+          .where("session_key", "=", key),
+      ),
+    ]),
+  );
   const ownedSessionIds: string[] = [];
   let transcriptInventoryUnchanged = options.deleteOwnedWindows !== true;
   for (const window of windows) {
-    const survivingNode = survivingNodes.find((node) => {
-      if (node.current_session_id === window.session_id) {
-        return true;
-      }
-      const entry = parseSessionEntryRow(node);
-      return entry ? collectSessionStateIdsForEntry(entry).includes(window.session_id) : false;
-    });
+    const survivingKey = survivingOwners.get(window.session_id);
+    const survivingNode = survivingKey ? survivingNodes.get(survivingKey) : undefined;
     if (survivingNode) {
       transcriptInventoryUnchanged &&=
         resolveAgentIdFromSessionKey(sessionKey, database.agentId) ===
@@ -193,12 +191,14 @@ export function deleteLifecycleTargetRows(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
   snapshot: SqliteLifecycleTargetSnapshot,
+  preparedReferenceOwners?: (sessionKey: string) => Map<string, string> | undefined,
 ): boolean {
   let transcriptInventoryUnchanged = true;
   for (const sessionKey of uniqueStrings([target.canonicalKey, ...target.storeKeys])) {
     const trimmed = sessionKey.trim();
     if (trimmed) {
       const unchanged = deleteSessionEntryRows(database, trimmed, {
+        preparedReferenceOwners: () => preparedReferenceOwners?.(trimmed),
         validatedEntry: snapshot.find((row) => row.sessionKey === trimmed)?.entry,
       });
       transcriptInventoryUnchanged &&= unchanged;

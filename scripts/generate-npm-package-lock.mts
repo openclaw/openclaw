@@ -10,7 +10,6 @@ import {
   lstatSync,
   realpathSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -26,6 +25,10 @@ import { parse as parseYaml } from "yaml";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { resolveRuntimeToolingEntrypointUrl } from "../src/infra/runtime-process-manifest.ts";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mts";
+import {
+  listManagedNpmLockPackageDirs as listManagedPackageDirs,
+  npmLockPackageDirsForChangedPaths as selectChangedPackageDirs,
+} from "./lib/npm-lock-package-selection.mjs";
 import { pnpmLockfileDocuments, resolveSnapshot } from "./lib/pnpm-lockfile-documents.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 
@@ -203,8 +206,7 @@ function pnpmPackageKeys(packageKey: string, metadata: unknown) {
   ].map((version) => `${parsed.name}@${version}`);
 }
 
-function readPnpmLockPackages() {
-  const lockfile = readPnpmLock();
+function readPnpmLockPackages(lockfile = readPnpmLock()) {
   const packages = recordAt(lockfile, "packages");
   if (!packages) {
     throw new Error("pnpm-lock.yaml is missing package resolution data.");
@@ -214,8 +216,7 @@ function readPnpmLockPackages() {
   );
 }
 
-function readPnpmLockPackageIntegrities() {
-  const lockfile = readPnpmLock();
+function readPnpmLockPackageIntegrities(lockfile = readPnpmLock()) {
   const packages = recordAt(lockfile, "packages") ?? {};
   const integrities = new Map<string, Set<string>>();
   for (const [packageKey, metadata] of Object.entries(packages)) {
@@ -672,8 +673,8 @@ function readNpmLockOverrides(
   packageJson: UnknownRecord,
   packageDir: string,
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
+  lockfile = readPnpmLock(),
 ) {
-  const lockfile = readPnpmLock();
   // npm can merge sibling override contexts at their common ancestor. Unrelated
   // workspace versions must not turn an exact runtime pin into nested-only rules.
   const runtimeLockfile = runtimePnpmLock(lockfile, packageJson, packageDir, localPackageArtifacts);
@@ -1123,19 +1124,31 @@ type OverrideViolation = {
 
 // Trusted release tooling validates frozen targets as well as current main. Keep each
 // reviewed npm tarball exact here until no supported frozen target can reference it.
-const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map(
-  ["11.20.0", "12.1.0", "12.2.0"].map((version) => [
-    version,
+const NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 = new Map([
+  ["node_modules/npm/node_modules/minimatch", "10.2.5"],
+  ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
+  ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+]);
+const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map<
+  string,
+  { allowMissingBundleMarker: boolean; exceptions: Map<string, string> }
+>([
+  ["11.20.0", { allowMissingBundleMarker: true, exceptions: NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 }],
+  ["12.1.0", { allowMissingBundleMarker: false, exceptions: NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 }],
+  ["12.2.0", { allowMissingBundleMarker: false, exceptions: NPM_BUNDLE_EXCEPTIONS_THROUGH_12_2_0 }],
+  // npm 12.2.1 bundles brace-expansion 5.0.12, satisfying the workspace override, and
+  // ip-address 10.7.2, which is newer than 12.2.0's bundle but still below the override.
+  [
+    "12.2.1",
     {
-      allowMissingBundleMarker: version === "11.20.0",
+      allowMissingBundleMarker: false,
       exceptions: new Map([
         ["node_modules/npm/node_modules/minimatch", "10.2.5"],
-        ["node_modules/npm/node_modules/brace-expansion", "5.0.9"],
-        ["node_modules/npm/node_modules/ip-address", "10.5.0"],
+        ["node_modules/npm/node_modules/ip-address", "10.7.2"],
       ]),
     },
-  ]),
-);
+  ],
+]);
 
 function isApprovedNpmBundledDependency(packages: UnknownRecord, lockPath: string) {
   const npm = recordAt(packages, "node_modules/npm");
@@ -1614,6 +1627,44 @@ function normalizeNpmVersionDrift<T>(lockfile: T): T {
   return lockfile;
 }
 
+function normalizeNpmRegistryIntegrities(
+  lockfile: unknown,
+  pnpmIntegrities: ReadonlyMap<string, ReadonlySet<string>>,
+) {
+  for (const [lockPath, metadata] of Object.entries(recordAt(lockfile, "packages") ?? {})) {
+    if (
+      !isRecord(metadata) ||
+      metadata.link === true ||
+      metadata.inBundle === true ||
+      typeof metadata.resolved !== "string" ||
+      !/^https?:\/\//u.test(metadata.resolved) ||
+      typeof metadata.integrity !== "string" ||
+      !/^sha1-[A-Za-z0-9+/]{27}=$/u.test(metadata.integrity)
+    ) {
+      continue;
+    }
+    const name =
+      typeof metadata.name === "string"
+        ? metadata.name
+        : parseLockPackagePath(lockPath).at(-1)?.name;
+    const packageKey = `${name}@${String(metadata.version)}`;
+    const pins = pnpmIntegrities.get(packageKey);
+    if (pins?.has(metadata.integrity)) {
+      continue;
+    }
+    const [pin] = pins ?? [];
+    if (pins?.size !== 1 || !pin || !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(pin)) {
+      throw new Error(
+        `cannot normalize registry integrity for ${packageKey}: expected one pnpm SHA512 pin`,
+      );
+    }
+    // Some mirrors expose only dist.shasum. Carry the reviewed archive constraint,
+    // not an assertion that SHA1 metadata authenticated those bytes. Consumers
+    // still verify downloaded archives against this SHA512; strong mismatches stay errors.
+    metadata.integrity = pin;
+  }
+}
+
 export function createNpmPackageLockInstallStrategyArgs(
   options: Pick<NpmLockOptions, "installStrategy"> = {},
 ) {
@@ -1636,7 +1687,14 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
     );
     const localPackageArtifacts = options.localPackageArtifacts ?? [];
     validateLocalPackageArtifacts(packageDir, localPackageArtifacts);
-    const installOverrides = readNpmLockOverrides(packageJson, packageDir, localPackageArtifacts);
+    // One source snapshot per generation; the next generation reads fresh policy.
+    const pnpmLock = readPnpmLock();
+    const installOverrides = readNpmLockOverrides(
+      packageJson,
+      packageDir,
+      localPackageArtifacts,
+      pnpmLock,
+    );
     const normalizedPackageJson = packageJsonForNpmLock(
       packageJson,
       installOverrides,
@@ -1667,6 +1725,8 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
         parseJsonObject(readFileSync(path.join(tempDir, "package-lock.json"), "utf8")),
       ),
     );
+    const pnpmIntegrities = readPnpmLockPackageIntegrities(pnpmLock);
+    normalizeNpmRegistryIntegrities(generated, pnpmIntegrities);
     let npmBundleTarball: Buffer | undefined;
     const npmVersion = recordAt(recordAt(generated, "packages"), "node_modules/npm")?.version;
     if (typeof npmVersion === "string" && NPM_BUNDLED_DEPENDENCY_POLICIES.has(npmVersion)) {
@@ -1677,7 +1737,13 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
       );
       npmBundleTarball = readFileSync(path.join(tempDir, `npm-${npmVersion}.tgz`));
     }
-    assertNpmLockMatchesPnpmLock(generated, localPackageArtifacts, npmBundleTarball);
+    assertNpmLockMatchesPnpmLock(
+      generated,
+      pnpmLock,
+      pnpmIntegrities,
+      localPackageArtifacts,
+      npmBundleTarball,
+    );
     return `${JSON.stringify(generated, null, 2)}\n`;
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -1689,7 +1755,7 @@ export function generateNpmPackageLock(packageDir: string, options: NpmLockOptio
 function verifiedNpmBundlePackages(
   packages: UnknownRecord,
   tarball: Buffer | undefined,
-  pnpmIntegrities: Map<string, Set<string>>,
+  pnpmIntegrities: ReadonlyMap<string, ReadonlySet<string>>,
 ) {
   const manifests = new Map<string, { name: string; version: string }>();
   if (!tarball) {
@@ -1757,7 +1823,7 @@ function verifiedNpmBundlePackages(
 function collectPnpmLockViolations(
   npmLock: unknown,
   pnpmLockPackages = readPnpmLockPackages(),
-  pnpmLockIntegrities = readPnpmLockPackageIntegrities(),
+  pnpmLockIntegrities: ReadonlyMap<string, ReadonlySet<string>> = readPnpmLockPackageIntegrities(),
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
   npmBundleTarball?: Buffer,
 ) {
@@ -1926,6 +1992,8 @@ function collectPnpmLockPlatformViolations(npmLock: unknown, pnpmLock = readPnpm
 
 function assertNpmLockMatchesPnpmLock(
   npmLock: unknown,
+  pnpmLock: unknown,
+  pnpmIntegrities: ReadonlyMap<string, ReadonlySet<string>>,
   localPackageArtifacts: NpmLocalPackageArtifact[] = [],
   npmBundleTarball?: Buffer,
 ) {
@@ -1946,12 +2014,12 @@ function assertNpmLockMatchesPnpmLock(
   }
   const violations = collectPnpmLockViolations(
     npmLock,
-    undefined,
-    undefined,
+    readPnpmLockPackages(pnpmLock),
+    pnpmIntegrities,
     localPackageArtifacts,
     npmBundleTarball,
   );
-  const platformViolations = collectPnpmLockPlatformViolations(npmLock);
+  const platformViolations = collectPnpmLockPlatformViolations(npmLock, pnpmLock);
   if (violations.length === 0 && platformViolations.length === 0) {
     return;
   }
@@ -1977,64 +2045,11 @@ function packageLabel(packageDir: string) {
 }
 
 export function listManagedNpmLockPackageDirs(rootDir = ROOT_DIR) {
-  // npm locks are generated on demand for every publishable package, but never committed.
-  return ["extensions", "packages"]
-    .flatMap((parentDir) =>
-      readdirSync(path.join(rootDir, parentDir), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.posix.join(parentDir, entry.name)),
-    )
-    .filter((packageDir) => {
-      const packageJsonPath = path.join(rootDir, packageDir, "package.json");
-      if (!existsSync(packageJsonPath)) {
-        return false;
-      }
-      const packageJson: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-      return recordAt(recordAt(packageJson, "openclaw"), "release")?.publishToNpm === true;
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  return listManagedPackageDirs(rootDir);
 }
 
 function npmLockPackageDirsForChangedPaths(changedPaths: string[]) {
-  const packageDirs = new Set<string>();
-  const managedNpmLockPackageDirs = new Set(listManagedNpmLockPackageDirs());
-  let hasAmbiguousDependencyPolicyChange = false;
-  let hasLockfileChange = false;
-
-  for (const changedPath of changedPaths) {
-    if (!changedPath) {
-      continue;
-    }
-    if (changedPath === "package.json") {
-      packageDirs.add(ROOT_DIR);
-      continue;
-    }
-    const workspacePackageMatch = changedPath.match(
-      /^((?:extensions|packages)\/[^/]+)(?:\/.*)?\/package\.json$/u,
-    );
-    const workspacePackageDir = workspacePackageMatch?.[1];
-    if (workspacePackageDir && managedNpmLockPackageDirs.has(workspacePackageDir)) {
-      packageDirs.add(path.resolve(ROOT_DIR, workspacePackageDir));
-      continue;
-    }
-    if (changedPath === "pnpm-lock.yaml") {
-      hasLockfileChange = true;
-      continue;
-    }
-    if (
-      changedPath === "pnpm-workspace.yaml" ||
-      changedPath === "scripts/generate-npm-package-lock.mts"
-    ) {
-      hasAmbiguousDependencyPolicyChange = true;
-    }
-  }
-
-  if (hasAmbiguousDependencyPolicyChange || hasLockfileChange) {
-    return [ROOT_DIR, ...listManagedNpmLockPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir))];
-  }
-  return [...packageDirs].toSorted((left, right) =>
-    packageLabel(left).localeCompare(packageLabel(right)),
-  );
+  return selectChangedPackageDirs(changedPaths, ROOT_DIR);
 }
 
 /** @internal Directly tested script implementation detail. */
@@ -2254,6 +2269,7 @@ export {
   parsePnpmPackageKey,
   parseLockPackagePath,
   readNpmLockOverrides,
+  runtimePnpmLock,
   shouldUseLegacyPeerDepsForNpmLock,
   npmLockPackageDirsForChangedPaths,
 };

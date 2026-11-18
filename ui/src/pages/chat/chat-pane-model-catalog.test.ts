@@ -33,7 +33,7 @@ import { makeChatHost, makeRequestMock, requestCalls } from "./chat-host.test-su
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
-import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
+import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -44,7 +44,6 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 
 beforeEach(installModelPickerLayout);
 
@@ -61,19 +60,13 @@ function seedCatalog(
 }
 
 const menuReady = (container: HTMLElement) =>
-  waitForSolid(() => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull());
+  waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu[aria-label]")).not.toBeNull(),
+  );
 
 function composerControls(state: ChatPageHost) {
-  return renderChatPaneComposerControls({
-    state,
+  return renderControls(state, {
     selectedSession: selectedChatSessionRow(state),
-    agentDefaultModel: undefined,
-    modelAccess: { allowed: true, requiredScope: "operator.write" },
-    effortAccess: { allowed: true, requiredScope: "operator.write" },
-    contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-    permissionAccess: { allowed: true, requiredScope: "operator.write" },
-    canSelectFull: true,
-    onModelSetup: vi.fn(),
   }).composerControls;
 }
 
@@ -283,7 +276,7 @@ describe("chat pane composer controls", () => {
     const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
     expect(picker.open).toBe(true);
     await menuReady(container);
-    container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+    container.querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!.click();
     flush();
     expect(container.querySelector('[data-chat-account-option="loading"]')).not.toBeNull();
 
@@ -324,10 +317,10 @@ describe("chat pane composer controls", () => {
       expect(state.chatModelCatalogError).toContain("Previous runtime preparation failed");
       expect(state.chatModelCatalog).toEqual(retained ? cachedModels : []);
       const failureLabel = retained
-        ? "Some models could not be refreshed. Open Models to try again."
+        ? "Couldn’t refresh some models. Open Models to try again."
         : "Models unavailable";
       await menuReady(container);
-      expandModelProviders(container);
+
       expect(container.textContent).toContain(failureLabel);
 
       const refresh =
@@ -336,18 +329,20 @@ describe("chat pane composer controls", () => {
       flush();
       expect(state.chatModelsLoading).toBe(true);
       expect(container.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
-      expect(container.querySelector(".btn__spinner")).not.toBeNull();
+
       expect(container.textContent).not.toContain(failureLabel);
       if (retained) {
-        expect(container.querySelector("[data-chat-model-refresh]")).not.toBeNull();
-        expect(container.textContent).toContain("Refreshing models…");
+        expect(container.querySelector("[data-chat-model-refresh]")).toBeNull();
+        expect(container.textContent).not.toContain("Refreshing models…");
+        expect(container.querySelector(".btn__spinner")).toBeNull();
         expect(
-          container.querySelector<HTMLButtonElement>("[data-chat-model-option]")?.disabled,
-        ).toBe(false);
+          container
+            .querySelector<HTMLElement>("[data-chat-model-option]")
+            ?.getAttribute("aria-disabled"),
+        ).toBeNull();
         expect(container.textContent).toContain("Cached Model");
       } else {
-        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
-        expect(container.textContent).toContain("Loading models…");
+        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).toBeNull();
       }
 
       checking.reject(new Error("Runtime preparation still failed"));
@@ -362,7 +357,7 @@ describe("chat pane composer controls", () => {
       request.mockResolvedValueOnce({ models: cachedModels });
       await refreshChatModelCatalogOnDemand(state);
       flush();
-      expandModelProviders(container);
+
       expect(container.textContent).toContain("Cached Model");
       expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     },
@@ -402,6 +397,7 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
         sessionsResult: { ...createSessionsListResult(), sessions: [session] },
       }) as unknown as ChatPageHost;
+      state.chatModelCatalogInitialized = false;
       state.chatModelSwitchPromises = {};
       onTestFinished(() => {
         container.remove();
@@ -474,7 +470,10 @@ describe("chat pane composer controls", () => {
       client,
       undefined,
       undefined,
-      modelCatalogEventInvalidation({ event: "config.changed" }),
+      modelCatalogEventInvalidation({
+        event: "chat.metadata.changed",
+        payload: { modelCatalogChanged: true, authChanged: true },
+      }),
     );
     const refresh = refreshPageChat(host, {
       awaitHistory: true,

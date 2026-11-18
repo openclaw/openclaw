@@ -4,12 +4,13 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createQaRunnerRuntime } from "./harness-runtime.js";
 import { startQaLabServer } from "./lab-server.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 
 async function start(runtime?: ReturnType<typeof createQaRunnerRuntime>) {
+  vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
   setActivePluginRegistry(
     createTestRegistry([{ pluginId: "qa-channel", plugin: qaChannelPlugin, source: "test" }]),
   );
@@ -30,7 +31,10 @@ async function start(runtime?: ReturnType<typeof createQaRunnerRuntime>) {
     [Symbol.asyncDispose]: () => lab.stop(),
   };
 }
-afterEach(resetPluginRuntimeStateForTest);
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  vi.unstubAllEnvs();
+});
 
 it("dispatches a QA Channel inbound turn through the embedded runner", async () => {
   await using lab = await start();

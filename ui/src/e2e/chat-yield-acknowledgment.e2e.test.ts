@@ -10,8 +10,10 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
 import { textContent } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { recordedToolCall } from "./recorded-tool.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat yield acknowledgment" });
 
@@ -31,7 +33,7 @@ const FIRST = "Docs site dependencies";
 const SECOND = "CLI dependencies";
 const THIRD = "CI action pins";
 
-type Scenario = "one-waiting" | "three-waiting" | "resumed";
+type Scenario = "one-waiting" | "three-waiting" | "resumed" | "background-job";
 
 const parentKey = "agent:main:dependency-updates";
 const runId = "parent-run";
@@ -39,7 +41,13 @@ const runId = "parent-run";
 type ChildFacts = Partial<
   Pick<
     GatewaySessionRow,
-    "status" | "hasActiveRun" | "activeRunIds" | "endedAt" | "runtimeMs" | "agentStatus"
+    | "status"
+    | "hasActiveRun"
+    | "activeRunIds"
+    | "endedAt"
+    | "agentStatus"
+    | "subagentRunState"
+    | "backgroundProcessCount"
   >
 >;
 
@@ -67,35 +75,37 @@ function scenarioData(scenario: Scenario, now: number) {
     activeRunIds: ["child-run"],
   };
   const done: ChildFacts = { status: "done", hasActiveRun: false, activeRunIds: [] };
-  const children =
-    scenario === "one-waiting"
-      ? [child(1, FIRST, running, now)]
-      : scenario === "three-waiting"
-        ? [
-            child(1, FIRST, running, now),
-            child(
-              2,
-              SECOND,
-              {
-                ...done,
-                endedAt: now - 200_000,
-                agentStatus: {
-                  note: "Needs a decision on the Node minimum",
-                  attention: "hand",
-                  expiresAt: now + 1_800_000,
-                },
-              },
-              now,
-            ),
-            child(3, THIRD, { ...done, endedAt: now - 350_000, runtimeMs: 240_000 }, now),
-          ]
-        : [
-            child(1, FIRST, { ...done, endedAt: now - 2_000 }, now),
-            child(2, SECOND, { ...done, endedAt: now - 200_000 }, now),
-            child(3, THIRD, { ...done, endedAt: now - 350_000 }, now),
-          ];
-  const acknowledgment = scenario === "one-waiting" ? SHORT_ACK : LONG_ACK;
   const resumed = scenario === "resumed";
+  const needsInput: ChildFacts = {
+    agentStatus: {
+      note: "Needs a decision on the Node minimum",
+      attention: "hand",
+      expiresAt: now + 1_800_000,
+    },
+  };
+  // Yielded on sessions_yield while its own background exec keeps running.
+  const backgroundJob: ChildFacts = {
+    ...done,
+    endedAt: yieldedAt + 10_000,
+    subagentRunState: "paused",
+    backgroundProcessCount: 1,
+  };
+  const children = [
+    child(
+      1,
+      FIRST,
+      resumed
+        ? { ...done, endedAt: now - 2_000 }
+        : scenario === "background-job"
+          ? backgroundJob
+          : running,
+      now,
+    ),
+    child(2, SECOND, { ...done, endedAt: now - 200_000, ...(!resumed && needsInput) }, now),
+    child(3, THIRD, { ...done, endedAt: now - 350_000, subagentRunState: "paused" }, now),
+  ].slice(0, scenario === "one-waiting" || scenario === "background-job" ? 1 : 3);
+  const acknowledgment =
+    scenario === "one-waiting" || scenario === "background-job" ? SHORT_ACK : LONG_ACK;
   const parent = {
     key: parentKey,
     sessionId: "dependency-updates",
@@ -112,15 +122,10 @@ function scenarioData(scenario: Scenario, now: number) {
   } satisfies GatewaySessionRow;
   const spawns = children.flatMap((row, index) => [
     {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: `spawn-${index}`,
-          name: "sessions_spawn",
-          arguments: { label: row.label, task: `Review ${row.label}.` },
-        },
-      ],
+      ...recordedToolCall(`spawn-${index}`, "sessions_spawn", {
+        label: row.label,
+        task: `Review ${row.label}.`,
+      }),
       timestamp: now - 590_000 + index * 10,
       __openclaw: { id: `spawn-call-${index}`, seq: 2 + index * 2, runId },
     },
@@ -142,15 +147,8 @@ function scenarioData(scenario: Scenario, now: number) {
     },
     ...spawns,
     {
-      role: "assistant",
-      content: [
-        {
-          type: "toolCall",
-          id: "handoff",
-          name: "sessions_yield",
-          arguments: { acknowledgment, message: PRIVATE },
-        },
-      ],
+      ...recordedToolCall("handoff", "sessions_yield", { acknowledgment, message: PRIVATE }),
+      stopReason: "toolUse",
       timestamp: yieldedAt - 1_000,
       __openclaw: { id: "yield-call", seq: 20, runId },
     },
@@ -158,7 +156,10 @@ function scenarioData(scenario: Scenario, now: number) {
       role: "toolResult",
       toolCallId: "handoff",
       toolName: "sessions_yield",
-      content: textContent(JSON.stringify({ status: "yielded", acknowledgment })),
+      content: [
+        ...textContent(JSON.stringify({ status: "yielded", acknowledgment })),
+        ...(resumed ? textContent("The session will resume when its children finish.") : []),
+      ],
       timestamp: yieldedAt,
       __openclaw: { id: "yield-result", seq: 21, runId },
     },
@@ -217,6 +218,16 @@ async function capture(page: Page, scope: string, pane: Locator, targets: Locato
   console.log(`Screenshot: ${file}`);
 }
 
+async function childDetails(pane: Locator) {
+  const details = await openChatDetails(pane);
+  const group = details.locator('[data-details-group="subagents"]');
+  const summary = group.locator(":scope > summary");
+  if ((await summary.getAttribute("aria-expanded")) !== "true") {
+    await summary.click();
+  }
+  return group.locator("button[data-subagent-session-key]");
+}
+
 const squash = (text: string | null) => text?.replace(/\s+/gu, " ").trim();
 
 suite.define(() => {
@@ -224,20 +235,32 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { pane, thread, prompt } = await openScenario(page, "one-waiting");
       const ack = thread.getByText(SHORT_ACK, { exact: true });
-      const wait = thread.locator(".chat-subagent-wait");
+      const wait = thread.locator(".chat-working-indicator__status");
       await ack.waitFor();
       await thread.locator(".chat-working-indicator").waitFor();
       await capture(page, "one-waiting", pane, [prompt, ack]);
       await thread.locator(".chat-group.assistant .chat-text").getByText(SHORT_ACK).waitFor();
       expect(await thread.locator(".chat-notice").count()).toBe(0);
-      await expect
-        .poll(async () => squash(await wait.textContent()))
-        .toBe(`Waiting on ${FIRST} · 10m`);
+      await expect.poll(async () => squash(await wait.textContent())).toBe("Wait for subagents");
       expect(await wait.locator("button[aria-expanded]").count()).toBe(0);
-      expect(await wait.locator("a").getAttribute("href")).toBe(
-        "/chat/main/subagent/dependency-update-1",
-      );
+      const rows = await childDetails(pane);
+      await rows.getByText(FIRST, { exact: true }).waitFor();
+      await closeChatDetails(pane);
       expect(await thread.textContent()).not.toContain(PRIVATE);
+    });
+  });
+
+  it("keeps the parent waiting while a yielded child has a background job", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { pane, thread, prompt } = await openScenario(page, "background-job");
+      const ack = thread.getByText(SHORT_ACK, { exact: true });
+      const wait = thread.locator(".chat-working-indicator__status");
+      await ack.waitFor();
+      await wait.waitFor();
+      await capture(page, "background-job", pane, [prompt, ack, wait]);
+      await expect.poll(async () => squash(await wait.textContent())).toBe("Wait for subagents");
+      const rows = await childDetails(pane);
+      await rows.getByText(FIRST, { exact: true }).waitFor();
     });
   });
 
@@ -255,36 +278,23 @@ suite.define(() => {
         .filter({ hasText: "Something to know before landing" })
         .waitFor();
       expect(await thread.locator(".chat-notice").count()).toBe(0);
-      const wait = thread.locator(".chat-subagent-wait");
-      const toggle = wait.locator("button[aria-expanded]");
-      await expect
-        .poll(async () => squash(await toggle.textContent()))
-        .toBe("Waiting on 3 sessions · 1 needs your input · 10m");
-      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
-      const rows = wait.locator("li");
-      expect((await rows.allTextContents()).map(squash)).toEqual([
-        `${SECOND} Needs your input`,
-        `${FIRST} Running`,
-        `${THIRD} Done`,
-      ]);
-      expect(
-        await rows.locator("a").evaluateAll((links) => links.map((a) => a.getAttribute("href"))),
-      ).toEqual([
-        "/chat/main/subagent/dependency-update-2",
-        "/chat/main/subagent/dependency-update-1",
-        "/chat/main/subagent/dependency-update-3",
-      ]);
-      await toggle.click();
-      expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      expect(await rows.first().isVisible()).toBe(false);
+      const wait = thread.locator(".chat-working-indicator__status");
+      await wait.getByText("Wait for subagents", { exact: true }).waitFor();
+      const rows = await childDetails(pane);
+      for (const name of [FIRST, SECOND, THIRD]) {
+        await rows.getByText(name, { exact: true }).waitFor();
+      }
+      expect(await rows.count()).toBe(3);
+      await closeChatDetails(pane);
     });
   });
 
-  it("keeps the acknowledgment after resume and folds the wait into a rule", async () => {
+  it("keeps an annotated yield acknowledgment after resume and folds the wait into a rule", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { pane, thread, prompt } = await openScenario(page, "resumed");
       const answer = thread.getByText("The docs update is ready to merge", { exact: false });
       await answer.waitFor();
+      expect(await thread.getByText("Interrupted", { exact: true }).count()).toBe(0);
       const rule = thread.locator(".chat-handoff-resume");
       const toggle = rule.locator("button[aria-expanded]");
       // Closed after resume; it opens to the sessions the handoff waited on.
@@ -292,19 +302,21 @@ suite.define(() => {
       expect(await toggle.getAttribute("aria-expanded")).toBe("false");
       await toggle.click();
       await rule.locator("li").first().waitFor();
-      await capture(page, "resumed", pane, [prompt, answer]);
+      await capture(page, "resumed", pane, [prompt, toggle, answer]);
       await thread
         .locator(".chat-group.assistant .chat-text p")
         .filter({ hasText: "Something to know before landing" })
         .waitFor();
-      expect(squash(await toggle.textContent())).toBe("Resumed · 9m 32s later · 3 sessions");
+      // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Verify rendered label and duration casing.
+      expect(squash(await toggle.innerText())).toBe("Resumed · 9m 32s later · 3 sessions");
       expect(await toggle.getAttribute("aria-expanded")).toBe("true");
       expect((await rule.locator("li").allTextContents()).map(squash)).toEqual([
+        `${THIRD} Paused`,
         `${FIRST} Done`,
         `${SECOND} Done`,
-        `${THIRD} Done`,
       ]);
-      expect(await thread.locator(".chat-group.assistant").count()).toBe(1);
+      // A remaining paused child does not keep an already resumed parent waiting.
+      expect(await thread.getByText("Wait for subagents", { exact: true }).count()).toBe(0);
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain(PRIVATE);
       // A listed child opens its own session in place.
@@ -315,6 +327,12 @@ suite.define(() => {
       await expect
         .poll(() => pane.locator(".chat-pane__session-title-text").first().textContent())
         .toBe(SECOND);
+    });
+    await suite.withPage({ locale: "nl" }, async ({ page }) => {
+      const { thread } = await openScenario(page, "resumed");
+      const rule = thread.locator(".chat-handoff-resume__rule");
+      // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Verify rendered duration casing.
+      expect(await rule.innerText()).toContain("9 m 32 s");
     });
   });
 });

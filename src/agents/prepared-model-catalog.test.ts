@@ -45,6 +45,7 @@ vi.mock("./prepared-model-runtime.js", async () => {
     await import("./prepared-model-runtime.errors.js");
   const lease = async (snapshot: Promise<unknown>, release = mocks.releaseSnapshot) => ({
     snapshot: await snapshot,
+    run: <T>(run: () => T): T => run(),
     [Symbol.asyncDispose]: release,
   });
   return {

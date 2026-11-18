@@ -550,26 +550,14 @@ it.each(realtimeStarts)(
 
 it.each(
   realtimeStarts.flatMap((start) =>
-    (["restart tombstone", "worker placement", "automation"] as const).map((reason) => ({
+    (["worker placement", "automation"] as const).map((reason) => ({
       start,
       reason,
     })),
   ),
 )("$start.method refuses archived $reason before provider creation", async ({ start, reason }) => {
   const sessionId = "refused-talk-session";
-  await writeSession(sessionId, {
-    archivedAt: 2,
-    ...(reason === "restart tombstone"
-      ? {
-          mainRestartRecovery: {
-            cycleId: "failed-cycle",
-            revision: 4,
-            chargedAttempts: 3,
-            tombstone: { reason: "automatic recovery exhausted" },
-          },
-        }
-      : {}),
-  });
+  await writeSession(sessionId, { archivedAt: 2 });
   if (reason === "worker placement") {
     const placements = createWorkerSessionPlacementStore({
       database: openOpenClawStateDatabase(),
@@ -586,7 +574,7 @@ it.each(
     false,
     undefined,
     expect.objectContaining({
-      message: expect.stringMatching(reason === "restart tombstone" ? /Resume|reset/ : /restore/i),
+      message: expect.stringMatching(/restore/i),
     }),
   );
   expect(createBrowserSession).not.toHaveBeenCalled();

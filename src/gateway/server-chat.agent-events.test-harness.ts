@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
   emitAgentEvent,
   emitAgentEvents,
@@ -17,7 +18,7 @@ export type AgentEventTestHarnessOptions = {
   now?: number;
   resolveSessionKeyForRun?: (runId: string, options?: { agentId?: string }) => string | undefined;
   lifecycleErrorRetryGraceMs?: number;
-  isChatSendRunActive?: (runId: string) => boolean;
+  delegateChatError?: (runId: string) => boolean;
   settleTrackedTerminal?: AgentEventHandlerOptions["settleTrackedTerminal"];
   trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
@@ -94,7 +95,7 @@ export function createAgentEventTestHarness(params?: AgentEventTestHarnessOption
     persistGatewaySessionLifecycleEventForEvent:
       params?.persistGatewaySessionLifecycleEventForEvent ?? vi.fn(async () => undefined),
     lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
-    isChatSendRunActive: params?.isChatSendRunActive,
+    delegateChatError: params?.delegateChatError,
     clearTrackedActiveRun,
     settleTrackedTerminal: params?.settleTrackedTerminal,
     trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
@@ -114,6 +115,7 @@ export function createAgentEventTestHarness(params?: AgentEventTestHarnessOption
     agent: () => agentBroadcastCalls(broadcast),
     targetedChat: () => chatBroadcastCalls(broadcastToConnIds),
     targetedAgent: () => agentBroadcastCalls(broadcastToConnIds),
+    inFlight: (runId: string) => projectInFlightRunSnapshot({ chatRunState, runId }),
     deltas: () => chatDeltaTexts(broadcast),
     targetedDeltas: () => chatDeltaTexts(broadcastToConnIds),
     nodeChat: () => sessionChatCalls(nodeSendToSession),

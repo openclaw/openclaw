@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../../../packages/ai/src/transports/openai-completions-transport.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -14,6 +14,7 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
@@ -21,6 +22,15 @@ import { createToolResultPromptProjectionState } from "../session-prompt-state.j
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput } from "./attempt-prompt-submit.test-support.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
+
+// Admission cases change the system prompt or tool definitions between requests on purpose;
+// they exercise request admission, not the session prefix invariant.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const { createFixture } = await vi.hoisted(
   async () => await import("./attempt-execution-phase.test-support.js"),
@@ -42,7 +52,10 @@ type AdmissionOptions = Partial<{
   ownsCompaction: boolean;
   oversizedAssembly: boolean;
   compatibleBudget: boolean;
+  strictReplay: boolean;
   responseSchema: boolean;
+  boundarySafe: boolean;
+  pressure: "maintenance" | "overflow";
 }>;
 
 describe("provider request admission", () => {
@@ -58,24 +71,27 @@ describe("provider request admission", () => {
   it.each`
     name                                   | usage     | chars      | cap       | fits     | options
     ${"compatible reasoning budget"}       | ${1_500}  | ${15_500}  | ${16_000} | ${true}  | ${{ compatibleBudget: true }}
+    ${"compatible strict tool IDs"}        | ${1_500}  | ${15_500}  | ${16_000} | ${true}  | ${{ compatibleBudget: true, strictReplay: true }}
     ${"unchanged schema"}                  | ${24_000} | ${100}     | ${16_000} | ${true}  | ${{ compatibleBudget: true, responseSchema: true }}
     ${"oversized engine assembly"}         | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, oversizedAssembly: true }}
     ${"exaggerated engine estimate"}       | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{ ownsCompaction: true }}
-    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true }}
+    ${"oversized engine continuation"}     | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ ownsCompaction: true, boundarySafe: true, pressure: "maintenance" }}
     ${"unchanged measured prefix"}         | ${15_000} | ${12_000}  | ${16_000} | ${true}  | ${{}}
     ${"visible completion"}                | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${largerVisible}
     ${"system tweak"}                      | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakSystem: true }}
     ${"tool definitions tweak"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, tweakTools: true }}
     ${"split completion + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...visible, asyncFragments: true, tweakSystem: true }}
     ${"late response identity"}            | ${15_000} | ${2_000}   | ${16_000} | ${true}  | ${{ ...largerVisible, asyncFragments: true }}
-    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true }}
+    ${"synthetic assistant tail"}          | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ syntheticAssistant: true, boundarySafe: true, pressure: "maintenance" }}
     ${"opaque reasoning"}                  | ${15_000} | ${12_000}  | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000 }}
-    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true }}
+    ${"opaque reasoning + system tweak"}   | ${15_000} | ${2_000}   | ${16_000} | ${false} | ${{ opaque: true, completionTokens: 16_000, tweakSystem: true, boundarySafe: true, pressure: "maintenance" }}
     ${"projected measured tail"}           | ${14_000} | ${100_000} | ${16_000} | ${true}  | ${{}}
     ${"projected unavailable usage"}       | ${0}      | ${100_000} | ${2_000}  | ${true}  | ${{}}
-    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{}}
+    ${"oversized measured tail"}           | ${23_000} | ${12_000}  | ${16_000} | ${false} | ${{ boundarySafe: true, pressure: "maintenance" }}
     ${"oversized prompt without usage"}    | ${0}      | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
     ${"changed system invalidates prefix"} | ${1_000}  | ${12_000}  | ${16_000} | ${false} | ${{ growSystem: true }}
+    ${"soft pressure, open tool batch"}    | ${23_000} | ${12_000}  | ${16_000} | ${true}  | ${{ boundarySafe: false }}
+    ${"over window, open tool batch"}      | ${33_000} | ${2_000}   | ${16_000} | ${false} | ${{ boundarySafe: false, pressure: "overflow" }}
   `(
     "admits only fitting provider requests: $name",
     async ({
@@ -95,7 +111,10 @@ describe("provider request admission", () => {
         ownsCompaction,
         oversizedAssembly,
         compatibleBudget,
+        strictReplay,
         responseSchema,
+        boundarySafe,
+        pressure,
       },
     }: AdmissionCase) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
@@ -185,7 +204,20 @@ describe("provider request admission", () => {
             ingest: async () => ({ ingested: true }),
             assemble: async ({ messages }) => ({
               messages: oversizedAssembly
-                ? [{ role: "user", content: "history ".repeat(40_000), timestamp: 1 }, ...messages]
+                ? [
+                    { role: "user", content: "history ".repeat(40_000), timestamp: 1 },
+                    ...Array.from({ length: 6 }, (_, index) => ({
+                      role: "toolResult" as const,
+                      toolName: "read",
+                      toolCallId: `engine-only-${index}`,
+                      content: [
+                        { type: "text" as const, text: "synthetic projection ".repeat(600) },
+                      ],
+                      isError: false,
+                      timestamp: 1,
+                    })),
+                    ...messages,
+                  ]
                 : messages,
               estimatedTokens: oversizedAssembly ? 1 : 1_000_000,
             }),
@@ -235,6 +267,10 @@ describe("provider request admission", () => {
       runtime.cacheTrace = null;
       runtime.isOpenAIResponsesApi = opaque === true;
       runtime.transcriptPolicy = { ...runtime.transcriptPolicy, repairToolUseResultPairing: false };
+      if (strictReplay) {
+        runtime.transcriptPolicy.sanitizeToolCallIds = true;
+        runtime.transcriptPolicy.toolCallIdMode = "strict";
+      }
       const wireRequests: Array<{
         max_tokens?: number;
         messages: Array<Record<string, unknown>>;
@@ -367,6 +403,7 @@ describe("provider request admission", () => {
       }
       const streamGuards = installEmbeddedAttemptStreamGuards(fixture.input, {
         onRejectedProviderReplayRepaired: vi.fn(),
+        isToolBoundarySafe: () => boundarySafe === true,
         onIdleTimeout: vi.fn(),
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({
           runId: fixture.input.attempt.runId,
@@ -404,7 +441,9 @@ describe("provider request admission", () => {
           toolResultMaxChars: cap,
           toolResultAggregateMaxChars: cap * 4,
           toolResultPromptProjectionState: projectionState,
+          prepareRequestTokenPressure: createFixedRequestTokenEstimator(),
           onModelRequest: streamGuards.onModelRequest,
+          normalizeToolCallIds: streamGuards.normalizeToolCallIds,
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
         const pendingPrecheck = guards.takePendingMidTurnPrecheckRequest();
@@ -412,6 +451,15 @@ describe("provider request admission", () => {
           oversizedAssembly ? 0 : fits ? 2 : 1,
         );
         expect(pendingPrecheck !== null).toBe(!fits);
+        if (pressure) {
+          expect(pendingPrecheck?.pressure).toBe(pressure);
+        }
+        if (oversizedAssembly) {
+          expect(pendingPrecheck).toMatchObject({
+            route: "compact_only",
+            toolResultReducibleChars: 0,
+          });
+        }
         if (compatibleBudget) {
           if (responseSchema) {
             expect(wireRequests[0]?.response_format).toMatchObject({ type: "json_schema" });
@@ -424,6 +472,14 @@ describe("provider request admission", () => {
             ).toBe(true);
           }
           expect(wireRequests.map((request) => request.max_tokens)).toEqual([8_192, 8_192]);
+          if (strictReplay) {
+            expect(wireRequests[1]?.messages).toContainEqual(
+              expect.objectContaining({
+                role: "assistant",
+                tool_calls: [expect.objectContaining({ id: "readreport" })],
+              }),
+            );
+          }
         }
         if (fits) {
           const sent = requests[1]?.messages.find((message) => message.role === "toolResult");

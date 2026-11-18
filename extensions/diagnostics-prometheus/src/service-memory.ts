@@ -110,17 +110,64 @@ export function recordMemorySample(
       labels,
       message.messages,
     );
-    store.counterValue(
-      "openclaw_worker_message_payload_bytes_total",
-      "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
-      labels,
-      message.payloadBytes,
-    );
+    for (const [requestClass, bytes] of Object.entries(
+      message.payloadBytesByRequestClass ?? {
+        [message.kind === "sqlite_request" ||
+        message.kind === "sqlite_reply" ||
+        message.kind === "authority"
+          ? "other"
+          : ""]: message.payloadBytes,
+      },
+    )) {
+      store.counterValue(
+        "openclaw_worker_message_payload_bytes_total",
+        "Known worker payload bytes, excluding transport framing and unmeasured object graphs.",
+        requestClass ? { ...labels, request_class: requestClass } : labels,
+        bytes,
+      );
+    }
     store.counterValue(
       "openclaw_worker_message_unmeasured_total",
       "Worker messages without a known payload size; these do not contribute to payload bytes.",
       labels,
       message.unmeasuredMessages,
+    );
+    for (const [requestClass, components] of Object.entries(message.payloadComponents ?? {})) {
+      for (const [component, sample] of Object.entries(components)) {
+        const componentLabels = { request_class: requestClass, component };
+        store.counterValue(
+          "openclaw_worker_authority_component_sampled_bytes_total",
+          "Sampled worker-to-main actor facts bytes; bounded marginal V8 sizes, one in 128 operations on average.",
+          componentLabels,
+          sample.bytes,
+        );
+        for (const [result, count] of [
+          ["measured", sample.samples],
+          ["unmeasured", sample.unmeasured],
+        ] as const) {
+          store.counterValue(
+            "openclaw_worker_authority_component_samples_total",
+            "Actor authority component samples; failed receipt attribution retains known bytes in receipt_other.",
+            { ...componentLabels, result },
+            count,
+          );
+        }
+      }
+    }
+  }
+  for (const reader of memory.sqliteReaderMetrics ?? []) {
+    const labels = { reader_operation: reader.operation };
+    store.counterValue(
+      "openclaw_sqlite_reader_operations_total",
+      "Measured outer reader operations in direct workers, including failures and retired workers.",
+      labels,
+      reader.count,
+    );
+    store.counterValue(
+      "openclaw_sqlite_reader_read_bytes_total",
+      "Linux physical storage bytes read by outer reader operations, including sub-threshold reads.",
+      labels,
+      reader.readBytes,
     );
   }
   for (const selection of memory.sessionRowSelections?.selections ?? []) {
@@ -182,15 +229,17 @@ export function recordMemorySample(
   }
   for (const worker of memory.workerTaskMetrics ?? []) {
     const labels = { worker_class: worker.workerClass, script: worker.script };
-    store.counterValue(
-      "openclaw_worker_tasks_completed_total",
-      "Observed terminal task replies from pool workers, including handled failures.",
-      labels,
-      worker.tasksCompleted,
-    );
+    if (worker.tasksCompleted !== undefined) {
+      store.counterValue(
+        "openclaw_worker_tasks_completed_total",
+        "Observed terminal task replies from pool workers, including handled failures.",
+        labels,
+        worker.tasksCompleted,
+      );
+    }
     store.gauge(
       "openclaw_worker_heap_used_high_water_bytes",
-      "Largest observed pool worker heap usage, retained across worker retirement.",
+      "Largest observed worker heap usage, retained across worker retirement.",
       labels,
       worker.heapUsedHighWaterBytes,
     );
@@ -198,19 +247,19 @@ export function recordMemorySample(
       const gcLabels = { ...labels, kind: gc.kind };
       store.counterValue(
         "openclaw_worker_gc_duration_seconds_total",
-        "Observed pool worker garbage collection duration, retained across worker retirement.",
+        "Observed worker garbage collection duration, retained across worker retirement.",
         gcLabels,
         gc.durationMs / 1000,
       );
       store.counterValue(
         "openclaw_worker_gc_collections_total",
-        "Observed pool worker garbage collections, retained across worker retirement.",
+        "Observed worker garbage collections, retained across worker retirement.",
         gcLabels,
         gc.count,
       );
       store.counterValue(
         "openclaw_worker_gc_reclaimed_bytes_total",
-        "Sum of positive heap usage decreases across observed pool worker garbage collections.",
+        "Sum of positive heap usage decreases across observed worker garbage collections.",
         gcLabels,
         gc.reclaimedBytes,
       );

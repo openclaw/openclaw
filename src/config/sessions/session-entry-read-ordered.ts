@@ -1,6 +1,9 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readSqliteDatabaseWriteTokenForPath } from "../../infra/sqlite-database-admission.js";
+import {
+  getSqliteDatabaseAdmissionIdentityForPath,
+  readSqliteDatabaseWriteTokenForPath,
+} from "../../infra/sqlite-database-admission.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
@@ -28,7 +31,7 @@ import type {
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
@@ -70,6 +73,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
   execution: OpenClawAgentDatabaseExecution;
   generation: AgentDatabaseGenerationClaim;
   database: PreparedSessionEntryWorkerRead["database"];
+  identity: SessionEntryCohortReader["identity"];
   sessionKey: string;
   logicalAgentId: string;
   storePaths: readonly string[];
@@ -86,6 +90,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
   };
   return {
     database,
+    identity: Object.freeze(params.identity),
     sessionKey: params.sessionKey,
     logicalAgentId: params.logicalAgentId,
     storePaths: Object.freeze([
@@ -106,7 +111,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
         withSessionHistoryWorkerDatabase(
           database,
           (reader) => reader.readExactEntries({ ...request, env: database.env }),
-          targetDiscoveryLane,
+          sessionStoreLane,
         ),
       );
       assertCurrent();
@@ -149,11 +154,15 @@ export function createAdmittedSessionEntryCohortReader(params: {
       const source = createSessionWorkerExecutionSource(
         assertCurrent,
         "Session cohort authority expired",
+        captured.readCustody,
       );
       const result = await params.execution.runExisting(
         source,
         async (worker) => {
-          const before = readSqliteDatabaseWriteTokenForPath(database.path);
+          const before =
+            !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+              ? readSqliteDatabaseWriteTokenForPath(database.path)
+              : undefined;
           const cached = readRetainedSessionEntryFacts(database, captured, params.generation);
           const read =
             cached ?? (await worker.execute({ type: "session.entry.read", input: captured }));
@@ -322,7 +331,10 @@ export async function withOrderedSessionEntriesInWorker<T>(
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
             const request = captureSessionEntryWorkerRequest(selectedInput);
-            const before = readSqliteDatabaseWriteTokenForPath(database.path);
+            const before =
+              !database.readIdentity || getSqliteDatabaseAdmissionIdentityForPath(database.path)
+                ? readSqliteDatabaseWriteTokenForPath(database.path)
+                : undefined;
             const cached = readRetainedSessionEntryFacts(database, request);
             const result =
               cached ??

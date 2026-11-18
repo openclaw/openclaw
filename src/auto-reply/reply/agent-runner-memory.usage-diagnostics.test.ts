@@ -1,7 +1,10 @@
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -35,18 +38,7 @@ it.each([false, true])("settles usage independently of a returned error: %s", as
   });
   runEntry.mockReset().mockImplementation(
     memoryFixture.createMemoryRunEntryMockImplementation({
-      runWithModelFallback: async ({ provider = "openai", model = "usage-fixture", run }) => ({
-        result: await run(provider, model, {
-          modelRoutingProvenance: {
-            requestedProvider: provider,
-            requestedModel: model,
-            stage: "initial",
-          },
-        }),
-        provider,
-        model,
-        attempts: [],
-      }),
+      runWithModelFallback: memoryFixture.runSelectedMemoryModel,
       ensureSelectedAgentHarnessPlugin: vi.fn().mockResolvedValue(undefined),
     }),
   );
@@ -64,7 +56,7 @@ it.each([false, true])("settles usage independently of a returned error: %s", as
     updatedAt: 10,
     totalTokens: 80_000,
     totalTokensFresh: true,
-    totalTokensVersion: 1,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     compactionCount: 1,
   };
   const followupRun = fixture.createTestFollowupRun({ workspaceDir: rootDir, agentDir: rootDir });

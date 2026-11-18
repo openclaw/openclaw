@@ -176,6 +176,7 @@ async function startOwnedGatewayChild(
     lifetime.rpcClient = await startQaGatewayRpcClient({
       wsUrl: launch.wsUrl,
       token: gatewayToken,
+      password: params.rpcPassword,
       logs,
     });
     await lifetime.rpcClient.request("config.get", {}, { timeoutMs: 30_000 });

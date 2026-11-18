@@ -88,6 +88,18 @@ function fixture(index: number): EventInput[] {
   const systemPrompt = "Synthetic system instruction with ordinary prose. ".repeat(160);
   const messages = Array.from({ length: 24 }, (_, message) => ({
     role: message % 2 ? "assistant" : "user",
+    ...(message % 2
+      ? {
+          providerReplay: {
+            v: 1,
+            type: "anthropic-compaction",
+            data: "opaque".repeat(8192),
+            provider: "synthetic",
+            api: "synthetic",
+            model: "mock",
+          },
+        }
+      : {}),
     content: [{ type: "text", text: `Message ${message}. ${"Synthetic context. ".repeat(48)}` }],
   }));
   const tools = Array.from({ length: 40 }, (_, tool) => ({

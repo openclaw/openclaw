@@ -34,7 +34,7 @@ the Gateway host. Marketplace requests also require a local connection because
 marketplace names can resolve to host-local registrations. The CLI resolves local
 paths before sending the request. The Control UI continues to offer official and ClawHub sources only.
 
-Plugin dependencies installed by `claws add` retain the Claw batch lease;
+Plugin dependencies installed by `templates add` retain the Template batch lease;
 live activation of that batch is separate from this single-plugin command.
 
 ```bash
@@ -217,7 +217,7 @@ If a plugin you published on ClawHub is hidden or blocked by a registry scan, us
 
 ### ClawHub security audit
 
-Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Claw installs a plugin, the Claw flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
+Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Template installs a plugin, the Template flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
 
 ### Hook packs and npm specs
 
@@ -335,6 +335,12 @@ openclaw plugins install -l ./my-plugin
 requires a local path that already exists. For a noninteractive local link,
 pass `--force` after reviewing the source; it confirms provenance but does not
 copy or overwrite the linked directory.
+
+On POSIX systems, a local path is resolved the way the filesystem traverses it:
+in `./link/../my-plugin`, `link` is followed before `..` applies, so the plugin
+installed is the one `ls ./link/../my-plugin` shows. The final path segment
+keeps its spelling, so a linked install records a symlinked plugin directory
+as typed.
 
 <Note>
 Workspace-origin plugins discovered from a workspace extensions root are not

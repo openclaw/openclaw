@@ -16,6 +16,7 @@ import {
   resolvePairingGatewayUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import type { WorkerNodeEnrollment, WorkerNodeRuntimePreparation } from "../../plugins/types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
@@ -29,7 +30,10 @@ import {
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
-import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
+import {
+  DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+  BUNDLE_NODE_TOOLCHAIN_SETUP_SH,
+} from "./node-toolchain.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -200,8 +204,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     nodeBootstrap: {
       ...grantArtifact(prepared, prepared.artifact, enrollmentSignal, isAuthorized, transferBytes),
       openclawVersion: prepared.artifact.openclawVersion,
+      install: prepared.artifact.install,
+      buildId: prepared.artifact.buildId,
+      manifestSha256: prepared.artifact.manifestSha256,
       enabledPluginIds: prepared.artifact.enabledPluginIds,
-      linuxToolchainSetup: DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+      linuxToolchainSetup:
+        prepared.artifact.install === "bundle"
+          ? BUNDLE_NODE_TOOLCHAIN_SETUP_SH
+          : DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
       ...(prepared.artifact.installLock
         ? {
             installLock: grantArtifact(
@@ -258,6 +268,14 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
+      let workerCodex: WorkerNodeEnrollment["workerCodex"];
+      // Only the prepared runtime's plugin inventory may opt into private Codex inputs.
+      if (prepared.artifact.enabledPluginIds.includes("codex")) {
+        const { readCodexWorkerProvisioningBundle } = loadBundledPluginPublicArtifactModuleSync<{
+          readCodexWorkerProvisioningBundle: () => WorkerNodeEnrollment["workerCodex"];
+        }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
+        workerCodex = readCodexWorkerProvisioningBundle();
+      }
       requireCurrent();
       await options.store.ensureNodeEnrollment(record.environmentId);
       let current = requireCurrent();
@@ -332,6 +350,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       };
       const enrollment: WorkerNodeEnrollment = {
         ...mode,
+        ...(workerCodex ? { workerCodex } : {}),
         ...grantRuntime(
           { ...prepared, url: gatewayUrl, tlsFingerprint },
           enrollmentSignal,

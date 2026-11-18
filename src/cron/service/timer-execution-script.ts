@@ -17,6 +17,7 @@ export async function executeScriptCronJob(
   job: CronStoredJob,
   occurrence: ScheduledOccurrence,
   abortSignal: AbortSignal | undefined,
+  assertCurrent: () => void,
   options?: ExecuteJobCoreOptions,
 ) {
   if (state.deps.cronConfig?.triggers?.enabled === false) {
@@ -129,13 +130,7 @@ export async function executeScriptCronJob(
         agentId,
         sessionKey: job.sessionKey,
         expectedTarget,
-        commitGuard: () => {
-          abortSignal?.throwIfAborted();
-          options?.deliveryAttemptFence?.assertCurrent();
-          if (!isCronActiveJobMarkerCurrent(options?.activeJobMarker)) {
-            throw new Error("Gateway restarting.");
-          }
-        },
+        commitGuard: assertCurrent,
       });
       if (!wakeResult.ok) {
         return { status: "error" as const, error: wakeResult.reason ?? "Wake was refused" };

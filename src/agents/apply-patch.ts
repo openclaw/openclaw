@@ -98,7 +98,7 @@ export function createApplyPatchTool(
   const cwd = options.cwd ?? process.cwd();
   const root = options.root ?? cwd;
   const sandbox = options.sandbox;
-  const workspaceOnly = options.workspaceOnly !== false;
+  const workspaceOnly = options.workspaceOnly ?? Boolean(sandbox);
 
   return {
     name: "apply_patch",
@@ -171,6 +171,7 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
       await preflightUpdateHunks(hunks, fileOps, patchOptions.signal);
       return await commitPatchHunks(hunks, fileOps, patchOptions);
     },
+    options.signal,
   );
 }
 

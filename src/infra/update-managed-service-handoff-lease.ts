@@ -78,7 +78,7 @@ export function resolveManagedUpdateLeaseDatabasePath(): string {
   // Other users may own /tmp/openclaw after a reboot; lease placement must not follow it.
   const preferredDir = path.join(base, uid === undefined ? "openclaw" : `openclaw-${uid}`);
   return path.join(
-    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base }),
+    resolvePreferredOpenClawTmpDir({ preferredDir, tmpdir: () => base, purpose: "coordination" }),
     "managed-update-handoffs.sqlite",
   );
 }
@@ -298,8 +298,23 @@ function createLeaseStore(
     admit,
     originalUpdateAdmissions,
   });
-  const { storedCurrent, originalAllowsMutation, childAliases, mutationCurrent, current } =
-    createManagedHandoffMutationReader({ withDatabase, row, handle, sameRow, currentLegacyParent });
+  const {
+    storedCurrent,
+    originalAllowsMutation,
+    childAliases,
+    mutationCurrent,
+    current,
+    owns,
+    ownsDelegation,
+  } = createManagedHandoffMutationReader({
+    withDatabase,
+    row,
+    handle,
+    sameRow,
+    currentLegacyParent,
+    isProcessIdentityCurrent,
+    acceptSelfIdentity,
+  });
   const cancelUpdate = createManagedHandoffCancellation({
     existingIdentity: options.existingIdentity,
     originalUpdateAdmissions,
@@ -316,18 +331,6 @@ function createLeaseStore(
     deleteRow,
     processState,
   });
-  function owns(lease: ManagedHandoffLease, role: "helper" | "executor" = "helper") {
-    return (
-      current(lease) &&
-      !(
-        lease.action.kind === "triage" &&
-        ["closing", "closed", "uncertain"].includes(lease.action.phase)
-      ) &&
-      lease[role].pid === process.pid &&
-      isProcessIdentityCurrent(lease.helper) &&
-      acceptSelfIdentity(lease[role])
-    );
-  }
   function acceptParentBoundExecutor(lease: ManagedHandoffLease) {
     return (
       current(lease) &&
@@ -568,9 +571,10 @@ function createLeaseStore(
     }
     const localHelper = lease.helper.pid === process.pid && processState(lease.helper) === "live";
     if (managedCommandCustody(lease)) {
-      return managedCommandCustody(lease) === "reserved"
-        ? localHelper && settledReservation
-        : !managedCommandUnsettled(lease);
+      return (
+        (managedCommandCustody(lease) === "reserved" && localHelper && settledReservation) ||
+        !managedCommandUnsettled(lease, processState)
+      );
     }
     const action = lease.action;
     const executorClosed =
@@ -675,6 +679,7 @@ function createLeaseStore(
     retarget,
     activate,
     owns,
+    ownsDelegation,
     hasUnsettledChildren,
     readCommandChildren,
     acceptParentBoundExecutor,
@@ -690,6 +695,7 @@ function createLeaseStore(
     processIdentity,
     inspectProcessIdentity,
     isProcessIdentityCurrent,
+    processState,
     readProcessStartIdentity,
     isPidAlive,
     bootIdentity,

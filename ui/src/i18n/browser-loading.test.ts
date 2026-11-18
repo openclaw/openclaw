@@ -35,21 +35,25 @@ describe("Browser English loading", () => {
       expect(en.browser.annotatePrompt).toBe(annotatePrompt);
       expect(browser.title).toBe(title);
       expect(manager.t("browser.loading")).toBe("Loading page…");
-      expect(errors.screenshotPathMissing).toBe("Browser screenshot did not return a media path.");
+      expect(errors.screenshotPathMissing).toBe(
+        "Couldn’t capture the page. No screenshot path was returned. Try again.",
+      );
       expect(manager.t("common.health")).toBe("Gesundheit");
       expect(manager.t("browser.downloading")).toBe("Downloading…");
       expect(manager.t("browser.downloadFile")).toBe("Download file");
       expect(manager.t("browser.navigationBlocked")).toBe(
         "The current browser navigation rules block this address. Select another tab or enter an allowed address.",
       );
-      expect(manager.t("browser.errors.downloadEmpty")).toBe("No file returned.");
+      expect(manager.t("browser.errors.downloadEmpty")).toBe(
+        "Couldn’t download this file. No file was returned. Try again.",
+      );
       expect(
         manager.t("browser.annotatePrompt.introUntitled", { url: "https://example.com" }),
       ).toBe(
         "I annotated the page at https://example.com — the attached screenshot shows my markup.",
       );
       expect(manager.t("browser.errors.downloadFailed", { error: "HTTP 403" })).toBe(
-        "Could not download this file: HTTP 403. Try again, or open it in your browser to save it.",
+        "Couldn’t download this file. Try again, or open it in your browser to save it.\nHTTP 403",
       );
     },
   );

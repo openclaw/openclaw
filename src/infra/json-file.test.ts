@@ -74,6 +74,25 @@ describe("json-file helpers", () => {
     });
   });
 
+  it.runIf(process.platform !== "win32")("ignores links through a regular file", async () => {
+    await withJsonSymlink(({ root, linkPath }) => {
+      const target = path.join(root, "regular");
+      fs.writeFileSync(target, "regular file");
+      fs.symlinkSync(path.join(target, "credentials.json"), linkPath);
+      expect(loadJsonFileThroughSymlink(linkPath)).toBeUndefined();
+    });
+  });
+
+  it.each(["EACCES", "EISDIR", "EPERM"])("propagates path resolution errors: %s", (code) => {
+    const error = Object.assign(new Error(`synthetic ${code}`), { code });
+    vi.spyOn(fs, "realpathSync").mockImplementationOnce(() => {
+      throw error;
+    });
+    expect(() => loadJsonFileThroughSymlink("credentials.json")).toThrow(
+      expect.objectContaining({ code }),
+    );
+  });
+
   it("creates parent dirs, writes a trailing newline, and loads the saved object", async () => {
     await withTestDir({ prefix: "openclaw-json-file-" }, async (root) => {
       const pathname = path.join(root, "nested", "config.json");

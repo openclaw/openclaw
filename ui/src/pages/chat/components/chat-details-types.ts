@@ -6,6 +6,8 @@ import type {
 } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
+import type { DetailsSnapshotPatch } from "../chat-details-snapshot.ts";
+import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import type { ChatSessionProgressProps } from "./chat-composer-types.ts";
 import type { ChatOutputsDesktopProps } from "./chat-outputs-data.ts";
 import type { ChatPanePlacementProps } from "./chat-pane-placement.tsx";
@@ -57,7 +59,7 @@ type ChatDetailsDesktopPresentation = {
   /** Localized section labels supplied by the host's copy owner. */
   peopleLabel: string;
   outputsLabel: string;
-  /** Localized Working, without the ellipsis in common.working. */
+  /** Localized Working label. */
   subagentsWorkingLabel: string;
 };
 
@@ -83,11 +85,16 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     | "subagentSessions"
     | "subagentParentKey"
     | "subagentSessionsHydrated"
+    | "subagentSessionsUnavailable"
     | "onOpenSubagent"
     | "onOpenSubagents"
     | "personActivity"
     | "onScrollPortRef"
   > & {
+    cachedDetails?: ChatDetailsSnapshot;
+    /** The session observation has accepted current facts; cached rows are display only. */
+    sessionFactsReady?: boolean;
+    onDetailsSnapshot?: (patch: DetailsSnapshotPatch) => void;
     desktopPresentation?: ChatDetailsDesktopPresentation;
     desktopDisclosures?: ChatDetailsDesktopDisclosures;
     environment?: ChatDetailsEnvironmentData;
@@ -96,6 +103,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     retainOutputs?: () => (() => void) | undefined;
     /** Details consumes the unfiltered progress projection, independently of Show in chat. */
     progressCardError?: "access-denied" | "unavailable";
+    progressCardRefreshReserved?: boolean;
     showTaskProgress?: boolean;
     onShowTaskProgressChange?: (shown: boolean) => void;
     onSessionSelect?: (sessionKey: string) => void;

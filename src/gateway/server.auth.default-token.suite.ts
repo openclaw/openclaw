@@ -6,6 +6,8 @@ import {
   type HelloOk,
   MIN_NODE_PROTOCOL_VERSION,
 } from "../../packages/gateway-protocol/src/index.js";
+import { resetLogger, setLoggerOverride } from "../logging.js";
+import { loggingState } from "../logging/state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   connectReq,
@@ -226,6 +228,16 @@ export function registerDefaultAuthTokenSuite(): void {
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
       let recoveryScope: string | undefined;
+      const expectedAuthKeys = [
+        "deviceToken",
+        "issuedAtMs",
+        "method",
+        "recoveryMigrationAllowed",
+        "recoveryScope",
+        "role",
+        "roleAllowsAdmin",
+        "scopes",
+      ];
       try {
         const initial = await connectReq(wsInitial, {
           token,
@@ -235,19 +247,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(initial.ok).toBe(true);
         const auth = readHelloOkAuth(initial.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.scopes).toEqual(["operator.admin"]);
         expect(typeof auth?.deviceToken).toBe("string");
         expect(auth?.recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         pairedDeviceToken = auth?.deviceToken as string | undefined;
         recoveryScope = auth?.recoveryScope;
       } finally {
@@ -264,19 +269,12 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(reconnect.ok).toBe(true);
         const auth = readHelloOkAuth(reconnect.payload);
         expect(auth?.role).toBe("operator");
+        expect(auth?.roleAllowsAdmin).toBe(true);
         expect(auth?.deviceToken).toBe(pairedDeviceToken);
         expect(auth?.recoveryScope).toBe(recoveryScope);
         expect(auth?.recoveryMigrationAllowed).toBe(true);
         expect(auth?.scopes).toEqual(["operator.read"]);
-        expect(Object.keys(auth ?? {}).toSorted()).toEqual([
-          "deviceToken",
-          "issuedAtMs",
-          "method",
-          "recoveryMigrationAllowed",
-          "recoveryScope",
-          "role",
-          "scopes",
-        ]);
+        expect(Object.keys(auth ?? {}).toSorted()).toEqual(expectedAuthKeys);
         const schema = await rpcReq(wsReconnect, "config.schema");
         expect(schema.ok).toBe(true);
         const admin = await rpcReq(wsReconnect, "config.patch");
@@ -320,7 +318,7 @@ export function registerDefaultAuthTokenSuite(): void {
       expect(connectRes.payload).toMatchObject({ snapshot: { presence: [] } });
       const presence = await rpcReq(ws, "system-presence");
       expect(presence.ok).toBe(false);
-      expect(presence.error?.message).toBe("missing scope: operator.read");
+      expect(presence.error?.message).toBe("missing scope: operator.sessions.read");
       expect(presence.payload).toBeUndefined();
 
       await expectStatusMissingScopeButHealthAvailable(ws);
@@ -478,6 +476,49 @@ export function registerDefaultAuthTokenSuite(): void {
         );
       } finally {
         ws.close();
+      }
+    });
+
+    test("keeps peer-supplied connect metadata inside one console line", async () => {
+      const forged = "2026-11-02T00:00:00.000Z info gateway forged-entry";
+      const client = {
+        ...TEST_OPERATOR_CLIENT,
+        displayName: "\u001b]0;pwned\u0007name",
+        version: `1.0.0\r${forged}\u2028${forged}`,
+        platform: `linux\n${forged}\u2029${forged}`,
+        instanceId: `\u001b[2J${forged}`,
+      };
+      const warnings: string[] = [];
+      loggingState.rawConsole = {
+        log: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn((line: string) => warnings.push(line)),
+        error: vi.fn(),
+      };
+      setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "pretty" });
+      try {
+        for (const opts of [
+          { token: "wrong", device: null, client },
+          { minProtocol: PROTOCOL_VERSION + 1, maxProtocol: PROTOCOL_VERSION + 1, client },
+        ]) {
+          const ws = await openWs(port);
+          const res = await connectReq(ws, opts);
+          expect(res.ok).toBe(false);
+          expect(await waitForWsClose(ws, 5_000)).toBe(true);
+        }
+      } finally {
+        loggingState.rawConsole = null;
+        resetLogger();
+      }
+
+      const lines = warnings.join("\n");
+      expect(lines).toContain("unauthorized conn=");
+      expect(lines).toContain("protocol mismatch conn=");
+      expect(lines).toContain("closed before connect conn=");
+      // Only the logger's own SGR colors may carry an escape; peer text must not add controls.
+      const loggerColors = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, "gu");
+      for (const line of warnings) {
+        expect(line.replace(loggerColors, "")).not.toMatch(/[\p{Cc}\u2028\u2029]/u);
       }
     });
 

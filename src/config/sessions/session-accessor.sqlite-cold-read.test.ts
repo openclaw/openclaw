@@ -36,11 +36,11 @@ import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
   findTranscriptEventInDatabase,
   loadTranscriptHeaderSync,
-  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
 import { loadTranscriptEventRowsAfterSeqInDatabase } from "./session-accessor.sqlite-transcript-incremental-read.js";
 import { readTranscriptMutationStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
+import { readTranscriptStatsBatchReadOnlySync } from "./session-accessor.sqlite-transcript-stats-read.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
@@ -53,7 +53,7 @@ import { maintenanceConfig } from "./session-cold-storage.test-support.js";
 import * as sqliteTargets from "./session-sqlite-target.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
-import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
+import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.worker.js";
 
 afterEach(() => vi.restoreAllMocks());
 

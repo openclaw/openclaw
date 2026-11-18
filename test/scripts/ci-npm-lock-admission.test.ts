@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { canSkipNpmLockSetup } from "../../scripts/ci-npm-lock-admission.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -61,6 +61,10 @@ beforeAll(() => {
     "scripts/generate-npm-package-lock.mts",
     "scripts/changed-lanes.mts",
     "scripts/lib/merge-head-diff-base.mjs",
+    "scripts/lib/npm-lock-package-selection.mjs",
+    "scripts/lib/npm-lock-package-selection.d.mts",
+    "scripts/lib/record-shared.mjs",
+    "scripts/lib/record-shared.d.mts",
   ]) {
     for (const directory of [cwd, harness]) {
       copy(file, directory);
@@ -77,6 +81,7 @@ beforeAll(() => {
   git("update-ref", "refs/remotes/origin/ci-ratchet-base", base);
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   git("reset", "--hard", base);
   git("clean", "-fd");
   git("update-ref", "refs/remotes/origin/ci-ratchet-base", base);
@@ -87,6 +92,19 @@ it("skips dependency setup for committed source-only changes without installed p
   expect(skip()).toBe(true);
   expect(runAdmission()).toBe("skip=true\n");
 });
+it.each(["committed", "staged", "untracked"])(
+  "skips canonical empty selections for %s unrelated root scripts without installed packages",
+  (state) => {
+    write("scripts/helper.mjs");
+    if (state === "committed") {
+      commit();
+    } else if (state === "staged") {
+      git("add", ".");
+    }
+    expect(skip()).toBe(true);
+    expect(runAdmission()).toBe("skip=true\n");
+  },
+);
 it("keeps full sweeps, historical targets, and invalid or mismatched base refs", () => {
   expect(canSkipNpmLockSetup({ cwd })).toBe(false);
   expect(canSkipNpmLockSetup({ cwd, base, historical: true })).toBe(false);
@@ -99,7 +117,18 @@ it("keeps each conservative path class even when untracked", () => {
     "pnpm-lock.yaml",
     "ui/package.json",
     "extensions/new/package-lock.json",
-    "scripts/helper.mjs",
+    "pnpm-workspace.yaml",
+    ".npmrc",
+    "patches/example.patch",
+    "packages/example/index.ts",
+    ".github/workflows/example.yml",
+    "scripts/ci-npm-lock-admission.mjs",
+    "scripts/generate-npm-package-lock.worker.mts",
+    "scripts/npm-runner.mts",
+    "scripts/windows-cmd-helpers.mjs",
+    "scripts/tsx.mjs",
+    "scripts/lib/example.mjs",
+    "scripts/e2e/example.sh",
     "extensions/example/local.tgz",
   ]) {
     write(file);
@@ -122,8 +151,34 @@ it("retains unknown commands", () => {
   write("package.json", '{"scripts":{"deps:npm-lock:check:changed":"custom"}}');
   expect(skip()).toBe(false);
 });
+it("retains root manifest changes with the canonical command unchanged", () => {
+  const packageJson = JSON.parse(readFileSync(path.join(cwd, "package.json"), "utf8"));
+  change("package.json", JSON.stringify({ ...packageJson, private: true }));
+  expect(skip()).toBe(false);
+});
+it.each(["OPENCLAW_NPM_LOCK_JOBS", "OPENCLAW_NPM_PACKAGE_LOCK_REPO_ROOT"])(
+  "retains even empty %s overrides",
+  (name) => {
+    vi.stubEnv(name, "");
+    expect(skip()).toBe(false);
+  },
+);
+it.each([
+  "packages",
+  "scripts/lib/npm-lock-package-selection.mjs",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/record-shared.d.mts",
+])("retains incomplete %s inputs", (file) => {
+  rmSync(path.join(cwd, file), { recursive: true, force: true });
+  expect(skip()).toBe(false);
+  expect(runAdmission()).toBe("skip=false\n");
+});
 it.each([
   ["scripts/changed-lanes.mts", "// different historical implementation\n"],
+  ["scripts/lib/npm-lock-package-selection.mjs", "// different historical selector\n"],
+  ["scripts/lib/npm-lock-package-selection.d.mts", "// different historical declaration\n"],
+  ["scripts/lib/record-shared.mjs", "// different historical record guard\n"],
+  ["scripts/lib/record-shared.d.mts", "// different historical record declaration\n"],
   [manifest, "invalid JSON"],
 ])("retains invalid %s even when comparing a revision to itself", (file, content) => {
   change(file, content);
@@ -142,6 +197,7 @@ it("matches the generator's merge diff scope", () => {
 });
 it.each([
   ["src/example.ts", true],
+  ["scripts/helper.mjs", true],
   [manifest, false],
 ])("uses the generator's two-dot fallback in a depth-one checkout: %s", (file, expected) => {
   change(file, file.endsWith(".json") ? '{"private":true}' : "changed\n");

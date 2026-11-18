@@ -13,7 +13,8 @@ import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-inte
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import type { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import {
   captureAbortedPartial,
   deferAbortedPartialPersistence,
@@ -21,7 +22,9 @@ import {
   retainChatAbortSessionSnapshot,
   type ChatAbortSessionSnapshot,
 } from "./server-methods/chat-aborted-partial.js";
+import { resolveAuthenticatedPersonalGatewayProfileId } from "./server-methods/gateway-personal-caller.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
@@ -31,61 +34,75 @@ type OperatorRunCancellationContext = Pick<
 
 /** Retain authority before its execution or queue owner can arm cancellation. */
 export async function retainGatewayOperatorRun(
-  params: Omit<
-    Parameters<typeof captureGatewayOperatorRunAuthority>[0],
-    "independentContinuation"
-  > & {
+  params: Parameters<typeof captureGatewayOperatorRunAuthority>[0] & {
     context: OperatorRunCancellationContext;
     runId: string;
-    /** Canonical child relationship from the admitted session. */
-    spawnedBy?: string;
     entry?: RpcSourceRef;
     abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
+    /** Present only for a trusted host-originated input with no explicit human requester. */
+    systemTurn?: Parameters<typeof prepareSessionSystemTurnAuthority>[0];
   },
 ) {
-  const captured = await captureGatewayOperatorRunAuthority({
-    ...params,
-    // Every child owns its accepted work beyond the requester's recovery turn.
-    independentContinuation: params.spawnedBy ? true : undefined,
-  });
+  const captured = params.systemTurn
+    ? await prepareSessionSystemTurnAuthority(params.systemTurn)
+    : // The requester's turn ending or chat edit does not revoke accepted work; policy does.
+      await captureGatewayOperatorContinuation(params);
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;
-  const partialSession =
-    signal && params.entry
-      ? retainChatAbortSessionSnapshot(
-          params.abortSession
-            ? { ok: true, value: params.abortSession }
-            : await prepareChatAbortSessionSnapshot({
-                cfg: params.context.getRuntimeConfig(),
-                key: getRpcSourceIdentity(params.entry).sessionKey,
-                agentId: getRpcSourceIdentity(params.entry).agentId,
-              }),
-        )
-      : undefined;
-  const cancellation =
-    signal && params.entry && partialSession
-      ? createGatewayOperatorRunCancellation({
-          signal,
-          runId: params.runId,
-          entry: params.entry,
-          context: params.context,
-          session: partialSession.read,
-        })
-      : undefined;
-  return {
-    authority: captured?.authority,
-    armCancellation: () => cancellation?.arm(),
-    retireCancellation: () => {
-      cancellation?.release();
-      partialSession?.release();
-    },
-    release: () => {
-      cancellation?.release();
-      partialSession?.release();
-      releaseSource?.();
-    },
-  };
+  let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
+  try {
+    if (
+      !params.systemTurn &&
+      captured &&
+      params.entry &&
+      isRpcSourceRegistered(params.entry) &&
+      resolveAuthenticatedPersonalGatewayProfileId(params.client) === captured.authority.profileId
+    ) {
+      // Retain human initiation across live queue handoffs. System-turn authority
+      // can come from the current session owner and must not mint this fact.
+      params.entry.adapter.initiatingPersonalOperator = captured.authority;
+    }
+    partialSession =
+      signal && params.entry
+        ? retainChatAbortSessionSnapshot(
+            params.abortSession
+              ? { ok: true, value: params.abortSession }
+              : await prepareChatAbortSessionSnapshot({
+                  cfg: params.context.getRuntimeConfig(),
+                  key: getRpcSourceIdentity(params.entry).sessionKey,
+                  agentId: getRpcSourceIdentity(params.entry).agentId,
+                }),
+          )
+        : undefined;
+    const cancellation =
+      signal && params.entry && partialSession
+        ? createGatewayOperatorRunCancellation({
+            signal,
+            runId: params.runId,
+            entry: params.entry,
+            context: params.context,
+            session: partialSession.read,
+          })
+        : undefined;
+    return {
+      authority: captured?.authority,
+      armCancellation: () => cancellation?.arm(),
+      retireCancellation: () => {
+        cancellation?.release();
+        partialSession?.release();
+      },
+      release: () => {
+        cancellation?.release();
+        partialSession?.release();
+        releaseSource?.();
+      },
+    };
+  } catch (error) {
+    partialSession?.release();
+    releaseSource?.();
+    throw error;
+  }
 }
 
 /** Queue retirement detaches cancellation while the original authority can still settle work. */

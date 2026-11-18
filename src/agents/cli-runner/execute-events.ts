@@ -15,6 +15,7 @@ import {
 } from "../agent-tools.before-tool-call.diagnostics.js";
 import type {
   CliCompactionDelta,
+  CliOutput,
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
@@ -28,9 +29,12 @@ import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-to
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
+import { isToolResultError } from "../tool-result-error.js";
 import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
-import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { normalizeCliToolName } from "./tool-policy.js";
+import { recordCliTrajectoryEvent } from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function resolveCliToolSource(name: string, kind?: CliToolUseStartDelta["kind"]): "core" | "mcp" {
@@ -66,6 +70,8 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
+  // One owner for native compaction facts: the published end event, the run's count, and its sizes.
+  let nativeCompaction: NonNullable<CliOutput["nativeCompaction"]> | undefined;
   let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
@@ -156,6 +162,11 @@ export function createCliEventHandlers(params: {
       startedAt: Date.now(),
     });
     recordToolSummary(event, false);
+    recordCliTrajectoryEvent(context.trajectoryRecorder, "tool.call", {
+      toolCallId: event.toolCallId,
+      name: normalizeCliToolName(stripOpenClawMcpToolPrefix(event.name)),
+      args: event.args,
+    });
     signalExecutionPhase("tool_execution_started");
     if (tracked) {
       params.toolTracking.handleCliToolUseStart(event);
@@ -182,6 +193,22 @@ export function createCliEventHandlers(params: {
     const loopbackOutcome = tracked
       ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
       : undefined;
+    if (context.trajectoryRecorder && firstTerminal) {
+      recordCliTrajectoryEvent(context.trajectoryRecorder, "tool.result", {
+        toolCallId: event.toolCallId,
+        name: normalizeCliToolName(stripOpenClawMcpToolPrefix(event.name)),
+        // The host's outcome survives CLI replies that cannot disambiguate parallel calls.
+        ...(loopbackOutcome
+          ? {
+              status: loopbackOutcome.outcome,
+              ...(loopbackOutcome.outcome === "unknown"
+                ? {}
+                : { success: loopbackOutcome.outcome === "completed" }),
+            }
+          : { success: !(event.isError || isToolResultError(event.result)) }),
+        result: readResult(),
+      });
+    }
     // Resolve presentation metadata before the result retires loopback correlation.
     const browserTab =
       tracked && !event.isError && stripOpenClawMcpToolPrefix(event.name) === "browser"
@@ -410,6 +437,18 @@ export function createCliEventHandlers(params: {
   };
   const emitCliCompaction = (event: CliCompactionDelta) => {
     observedCliActivity = true;
+    // Claude Code resends its `compacting` status every 30 s while one compaction
+    // runs. The activity above feeds the watchdog; publish only the first start.
+    if (event.phase === "start" && compactionActive) {
+      return;
+    }
+    if (event.phase === "end" && event.completed) {
+      nativeCompaction = {
+        compactionCount: (nativeCompaction?.compactionCount ?? 0) + 1,
+        ...(event.tokensBefore !== undefined ? { compactionTokensBefore: event.tokensBefore } : {}),
+        ...(event.tokensAfter !== undefined ? { compactionTokensAfter: event.tokensAfter } : {}),
+      };
+    }
     // Native compaction is silent but busy: the no-output watchdog reads this
     // between phase boundaries, so an end event must always clear the flag,
     // even for a failed compaction (`completed: false`).
@@ -514,9 +553,17 @@ export function createCliEventHandlers(params: {
 
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
-  const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+  const emitCliThinkingDelta = ({
+    text,
+    delta,
+    isReasoningSnapshot,
+    modelProgress,
+  }: CliThinkingDelta) => {
     if (params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
+    }
+    if (modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking");
     }
     if (text || delta) {
       observedCliActivity = true;
@@ -528,7 +575,10 @@ export function createCliEventHandlers(params: {
     }));
   };
 
-  const emitCliThinkingProgress = ({ progressTokens }: CliThinkingProgress) => {
+  const emitCliThinkingProgress = ({ progressTokens, modelProgress }: CliThinkingProgress) => {
+    if (!params.toolTracking.shouldSuppressAssistantOutput() && modelProgress) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progressModel("cli:thinking_tokens");
+    }
     observedCliActivity = true;
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };
@@ -564,6 +614,7 @@ export function createCliEventHandlers(params: {
       return tool !== undefined && isClaudeForegroundAgentToolName(tool.toolName);
     },
     getToolSummary,
+    getNativeCompaction: () => nativeCompaction,
   };
 }
 

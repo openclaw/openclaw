@@ -16,7 +16,13 @@ type Telemetry = {
     string,
     { count: number; totalMs: number; p95Ms: number; p99Ms: number; maxMs: number }
   >;
-  eventLoop: { count: number; p95Ms: number | null; p99Ms: number | null; maxMs: number | null };
+  eventLoop: {
+    count: number;
+    p95Ms: number | null;
+    p99Ms: number | null;
+    p999Ms?: number | null;
+    maxMs: number | null;
+  };
   stalls: { count: number; totalMs: number; maxMs: number };
   lastSample: { memory: NodeJS.MemoryUsage; heapSpaces?: HeapSpaces };
 };
@@ -203,6 +209,7 @@ export function summarizeStressRun(options: RunOptions): StressRun {
         durationMinutes,
       eventLoopP95Ms: telemetry.eventLoop.p95Ms,
       eventLoopP99Ms: telemetry.eventLoop.p99Ms,
+      eventLoopP999Ms: telemetry.eventLoop.p999Ms ?? null,
       eventLoopCount: telemetry.eventLoop.count,
       eventLoopMaxMs: telemetry.eventLoop.maxMs,
       sessionsListP50Ms: list.p50Ms,

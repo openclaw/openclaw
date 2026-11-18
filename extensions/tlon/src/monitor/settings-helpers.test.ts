@@ -19,6 +19,7 @@ const baseAccount: TlonResolvedAccount = {
   dmAllowlist: ["~zod"],
   groupInviteAllowlist: ["~bus"],
   autoDiscoverChannels: true,
+  crossChannelCitations: null,
   showModelSignature: false,
   autoAcceptDmInvites: true,
   autoAcceptGroupInvites: true,

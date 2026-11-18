@@ -1,6 +1,7 @@
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as markdown from "../../packages/markdown-core/src/markdown-code-regions.js";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -62,6 +63,39 @@ function mirror(fields: Record<string, unknown> = {}) {
 }
 const payloadFor = (message: unknown) =>
   projectSessionMessagePayload({ sessionKey: "agent:main:main", message }).payload;
+
+it.each(["scalar", "block"])("bounds %s preview Markdown before parsing managed media", (shape) => {
+  const raw = "MEDIA:./proof.png\n```md\n" + "x".repeat(20_000) + "\n```";
+  const source = assistant({
+    content: shape === "scalar" ? raw : [text(raw)],
+    openclawDelivery: { mediaUrls: ["./proof.png"] },
+  });
+  const scan = vi.spyOn(markdown, "findMarkdownCodeRegions");
+  try {
+    const result = project([source], { maxChars: 128 });
+    expect(scan).toHaveBeenCalled();
+    expect(Math.max(...scan.mock.calls.map(([input]) => input.length))).toBeLessThanOrEqual(146);
+    expect(result[0]).toHaveProperty("__openclaw", {
+      id: "real-answer",
+      truncated: true,
+      reason: "display-cap",
+    });
+    expect(JSON.stringify(result)).toContain("...(truncated)...");
+    expect(JSON.stringify(result)).not.toContain("MEDIA:");
+    expect(source.content).toEqual(shape === "scalar" ? raw : [text(raw)]);
+  } finally {
+    scan.mockRestore();
+  }
+});
+
+it("does not turn a capped blank completion into a visible reply", () => {
+  expect(
+    project([assistant({ content: " ".repeat(128), stopReason: "stop" })], {
+      maxChars: 16,
+    }),
+  ).toEqual([]);
+});
+
 function expectPrepared(source: Record<string, unknown>, content: unknown[]) {
   const before = structuredClone(source);
   const expected = [{ ...source, display: true, content }];
@@ -163,7 +197,7 @@ it("prepares raw prefixes before the display cap and preserves prepared or forwa
   }
 });
 
-describe("commentary group visibility", () => {
+describe.each([undefined, "stop", "length"])("commentary group visibility (%s)", (stopReason) => {
   const progress = "Visible progress";
   const keyed = phased(progress, "commentary", "progress");
   const unkeyed = phased("Hidden thought", "commentary");
@@ -175,6 +209,7 @@ describe("commentary group visibility", () => {
   const facts = [{ url: "/media/proof.png", contentType: "image/png" }];
   type Visibility = [string, unknown[], string[], number, number, string?, typeof facts?];
   it.each<Visibility>([
+    ["keyed text only", [keyed], [progress], 0, 0],
     ["visible siblings", [control, image, tool, final], [controls, "Final reply"], 1, 1],
     ["media facts", [control], [controls], 0, 0, undefined, facts],
     ["unkeyed media", [text("Image caption"), image], ["Image caption"], 1, 0, "commentary"],
@@ -182,6 +217,7 @@ describe("commentary group visibility", () => {
     ["inherited phases", inheritedContent, [progress], 1, 1, "commentary"],
   ])("keeps visibility scoped to %s", (_name, content, texts, images, tools, phase, mediaFacts) => {
     const source = assistant({
+      ...(stopReason ? { stopReason } : {}),
       ...(phase ? { phase } : {}),
       content,
       __openclaw: { id: "row-identity", ...(mediaFacts ? { media: mediaFacts } : {}) },
@@ -203,6 +239,33 @@ describe("commentary group visibility", () => {
     expect(source).toEqual(before);
   });
 });
+
+it.each(["stop", "length"])(
+  "preserves completed commentary visibility authority (%s)",
+  (stopReason) => {
+    const progress = "Visible progress";
+    for (const [final, fields, expected] of [
+      ["", {}, [progress]],
+      ["NO_REPLY", {}, []],
+      ["NO_REPLY", { display: true }, [progress, "NO_REPLY"]],
+      ["Final reply", { display: false }, []],
+    ] as const) {
+      const source = assistant({
+        ...fields,
+        stopReason,
+        content: [phased(progress, "commentary", "progress"), finalText(final)],
+      });
+      const original = structuredClone(source);
+      const projected = project([source], { includeCommentaryFallbacks: true });
+      expect(
+        projected.flatMap((row) => row.content).map((block) => asOptionalRecord(block)?.text),
+      ).toEqual(expected);
+      expect(projected).toHaveLength(expected.length);
+      expect(project(projected, { includeCommentaryFallbacks: true })).toEqual(projected);
+      expect(source).toEqual(original);
+    }
+  },
+);
 
 it("preserves error-turn media after a later reply", () => {
   const question = user("hello");

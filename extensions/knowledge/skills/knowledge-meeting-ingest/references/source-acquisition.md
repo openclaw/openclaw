@@ -15,7 +15,55 @@ If the source changes during acquisition, reconcile/refetch rather than silently
 combining versions. Finish acquisition before publication; a saved summary or
 the first page of a transcript is not a complete original.
 
+## Granola through the Granola plugin (MCP)
+
+Prefer this when the Granola plugin is installed and connected: its tools are
+`list_meetings`, `get_meetings` and `get_meeting_transcript` (find them with
+tool search for "granola"). The plugin holds the sign-in; never ask for or store
+an API key. If the tools are missing or report that the account is not
+connected, stop and say the Granola plugin needs to be installed or connected
+from the Plugins page.
+
+- **IDs.** Tools return the meeting UUID, the same one as in
+  `https://notes.granola.ai/d/<uuid>`. They also accept the REST API's `not_…`
+  note ID. Record the UUID and the notes URL on the meeting page as the source
+  ID. Earlier ingestions may cite only a `not_…` ID, so dedup by UUID or URL
+  first, then by title, attendees and date ([speakers](speakers.md)).
+- **List.** `list_meetings` with `time_range: "custom"`, `from_date`,
+  `to_date` (`YYYY-MM-DD`, user's time zone) filters by the scheduled meeting
+  start, newest first. Follow `next_cursor` with the same filters while
+  `has_more` is true. `updated_after` picks up changed notes. Without an
+  `involvement` filter it includes notes other people captured and shared;
+  `involvement: {captured_by_me: true, listed_as_participant: true}` keeps the
+  owner's meetings. `known_participants` is the invite list, not attendance.
+- **Metadata.** `get_meetings` (up to 10 IDs, `attachments: "none"`) returns
+  title, `meeting_at`, `created_at`, `updated_at`, participants, the AI
+  summary and the owner's private notes. The summary is a source claim.
+- **Transcript.** `get_meeting_transcript` with `include_timestamps: true` and
+  `max_chars` up to 80000 returns text blocks like
+  `[12:04] System audio: …`. Continue from `next_offset` with the same
+  `include_timestamps` until `truncated` is false, and concatenate the pages'
+  `transcript` strings in order; a block cut at a page end
+  (`ends_mid_utterance`) continues on the next page. Timestamps count from the first block, not the
+  clock. `Microphone` is the recorder's track and `System audio` everyone on
+  the call ([speakers](speakers.md)). `transcript_unavailable` with
+  `transcript_pending` means try a later run; `no_transcript` and
+  `transcript_deleted` are final, and such a meeting cannot be ingested.
+- **Still recording.** Skip a meeting whose `updated_at` is under 20 minutes
+  old or whose transcript is pending.
+- **Originals.** Retain the `get_meetings` result text and the joined
+  transcript text as two originals. With Code Mode, pipe each tool result
+  straight into `knowledge_attach` without printing it. Otherwise write the text
+  exactly as returned to a file in the workspace with the host file tool, check
+  that the transcript file's character count matches `total_chars` (more than
+  a few characters off means the copy is incomplete: write it again), and
+  retain it with `knowledge_attach_file`. Never retain a summary in place of the
+  transcript.
+
 ## Granola REST reference
+
+Use the public REST API only when the Granola plugin is not available and the
+owner has set up an API key.
 
 Checked against the official API docs on 2026-09-24. Recheck if the API rejects
 these parameters; do not substitute parameter names from another connector.

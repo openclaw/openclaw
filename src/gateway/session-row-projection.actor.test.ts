@@ -7,9 +7,10 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import type { SessionActor } from "../config/sessions/session-actor-contract.js";
 import { withSessionActor } from "../config/sessions/session-actor-scope.js";
-import { buildRestartRecoveryExpectedState } from "../config/sessions/session-transcript-turn-state.js";
+import { buildSessionTranscriptTurnExpectedState } from "../config/sessions/session-transcript-turn-state.js";
 import type { InternalSessionEntry as Entry } from "../config/sessions/types.js";
 import { patchSessionEntry as patchSdkSessionEntry } from "../plugin-sdk/session-store-runtime.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as rowFixture from "./session-row-projection.read-fixture.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
@@ -62,6 +63,16 @@ async function actorProjection(scope: Scope) {
 
 it("reuses actor row facts after metadata writes and refreshes Board presence after a write", async () => {
   await withActorRow("actor-row-facts", async (_actor, { sessionId }, scope) => {
+    {
+      using filesystem = observeMainThreadFs();
+      const target = await withSessionActor(
+        scope,
+        { assertCurrent() {}, assertReadable() {} },
+        async (actor) => actor.target,
+      );
+      expect(target).toEqual(_actor.target);
+      expect(filesystem.calls()).toEqual({});
+    }
     const updateLabel = (label: string, updatedAt: number) =>
       patchSdkSessionEntry({
         ...scope,
@@ -107,7 +118,7 @@ it("publishes terminal actor recency before another run begins", async () => {
           sessionId: entry.sessionId,
           lifecycleRevision: entry.lifecycleRevision ?? null,
           writerRunId: undefined,
-          expectedState: buildRestartRecoveryExpectedState(entry),
+          expectedState: buildSessionTranscriptTurnExpectedState(entry),
           lifecycle: { updatedAt: 2 },
         },
       },
@@ -139,7 +150,7 @@ it("publishes user and assistant actor previews without background reads or losi
       {
         commandId: "accepted-input",
         phaseId: "turn",
-        expectedState: buildRestartRecoveryExpectedState(entry),
+        expectedState: buildSessionTranscriptTurnExpectedState(entry),
         lifecycle: {},
         turn: {
           ...scope,
@@ -164,6 +175,7 @@ it("publishes user and assistant actor previews without background reads or losi
     await appendSessionManagerActor({
       actor,
       toolResult: false,
+      message: { role: "assistant" },
       assertCurrent() {},
       append: {
         kind: "message",

@@ -69,3 +69,39 @@ test("a failed diagnostic sink cannot replace the operation error", () => {
     }
   }).toThrow(originalError);
 });
+
+test("slow patch details include mutation names without identity fields or values", () => {
+  const patch = {
+    key: "synthetic-private-session",
+    agentId: "synthetic-private-agent",
+    expectedMarkedUnreadAt: null,
+    unread: false,
+    label: "synthetic-private-label",
+    "synthetic-private-field": "synthetic-private-value",
+  };
+  diagnostics.describeRequest(1, patch);
+  at(1_500, () => diagnostics.finish());
+  expect(log).toHaveBeenCalledExactlyOnceWith(
+    "slow session patch 1500ms method=sessions.patch targets=1 fields=label,unread",
+  );
+});
+
+test("slow batch details cap target count and sorted mutation names", () => {
+  diagnostics = startSessionPatchDiagnostics("sessions.patchMany");
+  diagnostics.describeRequest(150, {
+    unread: false,
+    thinkingLevel: "high",
+    pinned: true,
+    model: "synthetic-private-model",
+    label: "synthetic-private-label",
+    icon: "synthetic-private-icon",
+    contextWindow: "synthetic-private-window",
+    color: "synthetic-private-color",
+    category: "synthetic-private-category",
+    archived: false,
+  });
+  at(1_500, () => diagnostics.finish());
+  expect(log).toHaveBeenCalledExactlyOnceWith(
+    "slow session patch 1500ms method=sessions.patchMany targets=100 fields=archived,category,color,contextWindow,icon,label,model,pinned,+2",
+  );
+});

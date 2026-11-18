@@ -1,6 +1,10 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveChannelEntryMatchWithFallback } from "../../channels/channel-config.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -23,6 +27,7 @@ function stripThreadSuffix(value: string): string {
 export function limitHistoryTurns(
   messages: AgentMessage[],
   limit: number | undefined,
+  options: { groupConsecutiveUserTurns?: boolean } = {},
 ): AgentMessage[] {
   if (!limit || limit <= 0 || messages.length === 0) {
     return messages;
@@ -38,10 +43,13 @@ export function limitHistoryTurns(
   if (conversationStart < 0) {
     return messages;
   }
-  let userCount = 0;
+  const userTurnIndexes: number[] = [];
   for (let i = conversationStart; i < messages.length; i++) {
-    if (messages[i]?.role === "user") {
-      userCount++;
+    if (
+      messages[i]?.role === "user" &&
+      (!options.groupConsecutiveUserTurns || messages[i - 1]?.role !== "user")
+    ) {
+      userTurnIndexes.push(i);
     }
   }
 
@@ -49,21 +57,15 @@ export function limitHistoryTurns(
   // stable between cuts; up to 1.5x turns trades strictness for amortized cache reuse.
   const targetUserTurns = Math.floor(limit);
   const maxUserTurns = Math.ceil(targetUserTurns * 1.5);
+  const userCount = userTurnIndexes.length;
   if (userCount <= maxUserTurns) {
     return messages;
   }
   const evictionBatchSize = maxUserTurns - targetUserTurns + 1;
   const userTurnsToKeep = targetUserTurns + ((userCount - targetUserTurns) % evictionBatchSize);
 
-  let turnsRemaining = userTurnsToKeep;
-  const firstKeptIndex = messages.findLastIndex(
-    (message, index) =>
-      index >= conversationStart && message?.role === "user" && --turnsRemaining === 0,
-  );
-  return [
-    ...messages.slice(0, conversationStart),
-    ...messages.slice(firstKeptIndex < 0 ? messages.length : firstKeptIndex),
-  ];
+  const firstKeptIndex = userTurnIndexes.at(-userTurnsToKeep) ?? messages.length;
+  return [...messages.slice(0, conversationStart), ...messages.slice(firstKeptIndex)];
 }
 
 /** Raw channel-config fields this resolver reads, at channel root or under `accounts.<id>`. */
@@ -171,9 +173,15 @@ export function getHistoryLimitFromSessionKey(
   if (kind === "direct") {
     // An explicit account `dms` map replaces the root map under the account
     // merge contract, so pick the owning map before indexing. Falling back per
-    // entry would leak root per-peer overrides into that account.
+    // entry would leak root per-peer overrides into that account. Session peers
+    // are lowercase, but operators key `dms` by native ids such as Slack `U…`
+    // ids, so match case-insensitively after an exact key.
     const perDmLimit = userId
-      ? (accountConfig?.dms ?? providerConfig.dms)?.[userId]?.historyLimit
+      ? resolveChannelEntryMatchWithFallback({
+          entries: accountConfig?.dms ?? providerConfig.dms,
+          keys: [userId],
+          normalizeKey: normalizeLowercaseStringOrEmpty,
+        }).entry?.historyLimit
       : undefined;
     return perDmLimit !== undefined
       ? perDmLimit

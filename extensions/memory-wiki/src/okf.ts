@@ -2,12 +2,14 @@ import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   normalizeOptionalString,
   normalizeSingleOrTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
@@ -34,7 +36,6 @@ import {
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const OKF_RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
-const OKF_MARKDOWN_LINK_PATTERN = /(!?)\[([^\]]*)\]\(([^)]+)\)/g;
 const OKF_RELATED_SECTION_PATTERN = new RegExp(
   `\\n+## Related\\n${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}\\n?`,
   "g",
@@ -178,30 +179,8 @@ async function readOkfTextFile(params: {
   }
 }
 
-function splitMarkdownLinkDestination(target: string): {
-  destination: string;
-  titleSuffix: string;
-} {
-  const trimmed = target.trim();
-  if (trimmed.startsWith("<")) {
-    const end = trimmed.indexOf(">");
-    if (end > 0) {
-      return {
-        destination: trimmed.slice(1, end),
-        titleSuffix: trimmed.slice(end + 1),
-      };
-    }
-  }
-  const match = trimmed.match(/^(\S+)(\s+[\s\S]+)?$/);
-  return {
-    destination: match?.[1] ?? trimmed,
-    titleSuffix: match?.[2] ?? "",
-  };
-}
-
 function resolveOkfMarkdownTarget(sourceRelativePath: string, target: string): string | null {
-  const { destination } = splitMarkdownLinkDestination(target);
-  const trimmed = destination.trim();
+  const trimmed = target.trim();
   if (!trimmed || trimmed.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
     return null;
   }
@@ -243,45 +222,50 @@ function rewriteOkfMarkdownLinks(params: {
   if (!params.body.includes("[")) {
     return { body: params.body, linkedPages: [] };
   }
-  const rewriteLinks = (markdown: string) =>
-    markdown.replace(
-      OKF_MARKDOWN_LINK_PATTERN,
-      (match, imagePrefix: string, label: string, rawTarget: string) => {
-        const conceptId = resolveOkfMarkdownTarget(params.sourceRelativePath, rawTarget);
-        if (!conceptId) {
-          return match;
-        }
-        const target = params.pageByConceptId.get(conceptId);
-        if (!target) {
-          return match;
-        }
-        linkedPages.add(target);
-        const { destination, titleSuffix } = splitMarkdownLinkDestination(rawTarget);
-        const relativeTarget = path.posix.relative(
-          path.posix.dirname(params.sourcePagePath),
-          target.pagePath,
-        );
-        const suffix = destination.match(/[?#].*$/s)?.[0] ?? "";
-        return `${imagePrefix}[${label}](${relativeTarget}${suffix}${titleSuffix})`;
+  const destinations: Array<{ start: number; end: number; link: { url: string } }> = [];
+  // Observe source spans without replacing parser handlers. The referenced link receives
+  // its decoded URL before fromMarkdown returns, so escapes and entities resolve correctly.
+  fromMarkdown(params.body, {
+    mdastExtensions: [
+      {
+        beforeEnter(token) {
+          if (token.type !== "resourceDestinationString") {
+            return;
+          }
+          const link = this.stack.at(-1);
+          if (link?.type === "link" || link?.type === "image") {
+            destinations.push({ start: token.start.offset, end: token.end.offset, link });
+          }
+        },
       },
-    );
-  const body = rewriteMarkdownOutsideCode(params.body, rewriteLinks);
-  return { body, linkedPages: [...linkedPages] };
-}
-
-function rewriteMarkdownOutsideCode(
-  markdown: string,
-  rewriteLinks: (markdown: string) => string,
-): string {
-  const parts: string[] = [];
-  const rewriteLines = (text: string) => text.split("\n").map(rewriteLinks).join("\n");
-  let cursor = 0;
-  forEachMarkdownCodeRange(markdown, (start, end) => {
-    parts.push(rewriteLines(markdown.slice(cursor, start)), markdown.slice(start, end));
-    cursor = end;
+    ],
   });
-  parts.push(rewriteLines(markdown.slice(cursor)));
-  return parts.join("");
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const { start, end, link } of destinations) {
+    const conceptId = resolveOkfMarkdownTarget(params.sourceRelativePath, link.url);
+    const target = conceptId ? params.pageByConceptId.get(conceptId) : undefined;
+    if (!target) {
+      continue;
+    }
+    linkedPages.add(target);
+    const relativeTarget = path.posix.relative(
+      path.posix.dirname(params.sourcePagePath),
+      target.pagePath,
+    );
+    const suffix = link.url.match(/[?#].*$/s)?.[0] ?? "";
+    // URLs are decoded by the parser. Escape their Markdown delimiters/entities without
+    // changing percent escapes; otherwise a valid fragment can close the rewritten link.
+    const replacement = `${relativeTarget}${suffix}`.replace(/[\\()<> &\t\r\n]/g, (char) =>
+      /\s/u.test(char) ? encodeURIComponent(char) : `\\${char}`,
+    );
+    // Destination spans are disjoint and in source order, including nested images.
+    // One pass preserves authored labels/titles without repeatedly copying the whole body.
+    parts.push(params.body.slice(cursor, start), replacement);
+    cursor = end;
+  }
+  parts.push(params.body.slice(cursor));
+  return { body: parts.join(""), linkedPages: [...linkedPages] };
 }
 
 function normalizeOkfRenderedPageForComparison(content: string): string {
@@ -379,7 +363,7 @@ async function removeStaleOkfConceptPages(params: {
 }
 
 export function formatOkfImportSummary(result: ImportMemoryWikiOkfResult): string {
-  return `Imported ${result.importedCount} OKF concept${result.importedCount === 1 ? "" : "s"} from ${result.bundlePath} into memory wiki. Updated ${result.updatedCount}; removed ${result.removedCount}; skipped ${result.skippedCount}; refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
+  return terminalText`Imported ${result.importedCount} OKF concept${result.importedCount === 1 ? "" : "s"} from ${result.bundlePath} into memory wiki. Updated ${result.updatedCount}; removed ${result.removedCount}; skipped ${result.skippedCount}; refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
 }
 
 export async function importMemoryWikiOkfBundle(params: {
@@ -481,6 +465,7 @@ export async function importMemoryWikiOkfBundle(params: {
     const conceptTimestamp = normalizeOptionalString(concept.frontmatter.timestamp);
 
     const frontmatter = {
+      type: concept.type,
       pageType: "concept",
       id: concept.pageId,
       title: concept.title,
@@ -521,13 +506,12 @@ export async function importMemoryWikiOkfBundle(params: {
     }
     pagePaths.push(concept.pagePath);
   }
-  const currentPagePaths = new Set(pagePaths);
   const removedPagePaths =
     warnings.length === 0
       ? await removeStaleOkfConceptPages({
           vaultRoot: params.config.vault.path,
           bundleKey,
-          currentPagePaths,
+          currentPagePaths: new Set(pagePaths),
         })
       : [];
 

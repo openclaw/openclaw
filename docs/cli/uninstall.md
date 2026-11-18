@@ -50,6 +50,16 @@ Uninstall reports each requested scope and exits nonzero if any requested cleanu
   refuses and asks you to stop it first.
 - `--state` preserves configured workspace directories unless `--workspace` is
   also selected.
+- Before deleting completion caches, `--state` removes their literal source
+  registrations from supported shell profiles, including both Bash startup
+  files and both Windows PowerShell profile directories. It preserves other
+  state directories' registrations, user-managed portable hooks, orphan
+  markers, and unrelated profile content and permissions.
+- `--dry-run --state` reports affected profiles without changing them. If a
+  profile cannot be read or updated, state removal stops; resolve the reported
+  profile error and retry. A concurrent profile edit detected before replacement
+  also stops cleanup. Profiles are not changed when state ownership is blocked.
+  `reset` does not remove completion registrations.
 
 ## Related
 

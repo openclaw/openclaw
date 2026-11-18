@@ -6,6 +6,7 @@ import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.lifecycle-types.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
+import type { SessionColdSource } from "./session-cold-storage.types.js";
 import type { SessionArchivePruningRead } from "./session-history-archive-pruning.types.js";
 
 export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
@@ -28,11 +29,13 @@ export type SessionColdExternalization = {
   archive: Omit<SessionColdArchive, "archive_blob">;
   envelopeBytes: number;
 };
-export type SessionColdOversized = {
+type SessionColdOversized = {
   sessionId: string;
   lowerBoundBytes: number;
 };
+export type SessionColdCleanupCursor = { sessionId: string; afterSeq?: number };
 export type SessionColdBatchInput = {
+  cleanupCursor?: SessionColdCleanupCursor;
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
   admissionIdentities: string[];
   liveSessionKeys: string[];
@@ -42,7 +45,10 @@ export type SessionColdBatchInput = {
   maxBytes: number;
 };
 export type SessionColdBatchPrepared = {
+  cleanupCursor?: SessionColdCleanupCursor;
   freePages: number;
+  cleanupSessionIds: string[];
+  needsReconcile: boolean;
   protectionKeys: string[];
   prepared: SessionColdPrepared[];
   externalizations: SessionColdExternalization[];
@@ -172,7 +178,7 @@ export type TranscriptArchivePageResult = {
 };
 
 export type SqliteArchiveOperation =
-  | { operation: "cold-prepare"; input: SessionColdBatchInput }
+  | { operation: "cold-prepare"; input: SessionColdBatchInput & { source: SessionColdSource } }
   | { operation: "materialize"; plans: readonly TranscriptArchiveWorkerPlan[] }
   | { operation: "publish"; plans: readonly TranscriptArchivePublishPlan[] }
   | { operation: "read-page"; plans: readonly TranscriptArchivePagePlan[] }

@@ -283,6 +283,13 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
+  it("selects compiler planner unit and workflow consumers for planner changes", () => {
+    expectChangedTargets(
+      ["scripts/ci-check-plan.mts"],
+      testFiles("test/scripts", "ci-check-plan ci-workflow-planning"),
+    );
+  });
+
   it("unions semantic workflow owners with bounded direct references", () => {
     withTinyGitRepo(
       {
@@ -2024,7 +2031,7 @@ export const single = {
   );
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
-    const [spec] = runSpecs(["ui/src/pages/cron/run-transcript.e2e.test.ts"], {
+    const [spec] = runSpecs(["ui/src/pages/plugins/plugin-skills.e2e.test.ts"], {
       baseEnv: {},
     });
 
@@ -2749,6 +2756,7 @@ describe("test selector native source facts", () => {
         };
         for (const file of [
           "node-runtime-env.mjs",
+          "node-version.mjs",
           "runtime-process-scripts.generated.mjs",
           "scripts/lib/test-selector-source-facts.mts",
           "scripts/lib/test-selector-source-facts.worker.mts",

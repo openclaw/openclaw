@@ -23,6 +23,7 @@ import {
 } from "../agent-settings.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { clearCliSessionInStore } from "../cli-session-store.js";
+import { exceedsContextWindow } from "../context-pressure.js";
 import {
   isBenignCompactionSkipReason,
   isBenignCompactionSkipResult,
@@ -220,6 +221,7 @@ export async function runCliTurnCompactionLifecycle(
     assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = createPreparedEmbeddedAgentSettingsManager({
+      agentId: params.sessionAgentId,
       sessionId: params.sessionId,
       cwd: params.cwd ?? params.workspaceDir,
       agentDir: params.agentDir,
@@ -248,6 +250,14 @@ export async function runCliTurnCompactionLifecycle(
       preemptiveCompaction.estimatedPromptTokens,
       floorPositiveFiniteNumber(resolveFreshSessionTotalTokens(params.sessionEntry)) ?? 0,
     );
+    // Post-turn maintenance fails the command only when the next prompt cannot fit.
+    const settleFailedMaintenance = (message: string) => {
+      assertActive();
+      if (exceedsContextWindow(currentTokenCount, contextTokenBudget)) {
+        throw new Error(message);
+      }
+      log.warn(`${message}; continuing because the next prompt fits the context window`);
+    };
     if (
       !preemptiveCompaction.shouldCompact &&
       currentTokenCount <= preemptiveCompaction.promptBudgetBeforeReserve
@@ -330,9 +340,8 @@ export async function runCliTurnCompactionLifecycle(
                 params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {},
               );
               const preparedModelRuntime = preparedRuntimeLease.snapshot;
-              nativeResult = await withPluginRuntimeGenerationScope(
-                preparedModelRuntime,
-                async () => {
+              nativeResult = await preparedRuntimeLease.run(() =>
+                withPluginRuntimeGenerationScope(preparedModelRuntime, async () => {
                   await ensureSelectedAgentHarnessPlugin({
                     provider: params.provider,
                     modelId: params.model,
@@ -371,7 +380,7 @@ export async function runCliTurnCompactionLifecycle(
                     },
                     { preparedModelRuntime, sourceAuthority: { assertActive, operatorAuthority } },
                   );
-                },
+                }),
               );
             } catch (error) {
               const reason = coerceErrorMessage(error);
@@ -425,7 +434,7 @@ export async function runCliTurnCompactionLifecycle(
           if (nativeOutcome.compacted) {
             compactionKind = "native-harness";
           } else if (!nativeOutcome.fallbackToContextEngine && nativeOutcome.failureReason) {
-            throw new Error(
+            settleFailedMaintenance(
               `CLI native harness compaction failed for ${params.provider}/${params.model}: ${nativeOutcome.failureReason}`,
             );
           }
@@ -574,8 +583,9 @@ export async function runCliTurnCompactionLifecycle(
           const contextOutcome = await compactCliTranscript();
           contextCompactionOutcome = contextOutcome;
           compactionKind = contextOutcome.compacted ? "context-engine" : undefined;
+          // Post-turn maintenance fails the command only when the next prompt cannot fit.
           if (!compactionKind && contextOutcome.failureReason) {
-            throw new Error(
+            settleFailedMaintenance(
               `CLI transcript compaction failed for ${params.provider}/${params.model}: ${contextOutcome.failureReason}`,
             );
           }

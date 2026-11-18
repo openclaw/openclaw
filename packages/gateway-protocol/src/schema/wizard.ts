@@ -22,8 +22,33 @@ export const WizardStartParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
 });
 
-export const McpAuthLoginParamsSchema = closedObject({
-  sessionId: NonEmptyString,
+export const McpAuthLoginParamsSchema = Type.Union([
+  closedObject({
+    sessionId: NonEmptyString,
+    serverName: NonEmptyString,
+  }),
+  closedObject({
+    serverName: NonEmptyString,
+    callbackUrl: Type.Optional(NonEmptyString),
+  }),
+]);
+
+const McpAuthLoginLinkResultSchema = Type.Union([
+  closedObject({
+    status: Type.Union([Type.Literal("authorized"), Type.Literal("expired")]),
+    serverName: NonEmptyString,
+  }),
+  closedObject({
+    status: Type.Literal("redirect"),
+    serverName: NonEmptyString,
+    authorizationUrl: NonEmptyString,
+    redirectUrl: NonEmptyString,
+    usesPublicOrigin: Type.Boolean(),
+  }),
+]);
+
+/** Clears the shared operator OAuth credentials of one MCP server. */
+export const McpAuthLogoutParamsSchema = closedObject({
   serverName: NonEmptyString,
 });
 
@@ -126,6 +151,11 @@ export const WizardStartResultSchema = closedObject({
   ...WizardResultFields,
 });
 
+export const McpAuthLoginResultSchema = Type.Union([
+  WizardStartResultSchema,
+  McpAuthLoginLinkResultSchema,
+]);
+
 /** Minimal status poll result used when the client does not need the next step. */
 export const WizardStatusResultSchema = closedObject({
   status: WizardRunStatusSchema,
@@ -136,6 +166,9 @@ export const WizardStatusResultSchema = closedObject({
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
 export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
+export type McpAuthLoginLinkResult = Static<typeof McpAuthLoginLinkResultSchema>;
+export type McpAuthLoginResult = Static<typeof McpAuthLoginResultSchema>;
+export type McpAuthLogoutParams = Static<typeof McpAuthLogoutParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

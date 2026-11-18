@@ -61,14 +61,14 @@ export function beginActionDownloadCaptureOnPage(
         });
       };
       const firstEventGraceMs = Math.max(0, drainOpts.firstEventGraceMs ?? 0);
-      const deadlineAtMs = Date.now() + ACT_DOWNLOAD_MAX_DRAIN_MS;
-      const remainingBudgetMs = () => Math.max(0, deadlineAtMs - Date.now());
+      const deadlineAtMs = performance.now() + ACT_DOWNLOAD_MAX_DRAIN_MS;
+      const remainingBudgetMs = () => Math.max(0, deadlineAtMs - performance.now());
       if (capture.pending.length === 0 && firstEventGraceMs > 0) {
         await waitForEvent(Math.min(firstEventGraceMs, remainingBudgetMs()));
       }
       while (capture.lastEventAtMs !== undefined) {
         const remainingQuietMs = Math.min(
-          BROWSER_ACTION_NAVIGATION_GRACE_MS - (Date.now() - capture.lastEventAtMs),
+          BROWSER_ACTION_NAVIGATION_GRACE_MS - (performance.now() - capture.lastEventAtMs),
           remainingBudgetMs(),
         );
         if (remainingQuietMs <= 0) {

@@ -17,6 +17,7 @@ import { resolveUserPath } from "../utils.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
+import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
 import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
 import {
   clearPluginRunContext,
@@ -32,6 +33,7 @@ import { openPluginRootFileSync } from "./path-safety.js";
 import { getPluginCache, retirePluginCacheInstance } from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createPluginMetricsApi } from "./plugin-metrics.js";
 import { getPluginRuntimeEntrySource } from "./plugin-runtime-artifact-binding.js";
 import { projectPluginContributions } from "./registry-contributions.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
@@ -256,6 +258,9 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
           ),
         );
       };
+    const instance =
+      getPluginInstance(record) ??
+      new PluginInstance(record.id, { record, registry: state.registry });
     const api = buildPluginApi({
       id: record.id,
       name: record.name,
@@ -284,6 +289,24 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
             registerSubagentProfile,
           }
         : {}),
+      // Exporters can start or stop without reloading this producer. Grant the recorder
+      // on operator opt-in; the broker forwards samples only while an exporter listens.
+      ...(registrationMode === "full" &&
+      registryParams.activateGlobalSideEffects !== false &&
+      normalizePluginsConfig(params.config.plugins).entries[normalizePluginId(record.id)]
+        ?.allowMetrics === true
+        ? {
+            metrics: createPluginMetricsApi(record.id, registryParams.logger, {
+              onDispose: (dispose) => instance.lifecycle.onDispose(dispose),
+              captureAuthority: () =>
+                capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+                  registration: true,
+                }),
+              // Preparation may declare families; only the published instance delivers samples.
+              isPublished: () => isPluginRecordActive(registry, record),
+            }),
+          }
+        : {}),
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {
@@ -302,16 +325,32 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
               onConversationBindingResolved: bound.registerConversationBindingResolvedHandler,
               registerContextEngine: (id, factory) =>
                 bound.registerContextEngine(id, factory, registrationMode),
-              registerAgentToolResultMiddleware: (handler, options) => {
-                bound.registerAgentToolResultMiddleware(handler, options, params.hookPolicy);
-              },
-              enqueueNextTurnInjection: async (injection) => {
-                if (params.hookPolicy?.allowPromptInjection === false) {
+              registerTool: (tool, options) => {
+                // Tool guidance is prompt text: the operator's prompt-injection opt-out
+                // keeps the tool and drops only its guidance.
+                if (options?.promptGuidance && !resolvePromptInjectionAllowed(params.hookPolicy)) {
                   pushDiagnostic({
                     level: "warn",
                     pluginId: record.id,
                     source: record.source,
-                    message: `next-turn injection blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                    message: `tool promptGuidance blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
+                  });
+                  const { promptGuidance: _blocked, ...rest } = options;
+                  bound.registerTool(tool, rest);
+                  return;
+                }
+                bound.registerTool(tool, options);
+              },
+              registerAgentToolResultMiddleware: (handler, options) => {
+                bound.registerAgentToolResultMiddleware(handler, options, params.hookPolicy);
+              },
+              enqueueNextTurnInjection: async (injection) => {
+                if (params.hookPolicy?.allowPromptModification === false) {
+                  pushDiagnostic({
+                    level: "warn",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `next-turn injection blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
                   });
                   return {
                     enqueued: false,
@@ -338,7 +377,7 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
                 if (!resolvePromptInjectionAllowed(params.hookPolicy)) {
                   return {
                     steered: false,
-                    reason: `blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+                    reason: `blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
                   };
                 }
                 if (registryParams.activateGlobalSideEffects === false) {
@@ -519,11 +558,7 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
             }),
       },
     });
-    return instrumentPluginInstanceApi(
-      api,
-      getPluginInstance(record) ??
-        new PluginInstance(record.id, { record, registry: state.registry }),
-    );
+    return instrumentPluginInstanceApi(api, instance);
   };
 
   const rollbackPluginGlobalSideEffects = (pluginId: string, record: RegistryPluginRecord) => {

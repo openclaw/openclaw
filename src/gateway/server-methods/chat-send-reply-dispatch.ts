@@ -18,10 +18,7 @@ import {
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import {
-  resolveSessionTranscriptDatabasePath,
-  waitForSessionTranscriptProjection,
-} from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptProjection } from "../../config/sessions/session-accessor.js";
 import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { retainSessionHistoryWorkerDatabase } from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -33,7 +30,7 @@ import {
   extractAssistantPhaseText,
   extractAssistantTextForPhase,
 } from "../../shared/chat-message-content.js";
-import { combineNonStreamingReplyParts } from "../../shared/text/text-projection.js";
+import { combineNonStreamingReplyParts } from "../../shared/text/trim-code-text.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isToolHistoryBlockType } from "../chat-display-projection.canvas.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
@@ -185,12 +182,7 @@ export function createChatSendReplyDispatch(params: {
           isRunCurrent() &&
           current.entry?.sessionId === admission.sessionId &&
           current.entry.lifecycleRevision === lifecycleRevision &&
-          resolveSessionTranscriptDatabasePath({
-            agentId: session.agentId,
-            sessionId: admission.sessionId,
-            sessionKey: session.sessionKey,
-            storePath: current.storePath,
-          }) === admission.storePath
+          current.readSource?.path === admission.storePath
         );
       };
       if (

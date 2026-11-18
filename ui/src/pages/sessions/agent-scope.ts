@@ -1,4 +1,4 @@
-import type { AgentIdentityResult, SessionsListResult } from "../../api/types.ts";
+import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
@@ -19,10 +19,10 @@ export function sessionPathAgentId(key: string, context: ApplicationContext): st
   return sessionAgentId(key, context) ?? resolveSessionNavigationAgentId(context);
 }
 
-export function sessionAgentIds(result: SessionsListResult | null): string[] {
+export function sessionAgentIds(rows: readonly GatewaySessionRow[]): string[] {
   return [
     ...new Set(
-      (result?.sessions ?? [])
+      rows
         .map((row) => parseAgentSessionKey(row.key)?.agentId)
         .filter((agentId): agentId is string => Boolean(agentId)),
     ),
@@ -30,11 +30,11 @@ export function sessionAgentIds(result: SessionsListResult | null): string[] {
 }
 
 export function sessionAgentIdentityById(
-  result: SessionsListResult | null,
+  rows: readonly GatewaySessionRow[],
   getIdentity: (agentId: string) => AgentIdentityResult | undefined,
 ): Record<string, AgentIdentityResult> {
   return Object.fromEntries(
-    sessionAgentIds(result)
+    sessionAgentIds(rows)
       .map((agentId) => [agentId, getIdentity(agentId)] as const)
       .filter((entry): entry is readonly [string, AgentIdentityResult] => Boolean(entry[1])),
   );

@@ -22,11 +22,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramAccountConfig } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { NormalizedAllowFrom } from "./bot-access.js";
-import {
-  hasInboundMedia,
-  isDurablyRetryableInboundMediaError,
-  isRecoverableMediaGroupError,
-} from "./bot-handlers.media.js";
+import { hasInboundMedia } from "./bot-handlers.media.js";
 import {
   latestPromptContextAmbientWatermark,
   latestPromptContextMinTimestampMs,
@@ -49,6 +45,7 @@ import {
   MEDIA_GROUP_TIMEOUT_MS,
   type MediaGroupEntry,
 } from "./bot-updates.js";
+import type { TelegramMediaKind } from "./bot/body-helpers.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import {
   buildTelegramGroupPeerId,
@@ -96,6 +93,23 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
   };
 
 type TelegramGroupMediaDisposition = "process" | "skip" | "silent-ingest";
+
+const ALBUM_MEDIA_NOUNS: Record<TelegramMediaKind, string> = {
+  image: "images",
+  video: "videos",
+  audio: "audio",
+  document: "files",
+  sticker: "stickers",
+};
+
+function resolveAlbumMediaNoun(kinds: ReadonlySet<TelegramMediaKind>): string {
+  if (kinds.size !== 1) {
+    // Mixed albums use the generic noun, matching the agent-side download notice.
+    return "attachments";
+  }
+  const [kind] = kinds;
+  return kind ? ALBUM_MEDIA_NOUNS[kind] : "attachments";
+}
 
 export function createTelegramInboundMedia({
   params,
@@ -387,22 +401,23 @@ export function createTelegramInboundMedia({
         ...entry.spooledReplayParticipants.map((participant) => participant.abortSignal),
       );
       let skippedCount = 0;
+      const albumMediaKinds = new Set<TelegramMediaKind>();
       for (const { ctx, msg } of entry.messages) {
         const sourceMessageId = String(msg.message_id);
         const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
+        albumMediaKinds.add(nativeKind);
         let media;
         try {
           media = await resolveMedia({ ctx, maxBytes: mediaMaxBytes, ...mediaRuntime });
         } catch (error) {
-          if (
-            mediaRuntime.abortSignal?.aborted ||
-            isDurablyRetryableInboundMediaError(error) ||
-            !isRecoverableMediaGroupError(error)
-          ) {
+          // Only the album's owner leaving replays it. A failed attachment must not
+          // hide the rest of the album or hold the chat behind it.
+          if (mediaRuntime.abortSignal?.aborted) {
             throw error;
           }
-          // A failed attachment must not hide the rest of the album.
-          runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
+          runtime.log?.(
+            warn(`media group: skipping ${nativeKind} that failed to fetch: ${String(error)}`),
+          );
         }
         if (media) {
           await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
@@ -411,6 +426,7 @@ export function createTelegramInboundMedia({
             contentType: media.contentType,
             ...(media.fileName ? { fileName: media.fileName } : {}),
             kind: media.kind,
+            fileUniqueId: media.fileUniqueId,
             stickerMetadata: media.stickerMetadata,
             sourceMessageId,
           });
@@ -429,7 +445,7 @@ export function createTelegramInboundMedia({
         const verb = skippedCount === 1 ? "was" : "were";
         await sendMediaWarning(
           { ...entry, ...primary, chatId: primary.msg.chat.id },
-          `⚠️ Received ${allMedia.length - skippedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
+          `⚠️ Received ${allMedia.length - skippedCount} of ${entry.messages.length} ${resolveAlbumMediaNoun(albumMediaKinds)} — ${skippedCount} could not be fetched and ${verb} skipped.`,
         );
       }
       const result = await processMessageWithReplyChain({

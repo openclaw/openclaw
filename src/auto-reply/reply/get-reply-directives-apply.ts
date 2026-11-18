@@ -97,7 +97,6 @@ export async function applyInlineDirectiveOverrides(params: {
   effectiveModelDirective?: string;
   typing: TypingController;
 }): Promise<ApplyDirectiveResult> {
-  const directiveParams = { ...params };
   const {
     ctx,
     cfg,
@@ -296,7 +295,7 @@ export async function applyInlineDirectiveOverrides(params: {
     const reply = await (
       await directiveImplLoader.load()
     ).handleDirectiveOnly({
-      ...directiveParams,
+      ...params,
       directives,
       modelPolicy: modelState.modelPolicy,
       operatorAuthority: modelState.operatorAuthority,
@@ -421,7 +420,7 @@ export async function applyInlineDirectiveOverrides(params: {
       const { buildStatusReply } = await commandsStatusLoader.load();
       const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       statusReply = await buildStatusReply({
-        ...directiveParams,
+        ...params,
         sessionEntry: targetSessionEntry,
         parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
         provider,

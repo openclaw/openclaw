@@ -6,6 +6,7 @@ import {
   createSignal,
   Errored,
   Loading,
+  latest,
   onSettled,
   refresh as refreshRead,
   Show,
@@ -114,6 +115,16 @@ function publicationButtonSelection(publication: GitHubPublicationView) {
   );
 }
 
+/** Images belong to the offered account, so a different recorded publisher keeps initials. */
+function publisherAvatarUrl(
+  options: GitHubPublicationView["options"],
+  publisher: { source: string; accountId: number },
+): string | undefined {
+  const source = publisher.source === "personal" ? "personal" : "shared";
+  const offered = source === "personal" ? options?.personal?.account : options?.shared;
+  return offered?.accountId === publisher.accountId ? options?.avatarUrls?.[source] : undefined;
+}
+
 /** One eligible-choice projection serves every publication presentation. */
 export function githubPublicationAccountChoices(publication: GitHubPublicationView) {
   const personal = personalGitHubPublicationSelection(publication.options);
@@ -127,11 +138,17 @@ export function githubPublicationAccountChoices(publication: GitHubPublicationVi
     ? undefined
     : {
         accounts: [
-          { source: "shared" as const, login: shared.login, label: sourceLabel(shared.source) },
+          {
+            source: "shared" as const,
+            login: shared.login,
+            label: sourceLabel(shared.source),
+            avatarUrl: publication.options?.avatarUrls?.shared,
+          },
           {
             source: "personal" as const,
             login: personal.account.login,
             label: sourceLabel("personal"),
+            avatarUrl: publication.options?.avatarUrls?.personal,
           },
         ],
         duplicateLogin: shared.login === personal.account.login,
@@ -157,7 +174,10 @@ export function GitHubPublicationAccountSelector(props: {
       <Show when={publisher()}>
         {(value) => (
           <span class="github-publication-mobile__account-identity">
-            <GitHubPublicationAvatar login={value().login} />
+            <GitHubPublicationAvatar
+              login={value().login}
+              url={publisherAvatarUrl(props.publication.options, value())}
+            />
             <span
               ref={createTextOverflow(() => value().login)}
               class="github-publication-mobile__login"
@@ -271,11 +291,7 @@ export function GitHubPublicationAction(props: {
                 onClick={() => operation.run(props.publication.onNewAction)}
               >
                 <Loading on={operation.scope()} fallback={<Icon name="x" />}>
-                  {(() => {
-                    operation.read();
-                    operation.outcome();
-                    return <Icon name="x" />;
-                  })()}
+                  {(latest(operation.read), latest(operation.outcome), (<Icon name="x" />))}
                 </Loading>
               </button>
             </Show>
@@ -341,6 +357,7 @@ function PublicationButton(props: {
             : (props.publishLabel ?? t("chat.pullRequests.publishPr")),
     };
   });
+  // Observe completion without holding the live busy/disabled controls behind that read.
   // Accepted shared requests retain their status button even without a replay callback.
   return (
     <Errored fallback={operation.error}>
@@ -355,6 +372,7 @@ function PublicationButton(props: {
           ref={(element) => controlRef?.(element)}
           class="chat-pr__create"
           type="button"
+          aria-busy={operation.busy() ? "true" : undefined}
           disabled={action().disabled}
           onClick={() => operation.run(action().click)}
         >
@@ -363,11 +381,7 @@ function PublicationButton(props: {
           </Show>
           {action().label}
           <Loading on={operation.scope()} fallback={null}>
-            {(() => {
-              operation.read();
-              operation.outcome();
-              return null;
-            })()}
+            {(latest(operation.read), latest(operation.outcome), null)}
           </Loading>
         </button>
       </Show>
@@ -375,7 +389,7 @@ function PublicationButton(props: {
   );
 }
 
-function PublicationAccount(props: { publication: GitHubPublicationView }) {
+function PublicationAccount(props: { publication: GitHubPublicationView; mobile?: boolean }) {
   const publisher = () =>
     props.publication.result
       ? props.publication.result.publisher
@@ -384,7 +398,9 @@ function PublicationAccount(props: { publication: GitHubPublicationView }) {
     <Show when={publisher()}>
       {(value) => (
         <span data-publication-account>
-          {t("githubPublication.publishAs", { account: value().login })} ·{" "}
+          <Show when={!props.mobile}>
+            {t("githubPublication.publishAs", { account: value().login })} ·{" "}
+          </Show>
           {sourceLabel(value().source)}
         </span>
       )}
@@ -404,8 +420,8 @@ function PublicationRefresh(props: {
   return (
     <Errored fallback={operation.error}>
       <openclaw-tooltip
-        content={props.tooltip ?? t("githubPublication.refresh")}
-        prop:disabled={props.hideTooltip}
+        content={props.tooltip ?? ""}
+        prop:disabled={props.hideTooltip || !props.tooltip}
       >
         <button
           ref={(element) => controlRef?.(element)}
@@ -420,11 +436,7 @@ function PublicationRefresh(props: {
           onClick={() => operation.run(props.publication.onRefresh)}
         >
           <Loading on={operation.scope()} fallback={<Icon name="refresh" />}>
-            {(() => {
-              operation.read();
-              operation.outcome();
-              return <Icon name="refresh" />;
-            })()}
+            {(latest(operation.read), latest(operation.outcome), (<Icon name="refresh" />))}
           </Loading>
           <Show when={props.labelled}>{t("githubPublication.refresh")}</Show>
         </button>
@@ -592,6 +604,7 @@ export function GitHubPublicationDetails(props: {
                   <PublicationMore
                     publication={props.publication}
                     busy={busy()}
+                    mobile={props.mobile}
                     controls={props.controls}
                   />
                 </details>
@@ -602,6 +615,7 @@ export function GitHubPublicationDetails(props: {
           <PublicationMore
             publication={props.publication}
             busy={busy()}
+            mobile={props.mobile}
             controls={props.controls}
           />
         </Show>
@@ -668,6 +682,7 @@ export function GitHubPublicationDetails(props: {
 function PublicationMore(props: {
   publication: GitHubPublicationView;
   busy: boolean;
+  mobile?: boolean;
   controls?: MenuControls;
 }) {
   const message = () => {
@@ -681,7 +696,7 @@ function PublicationMore(props: {
   return (
     <Show when={props.publication.result || props.publication.locked || props.publication.error}>
       <div class="chat-pr__publication-more">
-        <PublicationAccount publication={props.publication} />
+        <PublicationAccount publication={props.publication} mobile={props.mobile} />
         <Show when={message()}>{(value) => <span>{value()}</span>}</Show>
         <Show when={props.publication.error}>{(error) => <span>{error()}</span>}</Show>
         <Show when={props.publication.locked && !props.publication.result && !props.busy}>

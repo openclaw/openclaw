@@ -16,8 +16,9 @@ type TranscriptPage = {
   nextCursor?: string;
 };
 
-export function commandFixture(groups: string[] = ["Team"]) {
+export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawConfig["agents"]) {
   const config: OpenClawConfig = {
+    agents,
     plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
   };
   setRuntimeConfigSnapshot(config);
@@ -41,6 +42,7 @@ export function commandFixture(groups: string[] = ["Team"]) {
   return {
     config,
     runtime,
+    gatewayHandlers: registry.registry.gatewayHandlers,
     commands,
     select: (share: unknown) => {
       config.plugins!.entries!["session-share"]!.config = { share };

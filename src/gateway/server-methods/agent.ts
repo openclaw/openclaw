@@ -44,7 +44,7 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
       profiles: preparedProfiles,
       isMember: () => false,
     });
-    if (sharing.policy?.sessions.others !== "none") {
+    if (sharing.sessionCap !== "none" && sharing.sessionCap !== "invited") {
       respondWithResult?.();
       return true;
     }
@@ -69,7 +69,7 @@ const agentWaitHandler: GatewayRequestHandlers["agent.wait"] = async ({
           !target ||
           run.lifecycleGeneration !== getAgentRunLifecycleGeneration() ||
           (run.sessionId !== undefined && target.entry.sessionId !== run.sessionId) ||
-          currentSharing.entryFilter?.(target.storeKey, target.entry) === false
+          !currentSharing.canReadTarget(target)
         ) {
           return deny();
         }

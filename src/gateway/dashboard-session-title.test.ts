@@ -129,6 +129,27 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
   afterEach(() => vi.useRealTimers());
 
+  it.each([
+    ["Plan the release", 0],
+    ["[Wed 2026-10-28 12:00 PDT] Plan the release", 0],
+    ["/topic Plan the release", 1],
+    ["[Wed 2026-10-28 12:00 PDT] /skill topic Plan the release", 1],
+  ] as const)(
+    "prepares skill commands only when needed for %s",
+    async (userMessage, preparations) => {
+      mocks.prepareSkills.mockResolvedValue([
+        { name: "topic", skillName: "topic", description: "Discuss a topic" },
+      ]);
+      await expect(
+        prepareDashboardSessionTitle({ cfg, agentId: "main", userMessage }),
+      ).resolves.toBe("Release Planning");
+      expect(mocks.prepareSkills).toHaveBeenCalledTimes(preparations);
+      expect(mocks.generate).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ userMessage: "Plan the release", utilityOnly: true }),
+      );
+    },
+  );
+
   it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
     "does not generate a title from a %s wake",
     async (_kind, userMessage) => {

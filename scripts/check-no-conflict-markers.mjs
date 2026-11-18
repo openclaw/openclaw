@@ -2,8 +2,6 @@
 
 // Rejects unresolved merge conflict markers in tracked files.
 import { spawnSync } from "node:child_process";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 const CONFLICT_MARKER_GREP_PATTERN = "^(<<<<<<< |\\|\\|\\|\\|\\|\\|\\| |=======$|>>>>>>> )";
 
@@ -101,7 +99,7 @@ export async function main() {
   process.exitCode = 1;
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   main().catch(
     /** @param {unknown} error */ (error) => {
       console.error(error);

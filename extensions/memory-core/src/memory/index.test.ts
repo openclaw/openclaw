@@ -349,26 +349,31 @@ describe("memory index", () => {
     }
   });
 
-  it("maps source-wide batch fallback results to missing chunks after cache hits", async () => {
-    const manager = await getBatchManager();
-    await manager.sync({ reason: "test" });
+  it.each(["failure", "decline"])(
+    "maps source-wide batch %s fallback results to missing chunks after cache hits",
+    async (completion) => {
+      const manager = await getBatchManager();
+      await manager.sync({ reason: "test" });
 
-    await writeMemory("2026-01-13.md", "# Log\nBeta memory line.");
-    providerFixture.providerRuntimeBatchCalls = [];
-    providerFixture.providerRuntimeBatchFailuresRemaining = 1;
-    providerFixture.embedBatchCalls = 0;
+      await writeMemory("2026-01-13.md", "# Log\nBeta memory line.");
+      providerFixture.providerRuntimeBatchCalls = [];
+      providerFixture.providerRuntimeBatchFailuresRemaining = completion === "failure" ? 1 : 0;
+      providerFixture.providerRuntimeBatchDeclines = completion === "decline";
+      providerFixture.embedBatchCalls = 0;
 
-    await manager.sync({ reason: "test", force: true });
+      await manager.sync({ reason: "test", force: true });
 
-    expect(providerFixture.embedBatchCalls).toBe(1);
-    const betaRow = read(
-      manager,
-      "SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?",
-    ).get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
+      expect(providerFixture.providerRuntimeBatchCalls).toHaveLength(1);
+      expect(providerFixture.embedBatchCalls).toBe(1);
+      const betaRow = read(
+        manager,
+        "SELECT embedding FROM memory_index_chunks WHERE path LIKE ? AND source = ?",
+      ).get("%2026-01-13.md", "memory") as { embedding: Uint8Array } | undefined;
 
-    expect(betaRow).toBeDefined();
-    expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
-  });
+      expect(betaRow).toBeDefined();
+      expect(betaRow?.embedding).toEqual(encodeMemoryEmbedding([0, 1, 0, 0]));
+    },
+  );
 
   it("counts local batch attempts and bypasses batching after repeated failures", async () => {
     providerFixture.providerRuntimeBatchErrors = [

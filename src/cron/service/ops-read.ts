@@ -12,6 +12,7 @@ import { readCronScratchSnapshotByKey } from "../scratch-read.js";
 import { writeCronJobScratchByKey } from "../scratch-store.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
+import { cronJobNeedsCreatorReauthorization } from "../tools-allow.js";
 import type { CronJob } from "../types.js";
 import {
   findJobOrThrow,
@@ -40,6 +41,7 @@ async function readSnapshot(
     return cached;
   }
   const sqlitePath = resolveOpenClawStateSqlitePath();
+  const storedJobs = state.store?.jobs ?? [];
   return (state.readSnapshot = {
     storeRevision,
     source,
@@ -51,7 +53,10 @@ async function readSnapshot(
       storePath: sqlitePath,
       storage: "sqlite" as const,
       sqlitePath,
-      jobs: state.store?.jobs.length ?? 0,
+      jobs: storedJobs.length,
+      reauthorizationRequired: storedJobs.filter((job) =>
+        cronJobNeedsCreatorReauthorization({ job }),
+      ).length,
       nextWakeAtMs: state.deps.cronEnabled ? (nextWakeAtMs(state) ?? null) : null,
     }),
   });
@@ -204,7 +209,8 @@ export async function listPage(
       enteredAt = performance.now();
       try {
         const read = await readSnapshot(state);
-        const query = normalizeLowercaseStringOrEmpty(opts?.query);
+        // Normalize comparison text only; stored cron job fields stay original.
+        const query = normalizeLowercaseStringOrEmpty(opts?.query).normalize("NFC");
         const enabledFilter = opts?.enabled ?? (opts?.includeDisabled ? "all" : "enabled");
         const scheduleKindFilter = opts?.scheduleKind ?? "all";
         const lastRunStatusFilter = opts?.lastRunStatus ?? "all";
@@ -254,7 +260,7 @@ export async function listPage(
                   job.agentId ?? "",
                   ...(job.displayName ? [job.displayName] : []),
                 ].join(" "),
-              );
+              ).normalize("NFC");
               read.searchText.set(job, haystack);
             }
             if (!haystack.includes(query)) {
