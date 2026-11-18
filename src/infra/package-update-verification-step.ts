@@ -3,6 +3,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import { formatErrorMessage } from "./errors.js";
 import type {
+  PackagePostInstallVerifier,
   StagedPackageInstall,
   StagedPackageSwapParams,
 } from "./package-update-swap-contract.js";
@@ -80,11 +81,6 @@ export async function validateStagedPackage(
   }
   return undefined;
 }
-
-export type PackagePostInstallVerifier = (
-  root: string,
-  results: UpdateStepResult[],
-) => Promise<UpdateStepResult | null>;
 
 export function markPackagePostInstallDoctorAdvisory<
   T extends Pick<
