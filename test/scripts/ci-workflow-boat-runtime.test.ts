@@ -8,6 +8,7 @@ import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.js";
 import {
   evaluateWorkflowExpression,
   readCiWorkflow,
+  readWorkflow,
   requiredWorkflowStep,
   runWorkflowShellScript,
   writeExecutable,
@@ -119,6 +120,77 @@ it.each(routes)("runs $name Node tests through the correct permission boundary",
     "node --import tsx scripts/ci-run-node-test-shard.mts",
   ]);
 });
+
+it.each(["extensions-batch", "extension-file-shard"])(
+  "runs hourly %s through the selected runner's permission boundary",
+  (task) => {
+    const job = readWorkflow(".github/workflows/plugin-prerelease.yml").jobs[
+      "plugin-prerelease-extension-shard"
+    ];
+    const step = requiredWorkflowStep(job.steps, "Run extension shard");
+    for (const route of [
+      { eventName: "schedule", runner: "boat", boat: true },
+      { eventName: "schedule", runner: "boat-large", boat: true },
+      { eventName: "schedule", runner: "blacksmith-4vcpu-ubuntu-2404", boat: false },
+      { eventName: "workflow_dispatch", runner: "boat", boat: false },
+    ] as const) {
+      const root = dirs.make("openclaw-hourly-boat-step-");
+      const bin = path.join(root, "bin");
+      mkdirSync(bin);
+      const calls = path.join(root, "calls");
+      writeExecutable(path.join(bin, "node"), [
+        "#!/bin/bash",
+        'printf "node %s\\n" "$*" >> "$CALLS"',
+        "exit 7",
+      ]);
+      writeExecutable(path.join(bin, "setpriv"), [
+        "#!/bin/bash",
+        'printf "setpriv %s %s\\n" "$1" "$2" >> "$CALLS"',
+        "shift 2",
+        'exec "$@"',
+      ]);
+      writeExecutable(path.join(bin, "jq"), ["#!/bin/bash", "exit 0"]);
+      const context = {
+        eventName: route.eventName,
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix: { runner: route.runner, runner_label: route.runner },
+      };
+      expect(evaluateWorkflowExpression(job["runs-on"], context)).toBe(
+        route.eventName === "workflow_dispatch" ? "ubuntu-24.04" : route.runner,
+      );
+      const selected = evaluateWorkflowExpression(
+        step.env.BOAT_TEST_RUNNER ?? "${{ false }}",
+        context,
+      );
+      const result = runWorkflowShellScript(step.run, {
+        linuxWorkflow: true,
+        cwd: root,
+        env: {
+          PATH: `${bin}:/usr/bin:/bin`,
+          CALLS: calls,
+          BOAT_TEST_RUNNER: String(selected),
+          OPENCLAW_EXTENSION_TASK: task,
+          OPENCLAW_EXTENSION_BATCH: "browser,memory-wiki",
+          OPENCLAW_EXTENSION_INCLUDE_PATTERNS_JSON: '["extensions/browser/**/*.test.ts"]',
+          OPENCLAW_EXTENSION_VITEST_CONFIG: "test/vitest/vitest.extensions.config.ts",
+          FRV_TEST_EXCLUDE_PATHS_JSON: "[]",
+          RUNNER_TEMP: root,
+          GITHUB_JOB: "fixture",
+        },
+      });
+      expect(result.status, result.stderr).toBe(7);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        ...(route.boat
+          ? ["setpriv --inh-caps=-dac_read_search --ambient-caps=-dac_read_search"]
+          : []),
+        task === "extensions-batch"
+          ? "node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test:extensions:batch browser,memory-wiki --"
+          : "node .frv-tooling/scripts/frv-test-exclusions.mjs run -- pnpm test -- test/vitest/vitest.extensions.config.ts",
+      ]);
+    }
+  },
+);
 
 it.each(routes)("preserves Android build JVM options for $name", (route) => {
   const root = dirs.make("openclaw-boat-android-step-");

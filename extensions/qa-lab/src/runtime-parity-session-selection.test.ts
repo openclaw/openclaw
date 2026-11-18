@@ -28,7 +28,7 @@ function captureSession(tempRoot: string, sessionKey: string) {
   return captureRuntimeParityCell({
     runtime: "codex",
     gateway: { tempRoot },
-    scenarioResult: { status: "pass", details: `RUNTIME_PARITY_SESSION_KEY=${sessionKey}` },
+    scenarioResult: { status: "pass", runtimeParitySessionKeys: [sessionKey] },
     wallClockMs: 10,
   });
 }
@@ -42,7 +42,7 @@ function captureSessionAfterPendingResults(
   return captureRuntimeParityCell({
     runtime: "codex",
     gateway: { tempRoot },
-    scenarioResult: { status: "pass", details: `RUNTIME_PARITY_SESSION_KEY=${sessionKey}` },
+    scenarioResult: { status: "pass", runtimeParitySessionKeys: [sessionKey] },
     wallClockMs: 10,
     pendingToolResultWaitMs: waitMs,
     pendingToolResultPoll: poll,

@@ -93,7 +93,9 @@ async function plan(
     } satisfies EmbeddedRunAttemptParams;
     const seed = surface.compactTools(uncompactedTools);
     const preparedToolBase = {
+      bindRunAbortDeadline() {},
       toolHookContext: {
+        getRunAbortDeadlineAtMs: () => undefined,
         awaitSessionDiffBaseline: undefined,
         watchdogAttempt: undefined,
         agentId: "main",

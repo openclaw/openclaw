@@ -813,6 +813,7 @@ src/config/sessions/session-model-context-read.ts
 src/config/sessions/session-model-context-window.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
+src/config/sessions/session-pending-input-end-cause.types.ts
 src/config/sessions/session-pending-input-operations.types.ts
 src/config/sessions/session-predicate-columns.ts
 src/config/sessions/session-transcript-writer-claim-error.ts
@@ -905,6 +906,7 @@ src/config/zod-schema.messages.ts
 src/config/zod-schema.model-compat.ts
 src/config/zod-schema.node-host.ts
 src/config/zod-schema.proxy.ts
+src/config/zod-schema.recommended-prompts.ts
 src/config/zod-schema.root-shape.ts
 src/config/zod-schema.root-support.ts
 src/config/zod-schema.sandbox.ts
@@ -939,6 +941,7 @@ src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
 src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
+src/gateway/openclaw-id/tunnel-principal-schema.ts
 src/gateway/openclaw-id/tunnel-principal.ts
 src/gateway/operator-run-recovery-source.codec.ts
 src/gateway/security-path.ts
@@ -1340,6 +1343,7 @@ src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
 src/infra/sqlite-snapshot-capacity-error.ts
 src/infra/sqlite-snapshot-diagnostics.ts
+src/infra/sqlite-snapshot-exclusive-copy.ts
 src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-publication-cleanup.ts
@@ -2175,6 +2179,7 @@ src/state/openclaw-agent-memory-path-migration.ts
 src/state/openclaw-agent-memory-revision-migration.ts
 src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
+src/state/openclaw-agent-pending-input-endings-schema.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
 src/state/openclaw-agent-schema-inspection-response.ts
@@ -2642,6 +2647,7 @@ packages/gateway-protocol/src/schema/environments.ts
 packages/gateway-protocol/src/schema/model-account-selection.ts
 packages/gateway-protocol/src/schema/model-catalog.ts
 packages/gateway-protocol/src/schema/model-runtime-options.ts
+packages/gateway-protocol/src/schema/recommended-prompts.ts
 packages/gateway-protocol/src/schema/secrets.ts
 packages/gateway-protocol/src/schema/session-classification.ts
 packages/gateway-protocol/src/schema/sessions-activity-summary.ts
@@ -2843,6 +2849,7 @@ src/sessions/nested-tool-activity.ts
 src/sessions/provider-review.ts
 src/sessions/transcript-anchor-page.ts
 src/sessions/transcript-display-position.ts
+src/sessions/transcript-record-visibility.ts
 src/sessions/transcript-visible-record.ts
 src/sessions/user-turn-transcript.metadata.ts
 src/sessions/user-turn-transcript.message.ts

@@ -161,7 +161,10 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
     // Retired rows no longer own completion, but every surviving frozen member
     // must be terminal before this batch can wake its requester.
-    settledBatch = frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake);
+    settledBatch = subagentRuns.selectCompletionAuthorityBatch(
+      frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake),
+      currentSettledEntry,
+    );
     if (!settledBatch.every(isRequesterSettleMemberReady)) {
       params.onDescendantsPending?.();
       return false;
@@ -169,7 +172,12 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   } else {
     // An unfrozen wave cannot absorb a different requester-yield generation.
     settledBatch = selectConnectedSettledSubagentWave(
-      requesterRuns.filter((entry) => hasCurrentWake(entry) && isRequesterSettleMemberReady(entry)),
+      subagentRuns.selectCompletionAuthorityBatch(
+        requesterRuns.filter(
+          (entry) => hasCurrentWake(entry) && isRequesterSettleMemberReady(entry),
+        ),
+        currentSettledEntry,
+      ),
       currentSettledEntry,
     );
   }
@@ -240,7 +248,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     requesterStorePath,
     settledEntry: currentSettledEntry,
     settledBefore: Math.min(...settledBatch.map((entry) => entry.createdAt)),
-    rootRunIds: frozen ? new Set(frozenBatchRunIds) : undefined,
+    rootRunIds: frozen ? new Set(batchRunIds) : undefined,
     signal: params.signal,
     isSourceCurrent: params.isSourceCurrent,
   });
@@ -299,6 +307,12 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // Cancellation already owns the task result; only consume its obsolete wake.
     await completeBatch(settledBatch, selectedState);
     return false;
+  }
+  if (!pauseNotice && settledBatch.every(hasConsumedRequesterInput)) {
+    // The input is already in the requester transcript. Restart continuation belongs
+    // to the Gateway; resubmitting it can conflict with the committed payload.
+    await completeBatch(settledBatch, selectedState, { delivered: true, path: "direct" });
+    return true;
   }
   const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
   // A yielded batch owns a rearm generation even when its child settles later.

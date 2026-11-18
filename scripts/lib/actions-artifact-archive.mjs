@@ -738,7 +738,7 @@ function requireExpectedBinding(params) {
   };
 }
 
-export function validateArtifactMetadata(artifact, expected) {
+function validateArtifactMetadata(artifact, expected) {
   if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
     throw new Error("Actions artifact metadata must be an object.");
   }

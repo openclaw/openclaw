@@ -1,6 +1,19 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.types.js";
-import type { SessionPendingInputReceipt } from "../config/sessions/session-accessor.pending-inputs.js";
+import {
+  isUserInitiatedAgentRunAbortReason,
+  resolveAgentRunErrorLifecycleFields,
+} from "../agents/run-termination.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
+import type { SessionPendingInputReceipt } from "../config/sessions/session-pending-input-receipt.types.js";
+import {
+  isOperatorAuthorityUnavailable,
+  readOperatorAuthorityFailure,
+} from "../infra/operator-authority-error.js";
+import {
+  GatewayDispatchUnavailableError,
+  GatewayOperatorRecoveryAuthorizationError,
+} from "../infra/restart-recovery-errors.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { UserTurnTranscriptRecorder } from "./user-turn-transcript.types.js";
 
@@ -22,26 +35,109 @@ export async function completeUserTurnProcessing(
   }
   return undefined;
 }
+/** Explicit terminal causes win; undefined leaves a transient outage queued. */
+export function resolvePendingInputEndCause(
+  signal?: AbortSignal,
+  failure?: unknown,
+  defaultEndCause: SessionPendingInputEndCause = "failed",
+): SessionPendingInputEndCause | undefined {
+  const reason = resolveAgentRunErrorLifecycleFields(failure, signal).stopReason;
+  if (isUserInitiatedAgentRunAbortReason(signal?.aborted ? signal.reason : failure)) {
+    return "user-stop";
+  }
+  if (defaultEndCause === "delete") {
+    return "delete";
+  }
+  if (
+    reason === "auth-revoked" ||
+    failure instanceof GatewayOperatorRecoveryAuthorizationError ||
+    readOperatorAuthorityFailure(failure)
+  ) {
+    return "revoked";
+  }
+  if (reason === "superseded") {
+    return "reset";
+  }
+  if (
+    isOperatorAuthorityUnavailable(failure) ||
+    (failure instanceof GatewayDispatchUnavailableError && failure.retryable)
+  ) {
+    return undefined;
+  }
+  return reason === "restart" ? "restart-unrecoverable" : defaultEndCause;
+}
+
+/** Accepted outages relinquish custody; pre-acceptance failures settle terminally. */
+export async function settleUserTurnPendingInput(
+  recorder: UserTurnTranscriptRecorder | undefined,
+  signal?: AbortSignal,
+  failure?: unknown,
+  deleted = false,
+  disposition: "cancelled" | "interrupted" = "cancelled",
+  accepted = false,
+): Promise<void> {
+  const consumed = recorder?.isPendingInputConsumed?.();
+  const endCause = consumed
+    ? undefined
+    : resolvePendingInputEndCause(signal, failure, deleted ? "delete" : "failed");
+  try {
+    if (!consumed && endCause === undefined && accepted) {
+      recorder?.relinquishPendingInput?.();
+    } else if (consumed) {
+      recorder?.releasePendingInput?.();
+    } else {
+      recorder?.finishPendingInput?.(disposition, endCause ?? "failed");
+    }
+  } finally {
+    await recorder?.waitForPendingInputSettlement?.();
+  }
+}
 
 /** The recorder owns one completion attempt, including its failure and native settlement. */
 export function createUserTurnProcessingCompletion(
   readPendingInput: () => SessionPendingInputReceipt | undefined,
   sources: readonly UserTurnTranscriptRecorder[] | undefined,
+  onPendingInputRelinquished: (receipt: SessionPendingInputReceipt) => void,
 ) {
   let processingCompletion: Result<AgentRunTerminalOutcome, unknown> | undefined;
   let processingCompletionPromise: Promise<AgentRunTerminalOutcome | undefined> | undefined;
+  let relinquishedPendingInput: SessionPendingInputReceipt | undefined;
   return {
     withPendingInput: <T>(run: () => T): T => {
       const pendingInput = readPendingInput();
       return pendingInput ? pendingInput.run(run) : run();
     },
-    finishPendingInput: (disposition: "cancelled" | "interrupted", userInitiated?: true) => {
+    finishPendingInput: (
+      disposition: "cancelled" | "interrupted",
+      endCause: SessionPendingInputEndCause,
+    ) => {
       const pendingInput = readPendingInput();
       if (pendingInput) {
-        pendingInput.finish(disposition, userInitiated);
+        pendingInput.finish(disposition, endCause);
       } else {
         for (const source of sources ?? []) {
-          source.finishPendingInput?.(disposition, userInitiated);
+          source.finishPendingInput?.(disposition, endCause);
+        }
+      }
+    },
+    releasePendingInput: () => {
+      const pendingInput = readPendingInput();
+      if (pendingInput) {
+        pendingInput.release();
+      } else {
+        for (const source of sources ?? []) {
+          source.releasePendingInput?.();
+        }
+      }
+    },
+    relinquishPendingInput: () => {
+      const pendingInput = readPendingInput();
+      if (pendingInput) {
+        pendingInput.relinquish();
+        relinquishedPendingInput = pendingInput;
+      } else {
+        for (const source of sources ?? []) {
+          source.relinquishPendingInput?.();
         }
       }
     },
@@ -115,6 +211,7 @@ export function createUserTurnProcessingCompletion(
       return processingCompletionPromise;
     },
     waitForPendingInputSettlement: async () => {
+      const relinquished = relinquishedPendingInput;
       const settled = await Promise.allSettled([
         processingCompletionPromise,
         readPendingInput()?.settled?.(),
@@ -130,6 +227,10 @@ export function createUserTurnProcessingCompletion(
       }
       if (failures.length) {
         throw new AggregateError(failures, "Failed to settle pending input custody");
+      }
+      if (relinquished && relinquishedPendingInput === relinquished) {
+        relinquishedPendingInput = undefined;
+        onPendingInputRelinquished(relinquished);
       }
     },
   };

@@ -14,7 +14,8 @@ extended-stable package and publication constraints.
 
 ## Boundaries
 
-- Generally select only P0 and P1 hotfixes; use the shared
+- Generally select only P0 and P1 product hotfixes, plus all applicable
+  release-tooling and validation changes regardless of severity; use the shared
   [release-track selection policy](backport-discovery.md#select-by-release-track).
 - Read `docs/reference/RELEASING.md`,
   `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
@@ -237,10 +238,13 @@ contracts.
 
 ## Filter by Publication Surface
 
-Include only fixes that affect the core package, an npm-publishable official
-plugin in the exact release inventory, or the official Docker image/runtime
-path. Prove package or image inclusion rather than inferring it from the source
-path alone.
+For product fixes, include only changes that affect the core package, an
+npm-publishable official plugin in the exact release inventory, or the official
+Docker image/runtime path. Prove package or image inclusion rather than
+inferring it from the source path alone. Applicable release-tooling and
+validation changes are also included even when they do not ship in those
+artifacts; use the shared release-process improvement rules for branch
+backports and independently pinned Q/P tooling.
 
 - Do not exclude `extensions/**` by path. Determine whether the package appears
   in the canonical `all-publishable` inventory.
@@ -249,9 +253,11 @@ path alone.
 - Treat ClawHub-only, external, private, or otherwise unlisted plugin changes as
   out of scope.
 - Treat macOS-app-only, Windows-Hub-only, mobile-only, website-only, and GitHub
-  Release-only fixes as `skip` for this Gateway extended-stable line.
-- Keep GitHub Release automation repairs in trusted current-main release
-  tooling; they are not product backports for the maintenance branch.
+  Release-only product fixes as `skip` for this Gateway extended-stable line.
+  Do not apply this exclusion to tooling or validation used by this line.
+- Include applicable GitHub Release automation changes as release tooling, not
+  product hotfixes. Keep independently pinned publishing tooling P on trusted
+  `main`; backport branch-owned changes when the selected tooling route needs them.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
   shipped npm surface and release owner are proven.
 
@@ -277,7 +283,7 @@ private refs into the public ledger, branch, PR, or chat output.
 
 ## Assess Every Plausible Fix
 
-For each candidate, prove:
+For each product candidate, prove:
 
 1. The faulty behavior exists in the published extended-stable package set or
    canonical branch.

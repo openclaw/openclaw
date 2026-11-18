@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 import { afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { page, server, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -83,6 +83,8 @@ function mountPicker(optionsReady = true) {
     flush();
     await new Promise(requestAnimationFrame);
     if (picker.open) {
+      // Settle the first lazy panel import before the fast DOM-only readiness check.
+      await vi.dynamicImportSettled();
       await waitForModelMenu(picker);
       if (params.modelOptions.length) {
         await waitForSolid(() =>
@@ -129,7 +131,7 @@ it("keeps numeric shortcuts functional without visible keycaps", async () => {
 });
 
 it("centers provider icons with their model labels in search results", async () => {
-  const { params, update, open } = mountPicker();
+  const { params, update, open, picker } = mountPicker();
   params.modelOptions = [
     modelOption("openai", "sol", { label: "Example Sol" }),
     modelOption("clawrouter", "astra", { label: "Example Astra" }),
@@ -138,13 +140,43 @@ it("centers provider icons with their model labels in search results", async () 
   update();
   await open();
   await page.getByRole("combobox", { name: "Search models" }).fill("Example");
+  // Compare settled geometry, not two samples during the opening transform.
+  const pickerSurface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+  await Promise.all(pickerSurface.getAnimations().map((animation) => animation.finished));
   for (const value of ["openai/sol", "clawrouter/astra"]) {
     const row = option(value);
     const icon = row.querySelector<HTMLElement>(".provider-brand-icon")!.getBoundingClientRect();
-    const name = row
-      .querySelector<HTMLElement>(".chat-controls__model-option-name")!
-      .getBoundingClientRect();
-    expect(Math.abs(icon.y + icon.height / 2 - name.y - name.height / 2)).toBeLessThan(0.5);
+    const label = row.querySelector<HTMLElement>(".chat-controls__model-option-name")!;
+    const name = label.getBoundingClientRect();
+    try {
+      expect(Math.abs(icon.y + icon.height / 2 - name.y - name.height / 2)).toBeLessThan(0.5);
+    } catch (error) {
+      // Preserve the failing sample; collect extra layout state only after the assertion fails.
+      const style = getComputedStyle(label);
+      const surface = row.closest<HTMLElement>(".chat-picker-overlay")!;
+      console.error(
+        "Model picker alignment diagnostics",
+        JSON.stringify({
+          value,
+          browser: server.browser,
+          devicePixelRatio: window.devicePixelRatio,
+          fontsStatus: document.fonts.status,
+          icon: icon.toJSON(),
+          name: name.toJSON(),
+          lineHeight: style.lineHeight,
+          fontFamily: style.fontFamily,
+          rowAlignItems: getComputedStyle(row).alignItems,
+          overlayPhase: surface.dataset.phase,
+          overlayTransform: getComputedStyle(surface).transform,
+          overlayAnimations: surface.getAnimations().map((animation) => ({
+            playState: animation.playState,
+            currentTime: animation.currentTime,
+            timing: animation.effect?.getComputedTiming(),
+          })),
+        }),
+      );
+      throw error;
+    }
     expect(name.x - icon.right).toBeGreaterThanOrEqual(6);
   }
 });

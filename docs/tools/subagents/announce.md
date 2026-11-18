@@ -51,6 +51,9 @@ timeout, preparation invalidation and other retryable refusals keep the wake pen
 with its last error, and the sweeper wakes it again. There is no attempt limit,
 retry ladder or expiry. A permanent refusal withholds the result with that error;
 it stays readable in the child session and is not dispatched again.
+A requester bound to a removed managed worktree is a permanent refusal and needs
+an explicit worktree restore before it can accept new work. An in-progress removal
+is transient and keeps the wake pending.
 Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
@@ -135,8 +138,12 @@ A required parent completion that permanently fails also records a visible failu
 notice in the original requester conversation, without starting another agent turn.
 The notice goes to the requester chat as it is now, also after a reset; a deleted requester gets none.
 A confirmed handoff remains delivered even if its receipt
-callback fails; cleanup must not replay an already consumed result. Failures before
+callback fails; cleanup must not replay an already consumed result. A completion
+steered into the requester's active run counts as delivered once the steer commits,
+even if its delivery owner changes afterward. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
+A temporary Gateway access-policy outage refuses only the current delivery attempt:
+the result stays owed and the next lifecycle event retries it.
 
 Restart checkpoint reconciliation retains the confirmed delivery evidence before
 clearing the active recovery claim. Delivered replies, intentionally suppressed

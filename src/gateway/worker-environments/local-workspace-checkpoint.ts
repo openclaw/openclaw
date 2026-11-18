@@ -27,6 +27,7 @@ import type {
   LocalWorkspaceCapture,
   LocalWorkspaceManifestCheckpoint,
   LocalWorkspaceProjection,
+  LocalWorkspacePreparedEntry,
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -39,6 +40,53 @@ import {
 } from "./workspace-result-staging.js";
 
 export type LocalWorkspaceSyncTarget = "canonical" | "projection";
+/** Unreferenced Git blobs are speculative input; only paused capture can reserve a result. */
+export async function prehashLocalWorkspaceCheckpoint(
+  store: LocalWorkspaceStore,
+  canonicalRoot: string,
+): Promise<LocalWorkspacePreparedEntry[] | undefined> {
+  const row = store.get();
+  if (!row?.tree_root_digest || row.pending_ref || row.journal_json || row.paused_runtimes_json) {
+    return undefined;
+  }
+  try {
+    const snapshot = await store.manifest(row, {
+      kind: "scan",
+      target: "canonical",
+      canonicalRoot,
+      prehash: true,
+    });
+    if (snapshot.kind !== "scan" || snapshot.previousRoot === snapshot.resultingRoot) {
+      return undefined;
+    }
+    const entries = snapshot.preparedEntries!.toSorted((a, b) =>
+      a.entry.path.localeCompare(b.entry.path),
+    );
+    const output = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+      ...snapshot,
+      root: canonicalRoot,
+      stagingRoot: row.projection_path,
+      stagedResultRef: workerWorkspaceResultRef(randomUUID()),
+      blobsOnly: true,
+      assertCurrent: store.assertCurrent,
+      workerAuthority: store.workerAuthority,
+    });
+    const objects = output ? output.split("\n") : [];
+    if (objects.length !== entries.length) {
+      throw new Error("Workspace checkpoint blob preparation is incomplete");
+    }
+    for (const [index, entry] of entries.entries()) {
+      entry.objectId = objects[index]!;
+    }
+    return entries;
+  } catch {
+    // A live writer may invalidate preparation. The existing frozen path owns the retry.
+    store.signal.throwIfAborted();
+    store.assertCurrent();
+    return undefined;
+  }
+}
+
 export type LocalWorkspaceSyncOptions = {
   captureRejected?: true;
   afterCapture?: () => Promise<void>;
@@ -433,15 +481,18 @@ export async function prepareLocalWorkspaceCheckpoint(params: {
   return params.current().projection_path;
 }
 
+export type LocalWorkspaceCheckpointUpdate = (
+  patch: Parameters<LocalWorkspaceStore["update"]>[1],
+  manifest?: Parameters<LocalWorkspaceStore["update"]>[3],
+  publicationPack?: Uint8Array<ArrayBuffer>,
+) => Promise<void>;
+
 export function applyLocalWorkspaceCheckpoint(params: {
   selected: Pick<LocalWorkspaceProjection, "worktree_id" | "pending_ref" | "base_commit">;
   reason: import("../../agents/sandbox/local-workspace-quiescence.js").LocalWorkspacePauseReason;
   application: Omit<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance">;
   current: () => LocalWorkspaceProjection;
-  update: (
-    patch: Parameters<LocalWorkspaceStore["update"]>[1],
-    manifest?: Parameters<LocalWorkspaceStore["update"]>[3],
-  ) => Promise<void>;
+  update: LocalWorkspaceCheckpointUpdate;
   replaceBaseline: (
     raw: string,
     ref: string,
@@ -459,11 +510,15 @@ export function applyLocalWorkspaceCheckpoint(params: {
   const acceptance = {
     journal: {
       load: async () => undefined,
-      begin: async (journal) => {
-        await params.update({
-          journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
-          journal_pack: journal.basePack,
-        });
+      begin: async (journal, publicationPack) => {
+        await params.update(
+          {
+            journal_json: serializeWorkerWorkspaceReconciliationPlan(journal),
+            journal_pack: journal.basePack,
+          },
+          undefined,
+          publicationPack,
+        );
       },
       abort: async () => {
         await params.update({ journal_json: null, journal_pack: null });
@@ -522,14 +577,19 @@ export function applyLocalWorkspaceCheckpoint(params: {
       target: params.target,
       reason: params.reason,
     },
-    (markApplied) =>
+    (markPhase) =>
       applyStagedWorkerWorkspace({
         ...params.application,
         ...acceptance,
+        journal: {
+          ...acceptance.journal,
+          commit: () => {
+            markPhase("acceptance");
+            return acceptance.journal.commit();
+          },
+        },
         onPhase: (phase) => {
-          if (phase === "apply") {
-            markApplied();
-          }
+          markPhase(phase);
           params.application.onPhase?.(phase);
         },
       }),
