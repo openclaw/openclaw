@@ -86,15 +86,15 @@ export {
 
 export { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 
-export type { GatewayPublicationReaderV1 } from "../gateway/publication-reader.js";
+export type { GatewayPublicationReaderV1 } from "../gateway/publication-transport.js";
 
 /** Attest a closed publication-reader device without impersonating a human profile. */
 export async function prepareGatewayPublicationReaderV1(
   ...args: Parameters<
-    typeof import("../gateway/publication-reader.js").prepareGatewayPublicationReaderV1
+    typeof import("../gateway/publication-transport.js").prepareGatewayPublicationReaderV1
   >
-): Promise<import("../gateway/publication-reader.js").GatewayPublicationReaderV1> {
-  const runtime = await import("../gateway/publication-reader.js");
+): Promise<import("../gateway/publication-transport.js").GatewayPublicationReaderV1> {
+  const runtime = await import("../gateway/publication-transport.js");
   return runtime.prepareGatewayPublicationReaderV1(...args);
 }
 
