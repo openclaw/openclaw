@@ -7,6 +7,7 @@ import type { TaskPublicationRead } from "../state/github-publication-task-reads
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateReadContext } from "../state/openclaw-state-worker-context.js";
 import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
+import type { SessionPrReceiptDiagnostic } from "./control-ui-session-pr-diagnostics.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { hasEntry, type EntryRow, type Lookup, type Row } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
@@ -200,6 +201,11 @@ type ReceiptResult = {
   pullRequestCount: number;
 };
 const cache = createRetainedCache<Promise<ReceiptResult>>();
+// Weak metadata follows the existing promise; it does not own or prolong read custody.
+const receiptReadDiagnostics = new WeakMap<
+  Promise<ReceiptResult>,
+  { readId: number; phase: string; settled: boolean }
+>();
 // Receipt commits and database retirement, rather than a poll TTL, own this derived cache.
 githubPublicationReceipts.subscribeFacts((change) => {
   if (change.kind === "committed" || change.kind === "unknown") {
@@ -216,20 +222,40 @@ export async function readTaskPullRequestReceipts(
   input: TaskPublicationRead,
   assertCurrent: () => void,
   signal?: AbortSignal,
+  diagnostic?: SessionPrReceiptDiagnostic,
 ): Promise<ReceiptResult> {
+  let observation: { readId: number; phase: string; settled: boolean } | undefined;
+  const observe = diagnostic
+    ? (phase: string) => {
+        if (observation) {
+          observation.phase = phase;
+        }
+        diagnostic.record(phase);
+      }
+    : undefined;
+  observe?.("source-admission-started");
   assertCurrent();
   const source = captureOpenClawStateReadContext();
   source.admission.assertCurrent();
+  observe?.("source-admission-returned");
   const key = JSON.stringify([source.admission.identity.key, input]);
   let pending = cache.get(key, signal);
   if (!pending) {
+    observation = diagnostic
+      ? { readId: diagnostic.readId, phase: "cache-miss", settled: false }
+      : undefined;
+    observe?.("cache-miss");
     pending = (async () => {
+      observe?.("import-started");
       const { readGitHubPublicationInWorker } =
         await import("../state/github-publication-worker.js");
-      const reply = await readGitHubPublicationInWorker({
-        type: "githubPublications.taskReceipts",
-        input,
-      });
+      observe?.("import-returned");
+      observe?.("state-read-started");
+      const reply = await readGitHubPublicationInWorker(
+        { type: "githubPublications.taskReceipts", input },
+        observe,
+      );
+      observe?.("state-read-returned");
       source.admission.assertCurrent();
       const result =
         reply?.type === "githubPublications.taskReceipts"
@@ -274,11 +300,42 @@ export async function readTaskPullRequestReceipts(
       };
     })();
     cache.set(key, pending, signal);
+    if (observation) {
+      receiptReadDiagnostics.set(pending, observation);
+    }
     const selected = pending;
-    void pending.catch(() => cache.delete(key, selected));
+    const selectedObservation = observation;
+    void pending.then(
+      () => {
+        if (selectedObservation) {
+          selectedObservation.settled = true;
+        }
+      },
+      () => {
+        if (selectedObservation) {
+          selectedObservation.settled = true;
+        }
+        cache.delete(key, selected);
+      },
+    );
+  } else {
+    const producer = receiptReadDiagnostics.get(pending);
+    diagnostic?.record("cache-hit", {
+      receiptProducerReadId: producer?.readId,
+      receiptProducerPhase: producer?.phase,
+      receiptSettled: producer?.settled,
+    });
   }
-  const result = await pending;
-  source.admission.assertCurrent();
-  assertCurrent();
-  return result;
+  diagnostic?.record("await-result-started");
+  try {
+    const result = await pending;
+    diagnostic?.record("await-result-returned");
+    source.admission.assertCurrent();
+    assertCurrent();
+    diagnostic?.record("caller-returned");
+    return result;
+  } catch (error) {
+    diagnostic?.record("caller-failed");
+    throw error;
+  }
 }

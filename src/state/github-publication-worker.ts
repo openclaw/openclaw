@@ -38,8 +38,12 @@ type MutationCommand = SqliteWorkerCommand<
 
 export async function readGitHubPublicationInWorker(
   command: SqliteWorkerCommand<PublicationReadOperations>,
+  onDiagnosticPhase?: (phase: string) => void,
 ) {
-  return await executeExistingOpenClawStateRead({}, command, { current: true });
+  onDiagnosticPhase?.("read-admission-started");
+  const read = executeExistingOpenClawStateRead({}, command, { current: true, onDiagnosticPhase });
+  onDiagnosticPhase?.("read-admission-returned");
+  return await read;
 }
 
 /** A publication execution retains FIFO writes through native settlement. */

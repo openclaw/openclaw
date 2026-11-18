@@ -115,6 +115,7 @@ type Selection = {
   snapshotPreparation?: "awaited";
   onChunk?: OpenClawStateReadOptions["onChunk"];
   onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"];
+  onDiagnosticPhase?: OpenClawStateReadOptions["onDiagnosticPhase"];
   controller: AbortController;
   signal: AbortSignal;
   callerSignal?: AbortSignal;
@@ -129,6 +130,7 @@ export function startOpenClawStateReadOperation(
 ): OpenClawStateReadCompletion {
   const { pathname, snapshot, scopes, context, preserveArtifacts, controller, signal, receipt } =
     selection;
+  const observe = selection.onDiagnosticPhase;
   type ReadTransport = ReturnType<
     ReturnType<typeof captureOpenClawStateReadSource>["createTransport"]
   >;
@@ -165,7 +167,9 @@ export function startOpenClawStateReadOperation(
     }
     retirement ??= transport.startClose();
     try {
+      observe?.("transport-close-started");
       await retirement;
+      observe?.("transport-close-returned");
     } catch (error) {
       retirement = undefined;
       throw error;
@@ -177,10 +181,12 @@ export function startOpenClawStateReadOperation(
       return Promise.resolve();
     }
     return (closing ??= (async () => {
+      observe?.("cleanup-started");
       await closeTransport();
       releasePreparedSource?.();
       releasePreparedSource = undefined;
       if (prepared) {
+        observe?.("snapshot-cleanup-started");
         snapshotCleanup = startSnapshotCleanup?.();
         const removed = snapshotCleanup
           ? await snapshotCleanup.result
@@ -192,11 +198,14 @@ export function startOpenClawStateReadOperation(
         }
         prepared = undefined;
         snapshotCleanup = undefined;
+        observe?.("snapshot-cleanup-returned");
       }
       if (preparation) {
         preparationClose ??= preparation.startClose();
         try {
+          observe?.("preparation-close-started");
           await preparationClose.result;
+          observe?.("preparation-close-returned");
         } catch (error) {
           preparationClose = undefined;
           throw error;
@@ -204,14 +213,19 @@ export function startOpenClawStateReadOperation(
         preparation = undefined;
         preparationClose = undefined;
       }
+      observe?.("borrow-release-started");
       borrowed?.release();
+      observe?.("borrow-release-returned");
+      observe?.("inherited-release-started");
       await snapshot?.release?.();
+      observe?.("inherited-release-returned");
       cleaned = true;
       unregister();
       unregisterSource?.();
       for (const scope of scopes) {
         scope.resources.delete(resource);
       }
+      observe?.("cleanup-returned");
     })().finally(() => {
       closing = undefined;
     }));
@@ -285,20 +299,29 @@ export function startOpenClawStateReadOperation(
       },
       authority,
     );
-    return consume(await read);
+    const outcome = await read;
+    observe?.("result-consumption-started");
+    const reply = consume(outcome);
+    observe?.("result-consumption-returned");
+    return reply;
   }
 
   async function run(): OpenClawStateReadCompletion {
+    observe?.("transport-creation-started");
     const source = captureOpenClawStateReadSource();
     const selectedTransport = source.createTransport(
       command,
       selection.onChunk,
       selection.onChunkAsync,
       selection.snapshotPreparation === "awaited",
+      observe,
     );
     transport = selectedTransport;
     unregisterSource = source.own(() => resource.close());
+    observe?.("transport-creation-returned");
+    observe?.("database-access-started");
     stateAccess = await prepareStateDatabaseReadAccess(context.admission);
+    observe?.("database-access-returned");
     signal.throwIfAborted();
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
@@ -343,7 +366,9 @@ export function startOpenClawStateReadOperation(
             ))) &&
         (hasVerifiedLiveSqliteOwner(pathname) || readSqliteDatabaseCleanClose(pathname));
       if (!native || currentMetadata) {
+        observe?.("fresh-validation-started");
         await selectedTransport.startValidateFresh(context, authority);
+        observe?.("fresh-validation-returned");
       }
       if (currentMetadata) {
         // Metadata reads pin the admitted source in a child before copying a warm
@@ -385,6 +410,7 @@ export function startOpenClawStateReadOperation(
       if (isPostgresSqlConnection(native.database.db)) {
         requireNativeDatabaseFile("postgres", "file-snapshot");
       }
+      observe?.("owned-snapshot-started");
       prepared = await prepareOwnedStateReadImage(
         native.database.db,
         pathname,
@@ -399,6 +425,7 @@ export function startOpenClawStateReadOperation(
         signal,
       );
     } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
+      observe?.("file-snapshot-started");
       const sourceIdentity = { key: context.admission.identity.key };
       if (selection.snapshotPreparation === "awaited" || isSqliteSnapshotReuseActive()) {
         prepared = await prepareSqliteReadOnlyLocationAwaited(pathname, {
@@ -423,6 +450,7 @@ export function startOpenClawStateReadOperation(
         startSnapshotCleanup = () => location.startCleanup();
       }
     }
+    observe?.("snapshot-selection-returned");
     return query(selectedTransport);
   }
 
@@ -432,7 +460,9 @@ export function startOpenClawStateReadOperation(
     const errors: unknown[] = [];
     try {
       value = await producer;
+      observe?.("producer-returned");
     } catch (error) {
+      observe?.("producer-failed");
       errors.push(error);
     }
     try {
@@ -442,6 +472,7 @@ export function startOpenClawStateReadOperation(
     }
     throwSqliteLifecycleErrors(errors, "Shared-state read and cleanup failed");
     selection.callerSignal?.throwIfAborted();
+    observe?.("operation-returned");
     return value;
   })().catch((error: unknown) => {
     throw selection.mapError ? selection.mapError(error, receipt.phase) : error;

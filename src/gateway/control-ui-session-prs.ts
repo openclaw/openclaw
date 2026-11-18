@@ -11,7 +11,10 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
-import { recordSessionPrDiagnostic } from "./control-ui-session-pr-diagnostics.js";
+import {
+  createSessionPrReceiptDiagnostic,
+  recordSessionPrDiagnostic,
+} from "./control-ui-session-pr-diagnostics.js";
 import {
   finishPullRequest,
   loadBoundSessionPullRequest,
@@ -408,6 +411,7 @@ export async function loadControlUiSessionPullRequests(
     },
     deps.read.assertCurrent,
     deps.cacheSignal,
+    createSessionPrReceiptDiagnostic(deps.read.target),
   );
   recordSessionPrDiagnostic("receipts-returned", deps.read.target, {
     count: task.taskPullRequests.length,

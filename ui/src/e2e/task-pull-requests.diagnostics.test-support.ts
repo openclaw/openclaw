@@ -42,6 +42,10 @@ export function recordTaskPrDiagnostics(sessionKeys: string[]) {
       "receiptsOnly",
       "count",
       "current",
+      "receiptReadId",
+      "receiptProducerReadId",
+      "receiptProducerPhase",
+      "receiptSettled",
     ]) {
       const value = message[key];
       if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {

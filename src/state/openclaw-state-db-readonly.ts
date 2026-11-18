@@ -68,6 +68,7 @@ import type {
   OpenClawStateReadCommand,
   OpenClawStateReadOnlyDatabase,
   RetainedReadScope,
+  StateReadScopeOptions,
 } from "./openclaw-state-read.types.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
 
@@ -154,16 +155,6 @@ export async function forkActiveOpenClawStateDatabaseReadSnapshot(
   signal?.throwIfAborted();
   return current.work.track(() => current.forkSource(signal));
 }
-
-type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
-  admissionTimeoutMs?: number;
-  /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
-  allowStartupRollbackRecovery?: true;
-  /** Selected reports acquire shared bytes only when a reader actually needs them. */
-  lazy?: boolean;
-  /** Command owners may cancel preparation before the callback acquires its read scope. */
-  signal?: AbortSignal;
-};
 
 /** Retain private inspection bytes or live read admission without redirecting writers. */
 export async function withOpenClawStateDatabaseReadSnapshot<T>(
@@ -549,6 +540,7 @@ function startRetainedOpenClawStateRead(
     snapshotPreparation,
     onChunk,
     onChunkAsync,
+    onDiagnosticPhase,
   }: OpenClawStateReadOptions,
 ): OpenClawStateReadCompletion {
   const currentRead = current || live;
@@ -594,6 +586,7 @@ function startRetainedOpenClawStateRead(
         snapshotPreparation,
         onChunk,
         onChunkAsync,
+        onDiagnosticPhase,
         controller,
         signal: readSignal,
         callerSignal,

@@ -42,6 +42,7 @@ import type {
   RepositoryGitHubPublicationReceiptTarget,
 } from "./github-publication-read.types.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 import type {
   RegisteredStateReadCommand,
   RegisteredStateReadResult,
@@ -287,6 +288,8 @@ export type OpenClawStateReadOutcome =
 type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
 export type OpenClawStateReadReceipt = { phase: OpenClawStateReadPhase };
 export type OpenClawStateReadOptions = {
+  /** Temporary receipt diagnostic overlay: local callback, never worker payload or authority. */
+  onDiagnosticPhase?: (phase: string) => void;
   /** Cancellation abandons delivery only after the accepted read and cleanup settle. */
   signal?: AbortSignal;
   /** Reuse the caller's captured authority instead of admitting a newer lifecycle. */
@@ -312,6 +315,16 @@ export type OpenClawStateReadOptions = {
       onChunkAsync: (value: unknown, signal: AbortSignal) => Promise<void>;
     }
 );
+
+export type StateReadScopeOptions = OpenClawStateDatabaseOptions & {
+  admissionTimeoutMs?: number;
+  /** Only startup may inspect a hot journal privately before guarded canonical recovery. */
+  allowStartupRollbackRecovery?: true;
+  /** Selected reports acquire shared bytes only when a reader actually needs them. */
+  lazy?: boolean;
+  /** Command owners may cancel preparation before the callback acquires its read scope. */
+  signal?: AbortSignal;
+};
 
 export type ReadResource = { close(): Promise<void> };
 export type RetainedReadScope = {

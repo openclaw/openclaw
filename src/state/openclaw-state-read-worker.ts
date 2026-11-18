@@ -234,8 +234,16 @@ class StateReadSource {
     onChunk?: OpenClawStateReadOptions["onChunk"],
     onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     awaitedOnly = false,
+    onDiagnosticPhase?: OpenClawStateReadOptions["onDiagnosticPhase"],
   ): Pick<StateReadTransport, "startValidateFresh" | "startRead" | "startClose"> {
-    return new StateReadTransport(command, this, onChunk, onChunkAsync, awaitedOnly);
+    return new StateReadTransport(
+      command,
+      this,
+      onChunk,
+      onChunkAsync,
+      awaitedOnly,
+      onDiagnosticPhase,
+    );
   }
 
   ownsAdmission(): boolean {
@@ -278,6 +286,7 @@ class StateReadTransport {
     private readonly onChunk?: OpenClawStateReadOptions["onChunk"],
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
+    private readonly onDiagnosticPhase?: OpenClawStateReadOptions["onDiagnosticPhase"],
   ) {
     // Immutable owner snapshots can cross preparation waits without another private copy.
     this.capturedCommand = isDeeplyFrozenPlainData(command) ? command : structuredClone(command);
@@ -344,15 +353,20 @@ class StateReadTransport {
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
+      const phase = readCommand.type === "admit" ? "admit-worker-" : "read-worker-";
+      this.onDiagnosticPhase?.(phase + "queued");
       const task = pool.pool.runTask(
         async () => {
+          this.onDiagnosticPhase?.(phase + "input-started");
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
+          this.onDiagnosticPhase?.(phase + "admission-started");
           const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () =>
             authority.assertCurrent(),
           );
           if (turn) {
             releaseAdmission = await turn;
           }
+          this.onDiagnosticPhase?.(phase + "admission-returned");
           try {
             authority.assertCurrent();
             // Queue admission can outlive the captured file at this pathname.
@@ -362,6 +376,8 @@ class StateReadTransport {
               });
               authority.assertCurrent();
             }
+            // This is input handoff, not proof of worker dispatch or query entry.
+            this.onDiagnosticPhase?.(phase + "input-returned");
             return request;
           } catch (error) {
             releaseAdmission?.();
@@ -412,9 +428,11 @@ class StateReadTransport {
         let outcome: OpenClawStateReadOutcome;
         try {
           const reply = await task.result;
+          this.onDiagnosticPhase?.(phase + "response-returned");
           cleanup.retire = retireAfterRead || Boolean(reply.nativeCleanupFailure);
           outcome = decodeOpenClawStateReadReply(reply);
         } catch (error) {
+          this.onDiagnosticPhase?.(phase + "response-failed");
           outcome = { error };
         }
         releaseAdmission?.();
