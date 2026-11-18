@@ -182,9 +182,10 @@ it("blocks bulk Add that would silently drop labels and keeps Replace empty as c
 });
 
 it("blocks Replace after selecting more labels than it can save in Remove mode", () => {
-  const titles = Array.from({ length: 13 }, (_, i) => `label-${i}`);
-  const first = createWorkboardCard({ id: "first", labels: titles.slice(0, 12) });
-  const second = createWorkboardCard({ id: "second", labels: titles.slice(12) });
+  const titles = Array.from({ length: 12 }, (_, i) => `label-${i}`);
+  const extraLabel = "label-12";
+  const first = createWorkboardCard({ id: "first", labels: titles });
+  const second = createWorkboardCard({ id: "second", labels: [extraLabel] });
   const request = vi.fn();
   const { state, container, renderView } = createWorkboardView({
     client: { request },
@@ -196,17 +197,17 @@ it("blocks Replace after selecting more labels than it can save in Remove mode",
   renderView();
   requireButton(container, "Edit properties").click();
   mode(container, "remove");
-  for (const title of titles) {
+  for (const title of [...titles, extraLabel]) {
     checkbox(container, title).click();
     flush();
   }
-  expect(checkbox(container, titles[12]).checked).toBe(true);
+  expect(checkbox(container, extraLabel).checked).toBe(true);
   expect(requireButton(container, "Apply changes").disabled).toBe(false);
   mode(container, "replace");
   expect(requireButton(container, "Apply changes").disabled).toBe(true);
   requireButton(container, "Apply changes").click();
   expect(request).not.toHaveBeenCalled();
-  checkbox(container, titles[12]).click();
+  checkbox(container, extraLabel).click();
   flush();
   expect(requireButton(container, "Apply changes").disabled).toBe(false);
 });
