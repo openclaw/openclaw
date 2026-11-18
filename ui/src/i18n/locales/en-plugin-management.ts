@@ -233,7 +233,6 @@ const enPluginManagement = {
       },
     },
     editor: {
-      title: "{name} settings",
       search: "Search settings",
       navigation: "Settings sections",
       other: "Other",
@@ -280,8 +279,6 @@ const enPluginManagement = {
       },
       unresolved:
         "This reference is currently unresolved. The configured source must provide the secret before the plugin can use it.",
-      invalid:
-        "The setting could not accept this value. Check the source, provider, and identifier.",
       invalidStored:
         "This credential has an invalid stored value. Replace it or edit its reference.",
       stale: "Configuration changed. Reload this reference before editing it.",
@@ -370,7 +367,6 @@ const enPluginManagement = {
     settingsDescription: "Manage plugin settings and access.",
     settingsTabs: "Plugin settings sections",
     settingsInstalled: "Installed",
-    settingsInstalledDescription: "Search and configure installed plugins.",
     advanced: "Advanced",
     advancedDescription:
       "Global plugin loading, allow and deny lists, and capability slot ownership.",
@@ -398,24 +394,13 @@ const enPluginManagement = {
       requestFailed: "Sign-in did not finish. Try signing in again.",
       sessionExpired: "This sign-in session expired. Try signing in again.",
     },
-    toggleNamed: "Enable or disable {name}",
     schemaUnavailable: "Plugin settings schema is unavailable.",
     pluginNotFound: "This installed plugin could not be found.",
-    configuration: "Configuration",
-    configurationDescription: "Settings declared by this plugin.",
-    accessCapabilities: "Access and capabilities",
-    accessCapabilitiesDescription: "What this plugin can access with the current policy.",
     promptContextAccess: "Modify prompts",
     promptContextAccessDescription:
       "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust.",
     conversationAccess: "Read conversation context",
     conversationAccessDescription: "Allows hooks to inspect conversation content.",
-    modelOverrideAccess: "Override model selection",
-    modelOverrideAccessDescription: "Allows plugin actions or subagents to choose another model.",
-    accessAllowed: "Allowed",
-    accessBlocked: "Blocked",
-    lifecycle: "Lifecycle",
-    lifecycleDescription: "Installed source, version, trust, and removal controls.",
     version: "Version",
     installedSource: "Installed source",
     integrity: "Integrity",
