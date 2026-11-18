@@ -633,9 +633,14 @@ function mockPackingEntries(entries: readonly PackingEntry[], timingName = (name
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it.each([false, true])(
-    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
-    (extraGroup) => {
+  it.each(
+    ["hybrid", "github"].flatMap((runnerBackend) =>
+      [false, true].map((extraGroup) => ({ runnerBackend, extraGroup })),
+    ),
+  )(
+    "keeps the scheduled main inventory within its reserved compact capacity ($runnerBackend, extra group: $extraGroup)",
+    ({ runnerBackend, extraGroup }) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
       const original = fullSuiteVitestShards.slice();
       if (extraGroup) {
         // A new isolated group must not exhaust main's capacity on arrival.
@@ -658,7 +663,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           compactMode: "pull-request",
           compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
-          runnerBackend: "hybrid",
+          runnerBackend,
         });
         const jobs = [...compactRows, ...workerRows];
         expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);

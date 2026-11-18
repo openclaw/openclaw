@@ -155,6 +155,8 @@ process observations stay with Blacksmith. Packing preserves each child group,
 its two-worker limit, and its timeout while keeping the complete Node matrix
 within the 77-row main-tier cap. Tooling groups that execute on the same hosted
 runner may share a row while retaining the strongest original capacity owner.
+Hosted file-count bounds participate in weighted balancing so inventory growth
+does not strand extra chunks after the time-based split.
 Explicit source watches live in
 `scripts/lib/ci-policy-test-watch.mts`, including dynamically launched workers
 and scripts that the import graph cannot discover.
