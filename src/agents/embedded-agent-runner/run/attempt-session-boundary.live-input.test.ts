@@ -279,7 +279,7 @@ describe("live pending inputs at the attempt boundary", () => {
           }
           activeSession.dispose();
         } finally {
-          receipt.finish("interrupted");
+          receipt.finish("interrupted", "failed");
         }
       });
     },
@@ -351,8 +351,8 @@ describe("live pending inputs at the attempt boundary", () => {
         expect(corrected).not.toContain("queued user request");
         activeSession.dispose();
       } finally {
-        recorder.finishPendingInput?.("interrupted");
-        foreign.finish("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
+        foreign.finish("interrupted", "failed");
       }
     });
   });
@@ -411,7 +411,7 @@ describe("live pending inputs at the attempt boundary", () => {
         expect(activeSession.getLastAssistantText()).toBe("early steering answered");
       } finally {
         activeSession.dispose();
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
     });
   });
@@ -487,7 +487,7 @@ describe("live pending inputs at the attempt boundary", () => {
         expect(context).toContain("current request");
         activeSession.dispose();
       } finally {
-        foreign.finish("interrupted");
+        foreign.finish("interrupted", "failed");
       }
     });
   });

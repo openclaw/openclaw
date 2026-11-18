@@ -577,14 +577,19 @@ export function applyLocalWorkspaceCheckpoint(params: {
       target: params.target,
       reason: params.reason,
     },
-    (markApplied) =>
+    (markPhase) =>
       applyStagedWorkerWorkspace({
         ...params.application,
         ...acceptance,
+        journal: {
+          ...acceptance.journal,
+          commit: () => {
+            markPhase("acceptance");
+            return acceptance.journal.commit();
+          },
+        },
         onPhase: (phase) => {
-          if (phase === "apply") {
-            markApplied();
-          }
+          markPhase(phase);
           params.application.onPhase?.(phase);
         },
       }),

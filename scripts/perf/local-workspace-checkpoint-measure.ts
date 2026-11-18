@@ -23,6 +23,8 @@
  * per request. --reconcile-target canonical|projection selects guest export or host
  * import; --reconcile-changed-files N changes N existing files at their original size.
  * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
+ * --reconcile-caller-stop leaves a staged projection receipt, stops the checkpoint
+ * caller after patch preparation, then proves the next preparation writes no journal.
  * --reconcile-random-bytes 7420 writes deterministic incompressible changed files;
  * allocation mode reports main and matched worker allocation for each reconcile burst.
  * --reconcile-profile (Node 26+) adds all-worker allocation/CPU profiles and a
@@ -209,6 +211,7 @@ const { values } = parseArgs({
     "tools-per-turn": { type: "string", default: "10" },
     "mutation-segments": { type: "boolean", default: false },
     "reconcile-traffic": { type: "boolean", default: false },
+    "reconcile-caller-stop": { type: "boolean", default: false },
     "reconcile-profile": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
@@ -467,6 +470,13 @@ const toolsPerTurn = Number(values["tools-per-turn"]);
 assert(Number.isSafeInteger(toolsPerTurn) && toolsPerTurn > 0 && toolsPerTurn % 10 === 0);
 const reconcileTarget = values["reconcile-target"];
 assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
+assert(
+  !values["reconcile-caller-stop"] ||
+    (reconcile && reconcileTarget === "projection" && values["reconcile-traffic"]),
+);
+let checkpointCaller = new AbortController();
+let checkpointInterruption: "stage" | "stop" | undefined;
+const stoppedCheckpointPreparations: unknown[] = [];
 const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
 const reconcileRandomBytes = Number(values["reconcile-random-bytes"]);
 assert(Number.isSafeInteger(reconcileRandomBytes) && reconcileRandomBytes >= 0);
@@ -1058,6 +1068,10 @@ Object.assign(globalThis, {
   __containerCommandMeasure: (command: string) => containerCommands.push(command),
   __nativeCommandFinished: nativeCommandFinished,
   __checkpointPhase: async (name: string, operation: () => Promise<unknown>) => {
+    if (name === "prepareWorkspacePatch" && checkpointInterruption === "stage") {
+      checkpointInterruption = undefined;
+      throw new Error("synthetic staged receipt interruption");
+    }
     const started = performance.now();
     const pausedAtStart = pauseBegan !== undefined;
     const cpu = process.cpuUsage();
@@ -1067,7 +1081,12 @@ Object.assign(globalThis, {
       nativeRemovals.add(completion);
     }
     try {
-      return await completion;
+      const result = await completion;
+      if (name === "prepareWorkspacePatch" && checkpointInterruption === "stop") {
+        checkpointInterruption = undefined;
+        checkpointCaller.abort(new DOMException("synthetic caller stop", "AbortError"));
+      }
+      return result;
     } finally {
       nativeRemovals.delete(completion);
       const used = process.cpuUsage(cpu);
@@ -1187,7 +1206,10 @@ registerHooks({
     }
     const phaseFunctions: Record<string, string[]> = {
       "src/agents/worktrees/filesystem-native.ts": ["read", "write"],
-      "src/gateway/worker-environments/workspace-manifest-worker.ts": ["computeWorkspaceManifest"],
+      "src/gateway/worker-environments/workspace-manifest-worker.ts": [
+        "computeWorkspaceManifest",
+        "prepareWorkspacePatch",
+      ],
       "src/gateway/worker-environments/workspace-result-staging.ts": [
         "stageWorkerWorkspaceResult",
         "withStagedWorkerWorkspaceManifest",
@@ -1782,9 +1804,23 @@ measurement: try {
     let edit = 0;
     runTurn = async (turnTools = toolsPerTurn) => {
       if (reconcile) {
+        if (values["reconcile-caller-stop"]) {
+          checkpointCaller = new AbortController();
+          turnProjection?.[Symbol.dispose]();
+          turnProjection = await prepareLocalSandboxWorkspace({
+            cfg: config,
+            agentId: owner.agentId,
+            sessionKey,
+            workspaceDir: canonical,
+            sandbox,
+            signal: checkpointCaller.signal,
+            assertCurrent: () => checkpointCaller.signal.throwIfAborted(),
+          });
+          assert(turnProjection);
+        }
         const commandBegan = performance.now();
-        const commandCpu = process.cpuUsage();
-        const commandAllocated = getHeapStatistics().total_allocated_bytes;
+        let commandCpu = process.cpuUsage();
+        let commandAllocated = getHeapStatistics().total_allocated_bytes;
         const seed = `synthetic reconcile ${++edit}`;
         const writeRoot = reconcileTarget === "canonical" ? workspace! : canonical;
         const writeFiles = `
@@ -1822,11 +1858,32 @@ measurement: try {
             String(reconcileRandomBytes),
           ]);
         }
+        if (values["reconcile-caller-stop"]) {
+          checkpointInterruption = "stage";
+          await assert.rejects(
+            projection.withLocalWorkspaceProjection(owner, (operations) =>
+              operations.synchronize("projection"),
+            ),
+            /synthetic staged receipt interruption/,
+          );
+          checkpointInterruption = "stop";
+          commandCpu = process.cpuUsage();
+          commandAllocated = getHeapStatistics().total_allocated_bytes;
+        }
         const began = performance.now();
         const beforePauses = pauseDurationsMs.length;
-        await projection.withLocalWorkspaceProjection(owner, (operations) =>
-          operations.synchronize(reconcileTarget),
-        );
+        const beforeTraffic = reconcileTraffic.length;
+        if (values["reconcile-caller-stop"]) {
+          await turnProjection!.checkpoint();
+          assert(
+            checkpointCaller.signal.aborted,
+            "Caller must stop during projection patch preparation",
+          );
+        } else {
+          await projection.withLocalWorkspaceProjection(owner, (operations) =>
+            operations.synchronize(reconcileTarget),
+          );
+        }
         const ended = performance.now();
         const usedCpu = process.cpuUsage(commandCpu);
         const paused = pauseDurationsMs.slice(beforePauses);
@@ -1840,6 +1897,29 @@ measurement: try {
           pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
           maxPauseDurationMs: Math.max(0, ...paused),
         });
+        if (values["reconcile-caller-stop"]) {
+          const nextStarted = performance.now();
+          const nextCpu = process.cpuUsage();
+          const nextAllocated = getHeapStatistics().total_allocated_bytes;
+          const nextPauses = pauseDurationsMs.length;
+          const nextTraffic = reconcileTraffic.length;
+          await prepareWorkspace();
+          const cpu = process.cpuUsage(nextCpu);
+          const journals = (start: number, end: number) =>
+            reconcileTraffic.slice(start, end).filter((request) => request.journalCounts).length;
+          assert.equal(journals(beforeTraffic, nextTraffic), 1);
+          assert.equal(journals(nextTraffic, reconcileTraffic.length), 0);
+          stoppedCheckpointPreparations.push({
+            durationMs: performance.now() - nextStarted,
+            processCpuMs: (cpu.user + cpu.system) / 1000,
+            allocatedBytes: getHeapStatistics().total_allocated_bytes - nextAllocated,
+            pausedDurationMs: pauseDurationsMs
+              .slice(nextPauses)
+              .reduce((sum, value) => sum + value, 0),
+            checkpointJournals: 1,
+            preparationJournals: 0,
+          });
+        }
         assert(pauseBegan === undefined, "Reconciliation must resume the guest");
         for (let i = 1; i <= reconcileChangedFiles; i++) {
           const expected = reconcileRandomBytes
@@ -2910,6 +2990,7 @@ measurement: try {
   custodyDurationsMs.length = 0;
   containerCommands.length = 0;
   finalizations.length = 0;
+  stoppedCheckpointPreparations.length = 0;
   pauseDurationsMs.length = 0;
   checkpointPhases.length = 0;
   fingerprintMetrics.length = 0;
@@ -3250,6 +3331,7 @@ measurement: try {
           commandAccounting:
             "command execution plus awaited finalization; subsequent correctness read excluded; CPU and allocation exclude child processes",
           finalizations,
+          ...(values["reconcile-caller-stop"] ? { stoppedCheckpointPreparations } : {}),
         }
       : undefined,
     guest:
