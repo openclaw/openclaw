@@ -12,9 +12,7 @@ export async function migrateDatabasePortSource(
   assertCurrent();
   await descriptor.migrateSqliteSource?.(sourcePath, sourceVersion, assertCurrent);
   using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
-  const { tables, allocations: retainedAllocations } = await inspectDatabasePort(
-    { engine: "sqlite", db },
-    descriptor,
-  );
-  return { tables, allocations: retainedAllocations };
+  const source = { engine: "sqlite" as const, db };
+  const { catalog: _catalog, ...verification } = await inspectDatabasePort(source, descriptor);
+  return verification;
 }

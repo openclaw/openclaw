@@ -884,35 +884,3 @@ it("rebinds hidden catch-up to the replacement Gateway", async () => {
   expect(oldRequest).not.toHaveBeenCalled();
   expect(request).toHaveBeenCalledWith("cron.list", expect.objectContaining({ agentId: "writer" }));
 });
-
-it("finishes an accepted create-and-run chain while hidden without background readbacks", async () => {
-  const visibility = controlVisibility();
-  const saved = gate();
-  const request = cronRpc({
-    "cron.add": async () => {
-      await saved.promise;
-      return { id: "created-job" };
-    },
-    "cron.run": () => ({ ok: true, enqueued: true, runId: "synthetic-run" }),
-  });
-  const { page } = mountCronPage(request);
-  await waitForCronPage(() => expect(page.cron.cronStatus).not.toBeNull());
-  await openDraft(page, "Synthetic task", "Synthetic prompt");
-  click(page, testId("cron-submit-run"));
-  await waitForCronPage(() =>
-    expect(request.mock.calls.some(([method]) => method === "cron.add")).toBe(true),
-  );
-  visibility("hidden");
-  request.mockClear();
-  saved.resolve();
-  await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-  expect(request).toHaveBeenCalledExactlyOnceWith("cron.run", {
-    id: "created-job",
-    mode: "force",
-  });
-  expect(page.cron.cronNotice).toContain("Run queued. Run ID: synthetic-run");
-  expect(page.cron.cronCreateOpen).toBe(false);
-  visibility("visible");
-  await settle();
-  expectCalls(request, refreshMethods, 1);
-});

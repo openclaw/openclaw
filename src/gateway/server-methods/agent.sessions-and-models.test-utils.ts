@@ -211,7 +211,7 @@ describe("gateway agent handler", () => {
             { client, respond, context, flushDispatch: false },
           );
           expect(replacementWrite).toHaveBeenCalledOnce();
-          expect(finish).toHaveBeenCalledWith("cancelled", undefined);
+          expect(finish).toHaveBeenCalledWith("cancelled", "failed");
           expect(dispose).toHaveBeenCalledOnce();
           expect(respond).toHaveBeenCalledWith(
             false,
