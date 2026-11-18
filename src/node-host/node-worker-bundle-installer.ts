@@ -316,7 +316,7 @@ export class NodeWorkerBundleInstaller {
       if (!fs.lstatSync(prepared).isDirectory() || fs.realpathSync.native(prepared) !== prepared) {
         return false;
       }
-      const receipt = await readReceipt(prepared);
+      const receipt = await readNodeWorkerBundleReceipt(prepared);
       if (!receipt || !sameWorkerBuild(receipt, input.build) || !this.#snapshotStartupOpen) {
         return false;
       }
