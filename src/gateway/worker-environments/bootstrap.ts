@@ -14,11 +14,6 @@ import { normalizeScpRemotePath } from "../../infra/scp-host.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import {
-  WORKER_BUNDLE_ARTIFACT_PATHS,
-  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
-  WORKER_BUNDLE_MANIFEST_VERSION,
-} from "../../shared/worker-bundle-hash.js";
-import {
   commandFailure,
   isSuccess,
   matchesCommandFailure,
@@ -35,6 +30,7 @@ import {
   workerSshOptions,
   type WorkerSshIdentityResolver,
 } from "./ssh.js";
+import { RECEIPT_MATCH_JS, VERIFY_INSTALL_JS } from "./worker-bundle-inspection.js";
 
 const BOOTSTRAP_ROOT = ".openclaw-worker";
 const BOOTSTRAP_RECEIPT = "bootstrap-receipt.json";
@@ -65,28 +61,6 @@ function checkRuntime() {
 }
 try { process.exitCode = checkRuntime(); } catch { process.exitCode = 1; }`;
 
-const RECEIPT_MATCH_JS = String.raw`const fs = require("node:fs");
-try {
-  const actual = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  const expected = JSON.parse(process.argv[2]);
-  const shapeMatches =
-    Object.keys(actual).sort().join(",") === "bundleHash,openclawVersion,protocolFeatures";
-  const featuresMatch =
-    Array.isArray(actual.protocolFeatures) &&
-    Array.isArray(expected.protocolFeatures) &&
-    actual.protocolFeatures.length === expected.protocolFeatures.length &&
-    actual.protocolFeatures.every((feature, index) => feature === expected.protocolFeatures[index]);
-  process.exitCode =
-    shapeMatches &&
-      actual.bundleHash === expected.bundleHash &&
-      actual.openclawVersion === expected.openclawVersion &&
-      featuresMatch
-      ? 0
-      : 1;
-} catch {
-  process.exitCode = 1;
-}`;
-
 const VERIFY_ARCHIVE_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
 try {
@@ -110,77 +84,11 @@ try {
   process.exitCode = 1;
 }`;
 
-const WORKER_ARTIFACT_PATHS_JS = `const artifactPaths = ${JSON.stringify(WORKER_BUNDLE_ARTIFACT_PATHS)};
-const chunkPathPattern = ${WORKER_BUNDLE_CHUNK_PATH_PATTERN.toString()};`;
-
 const SELECT_NPM_WORKER_FILES_JS = String.raw`const fs = require("node:fs");
 const expected = "package/dist/worker-artifacts/" + process.argv[2] + ".tar.gz";
 const selected = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((entry) => entry === expected);
 if (selected.length !== 1) throw new Error("missing or duplicate packaged worker bundle archive");
 process.stdout.write(selected.join("\n") + "\n");`;
-
-// Recompute the gateway's canonical flat file manifest before a receipt can attest to it.
-const VERIFY_INSTALL_JS = String.raw`const crypto = require("node:crypto");
-const fs = require("node:fs");
-const path = require("node:path");
-const root = process.argv[1];
-const expected = process.argv[2];
-const install = process.argv[3];
-${WORKER_ARTIFACT_PATHS_JS}
-const entries = [];
-function fail(message) {
-  throw new Error(message);
-}
-function assertRoot() {
-  const stats = fs.lstatSync(root);
-  if (stats.isSymbolicLink() || !stats.isDirectory()) {
-    fail("unsafe worker install root");
-  }
-  fs.chmodSync(root, 0o700);
-}
-function addFile(relative) {
-  const absolute = path.join(root, relative);
-  const stats = fs.lstatSync(absolute);
-  if (stats.isSymbolicLink() || !stats.isFile()) {
-    fail("unsafe worker file: " + relative);
-  }
-  const contents = fs.readFileSync(absolute);
-  const mode = 0o700;
-  fs.chmodSync(absolute, mode);
-  entries.push({
-    path: relative,
-    mode,
-    size: contents.byteLength,
-    sha256: crypto.createHash("sha256").update(contents).digest("hex"),
-  });
-}
-try {
-  assertRoot();
-  if (install === "npm" || install === "bundle") {
-    const allowedPaths = new Set([...artifactPaths, "bootstrap-receipt.json"]);
-    for (const name of fs.readdirSync(root)) {
-      if (chunkPathPattern.test(name)) {
-        artifactPaths.push(name);
-      } else if (!allowedPaths.has(name)) {
-        fail("unexpected worker bundle path: " + name);
-      }
-    }
-    for (const artifactPath of artifactPaths) addFile(artifactPath);
-  } else {
-    fail("invalid worker install channel");
-  }
-  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  const separator = String.fromCharCode(0);
-  const hash = crypto.createHash("sha256");
-  hash.update("${WORKER_BUNDLE_MANIFEST_VERSION}" + separator);
-  for (const entry of entries) {
-    hash.update(entry.path + separator + entry.mode.toString(8) + separator + entry.size + separator + entry.sha256 + separator);
-  }
-  process.exitCode = hash.digest("hex") === expected ? 0 : 1;
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-}`;
 
 const ENSURE_PRIVATE_DIRECTORY_SH = String.raw`ensure_private_directory() {
   directory=$1

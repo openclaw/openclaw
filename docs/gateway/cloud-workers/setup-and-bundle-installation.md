@@ -75,7 +75,7 @@ Each explicit npm runtime archive also gets a best-effort npm project lock, gene
 
 Successful worker starts log the `openclaw-bootstrap-*` phase durations at info level in the Gateway log, including download, installation, and verification. The installation phase can overlap the independent worker-bundle download. Unlocked-install fallback warnings also appear in the Gateway log.
 
-Prepared runtime producers can expand and prewarm the exact worker bundle before capture. Nodes reuse that package-owned bundle after ordinary integrity validation.
+Prepared snapshot producers expand and prewarm the exact worker bundle before capture. A fresh, verified snapshot can reuse that package-owned runtime during its initial session admission without downloading, expanding, or prewarming it again. The first code-capable node command ends this startup reuse; later requests verify installed contents and repair changes through the ordinary installer. Snapshot contents never replace current session or repository authority.
 
 Disposable nodes can connect while private computer capabilities finish preparing. Worker-bundle installation and private computer use still wait for that preparation, including failures, before reporting readiness.
 

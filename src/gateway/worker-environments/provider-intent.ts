@@ -16,6 +16,7 @@ import {
 } from "./preparation-identity.js";
 import * as prep from "./preparation-identity.schema.js";
 import * as projects from "./project-preparation.js";
+import { createWorkerProviderIntentAdmission } from "./provider-intent-admission.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import type { WorkerProviderRepositorySource } from "./provider-project-preparation.js";
 import {
@@ -43,6 +44,9 @@ type WorkerProviderIntentOptions = Pick<
     repositorySource?: WorkerProviderRepositorySource,
     wakeRetained?: () => void,
     originalSource?: () => void,
+    recordInitialSnapshot?: (
+      custody: import("./preparation-identity.js").WorkerInitialSnapshotCustody,
+    ) => void,
   ) => Promise<WorkerEnvironmentRecord>;
 };
 
@@ -92,29 +96,14 @@ function allocationSnapshot(
 
 /** Admits one immutable allocation intent before the provider lifecycle can allocate a lease. */
 export function createWorkerProviderIntent(options: WorkerProviderIntentOptions) {
-  const preparedIntents = new WeakMap<
-    WorkerProviderPreparedIntent,
-    { profileId: string; assertCurrent: () => void; repository?: WorkerProviderRepositorySource }
-  >();
-  const assertPreparedIntentCurrent = (profileId: string, intent: WorkerProviderPreparedIntent) => {
-    const prepared = preparedIntents.get(intent);
-    if (!prepared || prepared.profileId !== profileId) {
-      throw serviceError("invalid_state", "Worker preparation is not owned by this lifecycle");
-    }
-    prepared.assertCurrent();
-  };
   const { store, withLock, providerFor, resumeProvision } = options;
-  const requireProfileId = (profileId: string, signal?: AbortSignal) => {
-    signal?.throwIfAborted();
-    if (options.isStopping()) {
-      throw serviceError("invalid_state", "Worker environment service is stopping");
-    }
-    const normalizedProfileId = profileId.trim();
-    if (!normalizedProfileId || normalizedProfileId !== profileId) {
-      throw serviceError("invalid_profile", "Worker profile id must be non-empty and trimmed");
-    }
-    return normalizedProfileId;
-  };
+  const {
+    preparedIntents,
+    assertPreparedIntentCurrent,
+    requireProfileId,
+    takeInitialSnapshot,
+    preparedRepositorySource,
+  } = createWorkerProviderIntentAdmission(options);
   const resolveProfile = (
     profileId: string,
     createOptions: WorkerProviderIntentPreparationOptions,
@@ -699,8 +688,19 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         preparedIntents.get(admitted)?.repository,
         undefined,
         createOptions.provisionSource ? createOptions.beforeProvision : undefined,
+        (custody) => {
+          assertPreparedIntentCurrent(profileId, admitted);
+          preparedIntents.get(admitted)!.initialSnapshot = custody;
+        },
       );
     });
   };
-  return { prepareIntent, prepareRetention, assertPreparedIntentCurrent, createWithProfile };
+  return {
+    prepareIntent,
+    prepareRetention,
+    assertPreparedIntentCurrent,
+    createWithProfile,
+    takeInitialSnapshot,
+    preparedRepositorySource,
+  };
 }

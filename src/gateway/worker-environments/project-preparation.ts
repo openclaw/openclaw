@@ -6,10 +6,11 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import { sha256File } from "../../infra/directory-durability.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import type { WorkerRecipePreparation } from "../../plugins/capability-provider.types.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { resolveEnvironmentRecipe, type EnvironmentRecipe } from "./environment-recipe.js";
+import { ValidatedMachineCaches } from "./project-machine-caches.js";
 import { createProjectSeedScript } from "./project-seed-script.js";
+import { logWorkerSetupFailure } from "./project-setup-diagnostics.js";
 import {
   createProjectSetupScript,
   type PreparedProjectVerification,
@@ -139,6 +140,9 @@ export function createWorkerProjectPreparation(params: {
 }): {
   project: ProjectPreparation;
   getPreparedWorkspace: () => PreparationResult["preparedWorkspace"];
+  getInitialSnapshot: () =>
+    | import("../../worker/node-workspace-prepared-protocol.js").NodeWorkerInitialSnapshot
+    | undefined;
   close: () => void;
 } {
   if (!/^[A-Za-z0-9_-]{1,128}$/u.test(params.namespace)) {
@@ -158,6 +162,10 @@ export function createWorkerProjectPreparation(params: {
       : params.project.label;
   let active: Promise<PreparationResult> | undefined;
   let preparedWorkspace: PreparationResult["preparedWorkspace"];
+  let completionManifestRef: string | undefined;
+  let initialSnapshot:
+    | import("../../worker/node-workspace-prepared-protocol.js").NodeWorkerInitialSnapshot
+    | undefined;
   let mergedSetup: unknown;
   // The serialized pre-enrollment producer invalidates completion before mutation.
   // Reuse verification only within this operation; replay starts with a fresh scan.
@@ -208,6 +216,14 @@ export function createWorkerProjectPreparation(params: {
     ) {
       throw new Error("Prepared project returned invalid workspace identity");
     }
+    if (
+      prepared.completionManifestRef !== undefined &&
+      (typeof prepared.completionManifestRef !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/u.test(prepared.completionManifestRef))
+    ) {
+      throw new Error("Prepared project returned invalid completion identity");
+    }
+    completionManifestRef = prepared.completionManifestRef;
     return Object.freeze({
       preparationKey: preparation.key,
       cacheKey: preparation.cacheKey,
@@ -229,24 +245,28 @@ export function createWorkerProjectPreparation(params: {
     seedKey,
     baseCommit: params.project.baseCommit,
   };
-  const scriptInput = {
-    ...sourceInput,
-    projectKey: params.project.key,
-    ...(preparationInput ? { preparation: preparationInput } : {}),
-  };
   const prepareSeed: ProjectPreparation["prepare"] = async (transport) => {
     requireCurrent();
+    const requestedPreparation = preparationInput && {
+      ...preparationInput,
+      setupInitializer: transport.setupInitializer,
+    };
+    const scriptInput = {
+      ...sourceInput,
+      projectKey: params.project.key,
+      ...(requestedPreparation ? { preparation: requestedPreparation } : {}),
+    };
     const runSeed = async (
       input: Parameters<typeof createProjectSeedScript>[0],
     ): Promise<unknown> => {
       requireCurrent();
       return JSON.parse(
-        await (preparationInput && (input.pack || input.repository)
+        await (requestedPreparation && (input.pack || input.repository)
           ? transport.runScriptWithBudget!(
               (timeoutMs, setupEnv) =>
                 createProjectSeedScript({
                   ...input,
-                  preparation: { ...preparationInput, timeoutMs, setupEnv },
+                  preparation: { ...requestedPreparation, timeoutMs, setupEnv },
                 }),
               signal,
             )
@@ -393,6 +413,7 @@ export function createWorkerProjectPreparation(params: {
               timeoutMs,
               setupEnv,
               verifiedRetained,
+              setupInitializer: transport.setupInitializer,
             }),
           signal,
         ),
@@ -404,16 +425,37 @@ export function createWorkerProjectPreparation(params: {
     const recipePreparation = mergedSetup
       ? { ...RecipePreparation.parse(prepared.recipePreparation), phaseDurationsMs }
       : readRecipePreparation(prepared.recipePreparation);
+    const outputTail =
+      typeof prepared.setupFailure === "string"
+        ? logWorkerSetupFailure(recipePreparation.failure?.outputTail)
+        : undefined;
+    if (outputTail !== undefined && recipePreparation.failure) {
+      recipePreparation.failure = { ...recipePreparation.failure, outputTail };
+    }
     await transport.recordRecipePreparation?.(recipePreparation);
     requireCurrent();
     if (typeof prepared.setupFailure === "string") {
-      throw new Error(
-        `${prepared.setupFailure}${recipePreparation.failure?.outputTail ? `: ${recipePreparation.failure.outputTail}` : ""}`,
-      );
+      throw new Error(`${prepared.setupFailure}${outputTail ? `: ${outputTail}` : ""}`);
     }
     preparedWorkspace = readPreparedWorkspace(prepared);
+    if (
+      preparation?.purpose === "session" &&
+      transport.initialSnapshotCheckpointId &&
+      transport.snapshotBaseCommit === params.project.baseCommit &&
+      verifiedRetained?.baseCommit === params.project.baseCommit &&
+      verifiedRetained.sourceManifestRef === preparedWorkspace.sourceManifestRef &&
+      verifiedRetained.preparedManifestRef === preparedWorkspace.preparedManifestRef
+    ) {
+      initialSnapshot = {
+        checkpointId: transport.initialSnapshotCheckpointId,
+        baseCommit: params.project.baseCommit,
+        sourceManifestRef: preparedWorkspace.sourceManifestRef,
+        preparedManifestRef: preparedWorkspace.preparedManifestRef,
+      };
+    }
     return {
       ...result,
+      baseCommit: params.project.baseCommit,
       preparedWorkspace,
       recipePreparation,
       ...(typeof prepared.captureSkipped === "string"
@@ -425,6 +467,7 @@ export function createWorkerProjectPreparation(params: {
   };
   return {
     getPreparedWorkspace: () => preparedWorkspace,
+    getInitialSnapshot: () => initialSnapshot,
     project: {
       key: params.project.key,
       baseCommit: params.project.baseCommit,
@@ -439,19 +482,39 @@ export function createWorkerProjectPreparation(params: {
               purpose: preparation.purpose,
               demandAtMs: preparation.demandAtMs,
             },
-            inspectPreparedWorkspace: async (transport: {
-              runScript: (script: string, signal: AbortSignal) => Promise<string>;
-              recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
-            }) => {
+            inspectPreparedWorkspace: async (
+              transport: Parameters<NonNullable<ProjectPreparation["inspectPreparedWorkspace"]>>[0],
+            ) => {
               requireCurrent();
+              if ("source" in params.project) {
+                await params.revalidateRepositorySource?.(signal);
+                requireCurrent();
+              }
               const inspected: unknown = JSON.parse(
                 await transport.runScript(
-                  createProjectSetupScript({ ...sourceInput, ...preparationInput }, true),
+                  createProjectSetupScript(
+                    {
+                      ...sourceInput,
+                      ...preparationInput,
+                      ...(transport.baseCommit ? { baseCommit: transport.baseCommit } : {}),
+                      ...(transport.snapshot
+                        ? {
+                            snapshot: true,
+                            snapshotWorkerBundle: transport.snapshotWorkerBundle,
+                            expectedCompletionManifestRef: completionManifestRef,
+                          }
+                        : {}),
+                    },
+                    true,
+                  ),
                   signal,
                 ),
               );
               requireCurrent();
-              if (!isRecord(inspected) || inspected.baseCommit !== params.project.baseCommit) {
+              if (
+                !isRecord(inspected) ||
+                inspected.baseCommit !== (transport.baseCommit ?? params.project.baseCommit)
+              ) {
                 throw new Error("Enrolled project has no matching completed workspace");
               }
               preparedWorkspace = readPreparedWorkspace(inspected);
@@ -459,6 +522,19 @@ export function createWorkerProjectPreparation(params: {
                 readRecipePreparation(inspected.recipePreparation),
               );
               requireCurrent();
+              return {
+                namespace: params.namespace,
+                seedKey,
+                baseCommit: inspected.baseCommit,
+                ...preparedWorkspace,
+                ...(inspected.validatedMachineCaches
+                  ? {
+                      validatedMachineCaches: ValidatedMachineCaches.parse(
+                        inspected.validatedMachineCaches,
+                      ),
+                    }
+                  : {}),
+              };
             },
           }
         : {}),

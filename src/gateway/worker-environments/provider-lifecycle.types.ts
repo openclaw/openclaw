@@ -87,6 +87,7 @@ export type WorkerProviderLifecycleInputOptions = {
     sessionKey: string;
     preparationKey: string;
     cacheKey: string;
+    initialSnapshot?: import("../../worker/node-workspace-prepared-protocol.js").NodeWorkerInitialSnapshot;
     signal?: AbortSignal;
     assertCurrent: () => void;
   }) => Promise<NodeWorkerPreparedWorkspaceResult>;

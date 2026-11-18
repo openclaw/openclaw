@@ -126,7 +126,8 @@ describe("worker environment service", () => {
     const provider = support.createProvider({
       provision: async (profile, operationId, options) => {
         operationIds.push(operationId);
-        expect(support.testState.store.list()[0]).toMatchObject({
+        const intent = expectDefined(support.testState.store.list()[0], "persisted intent");
+        expect(intent).toMatchObject({
           state: "provisioning",
           provisionOperationId: operationId,
           profileSnapshot: {
@@ -140,6 +141,8 @@ describe("worker environment service", () => {
         expect(profile).toEqual({ region: "test" });
         expect(options).toEqual({
           profileId: "development",
+          environmentId: intent.environmentId,
+          nodeBootstrapTimeoutMs: undefined,
           machineClass: "beast",
           os: "os-a",
           assertCurrent: expect.any(Function),
@@ -234,20 +237,19 @@ describe("worker environment service", () => {
     expect(provision).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([]);
 
-    await expect(
-      workerService.createWithRequest({
-        profileId: "development",
-        idempotencyKey: "lifecycle-only",
-      }),
-    ).resolves.toMatchObject({
-      state: "ready",
+    const lifecycle = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "lifecycle-only",
     });
+    expect(lifecycle.state).toBe("ready");
     expect(provision).toHaveBeenCalledOnce();
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
       {
         profileId: "development",
+        environmentId: lifecycle.environmentId,
+        nodeBootstrapTimeoutMs: undefined,
         assertCurrent: expect.any(Function),
         reportStartStatus: expect.any(Function),
         recordResourceReceipt: expect.any(Function),

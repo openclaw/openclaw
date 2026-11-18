@@ -13,6 +13,7 @@ import {
   type WorkerExecutionMode,
   type WorkerLease,
   type WorkerLeaseStatus,
+  type WorkerNodeRuntimeIdentity,
   type WorkerProvider,
   type WorkerProfile,
   type WorkerMachineOption,
@@ -235,7 +236,6 @@ export function requireWorkerLease(value: unknown): WorkerLease {
     !value.leaseId.trim() ||
     hasSsh === hasNode ||
     (hasSsh && !isRecord(value.ssh)) ||
-    (hasNode && !isRecord(value.node)) ||
     (value.sharedHost !== undefined && typeof value.sharedHost !== "boolean")
   ) {
     throw new Error("Worker provider returned an invalid provision result");
@@ -261,11 +261,38 @@ export function requireWorkerLease(value: unknown): WorkerLease {
       ssh: normalizeWorkerSshEndpoint(value.ssh as WorkerSshEndpoint),
     };
   }
-  const deviceId = (value.node as { deviceId?: unknown }).deviceId;
+  const node = value.node;
+  if (!isRecord(node)) {
+    throw new Error("Worker provider returned an invalid node device id");
+  }
+  const deviceId = node.deviceId;
   if (typeof deviceId !== "string" || !deviceId.trim()) {
     throw new Error("Worker provider returned an invalid node device id");
   }
-  return { ...common, node: { deviceId: deviceId.trim() } };
+  const runtime = node.preparedRuntime;
+  let preparedRuntime: WorkerNodeRuntimeIdentity | undefined;
+  if (runtime !== undefined) {
+    if (
+      !isRecord(runtime) ||
+      typeof runtime.nodeBootstrapSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(runtime.nodeBootstrapSha256) ||
+      (runtime.executionMode !== "worker-turn" && runtime.executionMode !== "remote-exec") ||
+      (runtime.workerBundleSha256 !== undefined &&
+        (typeof runtime.workerBundleSha256 !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(runtime.workerBundleSha256)))
+    ) {
+      throw new Error("Worker provider returned an invalid prepared runtime identity");
+    }
+    preparedRuntime = {
+      nodeBootstrapSha256: runtime.nodeBootstrapSha256,
+      executionMode: runtime.executionMode,
+      ...(runtime.workerBundleSha256 ? { workerBundleSha256: runtime.workerBundleSha256 } : {}),
+    };
+  }
+  return {
+    ...common,
+    node: { deviceId: deviceId.trim(), ...(preparedRuntime ? { preparedRuntime } : {}) },
+  };
 }
 
 export function requireInstall(

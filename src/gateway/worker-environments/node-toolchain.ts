@@ -43,6 +43,7 @@ openclaw_install_node() (
     echo 'Cloud worker Node toolchain cannot execute; use a glibc Linux image compatible with official Node.js releases' >&2; exit 1
   fi
   (cd "$stage/release" && find . -type f ! -name .files.sha256 -exec sha256sum {} + > .files.sha256)
+  mv "$stage/node.tgz" "$stage/release/.archive.tgz"
   rm -rf "$destination"
   mv "$stage/release" "$destination"
   printf '%s\\n' "$destination/bin"

@@ -239,6 +239,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
       const [installed, preparation] = await Promise.allSettled([
         bundleInstaller.ensure({
           input: parseNodeWorkerBundleInstallInput(paramsJSON),
+          beforeCodeExecution: () => workspace?.invalidateSnapshotPreparation(),
           gatewayUrl: params.gatewayUrl,
           ...(params.gatewayTlsFingerprint
             ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }

@@ -23,6 +23,7 @@ const BundleInstallInputSchema = z.strictObject({
   gatewayNamespace: z.string().regex(GATEWAY_NAMESPACE_PATTERN),
   prefetch: z.literal(1).optional(),
   bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
+  initialSnapshot: z.string().min(1).max(4096).optional(),
   build: WorkerBuildSchema,
   archive: z.strictObject({
     token: z.string().regex(TOKEN_PATTERN),

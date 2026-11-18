@@ -24,6 +24,15 @@ const Paths = z.object({
   preparedManifestRef: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
 });
 const Registration = Identity.extend({ action: z.literal("register"), ...Paths.shape }).strict();
+const InitialSnapshot = z
+  .object({
+    checkpointId: Identifier,
+    baseCommit: z.string().regex(/^[a-f0-9]{40}$/u),
+    sourceManifestRef: Paths.shape.sourceManifestRef,
+    preparedManifestRef: Paths.shape.preparedManifestRef,
+  })
+  .strict();
+export type NodeWorkerInitialSnapshot = z.infer<typeof InitialSnapshot>;
 const Binding = Identity.extend({
   action: z.literal("bind"),
   sessionId: Identifier,
@@ -33,6 +42,7 @@ const Binding = Identity.extend({
     .max(1_024)
     .refine((value) => value.trim() === value && !value.includes("\0")),
   ownerEpoch: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+  initialSnapshot: InitialSnapshot.optional(),
 }).strict();
 const Input = z.discriminatedUnion("action", [Registration, Binding]);
 const Result = Identity.extend(Paths.shape).strict();
