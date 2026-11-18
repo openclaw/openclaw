@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { nodeRuntimePathEntries } from "../../node-runtime-env.mjs";
+import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
 import {
   createRuntimeProcessScriptFile,
   createRuntimeProcessScriptFileAsync,
@@ -66,6 +67,7 @@ function prepareNodeRuntimeResolution(options?: NodeRuntimeOptions):
   const requiredFlag = options?.requiredFlag;
   if (
     !process.versions.bun &&
+    isSupportedOpenClawNodeVersion(process.versions.node) &&
     (!requiredFlag || process.allowedNodeEnvironmentFlags.has(requiredFlag))
   ) {
     return { resolved: process.execPath };
