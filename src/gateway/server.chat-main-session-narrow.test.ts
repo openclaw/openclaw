@@ -149,7 +149,10 @@ test("an admitted subscriber to absent main receives only what it may currently 
       member.frames.length = 0;
       const turn = { sessionKey: MAIN, message: "private", idempotencyKey: `turn-${++turns}` };
       const saw = onceMessage(owner.ws, (frame) => frame.event === "session.message");
-      expect((await rpcReq(owner.ws, "chat.send", turn)).ok).toBe(true);
+      // A rejected send still closes this waiter during teardown; preserve the RPC failure.
+      void saw.catch(() => {});
+      const sent = await rpcReq(owner.ws, "chat.send", turn);
+      expect(sent.ok, JSON.stringify({ turn: turns, error: sent.error })).toBe(true);
       await saw;
       if (open) {
         await flush(member.ws);

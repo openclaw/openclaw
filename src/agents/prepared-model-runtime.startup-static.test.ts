@@ -1,7 +1,11 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareSessionMutationFacts } from "../gateway/session-sharing-preparation.js";
 import {
   bindPluginMetadataSnapshotCache,
   createPluginCache,
@@ -12,6 +16,8 @@ import {
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import * as databaseAdmission from "../state/agent-database-admission.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type * as ModelCatalog from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -88,6 +94,11 @@ const mocks = await vi.hoisted(async () => {
   }));
   return {
     model,
+    agentIds: ["default"],
+    agentRoot: "/tmp/prepared-static-agent",
+    prepareDatabase: vi.fn<
+      typeof import("../state/openclaw-agent-execution.js").prepareOpenClawAgentDatabaseExecution
+    >(async () => {}),
     authStorage,
     modelRegistry,
     metadataSnapshot,
@@ -214,14 +225,18 @@ vi.mock("../plugins/synthetic-auth.runtime.js", async (importOriginal) => ({
   resolveRuntimeSyntheticAuthProviderRefs: () => [],
 }));
 
-vi.mock("./legacy-inherited-auth-dir.js", () => ({
-  resolveLegacyInheritedAuthDir: () => "/tmp/prepared-static-agent",
+vi.mock("./legacy-inherited-auth-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./legacy-inherited-auth-dir.js")>()),
+  resolveLegacyInheritedAuthDir: () => mocks.agentRoot,
 }));
 
 vi.mock("./agent-scope-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-scope-config.js")>()),
-  listAgentIds: () => ["default"],
-  resolveAgentDir: () => "/tmp/prepared-static-agent",
+  listAgentIds: () => mocks.agentIds,
+  resolveAgentDir: (_config: unknown, agentId: string) =>
+    mocks.agentRoot === "/tmp/prepared-static-agent"
+      ? mocks.agentRoot
+      : path.join(mocks.agentRoot, agentId, "agent"),
   resolveAgentWorkspaceDir: () => "/tmp/prepared-static-workspace",
 }));
 
@@ -261,10 +276,6 @@ vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal
   ...(await importOriginal<typeof import("./embedded-agent-runner/model.static-catalog.js")>()),
   loadBundledProviderStaticCatalogContextModels: mocks.loadStaticCatalog,
   createBundledStaticCatalogModelResolver: () => mocks.resolveStaticCatalogModel,
-}));
-
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: vi.fn() }),
 }));
 
 const { getPreparedModelRuntimeSnapshot, refreshPreparedModelRuntimeSnapshots } =
@@ -308,6 +319,11 @@ async function withScopedCatalogCache<T>(read: () => Promise<T>): Promise<T> {
   }
 }
 
+vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-agent-execution.js")>()),
+  prepareOpenClawAgentDatabaseExecution: mocks.prepareDatabase,
+}));
+
 beforeEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   bindPluginMetadataSnapshotCache(mocks.metadataSnapshot, getPluginCache());
@@ -315,12 +331,122 @@ beforeEach(async () => {
     .mockReset()
     .mockImplementation(() => createEmptyPluginRegistry());
   vi.clearAllMocks();
+  mocks.agentIds = ["default"];
+  mocks.agentRoot = "/tmp/prepared-static-agent";
+  mocks.prepareDatabase.mockReset().mockResolvedValue(undefined);
   mocks.modelRegistry.find.mockReset();
   mocks.resolveStaticCatalogModel.mockReturnValue(undefined);
   mocks.resolveProviderPolicySurface.mockReset().mockReturnValue(null);
 });
 
 describe("prepared model runtime Gateway catalog mode", () => {
+  it.for(["startup", "new owner"] as const)(
+    "settles local catalog database readiness before %s authorization without waiting for discovery",
+    async (phase, { signal }) => {
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async (state) => {
+          const native = await vi.importActual<
+            typeof import("../state/openclaw-agent-execution.js")
+          >("../state/openclaw-agent-execution.js");
+          const { replacePersistedPluginModelCatalogs, encodePluginModelCatalogRelativePath } =
+            await import("./plugin-model-catalog.js");
+          mocks.agentRoot = state.statePath("agents");
+          mocks.agentIds = ["main"];
+          mocks.prepareDatabase.mockImplementation(native.prepareOpenClawAgentDatabaseExecution);
+          const config: OpenClawConfig = {
+            agents: { defaults: { model: "openai/gpt-5.5" }, entries: { main: {}, ops: {} } },
+          };
+          await state.writeConfig(config);
+          setRuntimeConfigSnapshot(config);
+          if (phase === "new owner") {
+            await refresh(config);
+            mocks.agentIds.push("ops");
+          }
+          const agentId = phase === "startup" ? "main" : "ops";
+          const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
+          const entered = createDeferred();
+          const release = createDeferred();
+          const discoveryStarted = createDeferred();
+          const discovered = createDeferred<ModelCatalogSnapshot>();
+          mocks.runPreparedModelCatalogWorker.mockImplementation(() => {
+            discoveryStarted.resolve();
+            return discovered.promise;
+          });
+          mocks.prepareDatabase.mockImplementation(async (options, assertCurrent, abortSignal) => {
+            if (options.agentId === agentId) {
+              entered.resolve();
+              await release.promise;
+            }
+            await native.prepareOpenClawAgentDatabaseExecution(options, assertCurrent, abortSignal);
+          });
+          let published = false;
+          const publication = refresh(config).then(() => {
+            published = true;
+          });
+          try {
+            // On the base publication wins this race: no local preparation exists.
+            await withinTest(Promise.race([entered.promise, publication]), signal);
+            expect(published).toBe(false);
+            expect(existsSync(databasePath)).toBe(false);
+            release.resolve();
+            await withinTest(publication, signal);
+            expect(existsSync(databasePath)).toBe(true);
+            await withinTest(discoveryStarted.promise, signal);
+            const sessionKey = "agent:" + agentId + ":catalog-readiness";
+            const facts = await prepareSessionMutationFacts({
+              cfg: config,
+              agentId,
+              sessionKey,
+              allowMissing: true,
+            });
+            try {
+              expect(facts.readCurrent(config).target).toBeNull();
+              // Discovery is still held. Its independent later save must not retire absent-session facts.
+              await replacePersistedPluginModelCatalogs({
+                agentDir: state.agentDir(agentId),
+                pluginCatalogWrites: {
+                  [encodePluginModelCatalogRelativePath("openai")]: JSON.stringify({
+                    providers: {},
+                  }),
+                },
+                env: state.env,
+              });
+              expect(facts.readCurrent(config).target).toBeNull();
+            } finally {
+              facts.release();
+            }
+          } finally {
+            release.resolve();
+            discovered.resolve({ entries: [], routeVariants: [] });
+            await publication;
+            await resetPreparedModelRuntimeSnapshotsForTest();
+          }
+        },
+      );
+    },
+  );
+
+  it("leaves write-refused configured stores with their database admission owner", async () => {
+    const refusal = databaseAdmission.createAgentDatabaseInspectionRefusal({
+      agentId: "default",
+      paths: ["/tmp/prepared-static-agent/openclaw-agent.sqlite"],
+      reason: "Synthetic read-ready startup recovery",
+      pending: true,
+    });
+    const refused = vi
+      .spyOn(databaseAdmission, "readAgentDatabaseAdmissionRefusal")
+      .mockReturnValue(refusal);
+    try {
+      const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
+      await refresh(config);
+      expect(snapshotFor(config)).toBeDefined();
+      expect(mocks.prepareDatabase).not.toHaveBeenCalled();
+    } finally {
+      refused.mockRestore();
+    }
+  });
+
   it("publishes binary thinking policy for lightweight configured and full catalog reads", async () => {
     const profile = {
       levels: [{ id: "off" }, { id: "low", label: "on" }],
@@ -428,6 +554,7 @@ describe("prepared model runtime Gateway catalog mode", () => {
         mode === "replace" ? [] : [expect.objectContaining(configuredModel)],
       );
       expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+      expect(mocks.prepareDatabase).not.toHaveBeenCalled();
     },
   );
 

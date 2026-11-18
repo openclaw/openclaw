@@ -502,6 +502,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       inventoryOwner: owner,
       pluginGeneration: owner.pendingPluginGeneration,
       prepareInboundPluginRegistry: owner.provenance === "configured",
+      prepareCatalogDatabase: owner.provenance === "configured" && !input.readOnly,
       inspectRegistry:
         owner.provenance === "run" || (owner.provenance === "ephemeral" && input.readOnly === true),
       isGenerationCurrent,

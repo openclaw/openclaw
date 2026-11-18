@@ -1,9 +1,11 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { readPreparedSessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import {
   retainPreparedSessionSharingFacts,
   projectSessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
+import type { SessionSharingEntry } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type {
   SessionEntryReadSourcePreparation,
@@ -163,6 +165,25 @@ export function createSessionSharingFactAcquisition(
     get(databaseIdentity: string, sessionKey: string) {
       const key = `${databaseIdentity}\0${sessionKey}`;
       return initialized.has(key) ? reads.get(key) : undefined;
+    },
+    adoptCreatedEntry(change: object, sessionKey: string, entry: SessionSharingEntry) {
+      const { identity } = readPreparedSessionEntryPublicationSource(change);
+      if (typeof identity !== "string") {
+        throw new SessionMutationFactsUnavailableError();
+      }
+      const retained = retainPreparedSessionSharingFacts({
+        databaseIdentity: `file:${identity}`,
+        sessionKey,
+        followLifecycle: params.followLifecycle,
+        followTranscript: params.followTranscript,
+        entry,
+        membership: new Set(),
+      });
+      const key = `file:${identity}\0${sessionKey}`;
+      reads.set(key, retained);
+      initialized.add(key);
+      params.releases.push(retained.release);
+      return retained;
     },
     prepareRead() {
       const pending = [...reads.values()].flatMap((read) => read.prepareRead() ?? []);
