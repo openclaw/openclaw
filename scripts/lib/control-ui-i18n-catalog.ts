@@ -422,11 +422,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     const hotKeys: Array<keyof typeof panelCopy> =
       key === "nativeStatus"
         ? ["title"]
-        : key === "desktopCloseSearch"
+        : key === "desktopFilter"
           ? ["desktopWorking"]
           : key === "mobileFinished"
             ? ["stopConfirmTitle", "stopConfirmMessage", "stopConfirmAction", "back"]
-            : key === "refresh"
+            : key === "noRunning"
               ? ["stop", "stopping"]
               : [];
     for (const name of hotKeys) {
