@@ -1484,6 +1484,11 @@ select.settings-select:not([multiple]) {
   font-weight: 600;
 }
 
+openclaw-math.markdown-math-display {
+  display: block;
+  margin: 1em 0;
+}
+
 .markdown-plain-text-fallback {
   display: block;
   white-space: pre-wrap;

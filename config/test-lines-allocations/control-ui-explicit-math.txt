@@ -1,0 +1,2 @@
+# Regression coverage for explicit TeX parsing, streaming sanitization and chat history rendering.
+215

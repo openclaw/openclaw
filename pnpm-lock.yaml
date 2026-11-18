@@ -3197,6 +3197,9 @@ importers:
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
+      katex:
+        specifier: 0.19.1
+        version: 0.19.1
       markdown-it:
         specifier: 15.0.3
         version: 15.0.3
@@ -8502,6 +8505,10 @@ packages:
   jwt-decode@4.0.0:
     resolution: {integrity: sha512-+KJGIyHgkGuIq3IEBNftfhW/LfWhXUIY6OmyVWjliu5KH1y0fw7VQ8YndE2O4qZdMSd9SqbnC8GOcZEy0Om7sA==}
     engines: {node: '>=18'}
+
+  katex@0.19.1:
+    resolution: {integrity: sha512-jG8uKntjSEcm2EpQOh0XturpPuuC9r3Sq5HLHdsFdWZT27E672SF19QEi+of0/YeOy15lDgRhKvr5614uRrEfA==}
+    hasBin: true
 
   kebab-case@1.0.2:
     resolution: {integrity: sha512-7n6wXq4gNgBELfDCpzKc+mRrZFs7D+wgfF5WRFLNAr4DA/qtr9Js8uOAVAfHhuLMfAcQ0pRKqbpjx+TcJVdE1Q==}
@@ -16430,6 +16437,10 @@ snapshots:
       safe-buffer: 5.2.1
 
   jwt-decode@4.0.0: {}
+
+  katex@0.19.1:
+    dependencies:
+      commander: 15.0.0
 
   kebab-case@1.0.2: {}
 

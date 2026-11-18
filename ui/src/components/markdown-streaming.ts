@@ -11,6 +11,7 @@ import {
   type MarkdownDetailsFrame,
   scanMarkdownDisclosureLine,
 } from "./markdown-details.ts";
+import { findMarkdownMathClosingDelimiter } from "./markdown-math.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import {
   streamingMarkdownState,
@@ -194,6 +195,7 @@ function scanStableStreamingMarkdown(
   let { boundary, containerOffset, hasLinkReferenceDefinition, index, lastLiteralOffset } = cursor;
   let lineMode = cursor.lineMode;
   let openFence = cursor.openFence;
+  let openMath = cursor.openMath;
   const detailsStack: MarkdownDetailsFrame[] = [];
   // Completed literal blocks cannot gain indentation ownership from later prose. Keep
   // open containers and unfinished fences intact when parsing the retained suffix.
@@ -233,14 +235,32 @@ function scanStableStreamingMarkdown(
         lastLiteralOffset,
         lineMode,
         openFence,
+        openMath,
       };
       continue;
     }
     const line = markdownLocal.slice(index, nextLineBreak === -1 ? lineEnd : nextLineBreak);
     const lineFence = openFence;
     let rawHtmlLine = false;
+    let mathLine = false;
 
-    if (openFence) {
+    if (openMath) {
+      mathLine = true;
+      const end = findMarkdownMathClosingDelimiter(line, openMath, 0);
+      if (end >= 0) {
+        const suffix = line.slice(end + openMath.length);
+        openMath = undefined;
+        lastLiteralOffset = lineEnd;
+        if (
+          detailsStack.length === 0 &&
+          nextLineBreak !== -1 &&
+          stripMarkdownContainerPrefixes(line).offset === 0 &&
+          !suffix.trim()
+        ) {
+          boundary = lineEnd;
+        }
+      }
+    } else if (openFence) {
       if (isFenceClose(line, openFence)) {
         openFence = null;
         lastLiteralOffset = lineEnd;
@@ -265,8 +285,27 @@ function scanStableStreamingMarkdown(
         const content = strippedLine.content.trimStart();
         rawTail = nextLineBreak === -1 && content.length > 0 && !content.startsWith("<");
       } else {
+        const mathOpening = /^ {0,3}(\\\[|\$\$)/u.exec(strippedLine.content)?.[1];
         const openingFence = getFenceMarker(line);
-        if (openingFence) {
+        if (mathOpening) {
+          mathLine = true;
+          const closing = mathOpening === "$$" ? "$$" : "\\]";
+          const offset = strippedLine.content.indexOf(mathOpening) + mathOpening.length;
+          const end = findMarkdownMathClosingDelimiter(strippedLine.content, closing, offset);
+          if (end < 0) {
+            openMath = closing;
+          } else {
+            lastLiteralOffset = lineEnd;
+            if (
+              detailsStack.length === 0 &&
+              nextLineBreak !== -1 &&
+              strippedLine.offset === 0 &&
+              !strippedLine.content.slice(end + closing.length).trim()
+            ) {
+              boundary = lineEnd;
+            }
+          }
+        } else if (openingFence) {
           openFence = openingFence;
           lastLiteralOffset = lineEnd;
         } else {
@@ -295,7 +334,7 @@ function scanStableStreamingMarkdown(
     if (
       detailsStack.length === 0 &&
       !rawHtmlLine &&
-      (nextLineBreak !== -1 || canResumeStreamingLine(line, lineFence))
+      (nextLineBreak !== -1 || (!openMath && !mathLine && canResumeStreamingLine(line, lineFence)))
     ) {
       lineMode = nextLineBreak === -1 ? (lineFence ? "fence" : "plain") : null;
       resumeCursor = {
@@ -306,6 +345,7 @@ function scanStableStreamingMarkdown(
         lastLiteralOffset,
         lineMode,
         openFence,
+        openMath,
       };
     }
   }
@@ -350,7 +390,7 @@ function scanStableStreamingMarkdown(
     rawTail,
     result: {
       boundary,
-      tailRepairStart: openFence ? null : Math.max(boundary, lastLiteralEnd),
+      tailRepairStart: openFence || openMath ? null : Math.max(boundary, lastLiteralEnd),
     },
   };
 }
@@ -360,7 +400,10 @@ function canResumeStreamingLine(line: string, fence: FenceMarker | null): boolea
   if (!first) {
     return false;
   }
-  return fence ? first !== fence.marker : !/[\s`~<[\]*+\-\d>]/u.test(first);
+  // A lone backslash or dollar can become an explicit math opener on append.
+  return fence
+    ? first !== fence.marker
+    : first !== "\\" && first !== "$" && !/[\s`~<[\]*+\-\d>]/u.test(first);
 }
 
 export function splitStableStreamingMarkdown(
@@ -393,8 +436,8 @@ export function splitStableStreamingMarkdown(
     : scanStableStreamingMarkdown(markdownLocal, scanned.cursor).result;
 }
 
-// Streaming-tail repair config: math is not rendered by this pipeline, so
-// completing `$$` would inject visible characters into ordinary prose.
+// Only explicit, complete math delimiters render. Never invent closing TeX
+// delimiters while repairing ordinary streamed Markdown.
 const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies RemendOptions;
 
 // repairStart is the splitter-owned literal boundary relative to this tail.

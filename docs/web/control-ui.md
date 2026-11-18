@@ -129,6 +129,8 @@ A short transcript loads at most one older page automatically when you open or r
 
 Earlier history is offered only when the Gateway provides a cursor or a loaded transcript entry can anchor the request. Tool activity summaries do not prevent loading older messages. If neither boundary exists, the control stays hidden and automatic loading stops without an error.
 
+Chat and document Markdown render inline TeX with `\(...\)` and display equations with `\[...\]` or `$$...$$`. Single-dollar text such as `$5` stays literal, and code spans and fenced code blocks are never typeset. The equation renderer and fonts load from the Gateway when first needed.
+
 GitHub item URLs and repository-qualified references such as `owner/repo#126` render as compact links. Use `PR owner/repo#126` for a pull request or `issue owner/repo#126` for an issue. References identified by keywords, such as `PR #126`, remain plain text without a repository qualifier. Project display names, the checkout, the project catalog, and other messages do not supply a destination. A standalone hash token that is also a valid hexadecimal color, such as `#126`, retains its color preview without a GitHub link.
 
 GitHub polling uses conditional requests when GitHub supplies an ETag. Unchanged responses reuse parsed metadata without downloading the body again. Reuse is bounded and isolated by API endpoint and credential; every refresh still checks GitHub and the current access rules. Authenticated `304 Not Modified` responses do not consume GitHub’s primary REST rate limit.

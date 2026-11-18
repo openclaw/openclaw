@@ -24,6 +24,7 @@ const allowedTags = [
   "li",
   "ol",
   "openclaw-person-reference",
+  "openclaw-math",
   "p",
   "pre",
   "s",
