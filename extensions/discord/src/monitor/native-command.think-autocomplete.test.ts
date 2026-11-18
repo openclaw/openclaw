@@ -23,7 +23,8 @@ vi.mock("openclaw/plugin-sdk/native-command-registry", async (importOriginal) =>
   loadCommandArgMenuModelCatalog: vi.fn(async () => []),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   getPreparedModelCatalogSnapshot: vi.fn(() => ({ entries: [], routeVariants: [] })),
   normalizeProviderId: (value: string) => value.trim().toLowerCase(),
   resolveAgentDir: (_cfg: OpenClawConfig, agentId: string) => `/tmp/agents/${agentId}/agent`,
