@@ -37,7 +37,8 @@ it.each(["complete", "cancel", "revoke", "consumer-error", "worker-failure"] as 
     const failure = new Error(`stream ${finish}`);
     let current = true;
     const authority = {
-      acquire<T>(operation: () => T): T {
+      async acquire<T>(operation: () => T, prepare?: () => Promise<void>): Promise<T> {
+        await prepare?.();
         authority.assertCurrent();
         return operation();
       },
@@ -202,6 +203,38 @@ it("captures queued read routing and schema facts without reading unrelated envi
   }
 });
 
+it.skipIf(process.platform === "win32").each(["queued", "custody"] as const)(
+  "rejects a file replaced during %s read admission",
+  async (phase) => {
+    const { pathname, options } = source();
+    const dispatch = createDeferredCore();
+    const task = queueTask(dispatch.promise);
+    void task.captured.then(
+      () => task.result.resolve(emptyReply),
+      () => {},
+    );
+    const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    const rejected = expect(reading).rejects.toThrow(/identity changed/);
+    await task.submitted;
+    const replace = () => {
+      const replacement = pathname + ".replacement";
+      fs.writeFileSync(replacement, "replacement source");
+      fs.renameSync(replacement, pathname);
+    };
+    if (phase === "queued") {
+      replace();
+    } else {
+      vi.spyOn(fs.promises, "readFile").mockImplementationOnce(async () => {
+        replace();
+        throw Object.assign(new Error("No persisted owner"), { code: "ENOENT" });
+      });
+    }
+    dispatch.resolve();
+    await rejected;
+    await expect(task.captured).rejects.toThrow(/identity changed/);
+  },
+);
+
 it("lets an active reader's host callback finish a nested read before the parent settles", async () => {
   const { pathname, options } = source();
   if (threadId === 0) {
@@ -215,7 +248,8 @@ it("lets an active reader's host callback finish a nested read before the parent
   const authority = {
     signal: controller.signal,
     assertCurrent: context.admission.assertCurrent,
-    acquire: <T>(operation: () => T) => {
+    acquire: async <T>(operation: () => T, prepare?: () => Promise<void>) => {
+      await prepare?.();
       context.admission.assertCurrent();
       return operation();
     },
@@ -544,7 +578,8 @@ it.each(captures)(
     const authority = {
       signal: new AbortController().signal,
       assertCurrent: fixture.checkFreshAdmission ? context.admission.assertCurrent : () => {},
-      acquire: <T>(operation: () => T) => {
+      acquire: async <T>(operation: () => T, prepare?: () => Promise<void>) => {
+        await prepare?.();
         if (fixture.checkFreshAdmission) {
           context.admission.assertCurrent();
         }

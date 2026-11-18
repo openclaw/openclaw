@@ -19,6 +19,10 @@ export function createSqliteWorkerClientActor(): Actor {
       async prepareAccess() {
         return () => {};
       },
+      async withReadAccess<T>(operation: () => T, prepare?: () => Promise<void>): Promise<T> {
+        await prepare?.();
+        return operation();
+      },
       assertReadAllowed() {},
     },
     pathReferences: new Map([["/fixture/state.sqlite", 1]]),

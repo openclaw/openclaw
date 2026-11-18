@@ -73,7 +73,8 @@ async function read(location = filename, checkFreshAdmission = false) {
       {
         signal: new AbortController().signal,
         assertCurrent: admission.assertCurrent,
-        acquire: <T>(operation: () => T) => {
+        acquire: async <T>(operation: () => T, prepare?: () => Promise<void>) => {
+          await prepare?.();
           admission.assertCurrent();
           return operation();
         },

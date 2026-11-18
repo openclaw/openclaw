@@ -5,7 +5,10 @@ import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
-import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import {
+  captureGatewayStateOwnerAsync,
+  type captureGatewayStateOwner,
+} from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
@@ -13,6 +16,7 @@ import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
+  readDatabasePathIdentity,
   type DatabasePathIdentity,
 } from "../infra/sqlite-worker-identity.js";
 import {
@@ -83,7 +87,7 @@ export function createAgentDatabaseNativeGeneration(
   startupPreparation = false,
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
-  const processOwner = captureGatewayStateOwner(context.admission.databasePath);
+  let processOwner: ReturnType<typeof captureGatewayStateOwner>;
   const startupSignal = startupPreparation ? resolveSqliteInspectionSignal() : undefined;
   const startupCancellation = startupSignal
     ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
@@ -440,27 +444,33 @@ export function createAgentDatabaseNativeGeneration(
       const finishPreparation = sharedPreparation.retain();
       const finishNativeOpen = sharedPreparation.beginNativeOpen();
       opening = (async () => {
-        retireReplacedAgentValidation(agentId, pathname, expectedIdentity);
         // Existing physical files share preparation. First-use creation retains its caller's claim.
         const preparingShared = expectedIdentity !== undefined;
+        const assertOpening = () => {
+          assertCurrent();
+          (preparingShared ? sharedPreparation.source : source).assertCurrent();
+          if (!preparingShared) {
+            assertCallerCurrent?.();
+            signal?.throwIfAborted();
+          }
+        };
+        processOwner = await captureGatewayStateOwnerAsync(context.admission.databasePath);
+        assertOpening();
+        retireReplacedAgentValidation(agentId, pathname, expectedIdentity);
         const registration =
           createIfMissing || preparingShared
             ? captureOpenClawAgentDatabaseRegistration({
                 agentId,
                 agentPath: pathname,
+                identity: await readDatabasePathIdentity(pathname),
                 admission: context.admission,
                 assertPublicationCurrent: context.assertPublicationCurrent,
                 onRegistryChange: (preparingShared ? sharedPreparation.source : source)
                   .onRegistryChange,
               })
             : undefined;
+        assertOpening();
         const openStore = async () => {
-          const assertOpening = () => {
-            assertCurrent();
-            source.assertCurrent();
-            assertCallerCurrent?.();
-            signal?.throwIfAborted();
-          };
           // Keep the native owner reachable if registration publication fails after open.
           openedStore = await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
             {
@@ -618,10 +628,12 @@ export function createAgentDatabaseNativeGeneration(
         const registration = captureOpenClawAgentDatabaseRegistration({
           agentId,
           agentPath: pathname,
+          identity: await readDatabasePathIdentity(pathname),
           admission: context.admission,
           assertPublicationCurrent: context.assertPublicationCurrent,
           onRegistryChange: source.onRegistryChange,
         });
+        assertOperationCurrent();
         await settleAgentRegistration(registration, async () => {
           await runSqliteWorkerStoreOperation(
             store,

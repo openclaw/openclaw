@@ -25,6 +25,7 @@ import { startGatewayStateOwnerHeartbeat } from "./gateway-state-owner-heartbeat
 import {
   acquireGatewayStateOwnerFile,
   assertPersistedStateDatabaseAccessAllowed,
+  assertPersistedStateDatabaseAccessAllowedAsync,
   defaultPayload,
   GatewayStateOwnerContentionError,
   StateDatabaseAdmissionPendingError,
@@ -500,7 +501,30 @@ export function hasActiveGatewayStateOwner(databasePath: string): boolean {
 
 /** Capture registered process custody; a PID or copied lock payload grants no authority. */
 export function captureGatewayStateOwner(databasePath: string) {
-  const key = resolveStateOwnerIdentity(databasePath).key;
+  const owner = captureGatewayStateOwnerAtIdentity(
+    databasePath,
+    resolveStateOwnerIdentity(databasePath),
+  );
+  owner?.assertCurrent();
+  return owner;
+}
+
+/** Native worker preparation awaits path discovery; custody checks keep their existing owner. */
+export async function captureGatewayStateOwnerAsync(databasePath: string) {
+  const identity = await resolveStateOwnerIdentityAsync(databasePath);
+  const owner = captureGatewayStateOwnerAtIdentity(databasePath, identity);
+  if (owner) {
+    const assertCurrent = await captureStateDatabaseAccessAtIdentity(identity).prepareAccess();
+    assertCurrent();
+  }
+  return owner;
+}
+
+function captureGatewayStateOwnerAtIdentity(
+  databasePath: string,
+  captured: ReturnType<typeof resolveStateOwnerIdentity>,
+) {
+  const key = captured.key;
   const owner = owners.get(key);
   if (!owner || owner.kind !== "process") {
     return undefined;
@@ -518,7 +542,6 @@ export function captureGatewayStateOwner(databasePath: string) {
     }
     assertStateDatabaseAccessAtOwnerPath(databasePath, identity, undefined);
   };
-  assertCurrent();
   return {
     ownerId: owner.payload.ownerId,
     role: owner.payload.role ?? "gateway",
@@ -527,11 +550,24 @@ export function captureGatewayStateOwner(databasePath: string) {
   };
 }
 
+// Only the synchronous acquisition frame can consume an awaited sidecar observation.
+// It cannot authorize a later dispatch, native write, or asynchronous descendant.
+const preparedReadAccess = new AsyncLocalStorage<{
+  path: string;
+  active: boolean;
+  assertCurrent(): void;
+}>();
+
 /** Reads within an admission reuse process custody; the next admission verifies the lock. */
 export function assertStateDatabaseReadAllowed(
   databasePath: string,
   captured?: Parameters<typeof assertStateDatabaseAccessAllowed>[1],
 ): void {
+  const prepared = preparedReadAccess.getStore();
+  if (prepared?.active && prepared.path === path.resolve(databasePath)) {
+    prepared.assertCurrent();
+    return;
+  }
   assertStateDatabaseReadAtOwnerPath(databasePath, captured);
 }
 
@@ -597,10 +633,15 @@ export function assertStateDatabaseAccessAllowed(
 
 /** Retained handles keep their admitted paths; reopening captures a fresh identity. */
 export async function captureStateDatabaseAccess(databasePath: string) {
-  const identity = await resolveStateOwnerIdentityAsync(databasePath);
+  return captureStateDatabaseAccessAtIdentity(await resolveStateOwnerIdentityAsync(databasePath));
+}
+
+function captureStateDatabaseAccessAtIdentity(
+  identity: ReturnType<typeof resolveStateOwnerIdentity>,
+) {
   const { canonicalPath } = identity;
   const registered = owners.get(identity.key);
-  return {
+  const access = {
     canonicalPath,
     processOwner:
       registered?.kind === "process"
@@ -675,11 +716,48 @@ export async function captureStateDatabaseAccess(databasePath: string) {
       readOwnerPaths.set(path.resolve(canonicalPath), owner);
       return assertCurrent;
     },
+    async withReadAccess<T>(operation: () => T, prepare?: () => Promise<void>): Promise<T> {
+      const owner = owners.get(identity.key);
+      if (owner !== registered) {
+        throw createGatewayStateProcessOwnerRetiredError();
+      }
+      let assertCurrent: () => void;
+      if (owner) {
+        assertCurrent = await access.prepareAccess();
+      } else {
+        // Foreign/offline custody is observed anew for every borrow and queued dispatch.
+        await assertPersistedStateDatabaseAccessAllowedAsync({
+          databasePath: canonicalPath,
+          ownerPath: identity.ownerPath,
+          assertMaintenance: () =>
+            assertStateDatabaseAccessAtOwnerPath(canonicalPath, identity, undefined),
+        });
+        assertCurrent = () => {
+          if (owners.get(identity.key) !== owner) {
+            throw createGatewayStateProcessOwnerRetiredError();
+          }
+        };
+      }
+      if (prepare) {
+        await prepare();
+      }
+      getOpenClawDatabaseMaintenanceScope()?.assertReadAdmission();
+      assertCurrent();
+      const frame = { path: path.resolve(canonicalPath), active: true, assertCurrent };
+      return preparedReadAccess.run(frame, () => {
+        try {
+          return operation();
+        } finally {
+          frame.active = false;
+        }
+      });
+    },
     // Native close can request its original schema custody after ordinary admission retires.
     assertReadAllowed(captured?: Parameters<typeof assertStateDatabaseAccessAllowed>[1]) {
       assertStateDatabaseReadAtOwnerPath(canonicalPath, captured, identity);
     },
   };
+  return access;
 }
 
 function assertStateDatabaseAccessAtOwnerPath(

@@ -4,7 +4,10 @@ import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-errors.js";
-import { getStateDatabaseSchemaLease } from "../infra/gateway-state-owner.js";
+import {
+  captureStateDatabaseAccess,
+  getStateDatabaseSchemaLease,
+} from "../infra/gateway-state-owner.js";
 import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
@@ -107,6 +110,7 @@ export function startOpenClawStateReadOperation(
   let closing: Promise<void> | undefined;
   let cleaned = false;
   let admissionDeadline: number | undefined;
+  let access: Awaited<ReturnType<typeof captureStateDatabaseAccess>>;
   const isPendingAdmission = (error: unknown) =>
     error instanceof StateDatabaseAdmissionPendingError && error.databasePath === pathname;
   const authority: OpenClawStateReadAuthority = {
@@ -117,13 +121,14 @@ export function startOpenClawStateReadOperation(
       context.admission.assertCurrent();
       openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
     },
-    acquire<T>(operation: () => T): T | Promise<T> {
-      const acquire = () => {
-        authority.assertCurrent();
-        return operation();
-      };
+    async acquire<T>(operation: () => T, prepare?: () => Promise<void>): Promise<T> {
+      const acquire = () =>
+        access.withReadAccess(() => {
+          authority.assertCurrent();
+          return operation();
+        }, prepare);
       try {
-        return acquire();
+        return await acquire();
       } catch (error) {
         if (!isPendingAdmission(error)) {
           throw error;
@@ -282,6 +287,7 @@ export function startOpenClawStateReadOperation(
     );
     transport = selectedTransport;
     unregisterSource = source.own(() => resource.close());
+    access = await captureStateDatabaseAccess(pathname);
     if (command.type === "admit") {
       return query(selectedTransport);
     }

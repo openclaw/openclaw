@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readSqliteReaderDiagnosticsForPath } from "../../infra/sqlite-reader-lifecycle.js";
@@ -157,6 +157,11 @@ it("dedupes configured, state-root, and registered custom database paths", async
     configured: { agentDir: configured },
     custom: { agentDir: path.join(root, "active-custom-agent") },
   };
+  const stackTraceLimit = Error.stackTraceLimit;
+  Error.stackTraceLimit = 100;
+  onTestFinished(() => {
+    Error.stackTraceLimit = stackTraceLimit;
+  });
   using filesystem = observeMainThreadFs();
   const candidates = await discover({ cfg: { agents: { entries } }, env });
   const ids = candidates.map(({ agentId }) => agentId);

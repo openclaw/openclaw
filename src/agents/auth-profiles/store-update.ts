@@ -512,6 +512,11 @@ async function runPreparedAuthProfileStoreUpdate(
           return result.value;
         },
         true,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        params.existingDatabaseTarget?.identity,
       );
       outcome = { ok: true, value };
     } catch (error) {

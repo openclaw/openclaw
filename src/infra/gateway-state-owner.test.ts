@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import {
@@ -30,6 +31,7 @@ import {
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
   captureGatewayStateOwner,
+  captureGatewayStateOwnerAsync,
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   getStateDatabaseSchemaLease,
@@ -104,31 +106,39 @@ function expectExistence(present: boolean, ...paths: string[]) {
 }
 
 describe("Gateway state ownership", () => {
-  it("resolves the selected database once per captured owner assertion and rejects successors", () => {
-    const owner = gatewayOwner(databasePath, root);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    fs.writeFileSync(databasePath, "synthetic database");
-    const captured = captureGatewayStateOwner(databasePath)!;
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    captured.assertCurrent();
-    expect(realpath.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
-    realpath.mockRestore();
-    owner.release();
-    gatewayOwner(databasePath, root);
-    expect(() => captured.assertCurrent()).toThrow();
-  });
+  it.each([captureGatewayStateOwner, captureGatewayStateOwnerAsync])(
+    "resolves the selected database once per captured owner assertion and rejects successors (%#)",
+    async (capture) => {
+      const owner = gatewayOwner(databasePath, root);
+      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      fs.writeFileSync(databasePath, "synthetic database");
+      const captured = (await capture(databasePath))!;
+      const realpath = vi.spyOn(fs.realpathSync, "native");
+      captured.assertCurrent();
+      expect(realpath.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
+      realpath.mockRestore();
+      owner.release();
+      gatewayOwner(databasePath, root);
+      expect(() => captured.assertCurrent()).toThrow();
+    },
+  );
 
-  it.skipIf(process.platform === "win32")("rejects a retargeted captured owner alias", () => {
-    gatewayOwner(databasePath, root);
-    const alias = path.join(directories.make("openclaw-owner-alias-"), "root");
-    fs.symlinkSync(root, alias);
-    const captured = captureGatewayStateOwner(path.join(alias, "state", "openclaw.sqlite"))!;
-    const otherRoot = directories.make("openclaw-owner-successor-");
-    gatewayOwner(path.join(otherRoot, "state", "openclaw.sqlite"), otherRoot);
-    fs.unlinkSync(alias);
-    fs.symlinkSync(otherRoot, alias);
-    expect(() => captured.assertCurrent()).toThrow(GatewayStateOwnerContentionError);
-  });
+  it
+    .skipIf(process.platform === "win32")
+    .each([captureGatewayStateOwner, captureGatewayStateOwnerAsync])(
+    "rejects a retargeted captured owner alias (%#)",
+    async (capture) => {
+      gatewayOwner(databasePath, root);
+      const alias = path.join(directories.make("openclaw-owner-alias-"), "root");
+      fs.symlinkSync(root, alias);
+      const captured = (await capture(path.join(alias, "state", "openclaw.sqlite")))!;
+      const otherRoot = directories.make("openclaw-owner-successor-");
+      gatewayOwner(path.join(otherRoot, "state", "openclaw.sqlite"), otherRoot);
+      fs.unlinkSync(alias);
+      fs.symlinkSync(otherRoot, alias);
+      expect(() => captured.assertCurrent()).toThrow(GatewayStateOwnerContentionError);
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
@@ -285,6 +295,36 @@ describe("Gateway state ownership", () => {
     access.assertReadAllowed();
     expect(stat).not.toHaveBeenCalled();
   });
+
+  it("refuses a new local owner acquired during an awaited offline read admission", async () => {
+    const access = await captureStateDatabaseAccess(databasePath);
+    const sidecar = createDeferredCore<string>();
+    vi.spyOn(fs.promises, "readFile").mockReturnValueOnce(sidecar.promise);
+    const consume = vi.fn();
+    const reading = access.withReadAccess(consume);
+    const owner = gatewayOwner(databasePath, root);
+    sidecar.resolve(fs.readFileSync(owner.path, "utf8"));
+    await expect(reading).rejects.toThrow("no longer current");
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it.each(["custody", "dispatch"] as const)(
+    "refuses a root retired during asynchronous read %s preparation",
+    async (phase) => {
+      const owner = gatewayOwner(databasePath, root);
+      const access = await captureStateDatabaseAccess(databasePath);
+      const consume = vi.fn();
+      const reading = access.withReadAccess(
+        consume,
+        phase === "dispatch" ? async () => owner.release() : undefined,
+      );
+      if (phase === "custody") {
+        owner.release();
+      }
+      await expect(reading).rejects.toThrow();
+      expect(consume).not.toHaveBeenCalled();
+    },
+  );
 
   it.skipIf(process.platform === "win32")(
     "keeps worker-verified custody bound to the captured target after an alias changes",

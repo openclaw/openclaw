@@ -81,12 +81,14 @@ export const isStateDatabaseMaintenanceContention = (error: unknown): boolean =>
       error instanceof StateDatabaseOfflineMaintenanceError;
 
 /** Persisted ownership can identify a holder but cannot lend this process maintenance authority. */
-export function assertPersistedStateDatabaseAccessAllowed(params: {
+type PersistedStateAccess = {
   databasePath: string;
   ownerPath: string;
   assertMaintenance: () => void;
-}): void {
-  const { databasePath, ownerPath, assertMaintenance } = params;
+};
+
+export function assertPersistedStateDatabaseAccessAllowed(params: PersistedStateAccess): void {
+  const { databasePath, ownerPath } = params;
   const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified from ${ownerPath}; restart the Gateway.`;
   let raw: string;
   try {
@@ -97,6 +99,33 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     }
     throw new StateDatabaseAccessError(unavailable, { cause: error });
   }
+  assertPersistedStateDatabaseRecordAllowed(params, raw);
+}
+
+/** Await the sidecar for reads; native maintenance retains its synchronous boundary. */
+export async function assertPersistedStateDatabaseAccessAllowedAsync(
+  params: PersistedStateAccess,
+): Promise<void> {
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(params.ownerPath, "utf8");
+  } catch (error) {
+    if (extractErrorCode(error) === "ENOENT") {
+      return;
+    }
+    throw new StateDatabaseAccessError(
+      `OpenClaw state ownership at ${params.databasePath} could not be verified from ${params.ownerPath}; restart the Gateway.`,
+      { cause: error },
+    );
+  }
+  assertPersistedStateDatabaseRecordAllowed(params, raw);
+}
+
+function assertPersistedStateDatabaseRecordAllowed(
+  { databasePath, ownerPath, assertMaintenance }: PersistedStateAccess,
+  raw: string,
+): void {
+  const unavailable = `OpenClaw state ownership at ${databasePath} could not be verified from ${ownerPath}; restart the Gateway.`;
   const inspection = ownerInspections.getStore();
   if (inspection?.deadOwner?.path === ownerPath && inspection.deadOwner.raw === raw) {
     return;
