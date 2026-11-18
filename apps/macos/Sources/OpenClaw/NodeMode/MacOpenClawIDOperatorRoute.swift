@@ -29,12 +29,14 @@ struct MacOpenClawIDOperatorLive: Sendable {
     let sessionBox: WebSocketSessionBox
     let dashboardURL: URL
     let dashboardCookie: HTTPCookie
+    /// For this device's own signed membership writes (Settings); never handed to the node worker.
+    let tunnel: OpenClawIDNodeTunnel
 }
 
 /// Owns the Mac's chat and dashboard access to its OpenClaw ID claw over the human key.
 @MainActor
 final class MacOpenClawIDOperatorRoute {
-    static let shared = MacOpenClawIDOperatorRoute()
+    static let shared = MacOpenClawIDOperatorRoute { MacOpenClawIDDeviceStore.shared.operatorEnrollment() }
 
     /// Synchronous guard checked while a route is prepared and after it is published.
     private final class Authority: Sendable {
@@ -56,7 +58,7 @@ final class MacOpenClawIDOperatorRoute {
         let credential: MacOpenClawIDOperatorCredential
     }
 
-    /// Set once at launch by the enrollment owner; nil while this Mac has no OpenClaw ID claw.
+    /// The enrollment owner's current device; nil while this Mac has no OpenClaw ID claw.
     var enrollment: @MainActor () -> MacOpenClawIDOperatorEnrollment?
     private var generation: UInt64 = 0
     private var route: (
@@ -186,7 +188,8 @@ final class MacOpenClawIDOperatorRoute {
                     sessionBox: WebSocketSessionBox(session: OpenClawIDNodeWebSocketSession(
                         tunnel: tunnel, logicalOrigin: origin, role: .operator)),
                     dashboardURL: proxy.baseURL,
-                    dashboardCookie: proxy.cookie)
+                    dashboardCookie: proxy.cookie,
+                    tunnel: tunnel)
                 return (live, Resources(tunnel: tunnel, proxy: proxy, credential: credential))
             } catch {
                 await tunnel.shutdown()

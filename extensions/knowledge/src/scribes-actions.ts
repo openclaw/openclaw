@@ -64,7 +64,7 @@ export async function startScribe(
  * Repair a scribe so its automation runs again in its own conversation.
  * - Archived conversation: restore it and turn the automation back on, without a model turn.
  *   Archiving turned the automation off; one paused before archiving also comes back on, a
- *   visible change Pause undoes.
+ *   visible change Disable undoes.
  * - Deleted conversation, or a failing scribe: the automation must be owned by the scribe's
  *   conversation, which only a turn there can do, so send it the repair prompt (in a new
  *   conversation when the old one was deleted).
@@ -129,7 +129,7 @@ function savedOptions(job: ScribeJob) {
 // What a refused run means for the operator, by the scheduler's reason.
 const RUN_REFUSALS: Record<string, string> = {
   stopped: "the scheduler is stopped",
-  disabled: "the automation is paused",
+  disabled: "the automation is disabled",
   ownerless: "the automation lost its owner; open the conversation and ask it to repair its setup",
   "invalid-spec": "its schedule is invalid; open the conversation and ask it to repair its setup",
 };
@@ -150,7 +150,7 @@ export async function runScribeNow(host: ScribeHost, job: ScribeJob) {
   throw new Error(`The run did not start: ${(RUN_REFUSALS[reason] ?? reason) || "not accepted"}.`);
 }
 
-/** Pause or resume the scribe's automation; rejected if it changed since it was read. */
+/** Disable or enable the automation; rejected if it changed since it was read. */
 export const setScribePaused = (host: ScribeHost, job: ScribeJob, paused: boolean) =>
   host.request("cron.update", {
     id: job.id,

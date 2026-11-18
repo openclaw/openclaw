@@ -136,8 +136,16 @@ it("uses only bounded visible dialogue and never appends a prediction", () =>
     expect(await loadTranscriptEvents(f.scope)).toEqual(before);
   }));
 
-it("reads past tool activity and keeps the end of long replies", () =>
+it("sends recent user turns and only the final reply, past tool activity", () =>
   withPredictionTest(async (f) => {
+    for (let index = 0; index < 16; index += 1) {
+      await appendTranscriptMessage(f.scope, {
+        message: { role: "user", content: `ask ${index}` },
+      });
+      await appendTranscriptMessage(f.scope, {
+        message: { role: "assistant", content: `progress ${index}` },
+      });
+    }
     for (let index = 0; index < 20; index += 1) {
       const id = `call-${index}`;
       await appendTranscriptMessage(f.scope, {
@@ -161,7 +169,11 @@ it("reads past tool activity and keeps the end of long replies", () =>
     });
     expect(await f.predict()).toMatchObject([true, { text: "What should I try next?" }]);
     const turns = JSON.parse(complete.mock.calls[0]?.[0].conversation);
-    expect(turns[0]).toEqual({ role: "user", text: "Help me find a safe next step." });
+    // The oldest user turn falls outside the 16-turn window; narration never reaches the model.
+    expect(turns.slice(0, -1)).toEqual(
+      Array.from({ length: 16 }, (_, index) => ({ role: "user", text: `ask ${index}` })),
+    );
+    expect(turns.at(-1).role).toBe("assistant");
     expect(turns.at(-1).text).toHaveLength(2_000);
     expect(turns.at(-1).text.endsWith(question)).toBe(true);
   }));

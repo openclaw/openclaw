@@ -1,6 +1,13 @@
 import Foundation
 
 extension DashboardManager {
+    func showRemovalIfNeeded(in controller: DashboardWindowController, present: Bool) -> Bool {
+        guard AppStateStore.shared.connectionMode == .unconfigured,
+              let removal = MacOpenClawIDDeviceStore.shared.lastRemoval() else { return false }
+        controller.showRemoval(removal, present: present)
+        return true
+    }
+
     func failureCopy(for error: Error) -> (title: String, message: String, detail: String) {
         let state = AppStateStore.shared
         return Self.failureCopy(

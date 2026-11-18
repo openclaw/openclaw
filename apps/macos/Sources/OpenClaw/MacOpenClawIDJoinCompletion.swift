@@ -2,21 +2,22 @@ import Foundation
 
 /// One owner for what a successful OpenClaw ID join means, whichever window finished it: the
 /// claw becomes this Mac's Gateway and first-run setup is complete, so no setup window stays
-/// open on a page that would pick a local Gateway. Setup closes before the primary connection
-/// changes, so it never reacts to that change; then the claw's dashboard opens.
+/// open on a page that would pick a local Gateway. The primary connection must commit before
+/// setup completes and the claw’s dashboard opens.
 @MainActor
 enum MacOpenClawIDJoinCompletion {
     static func finish(
         claw: String,
         markOnboardingComplete: @MainActor () -> Void = { OnboardingController.markComplete() },
         closeOnboarding: @MainActor () -> Void = { OnboardingController.shared.close() },
-        selectPrimary: @MainActor (String) -> Void = { Self.selectPrimary($0) },
+        selectPrimary: @MainActor (String) throws -> Void = { try Self.selectPrimary($0) },
         refreshEndpoint: @escaping @MainActor () async -> Void = { await GatewayEndpointStore.shared.refresh() },
         openDashboard: @escaping @MainActor () -> Void = { AppNavigationActions.openDashboard() })
+        throws
     {
+        try selectPrimary(claw)
         markOnboardingComplete()
         closeOnboarding()
-        selectPrimary(claw)
         Task { @MainActor in
             await refreshEndpoint()
             openDashboard()
@@ -34,10 +35,11 @@ enum MacOpenClawIDJoinCompletion {
         return serves(url)
     }
 
-    private static func selectPrimary(_ claw: String) {
-        let state = AppStateStore.shared
-        state.remoteTransport = .direct
-        state.remoteUrl = "wss://\(claw)"
-        state.connectionMode = .remote
+    /// The claw replaces this Mac's primary connection (Tailscale, token or SSH): its saved Gateway
+    /// token and password are cleared in the same write, so they cannot bypass a revocation in
+    /// OpenClaw ID. Tailscale itself is not touched.
+    static func selectPrimary(_ claw: String, state: AppState = AppStateStore.shared) throws {
+        guard let url = URL(string: "wss://\(claw)") else { throw URLError(.badURL) }
+        try state.setPrimaryGateway(.direct(url: url, token: nil, password: nil, tlsFingerprint: nil))
     }
 }

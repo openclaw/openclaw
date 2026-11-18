@@ -93,6 +93,13 @@ new tool results, against the full window even when proactive compaction is
 disabled. It stops an over-window submission and uses the existing safe recovery
 path. Native Codex and Claude CLI keep their own compaction policies.
 
+If tool-result trimming cannot change the saved context, recovery falls through
+to compaction instead of retrying the same oversized request. Same-turn retries
+reuse the recorded keyed input and its runtime context, preserving completed tool
+results without appending another continuation prompt. Recovery estimates count
+only tool-result text the transcript owner can trim; context-engine projections
+that are absent from the saved transcript require compaction.
+
 Scheduled turns in an existing session use the same built-in request checks.
 Their context totals update during requests and after completion even when the
 automation preserves the conversation's displayed model and billing snapshot.

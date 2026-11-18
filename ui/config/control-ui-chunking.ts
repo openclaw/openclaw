@@ -337,6 +337,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "chat-outputs";
     case "ui/src/pages/chat/components/chat-details-people-list.tsx":
       return "chat-details-people-list";
+    // Defer noble initialization inside this chunk without another cold-boot request.
+    case "ui/src/lib/nodes/device-signing.noble.ts":
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
     case "ui/src/pages/chat/chat-live-events.runtime.ts":
@@ -414,6 +416,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-session-organization-shared.ts":
       // Settings, New Session, and Chat share this English copy.
       return "chat-english";
+    case "ui/src/i18n/locales/en-session-organization.ts":
+      // Slash commands use shared labels; management copy loads with its own consumers.
+      return "session-management-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
     case "ui/src/pages/plugins/plugins-page.tsx":
@@ -446,18 +451,15 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/cron/event-source.ts":
     case "ui/src/pages/cron/human-owner.ts":
     case "ui/src/pages/cron/route-model.ts":
-    case "ui/src/pages/cron/run-transcript.tsx":
-    case "ui/src/pages/cron/suggestions.ts":
     case "ui/src/pages/cron/view-props.ts":
     case "ui/src/pages/cron/view-controls.tsx":
     case "ui/src/pages/cron/view-job-status.tsx":
-    case "ui/src/pages/cron/view-jobs-filter.tsx":
-    case "ui/src/pages/cron/view-list.tsx":
     case "ui/src/pages/cron/view-runs.tsx":
     case "ui/src/pages/cron/view.tsx":
     case "src/cron/run-link.ts":
       // These modules already load on first visit; detail/editor views stay lazy.
       return "cron-page";
+    case "packages/gateway-protocol/src/clawhub-trust-error-details.ts":
     case "packages/gateway-protocol/src/capability-consent-error-details.ts":
     case "packages/gateway-protocol/src/install-policy-warning-error-details.ts":
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":

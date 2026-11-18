@@ -7,7 +7,10 @@ import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-
 import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
 import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
-import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
+import {
+  isInlineUpdateCompatibilityExport,
+  readUpdateCompatibilityInventory,
+} from "../scripts/lib/update-compat-chunks.mts";
 import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import {
@@ -31,6 +34,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 // Package scripts, workflows, Docker scenarios, and documented maintainer commands invoke these
 // files by path. They are executable roots rather than importable library modules.
 const repositoryScriptEntries = [
+  "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
@@ -40,6 +44,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-deletion-cancellation-measure.ts",
   "scripts/perf/template-retirement-measure.mts",
   "scripts/windows-release-promotion.mjs!",
+  "scripts/windows-gateway-release.mjs!",
   // Offline composition is documented; Docker executes the staged finalizer by path.
   "scripts/compose-installed-runtime.mts!",
   "scripts/finalize-installed-runtime.mjs!",
@@ -73,6 +78,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
   // The Windows benchmark launches this observer with Node --import by exact path.
   "scripts/lib/session-source-observer-preload.mjs!",
+  "scripts/lib/usage-rollup-write-observer.cjs!",
+  "scripts/lib/agent-planner-statistics-observer.cjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -94,10 +101,13 @@ const repositoryScriptEntries = [
   "scripts/perf/state-private-store-modes-measure.mjs!",
   "scripts/perf/workspace-inventory-spawn-measure.ts!",
   "scripts/perf/sandbox-projection-fetch-measure.ts!",
+  // ws-compression-measure.ts forks the receiving peers by exact path.
+  "scripts/perf/ws-compression-peers.ts!",
   // catalog-compare-released.mts copies and spawns this sandboxed reader by path.
   "scripts/lib/catalog-compare-released-worker.mts!",
   // The prepublish registry executes this shared build-and-pack lifetime by path.
   "scripts/lib/plugin-npm-build-and-pack.mts!",
+  "scripts/lib/plugin-npm-build-and-pack-batch.mts!",
   // Package scripts execute the PostgreSQL schema generator, which consumes state declarations.
   "scripts/generate-postgres-schema.mts!",
   // Package scripts execute these maintained generators, whose inputs are production contracts.
@@ -139,6 +149,8 @@ const repositoryScriptEntries = [
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   // CI preflight executes the manifest from its trusted harness checkout.
   "scripts/ci-build-manifest.mjs!",
+  // Full release validation invokes child-evidence reuse through a shell variable.
+  "scripts/find-reusable-release-child.mjs!",
   // CI security-fast runs this from its trusted harness checkout.
   "scripts/ci-production-audit.mjs!",
   // tsdown builds this private macOS app worker protocol entry by path.
@@ -151,6 +163,8 @@ const repositoryScriptEntries = [
   ".github/workflows/plugin-prerelease.yml!",
   // Labeler steps import their shared helper through workspace file URLs.
   ".github/workflows/labeler.yml!",
+  // Stable closeout imports its recovery verifier from the trusted tooling checkout.
+  ".github/workflows/openclaw-stable-main-closeout.yml!",
   // Prepared publication imports its verifier from the frozen release harness.
   ".github/workflows/openclaw-release-publish.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
@@ -207,6 +221,7 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Opt-in append benchmark CLI documented in its source header.
   "scripts/perf/transcript-append-normalization-measure.ts!",
+  "scripts/perf/transcript-plan-stats.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",
@@ -245,8 +260,6 @@ const repositoryScriptEntries = [
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
-  "scripts/bench-media-completion-gateway.mts!",
-  "scripts/bench-media-completion-wait.mts!",
   "scripts/bench-memory-keyword.mjs!",
   "scripts/bench-session-cost-ready.mts!",
   "scripts/bench-session-projection-ready.mts!",
@@ -259,6 +272,9 @@ const repositoryScriptEntries = [
   "scripts/perf/sandbox-paths-measure.ts!",
   "scripts/perf/github-publication-snapshot-measure.ts!",
   "scripts/perf/workspace-reconciliation-measure.ts!",
+  "scripts/perf/workspace-snapshot-read-measure.ts!",
+  "scripts/perf/workspace-git-main-thread-measure.mjs!",
+  "scripts/perf/session-create-root-measure.mjs!",
   "scripts/perf/reply-directives-stream-measure.ts!",
   // Maintained source headers invoke these standalone commands and external preload by exact path.
   "scripts/bench-control-ui-talk.ts!",
@@ -445,6 +461,8 @@ const repositoryScriptEntries = [
   "scripts/generate-browser-inspect-script-swift.mts!",
   // The diagnostics guide invokes the sustained Gateway heap rig by path.
   "scripts/gateway-heap-rig.mjs!",
+  // The heap rig preloads its soak observer through --import.
+  "scripts/lib/gateway-heap-rig-soak-preload.mjs!",
   // The diagnostics guide invokes this offline snapshot comparison CLI by path.
   "scripts/heap-snapshot-diff.mjs!",
   // CI executes screenshot evidence from the workflow-owned harness copy.
@@ -558,6 +576,8 @@ const repositoryScriptEntries = [
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
+  // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
+  "skills/create-blobster/scripts/cli.mjs!",
   // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
   "skills/create-template/scripts/cli.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
@@ -582,15 +602,21 @@ function listScriptShimEntries(dir = "scripts"): string[] {
 }
 
 function compileWorkflowConsumers(source: string, filePath: string): string {
-  if (path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")) {
+  const stagedToolingRoot =
+    path.resolve(filePath) === path.resolve(".github/workflows/openclaw-release-publish.yml")
+      ? ".release-harness"
+      : path.resolve(filePath) ===
+          path.resolve(".github/workflows/openclaw-stable-main-closeout.yml")
+        ? ".closeout-tooling"
+        : undefined;
+  if (stagedToolingRoot) {
     return [
       ...source.matchAll(
-        /\bimport\s*\{([^}]+)\}\s*from\s*["']\.\/\.release-harness\/(scripts\/[^"'\r\n]+)["']/gu,
+        /\b(?:import|const)\s*\{([^}]+)\}\s*(?:from\s*|=\s*await\s+import\(\s*)["']\.\/(\.(?:release-harness|closeout-tooling))\/(scripts\/[^"'\r\n]+)["']/gu,
       ),
     ]
-      .map(
-        ([, names, specifier]) => `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
-      )
+      .filter((match) => match[2] === stagedToolingRoot)
+      .map((match) => `import {${match[1]}} from ${JSON.stringify(`../../${match[3]}`)};`)
       .join("\n");
   }
   if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
@@ -630,9 +656,25 @@ function compileWorkflowConsumers(source: string, filePath: string): string {
       }
     }
   }
-  return names.size
-    ? `import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`
-    : "";
+  const consumers = names.size
+    ? [`import { ${[...names].join(", ")} } from "../../scripts/frv-test-exclusions.mjs";`]
+    : [];
+  // Preserve the planner's actual member uses; an entry exemption would hide unused exports.
+  const plannerPath = source.match(
+    /["']plugin-prerelease-test-plan["']:\s*["']\.\/(scripts\/[^"'\r\n]+)["']/u,
+  )?.[1];
+  const planner = source.match(
+    /\bconst\s+\w+\s*=\s*await\s+import\(\s*targetPlanPath\(["']plugin-prerelease-test-plan["']\)\s*\);[\s\S]*?(?=\n\s*\}\s*catch\b)/u,
+  )?.[0];
+  if (plannerPath && planner) {
+    consumers.push(
+      planner.replace(
+        /targetPlanPath\(["']plugin-prerelease-test-plan["']\)/u,
+        JSON.stringify(`../../${plannerPath}`),
+      ),
+    );
+  }
+  return consumers.join("\n");
 }
 
 function compileShellConsumers(source: string, filePath: string): string {
@@ -1000,6 +1042,10 @@ function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
     `${left.module}:${left.symbol}`.localeCompare(`${right.module}:${right.symbol}`),
   );
   for (const [index, origin] of origins.entries()) {
+    // Inline historical implementations consume no current source binding.
+    if (isInlineUpdateCompatibilityExport(origin)) {
+      continue;
+    }
     const sourceFile = path.join(rootDir, origin.module);
     if (graph.names(sourceFile).includes(origin.symbol)) {
       imports.push(
@@ -1155,6 +1201,11 @@ const config = {
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
+    // These in-module helpers are direct seams in compaction-floor.test.ts and
+    // package-release-retention.test.ts. The full-tree scan verifies those consumers.
+    "packages/agent-core/src/harness/compaction/compaction-floor.ts": ["exports"],
+    "src/infra/package-release-retention.ts": ["exports"],
+    "src/infra/package-release-slot.ts": ["exports"],
     // P3-6c.1 stages manifest write/archive and typed replacement outcomes for P3-6c.2.
     // Remove these production-only exceptions when the offline port caller lands;
     // the full-tree audit still checks all exports against their boundary tests.
@@ -1311,6 +1362,8 @@ const config = {
         "btrfs",
         // doctor-sqlite-inspection.mjs compiles its native read counter with the host compiler.
         "cc",
+        // worktree-preservation-measure.ts sets its btrfs fixtures to no-copy-on-write.
+        "chattr",
         "ffmpeg",
         // sqlite-snapshot-retirement.mts inspects its btrfs fixture with this host tool.
         "filefrag",
@@ -1347,6 +1400,7 @@ const config = {
           "scripts/control-ui-parity/vitest.config.ts",
           "scripts/control-ui-retention/vitest.config.ts",
           "test/vitest.codex-worker-authority.config.ts",
+          "extensions/openclaw-id-access/test/member-devices.vitest.config.ts",
         ],
       },
       project: [
@@ -1614,6 +1668,10 @@ const config = {
       "session-catalog-plugin.ts!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode-go`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openclaw-id-access`]: bundledPluginWorkspace([
+      // Opt-in member-device visual proof selects this config directly through Vitest.
+      "test/member-devices.vitest.config.ts",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/openrouter`]: bundledPluginWorkspace([
       // OAuth, model, and media provider helpers are runtime/plugin surfaces.
       "image-generation-provider.ts!",

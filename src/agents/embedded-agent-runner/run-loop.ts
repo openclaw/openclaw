@@ -11,13 +11,12 @@ import {
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import { isStrictAgenticExecutionContractActive } from "../execution-contract.js";
 import type { FailoverReason } from "../failover/signal.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "../prepared-model-runtime.capture.js";
 import type { ToolOutcomeObservation } from "../tool-outcome-observation.js";
 import { normalizeUsage } from "../usage.js";
 import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import { log } from "./logger.js";
 import type { EmbeddedPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import { createPostCompactionLoopGuard } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
@@ -158,36 +157,12 @@ export async function runPreparedEmbeddedLoop(
   const terminalRetryState = createEmbeddedRunTerminalRetryState();
   // Keep the idle-timeout cost breaker across attempts and auth-profile retries.
   const idleTimeoutBreakerState = { consecutiveIdleTimeoutsBeforeOutput: 0 };
-  // Post-compaction loop guard for #77474. Armed at each compaction-success
-  // site below; observed from the live tool-outcome path so it can abort
-  // while the post-compaction prompt is still running.
-  const resolvedLoopDetectionConfig = resolveToolLoopDetectionConfig({
-    cfg: params.config,
-    agentId: sessionAgentId,
-  });
-  const postCompactionGuard = createPostCompactionLoopGuard({
-    enabled: resolvedLoopDetectionConfig?.enabled !== false,
-  });
-  let postCompactionAbortError: Error | undefined;
   // Presentation survives retry attempts, but a newer tool result must clear stale text.
   const terminalToolPresentation = createTerminalToolPresentationTracker();
   const turnTaintState = createAgentTurnTaintState(params.initialTurnTainted === true);
   const observeToolOutcome = (observation: ToolOutcomeObservation): void => {
     terminalToolPresentation.observe(observation);
     turnTaintState.observe(observation);
-    if (observation.presentationOnly) {
-      return;
-    }
-    const verdict = postCompactionGuard.observe(observation);
-    if (verdict.shouldAbort) {
-      postCompactionAbortError ??= Object.assign(new Error(verdict.message), {
-        name: "PostCompactionLoopPersistedError",
-        detector: verdict.detector,
-        count: verdict.count,
-        toolName: verdict.toolName,
-      });
-      input.laneController.laneTaskAbortController.abort(postCompactionAbortError);
-    }
   };
   let lastRetryFailoverReason: FailoverReason | null = null;
   let codexAppServerRecoveryRetries = 0;
@@ -344,7 +319,6 @@ export async function runPreparedEmbeddedLoop(
               observeToolOutcome,
               isTurnTainted: turnTaintState.isTainted,
               allocateToolOutcomeOrdinal: terminalToolPresentation.allocateOrdinal,
-              getPostCompactionAbortError: () => postCompactionAbortError,
             },
             async (attempt, captureContext) => {
               const assistant = resolveCurrentAttemptAssistant(attempt);
@@ -499,7 +473,6 @@ export async function runPreparedEmbeddedLoop(
               fallbackReason: resolveRuntimeFallbackReason(),
               degradedReason: settingsParams.degradedReason,
             }),
-          armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
           usageAccumulator,
           lastRunPromptUsage,
           runtimeAuthRetry,
@@ -518,8 +491,15 @@ export async function runPreparedEmbeddedLoop(
           lastRetryFailoverReason = recovery.lastRetryFailoverReason;
           continue;
         }
+        const preparedModelRuntime = admittedRunInput.preparedModelRuntime;
         const assistantFailureOutcome = await handleEmbeddedAssistantFailure({
           runInput: admittedRunInput,
+          providerOutcomes:
+            preparedModelRuntime &&
+            (
+              readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime) ??
+              preparedModelRuntime.modelCatalog
+            ).providerOutcomes,
           preparedRuntime,
           normalizedAttempt,
           runtime: attemptRuntimeSnapshot,
@@ -609,7 +589,6 @@ export async function runPreparedEmbeddedLoop(
           executionContract,
           replayState: accumulatedReplayState,
           sessionPromptState,
-          armPostCompactionGuard: () => postCompactionGuard.armPostCompaction(),
           readTerminalToolPresentation: () => terminalToolPresentationText,
           resolveReplayInvalid: resolveReplayInvalidForAttempt,
           setTerminalLifecycleMeta,

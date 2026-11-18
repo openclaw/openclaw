@@ -146,6 +146,7 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-owner-filter.real-gateway.e2e.test.ts",
   "ui/src/e2e/browser-pair-code.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
@@ -169,6 +170,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
+  "ui/src/e2e/required-human-action.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-add-provider-to-chat.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-connection-check.real-gateway.e2e.test.ts",
@@ -192,6 +194,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-stop-long-turn.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-steer-send-now.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-send-leaf-ancestor.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-incognito-send.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",

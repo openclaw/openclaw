@@ -55,6 +55,7 @@ export type SkillsProps = {
   readClawHubSearch: () => boolean;
   clawhubSearchEpoch: number;
   surface?: "discovery" | "settings";
+  /** Undefined until the library owner accepts its first inventory. */
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;
   library?: JSX.Element;

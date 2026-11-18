@@ -62,7 +62,8 @@ function resolveOAuthRedirectUrl(config: McpOAuthConfig, store: McpOAuthStore = 
   );
 }
 
-function hasRegisteredOAuthRedirect(redirectUris: string[], redirectUrl: string): boolean {
+/** Whether a dynamically registered client accepts this redirect (RFC 8252 loopback ports). */
+export function hasRegisteredOAuthRedirect(redirectUris: string[], redirectUrl: string): boolean {
   if (redirectUris.includes(redirectUrl)) {
     return true;
   }

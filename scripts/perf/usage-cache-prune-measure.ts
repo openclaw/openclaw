@@ -71,7 +71,7 @@ const percentile = (samples: number[], fraction: number) =>
 try {
   await refreshCostUsageCacheForAgent({ config, agentId });
   for (let pass = 0; pass < passes; pass++) {
-    const owner = prepareSessionCostUsageRefreshLock(agentId);
+    const owner = await prepareSessionCostUsageRefreshLock(agentId);
     try {
       assert(await owner.acquire());
       assert(await owner.writeRollup(inputs));

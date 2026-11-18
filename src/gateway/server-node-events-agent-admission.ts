@@ -1,4 +1,4 @@
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -14,7 +14,7 @@ import { formatForLog } from "./ws-log.js";
 export async function admitNodeAgentRequest(params: {
   ctx: Pick<NodeEventContext, "deps" | "logGateway">;
   nodeId: string;
-  input: Parameters<typeof agentCommandFromIngress>[0];
+  input: Parameters<typeof agentCommandFromGatewayIngress>[0];
   isConnectionCurrent?: NodeEventHandlerOptions["isConnectionCurrent"];
   pending?: Promise<unknown>[];
   onRejected: () => Promise<void>;
@@ -27,7 +27,7 @@ export async function admitNodeAgentRequest(params: {
       await params.onRejected();
       return;
     }
-    const agentWork = agentCommandFromIngress(params.input, defaultRuntime, params.ctx.deps);
+    const agentWork = agentCommandFromGatewayIngress(params.input, defaultRuntime, params.ctx.deps);
     admission.resolve(true);
     await agentWork;
   }, "node-events:agent-turn").catch((err: unknown) => {

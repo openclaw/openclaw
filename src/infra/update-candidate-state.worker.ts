@@ -172,18 +172,32 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
         includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.streamProgress),
       });
-    case "discover":
-      return discoverUpdateStateSchemaInspectionInProcess({
+    case "discover": {
+      const plan = await discoverUpdateStateSchemaInspectionInProcess({
         ...input,
         onProgress: createUpdateStateInspectionReporter(),
       });
-    case "versions":
+      const { writeUpdateStateSchemaOwnership } =
+        await import("./update-candidate-state.shared.js");
+      await writeUpdateStateSchemaOwnership(input.stagingRoot, plan.files);
+      return plan;
+    }
+    case "versions": {
+      if (input.inspectionPlan) {
+        const { rehydrateUpdateStateSchemaOwnership } =
+          await import("./update-candidate-state.shared.js");
+        input.inspectionPlan = await rehydrateUpdateStateSchemaOwnership(
+          input,
+          input.inspectionPlan,
+        );
+      }
       return readUpdateStateSchemaVersionsInProcess({
         ...input,
         includeLocalStoreVersions: input.includeLocalStoreVersions === true,
         includeClientCredentialStoreVersion: input.includeClientCredentialStoreVersion === true,
         onProgress: createUpdateStateInspectionReporter(!input.inspectionPlan),
       });
+    }
     default:
       throw new Error("Unknown update state inspection mode");
   }

@@ -666,7 +666,7 @@ describe("projectChatDisplayMessages", () => {
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
   const networkFailureText =
-    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];
@@ -1896,26 +1896,13 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("does not count iOS push delivery to hidden approval targets as a route", async (testContext) => {
-    const iosPushDelivery = createIosPushDelivery(
-      vi.fn(
-        async (
-          _request: unknown,
-          opts?: {
-            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-          },
-        ) =>
-          opts?.isTargetVisible?.({
-            deviceId: "device-other",
-            scopes: ["operator.approvals"],
-          }) ?? true,
-      ),
-    );
+  it("expires when the iOS push owner reports no delivery route", async (testContext) => {
+    const iosPushDelivery = createIosPushDelivery(vi.fn(async () => false));
     const fixture = await createForwardingExecApprovalFixture(testContext, { iosPushDelivery });
     return await fixture.run(async () => {
       const { manager, respond } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");
-      const id = "approval-ios-hidden-push";
+      const id = "approval-ios-undelivered-push";
       await requestExecApproval({
         ...fixture,
         client: createExecApprovalClient({

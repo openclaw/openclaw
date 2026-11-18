@@ -1,8 +1,6 @@
-import type {
-  LocalWorkspacePausePhase,
-  LocalWorkspacePauseReason,
-} from "../../agents/sandbox/local-workspace-quiescence.js";
-import type { SandboxConfig } from "../../agents/sandbox/types.js";
+import type { LocalWorkspacePauseReason } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { SandboxStateOwnerPath } from "../../agents/sandbox/state-owner-path.js";
+import type { LocalWorkspacePausePhase, SandboxConfig } from "../../agents/sandbox/types.js";
 import {
   startWorktreePreparationPhase,
   timeWorktreePreparationPhase,
@@ -149,14 +147,9 @@ export function checkpointLocalWorkspace(
     (beginCapture) =>
       withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
         beginCapture();
-        let snapshotCapture = false;
         if (
           !options.knownMutation &&
-          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"], (entries, elapsedMs) => {
-            // A probe stops at its first edit. The accepted inventory also covers
-            // large trees whose changed file happens to sort first.
-            snapshotCapture = entries >= 20_000 || elapsedMs >= 500;
-          }))
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical"]))
         ) {
           await removeLocalWorkspaceCheckpointCapture(store.get()!.projection_path, {
             signal: store.signal,
@@ -175,7 +168,7 @@ export function checkpointLocalWorkspace(
                 quiescence &&
                 (() => timeWorktreePreparationPhase("runtimeResume", quiescence.resume)),
             }),
-          { reason: "checkpoint", snapshotCapture },
+          { reason: "checkpoint" },
         );
       }),
     options,
@@ -231,12 +224,13 @@ async function settleLocalWorkspace<T>(
           worktree: params.worktree,
           env,
           assertCurrent: params.assertCurrent ?? (() => {}),
+          workerAuthority: params.workerAuthority,
         };
-        assertLocalWorkspaceProjectionOwner(
-          reply.row,
-          expectedOwner,
-          localWorkspaceProjectionPath(expectedOwner),
-        );
+        const projectionPath = await localWorkspaceProjectionPath(expectedOwner);
+        context.admission.assertCurrent();
+        params.assertCurrent?.();
+        params.workerAuthority?.assertCurrent?.();
+        assertLocalWorkspaceProjectionOwner(reply.row, expectedOwner, projectionPath);
       }
       const { readRegistry } = await import("../../agents/sandbox/registry.js");
       const { prepareSandboxPersistentExecRetirement } =
@@ -404,12 +398,8 @@ export function reuseLocalWorkspaceProjection(
           beginCapture?.();
         }
         return (
-          (await probeUnchangedLocalWorkspace(
-            owner,
-            store,
-            ["canonical", "projection"],
-            undefined,
-            (target) => markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
+          (await probeUnchangedLocalWorkspace(owner, store, ["canonical", "projection"], (target) =>
+            markPhase(target === "canonical" ? "probeCanonical" : "probeProjection"),
           )) ??
           (await runLocalWorkspaceProjection(owner, store, (state) => state.reuse(), {
             reason: "preparation",
@@ -429,7 +419,6 @@ async function probeUnchangedLocalWorkspace(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   targets: readonly ("canonical" | "projection")[],
-  observeProbe?: (entries: number, elapsedMs: number) => void,
   markProbe?: (target: "canonical" | "projection") => void,
 ) {
   let row = store.get();
@@ -445,11 +434,10 @@ async function probeUnchangedLocalWorkspace(
     return undefined;
   }
   // Bind the row before observation; acceptance retains the same lease and live authority.
-  projectionOperations(owner, store, row).current();
+  projectionOperations(owner, store, row, await localWorkspaceProjectionPath(owner)).current();
   for (const target of targets) {
     markProbe?.(target);
     const selected = row;
-    const started = performance.now();
     const snapshot = await timeWorktreePreparationPhase(
       target === "canonical" ? "synchronizeCanonical" : "synchronizeProjection",
       async () => {
@@ -466,10 +454,6 @@ async function probeUnchangedLocalWorkspace(
           return undefined;
         }
       },
-    );
-    observeProbe?.(
-      snapshot?.kind === "rescan" ? (snapshot.entryCount ?? 0) : 0,
-      performance.now() - started,
     );
     store.assertCurrent();
     if (snapshot?.kind !== "scan" || snapshot.resultingRoot !== snapshot.previousRoot) {
@@ -556,6 +540,7 @@ export async function resolveLocalWorkspaceOwner(params: {
   storePath?: string;
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
+  stateOwnerPath?: SandboxStateOwnerPath;
 }): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
   const context = captureWorktreeRunEndContext(params.env ?? process.env);
   const env = { ...(params.env ?? process.env), ...context.environment };
@@ -672,6 +657,7 @@ export async function resolveLocalWorkspaceOwner(params: {
       worktree,
       assertCurrent,
       workerAuthority: {
+        stateOwnerPath: params.stateOwnerPath,
         assertCurrent: assertSessionCurrent,
         predicates: [{ kind: "live-binding", record: worktree }],
       },

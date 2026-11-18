@@ -3,15 +3,9 @@ import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readAgentSelfHeldRefusal } from "../../gateway/agent-turn/agent-admission-refusal.js";
-import {
-  bindInProcessSubagentResume,
-  type TrustedSubagentResume,
-} from "../../gateway/in-process-subagent-resume.js";
+import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/types.js";
-import {
-  bindParentSubagentResume,
-  assertParentSubagentResumeCurrent,
-} from "../../gateway/session-subagent-resume.js";
+import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.js";
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -46,12 +40,9 @@ export async function resumeSessionsSendTask(params: {
   sessionKey: string;
   displayKey: string;
   runId: string;
-  expectedSessionId?: string;
-  expectedTask?: Omit<TrustedSubagentResume, "caller">;
   sendParams: Record<string, unknown>;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
-  let targetTask: Omit<TrustedSubagentResume, "caller"> | undefined;
   try {
     const assertCurrent = () => {
       params.caller.assertCurrent();
@@ -66,32 +57,17 @@ export async function resumeSessionsSendTask(params: {
     });
     assertCurrent();
     const entry = session?.entry;
-    if (
-      !entry ||
-      entry.archivedAt !== undefined ||
-      session.acp ||
-      (params.expectedSessionId && entry.sessionId !== params.expectedSessionId)
-    ) {
+    if (!entry || entry.archivedAt !== undefined || session.acp) {
       throw new Error("Task resume requires the existing, unarchived native child session.");
     }
-    const subagentResume = params.expectedTask
-      ? { ...params.expectedTask, caller: params.caller }
-      : bindParentSubagentResume({
-          cfg: params.cfg,
-          caller: params.caller,
-          childSessionKey: params.sessionKey,
-          childSessionId: entry.sessionId,
-          childLifecycleRevision: entry.lifecycleRevision,
-        });
-    assertParentSubagentResumeCurrent({
+    // Bound to the task's current paused run at dispatch; never replayed from an earlier capture.
+    const subagentResume = bindParentSubagentResume({
       cfg: params.cfg,
-      resume: subagentResume,
-      sessionKey: params.sessionKey,
-      sessionId: entry.sessionId,
-      sessionLifecycleRevision: entry.lifecycleRevision,
+      caller: params.caller,
+      childSessionKey: params.sessionKey,
+      childSessionId: entry.sessionId,
+      childLifecycleRevision: entry.lifecycleRevision,
     });
-    const { caller: _caller, ...pins } = subagentResume;
-    targetTask = pins;
     const accepted = await params.callGateway<{
       runId: string;
       taskRunId: string;
@@ -136,7 +112,6 @@ export async function resumeSessionsSendTask(params: {
   } catch (error) {
     return {
       selfHeld: readAgentSelfHeldRefusal(error),
-      targetTask,
       result: jsonResult({
         status: "error",
         runId: params.runId,

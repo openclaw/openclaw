@@ -246,7 +246,11 @@ export type WorkerPlacementDispatchAdmission = <T>(
 
 export type WorkerPlacementRedispatch = (
   placement: Extract<WorkerSessionPlacementRecord, { state: "reclaimed" | "failed" }>,
-  options: { assertCurrent: () => void; signal?: AbortSignal },
+  options: {
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    readNativeCredential?: GitHubCredentialReader;
+  },
 ) => Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
 
 /** Canonical admission rejected the session owner, not a caller or process cancellation. */

@@ -125,6 +125,7 @@ export async function buildOpenAILiveProviderConfig(
         provider: PROVIDER_ID,
         status: "ready",
         ...(modelAccessPrograms?.length ? { modelAccessPrograms } : {}),
+        modelIdCatalog: { baseUrl, modelIds: [...listedModels] },
       },
     };
   } catch (error) {

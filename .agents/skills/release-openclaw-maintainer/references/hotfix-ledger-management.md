@@ -44,9 +44,14 @@ Send `Accept: application/json` and an identifying User-Agent, e.g.
    dependencies, and evidence.
    Upsert its target-release assessment at the assessed SHA. Keep existing
    selection authority; eligibility or clean application is not approval.
-4. **Apply/verify:** follow the approved backport flow; record destination commits
-   and proof. Update the observed head and review stale assessments rather than
-   merely replacing their SHA. Keep deferred/blocked work for the next owner.
+4. **Apply/verify:** update the target assessment immediately after **every
+   backport adaptation**, not at batch completion or handoff. Record conflicts,
+   deviations, dependencies, new validation errors, repairs, destination commits
+   when available, and proof as it arrives. Other release owners often port the
+   same fixes concurrently and may consult the ledger at any time. Share useful
+   findings without assuming another baseline needs the same adaptation. Update
+   the observed head and review stale assessments rather than merely replacing
+   their SHA. Keep deferred/blocked work for the next owner.
 5. **Checkpoint:** after every release-branch change and immediately before
    handoff, complete the release-owner checkpoint below. A branch push, local
    candidate, or old assessment is not a checkpoint receipt.
@@ -150,7 +155,7 @@ assessment for the target release:
   not just to clear a stale flag.
 
 Deferral is not necessarily blocked; one release's exclusion does not make a fix
-globally `not_a_hotfix`. Keep P0/P1 priority in rationale/evidence, separate from
+globally `not_a_hotfix`. Keep P0/P1/P2 priority in rationale/evidence, separate from
 API severity.
 
 ## API essentials

@@ -3,6 +3,7 @@ import { GatewayClientRequestError } from "../../../../packages/gateway-client/s
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { gatewayOperatorAccessError } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import type {
@@ -184,13 +185,16 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
       invalidateGatewayPolicyClient(client, {
         reason: "remote-control-ui-ingress-closed",
         code: 4001,
-        message: "remote Control UI ingress closed",
-        close: () => close(4001, "remote Control UI ingress closed"),
+        message: "remote web app ingress closed",
+        close: () => close(4001, "remote web app ingress closed"),
       });
       return false;
     };
     const reconnectDevice =
-      client.internal?.authenticatedControlUi === true && client.isDeviceTokenAuth === true
+      (client.internal?.authenticatedControlUi === true ||
+        (client.internal?.authenticatedOperator === true &&
+          isNativeAppUiClient(client.connect.client))) &&
+      client.isDeviceTokenAuth === true
         ? client.internal.operatorDeviceTokenIdentity
         : undefined;
     const reconnectProfile = client.authenticatedUserProfile?.profileId;

@@ -1264,7 +1264,7 @@ extension GatewayEndpointStore {
         }
         guard let url = components.url else {
             throw NSError(domain: "Dashboard", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to build dashboard URL",
+                NSLocalizedDescriptionKey: "Failed to build the Gateway URL",
             ])
         }
         return url

@@ -1,6 +1,8 @@
 import { isMainThread } from "node:worker_threads";
+import { sql } from "kysely";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
+import { engineIndexHint } from "./database-engine/index-hint.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -37,24 +39,21 @@ export function deleteSessionCostUsagePartitionsInDatabase(
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  for (const replacements of chunkItems(
-    params.filter((row) => row.replacePartitions),
-    100,
-  )) {
+  // Keep range probes indexed even when statistics still describe a one-row cache.
+  const entries =
+    /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
+    sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
+      sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
+    );
+  // Combining ranges lets stale small-table statistics turn a refresh into a full scan.
+  for (const row of params.filter((param) => param.replacePartitions)) {
     executeSqliteQuerySync(
       db,
-      kysely.deleteFrom("cache_entries").where((eb) =>
-        eb.or(
-          replacements.map((row) =>
-            // Keep scope in each arm so SQLite seeks each composite-key range.
-            eb.and([
-              eb("scope", "in", PARTITION_SCOPES),
-              eb("key", ">=", usageCostPartitionKey(row.rollupId, "")),
-              eb("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
-            ]),
-          ),
-        ),
-      ),
+      kysely
+        .deleteFrom(entries)
+        .where("scope", "in", PARTITION_SCOPES)
+        .where("key", ">=", usageCostPartitionKey(row.rollupId, ""))
+        .where("key", "<=", usageCostPartitionKey(row.rollupId, "\uffff")),
     );
   }
   const removedKeys = params.flatMap((row) =>
@@ -62,13 +61,10 @@ export function deleteSessionCostUsagePartitionsInDatabase(
       ? []
       : (row.removedDates ?? []).map((date) => usageCostPartitionKey(row.rollupId, date)),
   );
-  for (const keys of chunkItems(removedKeys, 100)) {
+  for (const key of removedKeys) {
     executeSqliteQuerySync(
       db,
-      kysely
-        .deleteFrom("cache_entries")
-        .where("scope", "in", PARTITION_SCOPES)
-        .where("key", "in", keys),
+      kysely.deleteFrom(entries).where("scope", "in", PARTITION_SCOPES).where("key", "=", key),
     );
   }
 }

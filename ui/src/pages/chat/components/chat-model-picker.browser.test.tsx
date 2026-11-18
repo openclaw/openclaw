@@ -1,9 +1,9 @@
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
+import { page, server, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
@@ -22,6 +22,8 @@ const getSearch = () => container.querySelector<HTMLInputElement>(modelControlSe
 const option = (value: string) =>
   container.querySelector<HTMLButtonElement>(modelControlSelector("option", value))!;
 let dispose: (() => void) | undefined;
+// Keep cold Vite compilation outside interaction readiness checks on concurrent shards.
+beforeAll(() => import("./chat-model-picker-panel.tsx"));
 afterEach(() => {
   dispose?.();
   container.replaceChildren();
@@ -54,7 +56,6 @@ function mountPicker(optionsReady = true) {
           class="agent-chat__input"
           onPointerDown={(event) => focusComposerFromChrome(event, true, composer)}
           onClick={(event) => focusComposerFromChrome(event, true, composer)}
-          onKeyDown={(event) => focusChatComposerFromKeydown(container, event, composer)}
         >
           <div class="agent-chat__composer-combobox">
             <textarea ref={(element) => (composer = element)} />
@@ -66,6 +67,11 @@ function mountPicker(optionsReady = true) {
     { container },
   );
   flush();
+  // Chat and New Session transfer typing at document capture, before picker handlers.
+  const redirectTyping = (event: KeyboardEvent) =>
+    focusChatComposerFromKeydown(container, event, composer);
+  document.addEventListener("keydown", redirectTyping, true);
+  onTestFinished(() => document.removeEventListener("keydown", redirectTyping, true));
   const picker = container.querySelector("details")!;
   const trigger = picker.querySelector("summary")!;
   const toggle = async (activate: () => Promise<void>) => {
@@ -77,12 +83,103 @@ function mountPicker(optionsReady = true) {
     flush();
     await new Promise(requestAnimationFrame);
     if (picker.open) {
+      // Settle the first lazy panel import before the fast DOM-only readiness check.
+      await vi.dynamicImportSettled();
       await waitForModelMenu(picker);
+      if (params.modelOptions.length) {
+        await waitForSolid(() =>
+          expect(picker.querySelector("[data-chat-model-option]")).not.toBeNull(),
+        );
+      }
     }
   };
   const open = () => toggle(() => page.getByText("Alpha", { exact: true }).first().click());
   return { params, update, picker, trigger, composer, toggle, modelOptions, open };
 }
+
+it("uses slash to focus open picker search without editing the composer", async () => {
+  const { open, trigger, composer } = mountPicker();
+  composer.value = "Keep this draft";
+  await open();
+  const search = getSearch();
+  for (const target of [
+    trigger,
+    option("example/beta"),
+    container.querySelector<HTMLElement>('[role="tab"]')!,
+  ]) {
+    target.focus();
+    await userEvent.keyboard("/");
+    expect(document.activeElement).toBe(search);
+    expect(search.value).toBe("");
+    expect(composer.value).toBe("Keep this draft");
+  }
+  await userEvent.keyboard("/");
+  expect(search.value).toBe("/");
+  expect(composer.value).toBe("Keep this draft");
+});
+
+it("keeps numeric shortcuts functional without visible keycaps", async () => {
+  const { params, picker, trigger, open, composer } = mountPicker();
+  composer.value = "Keep this draft";
+  await open();
+  trigger.focus();
+  expect(picker.querySelector("kbd")).toBeNull();
+  expect(option("example/beta").getAttribute("aria-keyshortcuts")).toBe("2");
+  await userEvent.keyboard("2");
+  expect(params.onModelSelect).toHaveBeenCalledExactlyOnceWith("example/beta", "main", undefined);
+  expect(composer.value).toBe("Keep this draft");
+});
+
+it("centers provider icons with their model labels in search results", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "sol", { label: "Example Sol" }),
+    modelOption("clawrouter", "astra", { label: "Example Astra" }),
+  ];
+  params.selectedModelValue = "openai/sol";
+  update();
+  await open();
+  await page.getByRole("combobox", { name: "Search models" }).fill("Example");
+  // Compare settled geometry, not two samples during the opening transform.
+  const pickerSurface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+  await Promise.all(pickerSurface.getAnimations().map((animation) => animation.finished));
+  for (const value of ["openai/sol", "clawrouter/astra"]) {
+    const row = option(value);
+    const icon = row.querySelector<HTMLElement>(".provider-brand-icon")!.getBoundingClientRect();
+    const label = row.querySelector<HTMLElement>(".chat-controls__model-option-name")!;
+    const name = label.getBoundingClientRect();
+    try {
+      expect(Math.abs(icon.y + icon.height / 2 - name.y - name.height / 2)).toBeLessThan(0.5);
+    } catch (error) {
+      // Preserve the failing sample; collect extra layout state only after the assertion fails.
+      const style = getComputedStyle(label);
+      const surface = row.closest<HTMLElement>(".chat-picker-overlay")!;
+      console.error(
+        "Model picker alignment diagnostics",
+        JSON.stringify({
+          value,
+          browser: server.browser,
+          devicePixelRatio: window.devicePixelRatio,
+          fontsStatus: document.fonts.status,
+          icon: icon.toJSON(),
+          name: name.toJSON(),
+          lineHeight: style.lineHeight,
+          fontFamily: style.fontFamily,
+          rowAlignItems: getComputedStyle(row).alignItems,
+          overlayPhase: surface.dataset.phase,
+          overlayTransform: getComputedStyle(surface).transform,
+          overlayAnimations: surface.getAnimations().map((animation) => ({
+            playState: animation.playState,
+            currentTime: animation.currentTime,
+            timing: animation.effect?.getComputedTiming(),
+          })),
+        }),
+      );
+      throw error;
+    }
+    expect(name.x - icon.right).toBeGreaterThanOrEqual(6);
+  }
+});
 
 it("leaves touch pointerdown uncancelled for native model-picker activation", () => {
   const { composer, trigger } = mountPicker();
@@ -130,8 +227,9 @@ it("opens during activation and preserves filter focus and query across catalog 
   expect(search.value).toBe("beta");
   expect(composer.value).toBe("Keep this draft");
   expect(option("example/alpha")).toBeNull();
+  // Windowed results publish after the sheet's layout measurement.
+  await waitForSolid(() => expect(option("example/beta")).toMatchObject({ hidden: false }));
   const beta = option("example/beta");
-  expect(beta).toMatchObject({ hidden: false });
   expect(beta.checkVisibility()).toBe(true);
   beta.focus();
   expect(document.activeElement).toBe(beta);
@@ -150,6 +248,45 @@ it("opens during activation and preserves filter focus and query across catalog 
   trigger.focus();
   await userEvent.keyboard("1");
   expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
+});
+
+it("keeps the picker open when clicking its provider title and blank space", async () => {
+  const { picker, open, composer, params } = mountPicker();
+  composer.value = "Keep this draft";
+  await open();
+  const label = picker.querySelector<HTMLElement>(".chat-controls__provider-label")!;
+  await userEvent.click(label);
+  expect(picker.open).toBe(true);
+  expect(document.activeElement).not.toBe(composer);
+  const menu = picker.querySelector<HTMLElement>(".chat-controls__model-menu")!;
+  await userEvent.click(menu, { position: { x: menu.clientWidth / 2, y: 4 } });
+  expect(picker.open).toBe(true);
+  expect(document.activeElement).not.toBe(composer);
+  expect(composer.value).toBe("Keep this draft");
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+  await userEvent.click(getSearch());
+  await userEvent.keyboard("beta");
+  await waitForSolid(() => expect(option("example/beta")?.checkVisibility()).toBe(true));
+  await userEvent.click(option("example/beta"));
+  expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
+  expect(picker.open).toBe(false);
+});
+
+it("does not highlight an unselected model until keyboard navigation", async () => {
+  const { picker, open, params, toggle, trigger } = mountPicker();
+  await open();
+  await page.getByRole("tab", { name: "Other", exact: true }).click();
+  const gamma = option("other/gamma");
+  expect(gamma.getAttribute("aria-selected")).toBe("false");
+  expect(gamma.hasAttribute("data-chat-model-highlighted")).toBe(false);
+  expect(getSearch().getAttribute("aria-activedescendant")).toBeNull();
+  await userEvent.click(getSearch());
+  await userEvent.keyboard("{ArrowDown}");
+  expect(gamma.hasAttribute("data-chat-model-highlighted")).toBe(true);
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+  await toggle(() => userEvent.click(trigger));
+  await toggle(() => userEvent.click(trigger));
+  expect(picker.querySelector("[data-chat-model-highlighted]")).toBeNull();
 });
 
 it("clears the active descendant when a catalog refresh removes the filtered choice", async () => {
@@ -184,21 +321,23 @@ it("leaves digit shortcuts to a nested native menu", async () => {
   const menu = document.createElement("div");
   menu.role = "menu";
   menu.popover = "manual";
-  menu.innerHTML = '<button role="menuitem" data-shortcut="1">Nested choice</button>';
+  menu.innerHTML = '<button role="menuitem" data-shortcut="2">Nested choice</button>';
   const item = menu.querySelector("button")!;
-  const releaseShortcut = registerMenuShortcuts(menu, () => [{ element: item, key: "1" }]);
+  const releaseShortcut = registerMenuShortcuts(menu, () => [{ element: item, key: "2" }]);
   picker.querySelector(".chat-controls__model-menu")!.append(menu);
   menu.showPopover();
   item.focus();
-  await userEvent.keyboard("1");
+  await userEvent.keyboard("2");
   expect(params.onModelSelect).not.toHaveBeenCalled();
   expect(picker.open).toBe(true);
   menu.hidePopover();
   releaseShortcut();
   menu.remove();
   trigger.focus();
-  await userEvent.keyboard("1");
-  expect(params.onModelSelect).toHaveBeenCalledWith("example/alpha", "main", undefined);
+  expect(document.activeElement).toBe(trigger);
+  expect(option("example/beta").getAttribute("aria-keyshortcuts")).toBe("2");
+  await userEvent.keyboard("2");
+  expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
 });
 
 it("focuses the filter on keyboard open and reopen, and returns Escape to the trigger", async () => {
@@ -257,7 +396,7 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
       );
       search.focus();
       const highlighted = search.getAttribute("aria-activedescendant");
-      expect(highlighted, label).toBeTruthy();
+      expect(Boolean(highlighted), label).toBe(Boolean(query));
       // Exercise browser event ownership, not a native OS IME candidate window.
       const event = new KeyboardEvent("keydown", {
         key,
@@ -363,7 +502,7 @@ it.each([
 });
 
 it.each(["trigger", "Escape", "selection"])(
-  "retains provider toggles after closing through %s",
+  "reopens on the selected model's provider after closing through %s",
   async (close) => {
     const { picker, trigger, toggle, open, update, params } = mountPicker();
     await open();
@@ -396,16 +535,14 @@ it.each(["trigger", "Escape", "selection"])(
     expect(search.value).toBe("");
     update();
     await toggle(() => userEvent.click(trigger));
-    expect(option("example/beta")).toBeNull();
-    expectExpanded();
-    await vi.waitFor(() => {
-      const visible = option("other/gamma");
-      expect(visible).toMatchObject({ hidden: false });
-      expect(visible.checkVisibility()).toBe(true);
-    });
-    trigger.focus();
-    await toggle(() => userEvent.keyboard("1"));
-    expect(params.onModelSelect).toHaveBeenLastCalledWith("other/gamma", "main", undefined);
+    // A provider tab without the selected model never survives closing.
+    await vi.waitFor(() =>
+      expect([
+        providerToggle("example").ariaSelected,
+        providerToggle("other").ariaSelected,
+      ]).toEqual(["true", "false"]),
+    );
+    expect(option("other/gamma")).toBeNull();
   },
 );
 
@@ -466,6 +603,36 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
 });
+
+it.each(["center", "left", "right"])(
+  "centers the picker when it fits and keeps the %s edge onscreen",
+  async (position) => {
+    await page.viewport(1280, 900);
+    container.style.cssText =
+      "position:fixed;bottom:16px;width:200px;" +
+      (position === "center" ? "left:540px" : position === "left" ? "left:16px" : "right:16px");
+    const { trigger, picker, toggle } = mountPicker();
+    try {
+      await toggle(async () => trigger.click());
+      await vi.waitFor(() => {
+        const panel = picker
+          .querySelector<HTMLElement>(".chat-picker-overlay")!
+          .getBoundingClientRect();
+        const chip = trigger.getBoundingClientRect();
+        expect(panel.left).toBeGreaterThanOrEqual(0);
+        expect(panel.right).toBeLessThanOrEqual(1280);
+        expect(panel.bottom).toBe(chip.top - 8);
+        if (position === "center") {
+          expect(Math.abs(panel.left + panel.width / 2 - chip.left - chip.width / 2)).toBeLessThan(
+            1,
+          );
+        }
+      });
+    } finally {
+      container.removeAttribute("style");
+    }
+  },
+);
 
 it("keeps the desktop panel fixed above its model chip across provider and search views", async () => {
   await page.viewport(1280, 900);
@@ -604,7 +771,7 @@ it("reveals the selected provider on open, vertical navigation and reorder", asy
   expect(document.activeElement?.getAttribute("aria-selected")).toBe("true");
 });
 
-it("keeps the account heading below the provider's model choices", async () => {
+it("opens account choices without covering model choices while closed", async () => {
   await page.viewport(1280, 900);
   const { picker, params, update, toggle, trigger } = mountPicker();
   params.accountSection = {
@@ -625,9 +792,168 @@ it("keeps the account heading below the provider's model choices", async () => {
   update();
   await toggle(async () => trigger.click());
   await vi.waitFor(() => {
-    const account = picker.querySelector<HTMLElement>("[data-chat-account-group-toggle]")!;
-    expect(account.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      option("example/beta").getBoundingClientRect().bottom - 1,
+    const model = option("example/beta");
+    expect(model.checkVisibility()).toBe(true);
+    expect(picker.querySelector(".chat-controls__account-popover")?.matches(":popover-open")).toBe(
+      false,
     );
   });
+  await page.getByRole("button", { name: "Account", exact: true }).click();
+  expect(picker.querySelector(".chat-controls__account-popover")?.matches(":popover-open")).toBe(
+    true,
+  );
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+});
+
+it("opens the selected row's context menu without selecting its model", async () => {
+  const { params, update, open, picker } = mountPicker();
+  const onContextSelect = vi.fn(async () => {});
+  params.contextWindow = {
+    options: [
+      { id: "272k", label: "272K", contextWindow: 272_000 },
+      { id: "1m", label: "1M", contextWindow: 1_000_000 },
+    ],
+    selected: "272k",
+    disabled: false,
+    onSelect: onContextSelect,
+  };
+  update();
+  await open();
+  await page.getByRole("button", { name: "Context window: 272K" }).click();
+  await expect.element(page.getByRole("menuitemradio", { name: "1M", exact: true })).toBeVisible();
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+  await page.getByRole("menuitemradio", { name: "1M", exact: true }).click();
+  expect(onContextSelect).toHaveBeenCalledExactlyOnceWith("1m", "main");
+  expect(params.onModelSelect).not.toHaveBeenCalled();
+  expect(picker.open).toBe(true);
+  await page.getByRole("button", { name: "Context window: 272K" }).click();
+  await userEvent.keyboard("{Escape}");
+  await expect
+    .element(page.getByRole("button", { name: "Context window: 272K" }))
+    .toHaveAttribute("aria-expanded", "false");
+  expect(picker.open).toBe(true);
+});
+
+it("explains every OpenAI runtime in segment order with the generic detail", async () => {
+  const { params, update, open } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "gpt-5-mini", { agentRuntimeId: "openclaw" }),
+    modelOption("openai", "gpt-5-mini", { agentRuntimeId: "codex" }),
+  ];
+  params.selectedModelValue = "openai/gpt-5-mini";
+  update();
+  await open();
+  await page.getByRole("button", { name: "Runs on", exact: true }).click();
+  const card = container.querySelector<HTMLElement>(".chat-controls__runtime-details")!;
+  expect(card.matches(":popover-open")).toBe(true);
+  expect(
+    [...container.querySelectorAll(".chat-controls__runtime-option")].map((el) => el.textContent),
+  ).toEqual(["OpenClaw", "Codex"]);
+  expect(
+    [
+      ...card.querySelectorAll(
+        ".chat-controls__runtime-details-content > div:not(.chat-controls__runtime-details-header)",
+      ),
+    ].map((el) => [
+      el.querySelector(".chat-controls__runtime-detail-label")?.textContent,
+      el.querySelector(".chat-controls__runtime-detail-copy")?.textContent,
+    ]),
+  ).toEqual([
+    ["OpenClaw", "Runs through the OpenClaw agent runtime and the account it uses."],
+    ["Codex", "Runs through the Codex agent runtime and the account it uses."],
+  ]);
+});
+
+it.each(["rejected", "external"] as const)(
+  "keeps the authoritative runtime after a %s selection",
+  async (outcome) => {
+    const { params, update, open, picker } = mountPicker();
+    params.modelOptions = ["openclaw", "codex"].map((runtime) =>
+      modelOption("openai", "sample", {
+        agentRuntime: runtime,
+        agentRuntimeId: runtime,
+        runtimeOverride: runtime,
+      }),
+    );
+    params.selectedModelValue = "openai/sample";
+    params.selectedAgentRuntime = "openclaw";
+    params.onModelSelect = vi.fn(async () => outcome !== "rejected");
+    update();
+    await open();
+    await userEvent.click(
+      picker.querySelector<HTMLButtonElement>(
+        '.chat-controls__runtime-option[data-chat-model-runtime="codex"]',
+      )!,
+    );
+    expect(params.onModelSelect).toHaveBeenCalledWith("openai/sample", "main", "codex");
+    if (outcome === "external") {
+      params.selectedAgentRuntime = "codex";
+      update();
+      params.selectedAgentRuntime = "openclaw";
+      update();
+    }
+    await vi.waitFor(() =>
+      expect(
+        picker
+          .querySelector('.chat-controls__runtime-option[data-chat-model-runtime="openclaw"]')
+          ?.getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+  },
+);
+
+it("keeps an unknown configured runtime distinct from explicit OpenClaw", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "sample", { agentRuntime: null }),
+    ...["codex", "openclaw"].map((runtime) =>
+      modelOption("openai", "sample", {
+        agentRuntime: runtime,
+        agentRuntimeId: runtime,
+        runtimeOverride: runtime,
+      }),
+    ),
+  ];
+  params.selectedModelValue = "openai/sample";
+  params.selectedAgentRuntime = "codex";
+  update();
+  await open();
+  await userEvent.click(
+    picker.querySelector<HTMLButtonElement>(
+      '.chat-controls__runtime-option[data-chat-model-runtime="openclaw"]',
+    )!,
+  );
+  expect(params.onModelSelect).toHaveBeenLastCalledWith("openai/sample", "main", "openclaw");
+  const inherited = picker.querySelector<HTMLButtonElement>(
+    '.chat-controls__runtime-option[data-chat-model-runtime=""]',
+  )!;
+  expect(inherited.textContent).toBe("Default");
+  await userEvent.click(inherited);
+  expect(params.onModelSelect).toHaveBeenLastCalledWith("openai/sample", "main", null);
+});
+
+it("switches an inherited Default model to an available runtime with one click", async () => {
+  const { params, update, open, picker } = mountPicker();
+  params.modelOptions = [
+    modelOption("openai", "sample", {
+      isDefault: true,
+      commitValue: "",
+      agentRuntime: "openclaw",
+      agentRuntimeId: "openclaw",
+    }),
+    modelOption("openai", "sample", {
+      agentRuntime: "codex",
+      agentRuntimeId: "codex",
+      runtimeOverride: "codex",
+    }),
+  ];
+  params.selectedModelValue = "";
+  update();
+  await open();
+  const runtime = picker.querySelector<HTMLButtonElement>(
+    '.chat-controls__runtime-option[data-chat-model-runtime="codex"]',
+  )!;
+  expect(runtime.getAttribute("aria-disabled")).toBe("false");
+  await userEvent.click(runtime);
+  expect(params.onModelSelect).toHaveBeenCalledExactlyOnceWith("openai/sample", "main", "codex");
 });

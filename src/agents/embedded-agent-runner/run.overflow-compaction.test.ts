@@ -143,7 +143,6 @@ function makeRecoveryInput(
     adoptCompactionTranscript: vi.fn(async () => undefined),
     getActiveSession: vi.fn<EmbeddedRunCompactionRecoveryInput["getActiveSession"]>(),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
-    armPostCompactionGuard: vi.fn(),
     usageAccumulator: createUsageAccumulator(),
     ...overrides,
   };
