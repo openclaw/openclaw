@@ -5,7 +5,10 @@ import {
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { isUpdateActionable } from "../app/update-schedule-projection.ts";
+import {
+  isFinishingUpdateCampaign,
+  isUpdateActionable,
+} from "../app/update-schedule-projection.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   isUpdateAttentionForced,
@@ -79,8 +82,10 @@ export function resolveSidebarUpdateAttention(
   ) {
     return null;
   }
+  // A finishing restart leads the row it shares with the run that owes it, so dismissing the
+  // run's outcome cannot also hide the restart.
   const dismissal =
-    runVisible && run?.status !== "running"
+    runVisible && run?.status !== "running" && !isFinishingUpdateCampaign(snapshot.updateSchedule)
       ? { kind: "updateAvailable" as const, signature: JSON.stringify(["run", run?.runId]) }
       : resolveUpdateAttentionDismissal({
           gatewayBootId: context.gateway.snapshot.hello?.server?.bootId,
