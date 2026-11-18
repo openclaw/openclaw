@@ -222,6 +222,7 @@ export function createUserTurnTranscriptRecorder(
     const resolved = await (params.message || !params.resolveInput
       ? applyMessageOverrides(message)
       : resolvedMessagePromise);
+    admissionOwner.captureSubmittedText(resolved);
     resolvedSourceMessage =
       params.pendingInputSources && resolved ? structuredClone(resolved) : resolved;
     if (!pendingInput && resolved && params.pendingInputSources) {
@@ -613,6 +614,7 @@ export function createUserTurnTranscriptRecorder(
       replacementText = text;
       message = applyMessageOverrides(message);
       resolvedMessagePromise = undefined;
+      admissionOwner.invalidateSubmittedText();
     },
     confirmSteerTargetRunIdForPersistence: async (targetRunId) => {
       const normalizedTargetRunId = normalizePersistedSteerTargetRunId(targetRunId);
@@ -720,7 +722,7 @@ export function createUserTurnTranscriptRecorder(
   registerUserTurnInputActor(recorder, (binding) => {
     inputActorBinding = binding;
   });
-  registerUserTurnTranscriptAdmissionOwner(recorder, {
+  const admissionOwner = registerUserTurnTranscriptAdmissionOwner(recorder, {
     requesterOrigin: () =>
       pendingInput ? readSessionPendingInputRequesterOrigin(pendingInput) : requesterOrigin,
     pendingInput: () => pendingInput,
