@@ -27,6 +27,7 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
 vi.mock("./memory-state.js", () => ({
   getMemoryRuntime: () => state.capability.runtime,
   getMemoryProviderRuntime: () => state.capability.providerRuntime,
+  listMemoryBackendRegistrations: () => [],
   getMemoryCapabilityRegistration: () => ({
     pluginId: "test-memory",
     capability: state.capability,

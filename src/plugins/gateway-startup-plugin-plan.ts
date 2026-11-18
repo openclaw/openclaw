@@ -144,6 +144,16 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     activationSourcePlugins,
     normalizePluginId,
   });
+  const memoryBackendStartupPolicyIds = new Set(
+    memorySlotStartupPluginId
+      ? Object.entries(activationSourcePlugins.entries).flatMap(([policyId, entry]) =>
+          entry.memoryBackend === true &&
+          policyId !== normalizePluginPolicyId(memorySlotStartupPluginId)
+            ? [policyId]
+            : [],
+        )
+      : [],
+  );
   const startupDreamingPluginIds = resolveAuthorizedGatewayStartupDreamingPluginIds({
     config: params.config,
     pluginsConfig,
@@ -211,6 +221,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         manifest,
         startupDreamingPluginIds,
         memorySlotStartupPluginId,
+        memoryBackendStartupPolicyIds,
         contextEngineSlotStartupPluginId,
       })
     ) {

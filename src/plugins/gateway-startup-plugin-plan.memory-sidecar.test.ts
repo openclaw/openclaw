@@ -33,3 +33,30 @@ it.each(["selected-memory", "Selected-Memory"])(
     expect(resolveGatewayStartupMetadataPluginIds({ config, env: {}, index })).toEqual(expected);
   },
 );
+
+it.each([true, false])(
+  "starts an enabled non-owner memory plugin only when it opts in as a backend (%s)",
+  (memoryBackend) => {
+    const manifestRegistry = {
+      plugins: ["memory-fusion", "memory-store"].map((id) =>
+        createPluginManifestRecordFixture({ id, kind: "memory", origin: "global" }),
+      ),
+      diagnostics: [],
+    };
+    const index = createInstalledPluginIndexFixture(manifestRegistry);
+    const config: OpenClawConfig = {
+      channels: {},
+      plugins: {
+        slots: { memory: "memory-fusion" },
+        entries: {
+          "memory-fusion": { enabled: true },
+          "memory-store": { enabled: true, memoryBackend },
+        },
+      },
+    };
+    expect(
+      resolveGatewayStartupPluginPlanFromRegistry({ config, env: {}, index, manifestRegistry })
+        .pluginIds,
+    ).toEqual(memoryBackend ? ["memory-fusion", "memory-store"] : ["memory-fusion"]);
+  },
+);

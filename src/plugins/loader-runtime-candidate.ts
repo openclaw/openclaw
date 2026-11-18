@@ -33,7 +33,7 @@ import {
   recordPluginConfiguredUnavailable,
   recordPluginError,
 } from "./loader-records.js";
-import { resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
+import { memoryBackendPlan, resolvePluginRegistrationPlan } from "./loader-registration-plan.js";
 import {
   type AuthorizedDreamingSidecar,
   recordPluginStartupDiagnostics,
@@ -47,6 +47,7 @@ import {
   resolveManifestOwnerBasePolicyBlock,
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { isMemoryBackendRequested } from "./memory-backend.js";
 import { resolvePluginModuleExport } from "./module-export.js";
 import { resolveExternalPluginRuntimeDependencyRepairHint } from "./official-external-plugin-repair-hints.js";
 import { resolveConfiguredRuntimePluginInstallCandidate } from "./official-runtime-plugins.js";
@@ -218,7 +219,7 @@ export function* loadRuntimePluginCandidate(params: {
   const canLoadScopedSetupOnlyChannelPlugin =
     scopedSetupOnlyChannelPluginRequested &&
     (candidate.origin !== "workspace" || enableState.enabled);
-  const registrationPlan = resolvePluginRegistrationPlan({
+  const basePlan = resolvePluginRegistrationPlan({
     canLoadScopedSetupOnlyChannelPlugin,
     enableStateEnabled: enableState.enabled,
     shouldLoadModules: context.shouldLoadModules,
@@ -231,12 +232,13 @@ export function* loadRuntimePluginCandidate(params: {
     toolDiscovery: params.options.toolDiscovery === true,
     cliMetadata,
   });
-  if (!registrationPlan) {
+  if (!basePlan) {
     yield;
     markPluginActivationDisabled(record, enableState.reason);
     finish();
     return;
   }
+  let registrationPlan = basePlan;
   if (!enableState.enabled) {
     markPluginActivationDisabled(record, enableState.reason);
   }
@@ -277,6 +279,7 @@ export function* loadRuntimePluginCandidate(params: {
     return;
   }
   const memorySlot = context.normalized.slots.memory;
+  const asBackend = isMemoryBackendRequested(entry, memorySlot, record.id, registrationPlan.mode);
   const memoryDecisionFor = (kind: PluginRecord["kind"]) =>
     resolveMemorySlotDecision({
       id: record.id,
@@ -294,7 +297,7 @@ export function* loadRuntimePluginCandidate(params: {
     // dreaming sidecar remains loadable alongside the selected memory plugin.
     yield;
     const earlyMemoryDecision = memoryDecisionFor(manifestRecord.kind);
-    if (!earlyMemoryDecision.enabled) {
+    if (!earlyMemoryDecision.enabled && !asBackend) {
       disableMemoryPlugin(earlyMemoryDecision.reason);
       return;
     }
@@ -307,7 +310,7 @@ export function* loadRuntimePluginCandidate(params: {
   if (!context.shouldLoadModules && registrationPlan.runRuntimeCapabilityPolicy) {
     yield;
     const memoryDecision = memoryDecisionFor(record.kind);
-    if (!memoryDecision.enabled && !isDreamingSidecar) {
+    if (!memoryDecision.enabled && !isDreamingSidecar && !asBackend) {
       disableMemoryPlugin(memoryDecision.reason);
       return;
     }
@@ -315,6 +318,8 @@ export function* loadRuntimePluginCandidate(params: {
       state.selectedMemoryPluginId = record.id;
       state.memorySlotMatched = true;
       record.memorySlotSelected = true;
+    } else if (asBackend && !isDreamingSidecar && hasKind(record.kind, "memory")) {
+      record.memoryBackend = true;
     }
   }
   const beforeConfigValidation = performance.now();
@@ -602,14 +607,20 @@ export function* loadRuntimePluginCandidate(params: {
     }
     if (registrationPlan.runRuntimeCapabilityPolicy && !isDreamingSidecar) {
       const memoryDecision = memoryDecisionFor(record.kind);
-      if (!memoryDecision.enabled) {
+      if (!memoryDecision.enabled && asBackend) {
+        // register() still runs, but only the memory provider registrar is live.
+        registrationPlan = memoryBackendPlan();
+        record.memoryBackend = true;
+      } else if (!memoryDecision.enabled) {
         params.registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
         disableMemoryPlugin(memoryDecision.reason);
         return;
-      }
-      if (memoryDecision.selected && hasKind(record.kind, "memory")) {
+      } else if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         state.selectedMemoryPluginId = record.id;
         record.memorySlotSelected = true;
+      } else if (asBackend && hasKind(record.kind, "memory")) {
+        // A dual-kind plugin that lost the slot keeps its other role and also serves as a backend.
+        record.memoryBackend = true;
       }
     }
     if (params.validateOnly) {
@@ -633,7 +644,7 @@ export function* loadRuntimePluginCandidate(params: {
     const registerPlugin = () => {
       const ownedDefinition = instance?.wrap(definition) ?? definition;
       // Headless nodes also use non-activating registries; their commands remain available.
-      if (!cliMetadata) {
+      if (!cliMetadata && registrationPlan.mode !== "memory-backend") {
         for (const command of ownedDefinition?.nodeHostCommands ?? []) {
           params.registryBuilder.registerNodeHostCommand(record, command);
         }
