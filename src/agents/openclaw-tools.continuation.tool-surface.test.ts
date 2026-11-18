@@ -86,6 +86,7 @@ describe("continuation tools beside sessions_yield on cataloged tool surfaces", 
     expect(names).toEqual([...search, "sessions_yield"]);
     expect(catalog).toEqual(["fixture_lookup"]);
     const directory = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
+    expect(directory).toContain("fixture_lookup");
     expect(`${directory}${tooling(directory)?.join("")}`).not.toContain("continue_");
   });
 

@@ -1,2 +1,2 @@
 # Continuation tools direct-only: tool-surface tests with Tool Search on, directory, Code Mode, disabled, per-turn policy, and Tool Search off.
-117
+118
