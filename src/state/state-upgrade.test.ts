@@ -9,17 +9,89 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-schema-versions.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "./openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { createDoctorChain } from "./state-upgrade-doctor.js";
 import { copyTree, pruneGenerations, writePlan } from "./state-upgrade-tree.js";
 import { ChainStepError } from "./state-upgrade-validate.js";
 import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("startup reader replacement", () => {
+  it("reopens shared-state workers after the copy-and-swap upgrade", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-readers-"));
+    dirs.push(stateDir);
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    };
+    fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
+    const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    {
+      using state = new DatabaseSync(statePath);
+      state.exec("PRAGMA journal_mode = WAL");
+      state.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+    }
+    // The upgrade's file-only lock itself inspects the old database through a read worker.
+    const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+    try {
+      await expect(
+        upgradeStateDirectory({
+          env,
+          log: { info() {}, warn() {} },
+          runChain: async ({ stateDir: shadow }) => {
+            using state = new DatabaseSync(path.join(shadow, "state", "openclaw.sqlite"));
+            state.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+            state.exec(
+              `INSERT INTO config_machine_state VALUES ('plugins.bundledDiscovery', '"all"', 1)`,
+            );
+            return { warnings: [] };
+          },
+          admitConfig: async ({ stateDir: shadow }) => {
+            await executeExistingOpenClawStateRead(
+              { env: { ...env, OPENCLAW_STATE_DIR: shadow } },
+              { type: "plugins.metadata.read", input: { stateKeys: ["plugins.bundledDiscovery"] } },
+            );
+            return undefined;
+          },
+          beforeSwap: async () => {
+            await closeOpenClawStateDatabaseByPathAsync(statePath);
+          },
+        }),
+      ).resolves.toMatchObject({ status: "upgraded", mode: "chain" });
+    } finally {
+      await lock?.release();
+    }
+    // Startup's first writer switches the renamed rollback-journal database back to WAL.
+    using state = new DatabaseSync(statePath);
+    state.exec(`PRAGMA journal_mode = WAL;
+      UPDATE config_machine_state SET value_json = '"allowlist"'
+      WHERE state_key = 'plugins.bundledDiscovery'`);
+    await expect(
+      executeExistingOpenClawStateRead(
+        { env },
+        { type: "plugins.metadata.read", input: { stateKeys: ["plugins.bundledDiscovery"] } },
+      ),
+    ).resolves.toMatchObject({
+      type: "plugins.metadata.read",
+      rows: [{ state_key: "plugins.bundledDiscovery", value_json: '"allowlist"' }],
+    });
+    expect(isStateUpgradePending(env)).toBe(false);
+  });
 });
 
 describe("upgradeStateDirectory version zero", () => {
