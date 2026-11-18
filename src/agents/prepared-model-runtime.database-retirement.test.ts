@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as agentDatabase from "../state/openclaw-agent-execution.js";
@@ -26,7 +27,11 @@ it.each(["retirement", "unrelated"] as const)(
         await new Promise<never>((_resolve, reject) => {
           signal!.addEventListener(
             "abort",
-            () => reject(failureSource === "retirement" ? signal!.reason : unrelated),
+            () => {
+              const reason = failureSource === "retirement" ? signal!.reason : unrelated;
+              assert(reason instanceof Error);
+              reject(reason);
+            },
             { once: true },
           );
         });
