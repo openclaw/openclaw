@@ -11,6 +11,7 @@ import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  replaceSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { withoutHostSql } from "./session-accessor.observation.test-support.js";
@@ -56,7 +57,12 @@ it.each(["durable", "memory"])(
         relatedSessionKeys: relatedSessionKeys.map((relatedKey) => ` ${relatedKey} `),
       };
       const now = Date.now();
-      const current = { sessionId: "reply", updatedAt: now, parentSessionKey: storedParentKey };
+      const current = {
+        sessionId: "reply",
+        updatedAt: now,
+        parentSessionKey: storedParentKey,
+        lastSubmittedModel: { provider: "synthetic", model: "fixture" },
+      };
       const unrelated = {
         sessionId: "unrelated",
         updatedAt: now,
@@ -98,6 +104,11 @@ it.each(["durable", "memory"])(
         withoutHostSql(() =>
           commitReplySessionInitialization({ ...scope, activeSessionKey: sessionKey, ...params }),
         );
+      await replaceSessionEntry(scope, {
+        ...loadSessionEntry(scope)!,
+        lastSubmittedModel: { model: "fixture", provider: "synthetic" },
+        lastHeartbeatSentAt: 11,
+      });
       const committed = await commit({
         expectedRevision: snapshot.revision,
         sessionEntry: persistedCurrent,

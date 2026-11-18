@@ -4,7 +4,10 @@ import type {
   ReplyPayload,
   DispatchReplyWithBufferedBlockDispatcher,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import {
+  runWithSessionInitConflictRetry,
+  setReplyPayloadMetadata,
+} from "openclaw/plugin-sdk/reply-payload-testing";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
@@ -287,42 +290,28 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
     ) => {
       const { cfg, route, delivery, sessionInitRetry, ...prepared } = plan;
-      const runDispatch = async () => {
-        for (let retryIndex = 0; ; retryIndex += 1) {
-          try {
-            return await replyRuntime.dispatchReplyWithBufferedBlockDispatcher({
+      const runDispatch = () =>
+        runWithSessionInitConflictRetry(
+          () =>
+            replyRuntime.dispatchReplyWithBufferedBlockDispatcher({
               ctx: plan.ctxPayload,
               cfg,
               dispatcherOptions: {
                 ...plan.dispatcherOptions,
-                deliver: (payload, info) => {
-                  const providerInfo = {
+                deliver: (payload, info) =>
+                  delivery.deliverWithProviderMessageSending(payload, {
                     ...info,
                     onPlatformSendDispatch: async () => undefined,
                     assertPlatformSendAuthorized: () => undefined,
-                  };
-                  return delivery.deliverWithProviderMessageSending(payload, providerInfo);
-                },
+                  }),
                 onError: delivery.onError,
               },
               toolsAllow: plan.toolsAllow,
               replyOptions: plan.replyOptions,
               replyResolver: plan.replyResolver,
-            });
-          } catch (error) {
-            const delayMs = sessionInitRetry?.delaysMs[retryIndex];
-            const message = error instanceof Error ? error.message : String(error);
-            if (
-              delayMs === undefined ||
-              sessionInitRetry?.signal?.aborted === true ||
-              !/^reply session initialization conflicted for \S+$/u.test(message)
-            ) {
-              throw error;
-            }
-            await sessionInitRetry?.sleep?.(delayMs, sessionInitRetry.signal);
-          }
-        }
-      };
+            }),
+          { retryDelaysMs: sessionInitRetry?.delaysMs, ...sessionInitRetry },
+        );
       return await actual.runPreparedInboundReply({
         ...prepared,
         routeSessionKey: route.sessionKey,
