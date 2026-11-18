@@ -1,0 +1,45 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, expect, it } from "vitest";
+import { adoptReleasedProcess } from "./released-processes.js";
+
+const groups: number[] = [];
+afterEach(() => {
+  for (const pgid of groups.splice(0)) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+});
+
+it.runIf(process.platform !== "win32")(
+  "a group stop gives a child that outlives the survivor the rest of the grace",
+  async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "group-grace-"));
+    const marker = path.join(dir, "flushed");
+    // The survivor exits on SIGTERM at once; its child needs a second to finish its writes.
+    const child = `trap 'sleep 1; echo flushed > "${marker}"; exit 0' TERM; while :; do sleep 0.1; done`;
+    const survivor = spawn(
+      "sh",
+      ["-c", `sh -c '${child.replaceAll("'", "'\\''")}' & exec sleep 60`],
+      {
+        detached: true,
+        stdio: "ignore",
+      },
+    );
+    const pid = survivor.pid!;
+    groups.push(pid);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const adopted = adoptReleasedProcess("group-grace", { pid, pgid: pid }, () => {});
+
+    expect(await adopted!.stop({ group: true })).toEqual({ status: "stopped" });
+
+    expect(fs.readFileSync(marker, "utf8").trim()).toBe("flushed");
+    expect(() => process.kill(-pid, 0)).toThrow();
+  },
+  20_000,
+);
