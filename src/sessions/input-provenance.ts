@@ -136,7 +136,9 @@ export function applyInputProvenanceToUserMessage<T extends AgentMessage>(
   if (!provenance) {
     return message;
   }
-  const hideExecutionInput = isCronExecutionInputProvenance(provenance);
+  const hideExecutionInput =
+    isCronExecutionInputProvenance(provenance) ||
+    (provenance.kind === "internal_system" && provenance.sourceTool === "session_state");
   if (existing && (!hideExecutionInput || Reflect.get(message, "display") === false)) {
     return message;
   }

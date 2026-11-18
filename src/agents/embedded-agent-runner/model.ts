@@ -58,6 +58,8 @@ type AsyncModelResolutionOptions = {
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
+  /** Core simple completions need one row; SDK resolvers and agent sessions need full stores. */
+  selectedModelStores?: boolean;
   /** Resolve local provider facts without starting asynchronous catalog discovery. */
   deferProviderDynamicModelPreparation?: boolean;
 };
@@ -168,7 +170,13 @@ export async function resolveModelAsync(
     const logicalRef = { provider: normalizedRef.provider, model: normalizedRef.model };
     let { authStorage, modelRegistry } = options ?? {};
     if (!authStorage || !modelRegistry) {
-      const stores = preparedModelRuntime?.createStores() ?? createEmptyAgentDiscoveryStores();
+      const stores =
+        preparedModelRuntime?.createStores(
+          undefined,
+          options?.selectedModelStores
+            ? { provider: normalizedRef.provider, modelId: normalizedRef.model }
+            : undefined,
+        ) ?? createEmptyAgentDiscoveryStores();
       authStorage ??= stores.authStorage;
       modelRegistry ??= options?.authStorage
         ? stores.modelRegistry.fork(authStorage)
@@ -183,6 +191,8 @@ export async function resolveModelAsync(
       readCapturedPreparedModelRuntimeCatalog(preparedModelRuntime)?.entries.find(
         (entry) => matchesSelectedModel(entry) && modelTransportRoutesMatch(entry, declared ?? {}),
       );
+    // Typed-only veto (#184996). Accepted edge: a main/nightly catalog saved under #198288 can refuse a
+    // listed model until the first restart after upgrading; releases never saved that value.
     assertModelSupportsChat(captured?.inference?.chat ?? declared?.inference?.chat, normalizedRef);
     const runtimeHooks = resolveRuntimeHooks(options);
     let staticCatalogResolved = false;

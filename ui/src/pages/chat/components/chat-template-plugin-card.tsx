@@ -36,7 +36,7 @@ function ChatTemplatePluginCard(props: { notice: TemplatePluginInstallNotice }) 
             })
           }
         >
-          <span class="chat-clawhub-card__icon" aria-hidden="true">
+          <span class="chat-clawhub-card__icon muted" aria-hidden="true">
             <Icon name="plug" />
           </span>
           <span class="chat-clawhub-card__identity">
@@ -70,7 +70,10 @@ function ChatTemplatePluginCard(props: { notice: TemplatePluginInstallNotice }) 
               },
             ]}
           >
-            <Icon name={props.notice.status === "installed" ? "check" : "circleAlert"} />
+            <Icon
+              name={props.notice.status === "installed" ? "check" : "circleAlert"}
+              style={{ width: "16px", height: "16px" }}
+            />
             <span>
               {props.notice.status === "installed"
                 ? t("pluginsPage.installed")

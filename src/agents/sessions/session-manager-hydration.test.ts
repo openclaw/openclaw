@@ -32,6 +32,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
+import { sessionManagerOpenTranscriptCohort } from "./session-manager-core.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { sessionScope, withSessionState } from "./session-manager-fixtures.test-support.js";
 
@@ -502,6 +503,17 @@ it("keeps absent storage absent, lazy headers unpersisted, and malformed retarge
   await withOpenClawTestState({ label: "session-hydration-empty" }, async (state) => {
     const target = canonicalTarget(state, "empty");
     await expect(SessionManager.openAsync(target)).rejects.toThrow("storage");
+    expect(fs.existsSync(target.storePath)).toBe(false);
+    const consumeCohort = vi.fn();
+    await expect(
+      SessionManager[sessionManagerOpenTranscriptCohort](
+        target,
+        { maxBytes: 4096, maxEvents: 5 },
+        { sessionKey: target.sessionKey, entryIds: [] },
+        consumeCohort,
+      ),
+    ).rejects.toThrow("storage");
+    expect(consumeCohort).not.toHaveBeenCalled();
     expect(fs.existsSync(target.storePath)).toBe(false);
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const empty = await SessionManager.openAsync(target);

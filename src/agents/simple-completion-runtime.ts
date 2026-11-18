@@ -97,6 +97,8 @@ export type PrepareSimpleCompletionModelParams = {
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
   modelResolver?: SimpleCompletionModelResolver;
+  /** Internal authorization wrappers around resolveModelAsync may keep single-row stores. */
+  selectedModelStores?: boolean;
   signal?: AbortSignal;
   /** Internal caller-owned generation. Public plugin callers use the agent helper below. */
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -140,6 +142,9 @@ export async function prepareSimpleCompletionModel(
       preparedModelRuntime.workspaceDir ??
       resolveAgentWorkspaceDir(config, params.agentId ?? resolveDefaultAgentId(config)),
     modelResolver: params.modelResolver,
+    selectedModelStores:
+      params.selectedModelStores ??
+      (params.transport !== "provider-stream" && !params.modelResolver),
     agentRuntimeId: params.agentRuntimeId,
   });
   const prepared = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
@@ -442,7 +447,8 @@ async function prepareSimpleCompletionModelCore(
         })
       : fingerprintResolvedProviderAuth(auth)
     : undefined;
-  await import("./ai-transport-runtime-host.js");
+  const { configureAiTransportRuntimeHost } = await import("./ai-transport-runtime-host.js");
+  configureAiTransportRuntimeHost();
   assertCurrent?.();
   params.signal?.throwIfAborted();
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);

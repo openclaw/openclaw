@@ -15,7 +15,11 @@ import {
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
-import { applyOpenAICompletionsToolReasoning } from "../providers/openai-reasoning-effort.js";
+import {
+  applyOpenAICompletionsToolReasoning,
+  isOpenAIGpt6Model,
+  supportsOpenAITemperature,
+} from "../providers/openai-reasoning-effort.js";
 import {
   resolveOpenAIRequestReasoning,
   resolveOpenAISimpleReasoningEffort,
@@ -325,10 +329,10 @@ export function buildOpenAICompletionsRequest(
   if (policy.mode === "direct" || (compat.supportsPromptCacheKey && promptCacheKey)) {
     params.prompt_cache_key = compat.supportsPromptCacheKey ? promptCacheKey : undefined;
   }
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     params.temperature = options.temperature;
   }
-  if (policy.mode === "managed" && options?.topP !== undefined) {
+  if (policy.mode === "managed" && options?.topP !== undefined && !isOpenAIGpt6Model(model)) {
     params.top_p = options.topP;
   }
   const requestedResponseFormat = options?.responseFormat;

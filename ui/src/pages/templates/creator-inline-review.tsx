@@ -55,13 +55,15 @@ export function TemplateCreatorInlineReview(props: {
         <Show
           when={!unavailable()}
           fallback={
-            <InlineAlert tone="warning">
-              {t(
-                unavailable() === "disabled"
-                  ? "templatesDraft.reviewDisabled"
-                  : "templatesDraft.reviewUnavailable",
-              )}
-            </InlineAlert>
+            unavailable() !== "loading" && (
+              <InlineAlert tone="warning">
+                {t(
+                  unavailable() === "disabled"
+                    ? "templatesDraft.reviewDisabled"
+                    : "templatesDraft.reviewUnavailable",
+                )}
+              </InlineAlert>
+            )
           }
         >
           <For each={[gateway().read().client]}>

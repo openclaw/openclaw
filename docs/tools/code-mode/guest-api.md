@@ -267,6 +267,28 @@ in `content`, including empty-result messages and truncation notices. Directory
 pages retain `nextAfter`; search results retain their existing limit and
 truncation metadata.
 
+## File edits and multiline commands
+
+Prefer the enabled `edit` or `apply_patch` tool for file changes instead of
+nesting a Python replacement script inside JavaScript and a shell command.
+Use the callable names in the current quick index.
+
+For shell commands, ordinary JavaScript strings cannot contain literal newlines.
+Join command lines with `"\n"`; escape a backslash as `\\` inside each string:
+
+```javascript
+return await exec({
+  command: ["printf '%s\\n' '$HOME'", "printf '%s\\n' '`literal` ${value}\\n'"].join("\n"),
+});
+```
+
+This passes two command lines to the shell. The single-quoted shell arguments
+keep `$HOME`, backticks, `${value}`, and the final `\n` literal; the format
+argument `\n` is interpreted by `printf`. The JavaScript source goes in the
+outer tool's JSON `code` string, with normal JSON escaping. Code Mode does not
+unescape or repair JavaScript or change shell failure semantics. Check an edit
+or command result before running dependent validation.
+
 ## Reading skill companions
 
 Installed skills use `await skills.read(name)` for complete instructions.

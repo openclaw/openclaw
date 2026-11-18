@@ -9,10 +9,7 @@ import {
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { runInDetachedAsyncContext } from "../../../shared/detached-async-context.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
-import {
-  blockSubagentCompletionDelivery,
-  reconcileRetiredSubagentCancellation,
-} from "../completion/subagent-completion-admission.store.js";
+import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
 import { settleSubagentCompletionReservation } from "./subagent-controller-inputs.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import {
@@ -51,7 +48,10 @@ import {
   reconcileProvisionalSubagentKill,
 } from "./subagent-registry-sweep-kill.js";
 import { orderSubagentSweepEntries } from "./subagent-registry-sweep-order.js";
-import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
+import {
+  settleRestartInterruptedSubagentRun,
+  settleUnreachableYieldedSubagentRun,
+} from "./subagent-registry-sweep-settle.js";
 import { SUBAGENT_SESSION_RUN_TTL_MS } from "./subagent-registry-work-index.js";
 import type {
   ContextEngineSubagentEndedParams,
@@ -278,20 +278,6 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (
-          (selected.delivery?.status === "pending" ||
-            selected.delivery?.status === "in_progress") &&
-          !isYieldedSubagentRun(selected) &&
-          subagentRuns.isCompletionAuthorityRetired(selected)
-        ) {
-          await blockSubagentCompletionDelivery({
-            subagent: selected,
-            reason: "store replaced",
-            suspendedReason: "permanent_failure",
-            storeReplaced: true,
-          });
-          continue;
-        }
-        if (
           selected.killReconciliation &&
           (await reconcileRetiredSubagentCancellation(selected, now)) === false
         ) {
@@ -361,7 +347,15 @@ export function createSubagentRegistrySweeper(params: {
           continue;
         }
         if (typeof entry.execution.endedAt !== "number") {
-          // A row without a live execution is retained history, not a restart obligation.
+          // A running row from an earlier process never resumes; its requester still
+          // needs a terminal outcome. Any other unended row is retained history.
+          await settleRestartInterruptedSubagentRun({
+            runId,
+            entry,
+            readScope,
+            complete: params.completeSubagentRunWithRecovery,
+            now,
+          });
           continue;
         }
 
@@ -627,6 +621,7 @@ export function createSubagentRegistrySweeper(params: {
             return {
               value: true,
               postimages: new Map(groupEntries.map(([runId]) => [runId, null])),
+              removalReason: "retention",
             };
           },
           { runs },

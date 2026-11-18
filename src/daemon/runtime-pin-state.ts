@@ -7,6 +7,7 @@ import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   completeUnshippedDaemonRuntimePinMigration,
+  daemonRuntimePinMigrationSourcesMatch,
   readDaemonRuntimePinValue,
   readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
@@ -50,7 +51,8 @@ export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): bo
     migrationPending.set(
       source,
       receipt?.phase !== "complete" ||
-        (receipt.source_state !== source && receipt.source_state !== "none/unshipped"),
+        (receipt.source_state !== "none/unshipped" &&
+          !daemonRuntimePinMigrationSourcesMatch(receipt.source_state, source)),
     );
   }
   return migrationPending.get(source) ?? false;

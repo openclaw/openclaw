@@ -88,7 +88,7 @@ it.each([
   { progressOpen: true, takeover: "expand" },
   { progressOpen: false, takeover: "next" },
 ])(
-  "restores the composer after $takeover (progress=$progressOpen)",
+  "retains the composer through question $takeover (progress=$progressOpen)",
   async ({ progressOpen, takeover }) => {
     const prompt = questionPrompt("question-swap", "Choose a release target");
     const nextPrompt = questionPrompt("question-next", "Choose a release format");
@@ -128,11 +128,9 @@ it.each([
       expect(document.activeElement).toBe(editor());
     };
     const expectQuestion = (panel: Element, draft: string) => {
-      expect(
-        container.querySelector(
-          ".agent-chat__input, .agent-chat__composer-footer, .agent-chat__typing-indicator--outside",
-        ),
-      ).toBeNull();
+      expect(container.querySelector(".agent-chat__composer-combobox textarea")).toBe(
+        initialTextarea,
+      );
       expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
       expect(composerProps.draft).toBe(draft);
       expect(progressWrapper.hidden).toBe(true);
@@ -175,7 +173,7 @@ it.each([
   },
 );
 
-it("hides the pending progress slot during question takeover", () => {
+it("hides pending progress without hiding the composer during an expanded question", () => {
   const view = renderComposer({
     sessionKey: "queue-test",
     progressCardInitialLoading: true,
@@ -183,5 +181,5 @@ it("hides the pending progress slot during question takeover", () => {
   });
   const slot = view.container.querySelector<HTMLElement>(".agent-chat__progress-float--loading")!;
   expect(slot.hidden).toBe(true);
-  expect(view.container.querySelector(".agent-chat__input")).toBeNull();
+  expect(view.container.querySelector(".agent-chat__input")).not.toBeNull();
 });

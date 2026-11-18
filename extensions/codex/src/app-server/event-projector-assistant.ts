@@ -135,7 +135,7 @@ export class CodexAssistantProjection {
     const preparedDelta = prepared.accumulator.consume(delta, { final })?.text ?? "";
     prepared.text += preparedDelta;
     if (phase === "final_answer") {
-      this.emitAnswerCandidate(itemId, "candidate");
+      this.emitAnswerCandidate(itemId, "candidate", preparedDelta || delta);
     }
     if (!preparedDelta && !replacement) {
       return;
@@ -251,7 +251,7 @@ export class CodexAssistantProjection {
         } else if (
           item.text &&
           !this.isAsyncAssistantItem(item.id) &&
-          this.isFinalAnswerAssistantItem(item.id)
+          this.assistantPhaseByItem.get(item.id) === "final_answer"
         ) {
           this.emitAnswerCandidate(item.id, "candidate");
         }
@@ -426,7 +426,8 @@ export class CodexAssistantProjection {
       if (
         !this.steeringSegments.isCompleted(itemId) &&
         !this.isAsyncAssistantItem(itemId) &&
-        (this.isFinalAnswerAssistantItem(itemId) || this.isCommentaryAssistantItem(itemId))
+        (this.assistantPhaseByItem.get(itemId) === "final_answer" ||
+          this.isCommentaryAssistantItem(itemId))
       ) {
         if (itemId === this.visibleAnswerCandidateItemId) {
           // Activity needs the preview text to publish its superseded transition.
@@ -585,10 +586,6 @@ export class CodexAssistantProjection {
     return this.isCommentaryAssistantItem(itemId) || this.isAsyncAssistantItem(itemId);
   }
 
-  private isFinalAnswerAssistantItem(itemId: string): boolean {
-    return this.assistantPhaseByItem.get(itemId) === "final_answer";
-  }
-
   private emitCommentaryProgress(params: {
     itemId: string;
     text: string;
@@ -624,7 +621,12 @@ export class CodexAssistantProjection {
     });
   }
 
-  private emitAnswerCandidate(itemId: string, status: AnswerCandidateStatus): void {
+  private emitAnswerCandidate(itemId: string, status: AnswerCandidateStatus, delta = ""): void {
+    const previous = this.lastAnswerCandidateEventByItem.get(itemId);
+    // The assistant stream owns growing text; snapshots belong to lifecycle boundaries.
+    if (delta && (previous?.status === status || (!previous && !delta.trim()))) {
+      return;
+    }
     const text = (
       this.preparedStreams.get(itemId)?.text ??
       prepareAgentRunTerminalReply({ rawText: this.assistantTextByItem.get(itemId) }).text
@@ -636,7 +638,6 @@ export class CodexAssistantProjection {
       this.supersedeVisibleAnswerCandidate();
       this.visibleAnswerCandidateItemId = itemId;
     }
-    const previous = this.lastAnswerCandidateEventByItem.get(itemId);
     if (previous?.status === status && previous.text === text) {
       return;
     }
@@ -659,11 +660,10 @@ export class CodexAssistantProjection {
 
   private supersedeVisibleAnswerCandidate(): void {
     const itemId = this.visibleAnswerCandidateItemId;
-    if (!itemId) {
-      return;
+    if (itemId) {
+      this.emitAnswerCandidate(itemId, "superseded");
+      this.visibleAnswerCandidateItemId = undefined;
     }
-    this.emitAnswerCandidate(itemId, "superseded");
-    this.visibleAnswerCandidateItemId = undefined;
   }
 
   private markLatestTerminalAssistantCandidate(

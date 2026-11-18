@@ -1,6 +1,8 @@
+import type { WorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWatermark,
@@ -35,6 +37,8 @@ export type SessionActorAuthorityFacts = Pick<SessionActorHotState, "target" | "
 
 /** Host-owned live authority, rechecked at both synchronous admission boundaries. Facts are read-only. */
 export type SessionActorAuthority = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   assertCurrent(): void;
   authorize(
     stage: "transaction" | "commit",

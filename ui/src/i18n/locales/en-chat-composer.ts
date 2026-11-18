@@ -15,14 +15,14 @@ const catalog = {
       emojiSuggestions: "Emoji suggestions",
       placeholder: "Message {name}",
       emptyHint: "Type a message first.",
-      preparingModel: "Preparing model…",
-      responding: "{name} is responding…",
-      sendingMessage: "Sending message…",
-      working: "{name} is working…",
+      preparingModel: "Preparing model",
+      responding: "{name} is responding",
+      sendingMessage: "Sending message",
+      working: "{name} is working",
       runDone: "Done",
       runInterrupted: "Interrupted",
       localCancellationCaveat: "Cancellation requested; the local model may still be finishing.",
-      compactingContext: "Compacting context…",
+      compactingContext: "Compacting context",
       contextCompacted: "Context compacted",
       fallbackActive: "Fallback active: {model}",
       modelFallbackEvent: "Model fallback: {from} → {to}",
@@ -61,10 +61,6 @@ const catalog = {
         adminBlocked: "You need admin access to manage MCP servers.",
         savingBlocked: "Saving… Try again in a moment.",
       },
-      overrides: {
-        count: "{count} overrides",
-        countOne: "{count} override",
-      },
       contextUsage: {
         title: "Context usage details",
         percentUsed: "Context: {pct}% used",
@@ -75,6 +71,8 @@ const catalog = {
         inputShort: "In",
         outputShort: "Out",
         costShort: "Cost",
+        cacheShort: "Cache",
+        cacheHitRate: "Prompt tokens read from cache",
         sessionTotal: "Session total",
         unpriced: "Unpriced",
         quotaAccountUnknown: "Quota account unknown",
@@ -137,7 +135,7 @@ const catalog = {
       dictationInterruptedRecovery:
         "Captured text was inserted. Check your connection and try again.",
       dictationStartRecovery: "Check microphone access and transcription settings, then try again.",
-      dictationFinalizing: "Finishing dictation…",
+      dictationFinalizing: "Transcribing…",
       dictationListening: "Listening…",
       dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",
@@ -265,7 +263,7 @@ const catalog = {
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
-        "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+        "Browser attachment storage is unavailable. Allow browser storage and close older OpenClaw tabs before reconnecting and retrying. No new message was sent.",
       outboxPayloadMissing:
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",

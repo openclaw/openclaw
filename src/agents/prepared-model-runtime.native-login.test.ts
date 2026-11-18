@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
+import { createTestInstance } from "../plugins/plugin-instance.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PreparedModelCatalogAuth } from "./prepared-model-runtime-auth.js";
 import {
   createNativeLoginRecheck,
   createPreparedAccountCatalogAccess,
 } from "./prepared-model-runtime.catalog-auth.js";
-import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
 
 const native = vi.hoisted(() => ({
@@ -61,7 +65,11 @@ afterEach(() => {
   expect(native.unrelatedProbe).not.toHaveBeenCalled();
 });
 
-function fixture(resources: AsyncDisposableStack, savedNativeProfile = false) {
+function fixture(
+  resources: AsyncDisposableStack,
+  savedNativeProfile = false,
+  pluginRegistry?: PluginRegistry,
+) {
   const cache = resources.use(createPluginCache());
   const retirement = new AbortController();
   const metadata = createPluginMetadataSnapshotFixture({
@@ -79,8 +87,10 @@ function fixture(resources: AsyncDisposableStack, savedNativeProfile = false) {
     pluginMetadataSnapshot: metadata,
     inlineProviderModels: [],
     configuredCatalogEntries: [],
+    ...(pluginRegistry ? { pluginRegistry } : {}),
   };
-  resources.defer(retainPreparedPluginGeneration(pluginGeneration));
+  // Publication custody keeps the generation alive without holding work on its plugins.
+  resources.defer(ownPreparedPluginGeneration(pluginGeneration).retain());
   resources.defer(() => retirement.abort());
   const credentials: Record<string, { type: "api_key"; key: string }> = {
     shared: sharedCredential,
@@ -101,15 +111,16 @@ function fixture(resources: AsyncDisposableStack, savedNativeProfile = false) {
   const recheck = createNativeLoginRecheck(
     {
       pluginGeneration,
+      agentFacts: {
+        input: { config: {}, agentDir: "/tmp/native-login-agent", agentId: "main" },
+        env: {},
+      },
+      retirementSignal: retirement.signal,
       accountCatalog: createPreparedAccountCatalogAccess(() => !retirement.signal.aborted),
       normalizeProvider: (provider) => provider,
       assertCurrent: () => retirement.signal.throwIfAborted(),
       readAuth,
       refreshAuth,
-    },
-    {
-      agentFacts: { input: { config: {}, agentDir: "/tmp/native-login-agent" }, env: {} },
-      retirementSignal: retirement.signal,
     },
     [native.id, "unrelated-cli", "shared"],
     publish,
@@ -164,7 +175,7 @@ it("publishes a login whose check outlives the triggering read's plugin scope", 
   const readScope = {
     lookup: () => {
       if (!readOpen) {
-        throw new Error("Plugin invocation scope is closed");
+        throw new Error("Plugin fixture was reloaded or disabled");
       }
       return undefined;
     },
@@ -221,4 +232,42 @@ it("coalesces pending login checks and fences their result when the owner retire
   await vi.advanceTimersByTimeAsync(0);
   expect(publish).not.toHaveBeenCalled();
   expect(readAuth().authModes).toEqual({ shared: "api_key" });
+});
+
+it("lets an unrelated plugin reload while a native login probe is hung (#199521)", async () => {
+  await using resources = new AsyncDisposableStack();
+  const registry = createEmptyPluginRegistry();
+  const [cliPlugin, unrelated] = [native.id, "unrelated-plugin"].map((id) => {
+    const record = createPluginRecord({ id, status: "loaded" });
+    registry.plugins.push(record);
+    return createTestInstance(id, { record, registry });
+  });
+  // The probe belongs to its plugin; the recheck joins it until it settles.
+  const hung = createDeferredCore<undefined>();
+  const probe = cliPlugin!.wrap(() => hung.promise);
+  native.probe.mockImplementation(() => probe());
+  const { recheck, publish } = fixture(resources, false, registry);
+  // Disposal runs in reverse: settle the call before the generation's cleanup waits for it.
+  resources.defer(() => hung.resolve(undefined));
+  const pending = recheck({ force: true });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(native.probe).toHaveBeenCalledOnce();
+  // The probe holds its own plugin through its running call, attributed to discovery.
+  expect(cliPlugin!.retainedWorkCount).toBe(0);
+  expect(cliPlugin!.ordinaryCallCount).toBe(1);
+  expect(cliPlugin!.retentionSnapshot().references).toContainEqual(
+    expect.objectContaining({
+      kind: "call",
+      owner: { agentId: "main", serviceId: "model-catalog-discovery" },
+    }),
+  );
+  expect(unrelated!.retainedWorkCount).toBe(0);
+  const releaseReservation = unrelated!.reserveReplacement();
+  await unrelated!.waitForIdle(new AbortController().signal);
+  releaseReservation();
+  hung.resolve(undefined);
+  await pending;
+  expect(cliPlugin!.retainedWorkCount).toBe(0);
+  expect(cliPlugin!.ordinaryCallCount).toBe(0);
+  expect(publish).not.toHaveBeenCalled();
 });

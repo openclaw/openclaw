@@ -26,6 +26,22 @@ export class WorktreeRepositoryError extends Error {
   }
 }
 
+export type WorktreePreservationReason =
+  | "nested-repository"
+  | "repository-corrupt"
+  | "permission-denied";
+
+/** The code survives the existing Git worker error transport. */
+export class WorktreePreservationError extends Error {
+  constructor(
+    readonly code: WorktreePreservationReason,
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+  }
+}
+
 export class WorktreeRemovalContentionError extends Error {
   constructor(
     readonly kind: "busy" | "finalized",

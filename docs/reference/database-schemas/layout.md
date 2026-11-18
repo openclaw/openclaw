@@ -104,6 +104,15 @@ system input admitted under the owning session's current principal. Finished row
 their logs follow the registry's bounded result retention and explicit removal. A
 session reset invalidates completion eligibility through the recorded session ID.
 
+The same table also holds a best-effort row with `kind: "ordinary"` for each running
+ordinary (non-durable) background command whose exit would wake its conversation,
+except in incognito sessions. It carries the same bounded fields, with the generic
+command summary, no unit, and a `sandboxed` flag for sandbox commands. The registry writes it when the command is backgrounded and deletes it when
+the command exits while the Gateway runs. On startup the registry reports each remaining
+row as lost through the same completion path, then deletes it. The Gateway boot record
+tells it whether the previous Gateway shut down or crashed while the command ran. An older binary reads such a row as a durable process with a missing unit
+and reports it as lost, which remains accurate.
+
 ### Linux database page cache
 
 After readiness, the Gateway samples Linux file-cache residency and checks it again
@@ -456,6 +465,13 @@ That marker permanently excludes the run from automatic reconciliation, even
 if known parents later exit; existing recorded identities remain protected.
 A fresh run without identity follows the legacy explicit repair/supersession
 rules below.
+On Linux and macOS each adopter also stores an optional `namespace` string on
+its `origin.driver` entry, retained with it in `origin.previousDrivers`: the
+platform, kernel boot, Linux PID namespace, and digested machine identity it ran
+under, or `null` when they could not be read. A later `openclaw update` reads it
+only to show that a killed run's processes ended with an earlier boot of the
+same machine. Older readers drop the key; lease payloads, recovery receipts, and
+the public run record never carry it.
 This is additive JSON metadata;
 there are no new columns, tables, or schema versions. The separate
 `verification.pid` still identifies the Gateway service, not the updater.
@@ -467,6 +483,18 @@ write failures warn once per driver run and do not abort commands or finalizatio
 step and outcome writes retain their existing failure behavior. Encoding
 reserves space for exact identity bytes before bounding and redacting other
 origin diagnostics.
+
+An update of a source checkout that replaces the checkout's build in place
+records optional `origin.gitActivation` in the same `origin_json` column, before
+it reserves its plugin recovery: `sha` (the activated commit), `buildId` (the
+activated build) and `previousBuildId` (the build it replaced, or `null`). The
+next `openclaw update` reads it only for a killed run and only together with the
+checkout on disk; it never grants execution authority. It is an exact retained
+receipt like the driver identities: when the origin outgrows its byte budget,
+driver `namespace` values are dropped first and the activation stays exact.
+Public history projections omit it. This is
+additive JSON metadata with no new columns, tables, or schema versions; older
+readers drop the key, and runs without it keep the earlier behavior.
 
 The ledger owns abandonment classification and terminalization. Automatic
 recovery requires more than 30 minutes since both `updated_at_ms` and the latest
@@ -851,3 +879,12 @@ it does not automatically scan or import existing transcripts.
 
 See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 for authenticated inspection, explicit transcript import, reset, and privacy.
+
+### Pending-input endings
+
+Agent schema 43 adds nullable `end_cause` and `origin_source_json` columns to
+`session_pending_inputs` on SQLite and PostgreSQL. The forward migration marks
+legacy cancelled inputs carrying a user Stop or dismissal marker as `user-stop`,
+without changing their message bytes. Stores without the optional pending-input
+table keep it absent until first use. `origin_source_json` reserves storage for
+the original input source; this migration does not populate it.

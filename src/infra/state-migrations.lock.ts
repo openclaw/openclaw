@@ -6,7 +6,7 @@ import { formatErrorMessage } from "./errors.js";
 import { formatGatewayLockFailure } from "./gateway-lock-diagnostics.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
-import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-context.js";
 import { Utf8InputError } from "./utf8-input.js";
 
 type LegacyMigrationStateLockOptions = {

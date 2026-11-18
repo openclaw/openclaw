@@ -1,14 +1,15 @@
 // Reads the claw's Discovery mailbox (store-and-forward). Member and node invite
 // redemptions become pending, never admitted; the authority verifies root statements
 // and revocations. Every other kind is explicitly refused until its handler exists.
-// Device-signed approvals arriving this way are refused (spec section 7).
+// Browser-device approvals are direct; recovery-only member keys may add their own browser.
 import {
   MAILBOX_MAX_WAIT_SECONDS,
+  parseStatement,
   type AuthorityEvent,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { AuthorityAccepted, AuthorityRefusal } from "./authority-result.js";
-import type { RedemptionSender } from "./authority.js";
+import type { OpenClawIdAuthority, RedemptionSender } from "./authority.js";
 import type { DiscoveryClient } from "./discovery-client.js";
 
 const BACKOFF_INITIAL_MS = 5_000;
@@ -22,10 +23,22 @@ export type MailboxSink = {
     sender: RedemptionSender,
   ) => Promise<AuthorityAccepted | AuthorityRefusal>;
   redeemNode: (redemption: unknown) => Promise<AuthorityAccepted | AuthorityRefusal>;
+  memberBrowserRequest?: (message: MailboxMessage) => Promise<AuthorityAccepted | AuthorityRefusal>;
   saveCursor: (cursor: string) => Promise<void>;
 };
 
 type ReaderLogger = { info: (message: string) => void; warn: (message: string) => void };
+
+/** Route mailbox writes to the existing serialized claw owner. */
+export function createMailboxSink(owner: OpenClawIdAuthority): MailboxSink {
+  return {
+    submit: (statement) => owner.submit(statement, "mailbox"),
+    redeem: (redemption, sender) => owner.redeem(redemption, sender),
+    redeemNode: (redemption) => owner.redeemNode(redemption),
+    memberBrowserRequest: (message) => owner.memberBrowserRequest(message),
+    saveCursor: (cursor) => owner.recordDiscovery({ mailbox_cursor: cursor }),
+  };
+}
 
 /**
  * Applies one message; returns the authority results for its statements. `settle`
@@ -35,7 +48,7 @@ type ReaderLogger = { info: (message: string) => void; warn: (message: string) =
  */
 export async function applyMailboxMessage(
   message: MailboxMessage,
-  sink: Pick<MailboxSink, "submit" | "redeem" | "redeemNode">,
+  sink: Pick<MailboxSink, "submit" | "redeem" | "redeemNode" | "memberBrowserRequest">,
   settle: (result: AuthorityAccepted | AuthorityRefusal) => Promise<void> = async () => {},
   signal?: AbortSignal,
 ): Promise<Array<AuthorityAccepted | AuthorityRefusal>> {
@@ -62,8 +75,21 @@ export async function applyMailboxMessage(
         location_hint: message.location_hint,
       }),
     );
+  } else if (payload.kind === "member_browser_request" && sink.memberBrowserRequest) {
+    await record(await sink.memberBrowserRequest(message));
   } else if (payload.kind === "node_redemption") {
     await record(await sink.redeemNode(payload.redemption));
+  } else if (payload.kind === "member_recovery") {
+    const parsed = parseStatement(payload.statement, "MembershipChange");
+    if (!parsed.ok || parsed.statement.body.target.op !== "add_member_device") {
+      await record({
+        ok: false,
+        code: "unsupported",
+        detail: "member recovery adds only a member browser",
+      });
+    } else {
+      await record(await sink.submit(parsed.statement));
+    }
   } else if (payload.kind === "revocation") {
     await record(await sink.submit(payload.revocation));
   } else if (payload.kind === "root_statement") {
@@ -132,8 +158,12 @@ export function startMailboxReader(params: {
             params.sink,
             async (result) => {
               if (!result.ok) {
+                const detail =
+                  message.payload.kind === "invite_redemption" && result.code === "invite_used"
+                    ? `: ${result.detail}`
+                    : "";
                 params.log.warn(
-                  `openclaw-id: mailbox ${message.payload.kind} refused (${result.code})`,
+                  `openclaw-id: mailbox ${message.payload.kind} refused (${result.code})${detail}`,
                 );
                 await params
                   .onRefused?.(message, result)

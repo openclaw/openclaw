@@ -5,7 +5,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
-import { WorkerTaskAdmission } from "./worker-task-admission.js";
+import { enqueueWorkerTask, WorkerTaskAdmission } from "./worker-task-admission.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -191,8 +191,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     serviceNativeWorkerPass(this.host, this.slots);
     this.expireTasks();
     this.retirement.service();
-    const tasks = [...this.ownedTasks];
-    for (const task of tasks) {
+    for (const task of Array.from(this.ownedTasks)) {
       task.owner?.closing?.service();
     }
     this.dispatch();
@@ -241,18 +240,17 @@ export class WorkerTaskPoolCore<Input, Output> {
       );
       return task;
     }
-    const refusal = this.admission.admit(inputBytes, () =>
+    const refusal = this.admission.admitTask(task, () =>
       this.host.describeTask?.(this.options.workerUrl, undefined, options.diagnosticOperation),
     );
     if (refusal) {
       this.finish(task, refusal);
       return task;
     }
-    task.admitted = true;
     task.observation = this.observeTask?.(task.options.diagnosticOperation);
     armWorkerTaskTimeout(task, options.timeoutMs, this.timeout, "enqueue");
     options.signal?.addEventListener("abort", task.abort, { once: true });
-    this.queue.push(task);
+    enqueueWorkerTask(this.queue, task);
     if (options.signal?.aborted) {
       task.abort();
     } else {
@@ -282,6 +280,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.slots,
       this.resourceClosures,
       (slot) => this.ownedSettlement.retire(slot),
+      runInWorkerPoolContext,
       key,
       this.ownerOptions,
       this.host.observeResourceReply,
@@ -338,9 +337,13 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.computeCapacity?.remove(this.resumeCompute);
     }
     while (!this.closedError && this.retirement.dispatchAllowed && this.queue.length) {
-      let slot = this.retirement.preferredIdle;
+      const nextTask = this.queue[0]!;
+      // One worker beyond the bulk limit stays reserved for point reads.
+      const workerLimit = this.maxWorkers + Number(nextTask.options.pointRead === true);
+      let slot = this.activeTasks < workerLimit ? this.retirement.preferredIdle : undefined;
       slot ??= [...this.slots].find(
         (entry) =>
+          this.activeTasks < workerLimit &&
           !entry.task &&
           !entry.retiring &&
           !entry.retirementFailed &&
@@ -351,7 +354,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         if (constructionBlocked) {
           this.bootstrap.rejectQueued();
         }
-        if (constructionBlocked || this.slots.size >= this.maxWorkers) {
+        if (constructionBlocked || this.slots.size >= workerLimit) {
           // A host-waiting task can checkpoint rather than monopolize a worker.
           // Signal one owner per queued contender, in slot admission order.
           let contenders = this.queue.length;
@@ -368,8 +371,7 @@ export class WorkerTaskPoolCore<Input, Output> {
           return;
         }
       }
-      const nextTask = this.queue[0]!;
-      if (this.computeCapacity) {
+      if (this.computeCapacity && !nextTask.options.pointRead) {
         const permit = this.computeCapacity.acquire(this.resumeCompute, () => {
           if (
             nextTask.exchange &&

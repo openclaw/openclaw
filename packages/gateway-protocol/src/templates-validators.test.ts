@@ -40,6 +40,24 @@ const checkPlan = planResult.accepts;
 const rejectPlan = planResult.rejects;
 
 describe("Templates Gateway contract", () => {
+  it("bounds browser archive sources to Add only", () => {
+    const source = { kind: "upload", archiveBase64: "A".repeat(1398104) };
+    addPlan.accepts({ source });
+    addApply.accepts({ source, planIntegrity: "sha256:reviewed" });
+    addPlan.rejects({ source: { ...source, archiveBase64: "A".repeat(1398105) } });
+    addApply.rejects({ source: { ...source, path: "/private" } });
+    detail.rejects(source);
+    updateApply.rejects({ agentId: "demo", source, planIntegrity: "sha256:reviewed" });
+  });
+  it("accepts local project Add without expanding catalog or update sources", () => {
+    const source = { kind: "local", path: "/operator/template-project" };
+    addPlan.accepts({ source });
+    addApply.accepts({ source, planIntegrity: "sha256:reviewed" });
+    addApply.rejects({ source: { ...source, archive: "untrusted.tgz" } });
+    detail.rejects(source);
+    updateApply.rejects({ agentId: "demo", source, planIntegrity: "sha256:reviewed" });
+  });
+
   it("allows the public catalog and exact publisher Add coordinates", () => {
     search.accepts({}, { query: "workflow", limit: 30 }, { overview: true, limit: 8 });
     search.rejects({ sourceRoot: "/private/template" });
@@ -113,6 +131,16 @@ describe("Templates Gateway contract", () => {
       source: { packageName: "@alice/demo", version: "1.0.0" },
       planIntegrity: "sha256:reviewed-plan",
     });
+    // Chat-based Add names the agent it wants and carries no reviewed plan.
+    const chat = { mode: "chat", source: coordinate, agentId: "demo" };
+    addApply.accepts(chat, { ...chat, acknowledgeClawHubRisk: true }, { ...chat, resume: true });
+    addApply.rejects(
+      { mode: "chat", source: coordinate },
+      { ...chat, planIntegrity: "sha256:reviewed-plan" },
+      { ...chat, acknowledgeCapabilities: [] },
+      { ...chat, mode: "plan" },
+      { ...chat, resume: false },
+    );
     searchResult.accepts({
       entries: [
         {

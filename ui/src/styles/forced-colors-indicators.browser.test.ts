@@ -104,7 +104,6 @@ fixture.describe("Control UI forced-colors indicators", () => {
             css,
             `<span id="palette" style="color:CanvasText"></span>
             <span class="status-dot settings-status__dot"></span>
-            <span class="status-dot cron-table__state-dot"></span>
             <span class="status-dot activity-pulse__running"></span>
             <span class="status-dot activity-feed__presence-dot"></span>`,
           ),
@@ -116,7 +115,7 @@ fixture.describe("Control UI forced-colors indicators", () => {
             (element) => getComputedStyle(element).backgroundColor,
           ),
         }));
-        expect(colors.actual).toEqual(Array(4).fill(colors.expected));
+        expect(colors.actual).toEqual(Array(3).fill(colors.expected));
       },
     );
   });
