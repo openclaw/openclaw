@@ -787,13 +787,13 @@ describe("finalizeSetupWizard", () => {
   });
 
   it.each([
-    { platform: "linux", action: "installed" },
-    { platform: "linux", action: "reused" },
-    { platform: "linux", action: "skipped" },
-    { platform: "win32", action: "installed" },
+    { platform: "linux", action: "installed", skipHealth: false },
+    { platform: "linux", action: "reused", skipHealth: false },
+    { platform: "linux", action: "skipped", skipHealth: false },
+    { platform: "win32", action: "installed", skipHealth: true },
   ] as const)(
-    "uses the $platform readiness budget after service $action",
-    async ({ platform, action }) => {
+    "uses the $platform readiness budget after service $action (skipHealth=$skipHealth)",
+    async ({ platform, action, skipHealth }) => {
       await withPlatform(platform, async () => {
         gatewayServiceIsLoaded.mockResolvedValue(action !== "installed");
         const choice = action === "reused" ? "skip" : "restart";
@@ -801,7 +801,7 @@ describe("finalizeSetupWizard", () => {
 
         await finalizeSetupWizard(
           createFinalizeArgs("quickstart", {
-            opts: { installDaemon: action !== "skipped", skipHealth: false, skipUi: true },
+            opts: { installDaemon: action !== "skipped", skipHealth, skipUi: true },
             prompter,
           }),
         );
