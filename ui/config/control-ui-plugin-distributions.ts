@@ -60,7 +60,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
       const promised = required
         ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
             .filter((entry) => {
-              if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
+              if (
+                entry.id === "openclaw-id-access" ||
+                !isRecord(entry.packageJson) ||
+                !controlUiSource(entry.packageJson)
+              ) {
                 return false;
               }
               if (!entry.isolated) {
@@ -111,6 +115,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         }
         const controlUi = result.value;
         if (!controlUi) {
+          continue;
+        }
+        // This Labs-owned island uses the Gateway's flag-gated catalog/assets.
+        // Packaging it in the shared URL inventory makes generic navigation warm its CSS while off.
+        if (pluginId === "openclaw-id-access") {
           continue;
         }
         const capabilities = validatePluginUiCapabilities(manifest.uiCapabilities);

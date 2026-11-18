@@ -74,6 +74,23 @@ export type FinalizedToolCallOutcome = {
   resultContentSource?: ToolResultContentSource;
 };
 
+function applyToolResultUpdate(
+  result: AgentToolResult<unknown>,
+  update: Partial<AgentToolResult<unknown>>,
+): AgentToolResult<unknown> {
+  // Classification-only hooks must retain tool-owned outcome identity.
+  return update.content === undefined &&
+    update.details === undefined &&
+    update.terminate === undefined
+    ? result
+    : copyInternalToolResultState(result, {
+        ...result,
+        content: update.content ?? result.content,
+        details: update.details ?? result.details,
+        terminate: update.terminate ?? result.terminate,
+      });
+}
+
 export async function finalizeExecutedToolCall(
   batch: ToolOutcomeContext,
   prepared: PreparedToolCall,
@@ -97,12 +114,7 @@ export async function finalizeExecutedToolCall(
         batch.signal,
       );
       if (afterResult) {
-        result = copyInternalToolResultState(result, {
-          ...result,
-          content: afterResult.content ?? result.content,
-          details: afterResult.details ?? result.details,
-          terminate: afterResult.terminate ?? result.terminate,
-        });
+        result = applyToolResultUpdate(result, afterResult);
         isError = afterResult.isError ?? isError;
       }
     } catch (error) {
@@ -173,12 +185,7 @@ export async function finalizeToolCallOutcome(
       if (afterResult) {
         outcome = {
           ...finalized,
-          result: copyInternalToolResultState(finalized.result, {
-            ...finalized.result,
-            content: afterResult.content ?? finalized.result.content,
-            details: afterResult.details ?? finalized.result.details,
-            terminate: afterResult.terminate ?? finalized.result.terminate,
-          }),
+          result: applyToolResultUpdate(finalized.result, afterResult),
           isError: afterResult.isError ?? finalized.isError,
         };
       }

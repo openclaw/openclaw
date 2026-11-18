@@ -22,6 +22,8 @@ export type WorkshopView = () => {
   plugin: WorkshopPluginAvailability | null;
   onEnablePlugin: () => void;
   onRetryPlugin: () => void;
+  /** Config sets `plugins.enabled: false`, so enabling one plugin cannot succeed. */
+  pluginsDisabled: boolean;
   snapshot: WorkshopSnapshot | null;
   error: string | null;
   viewer: WorkshopViewer | null;

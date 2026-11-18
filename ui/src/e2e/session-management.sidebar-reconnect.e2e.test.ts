@@ -18,6 +18,7 @@ import {
   installMockGateway,
   captureUiProof,
 } from "./session-management.test-support.ts";
+import { seedSidebarOwnerFilter } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -82,6 +83,7 @@ suite.define(() => {
     const page = await context.newPage();
     const sessionKey = "agent:main:owned-reconnect";
     const ownKeys = [sessionKey, "agent:main:owned-other"];
+    await seedSidebarOwnerFilter(page, suite.server.baseUrl, "reader", "owner:reader");
     const gateway = await installMockGateway(page, {
       hasMultipleSessionSharingIdentities: true,
       sessionKey,

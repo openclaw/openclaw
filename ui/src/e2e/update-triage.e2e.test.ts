@@ -8,7 +8,10 @@ import {
   type MockGatewayRequest,
 } from "../test-helpers/control-ui-e2e.ts";
 import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.ts";
-import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  controlUiE2eBuiltModuleRequest,
+  failControlUiModuleForDocuments,
+} from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -94,9 +97,10 @@ suite.define(() => {
           const traffic = await recordUpdateTraffic(page);
           if (source === "missing triage module") {
             // A replaced installation can retire the current document's lazy chunks.
-            await page.route(
+            await failControlUiModuleForDocuments(
+              page,
               controlUiE2eBuiltModuleRequest("ui/src/app/update-triage.runtime.ts"),
-              (route) => route.abort("failed"),
+              Infinity,
             );
           }
           const config = { update: { channel: "stable", auto: { enabled: true } } };

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import {
   acquireBuildArtifactLockAsync,
   ARTIFACT_CACHE_VERSION,
@@ -19,7 +20,19 @@ import {
 import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 
 const isCacheSlot = (directory: string) =>
-  /^run-cache-(?:runtime-)?\d+$/u.test(path.basename(directory));
+  /^run-cache-(?:(?:runtime|tooling)-)?\d+$/u.test(path.basename(directory));
+
+function compilerNodeOptions(value: string | undefined) {
+  const args = parseNodeOptionsEnvVar(value);
+  if (args === null) {
+    return value;
+  }
+  // Heap ceilings affect compilation resources, not emitted worker bytes.
+  // Preserve every other option, including module-resolution conditions.
+  return JSON.stringify(
+    args.filter((arg) => !/^--max-old-space-size=\d+$/u.test(arg.replaceAll("_", "-"))),
+  );
+}
 
 function cacheLocation(root: string, directory: string) {
   const cacheRoot = path.join(root, ".artifacts/vitest-worker-cache");
@@ -194,7 +207,7 @@ export async function createVitestWorkerCache(
     `output=${fs.realpathSync(directory)}`,
     `preset=${preset}`,
     `schtasks=${process.env.CI_WINDOWS_SCHTASKS_INTEGRATION ?? ""}`,
-    `node-options=${process.env.NODE_OPTIONS ?? ""}`,
+    `node-options=${compilerNodeOptions(process.env.NODE_OPTIONS)}`,
     `node-arguments=${JSON.stringify(process.execArgv)}`,
     `umask=${process.umask()}`,
   ];

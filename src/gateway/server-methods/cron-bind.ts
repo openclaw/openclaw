@@ -132,7 +132,7 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
       capture = await captureCronCreatorSession(
         job,
         callerScope,
-        { client, context, signal },
+        { client, context, signal, hasCurrentClientAuthority },
         cfg,
         true,
       );
@@ -219,6 +219,8 @@ export const cronBindHandler: GatewayRequestHandler = defineValidatedGatewayHand
       }
       respondInvalidCronParams(respond, "cron.bind", formatErrorMessage(err));
       return;
+    } finally {
+      capture.disposeOperatorSource?.();
     }
     context.logGateway.info("cron: job bound to parent conversation", { jobId });
     respond(

@@ -57,6 +57,11 @@ export default function (api) {
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
 
+Message inputs to registered plugin engines are writable, isolated copies. An
+engine can edit nested content during `assemble()`, `afterTurn()`, `ingest()`,
+`ingestBatch()`, or `commitTurn()` without changing the host's retained transcript.
+Return the assembled messages from `assemble()` to use those edits as model context.
+
 The host completes registered async memory prompt preparation before calling a
 non-legacy engine's `assemble()`. `buildMemorySystemPromptAddition(...)` stays
 synchronous and reads that immutable run snapshot while `assemble()` is active.

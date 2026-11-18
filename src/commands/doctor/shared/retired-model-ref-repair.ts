@@ -490,7 +490,7 @@ function createRetiredModelRefRewriter(params: ModelRefRewriteContext) {
         ? decision.reason === "reference-preservation"
           ? `Preserved ${path} model "${modelRef}" as "${decision.modelRef}" after config repair.`
           : `Replaced retired ${path} "${modelRef}" with "${decision.modelRef}".`
-        : `Removed retired ${path} "${modelRef}" so it inherits the configured default model.`,
+        : `Removed retired ${path} "${modelRef}"${path.endsWith(".decisionModel") ? "; decisions use the inherited Decision model, or stay off without one" : " so it inherits the configured default model"}.`,
     );
     return decision.kind === "replace" ? decision.modelRef : null;
   };
@@ -512,7 +512,7 @@ function createRetiredModelSlotRewriter(params: ModelRefRewriteContext) {
 export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
   const rewriteSlot = createRetiredModelSlotRewriter(params);
   // Speech and media generation select their own capability provider routes.
-  for (const key of ["model", "utilityModel", "imageModel", "pdfModel"] as const) {
+  for (const key of ["model", "utilityModel", "imageModel", "pdfModel", "decisionModel"] as const) {
     rewriteSlot(params.owner, key, `${params.path}.${key}`);
     const selector = asOptionalRecord(params.owner[key]);
     if (selector && Object.keys(selector).length === 0) {

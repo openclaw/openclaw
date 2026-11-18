@@ -214,6 +214,31 @@ it("switches the advertised Mac experience and follows the native owner's saved 
   expect(page.textContent).not.toContain(title);
 });
 
+it("reconciles failed Launch at Login changes and shows native recovery guidance", async () => {
+  const { page, set, settle } = await setup();
+  const title = "Launch at login";
+  const login = row(page, title);
+  toggle(page, title, true);
+  expect(set).toHaveBeenCalledExactlyOnceWith("app.launchAtLogin", true, expect.any(Function));
+  const unchanged = createNativeDeviceSettingsSnapshot();
+  settle(
+    0,
+    unchanged,
+    new Error("Check OpenClaw in System Settings → General → Login Items and try again."),
+  );
+  await waitForSolid(() =>
+    expect(login.querySelector('[role="alert"]')?.textContent).toContain("Login Items"),
+  );
+  expect(toggleInput(login).checked).toBe(false);
+  toggle(page, title, true);
+  const enabled = createNativeDeviceSettingsSnapshot();
+  enabled.app.launchAtLogin = true;
+  settle(1, enabled);
+  await waitForSolid(() => expect(login.querySelector('[role="alert"]')).toBeNull());
+  expect(toggleInput(login).checked).toBe(true);
+  expect(row(page, title)).toBe(login);
+});
+
 it("switches Gateway hosting only when available and follows the native owner's result", async () => {
   const { page, set, settle, render } = await setup();
   const title = hostingTitle;

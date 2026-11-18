@@ -1,2 +1,0 @@
-# Windows/Linux compact hints and unchanged Mac labels at composer/approval UI boundaries.
-26

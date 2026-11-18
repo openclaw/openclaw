@@ -67,6 +67,7 @@ export type MemoryEmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
   adapters: readonly MemoryEmbeddingProviderAdapter[];
   checkedAtMs: number;
+  /** Compared against `performance.now()` so wall-clock steps cannot extend it. */
   expireAtMs: number;
 };
 

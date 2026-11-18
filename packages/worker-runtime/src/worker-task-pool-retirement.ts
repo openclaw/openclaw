@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  type RetainedOperation,
+} from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import {
   serviceNativeWorkerPass,
@@ -15,6 +19,11 @@ import {
 import type { Slot, WorkerTaskPoolOptions } from "./worker-task-pool.types.js";
 
 const WORKER_WARM_WINDOW_MS = 5 * 60_000;
+
+// Moderate pressure preserves reuse; critical pressure cannot afford the idle grace.
+export function isWorkerIdleForPressure(idleSince: number | undefined, critical = false): boolean {
+  return idleSince !== undefined && (critical || performance.now() - idleSince >= 1_000);
+}
 
 /** Repeated idle notifications preserve the deadline; only admitted work clears it. */
 export function createWorkerIdleTimers(runInContext: <T>(operation: () => T) => T) {
@@ -60,7 +69,10 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   onRotationComplete: () => void;
   serviceDeadlines: () => void;
   markWorkerRetirement: WorkerTaskHost["workerRetiring"];
-  serviceHost: Pick<WorkerTaskHost, "serviceNativeWorkers" | "flushWorkerDiagnostics">;
+  serviceHost: Pick<
+    WorkerTaskHost,
+    "serviceNativeWorkers" | "flushWorkerDiagnostics" | "workerStopped"
+  >;
 }) {
   const artifactCleanups = new Map<Promise<void>, RetainedOperation<void>>();
   let lastIdleRetirementAt = -Infinity;
@@ -83,6 +95,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     return newest;
   }
   function clearIdle(slot: Slot<Input, Output>): void {
+    slot.idleSince = undefined;
     idleSlots?.delete(slot);
     idleTimers.clear(slot);
   }
@@ -255,6 +268,19 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
                 .then(() => slot.worker!.terminate())
                 .then(() => stopped.resolve(), stopped.reject);
             }
+            if (serviceHost.workerStopped) {
+              const worker = slot.worker;
+              nativeStop = flatMapRetainedOperation(nativeStop, () => {
+                const settled = createRetainedOperation<void>(() => {});
+                const finishing = serviceHost.workerStopped?.(worker);
+                if (finishing) {
+                  void finishing.then(() => settled.resolve(), settled.reject);
+                } else {
+                  settled.resolve();
+                }
+                return settled.operation;
+              });
+            }
             void nativeStop.result.then(advance, advance);
           }
           const stopped = nativeStop?.read();
@@ -366,6 +392,7 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
   function idle(slot: Slot<Input, Output>, elapsedIdleMs = 0): void {
     const burst = isBurstSlot(slot);
     const idleMs = (burst ? options.burstIdleTimeoutMs : options.idleTimeoutMs) ?? 60_000;
+    slot.idleSince ??= now() - elapsedIdleMs;
     if (idleMs <= 0) {
       return;
     }
@@ -429,13 +456,14 @@ export function createWorkerTaskPoolRetirement<Input, Output>({
     },
     clearIdle,
     idle,
-    retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>) {
+    retireIdle(resourceClosures: WeakMap<WorkerLifecycle, { pending: number }>, critical = false) {
       for (const slot of slots) {
         if (
           !slot.task &&
           !slot.retiring &&
           !slot.retirementFailed &&
           slot.worker &&
+          isWorkerIdleForPressure(slot.idleSince, critical) &&
           !resourceClosures.get(slot.worker)?.pending
         ) {
           void retire(slot, "memory_pressure").catch(() => undefined);

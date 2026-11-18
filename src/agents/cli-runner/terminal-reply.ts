@@ -105,3 +105,20 @@ export function prepareCliRunTerminalReply(context: PreparedCliRunContext, outpu
         : prepared.terminalReply,
   };
 }
+
+/** A final source send completes the reply; later work and private results still need an outcome. */
+export function shouldSuppressCliAutomaticFinal(
+  output: CliOutput,
+  runParams: RunCliAgentParams,
+  delivered: boolean,
+): boolean {
+  return (
+    delivered &&
+    (runParams.sourceReplyDeliveryMode === "message_tool_only" ||
+      (output.terminalSourceReplyDelivered === true &&
+        resolveReplyExpectation(runParams) !== "result-required" &&
+        !output.errorText &&
+        !output.terminalFailure &&
+        !output.terminalInterruption))
+  );
+}

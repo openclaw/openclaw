@@ -47,6 +47,8 @@ export type QaMockProviderDispatchResult = {
   responsePauseMs?: number;
   /** Holds an accepted SSE stream open with comment keepalives during the pause. */
   responseKeepaliveMs?: number;
+  /** Writes each output-text delta this many milliseconds apart (paced streaming). */
+  deltaIntervalMs?: number;
 };
 
 export type StreamEvent =

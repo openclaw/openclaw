@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -9,7 +10,11 @@ import {
   listAgentDatabaseAdmissionRefusals,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
-import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
+import {
+  holdStateRead,
+  publicationRowDefaults,
+  waitForPublicationGate,
+} from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import * as profileReads from "../state/user-profile-list.js";
@@ -222,7 +227,7 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
   }
 });
 
-it("prepares creator aliases once per task audience validation", async () => {
+it("prepares task audience policy once without reacquiring descendant membership", async () => {
   for (let index = 0; index < 4; index++) {
     await fixture.seed(`agent:main:foreign-${index}`, fixture.other.id, {
       parentSessionKey: sessionKey,
@@ -241,8 +246,11 @@ it("prepares creator aliases once per task audience validation", async () => {
   await fixture.seed("agent:main:unrelated", fixture.profile.id);
   await projection.ensureMaterialized();
   const aliases = vi.spyOn(profileReads, "readResidentUserProfileAliases");
+  const membership = vi.spyOn(projection, "readMembership");
   target.assertCurrent!();
   expect(aliases).toHaveBeenCalledTimes(1);
+  // Root admission still reads membership; already-selected descendants use owner facts.
+  expect(membership).toHaveBeenCalledTimes(1);
 
   await fixture.seed("agent:main:foreign-0", fixture.other.id, {
     parentSessionKey: sessionKey,
@@ -522,6 +530,25 @@ async function passive(client = fixture.client) {
   await fixture.subscriptions.pollNow();
 }
 
+it("does not recheck unrelated PR audiences for owner-certified metadata writes", async () => {
+  const unrelated = "agent:main:metadata-only";
+  await fixture.seed(unrelated);
+  await passive();
+  const projection = getSessionRowProjection(fixture.context)!;
+  const captures = vi.spyOn(projection, "capture");
+  await fixture.seed(unrelated, fixture.profile.id, { updatedAt: 2 });
+  await nextTurn();
+  await nextTurn();
+  expect(captures.mock.calls.filter(([query]) => query.key === sessionKey)).toEqual([]);
+  // The changed root still reconciles its own source, and a real receipt still delivers.
+  await fixture.seed(sessionKey, fixture.profile.id, { updatedAt: 2 });
+  await nextTurn();
+  await nextTurn();
+  expect(captures.mock.calls.some(([query]) => query.key === sessionKey)).toBe(true);
+  receipt(sessionKey, 73);
+  await vi.waitFor(() => expect(taskNumbers()).toEqual([73]));
+});
+
 it("reads own and nested receipts without a checkout, refreshes on commit, and never polls GitHub", async () => {
   const child = "agent:main:child";
   const grandchild = "agent:main:grandchild";
@@ -600,6 +627,33 @@ it.each([false, true])(
     }
   },
 );
+
+it("withholds task receipts when a descendant becomes private during their read", async ({
+  signal,
+}) => {
+  const child = "agent:main:pending-private-child";
+  await fixture.seed(child, fixture.other.id, { parentSessionKey: sessionKey });
+  receipt(child, 1);
+  stubOffline();
+  const held = holdStateRead("githubPublications.taskReceipts");
+  const pending = passive();
+  try {
+    await waitForPublicationGate(signal, pending, held.ready);
+    await fixture.seed(child, fixture.other.id, {
+      parentSessionKey: sessionKey,
+      visibility: "draft",
+    });
+    held.release();
+    await pending;
+    await fixture.subscriptions.pollNow();
+    await vi.waitFor(() => expect(taskNumbers()).toEqual([]));
+    expect(snapshots().flatMap((snapshot) => snapshot.taskPullRequests ?? [])).toEqual([]);
+  } finally {
+    held.release();
+    await pending.catch(() => {});
+    held.restore();
+  }
+});
 
 it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants", async () => {
   const child = "agent:main:private-child";

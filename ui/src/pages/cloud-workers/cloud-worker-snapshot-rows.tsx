@@ -1,5 +1,6 @@
 import { createMemo, For, Show } from "solid-js";
 import type { EnvironmentSummary } from "../../../../packages/gateway-protocol/src/index.js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
@@ -130,11 +131,11 @@ export function CloudWorkerSnapshotRow(
       </Show>
       <Show when={props.image.retirement}>
         {(retirement) => (
-          <p class="callout warning" role="status">
+          <InlineAlert tone="warning" role="status">
             {t("cloudWorkersPage.snapshots.retirementHint", {
               checkpoint: retirement().checkpointId,
             })}
-          </p>
+          </InlineAlert>
         )}
       </Show>
       <Show when={props.image.capture?.phase === "uncertain"}>
@@ -199,6 +200,7 @@ export function CloudWorkerEnvironmentSheet(
   props: SnapshotActions & {
     environment: CloudEnvironment;
     profiles: SnapshotProfile[];
+    snapshotsKnown: boolean;
     destroying: boolean;
     onRebuild: (profileId: string, root: string) => void;
     onDestroy: (worker: EnvironmentSummary, dismiss: boolean) => void;
@@ -235,7 +237,24 @@ export function CloudWorkerEnvironmentSheet(
   );
   const phases = createMemo(() => {
     const durations = setup()?.phaseDurationsMs;
-    return (["onCreate", "updateContent", "detectedInstall"] as const).flatMap((name) =>
+    return (
+      [
+        "retainedGit",
+        "retainedManifest",
+        "inspection",
+        "seedPreparation",
+        "seedTransfer",
+        "seedVerification",
+        "seedCheckout",
+        "seedManifest",
+        "gitUpdate",
+        "toolchainPreparation",
+        "onCreate",
+        "updateContent",
+        "detectedInstall",
+        "preparedManifest",
+      ] as const
+    ).flatMap((name) =>
       durations?.[name] !== undefined ? [{ name, durationMs: durations[name] }] : [],
     );
   });
@@ -245,7 +264,7 @@ export function CloudWorkerEnvironmentSheet(
       <header class="cloud-environments__header">
         <h2>{props.environment.label}</h2>
         <div class="cloud-environments__actions">
-          <span title={rebuildReason()}>
+          <span title={props.snapshotsKnown ? rebuildReason() : undefined}>
             <button
               class="btn btn--sm"
               type="button"
@@ -268,39 +287,43 @@ export function CloudWorkerEnvironmentSheet(
           </Show>
         </div>
       </header>
-      <SettingsSection title={t("cloudWorkersPage.environments.snapshot")}>
-        <For
-          each={images()}
-          keyed={(image) => image.profileKey}
-          fallback={
-            <div class="cloud-environments__facts">
-              {t("cloudWorkersPage.environments.coldOnly")}
-            </div>
-          }
-        >
-          {(image) => (
-            <CloudWorkerSnapshotRow
-              {...props}
-              image={image()}
-              label={images().length > 1 ? (image().profileId ?? image().profileKey) : undefined}
-              actions={images().length > 1}
-            />
-          )}
-        </For>
-        <For
-          each={props.environment.workers.filter(showPreparationRow)}
-          keyed={(worker) => worker.id}
-        >
-          {(worker) => (
-            <CloudWorkerBuildRow
-              environment={worker()}
-              destroying={props.destroying}
-              canCall={props.canCall}
-              onDestroy={props.onDestroy}
-            />
-          )}
-        </For>
-      </SettingsSection>
+      <Show when={props.snapshotsKnown || props.environment.workers.some(showPreparationRow)}>
+        <SettingsSection title={t("cloudWorkersPage.environments.snapshot")}>
+          <For
+            each={images()}
+            keyed={(image) => image.profileKey}
+            fallback={
+              props.snapshotsKnown ? (
+                <div class="cloud-environments__facts">
+                  {t("cloudWorkersPage.environments.coldOnly")}
+                </div>
+              ) : undefined
+            }
+          >
+            {(image) => (
+              <CloudWorkerSnapshotRow
+                {...props}
+                image={image()}
+                label={images().length > 1 ? (image().profileId ?? image().profileKey) : undefined}
+                actions={images().length > 1}
+              />
+            )}
+          </For>
+          <For
+            each={props.environment.workers.filter(showPreparationRow)}
+            keyed={(worker) => worker.id}
+          >
+            {(worker) => (
+              <CloudWorkerBuildRow
+                environment={worker()}
+                destroying={props.destroying}
+                canCall={props.canCall}
+                onDestroy={props.onDestroy}
+              />
+            )}
+          </For>
+        </SettingsSection>
+      </Show>
       <SettingsSection title={t("cloudWorkersPage.environments.setup")}>
         <span
           class="cloud-environments__source"
@@ -339,7 +362,7 @@ export function CloudWorkerEnvironmentSheet(
           {(image) => (
             <Show when={image().recipePreparation?.failure}>
               {(failure) => (
-                <div class="callout warning" role="alert">
+                <InlineAlert tone="warning" role="alert">
                   <Show when={images().length > 1}>
                     <strong>{image().profileId ?? image().profileKey}</strong>
                   </Show>
@@ -347,7 +370,7 @@ export function CloudWorkerEnvironmentSheet(
                   <Show when={failure().outputTail}>
                     {(tail) => <pre class="cloud-environments__output">{tail()}</pre>}
                   </Show>
-                </div>
+                </InlineAlert>
               )}
             </Show>
           )}

@@ -123,6 +123,14 @@ it("does not force full collections in a reusable Code Mode worker", async () =>
   }
 });
 
+it("installs watchdog instrumentation in the Code Mode worker", async () => {
+  const pool = poolFor(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url));
+  expect(await run(pool, "return typeof watchdogThreads;")).toMatchObject({
+    status: "completed",
+    value: { kind: "complete", json: '"function"' },
+  });
+});
+
 it.skipIf(process.platform !== "linux")(
   "runs cells without per-evaluation native threads",
   async () => {

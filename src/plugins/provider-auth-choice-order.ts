@@ -4,6 +4,7 @@ const FEATURED_PROVIDER_AUTH_GROUP_ORDER = new Map<string, number>([
   ["xai", 2],
   ["google", 3],
   ["anthropic", 4],
+  ["copilot", 5],
 ]);
 const providerAuthGroupCollator = new Intl.Collator(undefined, { sensitivity: "base" });
 

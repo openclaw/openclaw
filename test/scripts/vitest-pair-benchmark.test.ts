@@ -200,7 +200,71 @@ function expectTerminalFailure(root: string, error: string) {
   expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ status: "failure", error });
 }
 
+function runBenchmarkCli(extraArgs: string[], includeManifest = true) {
+  const root = tempDirs.make("vitest-pair-cli-");
+  const outputDir = path.join(root, "output");
+  const args = [
+    "--baseline",
+    "baseline",
+    "--baseline-sha",
+    "a".repeat(40),
+    "--candidate",
+    path.join(root, "candidate"),
+    "--candidate-sha",
+    "b".repeat(40),
+    "--output",
+    outputDir,
+    "--pnpm-bin",
+    path.join(root, "unused-pnpm"),
+    "--run-attempt",
+    "2",
+    "--scratch",
+    path.join(root, "scratch"),
+  ];
+  if (includeManifest) {
+    args.push("--manifest", path.join(root, "unused-manifest.json"));
+  }
+  const result = spawnSync(
+    process.execPath,
+    [path.resolve("scripts/vitest-pair-benchmark.mts"), ...args, ...extraArgs],
+    {
+      cwd: root,
+      env: {
+        PATH: process.env.PATH,
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        BUN_RUNTIME_TRANSPILER_CACHE_PATH: path.join(root, "bun-cache"),
+      },
+      encoding: "utf8",
+      timeout: 10_000,
+    },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result.signal).toBeNull();
+  expect(result.status).toBe(1);
+  for (const directory of ["baseline", "candidate", "scratch"]) {
+    expect(existsSync(path.join(root, directory))).toBe(false);
+  }
+  return { outputDir, stderr: result.stderr };
+}
+
 describe("Vitest pair benchmark", () => {
+  it.each([
+    ["--mode", "seeded", "unknown option --mode"],
+    ["--baseline", "baseline", "duplicate option --baseline"],
+    ["--manifest", "duplicate", "duplicate option --manifest"],
+  ])("rejects CLI option %s before creating output", (option, value, error) => {
+    const { outputDir, stderr } = runBenchmarkCli([option, value]);
+    expect(stderr).toContain(error);
+    expect(existsSync(outputDir)).toBe(false);
+  });
+
+  it.each([true, false])("accepts legacy CLI options with manifest=%s", (includeManifest) => {
+    const { outputDir, stderr } = runBenchmarkCli([], includeManifest);
+    const error = "vitest-pair benchmark refuses workflow reruns; dispatch a fresh run";
+    expect(stderr).toContain(error);
+    expectTerminalFailure(outputDir, error);
+  });
+
   it("keeps the committed representative inventory valid and available", () => {
     const committed = loadBenchmarkManifest("scripts/vitest-pair-benchmark-lanes.json");
     expect(assertInventoryAvailable(process.cwd(), committed).inventorySha256).toMatch(

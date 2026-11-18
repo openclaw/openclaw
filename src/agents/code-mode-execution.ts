@@ -8,10 +8,7 @@ import {
   isCodeModeSwarmAvailable,
   requiresCodeModeCompletion,
 } from "./code-mode-bridge.js";
-import {
-  createCodeModeCatalogProjection,
-  type CodeModeCatalogProjection,
-} from "./code-mode-catalog.js";
+import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
   usableResumeBudgetMs,
   waitForCodeModePending,
@@ -24,11 +21,9 @@ import type {
 } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
 import { captureCodeModeValue, CodeModeOutputState } from "./code-mode-json.js";
-import {
-  createCodeModeNamespaceRuntime,
-  type CodeModeNamespaceRuntime,
-} from "./code-mode-namespaces.js";
+import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
+import { getPreparedCodeModeCatalog } from "./code-mode-prepared-catalog.js";
 import {
   CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
   codeModeFailureCode,
@@ -65,19 +60,8 @@ import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolResultBudget } from "./tool-result-limits.js";
 import { resolveCatalog } from "./tool-search-catalog.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
-import type { ToolSearchCatalogEntry, ToolSearchToolContext } from "./tool-search-types.js";
+import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
-
-// Catalog registration/restriction publishes a new entries array. Keep only
-// metadata here; bridge execution still resolves the current catalog authority.
-const preparedCatalogs = new WeakMap<
-  ToolSearchCatalogEntry[],
-  {
-    namespaceRuntime: CodeModeNamespaceRuntime;
-    catalogProjection: CodeModeCatalogProjection;
-    workerCatalogs: ReturnType<typeof prepareCodeModeNodeCatalog>[];
-  }
->();
 
 export async function runCodeModeExec(params: {
   toolCallId: string;
@@ -108,19 +92,7 @@ export async function runCodeModeExec(params: {
   const bridgeDispatch: CodeModeBridgeDispatchState = { started: false };
   const budget: CodeModeCallBudget = { deadlineMs: performance.now() + config.timeoutMs };
   const entries = resolveCatalog(params.ctx).entries;
-  let prepared = preparedCatalogs.get(entries);
-  if (!prepared) {
-    const namespaceRuntime = createCodeModeNamespaceRuntime(runtime.namespaceEntries());
-    prepared = {
-      namespaceRuntime,
-      catalogProjection: createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
-        reservedNames: namespaceRuntime.descriptors.map((descriptor) => descriptor.globalName),
-        mcpIds: namespaceRuntime.mcpBindings.keys(),
-      }),
-      workerCatalogs: [],
-    };
-    preparedCatalogs.set(entries, prepared);
-  }
+  const prepared = getPreparedCodeModeCatalog(entries);
   const { namespaceRuntime, catalogProjection } = prepared;
   const swarmEnabled = isCodeModeSwarmAvailable(params.ctx, entries);
   const workerCatalog = (prepared.workerCatalogs[Number(swarmEnabled)] ??=
@@ -154,7 +126,11 @@ export async function runCodeModeExec(params: {
     onUpdate: params.onUpdate,
   };
   const inlineHost = createInlineHost(context, pending, () => {
-    releaseReservation ??= reserveActiveRunSlot();
+    // Required completion cannot publish a suspended run, so it needs no slot.
+    // This also keeps existing process results collectable at suspension capacity.
+    if (!owner.completionRequired) {
+      releaseReservation ??= reserveActiveRunSlot();
+    }
   });
   try {
     const remainingMs = budget.deadlineMs - performance.now();
@@ -471,7 +447,7 @@ async function settleCodeModeResult(params: CodeModeSettlementContext) {
     }
     let releaseReservation: (() => void) | undefined;
     try {
-      if (!params.reservedActiveRunSlot) {
+      if (!params.reservedActiveRunSlot && !params.owner.completionRequired) {
         releaseReservation = reserveActiveRunSlot();
       }
       dispatchCodeModeRequests(params, pending, result.pendingRequests);

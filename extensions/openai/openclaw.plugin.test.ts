@@ -7,6 +7,7 @@ import {
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { createOpenAIProvider } from "./provider-contract-api.js";
+import discoveryProvider from "./provider-discovery.js";
 import { buildOpenAISetupProvider } from "./setup-api.js";
 
 const WIZARD_METADATA_KEYS = [
@@ -36,7 +37,7 @@ function comparableProviderMetadata(provider: ReturnType<typeof createOpenAIProv
   return {
     ...pick(provider, "id", "label", "hookAliases", "docsPath", "envVars"),
     auth: provider.auth.map((method) => ({
-      ...pick(method, "id", "kind", "label", "hint"),
+      ...pick(method, "id", "kind", "label", "hint", "credentialImport"),
       wizard: comparableWizardFields(method.wizard ?? {}),
     })),
   };
@@ -159,7 +160,7 @@ it("keeps the Azure transport alias and Spark suppression owned by the manifest"
 });
 
 it("keeps manifest auth choices aligned with the lightweight provider descriptor", () => {
-  const provider = createOpenAIProvider();
+  const provider = discoveryProvider;
   for (const entry of choices) {
     const key = `${entry.provider}:${entry.method}`;
     const method = provider.auth.find((candidate) => candidate.id === entry.method);
@@ -171,6 +172,7 @@ it("keeps manifest auth choices aligned with the lightweight provider descriptor
 });
 
 it.each([
+  ["catalog discovery", () => discoveryProvider],
   ["setup", buildOpenAISetupProvider],
   ["full runtime", buildOpenAIProvider],
 ])("keeps %s provider metadata on the lightweight descriptor", (_surface, buildProvider) => {

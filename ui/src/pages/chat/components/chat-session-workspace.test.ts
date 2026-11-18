@@ -847,15 +847,13 @@ describe("openSessionWorkspaceFile", () => {
         vi.waitFor(() => {
           setProps(workspaceProps(state));
           flush();
-          const selected = ".chat-workspace-rail__file--active .chat-workspace-rail__file-open";
+          const selected = ".workspace-desktop__row[aria-current=true]";
           expect(
-            container.querySelector(`.chat-workspace-rail__list--browser ${selected}`) !== null,
+            container.querySelector(`.workspace-desktop__project-scroll ${selected}`) !== null,
           ).toBe(path === expected);
           expect(
             Array.from(
-              container.querySelectorAll(
-                `.chat-workspace-rail__list:not(.chat-workspace-rail__list--browser) ${selected}`,
-              ),
+              container.querySelectorAll(`.workspace-desktop__session ${selected}`),
               (row) => row.getAttribute("aria-label"),
             ),
           ).toEqual([path]);

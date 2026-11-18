@@ -240,7 +240,7 @@ it("keeps retained row controls current across pending queries and access change
   expect(run.disabled).toBe(false);
   expect(toggle.getAttribute("aria-disabled")).toBeNull();
   run.click();
-  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job, "force");
+  expect(currentRun).toHaveBeenCalledExactlyOnceWith(job);
   expect(initialRun).not.toHaveBeenCalled();
 
   canManage = false;
@@ -248,4 +248,23 @@ it("keeps retained row controls current across pending queries and access change
   flush();
   expect(view.container.querySelector(".cron-table__row")).toBe(row);
   expect(row.querySelector(".cron-table__actions")).toBeNull();
+});
+
+it("shows a run's recorded next run as a fixed time, not a live relative label", () => {
+  const run = {
+    ts: 1,
+    runId: "run-next",
+    runAtMs: 1,
+    jobId: "job-next",
+    action: "finished" as const,
+    status: "ok" as const,
+    summary: "Done",
+    nextRunAtMs: Date.UTC(2020, 5, 15, 12, 0),
+  };
+  const view = mountSolid(() => (
+    <CronView {...createCronViewProps({ listTab: "activity", runs: [run] })} />
+  ));
+  const label = getElement(view.container, ".cron-run-entry__meta", HTMLElement).textContent;
+  expect(label).toMatch(/Next .*2020/);
+  expect(label).not.toMatch(/Due|ago/);
 });

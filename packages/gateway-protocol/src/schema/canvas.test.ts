@@ -21,3 +21,12 @@ it("rejects unsupported policy values and extra Canvas response fields", () => {
   }
   rejects(CanvasDocumentViewResultSchema, { ...document, allowScripts: true });
 });
+
+it("accepts the optional trusted bootstrap shell", () => {
+  accepts(CanvasDocumentViewResultSchema, {
+    ...document,
+    sandboxOrigin: "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz",
+    sandboxShellHtml: "<!doctype html><p>Shell</p>",
+  });
+  rejects(CanvasDocumentViewResultSchema, { ...document, sandboxShellHtml: {} });
+});

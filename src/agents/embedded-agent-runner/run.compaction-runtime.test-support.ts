@@ -358,6 +358,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         attemptCompactionCount: 0,
         prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
         markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
+        retryTransientCompactionFailure: async () => false,
       });
     };
     const snapshot = async () => {

@@ -11,12 +11,9 @@ function edit(raw: string, address: string, value: string) {
 
 describe("setOcPath", () => {
   it("replaces frontmatter while retaining unrelated pre-existing sentinel text", () => {
-    const r = edit(
-      `---\nname: github\ndescription: old desc\n---\nBody ${REDACTED_SENTINEL}.`,
-      "[frontmatter]/description",
-      "new desc",
-    );
-    expect(r.raw).toBe(`---\nname: github\ndescription: new desc\n---\nBody ${REDACTED_SENTINEL}.`);
+    const raw = `---\nname: github\ndescription: old desc\n---\nBody ${REDACTED_SENTINEL}.`;
+    const r = edit(raw, "[frontmatter]/description", "new desc");
+    expect(r.raw).toBe(raw.replace("old desc", "new desc"));
   });
 
   it.each(["", "has: colon", "1.10", "0123", "true", "~", "null", "- draft"])(
@@ -45,7 +42,7 @@ describe("setOcPath", () => {
 
   it("keeps item positions and explicit values through multiline edits and insertion", () => {
     let ast = parseMd(
-      "---\ndescription: |\n  old\n  text\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: second\n",
+      "---\ndescription: |\n  old\n  text\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- ```\n  name: decoy\n  ```\n\n  name: second\n",
     );
     for (const [address, value] of [
       ["[frontmatter]/description", "short"],
@@ -62,7 +59,7 @@ describe("setOcPath", () => {
       ast = result;
     }
     expect(ast.raw).toBe(
-      '---\ndescription: short\nadded: "1.10"\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: literal\n- name: second changed\n- name: appended changed\n',
+      '---\ndescription: short\nadded: "1.10"\n---\n## Intro\n- keep: stable\n## Tools\n- name: first\n- name: literal\n- ```\n  name: decoy\n  ```\n\n  name: second changed\n- name: appended changed\n',
     );
     expect(parseYaml(ast.raw.split(/^---$/m)[1] ?? "").added).toBe("1.10");
     expect(ast.blocks[1]?.items.map((item) => item.kv?.value)).toEqual([
@@ -89,6 +86,7 @@ describe("setOcPath", () => {
     ["## Tools\n- name: original\n", "tools/name/name", "parse-error", ""],
     ["## Tools\n- name: original\n", "tools/name/name", "parse-error", " \t"],
     ["## Tools\n- name: original\n", "tools/name/name", "parse-error", "\r\n"],
+    ["## Tools\n- | name: example |\n  | --- |\n", "tools/#0/name", "not-writable"],
   ])("rejects %s at %s with %s for %j", (raw, address, reason, value = "x") => {
     expect(() => edit(raw, address, value)).toThrow(expect.objectContaining({ reason }));
   });

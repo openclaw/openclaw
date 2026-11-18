@@ -63,7 +63,10 @@ function captureCapability(
     registerTool,
     registerService(service) {
       if (service.id === "memory-core-index") {
-        assert(service.apiVersion !== 2, "Unexpected scheduled service");
+        assert(
+          service.apiVersion !== 2 && service.apiVersion !== 3,
+          "Unexpected scheduled service",
+        );
         services.push(service);
       }
     },

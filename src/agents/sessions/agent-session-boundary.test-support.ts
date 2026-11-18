@@ -60,6 +60,7 @@ export async function safeguardFixture(
   model: Model,
   sessionManager: SessionManager,
   provider?: string,
+  before?: Parameters<typeof loadExtensionFromFactory>[0],
 ) {
   const { setCompactionSafeguardRuntime } =
     await import("../agent-hooks/compaction-safeguard-runtime.js");
@@ -74,7 +75,13 @@ export async function safeguardFixture(
   const network = vi
     .spyOn(globalThis, "fetch")
     .mockRejectedValue(new Error("Unexpected network request in compaction test"));
-  const { resourceLoader, eventBus } = await extensionFixture(sessionManager.getCwd(), safeguard);
+  // `before` registers ahead of the safeguard, so it can decline before the safeguard runs.
+  const first = before ? await extensionFixture(sessionManager.getCwd(), before) : undefined;
+  const { resourceLoader, eventBus } = await extensionFixture(
+    sessionManager.getCwd(),
+    safeguard,
+    first?.resourceLoader,
+  );
   const settingsManager = compactionSettings({ reserveTokens: 64 });
   const { session } = await createTestSession({
     model,
@@ -89,6 +96,7 @@ export async function safeguardFixture(
     dispose() {
       setCompactionSafeguardRuntime(sessionManager, null);
       eventBus.clear();
+      first?.eventBus.clear();
       network.mockRestore();
     },
   };

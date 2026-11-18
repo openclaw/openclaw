@@ -185,7 +185,7 @@ export function createSessionActorMemoryEvents(options: {
   const parent = (input: { parentId?: string | null; appendIntent?: "active-branch" }) =>
     resolveTranscriptAppendParent({
       ...input,
-      tailId: tree().appendParentId,
+      readTailId: () => tree().appendParentId,
       parentId: input.parentId,
       isAncestor,
     });
@@ -236,6 +236,7 @@ export function createSessionActorMemoryEvents(options: {
             message_role: message.role,
             context_free_command:
               message.excludeFromContext === true && internal?.contextFreeCommand === true ? 1 : 0,
+            human_addressed: internal?.humanAddressed === true ? 1 : 0,
             provenance_kind: provenance?.kind,
             provenance_source_channel: provenance?.sourceChannel,
           },
@@ -267,6 +268,22 @@ export function createSessionActorMemoryEvents(options: {
             : {}),
         }
       : { appended: false as const };
+  };
+  /**
+   * Append a navigation control under a rotated transcript generation.
+   *
+   * An in-place rewind or branch switch keeps the session id, so the rotated
+   * generation is what retires pre-cut readers: a raw-delta cursor captured
+   * before the cut must fail with `generation_mismatch`, exactly as it does on
+   * the SQLite path. `writeEvent` carries the rotated token into the version and
+   * the watermark together.
+   */
+  const appendNavigationControl = (event: unknown) => {
+    state.hot.transcript.version = {
+      ...state.hot.transcript.version,
+      generation: randomUUID(),
+    };
+    return appendRaw(event);
   };
   const replaceRows = (
     rows: SessionActorMemoryState["events"],
@@ -325,6 +342,7 @@ export function createSessionActorMemoryEvents(options: {
     checkMutation,
     rebasePrepared,
     appendRaw,
+    appendNavigationControl,
     replaceRows,
   };
 }

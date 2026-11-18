@@ -558,9 +558,12 @@ take effect before their normal expiry.
 #### Configure GitHub access for repository work
 
 Install `gh` for the Gateway service account. In **Settings → Profile → GitHub
-connections**, an administrator chooses **For the system** to connect the shared
-publication account. An agent can have an administrative override under
-**Agents → Tools**. Verify the selected account before publishing.
+accounts**, an administrator changes the **Shared agent account**, used by
+every agent without its own account for its commands, dashboard data, and
+**Publish PR** unless you choose My GitHub. To give one agent a different account, such
+as a token limited to a fork, choose **Give its own account** on that agent's row;
+the shared account and other agents stay unchanged. Verify the account before
+publishing.
 
 **My GitHub** is a separate personal connection for explicitly selected
 publication. It does not change the shared shell account or establish verified

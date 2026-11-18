@@ -95,11 +95,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     props.page.read();
     return props.page;
   };
+  const installPaused = () => {
+    const update = page().context.overlays.snapshot;
+    return update.updateRunning || update.updateReconciliationPending;
+  };
   const hasInventory = createMemo(() => page().state.result !== null);
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
-    error: page().discovery.read().error ?? page().state.error,
   }));
   const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
   const actions = {
@@ -214,7 +217,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   }));
 
   function CatalogInventory() {
-    // The route owns first-load readiness; retain accepted inventory during refresh.
+    // Observe the page owner's read while retaining accepted inventory during refresh.
     const catalogRead = createMemo(() => props.page.catalogRead());
     const loading = () => {
       latest(catalogRead);
@@ -359,6 +362,16 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
           <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
+            <Show when={page().loading && !hasInventory()}>
+              <div class="muted" role="status">
+                {t("pluginsPage.loading")}
+              </div>
+            </Show>
+            <Show when={page().state.error}>
+              {(error) => (
+                <PluginRetryError error={error()} onRetry={() => void page().refreshCatalog()} />
+              )}
+            </Show>
             {page().state.catalogDetail ? (
               detailPluginId() && !page().consent.getActiveInstall(`install:${catalogId()}`) ? (
                 <InstalledDetail pluginId={detailPluginId()!} />
@@ -385,8 +398,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     onRetry={() =>
                       void page().showCatalogDetail(page().state.catalogDetail?.id ?? null)
                     }
+                    installTitle={
+                      installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                    }
                     canInstall={
                       page().canMutate() &&
+                      !installPaused() &&
                       !page().state.messages[`install:${catalogId()}`]?.savedInstall &&
                       catalogInstallable()
                     }
@@ -419,7 +436,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   pluginIconUrls={page().state.iconUrls}
                   iconLoading={page().icons.catalog.isLoading}
                   pluginIconLoading={page().icons.installed.isLoading}
-                  canInstall={page().canMutate()}
+                  installTitle={
+                    installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                  }
+                  canInstall={page().canMutate() && !installPaused()}
                   installProgress={page().consent.read().installProgress}
                   inventory={page().state.result?.plugins}
                   entryHref={(id) => pathForPluginCatalogEntry(id, page().context.basePath)}

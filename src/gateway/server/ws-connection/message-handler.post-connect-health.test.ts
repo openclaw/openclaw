@@ -180,6 +180,10 @@ vi.mock("../../../config/config.js", () => ({
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
+vi.mock("../../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/runtime-snapshot.js")>()),
+  readRuntimeConfig: loadConfigMock,
+}));
 vi.mock("../../../infra/system-presence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/system-presence.js")>()),
   commitPresence: commitPresenceMock,
@@ -1813,7 +1817,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           resolvedSessionKey: "agent:main:main",
           client,
           request: { message: "hello", idempotencyKey: runId },
-          hasRestoredCronContinuation: false,
           isOneShotModelRun: false,
         }),
       ).toEqual(remote ? undefined : { runId, callerOrigin: { kind: "local" } });
@@ -1842,7 +1845,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
             resolvedSessionKey: "agent:main:main",
             client: harness.client as never,
             request: { message: "manage an automation", idempotencyKey: "control-ui-admin-run" },
-            hasRestoredCronContinuation: false,
             isOneShotModelRun: false,
           });
           const expected = {

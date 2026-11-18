@@ -42,6 +42,7 @@ const it = baseIt.extend<{ state: OpenClawTestState }>({
 });
 
 const heartbeatWorkers = vi.hoisted(() => ({
+  startupDelayMs: 0,
   beforeCreate: undefined as (() => void) | undefined,
   onCreate: undefined as ((worker: Worker, options: WorkerOptions) => void) | undefined,
 }));
@@ -60,7 +61,13 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.beforeCreate?.();
         }
-        super(filename, workerOptions);
+        const delayedFilename =
+          String(filename) === heartbeatUrl.href && heartbeatWorkers.startupDelayMs > 0
+            ? new URL(
+                `data:text/javascript,${encodeURIComponent(`await new Promise(resolve => setTimeout(resolve, ${heartbeatWorkers.startupDelayMs})); await import(${JSON.stringify(String(filename))});`)}`,
+              )
+            : filename;
+        super(delayedFilename, workerOptions);
         if (String(filename) === heartbeatUrl.href) {
           heartbeatWorkers.onCreate?.(this, workerOptions);
         }
@@ -100,6 +107,7 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.startupDelayMs = 0;
   heartbeatWorkers.beforeCreate = undefined;
   heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
@@ -171,6 +179,15 @@ describe("maintenance lease heartbeat", () => {
         },
       },
     });
+    expect(readLease(state.env)).toBeUndefined();
+  });
+
+  it("preserves native startup renewals beyond the initial lease expiry", async ({ state }) => {
+    openOpenClawStateDatabase({ env: state.env });
+    heartbeatWorkers.startupDelayMs = 1_500;
+    const entered = vi.fn(async (lease: OpenClawStateLeaseContext) => lease.assertOwned());
+    await withOpenClawStateLease(options(state.env), entered);
+    expect(entered).toHaveBeenCalledOnce();
     expect(readLease(state.env)).toBeUndefined();
   });
 
@@ -373,8 +390,8 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     "activation-worker.mts",
     `
       import { parentPort, workerData } from "node:worker_threads";
-      import { registerHooks } from "node:module";
-      registerHooks({
+      import nodeModule from "node:module";
+      nodeModule.registerHooks({
         resolve(specifier, context, nextResolve) {
           if (specifier.includes("openclaw-state-db-engine.")) {
             const gate = new Int32Array(workerData.fixtureLoadGate);
@@ -423,7 +440,6 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     env: {},
   });
   trackSqliteDatabaseAdmissionWorker(worker);
-  worker.once("exit", () => databaseAdmission.finish());
   const prepared = createDeferredCore();
   const processed = createDeferredCore();
   const ready = createDeferredCore();
@@ -520,7 +536,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     } finally {
       Atomics.store(loadGate, 0, 2);
       Atomics.notify(loadGate, 0);
-      registrationAdmission.finish();
+      await registrationAdmission.finish();
       registrationPort.port1.close();
       registrationPort.port2.close();
       registrationLoss.port1.close();
@@ -532,6 +548,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     }
     writer.close();
     await worker.terminate();
+    await databaseAdmission.finish();
     loss.port1.close();
     loss.port2.close();
   }

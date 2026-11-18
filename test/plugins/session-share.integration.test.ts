@@ -44,13 +44,21 @@ afterEach(() => vi.restoreAllMocks());
 function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {}) {
   const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
   const catalogs: SessionCatalogProvider[] = [];
-  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
+  const services: Extract<
+    Parameters<OpenClawPluginApi["registerService"]>[0],
+    { apiVersion: 2 }
+  >[] = [];
   const api = createTestPluginApi({
     runtime,
     config,
     registerNodeHostCommand: (command) => nodeCommands.push(command),
     registerSessionCatalog: (catalog) => catalogs.push(catalog),
-    registerService: (service) => services.push(service),
+    registerService: (service) => {
+      if (service.apiVersion !== 2) {
+        throw new Error("Expected Session Share service API version 2");
+      }
+      services.push(service);
+    },
   });
   sessionSharePlugin.register(api);
   const catalog = catalogs.find((entry) => entry.id === "openclaw");

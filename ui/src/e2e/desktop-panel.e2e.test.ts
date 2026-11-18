@@ -426,7 +426,7 @@ suite.define(() => {
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
         await page
           .locator("openclaw-command-palette")
-          .getByRole("textbox", { name: "Search or start a task…" })
+          .getByRole("textbox", { name: "Search…" })
           .waitFor({ state: "hidden" });
         expect(await passwordInput?.evaluate((element) => element.isConnected)).toBe(true);
         expect(await password.inputValue()).toBe("synthetic-unsent-password");

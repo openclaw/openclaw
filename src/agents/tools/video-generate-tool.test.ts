@@ -659,7 +659,6 @@ describe("createVideoGenerateTool", () => {
     createTool: createTaskTool,
     requesterOrigin: { channel: "discord", to: "channel:1" },
     references: ["./first.png", "./second.png"],
-    referenceSignal: "caller",
     loadMedia: () => vi.spyOn(webMedia, "loadWebMedia"),
     setup: (phase) => {
       if (phase === "reference") {

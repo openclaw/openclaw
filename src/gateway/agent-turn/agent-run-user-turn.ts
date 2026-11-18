@@ -19,6 +19,7 @@ import {
   resolveRequesterPrincipalKey,
   type RequesterOrigin,
 } from "../../agents/requester-origin.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -56,7 +57,6 @@ import { resolveGatewayInputParticipant } from "../session-input-participant.js"
 import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
-import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
@@ -149,6 +149,7 @@ export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
   onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
+  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
@@ -167,7 +168,6 @@ export async function prepareAgentRunUserTurn(params: {
   resolvedThreadId?: string | number;
   suppressVisibleSessionEffects: boolean;
   requestedPromptPersistenceSuppression: boolean;
-  restoredCronContinuation?: RestoredCronContinuation;
   canUseInternalRuntimeHandoff: boolean;
   execApprovalFollowupApprovalId?: string;
   message: string;
@@ -193,7 +193,7 @@ export async function prepareAgentRunUserTurn(params: {
         })
       : undefined;
   const resolveRuntimeSenderIsOwner = () =>
-    Boolean(params.restoredCronContinuation || hasGatewayAdminScope(params.client)) &&
+    hasGatewayAdminScope(params.client) &&
     (!requesterOrigin ||
       Boolean(requesterOrigin.operatorProfileId) ||
       ((!requesterOrigin.messageProvider ||
@@ -389,6 +389,12 @@ export async function prepareAgentRunUserTurn(params: {
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",
+        // Direct completion results live in a runtime carrier after the trigger message.
+        ...(params.onTranscriptCommitted
+          ? params.request.internalEvents?.length
+            ? { onInputSubmitted: () => params.onTranscriptCommitted?.(params.runId) }
+            : { onMessagePersisted: () => params.onTranscriptCommitted?.(params.runId) }
+          : {}),
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
           params.assertCurrent();
@@ -461,7 +467,9 @@ export async function prepareAgentRunUserTurn(params: {
     let releaseProcessingAbortObserver: (() => void) | undefined;
     if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
-        const stopReason = params.getAbortStopReason?.() ?? "rpc";
+        const stopReason = isAgentRunRestartAbortReason(params.abortSignal?.reason)
+          ? "restart"
+          : (params.getAbortStopReason?.() ?? "rpc");
         // Intentional Stop seals non-retry custody immediately. A timeout
         // retains its source until the producer publishes its actual terminal facts.
         if (stopReason === "timeout") {
@@ -568,10 +576,11 @@ export async function releasePreparedAgentRunUserTurn(
     | "execApprovalFollowupHandoffClaimId"
   >,
   disposition: "cancelled" | "interrupted" = "cancelled",
+  userInitiated?: true,
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();
-    prepared.recorder?.finishPendingInput?.(disposition);
+    prepared.recorder?.finishPendingInput?.(disposition, userInitiated);
   } finally {
     try {
       await prepared.recorder?.waitForPendingInputSettlement?.();

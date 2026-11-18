@@ -312,6 +312,9 @@ describe("full-release-validation-at-sha", () => {
     const reopened = fixture.run(["--reconcile-request", fixture.requestPath()], true);
     expect(reopened.status, reopened.stderr).toBe(0);
     expect(reopened.stdout).toContain("release_profile=stable rerun_group=all soak=true");
+    expect(reopened.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(readFileSync(fixture.requestPath())).toEqual(before);
     expect(
       fixture
@@ -1173,6 +1176,9 @@ describe("full-release-validation-at-sha", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("release_profile=stable rerun_group=all soak=true");
     expect(result.stdout).toContain("(dry run; not written)");
+    expect(result.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(result.stdout).toContain(`Validation SHA fetchable by bare SHA: ${fixture.targetSha}`);
     expect(result.stdout).not.toContain("validation/target-");
     const fetch = fixture
@@ -1644,6 +1650,9 @@ describe("full-release-validation-at-sha", () => {
     ]);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(`Trusted workflow ref: ${fixture.trustedWorkflowTag}`);
+    expect(result.stdout).toContain(
+      "WARNING: Cross-revision diagnostics cannot produce candidate-sealed child receipts.",
+    );
     expect(fixture.gitCalls()).toContainEqual([
       "ls-remote",
       "--tags",
@@ -1708,23 +1717,42 @@ describe("full-release-validation-at-sha", () => {
     },
   );
 
-  it("fails clearly before dispatch when the target SHA is absent after the named fetch", () => {
-    const fixture = createDispatchFixture();
-    const missingSha = "f".repeat(40);
-    const result = fixture.run(["--sha", missingSha]);
-    expect(result.status).toBe(1);
-    const failedReasons = result.stderr
-      .trim()
-      .split("\n")
-      .filter((line) => line.startsWith("[full-release-validation] FAILED:"));
-    expect(failedReasons).toEqual([
-      `[full-release-validation] FAILED: Target SHA ${missingSha} is not available locally after fetching ${fixture.releaseRef}`,
-    ]);
-    expect(result.stderr.trim().split("\n").at(-1)).toBe(
-      "[full-release-validation] FAILED (exit 1)",
-    );
-    expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
-  });
+  it.each([true, false])(
+    "fails locally for an unprepared target without lazy fetching (named fetch=%s)",
+    (includeTargetRef) => {
+      const fixture = createDispatchFixture({ includeTargetRef });
+      runGit(fixture.origin, ["config", "uploadpack.allowFilter", "true"]);
+      const tree = runGit(fixture.origin, ["rev-parse", `${fixture.targetSha}^{tree}`]);
+      const missingSha = runGit(fixture.origin, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit-tree",
+        tree,
+        "-p",
+        fixture.targetSha,
+        "-m",
+        "unprepared target",
+      ]);
+      runGit(fixture.origin, ["update-ref", "refs/heads/unprepared", missingSha]);
+      runGit(fixture.checkout, ["config", "remote.origin.promisor", "true"]);
+      runGit(fixture.checkout, ["config", "remote.origin.partialclonefilter", "blob:none"]);
+      const result = fixture.run(["--sha", missingSha]);
+      expect(result.status).toBe(1);
+      const failedReasons = result.stderr
+        .trim()
+        .split("\n")
+        .filter((line) => line.startsWith("[full-release-validation] FAILED:"));
+      expect(failedReasons).toEqual([
+        `[full-release-validation] FAILED: Target SHA ${missingSha} is not available locally${includeTargetRef ? ` after fetching ${fixture.releaseRef}` : "; pass --target-ref so it can be fetched by name"}`,
+      ]);
+      expect(result.stderr.trim().split("\n").at(-1)).toBe(
+        "[full-release-validation] FAILED (exit 1)",
+      );
+      expect(readFileSync(fixture.ghCallsPath, "utf8")).toBe("");
+    },
+  );
 
   it("supports current and legacy verifier locations in trusted workflow checkouts", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-verifier-path-"));

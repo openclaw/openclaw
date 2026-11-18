@@ -65,6 +65,17 @@ type Diagnostic = {
 };
 const diagnostics: Diagnostic[] = [
   {
+    name: "arbitrary exception prose remains local",
+    fact: {
+      check: "readyz",
+      code: "Error",
+      errorName: "Error",
+      message: "Validation refused for customer AcmeInternal during merger planning",
+    },
+    includes: ["Details retained locally"],
+    excludes: ["AcmeInternal", "merger planning", "Validation refused"],
+  },
+  {
     name: "managed handoff filesystem identities",
     phase: "requested",
     reason: "managed-service-handoff-failed",

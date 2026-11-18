@@ -2,11 +2,13 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { resolveUiSessionNavigationParentKey } from "../../lib/sessions/session-key.ts";
 import * as json from "../../lib/snapshot-json.ts";
 
 export const chatSessionStateSnapshotSchema = json.object({
+  runActive: json.optional(json.boolean),
   contextUsage: json.optional(
     json.object({
       used: json.refine(json.number, (value) => value >= 0),
@@ -41,6 +43,7 @@ export function projectChatSessionStateSnapshot(
   const used = asNonNegativeFiniteNumber(session.totalTokens);
   const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(session);
   return {
+    runActive: isSessionRunStateActive(session) || session.hasActiveSubagentRun === true,
     // Omitted enrichment retains display; an unavailable measurement clears it.
     contextUsage:
       used === undefined && session.totalTokensFresh === false

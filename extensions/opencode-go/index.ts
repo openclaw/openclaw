@@ -91,6 +91,10 @@ export default defineSingleProviderPluginEntry({
     augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
     ...buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }),
     resolveThinkingProfile,
+    classifyFailoverReason: ({ status, errorMessage }) =>
+      status === 403 && /\bUpstream request failed:\s*Endpoint is unavailable\./i.test(errorMessage)
+        ? "server_error"
+        : undefined,
     resolveTransportTurnState: (ctx) => {
       if (!normalizeOpencodeGoBaseUrl({ api: ctx.model?.api, baseUrl: ctx.model?.baseUrl })) {
         return undefined;

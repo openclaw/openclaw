@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import type { PluginLoadOptions } from "../loader.js";
+import { createToolLoadContext } from "../tools.test-support.js";
 import { loadPluginMetadataRegistrySnapshot } from "./metadata-registry-loader.js";
 
 const loadConfigMock = vi.fn();
@@ -123,15 +124,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       env,
       logger,
       manifestRegistry,
-      runtimeContext: {
-        rawConfig: sourceConfig,
-        config: sourceConfig,
-        activationSourceConfig: sourceConfig,
-        autoEnabledReasons: {},
-        workspaceDir: "/context-workspace",
-        env,
-        logger,
-      },
+      runtimeContext: createToolLoadContext(sourceConfig, "/context-workspace", { env, logger }),
     });
 
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();

@@ -1,2 +1,0 @@
-37
-# Preserve raw-byte admission, Unicode/control-character paths, and source-index bytes while reducing snapshot allocation.

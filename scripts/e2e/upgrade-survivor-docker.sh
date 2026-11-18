@@ -478,7 +478,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 
   if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
     WORKER_RUNTIME_HOST_ROOT="$(mktemp -d "$ARTIFACT_DIR/worker-runtime.XXXXXX")"
-    chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT"
+    chmod a+rwxt "$WORKER_RUNTIME_HOST_ROOT"
     UPGRADE_SCENARIO_ARGS+=(
       -v "$WORKER_RUNTIME_HOST_ROOT:$SURVIVOR_RUNTIME_ROOT"
     )

@@ -99,19 +99,17 @@ proceed; keep any other unresolved dependencies in the note.
 
 ## Format the note
 
-For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note or table instead.
+For eligible multi-step work with a known total, prefer a leading progress bar using observed completed/total counts: PRs reviewed, tests finished, files processed, or other meaningful work units. Prefer those counts over coarse phase counts such as "1 of 3 steps." Label exactly what the count measures: reviewed PRs are not merged PRs, and finished tests are not necessarily passing tests. Never invent percentages or infer completion from elapsed time. When the total is unknown, use a compact status note instead.
 
-Follow the bar with a short result, blocker, or next action. Use tables for comparisons and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Update after meaningful batches or state changes, keeping the bar and its label current in every replacement. Markdown accepts ordinary formatting, links, and progress bars:
+Follow the bar with a short result, blocker, or next action. Use a checklist only when the work is genuinely sequential. Omit the checklist when a bar or sentence says it better, and do not repeat the same facts across the plan and Markdown. Update after meaningful batches or state changes, keeping the bar and its label current in every replacement. Markdown accepts ordinary formatting, links, and progress bars:
 
 ```md
 <progress aria-label="Checks finished · 3/7" value="3" max="7"></progress>
 
 Tests are running.
 
-| check      | state   |
-| ---------- | ------- |
-| unit tests | passed  |
-| live flow  | running |
+- Unit tests: passed.
+- Live flow: running.
 ```
 
 Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. The session hovercard shows a compact note and the current step; it omits progress bars. Other raw HTML is stripped by the Markdown sanitizer.

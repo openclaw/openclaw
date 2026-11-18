@@ -1,7 +1,16 @@
 import type { TranscriptSessionSummary } from "@openclaw/gateway-protocol";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { Errored, For, Loading, Show, createMemo, latest, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createProjection,
+  latest,
+  onSettled,
+} from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
@@ -208,9 +217,10 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
 }
 
 function Library(props: TranscriptsViewProps) {
+  const sessions = createProjection(() => props.list?.sessions ?? [], [], { key: "selector" });
   const days = createMemo(() => {
     const result = new Map<string, TranscriptSessionSummary[]>();
-    for (const entry of props.list?.sessions ?? []) {
+    for (const entry of sessions) {
       const day = new Date(entry.startedAt).toLocaleDateString(undefined, {
         year: "numeric",
         month: "long",

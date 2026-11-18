@@ -644,6 +644,54 @@ suite.define(() => {
     );
   });
 
+  it("keeps the session card while the pointer crosses other rows toward it", async () => {
+    const selectedSessionKey = "agent:main:selected-aim";
+    const rows = ["First aim row", "Second aim row", "Third aim row"];
+    const keys = rows.map((_, index) => `agent:main:aim-${index}`);
+
+    await suite.withPage(
+      { hasTouch: false, ...createControlUiE2eContextOptions() },
+      async ({ page }) => {
+        await page.clock.install();
+        await installMockGateway(page, {
+          featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
+          methodResponses: {
+            "progressCard.get": { card: null },
+            "sessions.list": chatSessionListResponse([
+              { key: selectedSessionKey, kind: "direct", label: "Selected", updatedAt: 9 },
+              ...rows.map((label, index) => ({
+                key: keys[index]!,
+                kind: "direct",
+                label,
+                updatedAt: 8 - index,
+              })),
+            ]),
+          },
+          sessionKey: selectedSessionKey,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
+        const first = page.locator(`[data-session-key="${keys[0]}"]`);
+        const card = page.locator(".session-progress-hovercard");
+        const title = () => card.locator(".session-hovercard__title").textContent();
+        await page.locator(`[data-session-key="${keys[2]}"]`).waitFor({ state: "visible" });
+        await pauseVirtualClock(page);
+
+        await first.hover();
+        await expect.poll(() => first.getAttribute("aria-haspopup")).toBe("dialog");
+        await page.clock.runFor(450);
+        await card.waitFor({ state: "visible" });
+        expect(await title()).toBe("First aim row");
+        const target = (await card.boundingBox())!;
+        // The direct path to the card's lower edge crosses the rows below.
+        await page.mouse.move(target.x + 16, target.y + target.height - 8, { steps: 24 });
+        await page.clock.runFor(600);
+        expect(await card.count()).toBe(1);
+        expect(await title()).toBe("First aim row");
+      },
+    );
+  });
+
   it("keeps the portaled progress dialog keyboard-reachable and viewport-contained", async () => {
     const selectedSessionKey = "agent:main:selected-focus";
     const sessionKey = "agent:main:focusable-progress";

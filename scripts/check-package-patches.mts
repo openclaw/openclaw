@@ -10,12 +10,13 @@ import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
+  ["acorn@8.19.0", "patches/acorn@8.19.0.patch"],
   ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
   ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
   ["@clawdbot/lobster@2026.10.1", "patches/@clawdbot__lobster@2026.10.1.patch"],
   ["apache-arrow@21.2.0", "patches/apache-arrow@21.2.0.patch"],
   ["@shinyoshiaki/binary-data@0.6.1", "patches/@shinyoshiaki__binary-data@0.6.1.patch"],
-  ["@openclaw/crabline@0.1.31", "patches/@openclaw__crabline@0.1.31.patch"],
+  ["@openclaw/crabline@0.2.0", "patches/@openclaw__crabline@0.2.0.patch"],
   ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
   ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
   ["tar@7.5.22", "patches/tar@7.5.22.patch"],
@@ -27,7 +28,7 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
   ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
-  ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0.patch"],
+  ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0.patch"],
   ["ghostty-web@0.4.0", "patches/ghostty-web@0.4.0.patch"],
 ]);
 

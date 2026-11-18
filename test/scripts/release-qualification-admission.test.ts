@@ -5,6 +5,7 @@ import {
   buildQualificationAdmissionRequest,
   resolveQualificationAdmissionDescriptor,
   revalidateQualificationAdmissionAuthority,
+  verifyReleaseQualificationOperators,
   semanticQualificationInputs,
   QUALIFICATION_ADMISSION_WORKFLOW,
 } from "../../scripts/release-qualification-admission.mjs";
@@ -182,6 +183,26 @@ it("refuses changed archive bytes and UTF-8 archive adapters", () => {
     /archive bytes/,
   );
   expect(() => f.verify(f.selected.inputs, () => new Uint8Array(0))).toThrow(/archive bytes/);
+});
+
+it.each([false, true])("reads each distinct operator grant once (distinct=%s)", (distinct) => {
+  const actor = { id: 91, login: "release-operator", type: "User" };
+  const triggering = distinct ? { ...actor, id: 92, login: "release-trigger" } : { ...actor };
+  const calls: string[] = [];
+  const runGh = (args: string[]) => {
+    calls.push(args[1]!);
+    return JSON.stringify({
+      permission: "write",
+      user: args[1]!.includes("release-trigger") ? triggering : actor,
+    });
+  };
+  expect(
+    verifyReleaseQualificationOperators("openclaw/openclaw", actor, triggering, runGh),
+  ).toEqual({
+    operator: { id: actor.id, login: actor.login },
+    triggeringOperator: { id: triggering.id, login: triggering.login },
+  });
+  expect(calls).toHaveLength(distinct ? 2 : 1);
 });
 
 it("revalidates current authority without reacquiring immutable evidence (protected)", () => {

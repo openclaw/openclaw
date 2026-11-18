@@ -12,7 +12,7 @@ import { isErrno } from "./errors.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { isPathInside, safeStatSync } from "./path-guards.js";
 import { resolveSqliteDatabaseFilePaths, SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { quoteSqliteIdentifier } from "./sqlite-schema-sql.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";

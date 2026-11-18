@@ -6,9 +6,9 @@ import {
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
 import { hasBeforeToolCallPolicy } from "../../agents/agent-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../../agents/agent-tools.js";
 import { isGatewayToolAllowedWithoutAction } from "../../agents/gateway-tool-policy.js";
 import { createMcpClientElicitationHandler } from "../../agents/mcp-client-elicitation.js";
+import { resolveToolLoopDetectionConfig } from "../../agents/tool-loop-detection-config.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

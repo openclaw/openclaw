@@ -4,8 +4,6 @@ import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
-import type { BundledPluginReloadSource } from "./plugin-bundled-reload.js";
-import { getPluginCache } from "./plugin-cache.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type {
   PluginFrozenSourceSnapshot,
@@ -48,20 +46,68 @@ export function isPluginSourceCaptureOperation(operation: object): boolean {
 type SourceCustody = {
   source: PluginRecoverySource;
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
+  modules?: ReadonlyMap<string, PluginInspectedModule>;
 };
-export type PluginSourceCustodyFork = Pick<SourceCustody, "source" | "files">;
-type PluginGenerationCaptureArguments = [
-  rootDir: string,
-  entryFile?: string | readonly string[],
-  execute?: <V>(run: () => V) => V,
-  moduleSource?: (filename: string) => string,
-  nativeRecovery?: PluginNativeRecovery,
-  dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
-  bundledReloadSource?: BundledPluginReloadSource,
-];
+/** Plain inspection facts; executable lookup callbacks stay with each consuming capture. */
+export type PluginInspectedModule = {
+  staticImports: ReadonlySet<string>;
+  observed: ReadonlyMap<string, string | null | undefined>;
+  acquisitions: ReadonlyArray<
+    { kind: "file"; source: string } | { kind: "dependency"; importer: string; name: string }
+  >;
+};
+export type PluginSourceCustodyFork = SourceCustody;
 const sourceCustody = new AsyncLocalStorage<{
-  sources: Map<string, SourceCustody>;
+  closing: boolean;
+  prepared: Map<object, Map<string, Promise<PreparedSourceCustody>>>;
 }>();
+
+type PreparedSourceCustody = {
+  captureId: number;
+  sourceDigest: string;
+  disposeAsync(): Promise<void>;
+};
+
+export function hasPluginGenerationSourceCustody(): boolean {
+  return sourceCustody.getStore() !== undefined;
+}
+
+/** Retain an unexecuted worker source; each caller still prepares its own private artifact. */
+export async function retainPreparedPluginGenerationSource(
+  owner: object,
+  key: string,
+  create: () => Promise<PreparedSourceCustody>,
+): Promise<PreparedSourceCustody | undefined> {
+  const scope = sourceCustody.getStore();
+  if (!scope) {
+    return undefined;
+  }
+  if (scope.closing) {
+    throw new Error("Plugin source custody has closed");
+  }
+  let sources = scope.prepared.get(owner);
+  if (!sources) {
+    sources = new Map();
+    scope.prepared.set(owner, sources);
+  }
+  let preparing = sources.get(key);
+  if (!preparing) {
+    preparing = create();
+    sources.set(key, preparing);
+  }
+  try {
+    const source = await preparing;
+    if (scope.closing) {
+      throw new Error("Plugin source custody has closed");
+    }
+    return source;
+  } catch (error) {
+    if (sources.get(key) === preparing) {
+      sources.delete(key);
+    }
+    throw error;
+  }
+}
 
 /** Retain files across management phases, without retaining their callback instances or leases. */
 export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>): Promise<T> {
@@ -78,99 +124,22 @@ export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>
 
 function createPluginGenerationSourceCustody() {
   const scope = {
-    sources: new Map<string, SourceCustody>(),
+    closing: false,
+    prepared: new Map<object, Map<string, Promise<PreparedSourceCustody>>>(),
     async disposeAsync() {
+      this.closing = true;
       const results = await Promise.allSettled(
-        [...this.sources.values()].map(({ source }) => source.disposeAsync()),
+        [...this.prepared.values()].flatMap((sources) =>
+          [...sources.values()].map(async (source) => (await source).disposeAsync()),
+        ),
       );
+      this.prepared.clear();
       throwSettledAggregate(results, "Plugin source custody cleanup failed");
-      this.sources.clear();
     },
   };
   return {
     run: <T>(run: () => T): T => sourceCustody.run(scope, run),
     disposeAsync: () => scope.disposeAsync(),
-  };
-}
-
-/** Bind scoped file custody around an instance's independently constructed module graph. */
-export function createPluginGenerationCapture<
-  T extends {
-    retainSourceCustody(): SourceCustody;
-    dispose(): void;
-  },
->(
-  create: (
-    ...args: [
-      ...PluginGenerationCaptureArguments,
-      retained?: PluginSourceCustodyFork,
-      captureForCustody?: boolean,
-    ]
-  ) => T,
-) {
-  return (...args: PluginGenerationCaptureArguments): T => {
-    const [
-      rootDir,
-      entryFile,
-      execute,
-      moduleSource,
-      nativeRecovery,
-      dependencyLookupBoundary,
-      bundledReloadSource,
-    ] = args;
-    const custody =
-      execute && !nativeRecovery && !dependencyLookupBoundary && sourceCustody.getStore();
-    if (!custody) {
-      return create(...args);
-    }
-    const key = JSON.stringify([
-      path.resolve(rootDir),
-      typeof entryFile === "string"
-        ? path.resolve(entryFile)
-        : entryFile?.map((file) => path.resolve(file)),
-      bundledReloadSource,
-    ]);
-    let retained = custody.sources.get(key);
-    if (!retained) {
-      // This namespace is never executed; no instance can mutate the retained source bytes.
-      const seed = create(
-        rootDir,
-        entryFile,
-        (run) => run(),
-        undefined,
-        undefined,
-        undefined,
-        bundledReloadSource,
-        undefined,
-        true,
-      );
-      try {
-        retained = seed.retainSourceCustody();
-        custody.sources.set(key, retained);
-      } finally {
-        seed.dispose();
-      }
-    }
-    const fork = retained.source.fork();
-    try {
-      fork.native?.retain(getPluginCache());
-      return create(
-        rootDir,
-        entryFile,
-        execute,
-        moduleSource,
-        undefined,
-        undefined,
-        bundledReloadSource,
-        {
-          source: fork,
-          files: retained.files,
-        },
-      );
-    } catch (error) {
-      fork.dispose();
-      throw error;
-    }
   };
 }
 
@@ -287,7 +256,39 @@ export type PluginRecoverySource = {
   disposeAsync: () => Promise<void>;
 };
 
-function copyRecoverySource({
+function copyRecoverySource(
+  ...args: Parameters<typeof copyRecoverySourceSteps>
+): PluginRecoverySource {
+  const steps = copyRecoverySourceSteps(...args);
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      fs.cpSync(...step.value);
+      step = steps.next();
+    } catch (error) {
+      step = steps.throw(error);
+    }
+  }
+  return step.value;
+}
+
+async function copyRecoverySourceAsync(
+  ...args: Parameters<typeof copyRecoverySourceSteps>
+): Promise<PluginRecoverySource> {
+  const steps = copyRecoverySourceSteps(...args);
+  let step = steps.next();
+  while (!step.done) {
+    try {
+      await fs.promises.cp(...step.value);
+      step = steps.next();
+    } catch (error) {
+      step = steps.throw(error);
+    }
+  }
+  return step.value;
+}
+
+function* copyRecoverySourceSteps({
   rootDir,
   sourceRoot,
   capturedRoot,
@@ -303,7 +304,7 @@ function copyRecoverySource({
   sources: ReadonlyMap<string, string>;
   directories: ReadonlySet<string>;
   native?: PluginNativeRecovery;
-}): PluginRecoverySource {
+}): Generator<Parameters<typeof fs.cpSync>, PluginRecoverySource, void> {
   let native = suppliedNative;
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
@@ -311,52 +312,56 @@ function copyRecoverySource({
     const directory = recovery.directory;
     const relocate = (filename: string) =>
       path.join(directory, path.relative(boundaryRoot, filename));
-    const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
+    const fileReferenceTargets = new Map<string, PluginNativeArtifactFact>();
     const metrics = getPluginGenerationMetrics();
     let copiedBytes = 0;
     // Keep dependency links within the new capture without reopening installed packages.
-    fs.cpSync(boundaryRoot, recovery.directory, {
-      recursive: true,
-      verbatimSymlinks: true,
-      filter: (from, to) => {
-        const fact = native?.references.get(from);
-        if (!fact) {
-          const entry = fs.lstatSync(from);
-          if (metrics && entry.isFile()) {
-            copiedBytes += entry.size;
-          }
-          if (entry.isSymbolicLink()) {
-            const target = fs.readlinkSync(from);
-            const relative = path.isAbsolute(target)
-              ? relativePluginPathInsideRootSync(boundaryRoot, target)
-              : undefined;
-            if (relative !== undefined) {
-              // Windows junctions store absolute targets. A verbatim copy would
-              // point at the seed after custody disposes it, then fail on fork.
-              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
-              fs.symlinkSync(
-                path.relative(path.dirname(to), path.join(directory, relative)),
-                to,
-                fs.statSync(from).isDirectory() ? "junction" : "file",
-              );
-              return false;
+    yield [
+      boundaryRoot,
+      recovery.directory,
+      {
+        recursive: true,
+        verbatimSymlinks: true,
+        filter: (from, to) => {
+          const fact = native?.references.get(from);
+          if (!fact) {
+            const entry = fs.lstatSync(from);
+            if (metrics && entry.isFile()) {
+              copiedBytes += entry.size;
             }
+            if (entry.isSymbolicLink()) {
+              const target = fs.readlinkSync(from);
+              const relative = path.isAbsolute(target)
+                ? relativePluginPathInsideRootSync(boundaryRoot, target)
+                : undefined;
+              if (relative !== undefined) {
+                // Windows junctions store absolute targets. A verbatim copy would
+                // point at the seed after custody disposes it, then fail on fork.
+                fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+                fs.symlinkSync(
+                  path.relative(path.dirname(to), path.join(directory, relative)),
+                  to,
+                  fs.statSync(from).isDirectory() ? "junction" : "file",
+                );
+                return false;
+              }
+            }
+            return true;
           }
-          return true;
-        }
-        const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
-        if (linkPluginNativeReference(fact.capturedPath, to, retained) === "hardlink") {
-          hardlinkedTargets.set(to, retained);
-        }
-        native!.references.set(from, retained);
-        return false;
+          const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
+          if (linkPluginNativeReference(fact.capturedPath, to, retained) !== "symlink") {
+            fileReferenceTargets.set(to, retained);
+          }
+          native!.references.set(from, retained);
+          return false;
+        },
       },
-    });
+    ];
     if (metrics) {
       metrics.copiedBytes += copiedBytes;
     }
     const assertReference = createPluginNativeReferenceValidator(recovery.directory, rootDir);
-    for (const [target, fact] of hardlinkedTargets) {
+    for (const [target, fact] of fileReferenceTargets) {
       assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
     }
     const copiedSources = new Map(
@@ -445,6 +450,20 @@ export function createPluginGenerationSourceLookup({
     const captured = getCapturedSource(capturedPaths, rootDir, sourceRoot, source);
     return captured && isPathInside(capturedRoot, captured) ? captured : undefined;
   };
+  const recoveryInput = () => {
+    for (const captured of new Set(capturedPaths.values())) {
+      assertModuleAvailable(captured);
+    }
+    return {
+      rootDir,
+      sourceRoot,
+      capturedRoot,
+      boundaryRoot,
+      sources: new Map(capturedPaths),
+      directories: new Set(capturedDirectories),
+      native: captureNativeRecovery?.(),
+    };
+  };
   return {
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
     resolve: markPluginSourcePreparationOperation((source: string, rejectHardlinks = false) => {
@@ -464,20 +483,12 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     }),
-    captureRecoverySource: markPluginSourceCaptureOperation(() => {
-      for (const captured of new Set(capturedPaths.values())) {
-        assertModuleAvailable(captured);
-      }
-      return copyRecoverySource({
-        rootDir,
-        sourceRoot,
-        capturedRoot,
-        boundaryRoot,
-        sources: new Map(capturedPaths),
-        directories: new Set(capturedDirectories),
-        native: captureNativeRecovery?.(),
-      });
-    }),
+    captureRecoverySource: markPluginSourceCaptureOperation(() =>
+      copyRecoverySource(recoveryInput()),
+    ),
+    captureRecoverySourceAsync: markPluginSourceCaptureOperation(() =>
+      copyRecoverySourceAsync(recoveryInput()),
+    ),
   };
 }
 
@@ -518,6 +529,7 @@ export function createPluginGenerationModuleLookup({
       originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
     assertModuleAvailable,
     prepareModule: markPluginSourcePreparationOperation((filename: string) => {
+      assertModuleAvailable(filename);
       // Directory capture is valid, but selecting that directory as a module is not.
       if (capturedDirectories.has(filename)) {
         readPluginCapturedCode(filename, true);

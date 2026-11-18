@@ -158,19 +158,26 @@ it("revalidates artifact identity after a transient metadata retry", async () =>
 
 it("verifies already-published registry bytes alongside qualified publishers in a mixed roster", async () => {
   const parent = await fixture("direct", "existing-package");
-  await expect(parent.verify("@openclaw/existing", version, "beta")).resolves.toBeUndefined();
-  await expect(parent.verify(packageName, version, "beta")).resolves.toBeUndefined();
+  await expect(parent.verify("@openclaw/existing", version, "beta")).resolves.toEqual({
+    disposition: "published",
+  });
+  await expect(parent.verify(packageName, version, "beta")).resolves.toEqual({
+    disposition: "published",
+  });
 });
 
 it.each([
   "prepared",
+  "candidate-prepared",
   "retained-qualification",
   "retained-publisher",
   "retained-plan",
   "replanned-failed",
 ])("verifies exact qualified bytes through the %s producer binding", async (mode) => {
   const parent = await fixture(mode);
-  await expect(parent.verify(packageName, version, "beta")).resolves.toBeUndefined();
+  await expect(parent.verify(packageName, version, "beta")).resolves.toEqual({
+    disposition: "published",
+  });
   expect(parent.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
   expect(parent.evidence).toMatchObject([
     {
@@ -187,6 +194,12 @@ it.each([
   ["direct", "conflicting-bytes", "bytes differ"],
   ["direct", "archive-identity", "qualified artifact"],
   ["direct", "source", "approved package or source"],
+  ["candidate-prepared", "workflow", "approved package or source"],
+  ["candidate-prepared", "producer-sha", "immutable publication tuple"],
+  ["candidate-prepared", "policy", "canonically bind"],
+  ["candidate-prepared", "source-policy", "canonically bind"],
+  ["direct", "same-run-q", "approved package or source"],
+  ["candidate-prepared", "conflicting-bytes", "bytes differ"],
   ["direct", "attempt", "producer-attempt binding"],
   ["direct", "artifact", "immutable publication tuple"],
   ["direct", "none", "release version", version, "2026.9.2-beta.2"],
@@ -210,9 +223,10 @@ it.each([
 it("verifies superseded registry bytes without inventing qualification receipts", async () => {
   const supersededBy = "2026.9.2-beta.2";
   const parent = await fixture("direct", "no-publish", supersededBy);
-  await expect(parent.verify(packageName, version, "beta")).resolves.toBe(
-    `${packageName}@${version} superseded by ${supersededBy}; dist-tag beta stays.`,
-  );
+  await expect(parent.verify(packageName, version, "beta")).resolves.toEqual({
+    disposition: "published",
+    note: `${packageName}@${version} superseded by ${supersededBy}; dist-tag beta stays.`,
+  });
   expect(parent.evidence).toMatchObject([
     {
       packageName,
@@ -221,4 +235,28 @@ it("verifies superseded registry bytes without inventing qualification receipts"
     },
   ]);
   expect(parent.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
+});
+
+it("retains explicit authentication deferrals without fabricating a published disposition", async () => {
+  const result = await fixture("operator-deferred");
+  await expect(result.verify(packageName, version, "beta")).resolves.toMatchObject({
+    disposition: "deferred-auth",
+    note: expect.stringContaining("npm-trusted-publisher-exchange-http-404"),
+  });
+  expect(result.evidence).toContainEqual(
+    expect.objectContaining({
+      verification: "operator-deferred-auth",
+      packageName,
+      version,
+      evidence: "https://github.com/openclaw/openclaw/actions/runs/12/job/34",
+    }),
+  );
+  expect(result.requests.some((url) => url.startsWith("https://registry.npmjs.org/"))).toBe(true);
+  await expect(fixture("operator-deferred", "deferred-invalid")).rejects.toThrow("exact-source");
+  const published = await fixture("operator-deferred", "deferred-published");
+  await expect(published.verify(packageName, version, "beta")).resolves.toMatchObject({
+    disposition: "published",
+  });
+  const unavailable = await fixture("operator-deferred", "deferred-registry-error");
+  await expect(unavailable.verify(packageName, version, "beta")).rejects.toThrow();
 });

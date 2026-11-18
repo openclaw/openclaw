@@ -112,8 +112,10 @@ export async function prepareCronDeliverySourceGenerations(
     requests.map(({ agentId, sourceConversation }) => ({
       agentId,
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      ...sourceConversation,
-      lifecycleRevision: sourceConversation.lifecycleRevision ?? null,
+      sessionKey: sourceConversation.sessionKey,
+      sessionId: sourceConversation.sessionId,
+      // The creating conversation is linked by key; edits and resets keep it.
+      lifecycleRevision: null,
     })),
   );
 }
@@ -187,8 +189,9 @@ export async function resolveDeliveryTarget(
         ).prepareSessionGenerationFacts({
           agentId,
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-          ...source,
-          lifecycleRevision: source.lifecycleRevision ?? null,
+          sessionKey: source.sessionKey,
+          sessionId: source.sessionId,
+          lifecycleRevision: null,
         }));
       try {
         generation.assertCurrent();
@@ -308,16 +311,14 @@ export async function resolveDeliveryTarget(
 
   // Prefer an explicit accountId from the job's delivery config (set via
   // --account on cron add/edit). Fall back to the session's lastAccountId,
-  // then to the agent's bound account from bindings config.
+  // then to the agent's bound account and the channel's default account.
   const explicitAccountId =
     typeof jobPayload.accountId === "string" ? jobPayload.accountId.trim() || undefined : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
-    accountId = deliveryTargetRuntime.resolveFirstBoundAccountId({
-      cfg,
-      channelId: channel,
-      agentId,
-    });
+    accountId =
+      deliveryTargetRuntime.resolveFirstBoundAccountId({ cfg, channelId: channel, agentId }) ??
+      deliveryTargetRuntime.resolveChannelDefaultAccountIdForDelivery({ cfg, channel, agentId });
   }
 
   if (!channel) {

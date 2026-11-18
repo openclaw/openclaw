@@ -93,6 +93,7 @@ type LocalCheckResult =
   | { status: "passed"; command: string; reason?: never }
   | { status: "skipped"; reason: string; command?: never };
 type PreflightTarballs = Partial<Record<"corePackageTarballs" | "dependencyTarballs", unknown>>;
+type RequiredCandidateFlag = { flag: string; value: string; reason: string };
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODE = "both";
@@ -163,7 +164,7 @@ Options:
   --tag <tag>                         Release tag. An existing tag must resolve to the target SHA.
   --target-sha <sha>                  Frozen release SHA. Defaults to the current HEAD.
   --workflow-ref <ref>                Trusted helper/publisher source (P), not the candidate harness. Default: main.
-  --workflow-sha <sha>                Trusted helper/publisher SHA (P), a trusted-main commit, not the candidate; reuses or mints its release-publish tag. Fresh qualification runs Q=C.
+  --workflow-sha <sha>                Trusted helper/publisher SHA (P), a trusted-main commit, not the candidate; reuses or mints its release-publish tag. This or --publish-workflow-ref is required. Fresh qualification runs Q=C.
   --publish-workflow-ref <tag>         Protected publication tooling tag matching the trusted helper checkout.
   --publication-route <normal|prepared>
                                       Intended publication route. Default: normal; not inferred from a protected ref.
@@ -468,31 +469,43 @@ export function resolveEarlyPluginSdkApiBases({
   );
 }
 
-function formatPluginSdkApiAcknowledgementFailure(
-  error: PluginSdkApiAcknowledgementError,
-  report: string,
-) {
+// Every flag a rerun needs is reported together with one exact rerun command.
+function formatRequiredCandidateFlagsFailure(flags: RequiredCandidateFlag[], cause?: unknown) {
   const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
-  const end = argv.indexOf("--");
-  const flag = "--plugin-sdk-api-acknowledgement";
-  let replaced = false;
-  for (let index = 0; index < (end === -1 ? argv.length : end); index++) {
-    if (argv[index] === flag) {
-      argv[++index] = error.digest;
-      replaced = true;
+  for (const { flag, value } of flags) {
+    const end = argv.indexOf("--");
+    let replaced = false;
+    for (let index = 0; index < (end === -1 ? argv.length : end); index++) {
+      if (argv[index] === flag) {
+        argv[++index] = value;
+        replaced = true;
+      }
     }
-  }
-  if (!replaced) {
-    argv.unshift(flag, error.digest);
+    if (!replaced) {
+      argv.unshift(flag, value);
+    }
   }
   return new Error(
     [
-      error.message,
-      report || "Review the Plugin SDK API diff artifact before rerunning.",
+      ...flags.map(({ reason }) => reason),
       ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
     ].join("\n\n"),
-    { cause: error },
+    { cause },
   );
+}
+
+function pluginSdkApiAcknowledgementFlag(
+  error: PluginSdkApiAcknowledgementError,
+  report: string,
+): RequiredCandidateFlag {
+  return {
+    flag: "--plugin-sdk-api-acknowledgement",
+    value: error.digest,
+    reason: [
+      error.message,
+      report || "Review the Plugin SDK API diff artifact before rerunning.",
+    ].join("\n\n"),
+  };
 }
 
 export function resolveEarlyPluginSdkApiReviewPaths({
@@ -541,29 +554,17 @@ function runEarlyPluginSdkApiReview({
     npmDistTag,
     packageVersion,
   });
-  for (const tag of new Set(Object.values(bases))) {
-    run(
-      "git",
-      [
-        "fetch",
-        "--no-tags",
-        "--filter=blob:none",
-        "--depth=1",
-        "origin",
-        `+refs/tags/${tag}:refs/tags/${tag}`,
-      ],
-      { cwd: TOOLING_ROOT },
-    );
-  }
   const { reviewDir, evidencePath, reportPath, diffPath } = resolveEarlyPluginSdkApiReviewPaths({
     outputDir,
     targetRoot,
   });
   mkdirSync(reviewDir, { recursive: true });
+  const reviewRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-sdk-review-"));
   const args = [
-    "run",
-    "plugin-sdk:api:diff",
-    "--",
+    "--max-old-space-size=8192",
+    "--import",
+    join(TOOLING_ROOT, "scripts/tsx.mjs"),
+    join(TOOLING_ROOT, "scripts/plugin-sdk-api-diff.mts"),
     "--head",
     targetSha,
     "--evidence",
@@ -579,20 +580,58 @@ function runEarlyPluginSdkApiReview({
     args.push("--base", requireString(Object.values(bases)[0], "Plugin SDK API predecessor"));
   }
   console.log("Reviewing the Plugin SDK API while Full Release Validation runs...");
-  run("pnpm", args, { cwd: TOOLING_ROOT });
+  try {
+    run("git", ["init", "--initial-branch=review"], { cwd: reviewRoot });
+    run(
+      "git",
+      ["fetch", "--no-tags", "--depth=1", TOOLING_ROOT, `${toolingSha}:refs/heads/tooling`],
+      { cwd: reviewRoot },
+    );
+    run("git", ["symbolic-ref", "HEAD", "refs/heads/tooling"], { cwd: reviewRoot });
+    if (targetSha !== toolingSha) {
+      run(
+        "git",
+        ["fetch", "--no-tags", "--depth=1", targetRoot, `${targetSha}:refs/heads/target`],
+        { cwd: reviewRoot },
+      );
+    }
+    const origin = run("git", ["remote", "get-url", "origin"], {
+      capture: true,
+      cwd: TOOLING_ROOT,
+    }).trim();
+    run("git", ["remote", "add", "origin", origin], { cwd: reviewRoot });
+    for (const tag of new Set(Object.values(bases))) {
+      run(
+        "git",
+        [
+          "fetch",
+          "--no-tags",
+          "--filter=blob:none",
+          "--depth=1",
+          "origin",
+          `+refs/tags/${tag}:refs/tags/${tag}`,
+        ],
+        { cwd: reviewRoot },
+      );
+    }
+    run("node", args, { cwd: reviewRoot });
+  } finally {
+    rmSync(reviewRoot, { force: true, recursive: true });
+  }
   const evidence = readJson(evidencePath, "early Plugin SDK API evidence");
   const report = readFileSync(reportPath, "utf8").trim();
   try {
-    return validatePluginSdkApiReleaseEvidence({
+    validatePluginSdkApiReleaseEvidence({
       acknowledgement: "",
       evidence,
       expectedHeadSha: targetSha,
       expectedWorkflowSha: toolingSha,
       npmDistTag,
     });
+    return undefined;
   } catch (error) {
     if (error instanceof PluginSdkApiAcknowledgementError) {
-      throw formatPluginSdkApiAcknowledgementFailure(error, report);
+      return pluginSdkApiAcknowledgementFlag(error, report);
     }
     throw error;
   }
@@ -1071,6 +1110,7 @@ export function validateCandidateCheckout({
   return { status: "passed", targetSha, toolingSha, workflowRef };
 }
 
+/** Returns whether the remote release tag is already published at the target. */
 export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: string) {
   const ref = `refs/tags/${tag}`;
   const result = spawnSync(
@@ -1079,7 +1119,7 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
     { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
   if (result.status === 2) {
-    return;
+    return false;
   }
   if (result.status !== 0) {
     throw new Error(
@@ -1102,6 +1142,7 @@ export function assertReleaseCandidateTag(tag: string, targetSha: string, cwd: s
       `release candidate tag ${tag} resolves to ${tagSha ?? "an unknown target"}, expected ${targetSha}; use the matching release target or a new tag`,
     );
   }
+  return true;
 }
 
 function savedPublishWorkflowRef(statePath: string, toolingSha: string) {
@@ -1400,13 +1441,8 @@ function dispatchFullReleaseUsingHelper(
     !Number.isSafeInteger(observed?.id) ||
     Number(observed?.id) < 1
   ) {
-    const resumable =
-      record.kind === "openclaw.full-release-dispatch/v2" &&
-      record.phase === "prepared" &&
-      isRecord(record.refs) &&
-      record.refs.workflow === "intended";
     throw new Error(
-      `No observed Full Release Validation run. Next: pnpm ci:full-release -- ${resumable ? "--resume-request" : "--reconcile-request"} ${shellQuote(requestFile)}. The canonical helper revalidates admission; never redispatch uncertain work.`,
+      `No observed Full Release Validation run. Follow the canonical helper's recovery advice above; only it verifies whether resume is safe. Otherwise, Next: pnpm ci:full-release -- --reconcile-request ${shellQuote(requestFile)}.`,
     );
   }
   return String(observed!.id);
@@ -1536,7 +1572,11 @@ async function waitForSuccessfulRun(
       if (info.conclusion !== "success") {
         throw new Error(summarizeFailedRun(info));
       }
-      if (info.workflowName !== expected.workflowName) {
+      const receiptRecovery =
+        expected.workflowName === "Full Release Validation" &&
+        info.workflowName === "Full Release Receipt Recovery" &&
+        info.workflowPath === ".github/workflows/full-release-receipt-recovery.yml";
+      if (info.workflowName !== expected.workflowName && !receiptRecovery) {
         throw new Error(
           `run ${runId} workflow mismatch: expected ${expected.workflowName}, got ${info.workflowName}`,
         );
@@ -2099,7 +2139,7 @@ async function main() {
     tag: options.tag,
     targetSha,
   });
-  assertReleaseCandidateTag(options.tag, targetSha, targetRoot);
+  const tagPublished = assertReleaseCandidateTag(options.tag, targetSha, targetRoot);
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
   const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
   // The outer process pins a clean main commit before creating this tooling checkout.
@@ -2165,13 +2205,20 @@ async function main() {
     throw new Error("Parallels registry package artifacts must have unique package names");
   }
   const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
+  const savedState = existsSync(statePath)
+    ? readJson(statePath, "release candidate state")
+    : undefined;
   let candidateState = reconcileReleaseCandidateState(
-    existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,
+    savedState,
     expectedState,
     hasRetainedRequest,
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
+  // Keep previously accepted IDs immutable, but do not persist a new npm ID
+  // until its workflow role and trusted source have passed validation below.
+  candidateState.npmPreflightRunId =
+    typeof savedState?.npmPreflightRunId === "string" ? savedState.npmPreflightRunId : "";
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const version = parseReleaseVersion(options.tag.replace(/^v/u, ""));
     const train = version && classifyReleaseTrain(version);
@@ -2247,20 +2294,35 @@ async function main() {
   options.npmPreflightRunId ||= options.fullReleaseRunId;
   candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
     fullReleaseRunId: options.fullReleaseRunId,
-    npmPreflightRunId: options.npmPreflightRunId,
   });
 
   // The validation run continues in GitHub while trusted local tooling computes
-  // the review digest. A missing acknowledgement therefore surfaces near
-  // dispatch instead of after every FRV lane has sealed.
-  if (!options.pluginSdkApiAcknowledgement) {
-    runEarlyPluginSdkApiReview({
-      npmDistTag: options.npmDistTag,
-      outputDir: options.outputDir,
-      targetRoot,
-      targetSha,
-      toolingSha,
+  // the review digest. Missing flags therefore surface together near dispatch
+  // instead of one per pass after every FRV lane has sealed.
+  const requiredFlags: RequiredCandidateFlag[] = [];
+  if (!options.publishWorkflowRef) {
+    // Publish preflight verifies npm evidence against the protected tooling tag,
+    // so an unpinned P can never complete the candidate.
+    requiredFlags.push({
+      flag: "--workflow-sha",
+      value: toolingSha,
+      reason: `Publication needs a protected release-publish tooling tag (P). --workflow-sha ${toolingSha} reuses or mints release-publish/${toolingSha.slice(0, 12)}-<epoch> for this trusted tooling checkout; without tag-push authority, pass --publish-workflow-ref with an existing release-publish tag at that SHA instead.`,
     });
+  }
+  const sdkAcknowledgement = options.pluginSdkApiAcknowledgement
+    ? undefined
+    : runEarlyPluginSdkApiReview({
+        npmDistTag: options.npmDistTag,
+        outputDir: options.outputDir,
+        targetRoot,
+        targetSha,
+        toolingSha,
+      });
+  if (sdkAcknowledgement) {
+    requiredFlags.push(sdkAcknowledgement);
+  }
+  if (requiredFlags.length > 0) {
+    throw formatRequiredCandidateFlagsFailure(requiredFlags);
   }
 
   const { run: fullRun } = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
@@ -2285,6 +2347,9 @@ async function main() {
             workflowRef: options.workflowRef,
           }),
       });
+  candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
+    npmPreflightRunId: options.npmPreflightRunId,
+  });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const pluginSdkApiDir = join(options.outputDir, "plugin-sdk-api-evidence");
@@ -2422,7 +2487,10 @@ async function main() {
           });
         }
       }
-      throw formatPluginSdkApiAcknowledgementFailure(error, report);
+      throw formatRequiredCandidateFlagsFailure(
+        [pluginSdkApiAcknowledgementFlag(error, report)],
+        error,
+      );
     }
     throw error;
   }
@@ -2549,7 +2617,7 @@ async function main() {
       run: fullRun,
       targetSha,
       toolingSha,
-      allowPlannedTag: true,
+      allowPlannedTag: !tagPublished,
       npmManifest,
       npmManifestPath: join(npmDir, "preflight-manifest.json"),
       npmPreflightRun: npmRun,

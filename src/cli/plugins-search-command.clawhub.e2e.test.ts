@@ -35,6 +35,7 @@ async function startFixtureServer(signal: AbortSignal) {
         }
         response.writeHead(query === "unavailable" ? 503 : 200, {
           "content-type": "application/json",
+          ...(query === "unavailable" ? { "retry-after": "0" } : {}),
         });
         const results =
           query === "empty"

@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
-import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput } from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import { preparedRequestSuffix } from "../provider-options.js";
 import {
   responsesContinuationPrefixFingerprint,
@@ -64,20 +66,42 @@ export function takeResponsesContextUsageInput(
   return options.mutableInput ? cloneResponsesInputForPayloadHook(prepared.input) : prepared.input;
 }
 
+const reasoningJson = new WeakMap<object, string>();
+
 function contextFingerprint(input: readonly unknown[], output: readonly unknown[] = []): string {
   // Continuation normalizes provider output into replayable input. Context accounting
   // additionally binds reasoning bytes, which continuation intentionally ignores.
-  const reasoning = [...input, ...output].flatMap((item) => {
+  const reasoning: Array<string | { content: Record<string, unknown>; source?: object }> = [];
+  for (const item of [...input, ...output]) {
     if (!isRecord(item) || item.type !== "reasoning") {
-      return [];
+      continue;
+    }
+    const cached = reasoningJson.get(item);
+    if (cached !== undefined) {
+      reasoning.push(cached);
+      continue;
     }
     const { id: _id, status: _status, ...content } = item;
-    return [content];
-  });
-  return sha256StableValue({
-    prefix: responsesContinuationPrefixFingerprint(input, output),
-    reasoning,
-  }).digest;
+    reasoning.push({
+      content,
+      source: getAiTransportHost().immutableData?.isDeeplyFrozenPlainData(item) ? item : undefined,
+    });
+  }
+  // Preserve persisted bytes and mutable getter ordering: copy before the prefix,
+  // serialize afterward. Weak keys release encoded ciphertext with its source.
+  const digest = createHash("sha256").update(
+    `{"prefix":"${responsesContinuationPrefixFingerprint(input, output)}","reasoning":[`,
+  );
+  let separator = "";
+  for (const item of reasoning) {
+    const json = typeof item === "string" ? item : stableStringify(item.content);
+    if (typeof item !== "string" && item.source) {
+      reasoningJson.set(item.source, json);
+    }
+    digest.update(separator).update(json);
+    separator = ",";
+  }
+  return digest.update("]}").digest("hex");
 }
 
 /** Bind measured usage to the admitted replay prefix, without copying its content. */

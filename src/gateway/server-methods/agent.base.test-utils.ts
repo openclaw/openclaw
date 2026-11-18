@@ -655,15 +655,17 @@ describe("gateway agent handler", () => {
       state: "archived",
       entry: { archivedAt: 1 },
       reason: "is archived. Restore it before starting new work.",
+      retryable: false,
     },
     {
       state: "project preparation",
       entry: { pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git" },
       reason: "workspace is not ready. Wait for setup to finish or retry in chat.",
+      retryable: true,
     },
   ])(
     "clears pending dedupe when the routed recipient session awaits $state",
-    async ({ entry, reason }) => {
+    async ({ entry, reason, retryable }) => {
       const sessionKey = "agent:ops:whatsapp:direct:+15551234567";
       const runId = "recipient-session-route-archived";
       mocks.listAgentIds.mockReturnValue(["main", "ops"]);
@@ -689,9 +691,7 @@ describe("gateway agent handler", () => {
         { context, respond, reqId: runId, flushDispatch: false },
       );
 
-      expectRespondError(respond, {
-        message: `Session "${sessionKey}" ${reason}`,
-      });
+      expectRespondError(respond, { message: `Session "${sessionKey}" ${reason}`, retryable });
       expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
       expect(mocks.agentCommand).not.toHaveBeenCalled();
     },

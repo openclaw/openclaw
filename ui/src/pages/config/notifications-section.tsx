@@ -297,6 +297,9 @@ function WebPushSection(props: {
           : "configView.notifications.gatewayDisconnected",
       );
     }
+    if (props.push.supported && props.push.canManage && registered()) {
+      return t("configView.notifications.testAllBrowsersHint");
+    }
     return undefined;
   };
   const statusKind = () =>
@@ -345,7 +348,7 @@ function WebPushSection(props: {
                         disabled={busy() || !props.actions.connected}
                         onClick={() => submit(props.actions.onWebPushTest?.())}
                       >
-                        <Icon name="send" /> {t("configView.notifications.sendTest")}
+                        <Icon name="send" /> {t("configView.notifications.testAllBrowsers")}
                       </button>
                     </Show>
                   </>

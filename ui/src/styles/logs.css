@@ -19,6 +19,12 @@ main.content:where(.content--logs-page) .content-header {
   flex: 0 0 auto;
 }
 
+/* Export sits level with the 32px Refresh beside it instead of the taller default button. */
+.content--logs-page .page-header-actions .btn {
+  height: var(--settings-control-height);
+  padding-block: 0;
+}
+
 /* The page column stays in the fill-height chain, and the log's blocks keep their
    tight rhythm rather than the page's section gap. */
 .settings-workspace--fill-height > .settings-workspace__body > .settings-page {
@@ -194,7 +200,7 @@ main.content:where(.content--logs-page) .content-header {
   background: var(--muted);
   cursor: var(--cursor-action);
   appearance: none;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18 6 6 18'/%3E%3Cpath d='m6 6 12 12'/%3E%3C/svg%3E")
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 6 6 18'/><path d='m6 6 12 12'/></svg>")
     center / contain no-repeat;
 }
 

@@ -12,6 +12,7 @@ export type ChatSendInternalOptions = {
   transcript?: Parameters<typeof createGatewayChatUserTurnController>[0]["transcript"];
   prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   toolsAllow?: string[];
+  deferWorkspaceBootstrap?: true;
   beforeDispatch?: (params: {
     runId: string;
     assertCurrent: () => void;

@@ -82,10 +82,11 @@ type ArtifactCustody =
 // Without an artifact reference, an OpenClaw process can hold a runtime only as
 // the updater that created it, and `update`, its wizard, Doctor's git update,
 // and update workers all run it in-process. Only the Gateway, its spawn broker,
-// and the Windows job anchor that supervises its child never do; the Gateway's
-// process title erases its script path.
+// the directory watch helper, and the Windows job anchor that supervises its
+// child never do; the Gateway's process title erases its script path.
 const gatewayWorkerEntrypoints = [
   runtimeProcessEntrypoints.spawnBroker,
+  runtimeProcessEntrypoints.directoryWatchHost,
   runtimeProcessEntrypoints.serviceChildWindowsJobAnchor,
 ].flatMap((entry) => [
   path.posix.normalize(`src/infra/${entry.sourceWorkerName}.ts`),
@@ -137,6 +138,7 @@ function classifyProcessArtifactCustody(
     pid,
     cwd: cwd ?? "",
     serviceMarker: command.serviceMarker,
+    serviceMarkerUnavailable: command.serviceMarkerUnavailable,
     additionalEntrypoints: workerEntrypoints,
     inspectPackage: true,
   };
@@ -416,10 +418,11 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       }
       ancestors.add(parentPid);
       if ("argv" in parent.command) {
-        const { argv, serviceMarker } = parent.command;
+        const { argv, serviceMarker, serviceMarkerUnavailable } = parent.command;
         const identity = classifyOpenClawArgv(argv, {
           pid: parentPid,
           serviceMarker,
+          serviceMarkerUnavailable,
           cwd: directories.get(parentPid) ?? "",
           additionalEntrypoints: workerEntrypoints,
         });

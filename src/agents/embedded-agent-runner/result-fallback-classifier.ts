@@ -113,6 +113,7 @@ function providerErrorPayloadReason(failoverReason: FailoverReason | null) {
     case "billing":
     case "rate_limit":
     case "server_error":
+    case "route_unavailable":
     case "overloaded":
     case "timeout":
       return failoverReason;

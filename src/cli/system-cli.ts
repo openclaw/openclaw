@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
@@ -80,13 +81,13 @@ export function registerSystemCli(program: Command) {
       async () => {
         const text = normalizeOptionalString(opts.text) ?? "";
         if (!text) {
-          throw new Error(
+          throwExpectedCliError(
             `--text is required. Example: ${formatCliCommand('openclaw system event --text "deploy finished"')}.`,
           );
         }
         const mode = normalizeOptionalString(opts.mode) ?? "next-heartbeat";
         if (mode !== "now" && mode !== "next-heartbeat") {
-          throw new Error("--mode must be now or next-heartbeat");
+          throwExpectedCliError("--mode must be now or next-heartbeat");
         }
         const sessionKey = normalizeOptionalString(opts.sessionKey);
         const result = await callGatewayFromCli(

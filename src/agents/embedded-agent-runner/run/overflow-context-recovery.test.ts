@@ -116,6 +116,7 @@ async function withRecovery(
       prepareCurrentTranscriptRetry: () => {},
       prepareCompactedTranscriptRetry: async () => {},
       markOwnedTranscriptRetry: () => {},
+      retryTransientCompactionFailure: async () => false,
       armPostCompactionGuard: () => {},
       usageAccumulator: createUsageAccumulator(),
     };

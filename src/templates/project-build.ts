@@ -2,8 +2,10 @@ import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promise
 import { dirname, join, resolve } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { digestTemplateBytes } from "./digest.js";
 import {
   TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION,
@@ -17,11 +19,15 @@ export const TEMPLATE_BUILD_RESULT_SCHEMA_VERSION = "openclaw.templateBuild.v1" 
 // zlib's public numeric API defines Z_FILTERED as strategy 1.
 const ZLIB_FILTERED_STRATEGY = 1;
 
-async function readSelectedProjectFile(projectRoot: string, path: string): Promise<Buffer> {
+async function readSelectedProjectFile(
+  projectRoot: string,
+  path: string,
+  maxBytes = MAX_MANAGED_FILE_BYTES,
+): Promise<Buffer> {
   const sourceRoot = await fsSafeRoot(projectRoot);
   const read = await sourceRoot.read(path, {
     hardlinks: "reject",
-    maxBytes: MAX_MANAGED_FILE_BYTES,
+    maxBytes,
     symlinks: path === "CLAW.md" ? "follow-within-root" : "reject",
   });
   return read.buffer;
@@ -101,37 +107,48 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
   try {
     await mkdir(stagingRoot, { mode: 0o755 });
     const staging = await fsSafeRoot(stagingRoot, { mkdir: false, mode: 0o644, durable: false });
-    const files = new Map<string, Buffer | string>();
-    files.set("package.json", `${JSON.stringify(project.packageJson, null, 2)}\n`);
+    const files = new Map<string, { bytes: Buffer | string; mode?: number }>();
+    files.set("package.json", { bytes: `${JSON.stringify(project.packageJson, null, 2)}\n` });
     const templateMarkdown = await readSelectedProjectFile(project.root, "CLAW.md");
     assertValidatedBytes("CLAW.md", templateMarkdown, project.template.snapshot.manifest);
-    files.set("CLAW.md", templateMarkdown);
+    files.set("CLAW.md", { bytes: templateMarkdown });
     if (project.license) {
       const license = await readSelectedProjectFile(project.root, "LICENSE");
       assertValidatedBytes("LICENSE", license, project.license);
-      files.set("LICENSE", license);
+      files.set("LICENSE", { bytes: license });
     }
     if (project.template.packageBootstrap) {
-      const bootstrap = await readSelectedProjectFile(project.root, "BOOTSTRAP.md");
+      const bootstrap = await readSelectedProjectFile(
+        project.root,
+        "BOOTSTRAP.md",
+        MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      );
       assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.template.packageBootstrap);
-      files.set("BOOTSTRAP.md", bootstrap);
-    }
-    if (project.template.openClawProfile) {
-      const profileSnapshot = project.template.snapshot.openClawProfile;
-      if (!profileSnapshot) {
-        throw new TemplateProjectError(
-          "project_invalid",
-          "Validated OpenClaw profile is missing its source snapshot.",
-        );
-      }
-      const profile = await readSelectedProjectFile(project.root, profileSnapshot.sourcePath);
-      assertValidatedBytes(profileSnapshot.sourcePath, profile, profileSnapshot);
-      files.set(profileSnapshot.sourcePath, profile);
+      files.set("BOOTSTRAP.md", { bytes: bootstrap });
     }
     for (const source of project.template.snapshot.workspaceSources) {
       const bytes = await readSelectedProjectFile(project.root, source.sourcePath);
       assertValidatedBytes(source.sourcePath, bytes, source);
-      files.set(source.sourcePath, bytes);
+      files.set(source.sourcePath, { bytes });
+    }
+
+    for (const source of project.template.snapshot.bundledSources ?? []) {
+      const current = await snapshotTemplateDependencyDirectory({
+        rootDir: project.root,
+        path: source.path,
+      });
+      if (current.digest !== source.snapshot.digest) {
+        throw new TemplateProjectError(
+          "project_changed_during_build",
+          "Bundled dependency changed after validation.",
+        );
+      }
+      for (const file of source.snapshot.files) {
+        const path = `${source.path}/${file.path}`;
+        const bytes = await readSelectedProjectFile(project.root, path);
+        assertValidatedBytes(path, bytes, file);
+        files.set(path, { bytes, mode: file.executable ? 0o755 : 0o644 });
+      }
     }
 
     const fileNames = [...files.keys()].toSorted((left, right) =>
@@ -139,7 +156,8 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
     );
     for (const fileName of fileNames) {
       await mkdir(join(stagingRoot, dirname(fileName)), { recursive: true, mode: 0o755 });
-      await staging.create(fileName, files.get(fileName) as Buffer | string);
+      const file = files.get(fileName)!;
+      await staging.create(fileName, file.bytes, { mode: file.mode ?? 0o644 });
     }
     const tarInputNames = fileNames.map((fileName) =>
       fileName.startsWith("@") ? `./${fileName}` : fileName,

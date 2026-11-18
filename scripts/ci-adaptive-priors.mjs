@@ -21,9 +21,16 @@ const positive = (value) =>
   /^[1-9][0-9]*$/u.test(String(value)) && Number.isSafeInteger(Number(value));
 const time = (value) => typeof value === "string" && Number.isFinite(Date.parse(value));
 
+class PriorRestoreError extends Error {
+  constructor(reason, status = null) {
+    super(reason);
+    this.status = status;
+  }
+}
+
 function requirePrior(condition, reason) {
   if (!condition) {
-    throw new Error(reason);
+    throw new PriorRestoreError(reason);
   }
 }
 
@@ -48,7 +55,7 @@ async function readJson(
   });
   if (!response.ok) {
     await response.body?.cancel();
-    throw new Error("metadata-unavailable");
+    throw new PriorRestoreError("metadata-unavailable", response.status);
   }
   const chunks = [];
   let size = 0;
@@ -144,6 +151,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
     },
     candidates: [],
     fallbackReasons: [],
+    restoreFailure: null,
   };
   const token = env.GITHUB_TOKEN;
   if (
@@ -160,6 +168,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
   const fetchImpl = options.fetchImpl ?? fetch;
   const read = (endpoint) => readJson(fetchImpl, token, repository, endpoint, deadline);
   const comparisons = new Map();
+  let stage = "consumer-run";
   try {
     const current = await read(
       `actions/runs/${bundle.consumer.runId}/attempts/${bundle.consumer.runAttempt}`,
@@ -176,6 +185,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
     );
     bundle.cutoffAt = current.created_at;
     const cutoff = Date.parse(current.created_at);
+    stage = "prior-run-list";
     const listing = await read(
       "actions/workflows/ci.yml/runs?event=schedule&branch=main&status=completed&per_page=5",
     );
@@ -201,6 +211,7 @@ export async function restoreCiAdaptivePriors(options = {}) {
       ) {
         continue;
       }
+      stage = "prior-artifact-list";
       const artifacts = await read(`actions/runs/${run.id}/artifacts?per_page=100`);
       requirePrior(
         Array.isArray(artifacts.artifacts) && artifacts.total_count === artifacts.artifacts.length,
@@ -378,8 +389,19 @@ export async function restoreCiAdaptivePriors(options = {}) {
     if (!bundle.candidates.length) {
       bundle.fallbackReasons.push("no-eligible-prior");
     }
-  } catch {
+  } catch (error) {
     bundle.fallbackReasons.push("restore-unavailable");
+    // Keep only our own reason codes and status, never remote bodies or transport messages.
+    bundle.restoreFailure = {
+      stage,
+      reason:
+        error instanceof PriorRestoreError
+          ? error.message
+          : error instanceof SyntaxError
+            ? "invalid-metadata"
+            : "request-failed",
+      status: error instanceof PriorRestoreError ? error.status : null,
+    };
   }
   bundle.restoredAt = new Date().toISOString();
   bundle.fallbackReasons = [...new Set(bundle.fallbackReasons)];
@@ -400,6 +422,9 @@ async function main() {
     writeFileSync(temporary, JSON.stringify(bundle), { flag: "wx", mode: 0o600 });
     renameSync(temporary, output);
     console.log(`[adaptive-ci] restored ${bundle.candidates.length} prior observations`);
+    if (bundle.restoreFailure) {
+      console.warn("[adaptive-ci] prior restore failed; tests unchanged:", bundle.restoreFailure);
+    }
   } finally {
     rmSync(temporary, { force: true });
   }

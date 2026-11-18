@@ -25,12 +25,12 @@ import type { AuthProfileRowRead } from "../agents/auth-profiles/types.js";
 import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
-import * as embeddedStateLock from "../infra/embedded-state-lock.js";
-import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
 import {
   sanitizeHostExecEnv,
   withHostExecInheritedEnvOmitted,
 } from "../infra/host-env-security.js";
+import * as processSignalBridge from "../infra/process-signal-bridge.js";
+import { captureNativeSignalBridge } from "../infra/process-signal-bridge.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -75,9 +75,9 @@ describe("agent exec stored auth", () => {
         started.resolve();
         return pendingRows.promise;
       });
-      const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+      const createSignalBridge = processSignalBridge.createProcessSignalBridge;
       const signals = captureNativeSignalBridge(createSignalBridge);
-      vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+      vi.spyOn(processSignalBridge, "createProcessSignalBridge").mockImplementationOnce(
         signals.create,
       );
       const runAgent = vi.fn(async () => success());
