@@ -1572,9 +1572,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it.each(["hybrid", "github"])(
-    "gates Gateway method workers without changing complete coverage (%s)",
-    (runnerBackend) => {
+  it.each([
+    { runnerBackend: "hybrid", compactMode: "push" as const },
+    { runnerBackend: "github", compactMode: "push" as const },
+    { runnerBackend: "github", compactMode: "pull-request" as const },
+  ])(
+    "bounds Gateway method files and workers without losing coverage ($runnerBackend/$compactMode)",
+    ({ runnerBackend, compactMode }) => {
       const owner = "agentic-gateway-methods";
       const configs = new Set([
         configPath("gateway-methods"),
@@ -1587,13 +1591,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
 
       const jobs = bundleTests({
-        compactMode: "push",
+        compactMode,
         runnerBackend,
         includeReleaseOnlyPluginShards: false,
         includeReleaseOnlyRuntimeTests: true,
       });
       const groups = jobs.flatMap(jobGroups);
       expect(groups.length).toBeGreaterThan(0);
+      if (runnerBackend === "github") {
+        expectEvery(groups, (group) => requiredPatterns(group).length <= 96);
+      }
       expectSameEntries(groups.flatMap(optionalPatterns), [
         ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
         ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
@@ -2165,6 +2172,37 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(isPolicyTestOwnedPath(lookalike), lookalike).toBe(false);
       expect(resolvePolicyTestTargets([lookalike]), lookalike).toEqual([]);
     }
+  });
+
+  it("keeps full-dispatch Gateway chunks off neighboring hosted rows", () => {
+    const jobs = bundleTests({
+      runnerBackend: "github",
+      compactMode: "pull-request",
+      includeReleaseOnlyPluginShards: false,
+      includeReleaseOnlyToolingShards: true,
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+      includeProofTests: true,
+    });
+    expect(jobs.length).toBeLessThanOrEqual(96);
+    const gateway = jobs
+      .flatMap(jobGroups)
+      .filter((group) => /^agentic-gateway-methods(?:-hosted-\d+)?$/u.test(group.shard_name));
+    expect(gateway.length).toBeGreaterThan(0);
+    expectEvery(gateway, (group) => requiredPatterns(group).length <= 96);
+    for (const job of jobs) {
+      if (
+        job.groups.some((group) => gateway.includes(group) && requiredPatterns(group).length > 32)
+      ) {
+        expect(job.groups).toHaveLength(1);
+        expect(job.planConcurrency).toBe(1);
+        expect(workers(job.groups[0]!)).toBe("2");
+      }
+    }
+    expectSameEntries(gateway.flatMap(optionalPatterns), [
+      ...listMatchedTestFiles(createGatewayMethodsVitestConfig({})),
+      ...listMatchedTestFiles(createGatewayMethodsIsolatedVitestConfig({})),
+    ]);
   });
 
   it("bounds Gateway cache collections without dropping or repeating owner files", () => {
