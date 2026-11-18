@@ -54,6 +54,7 @@ suite.define(() => {
           const notice = page.locator(".new-session-page__blocked-submit");
           const frame = page.locator(".new-session-page__composer");
           const bounds = await frame.boundingBox();
+          const inputBounds = await composer.boundingBox();
           const stableBounds =
             width === 390 ? { x: bounds?.x, width: bounds?.width, height: bounds?.height } : bounds;
           expect(await start.isDisabled()).toBe(true);
@@ -78,7 +79,7 @@ suite.define(() => {
           expect(await notice.count()).toBe(0);
           expect(await composer.inputValue()).toBe(message);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-          expect(await frame.boundingBox()).toMatchObject(stableBounds!);
+          expect(await composer.boundingBox()).toEqual(inputBounds);
           await composer.press("Enter");
           await waitForCommittedChatRoute(page);
           const creates = await gateway.getRequests("sessions.create");
