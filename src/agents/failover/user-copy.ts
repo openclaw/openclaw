@@ -20,6 +20,7 @@ import {
   ERROR_DETAILS_HINT,
   ERROR_PREFIX_RE,
 } from "./assistant-request-failure-copy.js";
+import { formatBillingErrorMessage, renderBillingErrorDetail } from "./billing-error-detail.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   AUTH_PROFILE_COOLDOWN_ERROR_CODE,
@@ -40,6 +41,8 @@ import {
   type ProviderRequestFacet,
 } from "./request-error-facets.js";
 import type { FailoverClassification, FailoverReason } from "./signal.js";
+
+export { formatBillingErrorMessage } from "./billing-error-detail.js";
 
 const RATE_LIMIT_ERROR_USER_MESSAGE =
   "⚠️ The AI service needs a short break. Please try again in a few minutes.";
@@ -81,27 +84,6 @@ const PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE =
 const PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
-
-/** Format billing copy with optional provider/model and credential context. */
-export function formatBillingErrorMessage(
-  provider?: string,
-  model?: string,
-  authMode?: string,
-): string {
-  const providerName = provider?.trim();
-  const modelName = model?.trim();
-  const providerLabel =
-    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
-  const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
-  if (isSubscriptionAuth) {
-    return `⚠️ ${providerLabel ?? "API provider"} returned a billing error — check your account for subscription or usage limits, then try again.`;
-  }
-  return providerLabel
-    ? `⚠️ ${providerLabel} returned a billing error — check your account's balance and usage limits before trying again.`
-    : "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.";
-}
-
-const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {
   const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
@@ -323,6 +305,9 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
+  if (renderBillingErrorDetail(trimmed) === trimmed) {
+    return trimmed;
+  }
   for (const format of [
     formatCommandErrorForUser,
     formatExecDeniedUserMessage,
@@ -350,7 +335,7 @@ export function renderSanitizedUserFacingText(
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
     return reason === "billing"
-      ? BILLING_ERROR_USER_MESSAGE
+      ? formatBillingErrorMessage(undefined, undefined, undefined, trimmed)
       : renderRateLimitOrOverloadedCopy({ reason, raw: trimmed });
   }
   // Labeled HTTP statuses require the full grammar; keep provider retry detail above.
@@ -535,7 +520,7 @@ export function renderRateLimitReplyCopy(
   }
 
   if (attempts.some((attempt) => attempt.reason === "billing") || params.reason === "billing") {
-    return BILLING_ERROR_USER_MESSAGE;
+    return renderBillingReplyCopy({ ...params, rawError: params.message });
   }
   if (attempts.length === 0) {
     if (params.reason === "rate_limit" && isPeriodicUsageLimitErrorMessage(providerMessage)) {
@@ -581,9 +566,13 @@ export function renderBillingReplyCopy(params: {
   provider?: string;
   model?: string;
   authMode?: string;
+  rawError?: string;
   attempts?: readonly ReplyFallbackAttempt[];
 }): string {
   const attempts = params.attempts ?? [];
+  const detail = attempts.length
+    ? attempts.find((attempt) => attempt.reason === "billing")?.error
+    : params.rawError;
   const billingFailure =
     attempts.length > 0
       ? attempts.find(
@@ -599,8 +588,9 @@ export function renderBillingReplyCopy(params: {
         billingFailure.provider,
         billingFailure.model,
         billingFailure.authMode,
+        detail,
       )
-    : BILLING_ERROR_USER_MESSAGE;
+    : formatBillingErrorMessage(undefined, undefined, undefined, detail);
 }
 
 export function renderMissingApiKeyReplyCopy(params?: {

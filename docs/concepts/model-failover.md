@@ -456,6 +456,13 @@ The value is a TTL in milliseconds. `0` or unset disables the cache. Positive va
 
 Billing/credit failures (for example "insufficient credits" / "credit balance too low") are treated as failover-worthy. OpenClaw marks the credential as **disabled** for ten minutes initially and rotates to the next eligible profile/provider.
 
+When a provider says a request requires more credits or fewer `max_tokens`, the
+reply preserves the option to reduce the maximum output tokens. This means the
+requested budget exceeds the available credit or spending allowance, not
+necessarily that the account has no credit. Explicit key spending limits receive
+key-limit guidance; other billing failures retain balance and usage-limit guidance.
+These messages do not reduce token limits or add retries automatically.
+
 Configured inline API keys cannot retry during an active disable window. After the window expires, they become eligible again. Another billing failure starts a new ten-minute window. Stored auth profiles can also recover through bounded primary-provider checks during a disable window. Recharging does not itself clear persisted state, and upgrading leaves an already-active window at its existing deadline.
 
 <Note>

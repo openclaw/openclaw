@@ -70,6 +70,25 @@ describe("failover user copy", () => {
     }
   });
 
+  it.each([
+    [
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 217003 tokens, but can only afford 134896.",
+      "Reduce the maximum output tokens",
+    ],
+    ["403 Key limit exceeded", "key has reached its spending limit"],
+    ["402 insufficient credits", "credit balance and usage limits"],
+  ])(
+    "retains distinct billing remedies through fallback and normalization: %s",
+    (error, expected) => {
+      const text = billingCopy({
+        attempts: [{ provider: "openrouter", model: "fixture", reason: "billing", error }],
+      });
+      expect(text).toContain(expected);
+      expect(sanitizedCopy(text, { errorContext: true })).toBe(text);
+      expect(text).not.toMatch(/ran out|zero balance/);
+    },
+  );
+
   it("renders provider-safe missing-key guidance", () => {
     expect(missingKeyCopy({ provider: "openai", providerGuidance: true })).toContain(
       "openclaw configure",
