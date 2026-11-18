@@ -9,7 +9,6 @@ import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import "./notification-agents.css";
 
 export type NotificationAgentCatalog = Pick<
   AgentCapability["state"],
@@ -50,7 +49,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
       })
       .join(", ");
   };
-  const summary = () =>
+  const summary = createMemo(() =>
     props.agentIds === undefined
       ? t("configView.notifications.inheritAgents", {
           agents: props.inheritedAgentIds?.length
@@ -59,7 +58,8 @@ export function NotificationAgentsRow(props: AgentRowProps) {
         })
       : props.agentIds.length
         ? names(props.agentIds)
-        : t("configView.notifications.allAgents");
+        : t("configView.notifications.allAgents"),
+  );
   return (
     <>
       <SettingsRow
@@ -67,7 +67,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
         control={
           <button
             type="button"
-            class="btn notification-agents__trigger"
+            class="btn"
             disabled={props.disabled}
             aria-label={t("configView.notifications.chooseAgents")}
             title={summary()}
@@ -84,7 +84,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
               props.onLoadAgents?.();
             }}
           >
-            <span>{summary()}</span>
+            <span class="picker-select__label">{summary()}</span>
             <Icon name="chevronDown" />
           </button>
         }
@@ -165,7 +165,6 @@ function AgentSelectionDialog(
     <ModalDialog
       open
       label={t("configView.notifications.chooseAgents")}
-      class="notification-agents-modal"
       onOpenChange={(open) => {
         if (!open && !saving()) {
           props.onClose();
@@ -178,7 +177,7 @@ function AgentSelectionDialog(
       }}
     >
       <form
-        class="oc-dialog notification-agents"
+        class="oc-dialog"
         onSubmit={(event) => {
           event.preventDefault();
           submit();
@@ -228,10 +227,10 @@ function AgentSelectionDialog(
               value={query()}
               onInput={(event) => setQuery(event.currentTarget.value)}
             />
-            <div class="notification-agents__options">
+            <div>
               <For each={rows()} keyed={(row) => row.id}>
                 {(row) => (
-                  <label class="notification-agents__option">
+                  <label class="settings-row">
                     <Checkbox
                       checked={props.selection.ids.includes(row().id)}
                       disabled={
@@ -249,9 +248,9 @@ function AgentSelectionDialog(
                         })
                       }
                     />
-                    <span>
-                      <strong>{row().name}</strong>{" "}
-                      <small>
+                    <span class="settings-row__text">
+                      <span class="settings-row__title">{row().name}</span>{" "}
+                      <small class="settings-row__desc">
                         {row().available
                           ? row().id
                           : t("configView.notifications.savedAgentUnavailable")}
