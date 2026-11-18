@@ -1,12 +1,12 @@
-import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-replay.js";
+import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
+import { stripThoughtSignatures } from "../thinking-signatures.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
-import { stripThoughtSignatures } from "./bootstrap.js";
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 export const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";

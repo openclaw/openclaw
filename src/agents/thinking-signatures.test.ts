@@ -1,6 +1,5 @@
-// Covers bootstrap stripping of invalid thought-signature fields.
 import { describe, expect, it } from "vitest";
-import { stripThoughtSignatures } from "./bootstrap.js";
+import { stripThoughtSignatures } from "./thinking-signatures.js";
 
 describe("stripThoughtSignatures", () => {
   it("preserves thinkingSignature while still stripping invalid thought signatures", () => {

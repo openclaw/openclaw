@@ -12,7 +12,7 @@ import {
 import {
   replaceCompactionReplayWindowFactContent,
   resolveCompactionReplayWindow,
-} from "../../../packages/ai/src/transports/provider-compaction-replay.js";
+} from "../../../packages/ai/src/transports/provider-compaction-replay-kernel.js";
 import { isSilentAssistantFromFacts } from "../../shared/chat-message-content.js";
 import {
   GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT,

@@ -1,5 +1,6 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
+import type { SessionTranscriptActiveContextReadOptions } from "./session-accessor.sqlite-active-context-read.js";
 import type { SessionCompactionPreparation } from "./session-history-read.types.js";
 import type {
   SessionTranscriptHydrationWorkerRequest,
@@ -79,8 +80,8 @@ async function readTranscriptHydration(
   consume: SessionTranscriptHydrationConsumer | undefined,
   control: WorkerTaskControl,
 ): Promise<SessionTranscriptHydrationWorkerResult> {
-  const { readSessionTranscriptBoundedActiveContextCore, readSessionTranscriptCompactionPlan } =
-    await import("./session-accessor.sqlite-active-context.js");
+  const { readSessionTranscriptCompactionPlanInTransaction } =
+    await import("./session-accessor.sqlite-active-context-read.js");
   const { readSessionCompactionPreparation, streamSessionTranscriptHydration } =
     await import("./session-transcript-hydration.worker.js");
   if (request.limits) {
@@ -103,10 +104,8 @@ async function readTranscriptHydration(
     let residentRows: Array<{ rawSeq: number; serializedBytes: number }> | undefined;
     let compaction: SessionCompactionPreparation | undefined;
     let sequences: number[] = [];
-    const options: Parameters<typeof readSessionTranscriptBoundedActiveContextCore>[1] = {
+    const options: SessionTranscriptActiveContextReadOptions = {
       ...request.limits,
-      readOnly: true,
-      resolvedScope: request.resolvedScope,
       onRead: (projection, rows, messagePresence) => {
         sequences = rows.map((row) => row.rawSeq);
         if (!projection.hasUnindexedPrefix) {
@@ -142,14 +141,21 @@ async function readTranscriptHydration(
         throw new Error("Compaction transcript hydration requires its host channel");
       }
       return streamSessionTranscriptHydration(request, consume, control, (database) => {
-        const snapshot = readSessionTranscriptCompactionPlan(request.target, {
-          ...options,
-          transaction: database,
-        });
+        const snapshot = readSessionTranscriptCompactionPlanInTransaction(
+          database,
+          request.resolvedScope,
+          options,
+        );
         return { snapshot, sequences, ...facts() };
       });
     }
-    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, options);
+    const { readSessionTranscriptBoundedActiveContextCore } =
+      await import("./session-accessor.sqlite-active-context.js");
+    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
+      ...options,
+      readOnly: true,
+      resolvedScope: request.resolvedScope,
+    });
     return { kind: "bounded" as const, snapshot, ...facts() };
   }
   if (!consume) {

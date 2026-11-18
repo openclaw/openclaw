@@ -11,12 +11,12 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import type { ToolPairingMessageFact } from "../../../packages/agent-core/src/harness/session/tool-pairing-facts.js";
 import { collectToolPairingMessageFact } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { readOpenAIResponsesItemRecoveryAnchor } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
+import { readOpenAIResponsesItemRecoveryAnchor } from "../../../packages/ai/src/transports/openai-responses-compaction-checkpoint.js";
+import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import {
-  replaceCompactionReplayOwnerContent,
   createCompactionReplayWindowFactCollector,
   type CompactionReplayWindowFact,
-} from "../../../packages/ai/src/transports/provider-compaction-replay.js";
+} from "../../../packages/ai/src/transports/provider-compaction-replay-kernel.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 import { readModelPromptProjection } from "../../sessions/user-turn-transcript.message.js";
 import {

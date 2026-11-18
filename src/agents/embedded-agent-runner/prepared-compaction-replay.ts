@@ -1,6 +1,6 @@
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { buildSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
-import { preserveCompactionReplayWindow } from "../../../packages/ai/src/transports/provider-compaction-replay.js";
+import { preserveCompactionReplayWindow } from "../../../packages/ai/src/transports/provider-compaction-replay-kernel.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import { sanitizeSessionMessagesImages } from "../embedded-agent-helpers/images.js";

@@ -33,7 +33,7 @@ import { createCompactionReplacementProjector } from "../../agents/sessions/comp
 import { estimateCompactedRequestTokens } from "../../agents/sessions/compaction/request-budget.js";
 import type { SessionEntry, SessionHeader } from "../../agents/sessions/session-manager-types.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import { readSessionTranscriptCompactionPlan } from "./session-accessor.sqlite-active-context.js";
+import { readSessionTranscriptCompactionPlanInTransaction } from "./session-accessor.sqlite-active-context-read.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type {
@@ -148,32 +148,33 @@ export async function readPreparedSessionCompaction(
         const facts = new Map<number, PreparedCompactionEntryFact>();
         let header: SessionHeader | undefined;
         let selected: number[] = [];
-        const snapshot = readSessionTranscriptCompactionPlan(request.target, {
-          compaction: true,
-          readOnly: true,
-          resolvedScope: request.resolvedScope,
-          transaction: database,
-          onEntry: (event, row) => {
-            control.throwIfCancelled();
-            extracted.extractedRows += 1;
-            extracted.extractedBytes += row.serializedBytes;
-            if (isIndexedSessionEntry(event)) {
-              facts.set(
-                row.rawSeq,
-                collectPreparedCompactionEntryFact(
-                  event,
+        const snapshot = readSessionTranscriptCompactionPlanInTransaction(
+          database,
+          request.resolvedScope,
+          {
+            compaction: true,
+            onEntry: (event, row) => {
+              control.throwIfCancelled();
+              extracted.extractedRows += 1;
+              extracted.extractedBytes += row.serializedBytes;
+              if (isIndexedSessionEntry(event)) {
+                facts.set(
                   row.rawSeq,
-                  operation.kind === "plan" ? operation.replay : undefined,
-                ),
-              );
-            } else {
-              header ??= findSessionTranscriptHeader([event]);
-            }
+                  collectPreparedCompactionEntryFact(
+                    event,
+                    row.rawSeq,
+                    operation.kind === "plan" ? operation.replay : undefined,
+                  ),
+                );
+              } else {
+                header ??= findSessionTranscriptHeader([event]);
+              }
+            },
+            onRead: (_projection, rows) => {
+              selected = rows.map((row) => row.rawSeq);
+            },
           },
-          onRead: (_projection, rows) => {
-            selected = rows.map((row) => row.rawSeq);
-          },
-        });
+        );
         if (header) {
           assertCurrentSessionTranscriptHeader(header);
         }

@@ -14,7 +14,7 @@ import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-d
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import { prepareTranscriptEventReadQuery } from "./session-accessor.sqlite-read.js";
-import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import { toDatabaseOptions } from "./session-accessor.sqlite-scope-helpers.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import type { SessionPreparedCompactionInput } from "./session-compaction-prepared.types.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";

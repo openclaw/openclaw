@@ -8,9 +8,11 @@ import {
   isReasoningOnlyLengthAssistantTurn,
   isStreamErrorFallbackContent,
 } from "../../../packages/ai/src/replay-turn-classification.js";
-import { readOpenAIResponsesItemRecoveryAnchor } from "../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
-import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
-import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-replay.js";
+import { readOpenAIResponsesItemRecoveryAnchor } from "../../../packages/ai/src/transports/openai-responses-compaction-checkpoint.js";
+import {
+  isCompactionReplayCheckpoint,
+  replaceCompactionReplayOwnerContent,
+} from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";

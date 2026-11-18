@@ -3,7 +3,7 @@ import {
   normalizeOpenAIResponsesFunctionCallId,
   shouldNormalizeOpenAIResponsesToolCallId,
 } from "../../../packages/ai/src/transports/openai-responses-tool-call-id-shape.js";
-import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-replay.js";
+import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { rewriteToolResultIds } from "../tool-call-id.js";
 

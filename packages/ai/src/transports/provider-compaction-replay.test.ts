@@ -16,16 +16,20 @@ import {
 import type { OpenAIResponsesCompactionOutput } from "./openai-responses-compaction-window.js";
 import { createReplayState } from "./openai-responses-prompt-observer.test-support.js";
 import { convertResponsesMessages } from "./openai-responses-replay-internal.js";
+import { replaceCompactionReplayOwnerContent as replaceOwnerContent } from "./provider-compaction-checkpoint.js";
 import {
-  CompactionReplayRefreshRequiredError,
   createCompactionReplayWindowFactCollector,
   preserveCompactionReplayWindow as preserveWindow,
-  replaceCompactionReplayOwnerContent as replaceOwnerContent,
   replaceCompactionReplayWindowFactContent,
+  resolveCompactionReplayWindow,
+} from "./provider-compaction-replay-kernel.js";
+import {
+  CompactionReplayRefreshRequiredError,
+  createCompactionReplayWindowFactCollector as createTransportFactCollector,
+  preserveCompactionReplayWindow as preserveTransportWindow,
   requiresCompactionReplayRefresh as requiresRefresh,
   resolveCompactionReplayEligibility as resolveEligibility,
   resolveCompactionReplayPressure as measurePressure,
-  resolveCompactionReplayWindow,
 } from "./provider-compaction-replay.js";
 
 const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
@@ -251,6 +255,27 @@ describe("bounded compaction replay projection", () => {
 
 describe("payload-free compaction checkpoint facts", () => {
   const collect = createCompactionReplayWindowFactCollector(model, replayIdentity);
+
+  it("keeps transport adapters and payload-free readers on the same checkpoint decisions", () => {
+    const owner = createAssistant([text("covered")], 1);
+    const retained = createAssistant([], 0);
+    captureWindow(retained, [{ type: "compaction", encrypted_content: "opaque-window" }]);
+    const refresh = createAssistant([], 0);
+    refresh.providerReplay.type = "openai-responses-retained-compaction";
+    delete refresh.providerReplay.replayIndex;
+    const suppressed = createAssistant([], 0);
+    suppressCompaction(suppressed, model, replayIdentity);
+    const invalid = createAssistant([], -1);
+    const latest = { role: "user" as const, content: "latest", timestamp: 1 };
+    const transportCollect = createTransportFactCollector(model, replayIdentity);
+    for (const checkpoint of [owner, retained, refresh, suppressed, invalid]) {
+      expect(collect(checkpoint)).toEqual(transportCollect(checkpoint));
+      const source = [owner, checkpoint, latest];
+      expect(project(source, [latest])).toEqual(
+        preserveTransportWindow(source, [latest], model, replayIdentity),
+      );
+    }
+  });
 
   it("selects and projects the same owner using facts with no replay or message payload", () => {
     const owner = createAssistant([text("covered owner payload")], 1);

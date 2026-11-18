@@ -79,3 +79,27 @@ export function stripCompactionReplayCheckpoint(message: AssistantMessage): Assi
   delete replaySafeMessage.providerReplay;
   return replaySafeMessage;
 }
+
+/** Preserve the covered prefix and reindex checkpoints after known content removals. */
+export function replaceCompactionReplayOwnerContent(
+  message: AssistantMessage,
+  content: AssistantMessage["content"],
+): AssistantMessage {
+  const next = { ...message, content };
+  const replay = message.providerReplay;
+  if (!isCompactionReplayCheckpoint(replay)) {
+    return next;
+  }
+  if (replay.type === "openai-responses-retained-compaction") {
+    // This checkpoint is anchored to retained user turns, not assistant content indexes.
+    return next;
+  }
+  const replayIndex = replay.replayIndex ?? 0;
+  const rewrite = resolveCompactionReplayContentRewrite(message.content, content, replayIndex);
+  if (rewrite.type === "strip") {
+    return stripCompactionReplayCheckpoint(next);
+  }
+  return rewrite.type === "keep"
+    ? next
+    : { ...next, providerReplay: { ...replay, replayIndex: rewrite.replayIndex } };
+}

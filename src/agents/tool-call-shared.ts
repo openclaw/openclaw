@@ -12,7 +12,7 @@ import {
   collectToolPairingMessageFact,
   makeMissingToolResult,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { replaceCompactionReplayOwnerContent } from "../../packages/ai/src/transports/provider-compaction-replay.js";
+import { replaceCompactionReplayOwnerContent } from "../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 import { collectToolCallIds, isContractToolCallBlock } from "../shared/tool-block-contract.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";

@@ -34,6 +34,7 @@ import {
   readTranscriptStatsSync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import { readSessionTranscriptCompactionPlanInTransaction } from "./session-accessor.sqlite-active-context-read.js";
 import {
   readSessionTranscriptBoundedActiveContextCore as boundedContext,
   readSessionTranscriptCompactionPlan,
@@ -50,6 +51,7 @@ import {
   withRecentActiveTranscriptEvents as visitRecentEvents,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
+import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-read-scope.js";
 import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -414,70 +416,92 @@ function observePayloadAcquisition(
   };
 }
 
-it("collects range-rendering facts during the selector's sole payload decode", async ({
-  scope,
-}) => {
-  const marker = "single-compaction-decode:";
-  await persist(
-    scope,
-    Array.from({ length: 16 }, (_, index) =>
-      user(`row-${index}`, index === 0 ? null : `row-${index - 1}`, marker + "漢🦞".repeat(1024)),
-    ),
-  );
-  await waitProjection(scope);
-  const { events, ...expected } = boundedContext(scope, { compaction: true });
-  const messages = convertToLlm(
-    events
-      .filter(isIndexedSessionEntry)
-      .flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
-  );
-  const facts: ConversationMessageFact[] = [];
-  let payloadRows = 0;
-  let parseBytes = 0;
-  const { db } = openOpenClawAgentDatabase(scope);
-  const acquisition = observePayloadAcquisition(db, marker, () => {
-    const actual = readSessionTranscriptCompactionPlan(scope, {
-      compaction: true,
-      onEntry: (event, row) => {
-        payloadRows++;
-        parseBytes += row.serializedBytes - 1;
-        if (isIndexedSessionEntry(event) && event.type === "message") {
-          for (const message of convertToLlm([event.message])) {
-            facts.push(collectConversationMessageFact(message, facts.length));
-          }
-        }
-      },
-    });
-    expect(actual).toEqual(expected);
-  });
-  expect({ payloadRows, parseBytes }).toEqual({
-    payloadRows: events.length,
-    parseBytes: serializedBytes(events) - events.length,
-  });
-  expect(acquisition.decodedRows).toBe(16);
-  expect(JSON.stringify(facts)).not.toContain(marker);
-  for (const start of [0, 3, 12]) {
-    const rendered = renderConversationEntriesWithinBudget(
-      collectConversationRangeDescriptors(facts.slice(start)),
-      4000,
-      (descriptor, variant) => {
-        const message = messages[descriptor.source];
-        assert(message);
-        return serializeConversationEntry(message, descriptor, variant);
-      },
+it.for(["host", "borrowed"] as const)(
+  "collects %s range-rendering facts during the selector's sole payload decode",
+  async (owner, { scope }) => {
+    const marker = "single-compaction-decode:";
+    await persist(
+      scope,
+      Array.from({ length: 16 }, (_, index) =>
+        user(`row-${index}`, index === 0 ? null : `row-${index - 1}`, marker + "漢🦞".repeat(1024)),
+      ),
     );
-    expect(rendered).toEqual(serializeConversationWithinBudget(messages.slice(start), 4000));
-  }
-  expect(() =>
-    readSessionTranscriptCompactionPlan(scope, {
-      compaction: true,
-      onEntry: () => {
-        throw new Error("stop extraction");
-      },
-    }),
-  ).toThrow("stop extraction");
-  expect(db.isTransaction).toBe(false);
-});
+    await waitProjection(scope);
+    const { events, ...expected } = boundedContext(scope, { compaction: true });
+    const messages = convertToLlm(
+      events
+        .filter(isIndexedSessionEntry)
+        .flatMap((entry) => (entry.type === "message" ? [entry.message] : [])),
+    );
+    const facts: ConversationMessageFact[] = [];
+    let payloadRows = 0;
+    let parseBytes = 0;
+    const database = openOpenClawAgentDatabase(scope);
+    const { db } = database;
+    const resolved = resolveSqliteTranscriptReadScope(scope);
+    const readPlan = (options: Parameters<typeof readSessionTranscriptCompactionPlan>[1]) =>
+      owner === "host"
+        ? readSessionTranscriptCompactionPlan(scope, options)
+        : runSqliteReadSnapshotSync(db, () => {
+            const value = readSessionTranscriptCompactionPlanInTransaction(
+              database,
+              resolved,
+              options,
+            );
+            expect(db.isTransaction).toBe(true);
+            return value;
+          });
+    if (owner === "borrowed") {
+      expect(() =>
+        readSessionTranscriptCompactionPlanInTransaction(database, resolved, { compaction: true }),
+      ).toThrow("Transcript projection lost its borrowed transaction");
+    }
+    const acquisition = observePayloadAcquisition(db, marker, () => {
+      const actual = readPlan({
+        compaction: true,
+        onEntry: (event, row) => {
+          expect(db.isTransaction).toBe(true);
+          payloadRows++;
+          parseBytes += row.serializedBytes - 1;
+          if (isIndexedSessionEntry(event) && event.type === "message") {
+            for (const message of convertToLlm([event.message])) {
+              facts.push(collectConversationMessageFact(message, facts.length));
+            }
+          }
+        },
+      });
+      expect(actual).toEqual(expected);
+    });
+    expect({ payloadRows, parseBytes }).toEqual({
+      payloadRows: events.length,
+      parseBytes: serializedBytes(events) - events.length,
+    });
+    expect(acquisition.decodedRows).toBe(16);
+    expect(JSON.stringify(facts)).not.toContain(marker);
+    for (const start of [0, 3, 12]) {
+      const rendered = renderConversationEntriesWithinBudget(
+        collectConversationRangeDescriptors(facts.slice(start)),
+        4000,
+        (descriptor, variant) => {
+          const message = messages[descriptor.source];
+          assert(message);
+          return serializeConversationEntry(message, descriptor, variant);
+        },
+      );
+      expect(rendered).toEqual(serializeConversationWithinBudget(messages.slice(start), 4000));
+    }
+    expect(() =>
+      readPlan({
+        compaction: true,
+        onEntry: () => {
+          expect(db.isTransaction).toBe(true);
+          throw new Error("stop extraction");
+        },
+      }),
+    ).toThrow("stop extraction");
+    expect(db.isTransaction).toBe(false);
+  },
+);
 
 it("does not acquire unrelated excluded history while selecting background dependencies", async ({
   scope,
