@@ -4,7 +4,7 @@ import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
 import {
-  controlRealtimeVoiceAgentRun,
+  controlTalkAgentRun,
   type RealtimeVoiceAgentControlResult,
 } from "../../../talk/agent-run-control.js";
 import { withClientVoiceSessionSettlement } from "../../../talk/client-voice-session-lifecycle.js";
@@ -501,10 +501,10 @@ export function prepareTalkRealtimeRelayAgentControl(
   });
   return async () => {
     assertCurrent();
-    const result = await controlRealtimeVoiceAgentRun({
+    const result = await controlTalkAgentRun({
       sessionKey: canonicalKey,
       runTarget,
-      getToolAuthorityOverlay: () => {
+      getToolAuthorityOverlayAsync: () => {
         if (!session.getToolAuthorityOverlay) {
           throw new Error("Relay steering caller authority is unavailable");
         }

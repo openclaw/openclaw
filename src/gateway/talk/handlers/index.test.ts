@@ -123,7 +123,7 @@ const mocks = vi.hoisted(() => ({
   sendTalkTranscriptionRelayAudio: vi.fn(),
   stopTalkTranscriptionRelaySession: vi.fn(),
   chatSend: vi.fn(),
-  controlRealtimeVoiceAgentRun: vi.fn(),
+  controlTalkAgentRun: vi.fn(),
   steerTalkRealtimeRelayAgentRun: vi.fn(),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveRealtimeVoiceAgentContextInstructions: vi.fn(async (): Promise<string> => ""),
@@ -220,8 +220,9 @@ vi.mock("../../../talk/provider-internal.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Handler routing tests stub active-run control instead of driving live session runs.
 vi.mock("../../../talk/agent-run-control.js", () => ({
-  controlRealtimeVoiceAgentRun: mocks.controlRealtimeVoiceAgentRun,
+  controlTalkAgentRun: mocks.controlTalkAgentRun,
 }));
 
 vi.mock("../../../talk/agent-consult-runtime.js", async (importOriginal) => {
@@ -1752,7 +1753,7 @@ describe("talk.session unified handlers", () => {
       };
     });
     mocks.steerTalkRealtimeRelayAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
-    mocks.controlRealtimeVoiceAgentRun.mockResolvedValue(steeredRun("session:main"));
+    mocks.controlTalkAgentRun.mockResolvedValue(steeredRun("session:main"));
   });
 
   it("creates and drives a realtime gateway-relay session through the unified API", async () => {
@@ -2795,7 +2796,7 @@ describe("talk.client.steer handler", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.controlRealtimeVoiceAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
+    mocks.controlTalkAgentRun.mockResolvedValue(steeredRun("agent:main:main"));
   });
 
   it.each([
@@ -2811,7 +2812,7 @@ describe("talk.client.steer handler", () => {
       params: { sessionKey: "agent:main:main", text, ...(mode ? { mode } : {}) },
       context: await createSteerContext("conn-2"),
     });
-    expect(mocks.controlRealtimeVoiceAgentRun).not.toHaveBeenCalled();
+    expect(mocks.controlTalkAgentRun).not.toHaveBeenCalled();
     expectRespondError(respond, {
       code: ErrorCodes.INVALID_REQUEST,
       ...(message ? { message } : {}),
