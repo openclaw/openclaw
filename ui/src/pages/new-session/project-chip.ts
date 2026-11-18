@@ -41,6 +41,8 @@ export function resolveProjectChip(params: {
   const folder = params.folder.trim();
   const selectedProject = params.projects.find((project) => project.id === params.projectId);
   const normalizedQuery = params.projectQuery.trim().toLowerCase().normalize("NFC");
+  // Recent holds five rows; the workspace row takes one when present.
+  const recentLimit = params.workspace ? 4 : 5;
   return {
     label: params.freshWorkspace
       ? t("newSession.newWorkspace")
@@ -51,7 +53,9 @@ export function resolveProjectChip(params: {
           : folder
             ? pathDisplayName(folder)
             : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
-    recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
+    recents: normalizedQuery
+      ? []
+      : params.recents.filter((recent) => recent.kind !== "project").slice(0, recentLimit),
     showWorkspace:
       !normalizedQuery ||
       pathDisplayName(params.workspace).toLowerCase().normalize("NFC").includes(normalizedQuery),
