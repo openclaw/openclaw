@@ -34,6 +34,7 @@ import {
 import { runReplyAgent } from "./agent-runner-run.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import type { runPreparedReply } from "./get-reply-run.js";
+import { registerTelegramRequesterAuthorityCases } from "./get-reply-run.telegram-requester.test-support.js";
 import {
   baseParams,
   createProviderSurface,
@@ -105,6 +106,7 @@ export function registerPendingRequesterAuthorityCases({
     },
   );
 
+  registerTelegramRequesterAuthorityCases(runPrepared);
   it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
     const params = turn("Please inspect this", {
       ...createProviderSurface("x"),
