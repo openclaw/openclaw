@@ -703,8 +703,8 @@
   margin-left: 3px;
 }
 
-.cron-editor input[aria-invalid="true"],
-.cron-editor textarea[aria-invalid="true"] {
+.cron-editor-layout input[aria-invalid="true"],
+.cron-editor-layout textarea[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
@@ -1462,6 +1462,10 @@
 
   .cron-page[data-view="edit"] .cron-tab-panel {
     gap: var(--space-4);
+  }
+
+  .cron-page--create[data-view="edit"] .cron-detail-header {
+    margin-top: 0;
   }
 
   .cron-prompt--editing .cron-prompt__tray,

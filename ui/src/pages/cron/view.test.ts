@@ -60,7 +60,7 @@ describe("cron view editor", () => {
       editingJob: job,
       form: { ...DEFAULT_CRON_FORM, payloadKind: "agentTurn", payloadText },
     });
-    const preview = getElement(container, ".cron-editor .chat-text", HTMLDivElement);
+    const preview = getElement(container, ".cron-prompt-preview .chat-text", HTMLDivElement);
     expect(preview.querySelector("h1")?.textContent).toBe("Weekly digest");
     expect(preview.querySelector("li strong")?.textContent).toBe("Garden");
     expect(preview.querySelector('script, [onerror], a[href^="javascript:"]')).toBeNull();
@@ -73,7 +73,9 @@ describe("cron view editor", () => {
       { payloadKind: "script" as const, payloadLocked: true, payloadText: "# Source" },
       { payloadKind: "command" as const, payloadLocked: true, payloadText: "# Source" },
     ]) {
-      expect((await renderEditor(form)).querySelector(".cron-editor .chat-text")).toBeNull();
+      expect(
+        (await renderEditor(form)).querySelector(".cron-prompt-preview .chat-text"),
+      ).toBeNull();
     }
   });
 
