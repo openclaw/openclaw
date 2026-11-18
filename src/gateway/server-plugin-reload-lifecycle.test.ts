@@ -26,7 +26,6 @@ function fixture() {
   // Ports expose a read-only view; cases that need no unavailable plugins clear this owner.
   const unavailablePluginIds = new Set(["missing"]);
   const ports: Ports = {
-    previousReloadStatus: undefined,
     channels: {
       release: vi.fn(() => {
         order.push("channels");
@@ -38,23 +37,9 @@ function fixture() {
         order.push("dispose");
       }),
     },
-    finishReloadInputs: {
-      changedPluginIds: new Set(["plugin"]),
-      runtime: {
-        kernel: {
-          pluginRuntimeGeneration: {
-            finishReload: vi.fn(() => {
-              order.push("finish");
-            }),
-          },
-        },
-        pluginRuntime: {
-          registry: createTestRegistry(),
-        },
-      },
-      restartDrainSignal: new AbortController().signal,
-      log: { error: vi.fn() },
-    },
+    finishReload: vi.fn((kind: string) => {
+      order.push(`finish:${kind}`);
+    }),
   };
   return { order, lifecycle, ports, unavailablePluginIds };
 }
@@ -85,7 +70,7 @@ it("waits for recovery disposal before publishing exact health or returning", as
   try {
     await withinTest(entered.promise, signal);
     expect(settled).toBe(false);
-    expect(f.order).toEqual(["resource", "channels", "finish", "dispose"]);
+    expect(f.order).toEqual(["resource", "channels", "finish:applied", "dispose"]);
   } finally {
     release.resolve();
   }
@@ -96,9 +81,7 @@ it("waits for recovery disposal before publishing exact health or returning", as
     unavailablePluginIds: ["missing"],
   });
   await expect(f.lifecycle.run(f.ports, async () => "second")).rejects.toThrow("already ran");
-  expect(
-    f.ports.finishReloadInputs.runtime.kernel.pluginRuntimeGeneration.finishReload,
-  ).toHaveBeenCalledOnce();
+  expect(f.ports.finishReload).toHaveBeenCalledOnce();
 });
 
 it.each(["resource", "channels", "finish"] as const)(
@@ -114,7 +97,7 @@ it.each(["resource", "channels", "finish"] as const)(
       f.ports.channels.release = fail;
     }
     if (where === "finish") {
-      f.ports.finishReloadInputs.runtime.kernel.pluginRuntimeGeneration.finishReload = fail;
+      f.ports.finishReload = fail as Ports["finishReload"];
     }
     const result = f.lifecycle.run(f.ports, async (facts) => {
       facts.phase = "dispose";
@@ -332,17 +315,8 @@ it("fails private replay health when committed retirement rejects but finalizers
       throw failure;
     }),
   ).rejects.toBe(failure);
-  expect(f.order).toEqual(["channels", "finish", "dispose"]);
-  expect(
-    f.ports.finishReloadInputs.runtime.kernel.pluginRuntimeGeneration.finishReload,
-  ).toHaveBeenCalledWith(
-    undefined,
-    "applied",
-    f.ports.finishReloadInputs.changedPluginIds,
-    f.ports.finishReloadInputs.runtime.pluginRuntime.registry,
-    f.ports.recovery.unavailablePluginIds,
-    f.ports.finishReloadInputs.log.error,
-  );
+  expect(f.order).toEqual(["channels", "finish:applied", "dispose"]);
+  expect(f.ports.finishReload).toHaveBeenCalledWith("applied");
   await expect(f.lifecycle.replacementOperation.settled).resolves.toEqual({
     kind: "failed",
     committed: true,
@@ -366,11 +340,8 @@ it.each([false, true])(
         throw failure;
       }),
     ).rejects.toBe(failure);
-    expect(f.order).toEqual(["channels", "finish", "dispose"]);
-    expect(
-      vi.mocked(f.ports.finishReloadInputs.runtime.kernel.pluginRuntimeGeneration.finishReload).mock
-        .calls[0]?.[1],
-    ).toBe("restored");
+    expect(f.order).toEqual(["channels", "finish:restored", "dispose"]);
+    expect(vi.mocked(f.ports.finishReload).mock.calls[0]?.[0]).toBe("restored");
     await expect(f.lifecycle.replacementOperation.settled).resolves.toEqual({
       kind: channelRecoveryFailed ? "failed" : "restored",
       committed: false,
