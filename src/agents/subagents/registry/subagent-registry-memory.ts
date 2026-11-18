@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import {
   bindGatewayContextResolver,
@@ -246,8 +247,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   readLookup = new SubagentSessionReadLookup();
   readonly workIndex = new SubagentRunWorkIndex();
   private readonly completionAuthorities = new Map<object, SubagentCompletionCustody>();
-  // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
-  private readonly requiredCompletionEntries = new WeakSet<object>();
   private readonly retiredCompletionEntries = new WeakSet<object>();
 
   retireCompletionAuthority(observed: SubagentRunRecord): void {
@@ -275,8 +274,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   ) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
-    // A committed row with captured custody stays restricted if its source expires before publication.
-    this.requiredCompletionEntries.add(key);
     source.assertCurrent();
     if (
       this.retiredCompletionEntries.has(key) &&
@@ -285,7 +282,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       throw new Error("Subagent completion retry no longer owns its source");
     }
     this.releaseCompletionAuthority(entry);
-    this.requiredCompletionEntries.add(key);
     this.retiredCompletionEntries.delete(key);
     const custody: SubagentCompletionCustody = {
       authority: source,
@@ -353,15 +349,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (current && !isSameSubagentRunOwner(current, entry)) {
       throw new Error("Subagent completion runtime owner is no longer active");
     }
-    if (this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(entry))) {
-      throw new Error("Subagent completion requester store was retired");
-    }
-    if (
-      this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) &&
-      !isSameSubagentRunOwner(this.get(entry.runId), entry)
-    ) {
-      throw new Error("Subagent completion authority is no longer active");
-    }
   }
 
   runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
@@ -373,8 +360,13 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (!custody && isSubagentCancellationNotice(entry)) {
       return run();
     }
-    if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
-      throw new Error("Subagent completion authority is no longer active");
+    try {
+      custody?.authority.assertCurrent();
+    } catch (error) {
+      if (isOperatorAuthorityUnavailable(error)) {
+        throw error;
+      }
+      return run();
     }
     return custody ? custody.authority.run(run) : run();
   }
@@ -396,12 +388,6 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         batch: observed.map((entry) => this.currentValue(entry)),
         custodies: this.completionAuthorities,
         assertCurrent: (entry) => this.assertCompletionEntryCurrent(entry),
-        assertRetainedAuthority: (entry) => {
-          const key = getSubagentRunRuntimeKey(entry);
-          if (this.requiredCompletionEntries.has(key) && !this.completionAuthorities.has(key)) {
-            throw new Error("Subagent completion authority is no longer active");
-          }
-        },
         runWithAuthority: (entry, work) => this.runWithCompletionAuthority(entry, work),
       },
       run,
@@ -430,13 +416,8 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         }
       }
     }
-    const previousKey = getSubagentRunRuntimeKey(previous);
-    const nextKey = getSubagentRunRuntimeKey(next);
-    if (this.retiredCompletionEntries.has(previousKey)) {
-      this.retiredCompletionEntries.add(nextKey);
-    }
-    if (this.requiredCompletionEntries.has(previousKey)) {
-      this.requiredCompletionEntries.add(nextKey);
+    if (this.retiredCompletionEntries.has(getSubagentRunRuntimeKey(previous))) {
+      this.retiredCompletionEntries.add(getSubagentRunRuntimeKey(next));
     }
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
     if (!custody) {

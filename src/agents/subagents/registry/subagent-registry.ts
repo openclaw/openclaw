@@ -1,6 +1,5 @@
 import { getRuntimeConfig } from "../../../config/config.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
-import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -26,7 +25,6 @@ import {
   ANNOUNCE_EXPIRY_MS,
   GATEWAY_ADMISSION_RETRY_DELAY_MS,
 } from "./subagent-registry-helpers.js";
-import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
 import { subagentRegistryLog as log } from "./subagent-registry-lifecycle-log.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { createSubagentRegistryListener } from "./subagent-registry-listener.js";
@@ -154,17 +152,6 @@ const {
   settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
-function suspendReplacedNotificationsInBackground(): void {
-  void suspendReplacedStoreNotifications(subagentLifecycleController.options).catch(
-    (error: unknown) => {
-      log.warn("subagent notification retirement is deferred", { error });
-    },
-  );
-}
-registerSystemEventStoreOwner(
-  Symbol.for("openclaw.subagentNotifications"),
-  suspendReplacedNotificationsInBackground,
-);
 
 export function resumeSubagentRun(runId: string) {
   if (!runId) {

@@ -479,10 +479,6 @@ export async function blockSubagentCompletionDelivery(
     requesterBatch: _requesterBatch,
     ...request
   } = params;
-  if (params.storeReplaced) {
-    const current = currentCompletionOwner(subagentRuns, params.subagent);
-    subagentRuns.retireCompletionAuthority(current);
-  }
   const result = await mutateCompletion(
     [params.subagent],
     (rows) => {
@@ -501,7 +497,6 @@ export async function blockSubagentCompletionDelivery(
           applied === true &&
           (params.suspendedReason ||
             params.operatorAuthorityUnavailable ||
-            params.storeReplaced ||
             params.disposition === "permanent_failure")
         ) {
           // The durable outcome precedes releasing the completion input.
@@ -512,9 +507,7 @@ export async function blockSubagentCompletionDelivery(
   );
   if (
     result.applied &&
-    (params.storeReplaced ||
-      params.suspendedReason === "permanent_failure" ||
-      params.disposition === "permanent_failure")
+    (params.suspendedReason === "permanent_failure" || params.disposition === "permanent_failure")
   ) {
     await recordRequiredCompletionFailure(params.subagent, params.reason, params.requesterBatch);
   }

@@ -204,24 +204,24 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   it closes. Retiring the delivered child batch cannot revoke a still-running
   requester. A new direct user turn retires the automation entitlement, not the
   child batch’s separately retained completion source. Valid results can still
-  return under their original caller’s restrictions; they never borrow the new
-  turn’s identity or permissions.
+  return under live original custody or the System baseline; they never borrow
+  the new turn’s identity or permissions.
 - **Completion-source custody.** Registration retains the live operator source
-  separately from execution. Individual delivery and requester settlement use
-  that captured permission ceiling, not the async caller that later schedules
-  cleanup. Committed settlement, retirement, or source/Gateway revocation
-  releases it; provisional writes and same-task replacement cannot drop it.
-  Retained results do not retain usable authority after that release, and a
-  batch cannot combine incompatible operator sources. Cancellation-only batches
-  keep the existing cancellation caller's admission, rather than using the
-  revoked target to authorize a new turn. Mixed result/cancellation batches
-  require every original source to remain live and compatible. An explicit
-  delivery redrive captures its newly admitted caller while live and transfers
-  custody only after the new delivery generation commits; it does not reopen the
+  separately from execution. Individual delivery uses that live custody when
+  available, not the async caller that later schedules cleanup. A settlement batch
+  retains custody only when every member has the same live operator source and
+  permission ceiling. Missing, revoked, or mixed custody uses the System write-only
+  baseline; it does not refuse delivery or borrow a sibling's permissions.
+  Committed settlement, retirement, or source/Gateway revocation releases custody;
+  provisional writes and same-task replacement cannot drop it. Cancellation-only
+  notices without retained custody keep the independently admitted cancellation
+  caller. An explicit delivery redrive captures its newly admitted caller while live
+  and transfers custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
-  Settlement cohorts use the host-only binding to the requester chat as it is
-  now, also after a reset or a compaction successor. This lets a guest's own
+  Settlement cohorts use the host-only binding to the current requester agent and
+  session key, regardless of the recorded store path, also after a reset or a
+  compaction successor. This lets a guest's own
   yielded session resume under its existing session-write scope without granting
   `operator.write`. Copied request fields cannot supply the host-only binding.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
