@@ -113,7 +113,6 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "floorPositiveFiniteNumber",
       "isFutureDateTimestampMs",
       "nonNegativeSecondsToSafeMilliseconds",
-      "normalizeChunkLimit",
       "parseDateFirstTimestampMs",
       "parseDateStringTimestampMs",
       "parseFiniteNumber",
