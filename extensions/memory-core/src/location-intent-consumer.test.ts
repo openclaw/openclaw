@@ -137,6 +137,10 @@ describe("memory-core location.update consumer integration", () => {
     );
     await settleLocationIntentFiresForTest();
     expect(queuedTexts()[0]).toContain("Buy groceries when leaving lunch.");
+    // Privacy contract: the queued record must never carry the fix
+    // coordinates — it drains into model prompts on the next turn.
+    expect(queuedTexts()[0]).not.toMatch(/\d\.\d{4,}/);
+    expect(queuedTexts()[0]).toContain("Standing intent fired:");
     expect(api.logger.warn).not.toHaveBeenCalled();
     // Event-driven delivery: the APNs alert is attempted exactly once per fire.
     expect(sendNodeIntentAlertMock).toHaveBeenCalledTimes(1);

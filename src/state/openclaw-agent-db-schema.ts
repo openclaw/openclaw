@@ -122,6 +122,7 @@ import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
   withoutSessionEntrySnapshotsSchema,
 } from "./openclaw-agent-session-snapshots-schema.js";
+import { ensureStandingIntentsLocationColumns } from "./openclaw-agent-standing-intents-schema.js";
 import { migrateAgentStorageInTransaction } from "./openclaw-agent-storage-migration.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
 import {
@@ -318,6 +319,14 @@ function ensureAgentSchema(
       assertMigration();
       if (previousVersion < targetVersion) {
         interruptHistoricalPendingInputs(db, previousVersion);
+        // The canonical schema's idx_standing_intents_location references the
+        // additive location columns. A pre-location standing_intents table
+        // (any schema created before the location feature) lacks them, so
+        // canonical index repair and schema asserts below would fail with
+        // "no such column: trigger_kind" before the standing-intents ensure
+        // could ever run. Add the columns first; the ensure installs the
+        // index afterwards.
+        ensureStandingIntentsLocationColumns(db);
       }
       if (isEmptyDatabase && targetVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
         // Canonical creation has no legacy rows or definitions to converge or repair.

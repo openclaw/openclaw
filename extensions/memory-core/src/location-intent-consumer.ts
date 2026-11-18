@@ -94,7 +94,13 @@ async function evaluateFix(
         if (!target) {
           continue;
         }
-        const firedText = `Standing intent fired (${nodeId} ${payload.lat.toFixed(5)},${payload.lon.toFixed(5)}): ${intent.description}`;
+        // The queued record is an in-session reminder for the next turn. It
+        // must NOT embed the fix coordinates: the routed queue drains into
+        // ordinary reply preparation, so any coordinates here would send
+        // precise device location to the configured model — beyond the
+        // purpose the user consented to when arming the fence. The alert and
+        // the queue record both carry the intent description only.
+        const firedText = `Standing intent fired: ${intent.description}`;
         const enqueued = enqueueRoutedSystemEvent(firedText, { agentId, sessionKey: target });
         // A failed wake stays visible; the one-shot row remains done, so the
         // miss is not silently retried into a duplicate delivery later.
