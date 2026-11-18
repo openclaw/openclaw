@@ -70,6 +70,8 @@ final class IOSChatViewModelOwner {
         }
         // Resolving the default agent replaces its transport without changing the draft's owner.
         let draft = isDefaultAgentHydration ? self.viewModel?.input : nil
+        let previousPresentation = self.ownerID == ownerID && controlUIInputs != nil &&
+            self.controlUIInputs == controlUIInputs ? self.viewModel : nil
         // Initial route hydration changes transport, but the same draft keeps its native editor.
         if draft == nil { self.presentationID = UUID() }
         self.viewModel?.detachTransport()
@@ -108,6 +110,7 @@ final class IOSChatViewModelOwner {
                 }
             },
             diagnosticsLog: { message in GatewayDiagnostics.log(message) })
+        if let previousPresentation { viewModel.inheritTranscriptPresentation(from: previousPresentation) }
         self.viewModel = viewModel
         if let draft { viewModel.input = draft }
         self.hydratedComposerModel = draft != nil ? viewModel.composerModelResolver() : nil

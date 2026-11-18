@@ -164,7 +164,7 @@ export async function commitRequesterTransfer(
           postimages.set(draft.runId, draft);
         }
       }
-      return { value: drafts, postimages };
+      return { value: drafts, postimages, removalReason: "requester_transfer" };
     },
     {
       runs: options.runs,

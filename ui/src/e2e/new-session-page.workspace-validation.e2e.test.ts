@@ -159,7 +159,7 @@ async function expectPendingNewSession(page: Page, message: string) {
   await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
   await pollLocatorText(submittedPrompt).toContain(message);
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
   expect(await messageInput(page).isVisible()).toBe(false);
 }
@@ -868,7 +868,11 @@ suite.define(() => {
           "agents.list": {
             agents: [
               agent("main", "Main", WORKSPACE),
-              agent("research", "Research", "/home/peter/research"),
+              {
+                ...agent("research", "Research", "/home/peter/research"),
+                description: "Researches project decisions.",
+                recommendedPrompts: ["Research a decision"],
+              },
             ],
             defaultId: "main",
             mainKey: "main",
@@ -901,6 +905,10 @@ suite.define(() => {
         "#new-session-project-trigger .new-session-page__trigger-label",
       );
       await pollLocatorText(folderLabel).toBe("research");
+      await pollLocatorText(page.locator(".agent-chat__description")).toBe(
+        "Researches project decisions.",
+      );
+      await pollLocatorText(page.locator(".agent-chat__suggestion")).toBe("Research a decision");
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=main&catalog=claude");
@@ -908,6 +916,10 @@ suite.define(() => {
       });
 
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await expect.poll(() => page.locator(".agent-chat__description").count()).toBe(0);
+      expect(await page.locator(".agent-chat__welcome").textContent()).not.toContain(
+        "Research a decision",
+      );
       await pollLocatorText(folderLabel).toBe("openclaw");
       await messageInput(page).fill("retarget this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();

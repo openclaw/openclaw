@@ -1,11 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  normalizeGitPathForFilesystem,
-  requireGitCommandOutput,
-  type GitCommandOptions,
-} from "../../infra/git-exec.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { requireGitCommandOutput, type GitCommandOptions } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
@@ -26,6 +23,7 @@ import {
   commandError,
   worktreePathExists,
   requireGit,
+  requireGitPath,
   resolveGitMetadataPath,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
@@ -78,7 +76,11 @@ function assertOwned(options: WorktreeFilesystemOptions) {
 function gitOptions(options: WorktreeFilesystemOptions) {
   return {
     signal: options.signal,
-    beforeRun: () => assertOwned(options),
+    beforeRun: composeSessionSourceAssertion([options.commitGuard], (assertSource) => {
+      options.signal?.throwIfAborted();
+      assertSource();
+    }),
+    stateOwnerPath: options.workerAuthority?.stateOwnerPath,
     killProcessTree: true,
   };
 }
@@ -126,7 +128,13 @@ async function prepareTemplate(options: CheckoutOptions) {
         .update(`${options.commonDir}\n${options.worktreeRoot}\n${git.sourceOnly}`)
         .digest("hex");
       if (options.useWarmPool !== false && !options.deferGitCheckout) {
-        const existing = await readTemplateAsync(options.env, cacheKey, options.commitGuard);
+        const existing = await readTemplateAsync(
+          options.env,
+          cacheKey,
+          options.commitGuard,
+          undefined,
+          options.workerAuthority,
+        );
         if (
           existing?.status === "ready" &&
           existing.backend === backend.id &&
@@ -542,12 +550,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     const destinationIndex = await timeWorktreePreparationPhase("indexLocate", async () =>
       path.resolve(
         options.repoRoot,
-        normalizeGitPathForFilesystem(
-          await requireGit(
-            options.repoRoot,
-            ["--git-dir", gitDir, "rev-parse", "--git-path", "index"],
-            gitOptions(options),
-          ),
+        await requireGitPath(
+          options.repoRoot,
+          ["--git-dir", gitDir, "rev-parse", "--git-path", "index"],
+          gitOptions(options),
         ),
       ),
     );

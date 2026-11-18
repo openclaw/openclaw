@@ -52,72 +52,44 @@ export async function dispatchCronNotification(
 }
 
 /**
- * Starts the repair turn in the conversation that owns the job. Request failures are logged;
- * terminal one-shots send their fallback alert, while recurring jobs retain the repair deadline.
+ * Sends the failure notice to the agent in the conversation that owns the job. If that turn
+ * cannot start, the plain alert goes to the job's route instead.
  */
 async function requestFailureRepair(
   state: CronServiceState,
   notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
 ): Promise<void> {
   const jobId = notification.job.id;
-  const job = state.store?.jobs.find((candidate) => candidate.id === jobId);
-  const owner = job?.owner;
+  const owner = state.store?.jobs.find((candidate) => candidate.id === jobId)?.owner;
   const sessionKey = owner?.sessionKey?.trim();
-  const repairId = notification.job.state.lastFailureNotificationId;
-  const repairAtMs = job?.state.failureAlertIncident?.repair?.atMs;
-  const lifecycleGeneration = state.lifecycleGeneration;
-  const recordSettlement = async () => {
-    if (repairAtMs === undefined || !repairId) {
-      return;
-    }
-    const settledAtMs = state.deps.nowMs();
-    await locked(state, async () => {
-      if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
-        return;
-      }
-      const storeKey = state.deps.storeKey;
-      await runCronRuntimeMutation({
-        context: captureOpenClawStateWorkerContext(),
-        type: "cron.recordFailureRepairSettlement",
-        input: { storeKey, jobId, repairId, repairAtMs, settledAtMs },
-        snapshot: {},
-        assertCurrent() {
-          if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
-            throw new Error("Cron failure-repair owner retired");
-          }
-        },
-        publish(committed) {
-          if (committed.job) {
-            noteCronJobsStoreCommit(storeKey);
-            applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });
-          }
-        },
-      });
-    });
+  const cycle: FailureAlertCycle = {
+    jobId,
+    alertAtMs: notification.job.state.lastFailureAlertAtMs,
+    runAtMs: notification.job.state.lastRunAtMs,
+    notificationId: notification.job.state.lastFailureNotificationId,
+    lifecycleGeneration: state.lifecycleGeneration,
   };
   const failed = async (err: unknown) => {
     state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
-    if (notification.fallback) {
-      await dispatchCronNotification(state, {
-        ...notification.fallback,
-        routing: notification.routing,
-      });
-    }
+    await dispatchCronNotification(state, {
+      ...notification.fallback,
+      routing: notification.routing,
+    });
   };
-  if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
-    await failed(new Error("Missing failure repair runner, owner session, or repair ID"));
+  if (!sessionKey || !cycle.notificationId || !state.deps.runCronFailureRepair) {
+    await failed(new Error("Missing failure repair runner, owner session, or notice ID"));
     return;
   }
   void state.deps
     .runCronFailureRepair({
       jobId,
-      repairId,
+      repairId: cycle.notificationId,
       timeoutMs: state.deps.failureRepairTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
       agentId: owner?.agentId,
       sessionKey,
       message: notification.text,
     })
-    .then(recordSettlement)
+    .then(() => recordFailureAlertOutcome(state, cycle, { delivered: true, status: "delivered" }))
     .catch(failed)
     .catch((err: unknown) =>
       state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair fallback failed"),

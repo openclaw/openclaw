@@ -159,6 +159,9 @@ if(args[0]==="update") {
   const config=loadConfig();
   if(typeof setup(config)!=="string"||!config.meta?.migrations?.modelPolicyAllowlist)
     reject("fixture config invalid");
+  if(Object.hasOwn(config.plugins?.entries?.codex?.config?.appServer??{},"loopDetectionPreToolUseRelay"))
+    reject("retired loopDetectionPreToolUseRelay config requires Doctor");
+  if(config.syntheticInvalid)reject("fixture config invalid");
   if(scenario==="timer-change-during-validation") {
     put("timer-active","inactive");event("timer.changed-during-validation");
   }
@@ -674,6 +677,21 @@ function writeRelease(fixture, releaseSha = sha, schemaVersions = fixture.schema
   );
   writeFileSync(join(release, "dist", "control-ui", "assets", "app.js"), "fixture();\n");
   writeFileSync(join(release, "dist", "index.js"), gatewaySource(fixture), { mode: 0o755 });
+  mkdirSync(join(release, "dist/infra"), { recursive: true });
+  // Candidate I/O contract; the native worker separately proves actual Doctor transforms.
+  writeFileSync(join(release, "dist/infra/update-config-projection.worker.js"), `
+const fs=require('node:fs'),{createHash}=require('node:crypto');
+const configPath=process.env.OPENCLAW_CONFIG_PATH,raw=fs.readFileSync(configPath,'utf8'),config=JSON.parse(raw);
+fs.appendFileSync(${JSON.stringify(fixture.eventlog)},'config.project\\n');
+if(config.syntheticInvalid)throw Error('fixture config invalid');
+const server=config.plugins?.entries?.codex?.config?.appServer,changedPaths=[];
+if(server&&Object.hasOwn(server,'loopDetectionPreToolUseRelay')) {
+  delete server.loopDetectionPreToolUseRelay;
+  changedPaths.push('plugins.entries.codex.config.appServer.loopDetectionPreToolUseRelay');
+}
+process.stdout.write(JSON.stringify({configPath,originalSha256:createHash('sha256').update(raw).digest('hex'),config,
+  changedPaths,changes:changedPaths.map(path=>'Removed retired '+path)}));
+`);
   mkdirSync(join(release,"dist/plugin-sdk"),{recursive:true});
   writeFileSync(join(release,"dist/plugin-sdk/model-ref-parse.js"), `
 export function splitTrailingAuthProfile(raw) {

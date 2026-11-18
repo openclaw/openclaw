@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
 import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as snapshots from "../../infra/sqlite-transaction.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { retainSessionColdNavigationInTransaction } from "./session-cold-storage-navigation.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { mutateSessionColdTranscriptInWorker } from "./session-cold-storage-worker.js";
@@ -14,6 +20,7 @@ import {
   currentId,
   historicalId,
 } from "./session-cold-storage.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 vi.mock("./session-cold-storage-codec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-cold-storage-codec.js")>()),
@@ -59,6 +66,45 @@ function largestEventBytes(events: Fixture["original"]["events"]) {
       return Math.max(bytes, Buffer.byteLength(event.event_json));
     }, 0);
 }
+
+it("bounds navigation cleanup while preserving every untouched event", () =>
+  withFixture(async (fixture) => {
+    await replaceTranscriptEvents(
+      fixture.scope,
+      Array.from({ length: 8 }, (_, index) => ({
+        type: "message",
+        id: `large-${index}`,
+        parentId: index ? `large-${index - 1}` : null,
+        message: { role: "user", content: "synthetic repeated payload ".repeat(100) },
+      })),
+    );
+    await waitForSessionTranscriptIndexReconcile(fixture.options);
+    const database = fixture.database();
+    const read = () =>
+      database
+        .prepare("SELECT * FROM transcript_events WHERE session_id = ? ORDER BY seq")
+        .all(historicalId);
+    const before = read();
+    expect(before).toHaveLength(8);
+    expect(before.every((row) => row.navigation_json !== null)).toBe(true);
+    const work = trackSqliteStatementExecutions(database, ["update"], (sql) =>
+      sql.startsWith('update "transcript_events"') ? "update" : null,
+    );
+    try {
+      runOpenClawAgentWriteTransaction(
+        (current) => retainSessionColdNavigationInTransaction(current, historicalId, -1, 3),
+        fixture.options,
+      );
+      expect(work.counts.update).toBe(1);
+      expect(read()).toEqual(
+        before.map((row, index) =>
+          index < 3 ? Object.assign({}, row, { event_json: null, event_zstd: null }) : row,
+        ),
+      );
+    } finally {
+      work.restore();
+    }
+  }));
 
 it("defers event size reads until preparation and rejects oversized bytes before snapshotting", () =>
   withFixture(async (fixture) => {

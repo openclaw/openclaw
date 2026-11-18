@@ -6,7 +6,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { emptyPairingSnapshot } from "./pairing.test-support.ts";
-import { ChannelConfig } from "./view.config.tsx";
+import { ChannelConfig, ChannelConfigActions } from "./view.config.tsx";
 import { renderChannelDetail } from "./view.detail.tsx";
 import { resolveChannelDisplayState } from "./view.shared.tsx";
 import {
@@ -506,6 +506,49 @@ function renderWhatsAppConfigForm(
   return { container, onShowAdvancedSettings };
 }
 
+describe("channel config access", () => {
+  it.each([true, false])("matches editing and save controls to admin access: %s", (canAdmin) => {
+    const props = channelProps({ whatsapp: whatsappStatus });
+    props.canAdmin = canAdmin;
+    props.config.configSchema = CHANNEL_TIER_SCHEMA;
+    props.config.configUiHints = CHANNEL_TIER_HINTS;
+    props.config.configForm = { channels: { whatsapp: { enabled: true, timeoutMs: 5000 } } };
+    props.showAdvancedSettings = true;
+    props.configEdits = { whatsapp: [{ path: ["channels", "whatsapp", "enabled"], value: false }] };
+    props.onConfigPatch = vi.fn();
+    props.onConfigDiscard = vi.fn();
+    const container = document.createElement("div");
+    renderChannelView(
+      (viewProps: ChannelsProps) => (
+        <>
+          <ChannelConfig channelId="whatsapp" props={viewProps} />
+          <ChannelConfigActions channelId="whatsapp" props={viewProps} />
+        </>
+      ),
+      props,
+      container,
+    );
+    const inputs = [...container.querySelectorAll<HTMLInputElement>("input")];
+    expect(inputs.length).toBeGreaterThan(1);
+    expect(inputs.every((input) => input.disabled === !canAdmin)).toBe(true);
+    expect(
+      container.textContent?.includes("You can view channels, but only admins can change them."),
+    ).toBe(!canAdmin);
+    const save = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    expect(save.disabled).toBe(!canAdmin);
+    const discard = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Discard",
+    )!;
+    expect(discard.disabled).toBe(false);
+    discard.click();
+    expect(props.onConfigDiscard).toHaveBeenCalledExactlyOnceWith("whatsapp");
+    if (!canAdmin) {
+      inputs[0]!.click();
+      expect(props.onConfigPatch).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("channel config advanced tier", () => {
   it("hides advanced channel settings behind the disclosure by default", () => {
     const { container, onShowAdvancedSettings } = renderWhatsAppConfigForm(false);
@@ -617,7 +660,7 @@ describe("channel detail", () => {
     const detail = container.querySelector(".channels-detail")!;
 
     expect(detail.querySelector(heading)).not.toBeNull();
-    expect(text(detail, ".channels-detail__status .settings-status")).toBe("Not configured");
+    expect(detail.querySelector(".channels-detail__status .settings-status")).toBeNull();
     expect(detail.querySelector(probeButton)).not.toBeNull();
     expect(texts(detail, ".channels-detail__footer button")).toEqual(["Run setup"]);
     expect(detail.textContent).not.toContain("n/a");
@@ -656,6 +699,24 @@ describe("channel detail", () => {
     );
     expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
   });
+
+  it.each([false, true])(
+    "withholds channel health until a snapshot exists (retrying: %s)",
+    (loading) => {
+      const props = createProps(null);
+      props.channels.channelsLoading = loading;
+      props.channels.channelsError = "Status read failed";
+      const container = document.createElement("div");
+      renderChannelView(
+        renderChannelDetail,
+        { channelId: "telegram", label: "Telegram", props, onClose: () => {}, onSetup: () => {} },
+        container,
+      );
+      expect(container.querySelector(".channels-detail__status .settings-status")).toBeNull();
+      expect(text(container, ".channels-detail [role=alert]")).toBe("Status read failed");
+      expect(container.querySelector<HTMLButtonElement>(probeButton)?.disabled).toBe(loading);
+    },
+  );
 
   it("uses the list row's words for every state", () => {
     const state = (status: Record<string, unknown> | null) =>

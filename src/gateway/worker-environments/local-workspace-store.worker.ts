@@ -1,8 +1,14 @@
 import { deserialize } from "node:v8";
 import { inflateRawSync } from "node:zlib";
+import { assertSandboxStateOwnerPathCurrent } from "../../agents/sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import { assertWorktreeRegistryPredicates } from "../../agents/worktrees/registry-run-end.worker.js";
-import type { WorktreeRegistryPredicate } from "../../agents/worktrees/types.js";
+import type {
+  WorktreeRegistryPredicate,
+  WorktreeWorkerAuthority,
+} from "../../agents/worktrees/types.js";
 import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
@@ -17,6 +23,7 @@ import {
   pruneLocalWorkspaceLegacyBatchInDatabase,
   type LocalWorkspaceSweepCandidates,
 } from "./local-workspace-cas.kernel.js";
+import { warnOversizedMutation } from "./local-workspace-mutation-diagnostics.js";
 import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
 import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 
@@ -61,9 +68,15 @@ export const localWorkspaceOperations = {
       { database: open() },
     ),
   "localWorkspace.mutate": (
-    input: {
+    input: Pick<WorktreeWorkerAuthority, "workspaceEvidence" | "stateOwnerPath"> & {
       id: string;
       mutation: LocalWorkspaceMutation | Uint8Array;
+      journalPack?: Uint8Array;
+      diagnostic?: {
+        serializedBytes: number;
+        wireBytes: number;
+        correlation: Record<string, string>;
+      };
       preparationEpoch: number | undefined;
       leases: readonly OpenClawStateLeaseIdentity[];
       predicates?: readonly WorktreeRegistryPredicate[];
@@ -81,12 +94,29 @@ export const localWorkspaceOperations = {
     // current leases and registry predicates still gate the actual commit below.
     const mutation: LocalWorkspaceMutation =
       input.mutation instanceof Uint8Array
-        ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
+        ? (deserialize(resolveZstdCodec().decompress(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
         : input.mutation;
+    if (input.journalPack && mutation.kind === "update") {
+      mutation.patch.journal_pack = input.journalPack;
+    }
+    if (input.diagnostic) {
+      warnOversizedMutation(
+        mutation,
+        input.diagnostic.serializedBytes,
+        input.diagnostic.wireBytes,
+        input.diagnostic.correlation,
+      );
+    }
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
         const committed =
           mutateLocalWorkspaceProjection(db, input.id, mutation, input.preparationEpoch) ?? null;
+        for (const evidence of input.workspaceEvidence ?? []) {
+          assertWorkspaceFilesystemEvidence(evidence);
+        }
+        if (input.stateOwnerPath) {
+          assertSandboxStateOwnerPathCurrent(input.stateOwnerPath);
+        }
         assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leases, "commit");
         assertWorktreeRegistryPredicates(db, input.predicates);
         if (

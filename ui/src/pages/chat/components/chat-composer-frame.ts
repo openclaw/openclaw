@@ -40,7 +40,7 @@ import {
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
 import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
-import { createComposerKeyDownHandler } from "./chat-composer-keydown.ts";
+import { createComposerKeyDownHandler, stopRunFromEscape } from "./chat-composer-keydown.ts";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu-state.ts";
 import { resolveChatSlashCommandArgOptions, resolveComposerMenus } from "./chat-composer-menus.ts";
 import type { ComposerPrediction } from "./chat-composer-prediction.ts";
@@ -244,7 +244,8 @@ export function createChatComposerContext(
         ? "queue"
         : "steer"
       : undefined;
-  const showComposer =
+  // Expanded questions keep routine progress quiet without replacing the writing surface.
+  const showComposerProgress =
     !questionPanelProps ||
     questionPanelProps.model.nonBlocking === true ||
     questionPanelProps.model.requestedBySession !== undefined ||
@@ -659,8 +660,9 @@ export function createChatComposerContext(
     cancellationCaveat,
     sendShortcut,
     questionPanelProps,
-    showComposer,
+    showComposerProgress,
     handleKeyDown,
+    stopRunFromEscape: () => stopRunFromEscape({ state, props, showAbortableUi }),
     handleBeforeInput,
     handleInput,
     handleSelect,

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { definePluginEntry, type PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
-import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 
 const REVIEW_TIMEOUT_MS = 120_000;
 const RUN_CONTEXT_NAMESPACE = "advisor:admitted-run";
@@ -107,6 +106,26 @@ export default definePluginEntry({
             `advisor: review cancelled for session ${sessionKey}: reason=${String(cancel.reason)} runningMs=${Date.now() - startedAt}`,
           );
         } else {
+          // Codex exposes plain Errors here; match only its pinned /btw refusal sentences.
+          const skipped =
+            error instanceof Error
+              ? [
+                  [
+                    "the effective tool policy restricts Codex native tools for this session",
+                    "tool_policy",
+                  ],
+                  ["OpenClaw sandboxing is active for this session", "sandbox"],
+                  ["OpenClaw exec host=node is active for this session", "exec_host_node"],
+                ].find(([message]) =>
+                  error.message.startsWith(
+                    `Codex-native /btw side-question mode is unavailable because ${message}.`,
+                  ),
+                )?.[1]
+              : undefined;
+          if (skipped) {
+            api.logger.warn(`advisor: review skipped for session ${sessionKey}: ${skipped}`);
+            return;
+          }
           const reason =
             error instanceof Error && error.name === "TimeoutError" ? "timeout" : "fork_failed";
           api.logger.warn(`advisor: review failed for session ${sessionKey}: ${reason}`);
@@ -208,13 +227,8 @@ export default definePluginEntry({
       "before_agent_reply",
       (_event, ctx) => {
         // Hooks and the Gateway service use distinct registrations; run context carries admission.
-        // Only the main agent is reviewed: it sees its subagents' results and can redirect them.
-        if (
-          ctx.sessionKey &&
-          ctx.runId &&
-          ctx.trigger === "user" &&
-          !isSubagentSessionKey(ctx.sessionKey)
-        ) {
+        // Subagent runs dispatch with the "user" trigger too, so they are reviewed the same way.
+        if (ctx.sessionKey && ctx.runId && ctx.trigger === "user") {
           api.runContext.setRunContext({
             runId: ctx.runId,
             namespace: RUN_CONTEXT_NAMESPACE,
@@ -227,7 +241,7 @@ export default definePluginEntry({
 
     api.agent.events.registerAgentEventSubscription({
       id: "advisor-runs",
-      description: "Counts tool calls in main-agent user runs and reviews when a trigger is due.",
+      description: "Counts tool calls in user and subagent runs and reviews when a trigger is due.",
       streams: ["tool", "lifecycle", "codex_app_server.item"],
       phases: ["start", "result", "end", "error", "started", "completed"],
       payload: "metadata",

@@ -3,6 +3,7 @@ import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { currentSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import {
   parseStateLeaseProcessOwner,
   readStateLeaseProcessOwnerStatus,
@@ -17,7 +18,24 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
+import { assertSandboxStateOwnerPathCurrent } from "../sandbox/state-owner-path.js";
+import { assertWorkspaceFilesystemEvidence } from "../workspace-state-guard.js";
 import { retainedWorktreeTemplateKey, type WorktreeTemplateRecord } from "./template-registry.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
+
+type TemplateFilesystemAuthority = Pick<
+  WorktreeWorkerAuthority,
+  "workspaceEvidence" | "stateOwnerPath"
+>;
+
+function assertTemplateFilesystem(input: TemplateFilesystemAuthority | undefined): void {
+  for (const evidence of input?.workspaceEvidence ?? []) {
+    assertWorkspaceFilesystemEvidence(evidence);
+  }
+  if (input?.stateOwnerPath) {
+    assertSandboxStateOwnerPathCurrent(input.stateOwnerPath);
+  }
+}
 
 type TemplateDatabase = Pick<DB, "worktree_templates" | "state_leases">;
 const TEMPLATE_READER_SCOPE = "core:managed-worktrees:template-readers";
@@ -59,17 +77,32 @@ function worktreeTemplateMutation<Input, Output>(
   operationLabel: string,
   mutate: (db: EngineConnection, input: Input) => Output,
 ) {
-  return (input: Input, context: WorkerOperationContext): Output =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const result = mutate(db, input);
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-        return result;
-      },
-      openTemplateDatabase(context),
-      { operationLabel },
-    );
+  return (input: Input & TemplateFilesystemAuthority, context: WorkerOperationContext): Output => {
+    const owner = currentSqliteWorkerOperationAdmission.getStore()?.owner;
+    if (!owner) {
+      throw new Error("Template mutation requires its native operation");
+    }
+    const previous = owner.assertPhysicalSourceCurrent;
+    owner.assertPhysicalSourceCurrent = () => {
+      previous?.();
+      assertTemplateFilesystem(input);
+    };
+    try {
+      assertTemplateFilesystem(input);
+      return runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = mutate(db, input);
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          return result;
+        },
+        openTemplateDatabase(context),
+        { operationLabel },
+      );
+    } finally {
+      owner.assertPhysicalSourceCurrent = previous;
+    }
+  };
 }
 
 function hasTemplateReaders(db: EngineConnection, id: string): boolean {
@@ -106,9 +139,11 @@ function hasTemplateReaders(db: EngineConnection, id: string): boolean {
 
 export const worktreeTemplateReadOperations = {
   "worktrees.templates.read": (
-    { cacheKey, contentKey }: { cacheKey: string; contentKey?: string },
+    input: { cacheKey: string; contentKey?: string } & TemplateFilesystemAuthority,
     db,
   ) => {
+    assertTemplateFilesystem(input);
+    const { cacheKey, contentKey } = input;
     const row = tableExists(db, "worktree_templates")
       ? executeSqliteQuerySync(
           db,
@@ -138,29 +173,35 @@ export const worktreeTemplateReadOperations = {
       record: row ? rowToRecord(row) : undefined,
     };
   },
-  "worktrees.templates.has": (_input: undefined, db) => ({
-    type: "worktrees.templates.has" as const,
-    has:
-      tableExists(db, "worktree_templates") &&
-      executeSqliteQuerySync(
-        db,
-        kyselyFor(db).selectFrom("worktree_templates").select("cache_key").limit(1),
-      ).rows.length > 0,
-  }),
-  "worktrees.templates.list": (_input: undefined, db) => ({
-    type: "worktrees.templates.list" as const,
-    records: tableExists(db, "worktree_templates")
-      ? executeSqliteQuerySync(
+  "worktrees.templates.has": (input: TemplateFilesystemAuthority | undefined, db) => {
+    assertTemplateFilesystem(input);
+    return {
+      type: "worktrees.templates.has" as const,
+      has:
+        tableExists(db, "worktree_templates") &&
+        executeSqliteQuerySync(
           db,
-          kyselyFor(db)
-            .selectFrom("worktree_templates")
-            .selectAll()
-            .orderBy("last_used_at", "asc")
-            .orderBy("created_at", "asc")
-            .orderBy("id", "asc"),
-        ).rows.map(rowToRecord)
-      : [],
-  }),
+          kyselyFor(db).selectFrom("worktree_templates").select("cache_key").limit(1),
+        ).rows.length > 0,
+    };
+  },
+  "worktrees.templates.list": (input: TemplateFilesystemAuthority | undefined, db) => {
+    assertTemplateFilesystem(input);
+    return {
+      type: "worktrees.templates.list" as const,
+      records: tableExists(db, "worktree_templates")
+        ? executeSqliteQuerySync(
+            db,
+            kyselyFor(db)
+              .selectFrom("worktree_templates")
+              .selectAll()
+              .orderBy("last_used_at", "asc")
+              .orderBy("created_at", "asc")
+              .orderBy("id", "asc"),
+          ).rows.map(rowToRecord)
+        : [],
+    };
+  },
 } satisfies WorkerOperationHandlers<EngineConnection>;
 
 export const worktreeTemplateOperations = {

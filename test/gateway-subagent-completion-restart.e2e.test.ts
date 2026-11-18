@@ -27,10 +27,27 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
+it
+  .skipIf(process.platform === "win32")
+  .for([
+    "nested",
+    "captured",
+    "announcing",
+    "announcing-crash",
+    "private-announcing",
+    "private-announcing-crash",
+    "busy-requester",
+    "retrying-requester",
+    "unmarked-requester",
+    "stale-settle-requester",
+  ] as const)(
   "recovers session completion custody through a real Gateway restart (%s)",
   { timeout: 180_000 },
-  async (kind, { signal, onTestFailed }) => {
+  async (kind, { signal, onTestFailed, onTestFinished }) => {
+    const interruptAnnounce = kind.includes("announcing");
+    const privateContinuation = kind.startsWith("private-announcing");
+    const busyRequester = kind === "busy-requester";
+    const retryingRequester = kind === "retrying-requester";
     const rootKey = "agent:main:dashboard:restart-hub";
     let childKey: string | undefined;
     let siblingKey: string | undefined;
@@ -45,6 +62,11 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
     let childRunId: string | undefined;
     let capturedRunId: string | undefined;
     let finishCaptured: (() => void) | undefined;
+    let finishChild: (() => void) | undefined;
+    let announcing = false;
+    let completedReplies = 0;
+    let rootReceivedRecovery = false;
+    let resumedChildRequests = 0;
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
@@ -78,6 +100,7 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
             return;
           }
           if (text.includes("CUSTODY_ROOT_TASK")) {
+            rootReceivedRecovery ||= text.includes("Child runs do not resume independently.");
             const receipts = input.flatMap((item) =>
               isRecord(item) && item.type === "function_call_output"
                 ? findSubagentRecords(
@@ -99,8 +122,20 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
             }
             if (
               text.includes("CAPTURED_CUSTODY_RESULT") &&
-              (kind === "captured" || text.includes("NESTED_CHILD_RECONCILED"))
+              (kind !== "nested" || text.includes("NESTED_CHILD_RECONCILED"))
             ) {
+              if (retryingRequester && !restarted) {
+                response.writeHead(400, { "content-type": "application/json" });
+                response.end(
+                  JSON.stringify({ error: { message: "Synthetic announce unavailable" } }),
+                );
+                return;
+              }
+              if (interruptAnnounce && !restarted) {
+                announcing = true;
+                return;
+              }
+              completedReplies++;
               reply("HUB_RECEIVED_RESTART_COMPLETION");
             } else if (!childRunId) {
               call("sessions_send", {
@@ -114,7 +149,15 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
                 message: "CUSTODY_SIBLING_TASK",
                 timeoutSeconds: 0,
               });
-            } else if (text.includes("already_pending") || text.includes("nothing_pending")) {
+            } else if (busyRequester || retryingRequester) {
+              if (restarted || retryingRequester) {
+                reply("HUB_WAITING_FOR_OWNED_RESULTS");
+              }
+            } else if (
+              privateContinuation ||
+              text.includes("already_pending") ||
+              text.includes("nothing_pending")
+            ) {
               reply("HUB_WAITING_FOR_OWNED_RESULTS");
             } else {
               call("sessions_yield", {});
@@ -146,10 +189,12 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
           if (text.includes("CUSTODY_CHILD_TASK")) {
             childStarted = true;
             if (restarted) {
+              resumedChildRequests++;
               reply("NESTED_CHILD_RECONCILED");
               return;
             }
-            if (kind === "captured") {
+            if (kind !== "nested") {
+              finishChild = () => reply("NESTED_CHILD_RECONCILED");
               return;
             }
             leaf ??= input.flatMap((item) => {
@@ -194,6 +239,10 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
+    vi.stubEnv("OPENCLAW_STATE_DIR", instance.stateDir);
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
     const readRun = (runId: string) => {
       const db = openNodeSqliteDatabase(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
         readOnly: true,
@@ -219,14 +268,42 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
         sessionKey: rootKey,
         sessionId: session.sessionId,
         storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-      })?.events.filter(
-        (event) =>
-          isRecord(event) &&
-          event.type === "message" &&
-          isRecord(event.message) &&
-          event.message.role === "user" &&
-          JSON.stringify(event.message.content).includes("CAPTURED_CUSTODY_RESULT"),
-      );
+      })?.events.filter((event) => {
+        if (!isRecord(event)) {
+          return false;
+        }
+        if (busyRequester || retryingRequester) {
+          return (
+            event.type === "message" &&
+            isRecord(event.message) &&
+            event.message.role === "user" &&
+            isRecord(event.message.provenance) &&
+            event.message.provenance.sourceSessionKey === siblingKey &&
+            event.message.provenance.sourceTool === "subagent_announce"
+          );
+        }
+        if (privateContinuation) {
+          // Pending-result summaries repeat the text; only the completion event is delivery.
+          return (
+            event.type === "custom_message" &&
+            isRecord(event.details) &&
+            Array.isArray(event.details.fragments) &&
+            event.details.fragments.some(
+              (fragment) =>
+                isRecord(fragment) &&
+                fragment.kind === "conversation-data" &&
+                typeof fragment.text === "string" &&
+                fragment.text.startsWith("[Internal task completion event]\n") &&
+                fragment.text.includes("CAPTURED_CUSTODY_RESULT"),
+            )
+          );
+        }
+        const message =
+          event.type === "message" && isRecord(event.message) && event.message.role === "user"
+            ? event.message
+            : undefined;
+        return message && JSON.stringify(message.content).includes("CAPTURED_CUSTODY_RESULT");
+      });
     };
     let client: GatewayClient | undefined;
     let phase = "startup";
@@ -278,42 +355,157 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
           completionTarget: "parent",
           completion: { required: true },
         });
-        if (kind !== "captured") {
+        if (kind === "nested") {
           expect(
             await client.request("agent.wait", { runId: childRunId, timeoutMs: 15_000 }),
           ).toMatchObject({ status: "ok", yielded: true });
           await vi.waitFor(() => expect(leafStarted).toBe(true), { timeout: 15_000 });
         }
-        expect(
-          await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
-        ).toMatchObject({ status: "ok", yielded: true });
+        if (!busyRequester) {
+          expect(
+            await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
+          ).toMatchObject({
+            status: "ok",
+            ...(privateContinuation || retryingRequester ? {} : { yielded: true }),
+          });
+        }
+        if (privateContinuation) {
+          assert(finishChild);
+          finishChild();
+          await vi.waitFor(
+            () => expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } }),
+            { timeout: 15_000 },
+          );
+        }
         phase = "captured result awaiting requester cohort";
         finishCaptured();
+        if (busyRequester || retryingRequester) {
+          assert(finishChild);
+          finishChild();
+        }
         await vi.waitFor(
           () =>
             expect(readRun(capturedRunId!)).toMatchObject({
               spawnMode: "session",
               completionTarget: "parent",
               completion: { required: true, resultText: "CAPTURED_CUSTODY_RESULT" },
-              delivery: { status: "pending" },
+              delivery: {
+                status: retryingRequester ? expect.stringMatching(/pending|delivered/) : "pending",
+              },
             }),
           { timeout: 15_000 },
         );
         const before = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        expect(JSON.stringify(before.messages)).not.toContain("CAPTURED_CUSTODY_RESULT");
+        if (!privateContinuation && !retryingRequester) {
+          expect(JSON.stringify(before.messages)).not.toContain("CAPTURED_CUSTODY_RESULT");
+        }
+        if (retryingRequester) {
+          phase = "retry pending after requester settled";
+          await vi.waitFor(
+            () => {
+              expect(readRun(capturedRunId!).delivery).toMatchObject({
+                status: "delivered",
+                requesterDelivery: { state: "consumed" },
+              });
+              expect(
+                readRestartSession(instance.state.agentDir("main"), rootKey)?.lifecycleRunId,
+              ).toBeUndefined();
+            },
+            { timeout: 30_000 },
+          );
+        }
+        if (interruptAnnounce) {
+          phase = "requester announce in flight";
+          assert(finishChild);
+          if (!privateContinuation) {
+            finishChild();
+          }
+          await vi.waitFor(() => expect(announcing).toBe(true), { timeout: 15_000 });
+          await vi.waitFor(
+            () =>
+              expect(readRun(capturedRunId!)).toMatchObject({
+                delivery: {
+                  status: "pending",
+                  requesterDelivery: {
+                    state: "consumed",
+                    runId: expect.any(String),
+                  },
+                },
+              }),
+            { timeout: 15_000 },
+          );
+        }
         phase = "restart";
+        if (retryingRequester) {
+          const current = readRestartSession(instance.state.agentDir("main"), rootKey);
+          expect(current?.resumeAfterRestart).toBeUndefined();
+          expect(current?.mainRestartRecovery).toBeUndefined();
+          expect(current?.lifecycleRunId).toBeUndefined();
+        }
         if (kind === "nested") {
           expect(readRun(childRunId)).toMatchObject({ pauseReason: "sessions_yield" });
         }
-        await instance.stopGateway();
+        if (kind.endsWith("-crash") || retryingRequester) {
+          await instance.crashGateway();
+        } else {
+          await instance.stopGateway();
+        }
         await client.stopAndWait();
         client = undefined;
         expect(readRun(capturedRunId)).toMatchObject({
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
-          delivery: { status: "pending" },
+          // Shutdown can checkpoint custody before terminal delivery settlement finishes.
+          delivery: {
+            status: privateContinuation
+              ? expect.stringMatching(/^(pending|delivered)$/)
+              : retryingRequester
+                ? "delivered"
+                : "pending",
+          },
         });
+        if (interruptAnnounce) {
+          expect(readRun(capturedRunId)).toMatchObject({
+            delivery: { requesterDelivery: { state: "consumed" } },
+          });
+        }
+        if (kind === "captured") {
+          expect(readRun(childRunId)).toMatchObject({
+            execution: { outcome: { status: "error", error: "Gateway stopped" } },
+          });
+        }
+        if (kind === "unmarked-requester" || kind === "stale-settle-requester") {
+          // Recreate the persisted incident state: a settled, unmarked requester still owes
+          // this real child result. Change only the stopped fixture's requester markers.
+          const db = openNodeSqliteDatabase(
+            path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
+          );
+          try {
+            db.prepare(
+              "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.lifecycleRunId', '$.resumeAfterRestart', '$.mainRestartRecovery') WHERE session_key = ?",
+            ).run(rootKey);
+            if (kind === "stale-settle-requester") {
+              db.prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRunId', ?, '$.resumeAfterRestart', json(?)) WHERE session_key = ?",
+              ).run(
+                "announce:requester-settle:main:retired-cohort:yield-1",
+                JSON.stringify({ queuedInputIds: [], operatorSource: { kind: "unavailable" } }),
+                rootKey,
+              );
+            }
+          } finally {
+            db.close();
+          }
+          const current = readRestartSession(instance.state.agentDir("main"), rootKey);
+          if (kind === "unmarked-requester") {
+            expect(current?.lifecycleRunId).toBeUndefined();
+            expect(current?.resumeAfterRestart).toBeUndefined();
+          }
+          expect(current?.mainRestartRecovery).toBeUndefined();
+          expect(readCapturedInputs()).toHaveLength(0);
+          expect(readRun(capturedRunId).delivery).toMatchObject({ status: "pending" });
+        }
         restarted = true;
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
@@ -323,14 +515,23 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
             const history = await client!.request<{ messages: unknown[] }>("chat.history", {
               sessionKey: rootKey,
             });
-            expect(JSON.stringify(history.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
-            expect(history.messages).not.toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({ customType: "run-failed-before-reply" }),
-              ]),
-            );
+            if (!retryingRequester) {
+              expect(JSON.stringify(history.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
+              expect(history.messages).not.toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ customType: "run-failed-before-reply" }),
+                ]),
+              );
+            }
             expect(readRun(capturedRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+            if (busyRequester || retryingRequester) {
+              expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } });
+            }
             expect(readCapturedInputs()).toHaveLength(1);
+            if (interruptAnnounce) {
+              expect(completedReplies).toBe(1);
+              expect(rootReceivedRecovery).toBe(privateContinuation);
+            }
           },
           { timeout: 30_000 },
         );
@@ -343,9 +544,25 @@ it.skipIf(process.platform === "win32").for(["nested", "captured"] as const)(
         const after = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        expect(JSON.stringify(after.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
+        if (!retryingRequester) {
+          expect(JSON.stringify(after.messages)).toContain("HUB_RECEIVED_RESTART_COMPLETION");
+        }
         expect(readRun(capturedRunId)).toMatchObject({ delivery: { status: "delivered" } });
+        expect(instance.logs()).not.toContain("idempotency key conflicts");
+        if (kind === "stale-settle-requester") {
+          expect(
+            readRestartSession(instance.state.agentDir("main"), rootKey)?.resumeAfterRestart,
+          ).toBeUndefined();
+          expect(instance.logs()).not.toContain("Queued operator authority cannot be recovered");
+          expect(rootReceivedRecovery).toBe(false);
+        }
         expect(readCapturedInputs()).toHaveLength(1);
+        if (interruptAnnounce) {
+          expect(completedReplies).toBe(1);
+        } else if (kind === "captured") {
+          expect(rootReceivedRecovery).toBe(true);
+          expect(resumedChildRequests).toBe(0);
+        }
       },
       async () => {
         await client?.stopAndWait();

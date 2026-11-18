@@ -32,7 +32,7 @@ function formatToolFailureMeta(details: unknown): string | undefined {
   );
 }
 
-export function collectToolFailures(messages: Iterable<AgentMessage>): ToolFailure[] {
+export function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
   const failures: ToolFailure[] = [];
   const seen = new Set<string>();
 

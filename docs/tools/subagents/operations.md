@@ -58,6 +58,8 @@ the result and the earlier blocked-delivery notice are kept.
 A suspended delivery expires after seven days. The warning records its run and
 session identifiers, original delivery error, and suspension time. Expiry ends
 automatic delivery; it does not turn a successful child execution into a failure.
+A required parent completion that expires also records the visible failure notice
+in the requester conversation, so ending delivery is never silent.
 For a retained run, `/subagents info <runId>` shows the captured result, discarded
 delivery status, and original error, even after the run leaves the recent list.
 Inspect that result or available child session history and ask the requester to
@@ -96,15 +98,27 @@ Check whether files or external actions already changed before repeating work.
 New execution uses current authority and the session's current tool policy.
 
 If a requester wake is refused because the child's completion owner changed,
-that attempt ends instead of retrying indefinitely. The same requester and wake
-generation can still record a result already delivered after child cleanup. Otherwise, OpenClaw records failed delivery and attempts to append a
-short notice to the requester session. If that session is unavailable, the failure
-is logged without retrying the wake. Retained wakes converge on their next
-attempt; no manual database edits are needed.
+that attempt yields to the current owner. The completion stays owed and the registry
+re-evaluates its retained wake. The same requester and wake generation can still
+record a result already delivered after child cleanup. A yielded
+child's pause notice also settles if a resumed sibling changes the batch's run IDs;
+the notice belongs to that child, while the batch still waits for final results.
+The registry owns recovery of requester-settle continuations, including markers
+for an earlier cohort or retry. Startup clears those restart markers instead of
+starting a competing requester turn under the old run's operator authority.
+Completions from different operator invocations use separate settle wakes, each
+with its own retained authority. Sandbox setup failures and an unavailable Gateway
+leave uncommitted results owed for retry. Results already committed to the
+requester transcript are not replayed.
 
 A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
 eligible root requester from its persisted run identity in the immediately preceding
-Gateway lifetime. Children do not resume independently. Inspect their saved work
+Gateway lifetime. Children do not resume independently. After any restart, a child
+that was still running in the previous Gateway is recorded as failed with an
+interruption error, and its requester receives that failure through the normal
+completion path, so a waiting parent wakes instead of waiting indefinitely.
+The terminal notice waits for fresh requester authority after startup; it cannot
+use the previous Gateway's retired custody. Inspect their saved work
 before sending a fresh instruction to the same retained child session. A stopped
 execution is not a yielded pause, and a replacement does not inherit workspace or
 publication ownership. If the root cannot resume, send a new message to continue.
@@ -242,13 +256,10 @@ session work, clears its queues, and cancels its active child tree. Session-wide
 requires `clearQueued: true`. Ordinary `chat.abort` without a `runId` does not
 cascade to children. These operations retain their normal authorization checks.
 
-A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
-that branch check is present, `sessionId`. If the check fails during descendant
-cancellation, the Gateway refuses further cancellation and reports
-`active-leaf-changed`. Cancellation already accepted by a child still settles.
-If child ownership refuses cancellation before the branch check runs, the Gateway
-rechecks the requested leaf: a changed leaf takes precedence, while an unchanged
-leaf preserves the ownership error. Neither outcome authorizes changing a replacement child.
+A typed `/stop` sent through `chat.send` stops the work of the chat as it is
+when the Gateway receives it. It does not compare the sender's leaf or session id.
+Work that starts after the Stop, including a replacement conversation and its
+children, is not cancelled and needs its own Stop request.
 The cancellation result waits for pending child-session metadata writes before
 checking that the original session still owns the outcome.
 

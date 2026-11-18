@@ -114,7 +114,7 @@ export function createCliModelRequestGate(params: {
 
 /** Gate for one CLI run; its prepared user row carries provenance and sender metadata. */
 export function createCliRunModelRequestGate(params: {
-  hookRunner: HookRunner;
+  hookRunner: HookRunner | undefined;
   hookContext: PluginHookAgentContext;
   run: Pick<
     RunCliAgentParams,
@@ -123,7 +123,10 @@ export function createCliRunModelRequestGate(params: {
   model: string;
   prompt: string;
   history: () => readonly unknown[];
-}): CliModelRequestGate {
+}): CliModelRequestGate | undefined {
+  if (!params.hookRunner?.hasHooks("before_model_request")) {
+    return undefined;
+  }
   const { run } = params;
   let currentTurn: Promise<unknown> | undefined;
   return createCliModelRequestGate({

@@ -215,7 +215,10 @@ export function wrapStreamFnWithProviderPromptState(params: {
     payload: unknown,
     model: Model,
     context: Parameters<StreamFn>[1],
+    options: Parameters<StreamFn>[2],
   ) => Promise<unknown>;
+  /** Last edit before the body is recorded and sent; a session fork replays its parent here. */
+  finalizePayload?: (payload: Record<string, unknown>) => void;
 }): StreamFn {
   return async (model, context, options) => {
     params.state.lastAttempt = undefined; // Custom transports must not leave a stale candidate.
@@ -232,6 +235,8 @@ export function wrapStreamFnWithProviderPromptState(params: {
           typeof preparedPayload === "object" &&
           !Array.isArray(preparedPayload)
         ) {
+          // SAFETY: the guard admits a non-array request object. Replay before final policy.
+          params.finalizePayload?.(preparedPayload as Record<string, unknown>);
           // Shallow: transports reassign top-level fields after the hook; items stay shared.
           preparedRequests.set(params.state, { model: payloadModel, body: { ...preparedPayload } });
         }
@@ -241,7 +246,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
           return preparedPayload;
         }
         const finalPayload = params.transformPayload
-          ? await params.transformPayload(preparedPayload, payloadModel, context)
+          ? await params.transformPayload(preparedPayload, payloadModel, context, options)
           : preparedPayload;
         options?.signal?.throwIfAborted();
         await recordProviderPrompt({
@@ -285,10 +290,15 @@ export function wrapStreamFnWithProviderPromptState(params: {
         await options?.onResponse?.(response, responseModel);
       },
     };
-    markModelPayloadObserver(observedOptions.onPayload!, originalOnPayload);
+    markModelPayloadObserver(
+      observedOptions.onPayload!,
+      originalOnPayload,
+      () => !params.transformPayload,
+    );
+    modelRequestBodyState(observedOptions).hasFinalPolicy = Boolean(params.transformPayload);
     modelRequestBodyState(observedOptions).encode = async (payload) => {
       const finalPayload = params.transformPayload
-        ? await params.transformPayload(payload, model, context)
+        ? await params.transformPayload(payload, model, context, options)
         : payload;
       options?.signal?.throwIfAborted();
       const encoded = await recordProviderPrompt({

@@ -43,7 +43,7 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
 
 describe("createTypingCallbacks", () => {
   it("contains a synchronous plugin stop failure from the TTL timer", async () => {
-    const error = new Error("Plugin invocation scope is closed");
+    const error = new Error("Plugin fixture was reloaded or disabled");
     const { callbacks, onStopError, stop } = createTypingHarness({
       maxDurationMs: 1_000,
       stop: () => {

@@ -104,6 +104,12 @@ export type UpdateDatabaseBackup = z.infer<typeof UpdateDatabaseBackupSchema> & 
   };
   restoreRefusal?: string;
   restoreRefusalDiagnostics?: string[];
+  /**
+   * The run's plugin cohort pair, bound at capture while the state is still on the
+   * previous schema. Restore runs in the previous build, which cannot admit a
+   * migrated (newer) schema through its normal state reads.
+   */
+  pluginCohortRecovery?: import("./update-plugin-cohort-schema.js").PluginCohortRecoveryBinding;
 };
 
 type BackupInput = {
@@ -283,8 +289,8 @@ export async function createUpdateDatabaseBackupInProcess(
       return {};
     }
   };
-  const { readBackupEngine, readBackupEngineImage } =
-    await import("./database-engine/physical-store.js");
+  const { readBackupEngine } = await import("./database-engine/physical-store.js");
+  const { readBackupEngineImage } = await import("./database-engine/physical-store-inspection.js");
   const requestedOriginalSources = new Set(input.originalCaptureSourcePaths);
   const preserveSourceArtifacts = input.stopped || input.preserveSourceArtifacts;
   const stoppedSources = new Set(

@@ -5,6 +5,7 @@ import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import {
   createConfigIO,
@@ -25,7 +26,7 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { expandHomePrefix } from "../infra/home-dir.js";
+import { expandHomePrefix, resolveFilesystemPath } from "../infra/home-dir.js";
 import { canonicalizeContainmentRoot } from "../infra/path-containment.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
@@ -113,7 +114,7 @@ export function resolveRequiredBackupPath(
 ): string {
   const trimmed = value?.trim();
   if (!trimmed) {
-    throw new Error(`Missing required ${label} value.`);
+    throwExpectedCliError(`Missing required ${label} value.`);
   }
   return resolveUserPath(trimmed);
 }
@@ -123,9 +124,15 @@ export function resolveBackupArchivePath(
   label: "--output" | "<archive>" | "--target",
 ): string {
   if (!value?.trim()) {
-    throw new Error(`Missing required ${label} value.`);
+    throwExpectedCliError(`Missing required ${label} value.`);
   }
-  return path.resolve(expandHomePrefix(value));
+  try {
+    return resolveFilesystemPath(expandHomePrefix(value));
+  } catch (error) {
+    return throwExpectedCliError(
+      terminalText`Could not resolve ${label}: ${formatErrorMessage(error)}`,
+    );
+  }
 }
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";

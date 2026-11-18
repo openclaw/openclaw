@@ -24,10 +24,20 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
       : "";
   const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
   const shortReason = summarizeDecisionReason(reason);
+  const code = decision.outcome === "failed" ? findFailedProviderCode(decision) : undefined;
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
   const viaLabel = modelLabel ? ` via ${modelLabel}${backendLabel}` : "";
-  const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
+  const reasonLabel = shortReason ? ` reason=${shortReason}${code ? ` code=${code}` : ""}` : "";
   return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
+}
+
+/** Provider error code of the attachment whose failure `findDecisionReason` reports. */
+function findFailedProviderCode(decision: MediaUnderstandingDecision): string | undefined {
+  const attachment = decision.attachments.find((entry) =>
+    entry.attempts.some((attempt) => attempt.outcome === "failed" && attempt.reason?.trim()),
+  );
+  const disposition = attachment && decision.attachmentDispositions?.[attachment.attachmentIndex];
+  return disposition?.kind === "failed" ? disposition.code : undefined;
 }
 
 /** Returns the first non-empty attempt reason, optionally filtered by outcome. */

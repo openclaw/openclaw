@@ -97,7 +97,7 @@ Keep system context small and stable; put turn-specific material in `prependCont
 or `appendContext` instead.
 
 `before_prompt_build` and `agent_turn_prepare` receive a model-context view with
-fresh message arrays and envelopes per dispatch. Owned transcript payload leaves
+fresh message arrays and envelopes per dispatch. Proven immutable payload leaves
 (such as content blocks and tool arguments) are shared and deeply frozen. Treat
 nested history as read-only: writing a frozen leaf throws a `TypeError` in strict
 mode. Return the hook's result fields to contribute context or change the prompt;
@@ -106,7 +106,7 @@ in-place history edits do not update core history or become hook results.
 Registrations within one dispatch share its array and envelopes in priority order.
 Replacing an envelope field or editing the array remains local to that dispatch.
 Prepare, ordinary prompt-build, authorized enrichment, and later prompt rebuilds
-receive separate arrays and envelopes. Non-owned values are deep-cloned and retain
+receive separate arrays and envelopes. Other values are deep-cloned and retain
 the shared-memory isolation checks. Storage-only native prompt text and tool-result
 details are excluded. See the [migration note](/plugins/sdk-migration#prompt-hook-history-is-read-only)
 if your plugin previously mutated nested content.
@@ -476,7 +476,7 @@ before a model sees a request. On the embedded runner it sits on the provider
 transport and runs once per provider request, including each model call inside
 a tool loop and each encode-only transport retry, after provider and config
 `onPayload` transforms. For transports that use host request encoding it runs
-at final encoding instead. The returned payload is what the transport hashes,
+at final encoding instead. On supported Google video routes, ordinary provider transforms still see placeholders; only the opted-in final policy sees the outgoing video content after media preparation. The returned payload is what the transport hashes,
 records for context-retry admission, and sends.
 
 On CLI-backed runtimes such as `claude-cli`, the CLI owns its provider
@@ -512,9 +512,10 @@ The event is `{ runtime, requestKind, payload, provider, model, messages }`:
   image attachments, and what the CLI does inside its own tool loop are not part
   of the payload.
 - An embedded replacement may rewrite content but not the tool surface, model, or
-  Access program. If `tools`, `tool_choice`, `toolConfig`, `functions`,
-  `function_call`, `model`, or `access_programs` (top level or under `config`)
-  differ from the request as it was before any handler ran, the request fails.
+  Access program. The hook protects `tools`, `tool_choice`, `toolConfig`,
+  `functions`, `function_call`, `model`, and `access_programs` at the top level or
+  under `config`. It also protects Mistral's `toolChoice` and Google Interactions'
+  `generation_config.tool_choice`. Changing a protected field fails the request.
   The check also covers in-place edits to `payload` when a handler returns
   nothing. Tool, model, and Access-program authorization is settled before this
   hook, and provider-hosted tools have no later local gate.

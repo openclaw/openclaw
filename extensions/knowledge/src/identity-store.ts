@@ -5,6 +5,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
+  observeSqliteConnection,
   tableExists,
   tableHasColumn,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
@@ -168,7 +169,9 @@ export class SqliteIdentityStore implements IdentityStore {
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) {
       throw unavailable();
     }
-    const db = openNodeSqliteDatabase(this.filename, { timeout: BUSY_TIMEOUT_MS });
+    const db = observeSqliteConnection(
+      openNodeSqliteDatabase(this.filename, { timeout: BUSY_TIMEOUT_MS }),
+    );
     try {
       const current = isKnowledgeSchemaCurrent(db, stateSchema());
       const after = lstatSync(this.filename);

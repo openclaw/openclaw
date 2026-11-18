@@ -1,3 +1,4 @@
+import { isResponsesCompactRequest } from "@openclaw/ai/internal/openai";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -12,6 +13,7 @@ import type { EmbeddedRunAttemptParams } from "./run/types.js";
 const PROTECTED_FIELDS = [
   "tools",
   "tool_choice",
+  "toolChoice",
   "toolConfig",
   "functions",
   "function_call",
@@ -29,6 +31,12 @@ function readProtectedFields(payload: unknown): string {
   const fields = [payload, nested].flatMap((owner) =>
     PROTECTED_FIELDS.map((field) => Reflect.get(owner, field)),
   );
+  const generation = Reflect.get(payload, "generation_config");
+  fields.push(
+    generation && typeof generation === "object"
+      ? Reflect.get(generation, "tool_choice")
+      : undefined,
+  );
   return JSON.stringify(fields);
 }
 
@@ -37,7 +45,12 @@ function createModelRequestTransformer(
   hookContext: PluginHookAgentContext,
   requestKind: PluginHookModelRequestKind,
 ) {
-  return async (payload: unknown, model: Model, context: Context): Promise<unknown> => {
+  return async (
+    payload: unknown,
+    model: Model,
+    context: Context,
+    options: Parameters<StreamFn>[2],
+  ): Promise<unknown> => {
     const hooks = getGlobalHookRunner();
     if (!hooks?.hasHooks("before_model_request")) {
       return payload;
@@ -47,7 +60,7 @@ function createModelRequestTransformer(
     const result = await hooks.runBeforeModelRequest(
       {
         runtime: "embedded",
-        requestKind,
+        requestKind: isResponsesCompactRequest(options) ? "compaction" : requestKind,
         payload,
         provider: model.provider,
         model: model.id,
@@ -92,12 +105,15 @@ export function createAttemptModelRequestTransformer(
   attempt: EmbeddedRunAttemptParams,
   agentId: string,
 ) {
+  if (!getGlobalHookRunner()?.hasHooks("before_model_request")) {
+    return undefined;
+  }
   return createModelRequestTransformer(
     {
       ...buildEmbeddedAgentHookContext(attempt, agentId, undefined),
       modelProviderId: attempt.model.provider,
       modelId: attempt.model.id,
     },
-    "turn",
+    attempt.sessionForkRequest ? "side_question" : "turn",
   );
 }

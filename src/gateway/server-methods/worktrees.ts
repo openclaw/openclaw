@@ -124,10 +124,14 @@ function worktreeHandler<T>(
 }
 
 export const worktreesHandlers: GatewayRequestHandlers = {
-  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond }) => {
+  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond, client }) => {
     respond(
       true,
-      { worktrees: (await managedWorktrees.list()).map((record) => publicWorktreeRecord(record)) },
+      {
+        worktrees: (await managedWorktrees.list()).map((record) =>
+          publicWorktreeRecord(record, client?.connect.scopes?.includes(ADMIN_SCOPE)),
+        ),
+      },
       undefined,
     );
   }),
@@ -174,7 +178,10 @@ export const worktreesHandlers: GatewayRequestHandlers = {
   }),
   "worktrees.remove": worktreeHandler(validateWorktreesRemoveParams, async (opts, params) => {
     const { respond } = opts;
-    if ([params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1) {
+    if (
+      [params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1 ||
+      (params.ifLossless && params.retryPreserved)
+    ) {
       invalidParams(respond);
       return;
     }
@@ -198,6 +205,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         id,
         reason: "manual-delete",
         allowSnapshotLoss: params.force,
+        retryPreserved: params.retryPreserved,
         ...(params.exactState ? { exactState: params.exactState } : {}),
         ...guard,
       });
@@ -208,6 +216,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
           ? result
           : {
               removed: result.removed,
+              ...(result.preserved ? { preserved: result.preserved } : {}),
               ...(result.snapshotRef ? { snapshotRef: result.snapshotRef } : {}),
               ...(result.snapshotError ? { snapshotError: result.snapshotError } : {}),
             },

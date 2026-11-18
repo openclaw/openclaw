@@ -71,6 +71,7 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       evaluateReleaseChildPolicy({
         child: { ...normalCi, key: "normalCi" },
         targetVersion: manifest.validationInputs?.targetVersion,
+        targetSha: manifest.targetSha,
       }).blockingJobs.length > 0
     ) {
       throw new Error("Release manifest contains failed selected job evidence");
@@ -1608,8 +1609,8 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion });
+export function terminalPolicyPass(child, targetVersion, targetSha) {
+  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha });
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
@@ -1627,6 +1628,20 @@ export function planReleaseChildRerun({ childKey, jobs }) {
     .toSorted();
   if (failed.length === 0) {
     throw new Error(`${childKey} has no blocking failed job to rerun`);
+  }
+  // Plugin packs and their readback evidence are attempt-bound. The planning
+  // root owns every pack/verification/seal dependency, so rerun it rather than
+  // mixing a retried leaf with packages from the original attempt.
+  if (childKey === "artifact:plugin-npm") {
+    const root = jobs.filter((job) => job.name === "preview_plugins_npm");
+    if (
+      root.length !== 1 ||
+      root[0].status !== "completed" ||
+      !["success", "failure"].includes(root[0].conclusion)
+    ) {
+      throw new Error("Plugin artifact planning root is missing or ambiguous");
+    }
+    return { failed, mode: "producer", producer: "preview_plugins_npm" };
   }
   // Receipt publication is best-effort at the workflow boundary. A green child
   // can therefore need only this failed metadata job, never its passing workloads.
@@ -1690,9 +1705,9 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
   );
 }
 
-function releaseChildBlockers(selected, targetVersion) {
+function releaseChildBlockers(selected, targetVersion, targetSha) {
   const childJobBlockers = selected.flatMap((child) =>
-    evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+    evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1714,7 +1729,7 @@ function releaseChildBlockers(selected, targetVersion) {
         child.runId &&
         child.runAttempt &&
         child.status === "completed" &&
-        !terminalPolicyPass(child, targetVersion) &&
+        !terminalPolicyPass(child, targetVersion, targetSha) &&
         !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
     )
     .map((child) => ({
@@ -1737,6 +1752,7 @@ export function classifyReleaseSnapshot({
   extraErrors = [],
   localFailures = [],
   targetVersion,
+  targetSha,
 }) {
   const selected = children.filter((child) => child.selected);
   const active = selected.filter(
@@ -1745,7 +1761,7 @@ export function classifyReleaseSnapshot({
   const childErrors = selected.flatMap((child) =>
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
-  const childBlockers = releaseChildBlockers(selected, targetVersion);
+  const childBlockers = releaseChildBlockers(selected, targetVersion, targetSha);
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
@@ -1763,7 +1779,7 @@ export function classifyReleaseSnapshot({
     activeRunIds,
     advisoryJobs: selected.flatMap(releaseChildAdvisories),
     waivers: selected.flatMap((child) =>
-      evaluateReleaseChildPolicy({ child, targetVersion }).waivers.map((waiver) =>
+      evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).waivers.map((waiver) =>
         Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
       ),
     ),
@@ -1951,7 +1967,6 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     }
     if (
       payload.attemptEvidenceVersion !== 3 ||
-      payload.targetSha !== payload.workflowSha ||
       payload.releaseProfile !== coverage.profile ||
       payload.rerunGroup !== "all" ||
       !payload.sourceAdmission?.qualificationAdmission ||
@@ -1979,9 +1994,12 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     }
     for (const spec of coverage.children) {
       const child = children.find((entry) => entry.key === spec.key);
-      // Reuse retains the original producer; strict chain validation separately
-      // authenticates that root and proves the complete changelog-only delta.
-      const producer = child.source === "reused" && reusedProducer ? reusedProducer : payload;
+      // Reuse retains the original producer. Strict validation authenticates
+      // either its child workload closure or the whole-root changelog delta.
+      const producer =
+        child.source === "reused"
+          ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)
+          : payload;
       if (
         !child.required ||
         !child.selected ||
@@ -2490,6 +2508,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
     extraErrors: executionPlan.errors,
     localFailures: releasePlanGateFailures(effectiveGates),
     targetVersion: executionPlan.targetVersion,
+    targetSha: executionPlan.targetSha,
   });
   if (!isDeepStrictEqual(state.waivers, baseline.waivers)) {
     throw new Error(`${label} waivers differ from checked-in release tooling policy`);
@@ -2569,6 +2588,8 @@ function verifyStateTransition(decision, drain, executionPlan) {
         Object.entries(state.children).map(([key, child]) =>
           Object.assign({}, child, { key, jobs: child.timing.jobs }),
         ),
+        executionPlan.targetVersion,
+        executionPlan.targetSha,
       ).map((issue) => normalizeIssue(issue, "release_blocker")),
     ];
     const previous = new Map(

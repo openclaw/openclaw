@@ -1,5 +1,5 @@
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
-import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
+import { acquireCronRootTranscriptLease } from "../config/sessions/transcript-lease.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
@@ -10,6 +10,7 @@ import {
   buildAgentHookContextIdentityFields,
 } from "../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { sleep } from "../utils/sleep.js";
 import {
   hasAcceptedSessionSpawn,
@@ -50,7 +51,7 @@ import {
   attachCliMessagingDeliveryEvidence,
   getCliMessagingDeliveryEvidence,
 } from "./cli-runner/delivery-evidence.js";
-import { createCliFailoverError } from "./cli-runner/exit-error.js";
+import { createCliFailoverError, readCliStreamRefusalOutput } from "./cli-runner/exit-error.js";
 import { loadCliPromptImages } from "./cli-runner/helpers.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 import { createCliRunModelRequestGate } from "./cli-runner/model-request-hook.js";
@@ -79,6 +80,18 @@ import {
 } from "./tools/gateway-caller-context.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
+
+// A turn that ends without a final answer cannot authorize replaying the tool effects it completed.
+function stopFallbackAfterToolEffects(
+  error: unknown,
+  output: Pick<CliOutput, "toolSummary" | "acceptedSessionSpawns">,
+): void {
+  const completedToolEffects =
+    (output.toolSummary?.calls ?? 0) > 0 || hasAcceptedSessionSpawn(output.acceptedSessionSpawns);
+  if (completedToolEffects && error instanceof Error) {
+    recordModelFallbackStop(error);
+  }
+}
 
 /** Checks whether a Claude CLI session binding has reached its transcript file. */
 export async function isCliBindingFlushed(
@@ -124,7 +137,7 @@ async function runCliAgentInternal(
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
   let modelExecution: ReturnType<typeof bindOperatorModelExecution>;
   const generationAbortController = new AbortController();
-  let generation: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
+  let generation: Awaited<ReturnType<typeof acquireCronRootTranscriptLease>>;
   const assertCurrent = () => {
     params.abortSignal?.throwIfAborted();
     params.assertCurrent?.();
@@ -136,10 +149,9 @@ async function runCliAgentInternal(
     const target = params.sessionTarget;
     generation =
       target && !params.sessionManager && !params.isolatedCompletion
-        ? await prepareCronRootSessionGeneration(
+        ? await acquireCronRootTranscriptLease(
+            chatRef({ ...target, sessionKey: params.sessionKey ?? target.sessionKey }),
             {
-              ...target,
-              sessionKey: params.sessionKey ?? target.sessionKey,
               sessionId: params.sessionId,
               lifecycleRevision:
                 params.expectedLifecycleRevision ?? params.sessionEntry?.lifecycleRevision,
@@ -249,9 +261,7 @@ async function runPreparedCliAgentOwned(
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const hasBeforeAgentRunHooks = hookRunner?.hasHooks("before_agent_run") === true;
-  const hasModelRequestHooks = hookRunner?.hasHooks("before_model_request") === true;
-  const needsHookHistory =
-    hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks || hasModelRequestHooks;
+  const needsHookHistory = hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks;
   let historyMessages: unknown[] = [];
   let promptImages: ImageContent[] | undefined;
   const promptForHooks = context.promptForHooks ?? params.prompt;
@@ -281,16 +291,14 @@ async function runPreparedCliAgentOwned(
     ...buildAgentHookContextIdentityFields(params),
   } as const;
 
-  context.beforeModelRequest = hookRunner
-    ? createCliRunModelRequestGate({
-        hookRunner,
-        hookContext: buildAgentHookContext(hookContext),
-        run: params,
-        model: context.modelId,
-        prompt: promptForHooks,
-        history: () => historyMessages,
-      })
-    : undefined;
+  context.beforeModelRequest = createCliRunModelRequestGate({
+    hookRunner,
+    hookContext: buildAgentHookContext(hookContext),
+    run: params,
+    model: context.modelId,
+    prompt: promptForHooks,
+    history: () => historyMessages,
+  });
 
   const buildAgentEndMessages = (lastAssistant?: unknown): unknown[] =>
     buildAgentHookConversationMessages({
@@ -330,8 +338,10 @@ async function runPreparedCliAgentOwned(
   let userTurnHandled = false;
   // A directly stopped first turn rethrows its abort unsettled: no transcript, hooks,
   // or replay. Its flushed native session is the chat's only continuity, so bind
-  // it into the still-empty binding. Superseded, restarted, resumed, and forked
-  // runs keep the abort guards from #147139 and bind nothing here.
+  // it into the still-empty binding. A first turn whose stream was refused as
+  // unparseable is kept the same way so the fallback retry resumes it.
+  // Superseded, restarted, resumed, and forked runs keep the abort guards from
+  // #147139 and bind nothing here.
   const persistStoppedFirstCliSession = async (
     error: unknown,
     output: CliOutput,
@@ -340,12 +350,14 @@ async function runPreparedCliAgentOwned(
     const sessionId = output.sessionId;
     if (
       !params.persistStoppedFirstCliSession ||
-      !output.terminalInterruption ||
+      !(
+        (output.terminalInterruption && isAgentRunDirectAbortReason(error)) ||
+        readCliStreamRefusalOutput(error) === output
+      ) ||
       !sessionId ||
       cliSessionIdToUse ||
       resolveCliSessionId(context.reusableCliSession) ||
       sessionBindingDisabled ||
-      !isAgentRunDirectAbortReason(error) ||
       !isClaudeCliBackend(params.provider) ||
       !(await isCliBindingFlushed(sessionId, params.provider, context.cwd ?? context.workspaceDir))
     ) {
@@ -417,7 +429,14 @@ async function runPreparedCliAgentOwned(
               : {}),
           }
         : undefined,
-    );
+    ).catch(async (error: unknown) => {
+      const refused = readCliStreamRefusalOutput(error);
+      if (refused) {
+        stopFallbackAfterToolEffects(error, refused);
+        await persistStoppedFirstCliSession(error, refused, cliSessionIdToUse);
+      }
+      throw error;
+    });
     try {
       params.assertCurrent?.();
     } catch (error) {
@@ -468,13 +487,7 @@ async function runPreparedCliAgentOwned(
         "empty_response",
         cliFailoverContext,
       );
-      if (
-        (output.toolSummary?.calls ?? 0) > 0 ||
-        hasAcceptedSessionSpawn(output.acceptedSessionSpawns)
-      ) {
-        // Missing a final answer cannot authorize replaying completed tool effects.
-        recordModelFallbackStop(error);
-      }
+      stopFallbackAfterToolEffects(error, output);
       throw attachCliMessagingDeliveryEvidence(error, output);
     }
     const assistantTexts = assistantText ? [assistantText] : [];
@@ -518,7 +531,9 @@ async function runPreparedCliAgentOwned(
 
   const executeRun = async (): Promise<EmbeddedAgentRunResult> => {
     ({ executePreparedCliRun } = await import("./cli-runner/execute.runtime.js"));
-    historyMessages = needsHookHistory ? await loadCliSessionHistoryMessages(params) : [];
+    if (needsHookHistory || context.beforeModelRequest) {
+      historyMessages = await loadCliSessionHistoryMessages(params);
+    }
     if (turnSideEffectsDisabled) {
       const reusableCliSessionId = isolatedCompletion
         ? undefined
@@ -595,7 +610,9 @@ async function runPreparedCliAgentOwned(
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
           text: sourceReplyWasDelivered ? "" : (nativeFinal?.text ?? output.text),
-          ...(nativeFinal ? { nativeIdentity: nativeFinal.identity } : {}),
+          ...(nativeFinal
+            ? { nativeIdentity: nativeFinal.identity, interimReplies: output.interimNativeReplies }
+            : {}),
           modelId: context.modelId,
           usage: pricedUsage.usage,
           stopReason: resolveCliAssistantStopReason(output),

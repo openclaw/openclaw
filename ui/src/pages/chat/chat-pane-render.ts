@@ -168,7 +168,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     );
     const multiIdentity = this.hasMultipleIdentities();
     const catalogReason = this.catalogComposerReason(catalogKey);
-    const catalogDisabledReason = catalogReason?.text ?? null;
     const { closePanelSlot, openPanelSlot, onFindWorkspaceFile, sessionWorkspace } =
       createChatPaneRails({
         state,
@@ -269,7 +268,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       workspaceConflict: Boolean(workspaceConflict),
     });
     const sessionDisabledBanner = this.sessionDisabledBanner({
-      catalogDisabledReason,
+      catalogDisabledReason: catalogReason?.text ?? null,
       modelSetupRequired,
       selectedSessionArchived,
       selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
@@ -280,8 +279,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
-    const auth = gatewaySnapshot.hello?.auth ?? null;
-    const hasWriteScope = hasOperatorWriteAccess(auth);
+    const hasWriteScope = hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
     const composerAccess = catalogKey
       ? hasWriteScope ||
         (catalogKey.catalogId === "beam" &&
@@ -328,7 +326,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       canSend: composerAccess && available,
       modelRequiredReason: catalog || suggestionViewer ? undefined : requiredReason,
       disabledReason:
-        catalogDisabledReason ??
+        catalogReason?.text ??
         (!composerAccess ? t("chat.sessionSharing.scopeReadOnlyNotice") : null) ??
         disabledReason ??
         placementComposer.busyMessage ??
@@ -379,6 +377,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onActivityPillsLayout: this.onActivityPillsLayout,
       onScrollPortRef: this.mobileScrollFades.register,
       paneId: this.presentationId,
+      ownsComposer: this.active && this.presented,
       sessionKey: state.sessionKey,
       announceTranscript: this.active && this.presented,
       showThinking: state.settings.chatShowThinking,
@@ -435,6 +434,13 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...createChatQuestionActions({
         state,
         questionState: this.questionPromptState,
+        prompts: conversationAttention.gatewayQuestionPrompts,
+        sendActions: createChatPaneSendActions(state, {
+          canSend: composerAvailability.canSend,
+          modelRequiredReason: composerAvailability.modelRequiredReason,
+          continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
+          addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
+        }),
         canSend: composerAvailability.canSend && nativeConversation && state.connected,
         isCurrent: () => this.state === state,
       }),
@@ -595,12 +601,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       ...this.chatState.attachmentInputProps(state),
       cameraActive: this.conversationPresented,
       onRemoveAttachment: this.removeBrowserAnnotation,
-      ...createChatPaneSendActions(state, {
-        canSend: composerAvailability.canSend,
-        modelRequiredReason: composerAvailability.modelRequiredReason,
-        continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
-        addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
-      }),
       ...createChatPaneRunRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
         onRewindMessage: selectedSessionArchived

@@ -104,10 +104,29 @@ export function ApplicationShell(props: {
     };
   });
   const [navResizing, setNavResizing] = createSignal(false);
+  // Plugin pages decide their sidebar from plugin navigation, which arrives after the route.
+  const [pluginRevision, setPluginRevision] = createSignal(0);
+  onSettled(() =>
+    props.host.context?.plugins.subscribe(() => setPluginRevision((value) => value + 1)),
+  );
   const view = createMemo(() => {
     props.host.shellRevision();
+    pluginRevision();
     return readShellView(props.host);
   });
+  // A page with a sidebar opens it at once after a page without one. Its next collapse
+  // change clears this, so the explicit toggle keeps its motion.
+  const navPageShown = createMemo<{ hidden: boolean; collapsed: boolean; instant: boolean }>(
+    (previous) => {
+      const { navPageHidden: hidden, navCollapsed: collapsed } = view();
+      const opened = previous?.hidden === true && !hidden;
+      return {
+        hidden,
+        collapsed,
+        instant: opened || (previous?.collapsed === collapsed && previous.instant),
+      };
+    },
+  );
   // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
   const navBackdropInert = createMemo(() => !view().navDrawerOpen);
   const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
@@ -164,6 +183,8 @@ export function ApplicationShell(props: {
             "shell--chat": view().chatLikeRoute,
             "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
+            "shell--nav-page-hidden": view().navPageHidden,
+            "shell--nav-page-shown": navPageShown().instant,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
             "shell--floating-header": view().floatingHeader,

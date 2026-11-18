@@ -75,6 +75,7 @@ const enCron = {
       newSubtitle: "Describe what OpenClaw should do, then pick when it runs.",
       back: "All automations",
       settingsTab: "Settings",
+      edit: "Edit",
       historyTitle: "Activity history",
       generalSection: "General",
       scheduleSection: "Schedule",
@@ -85,7 +86,6 @@ const enCron = {
     },
     actions: {
       runNow: "Start now",
-      runNowJob: "Start now: {name}",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
       clone: "Clone",
@@ -97,7 +97,7 @@ const enCron = {
     },
 
     attention: {
-      title: "Run failed",
+      title: "Last run failed",
       autoDisabledTitle: "Automatically stopped",
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
@@ -106,6 +106,7 @@ const enCron = {
       running: "A new run is in progress. Review its outcome before starting another run.",
       effectsUnknown: "Check for completed actions before running again.",
       reviewRun: "Review run",
+      errorDetails: "Error details",
     },
 
     jobs: {
@@ -245,7 +246,7 @@ const enCron = {
       command: "Command",
       script: "Script",
       readOnlyPayloadHelp:
-        "This task was created outside the Control UI. You can’t edit its contents here, but saving other changes keeps them.",
+        "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
       systemEvent: "Post to main timeline",
       agentTurn: "Run agent task",
       systemEventHelp: "Adds your text to the agent’s main timeline for reminders.",
@@ -271,6 +272,9 @@ const enCron = {
       toPlaceholder: "+1555… or chat ID",
       toHelp: "Optional recipient override (chat ID, phone number, or user ID).",
       advanced: "Advanced",
+      advancedTask: "Task",
+      advancedConditions: "Conditions",
+      advancedTiming: "Timing",
       advancedHelp:
         "Optional condition checks, delivery guarantees, schedule jitter, and model controls.",
       conditionTrigger: "Condition trigger",
@@ -347,7 +351,6 @@ const enCron = {
     jobState: {
       nextRelative: "Next {at}",
       waiting: "Waiting: {reason} since {since}",
-      waitingWarning: "Warning: admission deferred {count} times",
     },
     runEntry: {
       tokens: "{count} Tokens",
@@ -355,15 +358,11 @@ const enCron = {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Started at",
-      transcript: "Conversation",
-      viewTranscript: "View transcript",
-      transcriptScope:
-        "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
-      transcriptEmpty: "No messages in this conversation yet.",
-      transcriptMissingMetadata:
-        "Couldn’t open this conversation. Its session information is missing.",
-      transcriptUnavailable:
-        "Couldn’t identify this conversation. Refresh the activity history and try again.",
+      conditionCheckFailed: "Condition check failed",
+      deliveryFailed: "Delivery failed: {error}",
+      deliveryNote: "Delivery: {error}",
+      showDetails: "Show details",
+      hideDetails: "Hide details",
       next: "Next {rel}",
     },
     events: {
@@ -425,74 +424,19 @@ const enCron = {
       removed: "Scratch removed.",
       tooLarge: "Scratch exceeds the byte limit.",
     },
-    suggestions: {
-      title: "Starter automations",
-      schedules: {
-        weekdayMornings: "Weekdays at 9:00 AM",
-        everyMorning: "Daily at 8:00 AM",
-        weekly: "Mondays at 9:00 AM",
-        hourly: "Every hour",
-      },
-      ideas: {
-        repoPulse: {
-          name: "Repo pulse",
-          tagline: "Overnight issues, PRs, and CI failures, ranked by urgency.",
-          prompt:
-            "Review overnight activity in my repositories: new issues, pull requests, and CI failures. Summarize the three things that most need my attention today, each with a link and a one-line reason.",
-        },
-        standupGhostwriter: {
-          name: "Standup ghostwriter",
-          tagline: "Your standup update, drafted from yesterday's work.",
-          prompt:
-            "Draft my standup update from yesterday's commits, merged pull requests, and open review threads. Three bullets max: done, doing, blocked.",
-        },
-        hackerNewsScout: {
-          name: "Hacker News scout",
-          tagline: "Three links worth your coffee, with hot takes.",
-          prompt:
-            "Scan today's Hacker News front page for posts about AI agents, developer tooling, and TypeScript. Send me the three most interesting links, each with a one-line hot take.",
-        },
-        dependencyRadar: {
-          name: "Dependency radar",
-          tagline: "Outdated or vulnerable dependencies, with upgrade notes.",
-          prompt:
-            "Check my main project for outdated or vulnerable dependencies. List the notable updates with a one-line risk note each, and draft the upgrade command.",
-        },
-        watchdog: {
-          name: "Night watch",
-          tagline: "Hourly health check with a one-line verdict.",
-          prompt:
-            "Check that my services and gateway are healthy: scan recent logs for new errors, restarts, or unusual load. Reply with a single short all-clear line when everything is fine; if something looks broken, report what failed and where to start looking.",
-        },
-        polyglotMinute: {
-          name: "Polyglot minute",
-          tagline: "One useful foreign phrase with your morning coffee.",
-          prompt:
-            "Teach me one useful phrase in Japanese: the phrase, how to pronounce it, its literal meaning, and when to use it. Keep it under five lines.",
-        },
-      },
-    },
     list: {
-      viewLabel: "Automation views",
-      sessionFilter: "Automations attached to this session.",
-      showAll: "Show all automations",
-      searchPlaceholder: "Search automations",
       newTask: "New automation",
       filters: "Filters",
       shownOf: "{shown} of {total}",
       emptyTitle: "No automations yet",
       emptyHint: "Create an automation to schedule work for an agent.",
-      noMatching: "No automations match the current filters.",
       loadMore: "Load more",
       loading: "Loading automations…",
       schedulerOff: "Scheduler disabled",
-      refresh: "Refresh",
       refreshing: "Refreshing...",
       paused: "Paused",
-      autoDisabledRunFailures: "Auto-disabled · {count} run failures",
-      autoDisabledScheduleErrors: "Auto-disabled · {count} schedule errors",
       tasksTab: "Automations",
-      activityTab: "Activity history",
+      runHistory: "Run history",
     },
   },
 } satisfies TranslationMap;

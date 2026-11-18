@@ -306,6 +306,28 @@ it("shows AWS SDK models but hides unresolved non-OpenAI SecretRefs", async () =
   ]);
 });
 
+it("offers likely chat models only; unlikely ones stay reachable by manual entry", async () => {
+  providerAuthEvaluations.set("anthropic", {
+    availability: true,
+    routeResolution: null,
+    selectedAuthMode: "api-key",
+    evidence: "provider-config",
+  });
+  const row = (id: string) => ({
+    ...catalogModel("anthropic", id, id),
+    api: "anthropic-messages",
+  });
+  loadModelCatalog.mockResolvedValue([
+    row("claude-sonnet-4-6"),
+    { ...row("claude-voice-fixture"), inference: { chat: true, chatEvidence: "unlikely" } },
+  ]);
+  const { select } = await promptDefaultPicker();
+  expect(optionValues(pickerOptions(select))).toEqual([
+    "__manual__",
+    "anthropic/claude-sonnet-4-6",
+  ]);
+});
+
 it("keeps provider browsing cold and preserves literal labels through selection", async () => {
   pickerRuntime.resolvePluginProviders.mockReturnValue([
     { id: "nvidia", preserveLiteralProviderPrefix: true },

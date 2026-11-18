@@ -12,30 +12,22 @@ import {
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-/** Host teardown may cross exact plugin owners after ordinary admission closes. */
+/**
+ * Host teardown may cross exact plugin owners after ordinary admission closes.
+ * Once teardown returns, late calls fall through to ordinary instance admission.
+ */
 export async function runPluginCleanupScope<T>(values: readonly object[], run: () => Promise<T>) {
   const instances = new Set(
     values.map(getPluginValueInstance).filter((instance) => instance !== undefined),
   );
   const parent = pluginInvocationContext.getStore();
-  let closed = false;
-  const assertOpen = () => {
-    if (closed) {
-      throw new Error("Plugin cleanup scope is closed");
-    }
-  };
+  let released = false;
   const bindings = new Map(
     [...instances].map((instance) => [
       instance,
       {
-        run: <R>(operation: () => R) => {
-          assertOpen();
-          return instance.runCleanup(operation);
-        },
-        wrap: <R>(value: R) => {
-          assertOpen();
-          return instance.wrap(value);
-        },
+        run: <R>(operation: () => R) => instance.runCleanup(operation),
+        wrap: <R>(value: R) => instance.wrap(value),
       },
     ]),
   );
@@ -43,18 +35,13 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
     return await runWithAsyncStore(
       pluginInvocationContext,
       {
-        lookup: (instance) => {
-          const binding = bindings.get(instance);
-          if (binding) {
-            assertOpen();
-          }
-          return binding ?? parent?.lookup(instance);
-        },
+        lookup: (instance) =>
+          (released ? undefined : bindings.get(instance)) ?? parent?.lookup(instance),
       },
       run,
     );
   } finally {
-    closed = true;
+    released = true;
   }
 }
 
@@ -68,7 +55,8 @@ export class PluginInvocationScope {
   };
   private readonly parent?: PluginInvocationContext;
   private readonly registryByInstance?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
-  private closed = false;
+  /** A released scope stops routing; late calls take ordinary counted instance admission. */
+  private released = false;
 
   constructor(
     readonly registry: PluginRegistry,
@@ -119,14 +107,8 @@ export class PluginInvocationScope {
     }
   }
 
-  private assertOpen(): void {
-    if (this.closed) {
-      throw new Error("Plugin invocation scope is closed");
-    }
-  }
-
   get retainedInstances(): readonly PluginInstanceHandle[] {
-    return this.closed
+    return this.released
       ? []
       : [
           ...new Set([
@@ -147,7 +129,7 @@ export class PluginInvocationScope {
 
   /** Nested capability scopes record use without inheriting callable admission. */
   retainInvocation(instance: PluginInstanceHandle): void {
-    if (!this.closed) {
+    if (!this.released) {
       if (!this.consumers?.has(instance)) {
         this.work?.retain(instance);
       }
@@ -156,25 +138,26 @@ export class PluginInvocationScope {
   }
 
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {
+    if (this.released) {
+      return undefined;
+    }
     let binding = this.bindings.get(instance);
     const registry = this.registryByInstance?.get(instance);
     if (!binding && this.work && registry) {
-      this.assertOpen();
       binding = {
         run: (run) => this.run(() => instance.runInRegistry(registry, run)),
         wrap: instance.createRegistryView(registry, (run) => this.run(run)),
       };
       this.bindings.set(instance, binding);
     }
-    if (binding) {
-      this.assertOpen();
-    }
     this.retainInvocation(instance);
     return binding;
   }
 
   run<T>(run: () => T): T {
-    this.assertOpen();
+    if (this.released) {
+      return run();
+    }
     if (this.consumers?.size && pluginInvocationContext.getStore() !== this) {
       // A child owns its streams; inherited caller tokens must not capture them.
       // Consumer reentry within this scope keeps the token it just installed.
@@ -195,7 +178,10 @@ export class PluginInvocationScope {
 
   /** Transfer custody before revoking callbacks captured by ordinary engine operations. */
   beginCleanup(): { scope: PluginInvocationScope; release: () => Promise<void> } {
-    this.assertOpen();
+    if (this.released) {
+      // Consumers already settled; teardown takes ordinary instance admission.
+      return { scope: new PluginInvocationScope(this.registry, []), release: async () => {} };
+    }
     // Retained scopes install teardown bindings below, not temporary ordinary views.
     const cleanup = new PluginInvocationScope(
       this.registry,
@@ -212,10 +198,13 @@ export class PluginInvocationScope {
             throw new Error("Plugin consumer cleanup has no invocation");
           }
           // Transfer only the teardown token, never the closed operation scope or caller authority.
+          // Teardown authority ends with the cleanup owner; later calls take ordinary admission.
           const run = <T>(operation: () => T): T =>
-            cleanup.run(() =>
-              pluginInstanceInvocation.run(teardown, () => instance.runCleanup(operation)),
-            );
+            cleanup.released
+              ? instance.run(operation)
+              : cleanup.run(() =>
+                  pluginInstanceInvocation.run(teardown, () => instance.runCleanup(operation)),
+                );
           cleanup.bindings.set(instance, {
             run,
             wrap: instance.createRegistryView(this.registry, run),
@@ -225,7 +214,8 @@ export class PluginInvocationScope {
       ),
     );
     void closed.catch(() => {});
-    this.closed = true;
+    this.released = true;
+    this.bindings.clear();
     return {
       scope: cleanup,
       release: async () => {
@@ -237,10 +227,12 @@ export class PluginInvocationScope {
   }
 
   release(): void {
-    if (this.closed) {
+    if (this.released) {
       return;
     }
-    this.closed = true;
+    this.released = true;
+    // Async continuations may keep this scope ambient; it no longer holds instance views.
+    this.bindings.clear();
     for (const consumer of this.consumers?.values() ?? []) {
       consumer.release();
     }

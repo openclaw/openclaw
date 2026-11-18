@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getSpawnBroker } from "../process/spawn-broker/context-state.js";
+import { restoreExecaResult } from "../process/spawn-broker/execa-protocol.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
@@ -78,9 +80,16 @@ export async function prepareChildRuntimeViability(params?: {
   let available = !(runtime.execPath === execPath && runtime.failure);
   if (available) {
     try {
-      await fs.access(execPath, constants.X_OK);
+      const probe = await probeChildRuntimeExecutable(execPath);
+      const identity = await fs.stat(execPath).then(formatExecutableIdentity, () => undefined);
+      available = !classifyRuntimeProbe(execPath, probe, identity, probe.error);
     } catch (error) {
-      available = publishRuntimeViability(execPath, error).available;
+      // A failed broker transport must not hide a runtime removed during restart.
+      const cause = await fs.stat(execPath).then(
+        () => error,
+        (statError: unknown) => statError,
+      );
+      available = publishRuntimeViability(execPath, cause).available;
     }
   }
   return {
@@ -140,11 +149,33 @@ function runtimeProbeOptions(options: { env?: NodeJS.ProcessEnv; cwd?: string } 
   };
 }
 
-/** Native launch avoids recursing into the command owner's runtime diagnosis. */
-export function probeChildRuntimeExecutable(
+/** Direct transport launch avoids recursing into the command owner's runtime diagnosis. */
+export async function probeChildRuntimeExecutable(
   execPath: string,
   options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): Promise<RuntimeProbe> {
+  const broker = getSpawnBroker();
+  if (broker) {
+    const remote = broker.spawnExeca([execPath, "--version"], {
+      ...runtimeProbeOptions(options),
+      extendEnv: false,
+      stripFinalNewline: false,
+      stdin: "ignore",
+    });
+    remote.child.once("spawn", () => {
+      remote.child.stdout?.resume();
+      remote.child.stderr?.resume();
+    });
+    const result = restoreExecaResult(await remote.result);
+    await remote.child.waitForClose();
+    return {
+      stdout: typeof result.stdout === "string" ? result.stdout : "",
+      stderr: typeof result.stderr === "string" ? result.stderr : "",
+      error: result instanceof Error ? result : undefined,
+      status: result.exitCode ?? null,
+      signal: result.signal ?? null,
+    };
+  }
   return new Promise((resolve) => {
     execFile(execPath, ["--version"], runtimeProbeOptions(options), (error, stdout, stderr) =>
       resolve({
@@ -181,13 +212,15 @@ export function assertChildRuntimeAvailable(): void {
   }
 }
 
-function recordUnavailableRuntime(execPath: string, cause?: unknown): Error {
+function recordUnavailableRuntime(execPath: string, cause?: unknown, stderr?: string): Error {
   if (runtime.execPath === execPath && runtime.failure) {
     return runtime.failure;
   }
   runtime.execPath = execPath;
+  const warning = formatMissingChildRuntimeWarning({ execPath, available: false });
+  const detail = stderr?.trim();
   runtime.failure = Object.assign(
-    new Error(formatMissingChildRuntimeWarning({ execPath, available: false }), { cause }),
+    new Error(detail ? `${warning}\n${detail}` : warning, { cause }),
     { code: "NODE_RUNTIME_UNAVAILABLE" },
   );
   createSubsystemLogger("gateway/runtime").error(runtime.failure.message);
@@ -229,7 +262,7 @@ function classifyRuntimeProbe(
         hasErrnoCode(probe.error, "ENOEXEC") ||
         hasErrnoCode(probe.error, "EACCES") ||
         hasErrnoCode(probe.error, "EPERM")));
-  return unavailable ? recordUnavailableRuntime(execPath, cause) : undefined;
+  return unavailable ? recordUnavailableRuntime(execPath, cause, probe.stderr) : undefined;
 }
 
 /** The public synchronous SQLite reader retains immediate failure classification. */
@@ -245,7 +278,7 @@ export function classifyChildRuntimeFailure(params: RuntimeFailure): Error | und
     loaderFailure.test(params.stderr ?? "") ||
     (params.error && !readChildRuntimeViability({ execPath }).available)
   ) {
-    return recordUnavailableRuntime(execPath, params.error);
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
   if (!needsRuntimeProbe(params)) {
     return undefined;
@@ -273,9 +306,9 @@ export async function prepareChildRuntimeFailure(
     loaderFailure.test(params.stderr ?? "") ||
     (params.error && !(await prepareChildRuntimeViability({ execPath })).publish().available)
   ) {
-    return recordUnavailableRuntime(execPath, params.error);
+    return recordUnavailableRuntime(execPath, params.error, params.stderr);
   }
-  if (!needsRuntimeProbe(params)) {
+  if (params.error || !needsRuntimeProbe(params)) {
     return undefined;
   }
   // IPC can fail before stderr arrives. Worker-only crashes must not disable healthy Node.
