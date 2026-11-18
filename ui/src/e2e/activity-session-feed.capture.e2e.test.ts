@@ -54,6 +54,7 @@ suite.define(() => {
 
         for (const width of [1600, 820, 390]) {
           await page.setViewportSize({ width, height: 900 });
+          await firstRow.hover();
           const bounds = await main.evaluate((element) => {
             const rect = element.getBoundingClientRect();
             return {
@@ -93,7 +94,11 @@ suite.define(() => {
               expect((await toolbar.boundingBox())!.y).toBe(toolbarTop);
             }
             await page.mouse.wheel(0, -300);
-            await expect.poll(async () => (await firstRow.boundingBox())!.y).toBe(rowTop);
+            await expect
+              .poll(async () => (await firstRow.boundingBox())!.y, {
+                message: `Return to the starting row position at ${width}px from the ${side}`,
+              })
+              .toBe(rowTop);
           }
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
