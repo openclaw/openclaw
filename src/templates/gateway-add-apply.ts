@@ -21,9 +21,8 @@ import {
   refuseAdmittedTemplateAgent,
   templateInitializationCheckpoints,
   type AdmittedTemplateAgent,
-  type PreparedAgentChat,
 } from "./gateway-add-continuation.js";
-import type { GatewayTemplateAddInput } from "./gateway-add-input.js";
+import type { GatewayTemplateAddInput, PreparedAgentChat } from "./gateway-add-input.js";
 import {
   buildGatewayTemplateAddPlan,
   projectGatewayTemplateAddPlan,

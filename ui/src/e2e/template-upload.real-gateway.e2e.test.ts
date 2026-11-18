@@ -55,7 +55,9 @@ const suite = createControlUiE2eSuite({
     });
     const cleanup = () =>
       runQaGatewayFixture(
-        () => instance?.cleanup(),
+        async () => {
+          await instance?.cleanup();
+        },
         async () => {
           provider.listener.closeAllConnections();
           await provider.releaseListener();

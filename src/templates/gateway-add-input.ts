@@ -10,12 +10,19 @@ import type { StatelessTemplateAddOptions } from "./add-stateless.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
 import type { TemplateSetupReport } from "./conversation.js";
 import type { TemplateCronGateway, PersistedTemplateCronRef } from "./cron.js";
-import type { PreparedAgentChat } from "./gateway-add-continuation.js";
 import type { GatewayTemplateAddPlanningContext } from "./gateway-add-plan.js";
 import type { TemplateAddSource, TemplateAddStageHook } from "./gateway-add-source.js";
 import type { TemplateAddPlan } from "./types.js";
 
 type TemplateAgentConfig = TemplateAddPlan["agent"]["config"];
+
+export type PreparedAgentChat = (() => Promise<void>) & {
+  assertCurrent?: () => Promise<void>;
+  complete?: (templateSetup?: SessionEntry["templateSetup"]) => Promise<void>;
+  checkpoint?: (
+    initialization: NonNullable<SessionEntry["templateInitialization"]>,
+  ) => Promise<void>;
+};
 
 export type ChatTemplateAddInput = ClawHubFetchOptions & {
   source: ClawHubCoordinate;

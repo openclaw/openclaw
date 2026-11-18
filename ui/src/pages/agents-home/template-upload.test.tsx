@@ -18,7 +18,8 @@ const gateway = vi.hoisted(() => ({
   selectAgent: vi.fn(),
   setSessionKey: vi.fn(),
 }));
-vi.mock("../../lib/reactive/context.ts", () => ({
+vi.mock("../../lib/reactive/context.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/reactive/context.ts")>()),
   useApplication: () => ({
     basePath: "",
     agents: { refreshList: gateway.refreshList, state: { agentsList: null } },
@@ -28,7 +29,8 @@ vi.mock("../../lib/reactive/context.ts", () => ({
     navigate: gateway.navigate,
   }),
 }));
-vi.mock("../../lib/reactive/gateway-page.ts", () => ({
+vi.mock("../../lib/reactive/gateway-page.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/reactive/gateway-page.ts")>()),
   useGatewayPage: () => ({
     snapshot: {
       client: {},
@@ -42,10 +44,12 @@ vi.mock("../../lib/reactive/gateway-page.ts", () => ({
     isCurrent: () => true,
   }),
 }));
-vi.mock("../../lib/blob-data-url.ts", () => ({
+vi.mock("../../lib/blob-data-url.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/blob-data-url.ts")>()),
   readBlobAsDataUrl: async () => "data:application/gzip;base64,YQ==",
 }));
-vi.mock("./templates-catalog-client.ts", () => ({
+vi.mock("./templates-catalog-client.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./templates-catalog-client.ts")>()),
   readTemplateAddReviewPlan: gateway.plan,
   applyTemplateUpload: gateway.apply,
 }));
@@ -85,9 +89,7 @@ describe("TemplateUpload", () => {
         <TemplateUpload />
       </ShellLayoutProvider>
     ));
-    expect(
-      view.getAllByRole("button", { name: "Import", exact: true }).at(-1)!.textContent,
-    ).toContain("Import");
+    expect(view.getAllByRole("button", { name: "Import" }).at(-1)!.textContent).toContain("Import");
     const release = owner.registerHeaderActions(slot);
     flush();
     expect(view.container.querySelector('button[aria-label="Import"]')).toBeNull();
@@ -114,13 +116,11 @@ describe("TemplateUpload", () => {
       expect(
         within(view.container.querySelector("openclaw-modal-dialog")!).getByRole("button", {
           name: "Import",
-          exact: true,
         }),
       ).toBeTruthy(),
     );
     const confirm = view.getByRole("button", {
       name: "Import",
-      exact: true,
     }) as HTMLButtonElement;
     confirm.click();
     flush();
@@ -144,7 +144,6 @@ describe("TemplateUpload", () => {
     gateway.refreshList.mockReturnValue(refreshing.promise);
     const openChat = view.getByRole("button", {
       name: "Open chat",
-      exact: true,
     }) as HTMLButtonElement;
     openChat.click();
     flush();
@@ -171,7 +170,7 @@ describe("TemplateUpload", () => {
     const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
     fireEvent.change(input, { target: { files: [new File(["archive"], "example.tgz")] } });
     await waitFor(() => expect(view.getByRole("status").textContent).toBe("Reviewing template…"));
-    const cancel = view.getByRole("button", { name: "Cancel", exact: true }) as HTMLButtonElement;
+    const cancel = view.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
     expect(cancel.disabled).toBe(false);
     cancel.click();
     planning.resolve(plan);
@@ -187,7 +186,7 @@ describe("TemplateUpload", () => {
     const choose = vi.spyOn(input, "click");
     fireEvent.change(input, { target: { files: [new File(["archive"], "wrong.txt")] } });
     await waitFor(() => expect(view.getByRole("alert").textContent).toContain(".tgz"));
-    const change = view.getAllByRole("button", { name: "Change file", exact: true }).at(-1)!;
+    const change = view.getAllByRole("button", { name: "Change file" }).at(-1)!;
     change.click();
     expect(choose).toHaveBeenCalledOnce();
     expect(gateway.plan).not.toHaveBeenCalled();
@@ -204,19 +203,17 @@ describe("TemplateUpload", () => {
       expect(
         within(view.container.querySelector("openclaw-modal-dialog")!).getByRole("button", {
           name: "Import",
-          exact: true,
         }),
       ).toBeTruthy(),
     );
     within(view.container.querySelector("openclaw-modal-dialog")!)
-      .getByRole("button", { name: "Import", exact: true })
+      .getByRole("button", { name: "Import" })
       .click();
     await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Connection lost"));
-    expect(view.queryByRole("button", { name: "Change file", exact: true })).toBeNull();
+    expect(view.queryByRole("button", { name: "Change file" })).toBeNull();
     expect(
       within(view.container.querySelector("openclaw-modal-dialog")!).queryByRole("button", {
         name: "Import",
-        exact: true,
       }),
     ).toBeNull();
     expect(gateway.apply).toHaveBeenCalledOnce();

@@ -79,7 +79,7 @@ describe("shared local Template review", () => {
     expect(view.container.querySelector(".template-package-art svg")).not.toBeNull();
     view.getByRole("button", { name: /Workspace files/ }).click();
     flush();
-    view.getByRole("button", { name: "SOUL.md", exact: true }).click();
+    view.getByRole("button", { name: "SOUL.md" }).click();
     flush();
     expect(view.container.textContent).toContain("Reviewed instructions");
     view.getByRole("button", { name: "Back to contents" }).click();
@@ -88,7 +88,7 @@ describe("shared local Template review", () => {
     flush();
     view.getByRole("button", { name: /Skills/ }).click();
     flush();
-    expect(view.getByRole("button", { name: "@example/weather", exact: true })).toBeTruthy();
+    expect(view.getByRole("button", { name: "@example/weather" })).toBeTruthy();
     view.unmount();
   });
 
@@ -138,7 +138,7 @@ describe("shared local Template review", () => {
     ));
     view.getByRole("button", { name: /MCP servers/ }).click();
     flush();
-    view.getByRole("button", { name: "incident-tools", exact: true }).click();
+    view.getByRole("button", { name: "incident-tools" }).click();
     flush();
     expect(view.getByText("Arguments")).toBeTruthy();
     expect(view.getByText("--isolated")).toBeTruthy();
@@ -150,7 +150,7 @@ describe("shared local Template review", () => {
     flush();
     view.getByRole("button", { name: /Automations/ }).click();
     flush();
-    view.getByRole("button", { name: "Morning briefing", exact: true }).click();
+    view.getByRole("button", { name: "Morning briefing" }).click();
     flush();
     expect(view.getByText("Prepare briefing")).toBeTruthy();
     view.unmount();

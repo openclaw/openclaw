@@ -157,13 +157,7 @@ it.each([
         ? projectGatewayTemplateAddPlan(
             await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} }),
             source,
-            {
-              riskAcknowledgementRequired: false,
-              trustRecord: {
-                clawhubTrustDisposition: "clean",
-                clawhubTrustCheckedAt: "2026-11-04T00:00:00.000Z",
-              },
-            },
+            { riskAcknowledgementRequired: false },
             config,
           )
         : undefined;
@@ -210,7 +204,7 @@ it.each([
           ),
         ).toBe("A calm fixture personality.\n");
       });
-      const applyInput: Parameters<typeof applyTemplateAddForGateway>[0] = {
+      const applyInput = {
         source: { packageName: "@fixture/template-first", version: "1.0.0" },
         ...(outcome.startsWith("admitted-")
           ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
@@ -267,7 +261,7 @@ it.each([
           return outcome === "restart-required" ? "applied-restart-required" : "applied";
         },
         onAgentReady,
-      };
+      } satisfies Parameters<typeof applyTemplateAddForGateway>[0];
       let result = await applyTemplateAddForGateway(applyInput);
       if (outcome === "admitted-reviewed-chat-retry") {
         // The reviewed path writes this real pending entry before runtime admission
