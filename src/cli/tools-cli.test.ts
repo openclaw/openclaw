@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
-import { registerToolsCli } from "./tools-cli.js";
+import { boundedInteger, registerToolsCli } from "./tools-cli.js";
 
 const mocks = vi.hoisted(() => ({ call: vi.fn(), writeJson: vi.fn(), log: vi.fn() }));
 // mock-isolation: Exercise command parsing without a Gateway or operator configuration.
@@ -48,7 +48,7 @@ it.each([
   expect(mocks.log).not.toHaveBeenCalled();
 });
 
-it.each(["0", "91", "2.5", "not-a-number"])(
+it.each(["0", "91", "2.5", "1e2", "0x10", "not-a-number"])(
   "rejects invalid import days %s before RPC",
   async (days) => {
     await expect(run(["import", "--since", days])).rejects.toThrow(
@@ -57,3 +57,7 @@ it.each(["0", "91", "2.5", "not-a-number"])(
     expect(mocks.call).not.toHaveBeenCalled();
   },
 );
+
+it("accepts a decimal integer within the bound", () => {
+  expect(boundedInteger("10", 90)).toBe(10);
+});
