@@ -209,18 +209,6 @@ describe("followup queue authority", () => {
                   agents: "*",
                   sessions: { others: "none" },
                 },
-                narrowed: {
-                  scopes: ["operator.read", "operator.write"],
-                  agents: "*",
-                  sessions: { others: "none" },
-                  modelPolicy: { allow: ["fixture/a"] },
-                },
-                widened: {
-                  scopes: ["operator.read", "operator.write"],
-                  agents: "*",
-                  sessions: { others: "none" },
-                  modelPolicy: { allow: ["fixture/a", "fixture/b", "fixture/c"] },
-                },
                 restricted: {
                   scopes: ["operator.read", "operator.write"],
                   agents: [],
@@ -278,10 +266,12 @@ describe("followup queue authority", () => {
             config.agents.list[0].model.fallbacks =
               restriction === "sourceAgent narrowing" ? [] : ["fixture/b", "fixture/c"];
           } else if (restriction.startsWith("model policy")) {
-            config.gateway.roles.definitions.writer.modelPolicy =
-              config.gateway.roles.definitions[
-                restriction === "model policy narrowing" ? "narrowed" : "widened"
-              ].modelPolicy;
+            config.gateway.roles.definitions.writer.modelPolicy = {
+              allow:
+                restriction === "model policy narrowing"
+                  ? ["fixture/a"]
+                  : ["fixture/a", "fixture/b", "fixture/c"],
+            };
           } else {
             setUserProfileRole(
               profile.id,
