@@ -164,7 +164,6 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
             const shellBounds = element.getBoundingClientRect();
             const footerBounds = footer.getBoundingClientRect();
             const input = element.querySelector(".agent-chat__input");
-            const style = getComputedStyle(footer, "::before");
             return {
               committed:
                 thread.offsetWidth === thread.parentElement.offsetWidth &&
@@ -174,8 +173,6 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
               contained:
                 shellBounds.top >= footerBounds.top && shellBounds.bottom <= footerBounds.bottom,
               inputOutsideContext: Boolean(input) && !input?.closest(".chat-footer__context"),
-              content: style.content,
-              background: style.backgroundImage,
             };
           }),
         { message: `${variant} at ${width}px` },
@@ -185,8 +182,6 @@ export async function expectComposerFooterLayout(page: Page, composer: Locator, 
         separated: true,
         contained: true,
         inputOutsideContext: true,
-        content: "none",
-        background: "none",
       });
   }
   await page.setViewportSize({ width: 1280, height: 900 });

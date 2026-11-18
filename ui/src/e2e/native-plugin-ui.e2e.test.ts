@@ -16,6 +16,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import {
   captureNativeWorkspaceFailure,
   catalog,
+  expectComposerFooterLayout,
   installNativeWorkspaceLitErrorTrace,
   pluginId,
   pluginModule,
@@ -484,6 +485,7 @@ suite.define(() => {
         if (replacement === "ui-fixture/failing-composer") {
           await page.getByRole("alert").filter({ hasText: "Fixture composer failed" }).waitFor();
         }
+        await expectComposerFooterLayout(page, composer, replacement || "Built-in");
       }
       await selectView(page, "Composer", composerView);
       const fixtureDraft = page.getByLabel("Fixture draft", { exact: true });
