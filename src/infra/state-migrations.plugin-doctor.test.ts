@@ -1,4 +1,7 @@
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
+import { hostname } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
@@ -6,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease-error.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -88,6 +92,7 @@ const skippedNotices = [
 ];
 
 afterEach(async () => {
+  vi.useRealTimers();
   controls.entries = [];
   controls.failSettlement = false;
   closeOpenClawAgentDatabasesForTest();
@@ -346,3 +351,47 @@ it.each([false, true])(
     });
   },
 );
+
+it("waits out a lifecycle lease that a stopped pre-2026.11.5 Gateway left behind", async () => {
+  const env = await repairEnv();
+  controls.entries = [postEntry("owner", "action", { detectLegacyState: () => null })];
+  const params = { ...repairParams(env), beforeCompletion: async () => {} };
+  await expect(repairPluginState(params)).resolves.toMatchObject({ warnings: [] });
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  {
+    using db = new DatabaseSync(databasePath);
+    // Published Gateways record pid, host and start time, but no process namespace.
+    const owner = {
+      pid: spawnSync(process.execPath, ["-e", ""]).pid,
+      host: hostname(),
+      startedAt: 1,
+    };
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO state_leases (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
+       VALUES ('core:plugin-lifecycle', 'global', 'stopped-gateway', ?, ?, ?, ?, ?)`,
+    ).run(now + 300_000, now, JSON.stringify({ owner }), now, now);
+  }
+  // Only the wait deadline's clock is fake; lease work and its retries run in real time.
+  vi.useFakeTimers({ toFake: ["performance"] });
+  let settled = false;
+  const repair = repairPluginState(params).finally(() => {
+    settled = true;
+  });
+  for (let step = 0; step < 20 && !settled; step += 1) {
+    vi.advanceTimersByTime(1_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
+  }
+  expect(settled).toBe(false);
+  // End the abandoned term from another process; a synchronous write here would
+  // block the event loop that admits the waiting Doctor's own lease transactions.
+  const expire = spawn(process.execPath, [
+    "-e",
+    `new (require("node:sqlite").DatabaseSync)(process.argv[1], { timeout: 30000 })
+       .prepare("DELETE FROM state_leases WHERE owner = 'stopped-gateway'").run();`,
+    databasePath,
+  ]);
+  expect(await once(expire, "exit")).toEqual([0, null]);
+  await expect(repair).resolves.toMatchObject({ completedPluginIds: ["owner"], warnings: [] });
+});
