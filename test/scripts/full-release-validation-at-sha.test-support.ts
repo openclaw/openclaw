@@ -26,55 +26,6 @@ export {
   runGit,
 } from "./full-release-validation-at-sha.repository.test-support.js";
 
-export function runToolingLagPreflight(
-  failure: "resolve" | "rev-list" | "shortstat" | "dirstat" | "main-fetch" | "package-source",
-) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-tooling-lag-"));
-  const preload = resolve("test/scripts/full-release-validation-at-sha.preflight-fixture.mjs");
-  const sources: Record<string, string> = {
-    "package.json": JSON.stringify({ version: "2026.8.1" }),
-    "CHANGELOG.md": "## 2026.8.1\n\nRelease notes for the selected synthetic candidate.\n",
-  };
-  for (const path of [
-    ".github/workflows/full-release-validation.yml",
-    ".github/workflows/openclaw-release-prepare.yml",
-    "scripts/lib/upgrade-survivor-scenarios.json",
-  ]) {
-    sources[path] = readFileSync(path, "utf8");
-  }
-  const sourcesPath = join(root, "sources.json");
-  writeFileSync(sourcesPath, JSON.stringify(sources));
-  try {
-    return spawnSync(
-      testNodeExecPath,
-      [
-        SCRIPT_PATH,
-        "--sha",
-        "a".repeat(40),
-        "--target-ref",
-        "release/2026.8.1",
-        "--admission-workflow-sha",
-        "b".repeat(40),
-        "--dry-run",
-        "-f",
-        "validation_purpose=diagnostic",
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import", preload].filter(Boolean).join(" "),
-          MOCK_PREFLIGHT_SOURCES: sourcesPath,
-          MOCK_PREFLIGHT_FAILURE: failure,
-        },
-      },
-    );
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-}
-
 type DispatchWorkflow = { on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } } };
 
 export function expectDispatchFailure(
@@ -150,6 +101,7 @@ export function createDispatchFixture(
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
     toolingLagFetchFailure?: boolean;
+    toolingLagComparisonFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
@@ -241,6 +193,9 @@ for (const method of ["execFileSync", "spawnSync"]) {
       const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
         .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
       if (mainFetches.length > 1) failure = "fixture origin/main fetch failed";
+    }
+    if (args[0] === "diff" && args.includes("--shortstat") && ${JSON.stringify(options.toolingLagComparisonFailure ?? false)}) {
+      failure = "fixture tooling comparison failed";
     }
     const bareFetch = args.includes("https://github.com/openclaw/openclaw.git");
     if (bareFetch && ${JSON.stringify(options.bareShaFetchFailure ?? false)}) {

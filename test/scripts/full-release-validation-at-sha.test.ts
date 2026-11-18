@@ -33,7 +33,6 @@ import {
   LEGACY_WORKFLOW_SOURCE,
   runGit,
   createDispatchFixture,
-  runToolingLagPreflight,
   ghApiEndpoint,
   ghApiMethod,
   isWorkflowDispatch,
@@ -47,33 +46,17 @@ function rejectArgs(args: string[], error: string) {
 }
 
 describe("full-release-validation-at-sha", () => {
-  it.each(["resolve", "rev-list", "shortstat", "dirstat"] as const)(
-    "keeps tooling-lag %s failures advisory through the CLI",
-    (failure) => {
-      const result = runToolingLagPreflight(failure);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain("WARNING: candidate tooling lag is unavailable");
-      expect(result.stdout).toContain("Validation SHA: " + "a".repeat(40));
-      expect(result.stdout).toContain("Tooling SHA: " + "a".repeat(40));
-      expect(result.stdout).toContain("(dry run; not written)");
-      expect(result.stdout).toContain(
-        "/full-release-validation.yml/dispatches (input values omitted)",
-      );
-    },
-  );
+  it("continues candidate dispatch after a tooling comparison fails", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      toolingLagComparisonFailure: true,
+    });
+    const result = fixture.run();
 
-  it.each(["main-fetch", "package-source"] as const)(
-    "keeps the %s prerequisite fatal through the CLI",
-    (failure) => {
-      const result = runToolingLagPreflight(failure);
-      expect(result.status, result.stderr).toBe(1);
-      expect(result.stderr).toContain("[full-release-validation] FAILED");
-      expect(result.stderr).toContain(
-        failure === "main-fetch" ? "fixture Git main-fetch failed" : "Unable to read package.json",
-      );
-      expect(result.stdout).not.toContain("/full-release-validation.yml/dispatches");
-    },
-  );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("WARNING: candidate tooling lag is unavailable");
+    expect(fixture.dispatches()).toHaveLength(2);
+  });
 
   it("reports patch-inequivalent main FRV tooling without changing frozen Q", () => {
     const candidateSha = "a".repeat(40);
