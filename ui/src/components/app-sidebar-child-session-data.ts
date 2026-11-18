@@ -286,8 +286,13 @@ export function applySidebarChildSessionSnapshot(
       query.childRead = params.captureChildRead();
     }
     query.loading = true;
-    owner.loadingChildSessionKeys = new Set([...owner.loadingChildSessionKeys, parentKey]);
-    owner.requestSessionDataUpdate();
+    // Revalidation keeps the accepted window, so only a first fill is loading.
+    // Parents whose loaded children are all hidden runs would otherwise flash
+    // a skeleton row on every child event.
+    if (!owner.loadedChildSessionKeys.has(parentKey)) {
+      owner.loadingChildSessionKeys = new Set([...owner.loadingChildSessionKeys, parentKey]);
+      owner.requestSessionDataUpdate();
+    }
     return;
   }
   if (snapshot.error) {

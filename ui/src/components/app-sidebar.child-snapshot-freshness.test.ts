@@ -325,7 +325,7 @@ it("retires collapsed child state after an event refresh finishes", async () => 
   vi.useFakeTimers();
   try {
     await publishChildChanged();
-    expect(data.loadingChildSessionKeys.has(parentKey)).toBe(true);
+    expect(harness.list).toHaveBeenCalledTimes(2);
     expand();
     await sidebar.updateComplete;
     refresh.resolve(result([{ ...child, status: "done", hasActiveRun: false }]));
@@ -369,6 +369,65 @@ it("keeps loaded children visible while a child event revalidates them", async (
   );
   expect(sidebar.querySelectorAll(`[data-session-key="${childKey}"]`)).toHaveLength(1);
   expect(rowElement(sidebar, sibling.key)).toBeNull();
+});
+
+it("keeps an expanded parent steady while it revalidates hidden-only children", async () => {
+  // A running parent whose children are all subagent runs or system sessions
+  // shows no child rows, yet every child event revalidates its window.
+  const publicationKey = "agent:main:dashboard:github-publication-1";
+  const runKey = "agent:main:subagent:run-1";
+  const harness = createSessionsHarness("main", [parentKey]);
+  const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+  harness.publishList({
+    result: result([{ ...parentRow, childSessions: [publicationKey, runKey] }]),
+  });
+  const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+  const data = sidebar.sessionData;
+  await sidebar.updateComplete;
+  let refresh: Promise<SessionsListResult> | undefined;
+  harness.list.mockImplementation((options) =>
+    options?.spawnedBy === parentKey
+      ? (refresh ??
+        Promise.resolve(
+          result([
+            {
+              key: publicationKey,
+              spawnedBy: parentKey,
+              kind: "direct",
+              createdActor: { type: "system", id: "gateway" },
+              updatedAt: 1,
+            },
+            { key: runKey, spawnedBy: parentKey, kind: "direct", updatedAt: 1 },
+          ]),
+        ))
+      : Promise.resolve(result([])),
+  );
+  childToggle(sidebar)!.click();
+  await waitForFast(() => expect(data.loadedChildSessionKeys.has(parentKey)).toBe(true));
+  await settleLitElement(sidebar);
+  expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
+  expect(sidebar.querySelector(".sidebar-session-tree__loading")).toBeNull();
+  const readsBeforeEvent = harness.list.mock.calls.length;
+
+  const pending = deferred<SessionsListResult>();
+  refresh = pending.promise;
+  vi.useFakeTimers();
+  try {
+    gatewayHarness.publishEvent("sessions.changed", {
+      sessionKey: runKey,
+      agentId: "main",
+      reason: "patch",
+      spawnedBy: parentKey,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(harness.list.mock.calls.length).toBeGreaterThan(readsBeforeEvent);
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-session-tree__loading")).toBeNull();
+    expect(data.loadingChildSessionKeys.has(parentKey)).toBe(false);
+  } finally {
+    pending.resolve(result([]));
+    vi.useRealTimers();
+  }
 });
 
 it.each(["shared rejection", "incomplete window"] as const)(
