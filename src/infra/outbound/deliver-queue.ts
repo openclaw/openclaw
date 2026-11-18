@@ -295,7 +295,7 @@ async function runOutboundDeliveryWithQueue(
         accountId: params.accountId,
         sessionKeyForInternalHooks: params.session?.key,
         isGroup: params.session?.conversationType === "group",
-        runId: params.replyPayloadSendingHook?.runId,
+        runId: params.runId ?? params.replyPayloadSendingHook?.runId,
         logPrefix: OUTBOUND_DELIVERY_LOG_SCOPE,
       });
       for (const payload of params.payloads) {

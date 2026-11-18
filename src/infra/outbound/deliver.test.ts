@@ -1370,34 +1370,48 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
-  it("emits one message_sent failure per payload when batch preparation fails", async () => {
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "message_sent" || hookName === "reply_payload_sending",
-    );
-    hookMocks.runner.runReplyPayloadSending.mockRejectedValueOnce(new Error("modifier exploded"));
-    const sendMatrix = vi.fn();
+  it.each([
+    { runId: "admitted-run", hookRunId: undefined, expectedRunId: "admitted-run" },
+    { runId: "admitted-run", hookRunId: "legacy-hook-run", expectedRunId: "admitted-run" },
+    { runId: undefined, hookRunId: "legacy-hook-run", expectedRunId: "legacy-hook-run" },
+    { runId: undefined, hookRunId: undefined, expectedRunId: undefined },
+  ])(
+    "preserves admitted run correlation when preparation fails: %j",
+    async ({ runId, hookRunId, expectedRunId }) => {
+      hookMocks.runner.hasHooks.mockImplementation(
+        (hookName?: string) => hookName === "message_sent" || hookName === "reply_payload_sending",
+      );
+      hookMocks.runner.runReplyPayloadSending.mockRejectedValueOnce(new Error("modifier exploded"));
+      const sendMatrix = vi.fn();
 
-    await expect(
-      deliverMatrix({
-        payloads: [{ text: "first payload" }, { text: "second payload" }],
-        deps: { matrix: sendMatrix },
-        replyPayloadSendingHook: {
-          kind: "final",
-          channel: "matrix",
-          context: { channelId: "matrix", conversationId: "!room:example" },
-        },
-      }),
-    ).rejects.toThrow("modifier exploded");
+      await expect(
+        deliverMatrix({
+          payloads: [{ text: "first payload" }, { text: "second payload" }],
+          runId,
+          deps: { matrix: sendMatrix },
+          replyPayloadSendingHook: {
+            kind: "final",
+            channel: "matrix",
+            context: { channelId: "matrix", conversationId: "!room:example" },
+            runId: hookRunId,
+          },
+        }),
+      ).rejects.toThrow("modifier exploded");
 
-    expect(sendMatrix).not.toHaveBeenCalled();
-    // Preparation aborts the whole batch: hooks must see every logical
-    // payload fail, matching the per-payload audit terminals.
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
-    const contents = hookMocks.runner.runMessageSent.mock.calls.map(
-      (call) => (call[0] as { content?: string }).content,
-    );
-    expect(contents).toEqual(["first payload", "second payload"]);
-  });
+      expect(sendMatrix).not.toHaveBeenCalled();
+      // Preparation aborts the whole batch: hooks must see every logical
+      // payload fail, matching the per-payload audit terminals.
+      expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
+      const contents = hookMocks.runner.runMessageSent.mock.calls.map(
+        (call) => (call[0] as { content?: string }).content,
+      );
+      expect(contents).toEqual(["first payload", "second payload"]);
+      for (const [event] of hookMocks.runner.runMessageSent.mock.calls) {
+        expect(event).toMatchObject({ success: false });
+        expect((event as { runId?: string }).runId).toBe(expectedRunId);
+      }
+    },
+  );
 
   it("retains custody when caller-owned retirement fails", async () => {
     queueMocks.moveToFailed.mockRejectedValueOnce(new Error("claim was replaced"));
