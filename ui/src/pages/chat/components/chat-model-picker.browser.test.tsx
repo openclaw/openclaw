@@ -141,8 +141,8 @@ it("centers provider icons with their model labels in search results", async () 
   await open();
   await page.getByRole("combobox", { name: "Search models" }).fill("Example");
   // Compare settled geometry, not two samples during the opening transform.
-  const surface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
-  await Promise.all(surface.getAnimations().map((animation) => animation.finished));
+  const pickerSurface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+  await Promise.all(pickerSurface.getAnimations().map((animation) => animation.finished));
   for (const value of ["openai/sol", "clawrouter/astra"]) {
     const row = option(value);
     const icon = row.querySelector<HTMLElement>(".provider-brand-icon")!.getBoundingClientRect();
