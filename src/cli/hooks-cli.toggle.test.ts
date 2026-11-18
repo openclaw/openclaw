@@ -286,7 +286,7 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
   });
 
-  it("surfaces an ambiguous hook identifier while the Gateway owns state", async () => {
+  it("names the ambiguous candidates in the refusal while the Gateway owns state", async () => {
     mocks.foreignOwner = true;
     mocks.buildWorkspaceHookStatus.mockReturnValue({
       ...report,
@@ -295,11 +295,55 @@ describe("hooks CLI metadata config keys", () => {
         { ...hook, name: "second-hook", hookKey: "shared-key" },
       ],
     });
-    await expectToggleFailure(
-      "disable",
-      "shared-key",
-      'Error: Hook "shared-key" is ambiguous; matches: first-hook (shared-key), second-hook (shared-key). Use a unique hook name or hook key.',
+    // Remote ambiguity must not fail the toggle outright: the refusal still
+    // names the candidates, and the local path below re-checks ambiguity
+    // against local inventory instead.
+    const error = await runHooks("disable", "shared-key").catch((err: unknown) => err);
+    expect(error).toMatchObject({ code: "OWNER_UNAVAILABLE" });
+    expect(String((error as Error).message)).toContain(
+      'Hook "shared-key" is ambiguous; matches: first-hook (shared-key), second-hook (shared-key). Use a unique hook name or hook key.',
     );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { action: "enable", value: true },
+    { action: "disable", value: false },
+  ])("directs a plugin-managed hook $action refusal to the owning plugin", async ({ action }) => {
+    mocks.foreignOwner = true;
+    mocks.buildWorkspaceHookStatus.mockReturnValue({
+      ...report,
+      hooks: [
+        { ...hook, source: "openclaw-plugin", managedByPlugin: true, pluginId: "demo-plugin" },
+      ],
+    });
+    const error = await runHooks(action, "display-name").catch((err: unknown) => err);
+    expect(error).toMatchObject({ code: "OWNER_UNAVAILABLE" });
+    const message = String((error as Error).message);
+    // The entries config path cannot toggle a plugin-managed hook, so the
+    // refusal must not suggest it.
+    expect(message).toContain('managed by plugin "demo-plugin"');
+    expect(message).toContain(`openclaw plugins ${action} demo-plugin`);
+    expect(message).not.toContain("hooks.internal.entries.metadata-key.enabled");
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("enables a locally unique hook when only the remote report is ambiguous", async () => {
+    mocks.callGateway.mockResolvedValue({
+      ...report,
+      hooks: [
+        { ...hook, name: "first-hook", hookKey: "display-name" },
+        { ...hook, name: "second-hook", hookKey: "display-name" },
+      ],
+    });
+    mocks.buildWorkspaceHookStatus.mockReturnValue(report);
+    await runHooks("enable", "display-name");
+    const nextConfig = structuredClone(sourceConfig);
+    Object.assign(nextConfig.hooks.internal.entries["metadata-key"], { enabled: true });
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig,
+      baseHash: "config-hash",
+    });
   });
 
   it("rejects the ambiguous hook identifier shared-key without mutation", async () => {

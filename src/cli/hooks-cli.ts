@@ -424,18 +424,20 @@ async function resolveToggleOnlineAlternative(params: {
   enabled: boolean;
 }): Promise<string> {
   const { agentId, name, enabled } = params;
+  const action = enabled ? "enable" : "disable";
   let hook: HookStatusEntry | undefined;
   try {
     hook = await loadHooksReport(agentId, (report) => resolveHookSelection(report, name));
   } catch (error) {
-    // An ambiguous identifier is rejected the same way offline; surface the
-    // candidates instead of a refusal that names no usable key.
+    // A remote report can be ambiguous for a locally unique hook: remote
+    // selection errors must not reject the offline local toggle, which
+    // resolves against local inventory below. Surface the candidates as
+    // refusal guidance instead of failing the preflight.
     if (isAmbiguousHookSelectionError(error)) {
-      throw error;
+      return `While the Gateway is running, ${action} it online instead: ${formatErrorMessage(error)}`;
     }
     hook = undefined;
   }
-  const action = enabled ? "enable" : "disable";
   const reloadNote =
     "The Gateway hot-reloads the change without a restart in the default hybrid reload mode; with gateway.reload.mode=off, restart the Gateway for the change to take effect.";
   const entryStep = (key: string) =>
@@ -443,6 +445,13 @@ async function resolveToggleOnlineAlternative(params: {
   const masterStep = enabled
     ? `\`${formatCliCommand("openclaw config set hooks.internal.enabled true")}\``
     : "";
+  if (hook?.managedByPlugin) {
+    // Plugin-source hooks are always enabled by resolveHookEnableState and the
+    // plugin registrar never consults the per-entry flag, so the entries
+    // config path cannot toggle them. Direct the operator to the plugin.
+    const pluginId = hook.pluginId ?? "unknown";
+    return `Hook "${name}" is managed by plugin "${pluginId}", so the hooks.internal.entries config cannot ${action} it. Manage it through the owning plugin instead (for example, \`${formatCliCommand(`openclaw plugins ${action} ${pluginId}`)}\`).`;
+  }
   if (hook) {
     // Enabling also needs the master switch: the entry-only write succeeds but
     // leaves every internal hook disabled while hooks.internal.enabled is false.
