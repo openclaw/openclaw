@@ -633,3 +633,100 @@ it.each(["2026.10.33", "2026.11.5"])(
     ).rejects.toThrow();
   },
 );
+
+const frv11Cases = [
+  {
+    jobName: "checks-node-compact-large-39 (bun)",
+    file: "src/agents/agent-bundle-mcp-instructions-prompt.test.ts",
+    title:
+      "embedded system prompt MCP server instructions > neutralizes application prompt delimiters in server instructions",
+    assertion:
+      "Error: listen EADDRINUSE: address already in use 127.0.0.1:20056\n❯ <anonymous> internal:net/server:24:5",
+  },
+  {
+    jobName: "checks-node-compact-large-41 (node)",
+    file: "src/cron/service/command-timeout.test.ts",
+    title:
+      "scheduled command timeouts > settles a real command after deadline without late delivery",
+    assertion:
+      'AssertionError: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string\n❯ src/cron/service/command-timeout.test.ts:101:32\n99|           expect.objectContaining({ source: "exec", severity: "error" …\n100|         );\n101|         expect(result.summary).toContain("synthetic progress");\n|                                ^\n102|         expect(result.summary).toContain("synthetic stderr");\n103|         const pid = Number(result.summary?.match(/pid=(\\d+)/)?.[1]);',
+  },
+];
+
+function frv11Log(row: (typeof frv11Cases)[number]) {
+  return [
+    "[shard:gateway] [test] inner parallelism 1",
+    "[shard:gateway] [test] starting test/vitest/vitest.gateway.config.ts",
+    "[shard:gateway] FAIL gateway " + row.file + " > " + row.title,
+    ...row.assertion.split("\n").map((line) => "[shard:gateway] " + line),
+    "[shard:gateway] Test Files 1 failed | 1 passed (2)",
+    "[shard:gateway] Tests 1 failed | 2 passed (3)",
+    "[shard:gateway] [test] failed 1 Vitest shard in 7s",
+    "[shard:gateway] [test] FAILED (exit 1)",
+    '[shard:completion] {"version":1,"planned":1,"completed":1,"invocations":1,"failedInvocations":1}',
+    "##[error]Process completed with exit code 1.",
+  ].join("\n");
+}
+
+describe("beta.1 exact FRV11 test failures", () => {
+  it.each(frv11Cases)("verifies complete leaf and aggregate evidence for $jobName", async (row) => {
+    const leaf = {
+      id: 900,
+      name: row.jobName,
+      status: "completed",
+      conclusion: "failure",
+      steps: [{ name: "Run Node test shard", conclusion: "failure" }],
+    };
+    const policy = evaluateReleaseChildPolicy({
+      child: { ...child, jobs: [leaf, gate] },
+      targetVersion: "2026.11.10-beta.1",
+    });
+    const log = frv11Log(row);
+    const validate = (
+      leafLog = log,
+      selectedLeaf = leaf,
+      aggregateLog = "##[error]checks-node-core-test-nondist-shard finished with failure (selected=true)",
+    ) =>
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: [selectedLeaf, gate],
+        getJobLog: (id) => (id === leaf.id ? leafLog : aggregateLog),
+      });
+    expect(policy.waivers).toHaveLength(1);
+    await expect(validate()).resolves.toBeUndefined();
+    expect(leaf.conclusion).toBe("failure");
+    for (const invalid of [
+      log.replace(row.title, "another test"),
+      frv11Log({ ...row, assertion: "Error: data was lost" }),
+      log.replace(
+        '[shard:completion] {"version":1,"planned":1,"completed":1,"invocations":1,"failedInvocations":1}',
+        "",
+      ),
+      log.replace('"completed":1', '"completed":0'),
+      log + "\n[shard:gateway] Error: worker crashed",
+      log
+        .replace(
+          "[shard:gateway] Test Files",
+          "[shard:gateway] FAIL gateway src/gateway/other.test.ts > loses data\n[shard:gateway] Error: data was lost\n[shard:gateway] Test Files",
+        )
+        .replace("Tests 1 failed", "Tests 2 failed"),
+    ]) {
+      await expect(validate(invalid)).rejects.toThrow("unwaived or incomplete failure");
+    }
+    await expect(
+      validate(log, { ...leaf, steps: [...leaf.steps, { name: "Setup", conclusion: "failure" }] }),
+    ).rejects.toThrow("non-policy failure");
+    await expect(validate(log, { ...leaf, conclusion: "cancelled" })).rejects.toThrow(
+      "non-policy failure",
+    );
+    await expect(
+      validate(log, leaf, "##[error]checks-ui finished with failure (selected=true)"),
+    ).rejects.toThrow("unwaived failure");
+    expect(
+      evaluateReleaseChildPolicy({
+        child: { ...child, jobs: [leaf] },
+        targetVersion: "2026.11.10-beta.2",
+      }).waivers,
+    ).toEqual([]);
+  });
+});

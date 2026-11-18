@@ -343,7 +343,9 @@ it("checks a live access source once for each role-policy evaluation", () =>
     client.internal = { ...client.internal, operatorRunAuthority: captured.authority };
     assertAccess.mockClear();
 
-    expect(resolveOperatorRolePolicy(client, config)).toBe(config.gateway.roles.definitions.reader);
+    expect(resolveOperatorRolePolicy(client, config)).toEqual(
+      config.gateway.roles.definitions.reader,
+    );
     expect(assertAccess).toHaveBeenCalledOnce();
     permitted = false;
     expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
@@ -352,7 +354,7 @@ it("checks a live access source once for each role-policy evaluation", () =>
     expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
   }));
 
-it("checks retained role grants without renormalizing them and rejects the next revocation", () =>
+it("keeps captured role grants when current grants change and refuses a fresh capture", () =>
   withOperator(async ({ profile, client, context }) => {
     setUserProfileRole(profile.id, "reader");
     const config = readerConfig([
@@ -369,19 +371,22 @@ it("checks retained role grants without renormalizing them and rejects the next 
     using _ = { [Symbol.dispose]: captured.release };
     const role = config.gateway.roles.definitions.reader;
     const grants = role.scopes;
-    let reads = 0;
-    role.scopes = new Proxy(grants, {
-      get(target, key, receiver) {
-        if (typeof key === "string" && /^\d+$/.test(key)) {
-          reads++;
-        }
-        return Reflect.get(target, key, receiver);
-      },
-    });
     expect(captured.authority.assertCurrent).not.toThrow();
-    expect(reads).toBe(1);
     grants[0] = "operator.sessions.read";
-    expect(captured.authority.assertCurrent).toThrow("Your operator role changed");
+    expect(captured.authority.assertCurrent).not.toThrow();
+    await expect(capture({ client, context })).rejects.toThrow("Your operator role changed");
+  }));
+
+it("keeps an admitted role-free policy when named roles are enabled", () =>
+  withOperator(async ({ client, context }) => {
+    let config: OpenClawConfig = {};
+    context.getRuntimeConfig = () => config;
+    const captured = await capture({ client, context });
+    using _ = { [Symbol.dispose]: captured.release };
+    const retained = { ...client, internal: { operatorRunAuthority: captured.authority } };
+    config = readerConfig([]);
+    expect(resolveOperatorRolePolicy(retained, config)).toBeUndefined();
+    await expect(capture({ client, context })).rejects.toThrow("Your operator role changed");
   }));
 
 it.each(["capture", "operator tool"])(
@@ -421,14 +426,14 @@ it.each(["capture", "operator tool"])(
             agents: { defaults: { model: { primary: "fixture/b", fallbacks: ["fixture/a"] } } },
           };
           publishOperatorRoleConfigChange(context);
-          expect(authority.modelPolicy?.models).toEqual([modelRef("b"), modelRef("a")]);
+          expect(authority.modelPolicy?.models).toEqual([modelRef("a"), modelRef("b")]);
           cfg = structuredClone(cfg);
           expectDefined(cfg.gateway?.roles?.definitions.reader, "reader role").modelPolicy = {
             allow: ["fixture/b", "fixture/c"],
           };
           publishOperatorRoleConfigChange(context);
           expect(authority.signal?.aborted).toBe(false);
-          expectModels(authority, [false, true, false]);
+          expectModels(authority, [true, true, false]);
           const release = expectDefined(authority.retain, "operator retention")();
           retained.release();
           authority.assertCurrent();
@@ -523,8 +528,9 @@ it.each([
         sideEffect();
       });
       const allowed =
-        ["policy restored", "unrelated policy", "target alias"].includes(revocation) ||
-        revocation.startsWith("model policy");
+        ["role restored", "policy restored", "unrelated policy", "target alias"].includes(
+          revocation,
+        ) || revocation.startsWith("model policy");
       const checked = allowed
         ? expect(pending).resolves.toBeUndefined()
         : expect(pending).rejects.toThrow();
@@ -592,7 +598,7 @@ it.each([
     }),
 );
 
-it("keeps target and unrelated sources live across alias additions, but rejects source merges", () =>
+it("keeps admitted sources across alias additions and source merges", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const source = ensureProfileForEmail("alias-source@example.test");
     const target = ensureProfileForEmail("alias-target@example.test");
@@ -608,7 +614,13 @@ it("keeps target and unrelated sources live across alias additions, but rejects 
     );
     try {
       linkEmail("alias-source@example.test", target.id);
-      expect(captures[0]?.authority.assertCurrent).toThrow();
+      expect(captures[0]?.authority.assertCurrent).not.toThrow();
+      await expect(
+        captureGatewayOperatorRunAuthority({
+          client: createOperatorClient({ profileId: source.id, scopes: ["operator.read"] }),
+          context,
+        }),
+      ).rejects.toThrow();
       expect(captures[1]?.authority.assertCurrent).not.toThrow();
       expect(captures[2]?.authority.assertCurrent).not.toThrow();
     } finally {
@@ -616,7 +628,7 @@ it("keeps target and unrelated sources live across alias additions, but rejects 
     }
   }));
 
-it("rechecks current role and latched revocation after a source callback mutates and restores it", () =>
+it("keeps captured role facts when a supplied source callback mutates and restores the role", () =>
   withOperator(async ({ profile, client, context }) => {
     let change = false;
     const captured = await capture({
@@ -635,14 +647,13 @@ it("rechecks current role and latched revocation after a source callback mutates
     using _ = { [Symbol.dispose]: captured.release };
 
     change = true;
-    expect(captured.authority.assertCurrent).toThrow(
-      /operator (?:role changed|execution authority is no longer active)/,
-    );
-    expect(captured.authority.signal?.aborted).toBe(true);
-    expect(captured.authority.assertCurrent).toThrow(captured.authority.signal?.reason);
+    expect(captured.authority.assertCurrent).not.toThrow();
+    expect(change).toBe(false);
+    expect(captured.authority.signal?.aborted).toBe(false);
+    expect(captured.authority.readCurrentRoleFacts?.().assignedRole).toBeNull();
   }));
 
-it("uses membership authority for operator runs despite a read-only named-role default, and refuses a later downgrade", async () => {
+it("keeps admitted membership authority after a downgrade and refuses a fresh capture", async () => {
   await withOperator(
     async ({ client, context }) => {
       const cfg: OpenClawConfig = {
@@ -686,7 +697,9 @@ it("uses membership authority for operator runs despite a read-only named-role d
           const retained = { ...client, internal: { operatorRunAuthority: accepted.authority } };
           expect(resolveOperatorRolePolicy(retained, cfg)?.scopes).toContain("operator.write");
           current = { ...admitted, role: "viewer" };
-          expect(() => accepted.authority.assertCurrent()).toThrow(/authority|membership|role/i);
+          expect(() => accepted.authority.assertCurrent()).not.toThrow();
+          expect(resolveOperatorRolePolicy(retained, cfg)?.scopes).toContain("operator.write");
+          await expect(capture({ client, context })).rejects.toThrow(/authority|membership|role/i);
         } finally {
           accepted.release();
         }

@@ -427,8 +427,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       contentOpened,
     ] = layout;
     const frame = elements?.frame;
-    // A fresh panel enters alongside the conversation; cached/retained panes
-    // restore their geometry immediately instead of replaying that entrance.
+    // A cached panel restores its geometry even while its content is loading.
     const manual =
       manualChange &&
       previous &&
@@ -436,7 +435,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
       presented === previous[9] &&
       open !== previous[1];
     manualChange = false;
-    const arriving = open && entrancePending && !cachedReady();
+    const arriving = open && entrancePending && !props.chat?.cachedDetails;
     if (open && contentOpened) {
       entrancePending = false;
     }
