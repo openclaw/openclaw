@@ -436,6 +436,23 @@ export function resolveSettledToolTerminalContinuation(
   };
 }
 
+export function isRejectedBeforeDispatch(params: {
+  assistant: ReturnType<typeof classifyAssistantTurn>["assistant"] | null;
+  attempt: IncompleteTurnAttempt;
+  replyDeliveryState: ReplyDeliveryState;
+}): boolean {
+  const { assistant, attempt } = params;
+  return (
+    attempt.itemLifecycle.completedCount > 0 &&
+    !attempt.hasToolMediaBlockReply &&
+    params.replyDeliveryState === "missing" &&
+    assistant?.stopReason === "error" &&
+    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
+      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
+    readSettledToolCalls(assistant).length === 0
+  );
+}
+
 /**
  * Builds the retry instruction for empty assistant turns when the provider/model
  * is eligible for non-visible turn recovery.
@@ -453,16 +470,17 @@ function resolveEmptyResponseRetryInstruction(
   // Visible progress text from the rejected turn does not make the replay
   // unsafe: the call never ran, and replyDeliveryState still vetoes a delivered
   // final answer.
-  const rejectedBeforeDispatch =
-    params.attempt.itemLifecycle.completedCount > 0 &&
-    !params.attempt.hasToolMediaBlockReply &&
-    params.replyDeliveryState === "missing" &&
-    assistant?.stopReason === "error" &&
-    (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
-      isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
-    readSettledToolCalls(assistant).length === 0;
+  const rejectedBeforeDispatch = isRejectedBeforeDispatch({
+    assistant,
+    attempt: params.attempt,
+    replyDeliveryState: params.replyDeliveryState,
+  });
   let consumedToolFailure = false;
-  if (rejectedBeforeDispatch && params.attempt.lastToolError?.executionStarted === false) {
+  if (
+    rejectedBeforeDispatch &&
+    assistant &&
+    params.attempt.lastToolError?.executionStarted === false
+  ) {
     const messages = params.attempt.messagesSnapshot;
     const failureIndex = messages.findLastIndex(
       (message) => message.role === "toolResult" && message.isError,
