@@ -249,8 +249,10 @@ export abstract class ChatPaneStateOwner {
     const wasConversationPresented = this.conversationPresented;
     this.presentation.visuallyPresented = value;
     this.element.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    this.visuallyPresentedChanged(value);
     this.notifyConversationPresentation(wasConversationPresented);
   }
+  protected visuallyPresentedChanged(_visible: boolean): void {}
   /** The pane's committed layout and both visual and route ownership permit idle warming. */
   get conversationPresented(): boolean {
     return this.presented && this.visuallyPresented && this.conversationVisible;
