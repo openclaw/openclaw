@@ -442,23 +442,28 @@ describe("GatewayChatClient", () => {
       content: [{ type: "text", text: `${preview}\n...(truncated)...` }],
       __openclaw: { id, truncated: true, reason: "display-cap" },
     });
-    const unavailable = (id: string) => ({
+    const marked = (id: string, note: string) => ({
       ...capped(id),
-      content: [
-        { type: "text", text: `${preview}\n...(truncated; the full reply could not be loaded)...` },
-      ],
+      content: [{ type: "text", text: `${preview}\n...(truncated; ${note})...` }],
     });
+    const retry = "couldn't load the full reply. Reopen the session to try again";
     const { client, request } = mockClient();
-    request.mockResolvedValueOnce({ messages: [capped("older"), capped("newer")] });
+    request.mockResolvedValueOnce({ messages: [capped("huge"), capped("older"), capped("newer")] });
     request.mockResolvedValueOnce({ ok: false, unavailableReason: "not_found" });
     request.mockRejectedValueOnce(new Error("unknown method: chat.message.get"));
+    request.mockResolvedValueOnce({ ok: false, unavailableReason: "oversized" });
 
     await expect(client.loadHistory({ sessionKey: "agent:main:long" })).resolves.toEqual({
-      messages: [unavailable("older"), unavailable("newer")],
+      messages: [
+        marked("huge", "the full reply is too large to show here"),
+        marked("older", retry),
+        marked("newer", retry),
+      ],
     });
     expect(request.mock.calls.slice(1).map(([, params]) => params)).toEqual([
       { sessionKey: "agent:main:long", messageId: "newer" },
       { sessionKey: "agent:main:long", messageId: "older" },
+      { sessionKey: "agent:main:long", messageId: "huge" },
     ]);
   });
 

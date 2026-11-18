@@ -4,10 +4,15 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 const TUI_FULL_MESSAGE_READ_CONCURRENCY = 4;
 
 const DISPLAY_CAP_MARKER = "\n...(truncated)...";
-const UNAVAILABLE_MARKER = "\n...(truncated; the full reply could not be loaded)...";
+const RETRY_MARKER =
+  "\n...(truncated; couldn't load the full reply. Reopen the session to try again)...";
+const TOO_LARGE_MARKER = "\n...(truncated; the full reply is too large to show here)...";
 
-/** Reads one stored message; resolves to a `chat.message.get`-shaped result. */
-export type TuiFullMessageReader = (messageId: string) => Promise<unknown>;
+/**
+ * Reads one stored message; resolves to a `chat.message.get`-shaped result.
+ * `preview` is the capped history row the result replaces.
+ */
+export type TuiFullMessageReader = (messageId: string, preview: unknown) => Promise<unknown>;
 
 function displayCappedAssistantId(message: unknown): string | undefined {
   const row = asOptionalRecord(message);
@@ -18,20 +23,20 @@ function displayCappedAssistantId(message: unknown): string | undefined {
   return typeof meta.id === "string" && meta.id ? meta.id : undefined;
 }
 
-function replaceMarker(text: string): string | undefined {
+function replaceMarker(text: string, marker: string): string | undefined {
   return text.endsWith(DISPLAY_CAP_MARKER)
-    ? `${text.slice(0, -DISPLAY_CAP_MARKER.length)}${UNAVAILABLE_MARKER}`
+    ? `${text.slice(0, -DISPLAY_CAP_MARKER.length)}${marker}`
     : undefined;
 }
 
-/** Keep the capped preview, but say that the rest could not be loaded. */
-function markUnavailable(message: unknown): unknown {
+/** Keep the capped preview, but say why the rest is missing. */
+function markUnavailable(message: unknown, marker: string): unknown {
   const row = asOptionalRecord(message);
   if (!row) {
     return message;
   }
   if (typeof row.content === "string") {
-    const content = replaceMarker(row.content);
+    const content = replaceMarker(row.content, marker);
     return content === undefined ? message : { ...row, content };
   }
   if (!Array.isArray(row.content)) {
@@ -40,7 +45,7 @@ function markUnavailable(message: unknown): unknown {
   let changed = false;
   const content = row.content.map((value: unknown) => {
     const block = asOptionalRecord(value);
-    const text = typeof block?.text === "string" ? replaceMarker(block.text) : undefined;
+    const text = typeof block?.text === "string" ? replaceMarker(block.text, marker) : undefined;
     if (!block || text === undefined) {
       return value;
     }
@@ -58,14 +63,15 @@ async function readFullMessage(
 ): Promise<unknown> {
   signal?.throwIfAborted();
   try {
-    const result = asOptionalRecord(await read(messageId));
+    const result = asOptionalRecord(await read(messageId, message));
     const full = result?.ok === true ? asOptionalRecord(result.message) : undefined;
-    return full ?? markUnavailable(message);
+    const tooLarge = result?.unavailableReason === "oversized";
+    return full ?? markUnavailable(message, tooLarge ? TOO_LARGE_MARKER : RETRY_MARKER);
   } catch (err) {
     if (signal?.aborted) {
       throw err;
     }
-    return markUnavailable(message);
+    return markUnavailable(message, RETRY_MARKER);
   }
 }
 
