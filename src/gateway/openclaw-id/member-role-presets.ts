@@ -34,6 +34,39 @@ const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer" | "guest", GatewayOperat
     },
   };
 
+function missingMemberRolePresets(config: OpenClawConfig) {
+  return Object.entries(MEMBER_ROLE_PRESETS).filter(
+    ([name]) => !Object.hasOwn(config.gateway?.roles?.definitions ?? {}, name),
+  );
+}
+
+/** Names needed by diagnostics; preset definitions remain owned by this module. */
+export function listMissingMemberRolePresets(config: OpenClawConfig): string[] {
+  return missingMemberRolePresets(config).map(([name]) => name);
+}
+
+/** Shared activation/Doctor transform: add missing presets without changing existing policy. */
+export function withMissingMemberRolePresets(config: OpenClawConfig): OpenClawConfig {
+  if (!isOpenClawIdEnabled(config.gateway?.openclawId)) {
+    return config;
+  }
+  const roles = config.gateway?.roles;
+  const missing = missingMemberRolePresets(config);
+  if (!missing.length) {
+    return config;
+  }
+  return {
+    ...config,
+    gateway: {
+      ...config.gateway,
+      roles: {
+        ...roles,
+        definitions: { ...roles?.definitions, ...structuredClone(Object.fromEntries(missing)) },
+      },
+    },
+  };
+}
+
 /** Seeds once per activation, never on ordinary definition edits or deletions. */
 export function createMemberRolePresetActivation(log: { warn: (message: string) => void }) {
   let active = false;
@@ -78,30 +111,12 @@ export function createMemberRolePresetActivation(log: { warn: (message: string) 
           await import("../../config/mutate.js");
         return await withConfigMutationExclusive(async (config) => {
           // Read the latest authored config under its normal writer lock.
-          if (!isOpenClawIdEnabled(config.gateway?.openclawId)) {
-            return false;
-          }
-          const roles = config.gateway?.roles;
-          const missing = Object.entries(MEMBER_ROLE_PRESETS).filter(
-            ([name]) => !Object.hasOwn(roles?.definitions ?? {}, name),
-          );
-          if (!missing.length) {
+          const sourceConfig = withMissingMemberRolePresets(config);
+          if (sourceConfig === config) {
             return false;
           }
           await replaceConfigFile({
-            sourceConfig: {
-              ...config,
-              gateway: {
-                ...config.gateway,
-                roles: {
-                  ...roles,
-                  definitions: {
-                    ...roles?.definitions,
-                    ...structuredClone(Object.fromEntries(missing)),
-                  },
-                },
-              },
-            },
+            sourceConfig,
             // Reconcile can run inside a managed reload. Publish the write but
             // never wait for the recursive runtime-application receipt here.
             afterWrite: { mode: "auto" },
