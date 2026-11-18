@@ -3,15 +3,19 @@ import {
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
+import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveTimezoneSuggestions } from "../../lib/timezone-suggestions.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";
-import type { CronModelSource } from "./view-model-controls.tsx";
+type CronModelSource = {
+  catalog: ModelCatalogPresentation | undefined;
+  agent: GatewayAgentRow | undefined;
+};
 
 export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const channels = page.inventories.channels.read();
@@ -19,7 +23,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
-  let agentSuggestions: string[] = [];
   let models: CronModelSource = { catalog: undefined, agent: undefined };
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
@@ -39,25 +42,10 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
         )
       : [];
     const channel = cron.cronForm.deliveryChannel.trim() || "last";
-    const systemAgentIds = new Set(
-      (agentsList?.agents ?? [])
-        .filter((entry) => entry.kind === "system")
-        .map((entry) => entry.id.trim()),
-    );
-    agentSuggestions = normalizeSortedUniqueTrimmedStringList([
-      ...listSelectableAgents(agentsList?.agents ?? []).map((entry) => entry.id.trim()),
-      ...cron.cronJobs.map((job) =>
-        typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
-          ? job.agentId.trim()
-          : "",
-      ),
-    ]);
+    const modelAgentId = page.resolveModelAgentId(cron);
     models = {
       catalog: page.cronModelCatalog(),
-      // The catalog is read for the selected agent; its model is the Default choice.
-      agent: agentsList?.agents.find(
-        (entry) => entry.id === page.context().agentSelection.state.selectedId,
-      ),
+      agent: agentsList?.agents.find((entry) => entry.id === modelAgentId),
     };
     const savedDeliveryTargets = normalizeSortedUniqueTrimmedStringList(
       cron.cronJobs.map((job) => job.delivery?.to),
@@ -145,7 +133,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     eventSource,
     fieldErrors,
     canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
-    agentSuggestions,
+    agentsList,
     models,
     timezoneSuggestions,
     deliveryToSuggestions,

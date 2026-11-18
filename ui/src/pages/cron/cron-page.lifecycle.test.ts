@@ -164,7 +164,9 @@ it("keeps a saved model and reasoning level the catalog does not list", async ()
   (await waitForElement(page, testId("cron-edit"))).click();
   await expectModels(page, ["alpha/current"]);
   // The catalog cannot say which levels an unlisted model takes, so only the model shows.
-  await waitForCronPage(() => expect(text(page, "#cron-payload-model")).toBe("legacy/old-model"));
+  await waitForCronPage(() =>
+    expect(text(page, '[data-chat-model-select="true"]')).toBe("legacy/old-model"),
+  );
   fillInput(page, "#cron-name", "Legacy model, renamed");
   await page.settle();
   page.querySelector<HTMLButtonElement>(testId("cron-submit"))!.click();
@@ -193,8 +195,8 @@ it("shows an unusual reasoning level beside the levels its model offers", async 
   page.patchForm({ payloadModel: "alpha/deep", payloadThinking: "turbo" });
   await page.settle();
   await waitForCronPage(() => {
-    expect(text(page, "#cron-payload-model")).toBe("Deep");
-    expect(text(page, "#cron-payload-thinking")).toBe("Turbo");
+    expect(text(page, '[data-chat-model-select="true"]')).toBe("Deep");
+    expect(text(page, '[data-chat-thinking-select="true"]')).toBe("Turbo");
   });
   expect(page.cron.cronForm.payloadThinking).toBe("turbo");
 });
@@ -278,7 +280,7 @@ it.each(["agent", "connection", "detach", "panel close"])(
   },
 );
 
-it("refreshes model suggestions when team selection changes without changing scope", async () => {
+it("scopes the model catalog to the draft agent and ignores the sidebar agent on team scope", async () => {
   const lateMain = deferred<{ models: ReturnType<typeof catalogModel>[] }>({ models: [] });
   const writer = deferred<{ models: ReturnType<typeof catalogModel>[] }>({ models: [] });
   const modelRequests: unknown[] = [];
@@ -321,6 +323,10 @@ it("refreshes model suggestions when team selection changes without changing sco
   await waitForCronPage(() => expect(modelRequests).toHaveLength(2));
   agentSelection.set("writer");
   expect(agentSelection.state).toEqual({ selectedId: "writer", scopeId: null });
+  await page.settle();
+  expect(modelRequests).toHaveLength(2);
+  expect(page.cronCatalogModels).toEqual(["fixture/main-model"]);
+  page.patchForm({ agentId: "writer" });
   await waitForCronPage(() => expect(modelRequests).toHaveLength(3));
   expect(page.cron).toBe(cron);
   expect(page.cronCatalogModels).toEqual([]);
@@ -599,14 +605,14 @@ it.each([false, true])(
   },
 );
 
-it.each(["hello", "roster after same-scope intent", "roster after model catalog"])(
+it.each(["hello", "roster after same-scope intent", "roster after editor opens"])(
   "opens the linked editor when %s supplies the initial agent scope after mount",
   async (publication) => {
     const job = createCronViewJob("linked-job", { name: "Linked automation" });
     const roster = createDeferred<AgentsListResult>();
     const lookup = deferred(job);
     const fallback = createRequest();
-    const changingCatalog = publication === "roster after model catalog";
+    const unavailableCatalog = publication === "roster after editor opens";
     let modelReads = 0;
     const client = createTestGatewayClient((method, params) => {
       if (method === "agents.list") {
@@ -617,10 +623,8 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       }
       if (method === "models.list") {
         modelReads += 1;
-        if (changingCatalog) {
-          if (asOptionalRecord(params)?.agentId === "previous") {
-            return { models: [catalogModel("previous-model")] };
-          }
+        if (unavailableCatalog) {
+          expect(asOptionalRecord(params)?.agentId).toBe("main");
           throw new Error("Current agent catalog unavailable");
         }
       }
@@ -629,10 +633,9 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
     const gateway = createGateway(client, false);
     const agents = createAgentCapability(gateway);
     const agentSelection = createAgentSelectionCapability(gateway, agents);
-    const page = createPage(
-      { ...createContext(gateway), agents, agentSelection },
-      { render: true },
-    );
+    const context = createContext(gateway);
+    const channels = context.acquireChannels(createChannelCapability);
+    const page = createPage({ ...context, agents, agentSelection }, { render: true });
     page.routeSearch = `?job=${job.id}`;
     const agentList: AgentsListResult = {
       defaultId: "main",
@@ -640,7 +643,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       scope: "per-sender",
       agents: [{ id: "main" }],
     };
-    const edited = publication === "roster after same-scope intent" || changingCatalog;
+    const edited = publication === "roster after same-scope intent" || unavailableCatalog;
     // The link opens the automation's history; its settings open from Edit.
     const openSettings = async () => {
       (await waitForElement(page, testId("cron-edit"))).click();
@@ -651,20 +654,17 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       expect(agentSelection.state.scopeId).toBeNull();
       gateway.emitSnapshot({
         phase: "connected",
-        assistantAgentId: changingCatalog ? "previous" : publication === "hello" ? "main" : null,
+        assistantAgentId: unavailableCatalog ? "previous" : publication === "hello" ? "main" : null,
       });
       await page.settle();
       if (edited) {
         lookup.resolve(job);
         await openSettings();
         await waitForElement(page, "#cron-name");
-        if (changingCatalog) {
-          await expectModels(page, ["fixture/previous-model"]);
-        } else {
-          await page.settle();
-          expect(agentSelection.state.selectedId).toBeNull();
-          expect(modelReads).toBe(0);
-        }
+        await page.settle();
+        expect(modelReads).toBe(0);
+        expect(page.cronCatalogModels).toEqual([]);
+        expect(channels.refresh).toHaveBeenCalled();
         fillInput(page, "#cron-name", "Unsaved name");
         await page.settle();
         if (publication === "roster after same-scope intent") {
@@ -678,7 +678,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       if (!edited) {
         await openSettings();
       }
-      if (changingCatalog) {
+      if (unavailableCatalog) {
         await waitForCronPage(() =>
           expect(page.textContent).toContain("Current agent catalog unavailable"),
         );
@@ -689,7 +689,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
         expect(page.querySelector("details.cron-advanced > summary")).not.toBeNull();
         expect(inputValue(page, "#cron-name")).toBe(edited ? "Unsaved name" : job.name);
       });
-      await waitForCronPage(() => expect(modelReads).toBe(changingCatalog ? 2 : 1));
+      await waitForCronPage(() => expect(modelReads).toBe(1));
     } finally {
       page.remove();
       agentSelection.dispose();

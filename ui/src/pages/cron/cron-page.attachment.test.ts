@@ -30,7 +30,9 @@ describe("CronPage lifecycle", () => {
       expect(request).not.toHaveBeenCalled();
       document.body.append(page);
       page.querySelector<HTMLButtonElement>('[data-test-id="cron-new-task"]')!.click();
-      await waitForCronPage(() => expect(page.querySelector("#cron-payload-model")).not.toBeNull());
+      await waitForCronPage(() =>
+        expect(page.querySelector('[data-chat-model-select="true"]')).not.toBeNull(),
+      );
       await waitForCronPage(() =>
         expect(page.cronCatalogModels).toEqual(["fixture/catalog-choice"]),
       );

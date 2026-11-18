@@ -64,7 +64,9 @@ it("lets a human owner edit their job but not another person's job", async () =>
   const owner = page.querySelector<HTMLButtonElement>("#cron-owner-profile-id");
   expect(owner).not.toBeNull();
   // The model and reasoning pickers are native details, which a disabled fieldset does not reach.
-  expect(page.querySelector("#cron-payload-model")?.getAttribute("aria-disabled")).toBe("false");
+  expect(page.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled")).toBe(
+    "false",
+  );
   expect(owner?.matches(":disabled")).toBe(false);
   page.patchForm({ name: "Edited by owner", ownerProfileId: "bob" });
   await page.settle();
@@ -77,7 +79,9 @@ it("lets a human owner edit their job but not another person's job", async () =>
   await waitForCronPage(() =>
     expect(page.querySelector<HTMLInputElement>("#cron-name")?.matches(":disabled")).toBe(true),
   );
-  expect(page.querySelector("#cron-payload-model")?.getAttribute("aria-disabled")).toBe("true");
+  expect(page.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled")).toBe(
+    "true",
+  );
   page.patchForm({ name: "Unauthorized" });
   expect(page.cron.cronForm.name).toBe(other.name);
   page.closePanel();

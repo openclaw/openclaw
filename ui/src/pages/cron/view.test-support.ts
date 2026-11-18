@@ -71,7 +71,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     runsDeliveryStatuses: [],
     runsQuery: "",
     runsSortDir: "desc",
-    agentSuggestions: [],
+    agentsList: null,
     models: { catalog: undefined, agent: undefined },
     timezoneSuggestions: [],
     deliveryToSuggestions: [],

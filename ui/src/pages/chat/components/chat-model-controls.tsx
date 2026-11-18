@@ -658,8 +658,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           props.onModelSelect?.(next, targetSessionKey, agentRuntime),
         onTargetRetry: props.onModelPickerTargetRetry,
         onTargetSelect: props.onModelPickerTargetSelect,
-        triggerId: props.triggerIds?.model,
-        placement: props.menuPlacement,
       },
       effort: {
         accessProgram:
@@ -688,8 +686,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         onThinkingSelect: async (next, targetSessionKey) =>
           props.onThinkingSelect?.(next, targetSessionKey),
         reserved: reserveEffortPicker,
-        triggerId: props.triggerIds?.effort,
-        placement: props.menuPlacement,
       },
     };
   });

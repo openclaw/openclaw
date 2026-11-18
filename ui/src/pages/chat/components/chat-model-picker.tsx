@@ -68,8 +68,6 @@ export type ChatModelPickerParams = {
   ) => Promise<unknown>;
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
-  triggerId?: string;
-  placement?: "top" | "bottom";
 };
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
@@ -107,24 +105,20 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
   const search = createChatModelSearch();
   // Retain the panel after first use so expanded model lists survive dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
-  const pickerOverlay = createChatPickerOverlay(
-    (target) => {
-      search.setOpen(target.open);
-      if (target.open) {
-        mountChoices(true);
-      }
-      params.onOpenChange?.(target.open);
-      if (!target.open) {
-        params.accountSection?.onClose();
-        resetModelSearch(target);
-        return;
-      }
-      void params.onOpen?.();
-      search.focusOnOpen();
-    },
-    // oxlint-disable-next-line solid/reactivity -- The overlay binds its side once; a host keeps one placement.
-    params.placement ?? "top",
-  );
+  const pickerOverlay = createChatPickerOverlay((target) => {
+    search.setOpen(target.open);
+    if (target.open) {
+      mountChoices(true);
+    }
+    params.onOpenChange?.(target.open);
+    if (!target.open) {
+      params.accountSection?.onClose();
+      resetModelSearch(target);
+      return;
+    }
+    void params.onOpen?.();
+    search.focusOnOpen();
+  }, "top");
   const triggerModel = createMemo(() => {
     const triggerModelValue = params.triggerModelValue;
     return triggerModelValue === ""
@@ -174,7 +168,6 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
       >
         <summary
           ref={[search.summaryRef, pickerOverlay.trigger]}
-          id={params.triggerId}
           class="chat-controls__inline-select-trigger chat-controls__model-trigger"
           data-chat-model-select="true"
           data-chat-model-locked={params.modelSelectionLocked ? "true" : "false"}

@@ -1,10 +1,6 @@
 import { createMemo } from "solid-js";
-import type { GatewayAgentRow } from "../../api/types.ts";
 import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
-import {
-  resolveModelCatalogState,
-  type ModelCatalogPresentation,
-} from "../../lib/model-catalog-store.ts";
+import { resolveModelCatalogState } from "../../lib/model-catalog-store.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChatModelControls } from "../chat/components/chat-model-controls.tsx";
 import type { ChatModelControlsProps } from "../chat/components/chat-model-controls.types.ts";
@@ -13,7 +9,6 @@ import {
   resolveDraftModelControls,
   type NewSessionModelMetadata,
 } from "../new-session/model-target.ts";
-import { inputIdForField } from "./view-fields.tsx";
 import type { CronProps } from "./view-types.ts";
 import "../../styles/chat/composer.css";
 
@@ -22,16 +17,9 @@ const SESSION_KEY = "cron-editor";
 // access program and runtime stay with the agent's defaults.
 const NO_FAST_MODE = { active: false, currentOverride: "", label: "", supported: false } as const;
 
-export type CronModelSource = {
-  catalog: ModelCatalogPresentation | undefined;
-  agent: GatewayAgentRow | undefined;
-};
-
 /** The session composer's model and reasoning pickers, bound to the automation's payload. */
 export function CronModelControls(
-  props: Pick<CronProps, "form" | "connected" | "busy" | "canManage" | "onFormChange"> & {
-    models: CronModelSource;
-  },
+  props: Pick<CronProps, "form" | "connected" | "busy" | "canManage" | "onFormChange" | "models">,
 ) {
   const metadata = createMemo((): NewSessionModelMetadata => {
     const catalog = props.models.catalog;
@@ -68,10 +56,6 @@ export function CronModelControls(
         : undefined;
     return {
       ...draft,
-      triggerIds: {
-        model: inputIdForField("payloadModel"),
-        effort: inputIdForField("payloadThinking"),
-      },
       activeRunId: null,
       connected: props.connected,
       gatewayAvailable: props.connected,
@@ -82,7 +66,6 @@ export function CronModelControls(
       modelMutationDisabledReason: disabledReason,
       effortMutationDisabledReason: disabledReason,
       contextWindowTarget: {},
-      menuPlacement: "bottom",
       fastModeDisplay: NO_FAST_MODE,
       sending: false,
       sessionKey: SESSION_KEY,

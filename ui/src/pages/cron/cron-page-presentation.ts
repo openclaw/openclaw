@@ -1,7 +1,10 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { action, createMemo, createOptimistic, createSignal } from "solid-js";
-import type { CronJob } from "../../api/types.ts";
+import { tryResolveCronJobEffectiveAgentId } from "../../../../src/cron/agent-id.js";
+import type { AgentsListResult, CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { CronState } from "../../lib/cron/types.ts";
+import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import type { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -18,8 +21,29 @@ type CronPresentationDeps = {
   connection: ReturnType<typeof createGatewayConnectionLifecycle>;
   context: () => ApplicationContext;
   active: () => boolean;
+  modelAgentId: (state: CronState) => string | undefined;
   publish: (state: CronState) => void;
 };
+
+export function resolveCronModelAgentId(
+  form: CronFormState,
+  config: Record<string, unknown> | null,
+  roster: AgentsListResult | null | undefined,
+) {
+  const defaults = asNullableRecord(asNullableRecord(config?.agents)?.defaults);
+  const configuredOwner = normalizeOptionalString(asNullableRecord(defaults?.systemAgent)?.agentId);
+  // The Gateway can expose a UI fallback ID even when cron has no implicit owner.
+  const rosterOwner =
+    roster &&
+    (roster.selectionRequired === false ||
+      (roster.selectionRequired === undefined && roster.agents.length === 1))
+      ? roster.defaultId
+      : undefined;
+  return tryResolveCronJobEffectiveAgentId(
+    { agentId: form.clearAgent ? undefined : form.agentId, sessionKey: form.sessionKey },
+    configuredOwner ?? rosterOwner,
+  );
+}
 
 /** Presents admitted cron work; the plain owners retain every request decision. */
 export function createCronPresentation(deps: CronPresentationDeps) {
@@ -29,7 +53,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   const cronModelCatalog = createMemo(
     () => {
       const state = deps.readState();
-      const agentId = deps.context().agentSelection.state.selectedId;
+      const agentId = deps.modelAgentId(state);
       const receipt = modelReceipt();
       if (receipt?.state !== state || receipt.agentId !== agentId) {
         return undefined;
@@ -38,8 +62,8 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     },
     { lazy: true },
   );
-  let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
-  let stopModelSuggestions: (() => void) | undefined;
+  let modelRequest: { state: CronState; agentId: string } | null = null;
+  let stopModelCatalog: (() => void) | undefined;
   let presentationLifetime = Promise.withResolvers<void>();
   const ownerScope = createMemo(() => deps.readState());
   const connectionEpoch = createMemo(() => {
@@ -103,44 +127,54 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     }
   }
 
-  async function loadModelSuggestions(cronState: CronState) {
+  function ensureModels(state: CronState, forceRefresh: boolean) {
+    const agentId = deps.modelAgentId(state);
+    if (!agentId) {
+      if (modelRequest) {
+        resetModels();
+      }
+    } else if (forceRefresh || modelRequest?.state !== state || modelRequest.agentId !== agentId) {
+      void loadModels(state, agentId);
+    }
+  }
+
+  async function loadModels(cronState: CronState, agentId: string) {
     const client = cronState.client;
-    const agentId = deps.context().agentSelection.state.selectedId;
     // Last-good suggestions belong to one agent, including when its successor has no catalog.
-    if (modelSuggestionsRequest?.agentId !== agentId) {
-      modelSuggestionsRequest = null;
+    if (modelRequest?.agentId !== agentId) {
+      modelRequest = null;
       setModelReceipt(null);
       deps.publish(cronState);
     }
-    if (!client || !agentId || !isGatewayAvailable(deps.context().gateway.snapshot)) {
+    if (!client || !isGatewayAvailable(deps.context().gateway.snapshot)) {
       return;
     }
     const connectionScope = deps.connection.capture();
     if (!connectionScope) {
       return;
     }
-    stopModelSuggestions ??= subscribeModelCatalogCache(
+    stopModelCatalog ??= subscribeModelCatalogCache(
       client,
       (update) => {
         if (deps.active() && deps.currentState().client === client) {
           if (update.type === "invalidated") {
-            void loadModelSuggestions(deps.currentState());
+            ensureModels(deps.currentState(), true);
           } else {
             deps.publish(deps.currentState());
           }
         }
       },
-      () => ({ agentId: deps.context().agentSelection.state.selectedId ?? undefined }),
+      () => ({ agentId: deps.modelAgentId(deps.currentState()) }),
     );
     const request = { state: cronState, agentId };
-    modelSuggestionsRequest = request;
+    modelRequest = request;
     // Only the latest catalog request may publish rows or errors.
     const isCurrent = () =>
       deps.active() &&
       deps.currentState() === cronState &&
       deps.connection.isCurrent(connectionScope) &&
-      modelSuggestionsRequest === request &&
-      deps.context().agentSelection.state.selectedId === agentId;
+      modelRequest === request &&
+      deps.modelAgentId(cronState) === agentId;
     const result = loadModelCatalog(client, { agentId })
       .then((catalog) => {
         if (isCurrent()) {
@@ -162,10 +196,10 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   }
 
   function resetModels() {
-    stopModelSuggestions?.();
-    stopModelSuggestions = undefined;
+    stopModelCatalog?.();
+    stopModelCatalog = undefined;
     setModelReceipt(null);
-    modelSuggestionsRequest = null;
+    modelRequest = null;
   }
 
   return {
@@ -177,14 +211,11 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     },
     dispose() {
       presentationLifetime.resolve();
-      stopModelSuggestions?.();
-      modelSuggestionsRequest = null;
+      stopModelCatalog?.();
+      modelRequest = null;
     },
     modelCatalog: cronModelCatalog,
-    get modelRequest() {
-      return modelSuggestionsRequest;
-    },
-    loadModels: loadModelSuggestions,
+    ensureModels,
     resetModels,
     runTask: runCronTask,
     async mutate(

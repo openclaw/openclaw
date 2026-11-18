@@ -32,8 +32,6 @@ export type ChatEffortPickerParams = {
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
   reserved?: boolean;
-  triggerId?: string;
-  placement?: "top" | "bottom";
 };
 
 export function formatEffortLabel(label: string): string {
@@ -142,10 +140,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     <Show when={visible()}>
       {(_visible) => {
         const [open, setOpen] = createSignal(false);
-        const pickerOverlay = createChatPickerOverlay(
-          (details) => setOpen(details.open),
-          `${props.placement ?? "top"}-end`,
-        );
+        const pickerOverlay = createChatPickerOverlay((details) => setOpen(details.open));
         return (
           <details
             ref={pickerOverlay.details}
@@ -162,7 +157,6 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
           >
             <summary
               ref={pickerOverlay.trigger}
-              id={props.triggerId}
               class={[
                 "chat-controls__inline-select-trigger chat-controls__effort-trigger",
                 {
