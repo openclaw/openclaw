@@ -1,10 +1,11 @@
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MentionSharingTarget } from "./human-mention-policy.js";
 import { formatMentionSessionTitle } from "./mention-inbox-presentation.js";
 import { mentionTargetKey, type StoredMention } from "./mention-inbox-projection.js";
 import { MAX_MENTION_SOURCES } from "./mention-inbox-store.js";
 import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
-import { resolveSessionSharingTargetAsync } from "./session-sharing.js";
+import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 type PreparedTarget = {
   sessionKey: string;
@@ -57,32 +58,49 @@ export function createMentionTargetCache(params: {
   ) {
     removeTarget(targetAliases.get(key) ?? key);
     const cfg = params.getRuntimeConfig();
-    const target = await resolveSessionSharingTargetAsync({ cfg, sessionKey, agentId });
-    if (!target) {
-      return;
-    }
-    const canonicalKey = mentionTargetKey(target.canonicalKey, target.agentId);
-    const existing = readTarget(canonicalKey);
-    if (existing) {
+    const identity = resolveSessionStoreIdentity({ cfg, sessionKey, agentId });
+    const facts = await prepareSessionSharingRead({ cfg, sessionKey, agentId: identity.agentId });
+    let retained = false;
+    try {
+      const { target, membership } = facts.readCurrent(cfg);
+      if (!target) {
+        return;
+      }
+      const canonicalKey = mentionTargetKey(target.canonicalKey, target.agentId);
+      const existing = readTarget(canonicalKey);
+      if (existing) {
+        targetAliases.set(key, canonicalKey);
+        existing.aliases.add(key);
+        return;
+      }
+      // Sharing owns target selection; display reads use that exact physical source.
+      const { entries } = await readSessionEntriesFromStoreInWorker({
+        agentId: target.readSource?.agentId ?? target.agentId,
+        storePath: target.readSource?.path ?? target.storePath,
+        sessionKeys: [target.storeKey],
+        projection: "full",
+        snapshotFields: [],
+        pointRead: true,
+      });
+      facts.readCurrent(params.getRuntimeConfig());
+      removeTarget(canonicalKey);
+      if (connectedTargets.size >= MAX_MENTION_SOURCES) {
+        pruneTargets();
+      }
+      connectedTargets.set(canonicalKey, {
+        sessionKey,
+        target: { ...target, membership },
+        sessionTitle: formatMentionSessionTitle(entries[0]?.entry),
+        facts,
+        aliases: new Set([key]),
+      });
       targetAliases.set(key, canonicalKey);
-      existing.aliases.add(key);
-      return;
+      retained = true;
+    } finally {
+      if (!retained) {
+        facts.release();
+      }
     }
-    removeTarget(canonicalKey);
-    if (connectedTargets.size >= MAX_MENTION_SOURCES) {
-      pruneTargets();
-    }
-    const facts = await prepareSessionSharingRead({ cfg, sessionKey, agentId: target.agentId });
-    // Sharing facts omit display fields; row publications invalidate this prepared title.
-    const prepared = {
-      sessionKey,
-      target,
-      sessionTitle: formatMentionSessionTitle(target.entry),
-      facts,
-      aliases: new Set([key]),
-    };
-    connectedTargets.set(canonicalKey, prepared);
-    targetAliases.set(key, canonicalKey);
   }
 
   async function prepareTargets(
