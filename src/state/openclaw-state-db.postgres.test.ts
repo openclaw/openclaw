@@ -130,7 +130,11 @@ async function restoreEmptyPredecessorTables(client: pg.Client, previousVersion:
   const eager = expectDefined(source.postgres, "Historical PostgreSQL DDL");
   // DROP COLUMN retains an attnum hole, including at the tail. Recreate the empty
   // receipt tables, retaining incoming foreign keys from installed optional fragments too.
-  for (const table of ["worker_environments", "worker_workspace_pending_results"]) {
+  for (const table of [
+    "worker_environments",
+    "worker_workspace_pending_results",
+    "worker_session_placements",
+  ]) {
     expect((await client.query(`SELECT count(*)::int AS n FROM "${table}"`)).rows).toEqual([
       { n: 0 },
     ]);
@@ -164,18 +168,19 @@ async function restoreEmptyPredecessorTables(client: pg.Client, previousVersion:
     ]);
     await client.query(`DROP TABLE "${current}"; ${declaration}`);
   }
-  const present = await client.query(
-    "SELECT to_regclass('agent_provenance') IS NOT NULL AS present",
-  );
-  if (present.rows[0].present) {
+  for (const table of ["agent_provenance", "session_repository_workspaces"]) {
+    const present = await client.query("SELECT to_regclass($1) IS NOT NULL AS present", [table]);
+    if (!present.rows[0].present) {
+      continue;
+    }
     const fragment = expectDefined(
-      source.postgresFragments?.find((item) => item.tables.includes("agent_provenance")),
-      "Historical optional provenance DDL",
+      source.postgresFragments?.find((item) => item.tables.includes(table)),
+      `Historical optional DDL for ${table}`,
     );
-    expect((await client.query("SELECT count(*)::int AS n FROM agent_provenance")).rows).toEqual([
+    expect((await client.query(`SELECT count(*)::int AS n FROM "${table}"`)).rows).toEqual([
       { n: 0 },
     ]);
-    await client.query(`DROP TABLE agent_provenance; ${fragment.sql}`);
+    await client.query(`DROP TABLE "${table}"; ${fragment.sql}`);
   }
 }
 const legacyPublicationInsert = `INSERT INTO github_publication_requests

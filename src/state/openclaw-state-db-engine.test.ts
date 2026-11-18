@@ -6,11 +6,19 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import * as physicalFacts from "../infra/database-engine/physical-facts.js";
 import { postgresIndexOrderingMigration } from "../infra/database-engine/postgres-index-ordering.js";
 import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { PostgresSqlConnection } from "../infra/sql-connection.js";
+import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
 import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
-import { isStatePostgres, stateEngineSchema } from "./openclaw-state-db-engine.js";
+import {
+  ensureStatePostgresFragment,
+  isStatePostgres,
+  stateEngineSchema,
+} from "./openclaw-state-db-engine.js";
 
 vi.mock("../infra/database-engine/postgres-index-ordering.js", async (importOriginal) => {
   const actual =
@@ -77,3 +85,59 @@ it("preserves explicit backend selection and the test-only state connection fall
     vi.unstubAllEnvs();
   }
 });
+
+it.each([
+  { version: 37, disk: false, recovery: false },
+  { version: 40, disk: true, recovery: false },
+  { version: 41, disk: true, recovery: true },
+])(
+  "creates repository fragments with only version $version columns",
+  ({ version, disk, recovery }) => {
+    using anchor = openNodeSqliteDatabase(":memory:");
+    const captured = new Error("captured fragment DDL before PostgreSQL execution");
+    let fragmentSql = "";
+    const unused = () => {
+      throw new Error("Unexpected database I/O before fragment DDL");
+    };
+    const db: PostgresSqlConnection = {
+      anchor,
+      isOpen: true,
+      isTransaction: false,
+      mutationRevision: 0,
+      advisoryLockKey: 0n,
+      prepare: unused,
+      query: unused,
+      close: unused,
+      releaseIdleTransport: unused,
+      runTransaction: unused,
+      exec(sql) {
+        // Conformance owns catalog admission; this proof stops at the emitted DDL.
+        fragmentSql = sql;
+        throw captured;
+      },
+    };
+    Object.defineProperty(db, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
+    const facts = vi.spyOn(physicalFacts, "getPostgresPhysicalFacts").mockReturnValue({
+      engine: "postgres",
+      admissionId: "fragment-test",
+      store: "state",
+      namespace: "fragment_test",
+      storeId: "fragment-test",
+      version,
+      capabilities: { serverMajor: 17, serverEncoding: "UTF8", clientEncoding: "UTF8" },
+      catalog: [],
+    });
+    try {
+      expect(() =>
+        withSqlitePostCommitPublications(db, () =>
+          ensureStatePostgresFragment(db, "session_repository_workspaces"),
+        ),
+      ).toThrow(captured);
+      expect(fragmentSql).toContain('CREATE TABLE "session_repository_workspaces"');
+      expect(fragmentSql.includes('"disk_authority_json"')).toBe(disk);
+      expect(fragmentSql.includes('"recovery_json"')).toBe(recovery);
+    } finally {
+      facts.mockRestore();
+    }
+  },
+);
