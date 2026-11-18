@@ -4,6 +4,7 @@ import type { ToolResultMessage } from "@openclaw/llm-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
@@ -171,9 +172,9 @@ describe("preemptive-compaction", () => {
   it("routes predicted overflow from already-sent tool results to compaction", () => {
     const sentOutput = "alpha beta gamma delta epsilon ".repeat(500);
     const messages = [
-      makeAssistantHistory("read previous reports"),
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "read previous reports" }] }),
       ...Array.from({ length: 8 }, () => makeToolResultMessage(sentOutput)),
-      makeAssistantHistory("reports received"),
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "reports received" }] }),
     ];
     const decision = resolveProjectedRequestPressure({
       context: { messages },

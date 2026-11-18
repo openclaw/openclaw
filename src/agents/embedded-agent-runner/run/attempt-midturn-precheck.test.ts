@@ -108,7 +108,9 @@ describe("provider request admission", () => {
       settingsManager,
     });
     onTestFinished(() => guards.remove());
-    const messages = sessionManager.buildSessionContext().messages;
+    const messages = await session.agent.convertToLlm(
+      sessionManager.buildSessionContext().messages,
+    );
     expect(messages.map(({ role }) => role)).toEqual(["assistant", "toolResult", "assistant"]);
     await expect(
       guards.checkMidTurnPrecheck({
