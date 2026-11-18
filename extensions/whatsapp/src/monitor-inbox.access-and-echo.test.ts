@@ -471,6 +471,47 @@ describe("web monitor inbox", () => {
     },
   );
 
+  describe("edit echoes", () => {
+    const remoteJid = "123@s.whatsapp.net";
+    const key = { remoteJid, id: "edit-target", fromMe: true } as const;
+    const protocolMessage = {
+      key,
+      editedMessage: { extendedTextMessage: { text: "updated" } },
+      type: 14,
+    };
+
+    it.each([
+      ["a gateway edit", "gateway-edit-envelope", true],
+      ["an edit from another device", "device-edit-envelope", false],
+    ])("never dispatches the echo of %s", async (_name, id, viaGateway) => {
+      mockLoadConfig.mockReturnValue(
+        createInboxConfig({ selfChatMode: true, allowFrom: ["+123"] }),
+      );
+      const { onMessage, listener, sock } = await openInboxMonitor();
+      if (viaGateway) {
+        sock.sendMessage.mockResolvedValueOnce({ key: { remoteJid, id, fromMe: true } });
+        await listener.editMessage(key.remoteJid, key.id, "updated");
+      }
+
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [
+          {
+            key: { id, remoteJid, fromMe: true },
+            message: { protocolMessage },
+            messageTimestamp: nowSeconds(),
+          },
+        ],
+      });
+      await settleInboundWork();
+      await waitForInboundWorkDrained();
+
+      expect(onMessage).not.toHaveBeenCalled();
+
+      await listener.close();
+    });
+  });
+
   it("keeps provider-normalized echo matches scoped to their account and message", async () => {
     mockLoadConfig.mockReturnValue(
       createInboxConfig({

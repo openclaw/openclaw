@@ -10,7 +10,11 @@ import {
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
 import { createAgentRuntimeAuthorityGuard } from "../src/gateway/server-methods/agent-runtime-authority.js";
-import type { GatewayClient, GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import type {
+  GatewayClient,
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../src/gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -23,6 +27,7 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
   requesterSenderId: string;
   toolContext: T;
   gatewayContext: "resolved" | "expiry-only";
+  gatewayContextResolver?: GatewayContextResolver;
 }) {
   const { runId, sessionKey, requesterSenderId, toolContext } = params;
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
@@ -76,6 +81,7 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
       agentId: "main",
       sessionKey,
       operationalRunInstance,
+      gatewayContextResolver: params.gatewayContextResolver,
       receiptAuthority: () => validateAgentRunDelegatedAuthority(delegated),
     });
   const revokeTurn = () => revokeMessageActionTurnCapability(capability);
