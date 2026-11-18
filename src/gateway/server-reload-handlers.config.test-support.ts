@@ -229,7 +229,6 @@ export function createHotReloadHandlerTestParams(
     releaseChannelRouteHandoffs: vi.fn(),
     pruneInactiveChannelAccountState: vi.fn(),
     reloadPlugins: vi.fn(async () => makePluginReloadResult()),
-    logHooks: createInfoWarnErrorLogger(),
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload: createInfoWarnErrorLogger(),
@@ -278,7 +277,6 @@ export function createManagedReloadTestParams(
     reloadPlugins: async () => {
       throw new Error("Unexpected plugin reload");
     },
-    logHooks: log,
     logChannels: log,
     logCron: log,
     logReload: log,

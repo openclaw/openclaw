@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveExecutable } from "openclaw/plugin-sdk/process-runtime";
-import { canAccessSync } from "openclaw/plugin-sdk/process-runtime";
-import { formatCommandOutput, formatCommandResult } from "openclaw/plugin-sdk/process-runtime";
-import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
-import { hasBinary } from "openclaw/plugin-sdk/process-runtime";
+import {
+  canAccessSync,
+  formatCommandOutput,
+  formatCommandResult,
+  hasBinary,
+  resolveExecutable,
+  runCommandWithTimeout,
+  type SpawnResult,
+} from "openclaw/plugin-sdk/process-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeServePath } from "./gmail.js";

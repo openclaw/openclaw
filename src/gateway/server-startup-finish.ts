@@ -556,7 +556,6 @@ export async function finishGatewayStartup(params: {
       }
       await services.reload(config, serviceIds);
     },
-    logHooks,
     logChannels,
     logCron,
     logReload,

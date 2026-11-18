@@ -1,13 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import process from "node:process";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
-import { releaseChildProcessOutputAfterExit } from "openclaw/plugin-sdk/process-runtime";
-import { formatCommandResult } from "openclaw/plugin-sdk/process-runtime";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
-import { resolveExecutablePath } from "openclaw/plugin-sdk/process-runtime";
-import { computeBackoff } from "openclaw/plugin-sdk/runtime-env";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import {
+  formatCommandResult,
+  killProcessTree,
+  releaseChildProcessOutputAfterExit,
+  resolveExecutablePath,
+  runCommandWithTimeout,
+} from "openclaw/plugin-sdk/process-runtime";
+import { computeBackoff, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { inspectGog, type GogInspection } from "./gmail-gog.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 import {

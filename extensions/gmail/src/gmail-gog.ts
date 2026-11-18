@@ -2,13 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
-import { resolveExecutablePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
+  resolveCommandProcessSignal,
+  resolveExecutablePath,
+  runUtf8CommandWithTimeout,
+  type SpawnResult,
 } from "openclaw/plugin-sdk/process-runtime";
-import { resolveCommandProcessSignal } from "openclaw/plugin-sdk/process-runtime";
-import { runUtf8CommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { resolveGogServeInvocation } from "./gmail.js";
 

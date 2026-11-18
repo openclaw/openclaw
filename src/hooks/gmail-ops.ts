@@ -20,21 +20,20 @@ import {
   resolveGmailHookRuntimeConfig,
 } from "../../extensions/gmail/api.js";
 import {
-  inspectGog,
-  inspectGogUpgrade,
-  upgradeGog,
-  type GogInspection,
-} from "../../extensions/gmail/runtime-api.js";
-import {
   ensureDependency,
   ensureGcloudAuth,
   ensureSubscription,
   ensureTailscaleEndpoint,
   ensureTopic,
+  type GogInspection,
+  inspectGog,
+  inspectGogUpgrade,
   resolveProjectIdFromGogCredentials,
   runGcloud,
+  startGmailWatcherService,
+  stopGmailWatcher,
+  upgradeGog,
 } from "../../extensions/gmail/runtime-api.js";
-import { startGmailWatcherService, stopGmailWatcher } from "../../extensions/gmail/runtime-api.js";
 import { stylePromptMessage } from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {

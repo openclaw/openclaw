@@ -34,10 +34,10 @@ describePosix("Gmail plugin service (integration)", () => {
     const hookToken = randomBytes(24).toString("hex");
     const transportReceipt = join(tmpDir, "transport.json");
     const scheduler = createTestGatewayScheduler("fake-timers");
-    let stop: (() => Promise<void>) | undefined;
+    const cleanup: { stop?: () => Promise<void> } = {};
     onTestFinished(async () => {
       try {
-        await stop?.();
+        await cleanup.stop?.();
       } catch {
         // Still force cleanup when watcher shutdown fails.
       }
@@ -112,9 +112,10 @@ describePosix("Gmail plugin service (integration)", () => {
     if (!handle) {
       throw new Error("Gmail did not register a plugin service");
     }
-    stop = async () => {
+    const stop = async () => {
       await handle.stop({ strict: true });
     };
+    cleanup.stop = stop;
 
     await wait(receipts.waitFor(helperPidPath, "ready"));
 

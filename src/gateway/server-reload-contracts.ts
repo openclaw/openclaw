@@ -164,11 +164,6 @@ export type GatewayReloadHandlerParams = {
     checkpoint?: () => Promise<void>;
     assertInvokerOwned?: () => void;
   }) => Promise<GatewayPluginReloadResult>;
-  logHooks: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;

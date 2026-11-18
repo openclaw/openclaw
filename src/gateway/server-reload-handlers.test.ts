@@ -7,7 +7,6 @@ import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
-  nextEventLoopTurn,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -65,7 +64,6 @@ import {
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   getActiveGatewayRootWorkCount,
-  getActiveGatewayRootWorkHolders,
   isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
