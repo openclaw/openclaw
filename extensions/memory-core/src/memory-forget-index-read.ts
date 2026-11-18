@@ -12,10 +12,11 @@ import {
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { referencesSession, scrubMemoryContent } from "./memory-forget-content.js";
-import type {
-  ForgetDatabase,
-  ForgetIndexPlan,
-  ForgetIndexReadInput,
+import {
+  forEachMemoryForgetChunkIdBatch,
+  type ForgetDatabase,
+  type ForgetIndexPlan,
+  type ForgetIndexReadInput,
 } from "./memory-forget-index-task.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 
@@ -106,31 +107,39 @@ export async function readMemoryForgetIndexInWorker(
         ? chunkIds.length
         : 0
       : chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
-        ? executeSqliteQuerySync(
-            db,
-            kysely
-              .selectFrom("memory_index_chunks_fts")
-              .select((eb) => eb.fn.countAll<number>().as("count"))
-              .where(
-                "rowid",
-                "in",
+        ? forEachMemoryForgetChunkIdBatch(
+            chunkIds,
+            (batch) =>
+              executeSqliteQuerySync(
+                db,
                 kysely
-                  .selectFrom("memory_index_chunks")
-                  .select("chunk_rowid")
-                  .where("id", "in", chunkIds),
-              ),
-          ).rows[0]!.count
+                  .selectFrom("memory_index_chunks_fts")
+                  .select((eb) => eb.fn.countAll<number>().as("count"))
+                  .where(
+                    "rowid",
+                    "in",
+                    kysely
+                      .selectFrom("memory_index_chunks")
+                      .select("chunk_rowid")
+                      .where("id", "in", batch),
+                  ),
+              ).rows[0]!.count,
+          ).reduce((total, count) => total + count, 0)
         : 0;
     const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
     const vectorRows =
       postgres && hasVectorTable && chunkIds.length > 0
-        ? executeSqliteQuerySync(
-            db,
-            kysely
-              .selectFrom("memory_index_chunks_vec")
-              .select((eb) => eb.fn.countAll<number>().as("count"))
-              .where("id", "in", sqliteStringSet(chunkIds)),
-          ).rows[0]!.count
+        ? forEachMemoryForgetChunkIdBatch(
+            chunkIds,
+            (batch) =>
+              executeSqliteQuerySync(
+                db,
+                kysely
+                  .selectFrom("memory_index_chunks_vec")
+                  .select((eb) => eb.fn.countAll<number>().as("count"))
+                  .where("id", "in", sqliteStringSet(batch)),
+              ).rows[0]!.count,
+          ).reduce((total, count) => total + count, 0)
         : 0;
     let embeddingCacheRows = 0;
     if (params.sessionIds.size > 0 && tableExists(db, "memory_embedding_cache")) {
@@ -193,17 +202,17 @@ export async function readMemoryForgetIndexInWorker(
         db.enableLoadExtension(true);
         db.loadExtension(preparedExtensionPath);
         const vectorKysely = getNodeSqliteKysely<ForgetDatabase>(db);
-        return executeSqliteQuerySync(
-          db,
-          vectorKysely
-            .selectFrom("memory_index_chunks_vec")
-            .select((eb) => eb.fn.countAll<number>().as("count"))
-            .where(
-              "id",
-              "in",
-              result.value.chunks.map((chunk) => chunk.id),
-            ),
-        ).rows[0]!.count;
+        return forEachMemoryForgetChunkIdBatch(
+          result.value.chunks.map((chunk) => chunk.id),
+          (batch) =>
+            executeSqliteQuerySync(
+              db,
+              vectorKysely
+                .selectFrom("memory_index_chunks_vec")
+                .select((eb) => eb.fn.countAll<number>().as("count"))
+                .where("id", "in", batch),
+            ).rows[0]!.count,
+        ).reduce((total, count) => total + count, 0);
       },
       options,
       { allowExtension: true },

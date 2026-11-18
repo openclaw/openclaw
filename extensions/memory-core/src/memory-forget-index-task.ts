@@ -41,3 +41,17 @@ export type ForgetIndexReadInput = {
   entryKeys: readonly string[];
   corpusSnippets: readonly string[];
 };
+
+/** Keep generated IN lists below SQLite's variable limit during forget operations. */
+export const MEMORY_FORGET_CHUNK_ID_BATCH_SIZE = 500;
+
+export function forEachMemoryForgetChunkIdBatch<T>(
+  chunkIds: readonly string[],
+  visit: (batch: readonly string[]) => T,
+): T[] {
+  const results: T[] = [];
+  for (let offset = 0; offset < chunkIds.length; offset += MEMORY_FORGET_CHUNK_ID_BATCH_SIZE) {
+    results.push(visit(chunkIds.slice(offset, offset + MEMORY_FORGET_CHUNK_ID_BATCH_SIZE)));
+  }
+  return results;
+}
