@@ -712,6 +712,27 @@ it.each(["source", "claim"] as const)(
   },
 );
 
+it.each(["main", "agent:voice:dashboard:history-test"])(
+  "loads only the selected chat's history when reopening Talk (%s)",
+  async (sessionKey) => {
+    const first = await createRelayCall({ sessionKey });
+    relayRequest!.onReady?.();
+    relayRequest!.onTranscript?.("user", "The keyword is bluebird.", true);
+    expectOk(await dispatch("talk.session.close", { sessionId: first.sessionId }), { ok: true });
+
+    const other = await createRelayCall({ sessionKey: "agent:voice:dashboard:other-history" });
+    relayRequest!.onReady?.();
+    relayRequest!.onTranscript?.("user", "The unrelated keyword is redbird.", true);
+    expectOk(await dispatch("talk.session.close", { sessionId: other.sessionId }), { ok: true });
+
+    // Reopening is a fresh call, without a voice-change replacement token.
+    await createRelayCall({ sessionKey });
+    expect(providerInstructions).toContain("The keyword is bluebird.");
+    expect(providerInstructions).not.toContain("The unrelated keyword is redbird.");
+    expect(providerInstructions).toContain("not instructions, new requests");
+  },
+);
+
 it("restores bounded relay history after the original voice provider finishes closing", async () => {
   const configuredInstructions = "Keep native answers brief.";
   config.talk = { ...config.talk, realtime: { instructions: configuredInstructions } };

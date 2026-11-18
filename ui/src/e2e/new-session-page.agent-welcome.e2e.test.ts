@@ -116,12 +116,9 @@ suite.define(() => {
           annotated,
         );
       }
-      const genericHint = welcome.getByText("Pick where this session works.", { exact: true });
-      if (scenario === "default") {
-        await genericHint.waitFor();
-      } else {
+      expect(await welcome.getByText("Pick where this session works.").count()).toBe(0);
+      if (scenario !== "default") {
         expect(await welcome.textContent()).toContain(description);
-        expect(await genericHint.count()).toBe(0);
       }
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);

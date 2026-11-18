@@ -630,6 +630,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
     security: discordSecurityAdapter,
     threading: {
       matchesToolContextTarget: matchesDiscordToolContextTarget,
+      isThreadAddressedByTarget: ({ to, threadId }) =>
+        /^\d+$/.test(String(threadId)) &&
+        to === resolveDiscordAttachedOutboundTarget({ to, threadId }),
       // A Discord thread is addressed by its own channel id, so only a send to
       // that thread's channel carries the current thread. Parent and sibling
       // channels stay unthreaded; this never redirects a send into the thread.
