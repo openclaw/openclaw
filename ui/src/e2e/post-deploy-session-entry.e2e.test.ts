@@ -1,13 +1,14 @@
-import { cp, mkdtemp, rm } from "node:fs/promises";
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { chromium, type Browser, type Page, type Request } from "playwright";
+import { chromium, type APIResponse, type Browser, type Page, type Request } from "playwright";
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../src/config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../../src/config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
+import type { ResolvedGatewayAuth } from "../../../src/gateway/auth.js";
 import * as documentTransport from "../../../src/gateway/control-ui-static.js";
 import { createGatewayHttpServer } from "../../../src/gateway/server-http.js";
 import { createGatewayRequestContext } from "../../../src/gateway/server-request-context.js";
@@ -17,10 +18,23 @@ import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../../../src/gateway/session-row-projection.js";
+import { sessionChanges } from "../../../src/sessions/session-row-changes.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  publishPendingAgentDatabaseReadAdmission,
+  readAgentDatabaseAdmissionRefusal,
+  readAgentDatabaseReadAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../../../src/state/agent-database-admission.js";
+import { createAgentDatabaseStartupObservation } from "../../../src/state/agent-database-startup-observation.js";
+import type { PendingAgentDatabaseRecovery } from "../../../src/state/agent-database-startup.types.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../src/state/openclaw-agent-db.paths.js";
 import { ensureCanonicalUserProfileForEmail } from "../../../src/state/user-profile-writes.js";
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   buildProductionControlUiE2e,
   captureControlUiE2eFailureDiagnostics,
@@ -46,6 +60,7 @@ const unrelatedScope = {
 };
 const publishedMessage = "Synthetic published conversation.";
 const operatorEmail = "reload-operator@example.test";
+const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };
 type HttpSample = { path: string; status: number };
 
 // Real HTTP authentication, session publication, HTML delivery and built workers;
@@ -58,6 +73,9 @@ describe("public-session post-deploy app handoff", () => {
   let listener: Awaited<ReturnType<typeof reserveTestPortListener<Server>>> | undefined;
   let baseUrl: string;
   let root: { kind: "resolved"; path: string };
+  let cfg: OpenClawConfig;
+  let auth: ResolvedGatewayAuth;
+  let gatewayContext: ReturnType<typeof createGatewayRequestContext>;
   const requests: HttpSample[] = [];
   let publication = 2;
 
@@ -78,8 +96,7 @@ describe("public-session post-deploy app handoff", () => {
       scenario: "minimal",
       label: "post-deploy-session-entry",
     });
-    const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };
-    const cfg: OpenClawConfig = {
+    cfg = {
       agents: { entries: { main: {} } },
       gateway: {
         publicOrigin: "https://threads.example.test",
@@ -119,11 +136,11 @@ describe("public-session post-deploy app handoff", () => {
     });
     projection = await createSessionRowProjection({ cfg, getConfig: () => cfg, modelCatalog: [] });
     await projection.ensureMaterialized();
-    const context = createGatewayRequestContext(makeContextParams());
-    context.resolveGatewayContext = () => context;
-    bindSessionRowProjection(context, () => projection);
+    gatewayContext = createGatewayRequestContext(makeContextParams());
+    gatewayContext.resolveGatewayContext = () => gatewayContext;
+    bindSessionRowProjection(gatewayContext, () => projection);
     root = { kind: "resolved", path: path.join(fixture, buildA) };
-    const auth = { mode: "trusted-proxy" as const, trustedProxy, allowTailscale: false };
+    auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
     listener = await reserveTestPortListener({
       offsets: [0],
       createListener: () => {
@@ -138,8 +155,8 @@ describe("public-session post-deploy app handoff", () => {
           resolvedAuth: auth,
           getResolvedAuth: () => auth,
           getRuntimeConfig: () => cfg,
-          getGatewayRequestContext: () => context,
-          httpRequestLifetime: context,
+          getGatewayRequestContext: () => gatewayContext,
+          httpRequestLifetime: gatewayContext,
           isTerminalEnabled: () => false,
         });
         server.prependListener("request", (req, res) => {
@@ -369,6 +386,202 @@ describe("public-session post-deploy app handoff", () => {
       }
     }, 60_000);
   }
+
+  it.for([false, true])(
+    "revalidates a pending handoff and probe (revoked=%s)",
+    { timeout: 60_000 },
+    async (revoked, { signal }) => {
+      const originalConfig = cfg;
+      const originalAuth = auth;
+      root.path = path.join(fixture!, buildA);
+      const proof = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
+        ? createControlUiE2eArtifactDir("session-entry-readiness")
+        : undefined;
+      await using browserContext = await browser!.newContext({
+        serviceWorkers: "allow",
+        viewport: { width: 1440, height: 1000 },
+        ...(proof ? { recordVideo: { dir: proof, size: { width: 1440, height: 1000 } } } : {}),
+      });
+      await browserContext.addCookies([{ name: "operator", value: "1", url: baseUrl }]);
+      const page = await browserContext.newPage();
+      const gateway = await installAppGateway(page, buildA);
+      await openAcrossPublication(page, signal, buildA, 2, gateway);
+      await page.waitForFunction(() => navigator.serviceWorker.controller?.state === "activated");
+
+      const readReady = createDeferred();
+      const completion = createDeferred();
+      const joined = createDeferred();
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "main",
+        paths: [databasePath],
+        reason: "Source inspection is pending",
+        pending: true,
+      });
+      const pending: PendingAgentDatabaseRecovery = {
+        refusal,
+        readReady: readReady.promise,
+        completion: completion.promise,
+        startedAt: 0,
+        phase: "inspection",
+        phaseStartedAt: 0,
+        phaseDurationsMs: {},
+      };
+      const startup = createAgentDatabaseStartupObservation(new Map([["main", pending]]), signal);
+      const wait = startup.waitForAgentPreparation.bind(startup);
+      let observers = 0;
+      const observedWait = vi
+        .spyOn(startup, "waitForAgentPreparation")
+        .mockImplementation((...args) => {
+          const result = wait(...args);
+          if (result && ++observers === 3) {
+            joined.resolve();
+          }
+          return result;
+        });
+      let revokeRead: (() => void) | undefined;
+      let navigation: Promise<unknown> | undefined;
+      let documentRequest: Promise<APIResponse> | undefined;
+      let probeRequest: Promise<APIResponse> | undefined;
+      try {
+        recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+        gatewayContext.agentDatabaseStartup = startup;
+        // A restarted projection captures the real pending source, not the old warm rows.
+        projection!.dispose();
+        projection = await createSessionRowProjection({
+          cfg,
+          getConfig: () => cfg,
+          modelCatalog: [],
+        });
+        await projection.ensureMaterialized();
+        const start = requests.length;
+        root.path = path.join(fixture!, buildB);
+        await gateway.setServerBuildId(buildB);
+        const response = browserContext.waitForEvent("response", {
+          predicate: (result) =>
+            result.url().includes("/__openclaw__/session-entry?") &&
+            !new URL(result.url()).searchParams.has("probe"),
+        });
+        void response.catch(() => {});
+        // Own the document body independently of the worker serving navigation;
+        // Playwright cannot read that worker's response after it closes.
+        documentRequest = browserContext.request.get(
+          `${baseUrl}/__openclaw__/session-entry?${new URLSearchParams({ path: publicPath })}`,
+        );
+        void documentRequest.catch(() => {});
+        probeRequest = browserContext.request.get(
+          `${baseUrl}/__openclaw__/session-entry?${new URLSearchParams({ path: publicPath, probe: "1" })}`,
+        );
+        void probeRequest.catch(() => {});
+        navigation = page.reload({ waitUntil: "commit" });
+        void navigation.catch(() => {});
+        // A pre-fix 503 fails immediately at the real HTTP boundary instead of timing out.
+        expect(
+          await withinTest(
+            Promise.race([
+              joined.promise.then(() => "waiting"),
+              response.then((result) => result.status()),
+            ]),
+            signal,
+          ),
+        ).toBe("waiting");
+        if (revoked) {
+          const revokedProxy = { ...trustedProxy, allowUsers: ["other-viewer@example.test"] };
+          auth = { ...auth, trustedProxy: revokedProxy };
+          cfg = {
+            ...cfg,
+            gateway: {
+              ...cfg.gateway,
+              auth: { ...cfg.gateway?.auth, trustedProxy: revokedProxy },
+            },
+          };
+          setRuntimeConfigSnapshot(cfg, cfg);
+        }
+        revokeRead = publishPendingAgentDatabaseReadAdmission(refusal, {
+          paths: [databasePath],
+          assertCurrent: () => signal.throwIfAborted(),
+        });
+        pending.readReady = undefined;
+        readReady.resolve();
+        sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+        const entryResponse = await response;
+        const documentResponse = await documentRequest;
+        const probeResponse = await probeRequest;
+        expect(await entryResponse.headerValue("cache-control")).toMatch(
+          /(?:^|,)\s*no-store\s*(?:,|$)/i,
+        );
+        for (const result of [documentResponse, probeResponse]) {
+          expect(result.headers()["cache-control"]).toMatch(/(?:^|,)\s*no-store\s*(?:,|$)/i);
+        }
+        await navigation;
+        if (revoked) {
+          expect([401, 403]).toContain(entryResponse.status());
+          expect(await entryResponse.headerValue("x-openclaw-session-entry")).toBeNull();
+          for (const result of [documentResponse, probeResponse]) {
+            expect([401, 403]).toContain(result.status());
+            expect(result.headers()["x-openclaw-session-entry"]).toBeUndefined();
+            expect(await result.text()).not.toMatch(/<openclaw-app|type=["']module/);
+          }
+          await page.getByText(publishedMessage, { exact: true }).waitFor();
+          expect(await page.locator("openclaw-app").count()).toBe(0);
+        } else {
+          expect(entryResponse.status()).toBe(200);
+          expect(await entryResponse.headerValue("x-openclaw-session-entry")).toBe("1");
+          expect(documentResponse.status()).toBe(200);
+          expect(documentResponse.headers()["x-openclaw-session-entry"]).toBe("1");
+          expect(await documentResponse.text()).toContain("<openclaw-app");
+          expect(probeResponse.status()).toBe(204);
+          expect(await probeResponse.body()).toHaveLength(0);
+          await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
+          expect(new URL(page.url()).pathname).toBe(publicPath);
+          expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
+            client: { buildId: buildB },
+          });
+          expect(requests.slice(start).filter(({ path: url }) => url.startsWith("/chat/"))).toEqual(
+            [],
+          );
+          expect(
+            requests.slice(start).filter(({ path: url }) => url.includes("probe=1")),
+          ).toHaveLength(1);
+        }
+        expect(readAgentDatabaseReadAdmissionRefusal("main")).toBeUndefined();
+        expect(readAgentDatabaseAdmissionRefusal("main")).toBe(refusal);
+        if (proof) {
+          await writeFile(
+            path.join(proof, revoked ? "revoked.png" : "recovered.png"),
+            await takeControlUiViewportScreenshot(page, page.locator("body"), []),
+          );
+        }
+      } catch (error) {
+        if (proof) {
+          await page.screenshot({ path: path.join(proof, "failure.png") });
+        }
+        throw error;
+      } finally {
+        observedWait.mockRestore();
+        pending.readReady = undefined;
+        revokeRead?.();
+        recordAgentDatabaseAdmissions([], { source: "startup" });
+        gatewayContext.agentDatabaseStartup = undefined;
+        readReady.resolve();
+        completion.resolve();
+        // A failing assertion may precede navigation commit. Retire held startup
+        // work and settle navigation before closing its page or context.
+        await Promise.allSettled([navigation, documentRequest, probeRequest]);
+        await page.close();
+        cfg = originalConfig;
+        auth = originalAuth;
+        setRuntimeConfigSnapshot(cfg, cfg);
+        projection?.dispose();
+        projection = await createSessionRowProjection({
+          cfg,
+          getConfig: () => cfg,
+          modelCatalog: [],
+        });
+        await projection.ensureMaterialized();
+      }
+    },
+  );
 
   it("keeps an unauthenticated public-session reload in the reader", async () => {
     root.path = path.join(fixture!, buildB);
