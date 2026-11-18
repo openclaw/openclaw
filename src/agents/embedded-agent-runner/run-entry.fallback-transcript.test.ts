@@ -155,28 +155,35 @@ describe("run entry durable fallback notices", () => {
     return { scope, entry, candidates, steps, run, [Symbol.dispose]: () => admission.close() };
   }
 
-  it("keeps a terminal error from a backup without reporting success or replaying the turn", async () => {
-    const message = "OpenClaw couldn't finish this reply.";
-    using f = await fixture({
-      lastFallback: "minimax/minimax-m3",
-      backupResult: {
-        payloads: [{ text: message, isError: true }],
-        meta: {
-          durationMs: 10,
-          replayInvalid: true,
-          stopReason: "error",
-          error: { kind: "incomplete_turn", message, fallbackSafe: false },
+  it.each([true, false])(
+    "keeps a terminal error with recorded metadata=%s without reporting success or replaying the turn",
+    async (recorded) => {
+      const message = "OpenClaw couldn't finish this reply.";
+      using f = await fixture({
+        lastFallback: "minimax/minimax-m3",
+        backupResult: {
+          payloads: [{ text: message, isError: true }],
+          meta: {
+            durationMs: 10,
+            ...(recorded
+              ? {
+                  replayInvalid: true,
+                  stopReason: "error",
+                  error: { kind: "incomplete_turn", message, fallbackSafe: false },
+                }
+              : {}),
+          },
         },
-      },
-    });
+      });
 
-    const result = await f.run();
+      const result = await f.run();
 
-    expect(result.terminal.outcome.status).toBe("error");
-    expect(result.result.payloads).toEqual([{ text: message, isError: true }]);
-    expect(f.candidates).toEqual([primary, backup]);
-    expect(f.steps.map((step) => step.fallbackStepFinalOutcome)).toEqual(["next_fallback"]);
-  });
+      expect(result.terminal.outcome.status).toBe("error");
+      expect(result.result.payloads).toEqual([{ text: message, isError: true }]);
+      expect(f.candidates).toEqual([primary, backup]);
+      expect(f.steps.map((step) => step.fallbackStepFinalOutcome)).toEqual(["next_fallback"]);
+    },
+  );
 
   it("persists a real transition once, preserving callbacks and source-session binding", async () => {
     using f = await fixture();
