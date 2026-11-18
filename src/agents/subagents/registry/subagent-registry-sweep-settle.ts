@@ -149,7 +149,8 @@ export async function settleRestartInterruptedSubagentRun(params: {
   if (
     hasSubagentRunEnded(entry) ||
     isYieldedSubagentRun(entry) ||
-    !subagentRuns.isCompletionAuthorityRetired(entry) ||
+    // Fresh requester custody owns the notice; the retired process cannot send it.
+    (subagentRuns.isCompletionAuthorityRetired(entry) && entry.expectsCompletionMessage === true) ||
     // Only an earlier process could have owned this execution; this process never did.
     !(entry.createdAt < processStartedAt) ||
     isSubagentRunLive(entry) ||
