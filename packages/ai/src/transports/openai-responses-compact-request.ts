@@ -32,6 +32,11 @@ type ResponsesCompactRequestController = {
 
 const COMPACT_REQUEST = Symbol("openaiResponsesCompactRequest");
 
+/** Non-consuming classification for host policy; only the transport claims the operation. */
+export function isResponsesCompactRequest(options: object | undefined): boolean {
+  return options !== undefined && Reflect.has(options, COMPACT_REQUEST);
+}
+
 export function claimResponsesCompactRequest(options: object | undefined) {
   const controller = options
     ? (Reflect.get(options, COMPACT_REQUEST) as ResponsesCompactRequestController | undefined)

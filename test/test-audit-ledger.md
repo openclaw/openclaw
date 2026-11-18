@@ -1075,6 +1075,66 @@ baseline; 1.88 s candidate command time); these are correctness runs, not a
 performance comparison. Scoped scripts-test typecheck, lint, formatting and
 both line-cap ratchets pass. Production and shared-helper code are unchanged.
 
+### Built status runtime fixture cleanup
+
+At `a58770f3a50053e89236c787a331c1cb48d4b388`, the built-status runtime test
+clears its directory tracker before removal and stops on the first failure.
+Reuse the shared cleanup owner while preserving the synchronous hook, fixture
+factory and both declarations / four expanded cases. Retain the empty-PATH
+fallback with scoped environment restoration, hashed `.mjs` preference and
+three external-find rows with the no-readdir assertion. Production and shared
+helpers are unchanged.
+
+Actual Vitest-hook fault injection preserves the original error on both
+versions. The baseline loses both roots and performs no retry; the candidate
+removes the healthy root, retains the failed root and removes it on retry.
+Both injected runs intentionally report one hook failure and three passing
+cases. Both clean runs pass all four cases (6.99 s baseline command time;
+1.90 s candidate); these correctness runs are not a performance comparison.
+The temporary instrumentation was restored byte for byte, and scoped PATH
+restoration passed. Scoped scripts-test typecheck, lint, formatting and both
+line-cap ratchets pass. Independent preservation and local ClawSweeper reviews
+found no actionable defects.
+
+### Hotspot report fixture cleanup
+
+At `5cb4520c7e1d2d4ef519508c2c5dd091e446d789`, hotspot-report teardown
+clears its tracked roots before removal and stops on the first error. Reuse
+the shared cleanup owner without changing the fixture factory or the single
+declaration / expanded case. Preserve the real CLI's rejection of a valid
+report with no timed files: exit 1, empty stdout and the specific diagnostic.
+The shared report-parser tests protect a separate contract; they do not
+replace this CLI-boundary proof. Production and shared helpers are unchanged.
+
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and performs no retry. The
+shared owner preserves the same error, removes the healthy root, retains the
+failed root and succeeds on retry. Both injected runs intentionally fail the
+single case at teardown; both clean runs pass it. Temporary instrumentation
+was restored byte for byte. Scoped scripts-test typecheck, lint, formatting
+and both line-cap ratchets pass. Independent preservation and local
+ClawSweeper reviews found no actionable defects.
+
+### Standalone SQLite fixture cleanup
+
+At `4f8b68e647afb8507f3e5bba54af1374cb608389`, standalone SQLite test
+teardown clears its directory tracker before removal and stops on the first
+error. Reuse the shared cleanup owner while preserving the synchronous hook,
+fixture registration, child-process mock and all three declarations / five
+expanded cases. Retain macOS staging and manifest identity, the three distinct
+rejection guards, and Linux's embedded-library behavior. Production and shared
+helpers are unchanged. Mocked compilation and probing do not establish real
+SQLite capability qualification.
+
+Injection through the actual registered Vitest hook confirms that the original
+cleanup loses both failed and unattempted roots and cannot retry. The shared
+owner preserves the same error, removes the healthy root, retains the failed
+root and removes it on retry. Both injected runs intentionally report one
+teardown failure and four passing cases. Both clean runs pass all five cases.
+Temporary instrumentation was restored byte for byte. Scoped scripts-test
+typecheck, lint, formatting and both line-cap ratchets pass. Independent
+preservation and local ClawSweeper reviews found no actionable defects.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

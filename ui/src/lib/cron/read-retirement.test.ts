@@ -19,7 +19,6 @@ import {
   loadCronJobsPage,
   runCronJob,
   startCronEdit,
-  updateCronJobsFilter,
 } from "./index.ts";
 import { loadCronRuns, updateCronRunsFilter } from "./runs.ts";
 import { loadCronStatus, retireCronStatusFeedback } from "./state.ts";
@@ -48,7 +47,7 @@ describe("cron controller", () => {
       cronJobsQuery: "old",
     });
     const pending = loadCronJobsPage(state, { tableFilters: true });
-    updateCronJobsFilter(state, { cronJobsQuery: "latest" });
+    state.cronJobsQuery = "latest";
     await loadCronJobsPage(state, { tableFilters: true });
     superseded.resolve(cronJobsListResponse([createCronJob("old", "Old result")]));
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
@@ -173,10 +172,8 @@ describe("cron controller", () => {
         : { cronJobsScheduleKindFilter: "cron", cronJobsLastStatusFilter: "unknown" },
     );
     const pending = loadCronJobsPage(state, { append: tableFilters, tableFilters });
-    updateCronJobsFilter(state, {
-      cronJobsScheduleKindFilter: "cron",
-      cronJobsLastStatusFilter: "unknown",
-    });
+    state.cronJobsScheduleKindFilter = "cron";
+    state.cronJobsLastStatusFilter = "unknown";
     await loadCronJobsPage(state, { tableFilters: true });
     if (!tableFilters) {
       await loadCronJobsPage(state);

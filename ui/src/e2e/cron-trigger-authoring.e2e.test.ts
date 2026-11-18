@@ -4,7 +4,15 @@ import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
+import {
+  automationRow,
+  cronJob,
+  cronList,
+  cronRuns,
+  cronSidebarFeatureMethods,
+  openAutomationActivity,
+  chooseScheduleKind,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation condition-trigger authoring",
@@ -23,7 +31,7 @@ const pageOptions = {
   viewport: { height: 1_050, width: 1_440 },
 };
 const triggerToggle = (page: Page) =>
-  page.locator(".settings-row--toggle").filter({ hasText: "Condition trigger" });
+  page.locator(".settings-row--toggle").filter({ hasText: "Check a condition first" });
 const field = (page: Page, name: string) => page.locator(`#cron-${name}`);
 const submit = (page: Page) => page.locator('[data-test-id="cron-submit"]');
 async function newTask(page: Page, name: string, message: string) {
@@ -110,11 +118,11 @@ suite.define(() => {
   it("keeps a rejected trigger draft visible without reloading inventory", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
         methodResponses: cronMethodResponses([scriptJob]),
       });
       await page.goto(`${suite.server.baseUrl}cron`);
-      const existingRow = page.locator('[data-test-id="cron-row-existing-script-automation"]');
-      await existingRow.waitFor();
+      const existingRow = await automationRow(page, scriptJob.id);
       await newTask(page, "Malformed condition", "Run when the condition matches");
       await advanced(page);
       await triggerToggle(page).click();
@@ -141,15 +149,20 @@ suite.define(() => {
       await errorBanner.scrollIntoViewIfNeeded();
 
       // A rejected save must release the fieldset's inherited disabled state.
-      const once = page.locator('[data-test-id="cron-schedule-kind-at"]').getByRole("radio");
-      await once.scrollIntoViewIfNeeded();
-      await expect.poll(() => once.isEnabled()).toBe(true);
-      await once.click();
+      await expect
+        .poll(() =>
+          page
+            .locator("fieldset.cron-editor")
+            .evaluate((element) => (element as HTMLFieldSetElement).disabled),
+        )
+        .toBe(false);
+      await chooseScheduleKind(page, "at");
       await field(page, "schedule-at").waitFor();
       expect(await field(page, "name").inputValue()).toBe("Malformed condition");
       expect(await gateway.getRequests("cron.add")).toHaveLength(1);
 
-      await page.locator('[data-test-id="cron-back"]').click();
+      // Leaving the rejected draft keeps the sidebar's inventory without reading it again.
+      await openAutomationActivity(page);
       await existingRow.waitFor();
       expect(await gateway.getRequests("cron.list")).toHaveLength(listsBeforeSave);
     });

@@ -145,7 +145,7 @@ const parseDirectiveToken = createSpeechDirectiveParser({
 
 export function buildInworldSpeechProvider(): SpeechProviderPlugin {
   const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
-    Boolean(resolveInworldApiKey(readInworldProviderConfig(providerConfig).apiKey));
+    Boolean(resolveInworldApiKey(trimToUndefined(providerConfig.apiKey)));
   return {
     id: "inworld",
     label: "Inworld",

@@ -4,7 +4,10 @@
  * uses OPENCLAW_BENCH_BASELINE_DIR and the existing worker loader. CPU includes
  * workers, excludes Git children; allocated bytes cover the main V8 isolate.
  * --kind nested|missing selects the refusal; first-attempt and later sweeps are
- * separate. Acceptance: preserved bytes, at most 1/3 attempts respectively,
+ * separate. --operation remove measures repeated explicit removals instead of GC.
+ * Removal acceptance: zero further attempts and lower wall/CPU/allocation after
+ * the first terminal receipt; explicit retry behavior is covered by owner tests.
+ * GC acceptance: preserved bytes, at most 1/3 attempts respectively,
  * zero snapshot retries after terminal preservation; no disk-reclamation claim.
  */
 import assert from "node:assert/strict";
@@ -24,10 +27,13 @@ const { values } = parseArgs({
     "agent-db": { type: "string" },
     kind: { type: "string", default: "missing" },
     passes: { type: "string", default: "6" },
+    operation: { type: "string", default: "gc" },
   },
 });
 assert(values.repo && values.output && values["agent-db"]);
 assert(values.kind === "nested" || values.kind === "missing");
+assert(values.operation === "gc" || values.operation === "remove");
+assert(values.operation !== "remove" || values.kind === "nested");
 const output = path.resolve(values.output);
 fs.mkdirSync(output);
 execFileSync("chattr", ["+C", output]);
@@ -129,8 +135,8 @@ try {
     const allocation = getHeapStatistics().total_allocated_bytes;
     assert(Number.isFinite(allocation));
     const started = performance.now();
-    const outcome =
-      pass === 0
+    const outcome: Awaited<ReturnType<typeof service.remove | typeof service.gc>> | string =
+      pass === 0 || values.operation === "remove"
         ? await service
             .remove({ id: created.id, reason: "synthetic refusal" })
             .catch((error: unknown) => String(error))
@@ -149,6 +155,10 @@ try {
     }
     if (!baseline && pass >= (values.kind === "nested" ? 0 : 2)) {
       assert.equal(record.gcRetry?.retryAt, null);
+      if (values.operation === "remove" && pass > 0) {
+        assert.equal(record.gcRetry.attempts, 1);
+        assert.deepEqual(outcome, { removed: false, preserved: record.cleanup });
+      }
     }
     samples.push({
       pass,
@@ -166,6 +176,7 @@ try {
       {
         baseline: baseline ?? null,
         kind: values.kind,
+        operation: values.operation,
         node: process.version,
         agentDbBytes: fs.statSync(values["agent-db"]).size,
         samples,

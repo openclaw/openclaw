@@ -5,6 +5,7 @@ import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import type { SystemdServiceStartRefusal } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { settleGitReleaseTrial } from "../../infra/git-release.js";
 import {
   normalizeUpdateFailureFacts,
   type UpdateFailureFact,
@@ -351,6 +352,8 @@ export async function verifyUpdatedGateway(
     assertCurrent();
     const verifiedAtMs = Date.now();
     params.onVerified?.(verifiedAtMs);
+    // A verified Git release ends its trial even when it predates the Gateway's own settlement.
+    await settleGitReleaseTrial(params.result.root ?? null).catch(() => {});
     assertCurrent();
     recordVerificationStep(undefined, undefined, undefined, verifiedAtMs);
 

@@ -12,7 +12,6 @@ import { versionValueFlag } from "./lib/version-script-args.ts";
 type ReleasePrepareMode = "check" | "shadow" | "write";
 
 type ReleasePrepareArgs = {
-  android: boolean;
   help: boolean;
   jobs: number;
   json: boolean;
@@ -42,7 +41,6 @@ const GIT_OUTPUT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 export function parseReleasePrepareArgs(argv: string[]): ReleasePrepareArgs {
   const args: ReleasePrepareArgs = {
-    android: false,
     help: false,
     jobs: DEFAULT_JOBS,
     json: false,
@@ -56,7 +54,6 @@ export function parseReleasePrepareArgs(argv: string[]): ReleasePrepareArgs {
     argv,
     args,
     [
-      booleanFlag("--android", "android", true, { repeatable: true }),
       booleanFlag("--json", "json", true, { repeatable: true }),
       booleanFlag("-h", "help", true, { repeatable: true }),
       booleanFlag("--help", "help", true, { repeatable: true }),
@@ -82,7 +79,7 @@ export function parseReleasePrepareArgs(argv: string[]): ReleasePrepareArgs {
 }
 
 export function createReleasePrepareSteps(
-  args: Pick<ReleasePrepareArgs, "android" | "jobs" | "mode" | "rootDir" | "version">,
+  args: Pick<ReleasePrepareArgs, "jobs" | "mode" | "rootDir" | "version">,
 ): ReleasePrepareStep[] {
   if (!args.version) {
     throw new Error("Missing required --version.");
@@ -107,9 +104,6 @@ export function createReleasePrepareSteps(
     "--version",
     parsedVersion.version,
   ];
-  if (args.android) {
-    versionArgs.push("--android");
-  }
   if (args.mode === "write") {
     versionArgs.push("--write");
   }
@@ -356,7 +350,6 @@ function printUsage(): void {
       "  --write    align versions and refresh version-owned generated metadata",
       "",
       "Options:",
-      "  --android         prepare shared mobile and Android release metadata",
       "  --jobs <count>    preflight concurrency, 1 through 16 (default: 4)",
       "  --manifest <path> override the git-local candidate manifest path",
       "  --json            emit machine-readable output",

@@ -29,6 +29,12 @@ import { pluginSyncResult } from "./update-cli/update-cli-config.test-support.js
 import { recoveryVerificationStep } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import * as postCore from "./update-cli/update-command-post-core.js";
 
+// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
+vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
+  usesGitReleases: () => false,
+}));
+
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
