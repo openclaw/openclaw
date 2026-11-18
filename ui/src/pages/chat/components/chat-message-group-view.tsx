@@ -12,7 +12,11 @@ import { ChatAvatar, ForwardedAvatar } from "../chat-avatar.ts";
 import { readHandoffDisplay } from "../chat-sessions-yield.ts";
 import { listResumedHandoffSessions } from "../chat-subagent-wait.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
-import { hasForwardedSource, isSessionActivityGroup } from "../chat-turn-boundary.ts";
+import {
+  hasForwardedSource,
+  isSessionActivityGroup,
+  readInterSessionSummary,
+} from "../chat-turn-boundary.ts";
 import { isActivityMessageGroup } from "../chat-turn-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
@@ -647,6 +651,12 @@ function SessionActivityGroup(props: {
                 ...options(),
                 isForwarded: true,
                 onToggleUserMessageExpanded: undefined,
+                forwardedSummary: readInterSessionSummary(item().message)
+                  ? {
+                      text: readInterSessionSummary(item().message)!,
+                      disclosureId: "session-activity:" + item().key,
+                    }
+                  : undefined,
                 replyLine: resolveGroupReplyLine(
                   { ...props.group, messages: [item()] },
                   options().resolveReplyPreview,

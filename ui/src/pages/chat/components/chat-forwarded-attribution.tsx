@@ -19,6 +19,7 @@ export type ForwardedAttributionOptions = ForwardedAvatarOptions & {
   mainKey?: string;
   basePath?: string;
   updateCount?: number;
+  sourceOnly?: boolean;
   displayFacts?: ChatDisplayFacts;
 };
 
@@ -160,7 +161,9 @@ export function ForwardedAttribution(props: {
     () => source().sourceLabel ?? source().sourceSessionKey ?? "",
   );
   const avatarAgentId = () =>
-    source().sourceIsOtherAgent && props.options.updateCount === undefined
+    source().sourceIsOtherAgent &&
+    !props.options.sourceOnly &&
+    props.options.updateCount === undefined
       ? source().sourceParsed?.agentId
       : undefined;
   const hasAvatar = () => {

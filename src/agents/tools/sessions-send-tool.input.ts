@@ -31,6 +31,17 @@ export function readSessionsSendMessage(params: Record<string, unknown>): string
   return message;
 }
 
+export function readSessionsSendSummary(params: Record<string, unknown>): string | undefined {
+  if (params.summary === undefined) {
+    return undefined;
+  }
+  const summary = readToolStringParam(params, "summary", { required: true });
+  if (summary.length > 280 || /[\r\n\u2028\u2029]/u.test(summary)) {
+    throw new ToolInputError("summary must be one line of at most 280 characters");
+  }
+  return summary;
+}
+
 export function readSessionsSendTimeout(
   params: Record<string, unknown>,
   mode: ReturnType<typeof readSessionsSendMode>,

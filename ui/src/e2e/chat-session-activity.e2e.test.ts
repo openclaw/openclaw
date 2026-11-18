@@ -19,7 +19,13 @@ function delivery(
   sessionKey: string,
   content: string,
   seq: number,
-  provenance: { kind: string; sourceTool: string; jobId?: string; runId?: string },
+  provenance: {
+    kind: string;
+    sourceTool: string;
+    sourceSummary?: string;
+    jobId?: string;
+    runId?: string;
+  },
   label?: string,
 ) {
   return {
@@ -192,65 +198,91 @@ suite.define(() => {
     },
   );
 
-  it.each([1440, 390])("keeps source updates compact and navigable at %ipx", async (width) => {
-    const key = "agent:main:activity-reader";
-    const sourceKey = "agent:main:activity-source";
-    const label = "Verification session";
-    await suite.withPage(
-      { viewport: { width, height: 844 }, locale: "en-US", serviceWorkers: "block" },
-      async ({ page }) => {
-        const { activity, summary } = await openActivity(
-          page,
-          key,
-          [row(key, "Reader"), row(sourceKey, label)],
-          [1, 2, 3].map((seq) =>
-            delivery(
-              sourceKey,
-              `Receipt ${seq}: ${"Verification detail. ".repeat(100)}End of receipt ${seq}`,
-              seq,
-              { kind: "inter_session", sourceTool: "sessions_send" },
+  it.each([1440, 390])(
+    "keeps incoming source messages left-aligned and navigable at %ipx",
+    async (width) => {
+      const key = "agent:main:activity-reader";
+      const sourceKey = "agent:main:activity-source";
+      const label = "Verification session";
+      await suite.withPage(
+        {
+          viewport: { width, height: 844 },
+          colorScheme: "light",
+          locale: "en-US",
+          serviceWorkers: "block",
+        },
+        async ({ page }) => {
+          await openActivity(
+            page,
+            key,
+            [row(key, "Reader"), row(sourceKey, label)],
+            [1, 2, 3].map((seq) =>
+              delivery(
+                sourceKey,
+                "Receipt " + seq + ": Verification detail. End of receipt " + seq,
+                seq,
+                {
+                  kind: "inter_session",
+                  sourceTool: "sessions_send",
+                  sourceSummary: "Receipt " + seq + " verified",
+                },
+                label,
+              ),
             ),
-          ),
-        );
-        const exact = (text: string) => summary.getByText(text, { exact: true });
-        await exact(label).waitFor();
-        expect(
-          await summary.evaluate((element) =>
-            [element, element.querySelector("a")!].map((node) => getComputedStyle(node).fontSize),
-          ),
-        ).toEqual(["12px", "12px"]);
-        expect(
-          await summary.evaluate(
-            (node) =>
-              node.getBoundingClientRect().width -
-              node.querySelector(".chat-reply-attribution")!.getBoundingClientRect().width,
-          ),
-        ).toBeLessThanOrEqual(40);
-        expect([
-          await activity.count(),
-          await summary.locator("a[data-session-key]").count(),
-          await activity.locator(".chat-bubble").count(),
-        ]).toEqual([1, 1, 0]);
-        await exact("3 updates from").click();
-        const lastReceipt = activity.getByText(/End of receipt 3$/);
-        await lastReceipt.waitFor();
-        expect({
-          attribution: await activity.locator(".chat-reply-attribution").count(),
-          summary: await exact("3 updates from").count(),
-          from: await exact("From").count(),
-          bodyAttribution: await activity
-            .locator(".chat-session-activity__body .chat-reply-attribution")
-            .count(),
-          toggles: await activity.locator(disclosure).count(),
-        }).toEqual({ attribution: 1, summary: 1, from: 0, bodyAttribution: 0, toggles: 0 });
-        await summary.focus();
-        await summary.press("Enter");
-        await lastReceipt.waitFor({ state: "detached" });
-        await summary.press("Space");
-        await lastReceipt.waitFor();
-        await activity.locator("a[data-session-key]").click();
-        await page.waitForURL((url) => url.pathname.includes("activity-source"));
-      },
-    );
-  });
+          );
+          const group = page.locator(".chat-group--inter-session");
+          const source = group.locator(".chat-group-messages > .chat-reply-attribution");
+          const link = source.locator("a[data-session-key]");
+          await link.getByText(label, { exact: true }).waitFor();
+          const activity = group.locator(".chat-session-activity");
+          expect(await group.count()).toBe(1);
+          expect(await activity.count()).toBe(3);
+          expect(await activity.locator("a[data-session-key]").count()).toBe(0);
+          const geometry = () =>
+            group.evaluate((element) => {
+              const avatar = element
+                .querySelector(".chat-avatar, .chat-avatar-slot")!
+                .getBoundingClientRect();
+              const bubble = element.querySelector(".chat-bubble")!.getBoundingClientRect();
+              const from = element
+                .querySelector(".chat-reply-attribution")!
+                .getBoundingClientRect();
+              return {
+                avatarWidth: avatar.width,
+                avatarRight: avatar.right,
+                bubbleLeft: bubble.left,
+                sourceLeft: from.left,
+                sourceBottom: from.bottom,
+                bubbleTop: bubble.top,
+              };
+            });
+          const collapsed = await geometry();
+          expect(collapsed.avatarWidth).toBeGreaterThan(0);
+          expect(collapsed.avatarRight).toBeLessThan(collapsed.bubbleLeft);
+          expect(Math.abs(collapsed.sourceLeft - collapsed.bubbleLeft)).toBeLessThan(1);
+          expect(collapsed.sourceBottom).toBeLessThanOrEqual(collapsed.bubbleTop);
+          const first = activity.first();
+          const summary = first.locator("summary");
+          expect(await summary.textContent()).toBe("Receipt 1 verified");
+          await summary.focus();
+          await summary.press("Enter");
+          await first.getByText(/End of receipt 1$/).waitFor();
+          expect(await activity.nth(1).getAttribute("open")).toBeNull();
+          const expanded = await geometry();
+          expect(expanded.bubbleLeft).toBeCloseTo(collapsed.bubbleLeft, 0);
+          expect(
+            await first.locator(".chat-session-activity__body").evaluate((body) => {
+              const css = getComputedStyle(body);
+              return [css.borderTopWidth, css.borderLeftWidth];
+            }),
+          ).toEqual(["0px", "0px"]);
+          expect(await first.locator(".chat-reply-attribution, .chat-bubble").count()).toBe(0);
+          await summary.press("Space");
+          await first.getByText(/End of receipt 1$/).waitFor({ state: "detached" });
+          await link.click();
+          await page.waitForURL((url) => url.pathname.includes("activity-source"));
+        },
+      );
+    },
+  );
 });

@@ -145,6 +145,61 @@ export function GroupedMessage(props: {
                       />
                     </Show>
                     <Switch>
+                      <Match when={props.options.forwardedSummary}>
+                        <details
+                          class="chat-session-activity"
+                          open={
+                            Boolean(props.options.searchResult) ||
+                            Boolean(
+                              props.options.isToolMessageExpanded?.(
+                                props.options.forwardedSummary!.disclosureId,
+                              ),
+                            )
+                          }
+                          onToggle={(event) => {
+                            if (props.options.searchResult) {
+                              return;
+                            }
+                            const id = props.options.forwardedSummary!.disclosureId;
+                            const open = event.currentTarget.open;
+                            if (open !== Boolean(props.options.isToolMessageExpanded?.(id))) {
+                              props.options.onToggleToolMessageExpanded?.(id, !open);
+                            }
+                          }}
+                        >
+                          <summary
+                            class="chat-session-activity__summary"
+                            onClick={(event) => {
+                              if (props.options.searchResult) {
+                                event.preventDefault();
+                              }
+                            }}
+                          >
+                            <span>{props.options.forwardedSummary!.text}</span>
+                            <span class="chat-session-activity__chevron" aria-hidden="true">
+                              <Icon name="chevronDown" />
+                            </span>
+                          </summary>
+                          <div class="chat-session-activity__body">
+                            <Show
+                              when={
+                                props.options.searchResult ||
+                                props.options.isToolMessageExpanded?.(
+                                  props.options.forwardedSummary!.disclosureId,
+                                ) ||
+                                !props.options.onToggleToolMessageExpanded
+                              }
+                            >
+                              <BubbleContents
+                                state={state}
+                                messageKey={props.messageKey}
+                                options={props.options}
+                                onOpenSidebar={props.onOpenSidebar}
+                              />
+                            </Show>
+                          </div>
+                        </details>
+                      </Match>
                       <Match when={state().voiceTranscript}>
                         <ChatBubbleActivity
                           label={t("chat.messages.voiceTranscript")}

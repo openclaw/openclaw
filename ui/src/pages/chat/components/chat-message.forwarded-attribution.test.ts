@@ -365,15 +365,17 @@ it.each([
 });
 
 it.each([
-  { senderSession: { agentId: "main" }, label: "1 update · Forwarded from main" },
-  { senderSession: undefined, label: "1 update · Forwarded message" },
-  { senderSession: { sessionKey: "legacy-session" }, label: "1 update from legacy-session" },
+  { senderSession: { agentId: "main" }, label: "Forwarded from main" },
+  { senderSession: undefined, label: "Forwarded message" },
+  { senderSession: { sessionKey: "legacy-session" }, label: "From legacy-session" },
 ])("renders legacy attribution without a link: $label", ({ senderSession, label }) => {
   renderGroup(createGroup(senderSession, { content: "legacy report", provenance }));
 
-  const attribution = query(".chat-session-activity .chat-reply-attribution");
+  const attribution = query(".chat-group--inter-session .chat-reply-attribution");
   expect(attribution?.textContent?.replace(/\s+/g, " ").trim()).toBe(label);
   expect(attribution?.querySelector("a, [tabindex]")).toBeNull();
+  expect(text(".chat-bubble")).toContain("legacy report");
+  expect(query(".chat-session-activity")).toBeNull();
   expect(query(".chat-group-footer .chat-sender-name")).toBeNull();
 });
 

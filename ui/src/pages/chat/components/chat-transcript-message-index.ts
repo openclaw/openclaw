@@ -652,7 +652,15 @@ export function expandReplyTargetWork(
         isSessionActivityGroup(part) &&
         part.messages.some((source) => persistedMessageEntryId(source.message) === messageId)
       ) {
-        setExpansionState(expandedToolCards, "session-activity:" + part.key, true);
+        for (const source of part.messages) {
+          if (persistedMessageEntryId(source.message) === messageId) {
+            setExpansionState(
+              expandedToolCards,
+              "session-activity:" + (isInterSessionMessage(source.message) ? source.key : part.key),
+              true,
+            );
+          }
+        }
       }
       if (
         part.kind === "work-group" &&
