@@ -53,7 +53,7 @@ export function prepareAgentWaitForTurn(
     queuedBeforeWait?.session ??
     getAgentJobSession(runId, source === "chat" ? "chat" : undefined) ??
     captureAgentJobSession(runContext);
-  const wait = async (options?: { recoverWithSessionAuthorization: true }) => {
+  const wait = async (recovery?: { recoverWithSessionAuthorization: true }) => {
     if (queuedBeforeWait) {
       return queuedBeforeWait;
     }
@@ -64,7 +64,7 @@ export function prepareAgentWaitForTurn(
       source,
       readRestoredCompletion: () => {
         if (
-          !options?.recoverWithSessionAuthorization ||
+          !recovery?.recoverWithSessionAuthorization ||
           source ||
           runContext ||
           context.dedupe.has(pendingChatSendDedupeKey(runId)) ||

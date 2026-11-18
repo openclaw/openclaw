@@ -391,7 +391,7 @@ export function createRestoredCompletionIndex(isReady: () => boolean) {
       if (!tail.newestContiguousEventCount) {
         return undefined;
       }
-      for (const { event } of tail.events.slice(-tail.newestContiguousEventCount).reverse()) {
+      for (const { event } of tail.events.toReversed().slice(0, tail.newestContiguousEventCount)) {
         const message = asOptionalRecord(asOptionalRecord(event)?.message);
         if (message?.role === "user") {
           return typeof message.idempotencyKey === "string" ? message.idempotencyKey : undefined;
