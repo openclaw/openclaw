@@ -202,3 +202,23 @@ export function createRequesterSettleContext(): GatewayRequestContext {
     removeChatRun: vi.fn(() => undefined),
   });
 }
+
+export function dispatchFixture(child = settledChild()) {
+  registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
+  const completeBatch = vi.fn<WakeParams["completeBatch"]>(() => {
+    child.requesterSettleWake = undefined;
+  });
+  return { child, completeBatch, params: wakeParams(child, completeBatch) };
+}
+
+type Turn = Pick<AgentTurnStartRequest, "preflight" | "io" | "controllerInput">;
+export function acceptTurn({ preflight, io }: Turn, cached?: true) {
+  const runId = preflight.request.idempotencyKey;
+  io.emitAcceptance([true, { runId, status: "accepted" }, undefined], {
+    runId,
+    ...(cached ? { cached } : {}),
+  });
+}
+export function finishTurn(io: Turn["io"], text: string | undefined) {
+  io.emitFinal([true, { status: "ok", result: { payloads: [{ text }] } }, undefined]);
+}

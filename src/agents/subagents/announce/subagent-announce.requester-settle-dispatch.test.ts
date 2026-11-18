@@ -9,6 +9,7 @@ import { SessionWorkStartChangedError } from "../../../config/sessions/work-star
 import { resolveGatewayAgentAbortStopReason } from "../../../gateway/agent-turn/agent-run-dispatch-outcome.js";
 import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
+import { GatewayOperatorAccessUnavailableError } from "../../../gateway/operator-access-errors.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
@@ -19,7 +20,12 @@ import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
+import {
+  createAgentRunDirectAbortError,
+  resolveAgentRunAbortLifecycleFields,
+} from "../../run-termination.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
+import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
@@ -31,6 +37,9 @@ import {
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 import {
   deliver,
+  dispatchFixture,
+  acceptTurn,
+  finishTurn,
   registryRead,
   readDescendantFacts,
   startTurn,
@@ -51,25 +60,7 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "./subagent-announce.r
 afterEach(() => clearRuntimeConfigSnapshot());
 
 type Wake = Parameters<typeof maybeWakeRequesterAfterAllChildrenSettled>[0];
-function dispatchFixture(child = settledChild()) {
-  registryRead.listSubagentRunsForRequester.mockReturnValue([child]);
-  const completeBatch = vi.fn<Wake["completeBatch"]>(() => {
-    child.requesterSettleWake = undefined;
-  });
-  return { child, completeBatch, params: wakeParams(child, completeBatch) };
-}
-
 type Turn = Pick<AgentTurnStartRequest, "preflight" | "io" | "controllerInput">;
-function acceptTurn({ preflight, io }: Turn, cached?: true) {
-  const runId = preflight.request.idempotencyKey;
-  io.emitAcceptance([true, { runId, status: "accepted" }, undefined], {
-    runId,
-    ...(cached ? { cached } : {}),
-  });
-}
-function finishTurn(io: Turn["io"], text: string | undefined) {
-  io.emitFinal([true, { status: "ok", result: { payloads: [{ text }] } }, undefined]);
-}
 function registerRequesterTurn({ preflight, controllerInput }: Turn, timeoutMs: number) {
   return registerChatAbortController({
     target: REQUESTER_TARGET,

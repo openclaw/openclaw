@@ -46,6 +46,7 @@ export function summarizeDeliveryError(error: unknown): string {
 }
 
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
+  /^managed worktree was removed: .+$/,
   /unsupported channel/i,
   /unknown channel/i,
   /chat not found/i,

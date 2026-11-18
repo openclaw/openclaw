@@ -31,6 +31,9 @@ schedule. Every retryable settle outcome keeps its wake; exhausting the budget
 records a permanent failure and the existing blocked-delivery notice. Runs with
 committed or unknown effects remain failed for explicit recovery instead of
 repeating their work.
+A requester bound to a removed managed worktree is a permanent refusal and needs
+an explicit worktree restore before it can accept new work. An in-progress removal
+is transient and keeps the wake pending.
 Ordinary completion delivery retains its existing frozen-result retry policy and
 delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
