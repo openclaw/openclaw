@@ -154,6 +154,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-doctor-media.postgres.test.ts",
   "src/state/openclaw-agent-db-engine.postgres.test.ts",
   "src/gateway/server-database-engine.postgres.test.ts",
+  "src/gateway/server-database-engine-cron.postgres.test.ts",
   "src/infra/postgres-sync/locks.test.ts",
   "src/acp/runtime/session-meta-read.cache.test.ts",
   "src/state/user-profile-catalog-identity.read.test.ts",

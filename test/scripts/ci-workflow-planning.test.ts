@@ -160,7 +160,7 @@ describe("PostgreSQL conformance selection", () => {
     expect(smoke.with).toEqual({
       image:
         "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
-      target: "src/gateway/server-database-engine.postgres.test.ts",
+      target: "src/gateway/server-database-engine-cron.postgres.test.ts",
     });
   });
 
