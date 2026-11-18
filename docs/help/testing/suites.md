@@ -44,10 +44,12 @@ comparison bases and shrink-only maintenance.
 ## Released mobile apps against a candidate Gateway
 
 The existing mobile release E2E suites build candidate apps against a published
-stable Gateway; they do not test the reverse direction. Released-app runtime
-coverage is currently blocked on verified public binaries and supported device
-automation. See [released app compatibility](/help/testing/released-app-compatibility)
-for the artifact boundaries and proposed independent release child.
+stable Gateway. The independent Stable Release Source Compatibility workflow
+reverses that direction using a frozen stable repository release for native
+client rebuilds and the candidate checkout for Gateway and harness code. This
+is not exact store-binary coverage. See
+[released app compatibility](/help/testing/released-app-compatibility) for inputs,
+proof boundaries, and remaining native runtime validation.
 
 ## Runner exit status
 

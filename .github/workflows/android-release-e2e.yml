@@ -6,6 +6,14 @@ on:
       target_sha:
         type: string
         required: true
+      client_sha:
+        description: Optional frozen stable-release client source SHA
+        type: string
+        default: ""
+      client_release_tag:
+        description: Published stable repository release identifying client_sha
+        type: string
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -21,6 +29,8 @@ jobs:
     timeout-minutes: 90
     env:
       TARGET_SHA: ${{ inputs.target_sha || github.sha }}
+      CLIENT_SHA: ${{ inputs.client_sha }}
+      CLIENT_RELEASE_TAG: ${{ inputs.client_release_tag }}
     steps:
       - name: Initialize failure proof and validate target
         shell: bash
@@ -54,7 +64,31 @@ jobs:
           test -f scripts/android-release-e2e.ts
           test -f scripts/ios-release-gateway.ts
 
+      - name: Checkout frozen stable client source
+        if: inputs.client_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.client_sha }}
+          fetch-tags: true
+          path: .openclaw/tmp/stable-client
+          persist-credentials: false
+
+      - name: Prepare candidate Gateway toolchain
+        if: inputs.client_sha != ''
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          cache-mode: "off"
+
+      - name: Build candidate Gateway and prepare stable client dependencies
+        if: inputs.client_sha != ''
+        run: |
+          pnpm build:runtime
+          pnpm --dir .openclaw/tmp/stable-client install --frozen-lockfile
+
       - name: Prepare stable Gateway selection
+        if: inputs.client_sha == ''
         id: gateway-preparation
         uses: ./.github/actions/prepare-mobile-release-gateway
         with:
@@ -71,10 +105,14 @@ jobs:
         env:
           OPENCLAW_GRADLE_JAVA_HOME: ${{ steps.android-toolchain.outputs.gradle-java-home }}
         run: |
+          client_args=()
+          if [[ -n "$CLIENT_SHA" ]]; then
+            client_args=(--client-root "$GITHUB_WORKSPACE/.openclaw/tmp/stable-client" --client-sha "$CLIENT_SHA" --client-release-tag "$CLIENT_RELEASE_TAG")
+          fi
           pnpm android:release:validate -- \
             --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
             --selection-dir "$GATEWAY_SELECTION_DIR" \
-            --artifacts-dir "$RUNNER_TEMP/android-release-e2e"
+            --artifacts-dir "$RUNNER_TEMP/android-release-e2e" "${client_args[@]}"
 
       - name: Retain sanitized qualification evidence
         if: always()

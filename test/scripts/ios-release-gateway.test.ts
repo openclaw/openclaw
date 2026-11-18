@@ -179,6 +179,50 @@ function fixture(options: { annotatedTag?: boolean } = {}) {
   return { selectionDir, installDir, state, fetch, installs, select, prepare };
 }
 
+describe("candidate Gateway source qualification", () => {
+  it.each(["match", "wrong-checkout", "wrong-build"])(
+    "selects the built candidate without npm: %s",
+    async (state) => {
+      const root = tempDirs.make("candidate-gateway-");
+      mkdirSync(path.join(root, "dist"));
+      writeJson(path.join(root, "dist", "build-info.json"), {
+        commit: state === "wrong-build" ? sourceSha : targetSha,
+      });
+      command.mockImplementation(async ({ bin, cwd, onReady }) => {
+        expect(bin).toBe("git");
+        expect(cwd).toBe(root);
+        const stdout = new PassThrough();
+        const child = new ChildProcess();
+        Object.defineProperty(child, "stdout", { value: stdout });
+        onReady?.(child);
+        stdout.end((state === "wrong-checkout" ? sourceSha : targetSha) + "\n");
+        return 0;
+      });
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      const result = prepareIOSReleaseGateway({
+        candidateDir: root,
+        targetSha,
+        signal: new AbortController().signal,
+        selectionDir: path.join(root, "must-not-read"),
+        installDir: path.join(root, "must-not-install"),
+      });
+      if (state === "match") {
+        await expect(result).resolves.toEqual({
+          cwd: root,
+          entrypoint: [path.join(root, "openclaw.mjs")],
+          identity: { kind: "candidate-source", targetSha, sourceSha: targetSha },
+        });
+      } else {
+        await expect(result).rejects.toThrow("Candidate Gateway checkout and build");
+      }
+      expect(fetch).not.toHaveBeenCalled();
+      expect(command).toHaveBeenCalledTimes(1);
+      expect(existsSync(path.join(root, "must-not-install"))).toBe(false);
+    },
+  );
+});
+
 describe("iOS stable Gateway package qualification", () => {
   it.each([false, true])("replays the frozen graph (annotated tag: %s)", async (annotatedTag) => {
     vi.stubEnv("GH_TOKEN", annotatedTag ? "synthetic-ios-github-token" : "");

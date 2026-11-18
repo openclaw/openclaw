@@ -6,6 +6,14 @@ on:
       target_sha:
         type: string
         required: true
+      client_sha:
+        description: Optional frozen stable-release client source SHA
+        type: string
+        default: ""
+      client_release_tag:
+        description: Published stable repository release identifying client_sha
+        type: string
+        default: ""
       mode:
         type: string
         default: stock
@@ -34,6 +42,8 @@ jobs:
     timeout-minutes: 240
     env:
       TARGET_SHA: ${{ inputs.target_sha || github.sha }}
+      CLIENT_SHA: ${{ inputs.client_sha }}
+      CLIENT_RELEASE_TAG: ${{ inputs.client_release_tag }}
       E2E_MODE: ${{ inputs.mode }}
     steps:
       - name: Initialize failure proof and validate inputs
@@ -79,7 +89,31 @@ jobs:
           test -f scripts/lib/ios-release-e2e-native.ts
           test -f test/helpers/openclaw-test-instance.ts
 
+      - name: Checkout frozen stable client source
+        if: inputs.client_sha != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.client_sha }}
+          fetch-tags: true
+          path: .openclaw/tmp/stable-client
+          persist-credentials: false
+
+      - name: Prepare candidate Gateway toolchain
+        if: inputs.client_sha != ''
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          install-bun: "false"
+          cache-mode: "off"
+
+      - name: Build candidate Gateway and prepare stable client dependencies
+        if: inputs.client_sha != ''
+        run: |
+          pnpm build:runtime
+          pnpm --dir .openclaw/tmp/stable-client install --frozen-lockfile
+
       - name: Prepare stable Gateway selection
+        if: inputs.client_sha == ''
         id: gateway-preparation
         uses: ./.github/actions/prepare-mobile-release-gateway
         with:
@@ -97,7 +131,9 @@ jobs:
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
           export PATH="$HOME/.cargo/bin:$PATH"
-          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
+          client_root="${GITHUB_WORKSPACE}"
+          if [[ -n "$CLIENT_SHA" ]]; then client_root="$GITHUB_WORKSPACE/.openclaw/tmp/stable-client"; fi
+          watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' "$client_root/apps/shared/OpenClawWatchRTC/rust-toolchain.toml")"
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
@@ -121,10 +157,14 @@ jobs:
           OPENCLAW_CI_SIMSLIM_BINARY: ${{ steps.simslim.outputs.binary }}
           OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ inputs.resource_diagnostics && '1' || '0' }}
         run: |
+          client_args=()
+          if [[ -n "$CLIENT_SHA" ]]; then
+            client_args=(--client-root "$GITHUB_WORKSPACE/.openclaw/tmp/stable-client" --client-sha "$CLIENT_SHA" --client-release-tag "$CLIENT_RELEASE_TAG")
+          fi
           node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
             node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \
             --mode "$E2E_MODE" --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \
-            --gateway-selection "$GATEWAY_SELECTION_DIR"
+            --gateway-selection "$GATEWAY_SELECTION_DIR" "${client_args[@]}"
 
       - name: Complete sanitized timing proof
         if: always()

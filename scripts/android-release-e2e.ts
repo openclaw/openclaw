@@ -4,6 +4,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rename,
   rm,
   symlink,
@@ -37,6 +38,7 @@ import {
 } from "./lib/android-release-e2e-evidence.js";
 import { prepareIOSReleaseGateway } from "./lib/ios-release-gateway.js";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   getStandaloneRuntimeProcessOutputOptions,
@@ -60,6 +62,12 @@ type Evidence = {
   schema: number;
   status: "failed" | "passed";
   targetSha: string;
+  client?: {
+    kind: "stable-release-source-rebuild";
+    clientSha: string;
+    releaseTag: string;
+    source: { clean: boolean; diffSha256?: string };
+  };
   source: { clean: boolean; diffSha256?: string };
   phases: string[];
   coverage: string;
@@ -98,6 +106,9 @@ export async function main(argv = process.argv.slice(2)) {
     args: argv.filter((arg) => arg !== "--"),
     options: {
       "target-sha": { type: "string" },
+      "client-root": { type: "string" },
+      "client-sha": { type: "string" },
+      "client-release-tag": { type: "string" },
       output: { type: "string" },
       "artifacts-dir": { type: "string" },
       "selection-dir": { type: "string" },
@@ -106,8 +117,31 @@ export async function main(argv = process.argv.slice(2)) {
   });
   if (!values.output || !/^[a-f0-9]{40}$/u.test(values["target-sha"] ?? "")) {
     throw new Error(
-      "usage: --target-sha <full-sha> --output <proof.json> [--artifacts-dir <directory>] [--selection-dir <directory>]",
+      "usage: --target-sha <full-sha> --output <proof.json> [--artifacts-dir <directory>] [--selection-dir <directory>] [--client-root <stable-checkout> --client-sha <full-sha> --client-release-tag <tag>]",
     );
+  }
+  const compatibility =
+    values["client-root"] !== undefined ||
+    values["client-sha"] !== undefined ||
+    values["client-release-tag"] !== undefined;
+  const releaseTag = values["client-release-tag"];
+  const release = releaseTag?.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
+  if (
+    compatibility &&
+    (!values["client-root"]?.trim() ||
+      !/^[a-f0-9]{40}$/u.test(values["client-sha"] ?? "") ||
+      !release ||
+      releaseTag !== `v${release.version}` ||
+      release.channel !== "stable" ||
+      release.patch >= 33)
+  ) {
+    throw new Error(
+      "--client-root, --client-sha (full SHA), and --client-release-tag (regular stable tag) are required together.",
+    );
+  }
+  const clientRoot = compatibility ? await realpath(values["client-root"]!) : repo;
+  if (compatibility && clientRoot === (await realpath(repo))) {
+    throw new Error("--client-root must be a separate stable-release checkout.");
   }
   if (
     !["linux", "darwin"].includes(process.platform) ||
@@ -137,10 +171,21 @@ export async function main(argv = process.argv.slice(2)) {
     schema: 1,
     status: "failed",
     targetSha: values["target-sha"]!,
+    ...(compatibility
+      ? {
+          client: {
+            kind: "stable-release-source-rebuild" as const,
+            clientSha: values["client-sha"]!,
+            releaseTag: releaseTag!,
+            source: { clean: false },
+          },
+        }
+      : {}),
     source: { clean: false },
     phases: [],
-    coverage:
-      "Native phone and Wear application behavior through a controlled Google Data Layer boundary, real protocol, phone bridge/controller, published Gateway and local provider.",
+    coverage: compatibility
+      ? "Stable-release-source-rebuild phone and Wear application behavior through a controlled Google Data Layer boundary, real protocol, phone bridge/controller, candidate Gateway and local provider."
+      : "Native phone and Wear application behavior through a controlled Google Data Layer boundary, real protocol, phone bridge/controller, published Gateway and local provider.",
     exclusions: [
       "Google capability discovery",
       "WearableListenerService delivery",
@@ -173,7 +218,7 @@ export async function main(argv = process.argv.slice(2)) {
     bin: string,
     args: string[],
     timeoutMs = 60_000,
-    extra: { input?: string; cleanup?: boolean; binaryFile?: string } = {},
+    extra: { input?: string; cleanup?: boolean; binaryFile?: string; cwd?: string } = {},
   ) {
     let stdout = "";
     let stderr = "";
@@ -185,7 +230,7 @@ export async function main(argv = process.argv.slice(2)) {
       code = await runManagedCommand({
         bin,
         args,
-        cwd: repo,
+        cwd: extra.cwd ?? repo,
         env,
         timeoutMs,
         shell: false,
@@ -329,6 +374,24 @@ export async function main(argv = process.argv.slice(2)) {
     ) {
       throw new Error("dirty-source");
     }
+    // Git status and the untracked bytes hashed by source evidence must come
+    // from the same checkout, not candidate status paired with stable files.
+    const clientCommand = (bin: string, args: string[]) =>
+      command(bin, args, 60_000, { cwd: clientRoot });
+    if (evidence.client) {
+      if (
+        (await clientCommand("git", ["rev-parse", "--show-toplevel"])) !== clientRoot ||
+        (await clientCommand("git", ["rev-parse", "HEAD"])) !== evidence.client.clientSha ||
+        (await clientCommand("git", ["rev-parse", `${evidence.client.releaseTag}^{commit}`])) !==
+          evidence.client.clientSha
+      ) {
+        throw new Error("client-source-identity-mismatch");
+      }
+      evidence.client.source = await androidReleaseSourceEvidence(clientCommand, clientRoot);
+      if (!evidence.client.source.clean) {
+        throw new Error("dirty-client-source");
+      }
+    }
     phase("build");
     await command(
       process.execPath,
@@ -344,9 +407,10 @@ export async function main(argv = process.argv.slice(2)) {
         "--max-workers=2",
       ],
       1_200_000,
+      { cwd: clientRoot },
     );
     async function apk(relative: string) {
-      const directory = path.join(repo, "apps/android", relative);
+      const directory = path.join(clientRoot, "apps/android", relative);
       const metadata = JSON.parse(
         await readFile(path.join(directory, "output-metadata.json"), "utf8"),
       ) as { elements: { outputFile: string }[] };
@@ -373,6 +437,7 @@ export async function main(argv = process.argv.slice(2)) {
       selectionDir: path.resolve(values["selection-dir"] ?? `${output}.gateway-selection`),
       installDir: path.join(root, "gateway-install"),
       targetSha: evidence.targetSha,
+      ...(compatibility ? { candidateDir: repo } : {}),
       signal: abort.signal,
     });
     evidence.gateway = gateway.identity;
@@ -860,6 +925,13 @@ export async function main(argv = process.argv.slice(2)) {
         JSON.stringify(evidence.source)
     ) {
       throw new Error("source-changed-during-validation");
+    }
+    if (
+      evidence.client &&
+      ((await clientCommand("git", ["rev-parse", "HEAD"])) !== evidence.client.clientSha ||
+        !(await androidReleaseSourceEvidence(clientCommand, clientRoot)).clean)
+    ) {
+      throw new Error("client-source-changed-during-validation");
     }
     evidence.status = "passed";
   } catch (error) {

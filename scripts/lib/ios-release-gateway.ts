@@ -277,12 +277,61 @@ export async function selectIOSReleaseGateway(options: SelectionOptions): Promis
   }
 }
 
-export async function prepareIOSReleaseGateway(options: SelectionOptions & { installDir: string }) {
-  const selection = await selectIOSReleaseGateway(options);
+export async function prepareIOSReleaseGateway(options: {
+  targetSha: string;
+  signal: AbortSignal;
+  selectionDir?: string;
+  installDir: string;
+  candidateDir?: string;
+}) {
+  if (options.candidateDir) {
+    options.signal.throwIfAborted();
+    const cwd = path.resolve(options.candidateDir);
+    let head = "";
+    const code = await runManagedCommand({
+      bin: "git",
+      args: ["rev-parse", "HEAD"],
+      cwd,
+      signal: options.signal,
+      timeoutMs: 30_000,
+      requireProcessTreeExit: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      onReady(child) {
+        child.stdout?.on("data", (chunk: Buffer) => {
+          head += chunk.toString("utf8");
+        });
+      },
+    });
+    const build = z
+      .object({ commit: z.string().regex(SHA) })
+      .parse(JSON.parse(await readFile(path.join(cwd, "dist", "build-info.json"), "utf8")));
+    if (
+      !SHA.test(options.targetSha) ||
+      code !== 0 ||
+      head.trim() !== options.targetSha ||
+      build.commit !== options.targetSha
+    ) {
+      throw new Error("Candidate Gateway checkout and build must match the qualification target.");
+    }
+    return {
+      cwd,
+      entrypoint: [path.join(cwd, "openclaw.mjs")],
+      identity: {
+        kind: "candidate-source" as const,
+        targetSha: options.targetSha,
+        sourceSha: build.commit,
+      },
+    };
+  }
+  const selectionDir = options.selectionDir;
+  if (!selectionDir) {
+    throw new Error("Published Gateway qualification requires a selection directory.");
+  }
+  const selection = await selectIOSReleaseGateway({ ...options, selectionDir });
   await mkdir(options.installDir);
   await Promise.all(
     ["package.json", "package-lock.json"].map((file) =>
-      copyFile(path.join(options.selectionDir, file), path.join(options.installDir, file)),
+      copyFile(path.join(selectionDir, file), path.join(options.installDir, file)),
     ),
   );
   await npm(["ci", "--no-audit", "--no-fund"], options.installDir, options.signal);
