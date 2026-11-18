@@ -56,9 +56,8 @@ ghx issue view <issue> --repo openclaw/openclaw \
 
 ## Review and publish
 
-- Before committing or landing nontrivial code: fresh review through permitted workflow; resolve actionable findings unless user opts out. Actionable = likely or high-impact; decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with one-line reason.
-
-- Nontrivial code commit/landing: use the [selected local review route](../../../docs/reference/pull-request-review-flow.md#local-review-before-a-pr) and resolve verified actionable findings. Required fresh independent review still applies. Review-only: independent pass only when requested, no extra mandatory CLI pass.
+- Before committing or landing nontrivial code, use the [selected local review route](../../../docs/reference/pull-request-review-flow.md#local-review-before-a-pr). Resolve likely or high-impact findings unless the user opts out; explain declined low-risk findings in one line. Review-only: independent pass only when requested, no extra mandatory CLI pass.
+- If review times out without a report, continue the authorized work. For a tested, staged repair like [#199675](https://github.com/openclaw/openclaw/pull/199675), commit and push to the authorized PR branch for CI rather than wait for another push instruction. This is publication, not landing: honor explicit pre-push gates and keep required review pending on the pushed head. A worker stopping its review does not end the parent’s task.
 - Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
 - Current PR template: plain problem/impact; inventories in diff/details. Keep risks, migrations, actions, proof, gaps, credit current; explain material tradeoffs. No invented internal-only user benefit or universal LOC/provenance/alternate-fix essays.
 - `CHANGELOG.md` release-owned; release-note context in PR/commit. Agent transcripts only on explicit request.
