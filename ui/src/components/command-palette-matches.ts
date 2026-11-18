@@ -4,12 +4,10 @@ import {
   filterCommandPaletteItems,
   getStaticCommandPaletteCatalogItems,
 } from "./command-palette-catalog-search.ts";
-import type { CommandPaletteState } from "./command-palette-state.ts";
+import type { CommandPaletteSnapshot } from "./command-palette-recent-sessions.ts";
 
 /** Prepare catalog and query results independently of selection-only publications. */
-export function createCommandPaletteMatches(
-  read: () => ReturnType<CommandPaletteState["readProps"]>,
-) {
+export function createCommandPaletteMatches(read: () => CommandPaletteSnapshot) {
   const catalogInputs = createMemo(
     () => {
       const snapshot = read();
@@ -39,6 +37,7 @@ export function createCommandPaletteMatches(
         snapshot.searchQuery,
         Boolean(snapshot.onSlashCommand),
         snapshot.sessionItems,
+        snapshot.recentItems,
         catalogItems(),
         snapshot.desktopAvailable,
         snapshot.custodianAvailable,
@@ -53,6 +52,7 @@ export function createCommandPaletteMatches(
       query,
       includeSlashCommands,
       sessionItems,
+      recentItems,
       preparedCatalog,
       desktopAvailable,
       custodianAvailable,
@@ -65,6 +65,7 @@ export function createCommandPaletteMatches(
           query,
           includeSlashCommands,
           sessionItems,
+          recentItems,
           catalogItems: preparedCatalog,
           desktopAvailable,
           custodianAvailable,

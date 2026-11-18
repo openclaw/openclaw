@@ -170,6 +170,9 @@ export function CommandPaletteResult(props: {
         <span class="cmd-palette__item-heading">
           <span class="cmd-palette__item-title">
             {highlightMatch(props.item.label, props.query)}
+            <Show when={session()?.unread}>
+              <span class="session-unread-dot" role="img" aria-label={t("sessionsView.unread")} />
+            </Show>
           </span>
           <Show when={session()?.updatedAt}>
             {(updatedAt) => (
