@@ -12,7 +12,13 @@ import {
 import {
   formatSkillInstructions,
   rememberSkillInstructionDelivery,
+  type SkillInstructionResult,
 } from "../skill-instruction-result.js";
+import {
+  resolveToolResultBudget,
+  toolResultFitsBudget,
+  type ToolResultBudget,
+} from "../tool-result-limits.js";
 import {
   asToolParamsRecord,
   jsonResult,
@@ -27,11 +33,67 @@ const SkillsSearchSchema = Type.Object({
 });
 const SkillsReadSchema = Type.Object({ name: Type.String({ minLength: 1 }) });
 
-export function createInstalledSkillTools(skills: readonly InstalledSkill[]): AnyAgentTool[] {
+// Covers the deferred dispatch envelope that wraps this text as a JSON string.
+const DISPATCH_ENVELOPE_RESERVE_CHARS = 512;
+
+function fitsModelOutput(text: string, budget: ToolResultBudget): boolean {
+  return toolResultFitsBudget(JSON.stringify(text), {
+    maxChars: budget.maxChars - DISPATCH_ENVELOPE_RESERVE_CHARS,
+    maxContextChars: budget.maxContextChars - DISPATCH_ENVELOPE_RESERVE_CHARS * 2,
+  });
+}
+
+/**
+ * Fit SKILL.md text to the model output budget. An oversized document returns its
+ * first lines and names the `read` call that continues it, instead of letting a
+ * generic output cap remove the middle without a way to recover it.
+ */
+function formatSkillInstructionsForModel(
+  instructions: SkillInstructionResult,
+  budget: ToolResultBudget | undefined,
+  readCallable: boolean,
+): { text: string; whole: boolean } {
+  const text = formatSkillInstructions(instructions);
+  if (!budget || fitsModelOutput(text, budget)) {
+    return { text, whole: true };
+  }
+  const lines = instructions.content.split("\n");
+  const header = formatSkillInstructions({ ...instructions, content: "" });
+  const render = (shown: number) => {
+    const notice = readCallable
+      ? `[Skill instructions incomplete: showing lines 1-${shown} of ${lines.length}. Before acting, read the rest with read(${JSON.stringify({ path: instructions.location, offset: shown + 1 })}) and follow each continuation until the end.]`
+      : `[Skill instructions incomplete: showing lines 1-${shown} of ${lines.length}. Before acting, read the rest of ${instructions.location} from line ${shown + 1} with an available file tool. If none can read it, tell the user that this skill is too large to load and should move detail into references/ files.]`;
+    return `${header}${lines.slice(0, shown).join("\n")}\n\n${notice}`;
+  };
+  // Accepted edge case: a single line larger than the budget shows no lines; read
+  // continues long lines with its own cursor.
+  let low = 0;
+  let high = lines.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fitsModelOutput(render(middle), budget)) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return { text: render(low), whole: false };
+}
+
+export function createInstalledSkillTools(
+  skills: readonly InstalledSkill[],
+  options?: { modelContextWindowTokens?: number },
+): AnyAgentTool[] {
   if (skills.length === 0) {
     return [];
   }
-  const readerBinding: AgentToolAvailabilityBinding = { prepare() {} };
+  const budget = resolveToolResultBudget(options?.modelContextWindowTokens);
+  let readCallable = false;
+  const readerBinding: AgentToolAvailabilityBinding = {
+    prepare(_tool, callableTools) {
+      readCallable = callableTools.has("read");
+    },
+  };
   let readAuthority: object | undefined;
   return [
     bindAgentToolAvailability<AnyAgentTool>(
@@ -79,11 +141,18 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });
           const instructions = await readInstalledSkill(skills, name, signal);
+          const { text, whole } = formatSkillInstructionsForModel(
+            instructions,
+            budget,
+            readCallable,
+          );
           const result = {
-            content: [{ type: "text" as const, text: formatSkillInstructions(instructions) }],
+            content: [{ type: "text" as const, text }],
             details: instructions,
           };
-          rememberSkillInstructionDelivery(result, instructions.content);
+          if (whole) {
+            rememberSkillInstructionDelivery(result, instructions.content);
+          }
           return result;
         },
       },

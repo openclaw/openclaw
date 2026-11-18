@@ -471,7 +471,9 @@ function* createOpenClawToolsSteps(
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const githubSettingsOffered = options?.listingClientCaps?.includes("ui-agent-github-settings");
   const tools: AnyAgentTool[] = [
-    ...createInstalledSkillTools(options?.installedSkills ?? []),
+    ...createInstalledSkillTools(options?.installedSkills ?? [], {
+      modelContextWindowTokens: options?.modelContextWindowTokens,
+    }),
     createDashboardTool({
       agentSessionKey:
         scheduledTargets?.boardSessionKey ?? options?.runSessionKey ?? options?.agentSessionKey,
