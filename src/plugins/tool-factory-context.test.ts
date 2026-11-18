@@ -398,3 +398,18 @@ it.each(["allowed", "owner-close", "run-close", "plugin-close"] as const)(
     expect(effect).toHaveBeenCalledTimes(mode === "allowed" ? 1 : 0);
   },
 );
+
+it("binds optional listing support to the registered plugin lifecycle and scope", async () => {
+  const { registry, api } = toolRegistry({ tools: ["probe"] });
+  api.registerTool(() => probe(() => assert.fail("listing must not execute")), {
+    name: "probe",
+    listingSupported: async () => {
+      expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe("probe");
+      return false;
+    },
+  });
+  const entry = registry.tools[0]!;
+  await expect(entry.listingSupported?.({})).resolves.toBe(false);
+  markPluginRegistryRetired(registry);
+  await expect(Promise.resolve().then(() => entry.listingSupported?.({}))).rejects.toThrow();
+});

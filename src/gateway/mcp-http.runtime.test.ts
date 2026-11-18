@@ -4,7 +4,10 @@ import {
   createAdmittedRunOperatorAuthority,
   readAdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
+import { bindAgentToolAvailability } from "../agents/agent-tool-availability.js";
+import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import * as mcp from "./mcp-http-request.test-support.js";
 import {
   McpLoopbackToolCache as ToolCache,
@@ -301,6 +304,51 @@ describe("McpLoopbackToolCache", () => {
 });
 
 describe("MCP loopback Computer Use schema", () => {
+  it("advertises the projected widget definition after capturing eligible policy", async () => {
+    const tool = createStubTool("show_widget");
+    tool.description = "Present inline or on a node panel";
+    bindAgentToolAvailability(tool, {
+      prepare: () => {},
+      listingDefinition: {
+        name: tool.name,
+        description: "Present inline",
+        parameters: { type: "object", properties: { target: { enum: ["inline"] } } },
+      },
+    });
+    const capture = vi.fn();
+    resolveGatewayScopedTools.mockReturnValue({
+      agentId: "main",
+      tools: [tool],
+      captureFinalCronCreatorTools: capture,
+    });
+    const result = await new ToolCache().resolve(scopeParams({ toolsAllow: ["show_widget"] }));
+    expect(capture).toHaveBeenCalledWith(new Set(["show_widget"]));
+    expect(result.toolSchema).toEqual([
+      expect.objectContaining({
+        name: "show_widget",
+        description: "Present inline",
+        inputSchema: expect.objectContaining({
+          properties: { target: { enum: ["inline"] } },
+        }),
+      }),
+    ]);
+  });
+  it("captures eligible plugin policy before passive runtime omission", async () => {
+    const tool = createStubTool("device_read");
+    setPluginToolMeta(tool, { pluginId: "fixture", optional: false, listingSupported: false });
+    const capture = vi.fn();
+    resolveGatewayScopedTools.mockReturnValue({
+      agentId: "main",
+      tools: [tool],
+      captureFinalCronCreatorTools: capture,
+    });
+    const scope = scopeParams({ toolsAllow: ["device_read"] });
+    expect(toolNames(await resolveExact(scope))).toEqual([]);
+    expect(capture).toHaveBeenLastCalledWith(new Set(["device_read"]));
+    setPluginToolMeta(tool, { pluginId: "fixture", optional: false });
+    expect(toolNames(await resolveExact(scope))).toEqual(["device_read"]);
+    expect(listNodes).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     resolveGatewayScopedTools.mockImplementation(({ cfg, pairedNodeComputerUse }) => {
       const computerDenied = cfg.tools?.deny?.includes("computer");
@@ -358,5 +406,22 @@ describe("MCP loopback Computer Use schema", () => {
       expect.arrayContaining(["screenshot", "list_windows", "launch_app", "wait"]),
     );
     expect(listNodes).toHaveBeenCalledTimes(2);
+  });
+
+  it("captures eligible desktop authority before omitting an unsupported loopback surface", async () => {
+    const capture = vi.fn();
+    resolveGatewayScopedTools.mockImplementation(({ pairedNodeComputerUse }) => ({
+      agentId: "main",
+      tools: [createComputerTool({ pairedNodeComputerUse })],
+      captureFinalCronCreatorTools: capture,
+    }));
+    const scope = scopeParams({ toolsAllow: ["computer"], modelHasVision: true });
+    const absent = await resolveExact(scope);
+    expect(toolNames(absent)).toEqual([]);
+    expect(capture).toHaveBeenLastCalledWith(new Set(["computer"]));
+    listNodes.mockResolvedValue([
+      { ...computerNode("offline-desktop", ["screenshot"]), connected: false, paired: true },
+    ]);
+    expect(toolNames(await resolveExact(scope))).toEqual(["computer"]);
   });
 });

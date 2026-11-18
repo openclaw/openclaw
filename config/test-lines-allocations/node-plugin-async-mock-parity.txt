@@ -1,0 +1,3 @@
+# Preserve existing delivery/auth/refresh assertions across sync and prepared plugin resolution.
+# 29 owned fixture/helper lines + 2 explicit suppression-inventory lines.
+31

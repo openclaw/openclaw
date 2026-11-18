@@ -4,10 +4,13 @@ import {
   makeRegistry,
 } from "../../../config/plugin-auto-enable.test-helpers.js";
 import { withDiagnosticsTimelineObserver } from "../../../infra/diagnostics-timeline.js";
+import { normalizeGeminiToolSchemas } from "../../../plugin-sdk/provider-tools.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
+import { bindAgentToolAvailability } from "../../agent-tool-availability.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
+import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
 import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import { listPersistedRuntimeToolSchemaQuarantines } from "../../tool-schema-quarantine-health.js";
@@ -38,7 +41,8 @@ vi.mock("../../local-model-lean.js", () => ({
   filterLocalModelLeanTools: vi.fn(({ tools }: { tools: unknown[] }) => tools),
 }));
 
-vi.mock("../../tool-schema-projection.js", () => ({
+vi.mock("../../tool-schema-projection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../tool-schema-projection.js")>()),
   filterRuntimeCompatibleTools: mocks.filterRuntimeCompatibleTools,
 }));
 
@@ -52,6 +56,9 @@ import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 describe("prepareEmbeddedAttemptBundleTools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(normalizeAgentRuntimeTools)
+      .mockReset()
+      .mockImplementation(({ tools }) => [...tools]);
     mocks.createBundleLspToolRuntime.mockReset().mockResolvedValue(undefined);
     mocks.acquireSessionMcpRuntime.mockReset().mockResolvedValue(undefined);
     mocks.materializeBundleMcpToolsForRun.mockReset().mockResolvedValue(undefined);
@@ -179,7 +186,88 @@ describe("prepareEmbeddedAttemptBundleTools", () => {
     },
   );
 
+  it("normalizes a replacement before catalog publication without narrowing descendant eligibility", async () => {
+    const actual = await vi.importActual<typeof import("../../runtime-plan/tools.js")>(
+      "../../runtime-plan/tools.js",
+    );
+    vi.mocked(normalizeAgentRuntimeTools)
+      .mockImplementationOnce(actual.normalizeAgentRuntimeTools)
+      .mockImplementationOnce(actual.normalizeAgentRuntimeTools);
+    const widget = createStubTool("show_widget");
+    bindAgentToolAvailability(widget, {
+      prepare: () => {},
+      listingDefinition: {
+        name: widget.name,
+        description: "Inline widget",
+        parameters: { type: "object", properties: { name: { type: "string", pattern: "^safe$" } } },
+      },
+    });
+    const inherited = ["show_widget"];
+    const input = createInput(inherited, [widget]);
+    input.attempt.runtimePlan = undefined;
+    input.attempt.provider = "google";
+    input.setup.getProviderRuntimeHandle = () => ({
+      provider: "google",
+      modelId: input.attempt.modelId,
+      prepared: true,
+      plugin: {
+        id: "google",
+        label: "Google",
+        auth: [],
+        normalizeToolSchemas: normalizeGeminiToolSchemas,
+      },
+    });
+    const result = await prepare(input);
+    expect(result.uncompactedEffectiveTools[0]?.parameters).not.toHaveProperty(
+      "properties.name.pattern",
+    );
+    expect(result.uncompactedEffectiveTools[0]?.parameters).toHaveProperty(
+      "properties.name.type",
+      "string",
+    );
+    expect(inherited).toEqual(["show_widget"]);
+    expect(input.preparedToolBase.cronCreatorToolAllowlist).toEqual([{ name: "show_widget" }]);
+  });
+
   const clients = ["client_read", "client_write", "other_read"];
+  it("keeps passive plugin absence out of child and cron policy", async () => {
+    const missing = pluginTool("device_read", "fixture");
+    setPluginToolMeta(missing, { pluginId: "fixture", optional: false, listingSupported: false });
+    const inherited = ["device_read"];
+    const input = createInput(inherited, [missing]);
+    const result = await prepare(input);
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual([]);
+    expect(inherited).toEqual(["device_read"]);
+    expect(input.preparedToolBase.cronCreatorToolAllowlist).toEqual([
+      { name: "device_read", pluginId: "fixture" },
+    ]);
+    setPluginToolMeta(missing, { pluginId: "fixture", optional: false, listingSupported: true });
+    result.refreshTools(() => {});
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["device_read"]);
+  });
+  it("keeps host-runtime omissions out of child and cron authority, including refresh", async () => {
+    const inherited = ["nodes", "computer", "mobile_ui"];
+    const input = createInput(
+      inherited,
+      inherited.map((name) => createStubTool(name)),
+    );
+    input.preparedToolBase.nodeToolAvailability = {
+      cacheKey: "no-supported-targets",
+      unsupportedTools: ["computer", "mobile_ui"],
+    };
+    const result = await prepare(input);
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["nodes"]);
+    expect(inherited).toEqual(["nodes", "computer", "mobile_ui"]);
+    expect(input.preparedToolBase.cronCreatorToolAllowlist).toEqual([
+      { name: "nodes" },
+      { name: "computer" },
+      { name: "mobile_ui" },
+    ]);
+    input.preparedToolBase.nodeToolAvailability = undefined;
+    result.refreshTools(() => {});
+    expect(toolNames(result.uncompactedEffectiveTools)).toEqual(["nodes", "computer", "mobile_ui"]);
+    expect(inherited).toEqual(["nodes", "computer", "mobile_ui"]);
+  });
   it.each<[string, string[], string[], boolean]>([
     ["empty", [], [], false],
     [

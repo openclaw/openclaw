@@ -10,6 +10,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { BoardWidgetDeclaredSchema } from "../../packages/gateway-protocol/src/schema/board.js";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
+import { bindAgentToolAvailability } from "../agents/agent-tool-availability.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
 import { type AnyAgentTool, jsonResult, readToolStringParam } from "../agents/tools/common.js";
 import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
@@ -183,6 +184,50 @@ function assertPinnedWidgetDocumentSize(html: string): void {
 }
 
 export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAgentTool {
+  const tool = createShowWidgetToolDefinition(options);
+  const presenters = options.presenters ?? [];
+  if (
+    !presenters.some(
+      (presenter) => presenter.target !== "current_channel" && presenter.listingSupported,
+    )
+  ) {
+    return tool;
+  }
+  return bindAgentToolAvailability(tool, {
+    prepare: () => {},
+    prepareListing: async () => {
+      const context =
+        options.presenterContext ??
+        (options.agentSessionKey ? { sessionKey: options.agentSessionKey } : {});
+      const listed = await Promise.all(
+        presenters.map(async (presenter) => {
+          if (presenter.target === "current_channel" || !presenter.listingSupported) {
+            return presenter;
+          }
+          try {
+            return (await presenter.listingSupported(context)) === false ? undefined : presenter;
+          } catch {
+            return presenter;
+          }
+        }),
+      );
+      const supported = listed.filter(
+        (presenter): presenter is WidgetPresenter => presenter !== undefined,
+      );
+      if (supported.length === presenters.length) {
+        return undefined;
+      }
+      const projected = createShowWidgetToolDefinition({ ...options, presenters: supported });
+      return {
+        name: tool.name,
+        description: projected.description,
+        parameters: projected.parameters,
+      };
+    },
+  });
+}
+
+function createShowWidgetToolDefinition(options: ShowWidgetToolOptions): AnyAgentTool {
   const pinnedOnly = options.pinnedOnly === true;
   const inlineHostEnabled = options.inlineHostEnabled !== false;
   const inlineAvailable =

@@ -4,7 +4,7 @@ import { normalizeToolPolicyName } from "../agents/tool-policy-shared.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import type { PluginRegistry } from "./registry-types.js";
+import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 
 /** MCP bridge metadata attached to plugin tools surfaced through agent tool lists. */
 export type PluginToolMcpMeta = {
@@ -34,6 +34,8 @@ type PluginToolMeta = {
   kind?: PluginManifestRecord["kind"];
   optional: boolean;
   workspaceAccess?: boolean | "execute";
+  /** Transient prepared support, never inherited or scheduled authority. */
+  listingSupported?: boolean;
   replaySafe?: boolean;
   sideEffecting?: boolean;
   trustedLocalMedia?: boolean;
@@ -45,6 +47,28 @@ const pluginToolMeta = new WeakMap<object, PluginToolMeta>();
 /** Attaches plugin ownership metadata to a concrete agent tool instance. */
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
   pluginToolMeta.set(tool, meta);
+}
+
+/** Registration and manifest facts keep one owner when current listing support is prepared. */
+export function setResolvedPluginToolMeta(
+  tool: AnyAgentTool,
+  entry: PluginToolRegistration,
+  manifest: PluginManifestRecord | undefined,
+  listingSupported: boolean | undefined,
+  name: string,
+): void {
+  const metadata = manifest?.toolMetadata?.[name];
+  setPluginToolMeta(tool, {
+    pluginId: entry.pluginId,
+    ...(manifest?.kind ? { kind: manifest.kind } : {}),
+    optional: entry.optional || metadata?.optional === true,
+    workspaceAccess: entry.workspaceAccess ?? true,
+    listingSupported,
+    replaySafe: metadata?.replaySafe === true,
+    sideEffecting: metadata?.sideEffecting === true,
+    trustedLocalMedia:
+      manifest?.origin === "bundled" && manifest.contracts?.tools?.includes(name) === true,
+  });
 }
 
 /** Reads plugin ownership metadata for a concrete agent tool instance. */

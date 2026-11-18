@@ -104,6 +104,10 @@ export type WidgetPresentationSuccess =
 
 export type WidgetPresenter = {
   description: string;
+  /** Passive route support; false omits this target only, never the widget tool. */
+  listingSupported?: (
+    context: WidgetPresenterContext,
+  ) => boolean | undefined | Promise<boolean | undefined>;
   availability: (
     context: WidgetPresenterContext,
   ) => Promise<Result<{ available: true }, WidgetPresentationError>>;

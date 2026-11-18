@@ -16,6 +16,30 @@ export type PluginToolOwnerContinuation = {
   accountId?: string;
 };
 
+/** Passive preparation shares the factory context and never grants invocation authority. */
+export function preparePluginToolListingSupport(
+  entry: PluginToolRegistration,
+  context: OpenClawPluginToolContext,
+  enabled: boolean,
+): Readonly<{ supported?: boolean; ready?: Promise<void> }> {
+  const prepared: { supported?: boolean; ready?: Promise<void> } = {};
+  if (enabled && entry.listingSupported) {
+    prepared.ready = (async () => {
+      context.assertInvocationCurrent?.();
+      try {
+        const supported = await entry.listingSupported?.(context);
+        if (typeof supported === "boolean") {
+          prepared.supported = supported;
+        }
+      } catch {
+        // Missing owners and unreadable inventories preserve unknown support.
+      }
+      context.assertInvocationCurrent?.();
+    })();
+  }
+  return prepared;
+}
+
 /** One binding supplies both the factory's final-effect guard and its retained callbacks. */
 export function createPluginToolFactoryContext(params: {
   entry: PluginToolRegistration;

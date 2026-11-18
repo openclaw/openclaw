@@ -95,6 +95,8 @@ export function createOperationRegistrars(state: PluginRegistryState) {
       !description ||
       description.length > 160 ||
       typeof presenter.availability !== "function" ||
+      (presenter.listingSupported !== undefined &&
+        typeof presenter.listingSupported !== "function") ||
       typeof presenter.present !== "function"
     ) {
       reportRegistrationError(record, "invalid widget presenter registration");

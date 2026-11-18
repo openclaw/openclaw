@@ -318,7 +318,7 @@ type PluginToolOptions = {
 export async function resolveOpenClawPluginToolsForOptionsAsync(
   params: PluginToolOptions,
 ): Promise<AnyAgentTool[]> {
-  const steps = resolveOpenClawPluginToolSteps(params);
+  const steps = resolveOpenClawPluginToolSteps(params, true);
   let step = steps.next();
   while (!step.done) {
     await step.value;
@@ -339,6 +339,7 @@ export function resolveOpenClawPluginToolsForOptions(params: PluginToolOptions):
 
 function* resolveOpenClawPluginToolSteps(
   params: PluginToolOptions,
+  prepareListingSupport = false,
 ): Generator<Promise<void>, AnyAgentTool[], void> {
   const inputConfig = params.resolvedConfig ?? params.options?.config;
   const availabilityConfig = selectLiveRuntimeConfig(inputConfig);
@@ -499,6 +500,7 @@ function* resolveOpenClawPluginToolSteps(
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const resolution = {
+    prepareListingSupport,
     ...pluginToolInputs,
     bindExecutionCapabilities: preparePluginToolExecutionCapabilities({
       sandbox: params.options?.sandbox?.enabled ? params.options.sandbox : undefined,
@@ -543,7 +545,7 @@ function* resolveOpenClawPluginToolSteps(
       : {}),
   };
   const pluginTools = applySkillLibraryGrant(
-    captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
+    prepareListingSupport || captureAgentWorkspaceReadiness(pluginToolInputs.context.sessionKey)
       ? yield* resolvePluginToolsSteps(resolution)
       : resolvePluginTools(resolution),
     params.options,

@@ -12,13 +12,13 @@ type CanvasNodeDescriptor = Pick<
 
 export const CANVAS_PRESENT_COMMAND = "canvas.present";
 
-export function isEligibleCanvasNode(node: CanvasNodeDescriptor): boolean {
+export function supportsCanvasNode(node: CanvasNodeDescriptor): boolean {
   const commands = node.invocableCommands ?? node.commands ?? [];
-  return (
-    /^macos(?:\s|$)/i.test(node.platform ?? "") &&
-    node.connected === true &&
-    commands.includes(CANVAS_PRESENT_COMMAND)
-  );
+  return /^macos(?:\s|$)/i.test(node.platform ?? "") && commands.includes(CANVAS_PRESENT_COMMAND);
+}
+
+export function isEligibleCanvasNode(node: CanvasNodeDescriptor): boolean {
+  return node.connected === true && supportsCanvasNode(node);
 }
 
 const CANVAS_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {

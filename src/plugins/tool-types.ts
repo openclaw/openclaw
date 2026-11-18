@@ -193,6 +193,15 @@ export type OpenClawPluginToolOptions = {
   /** False: independent; execute: pure factory with workspace use; true/omitted: factory may use it. */
   workspaceAccess?: boolean | "execute";
   /**
+   * Passive current-runtime support, not execution authority or health.
+   * False proves no route; true includes supported offline routes. Missing,
+   * undefined, and failed reads stay visible. Async preparation calls this once;
+   * synchronous construction does not call it. Never probe remote services.
+   */
+  listingSupported?: (
+    ctx: OpenClawPluginToolContext,
+  ) => boolean | undefined | Promise<boolean | undefined>;
+  /**
    * System-prompt guidance for these tools. Agent harnesses show it only while one of the
    * named tools is callable in the run, so a denied tool adds no prompt bytes.
    */

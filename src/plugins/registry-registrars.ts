@@ -483,6 +483,10 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       return;
     }
     const promptGuidance = opts?.promptGuidance?.trim();
+    if (opts?.listingSupported !== undefined && typeof opts.listingSupported !== "function") {
+      reportRegistrationError(record, "tool listingSupported must be a function");
+      return;
+    }
     if (opts?.promptGuidance !== undefined && (!promptGuidance || normalized.length === 0)) {
       // Guidance is gated on the registration's declared names; a factory that names its
       // tools only at run time could never show it.
@@ -534,6 +538,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
         workspaceAccess:
           opts?.workspaceAccess ?? (typeof tool !== "function" && !versioned ? "execute" : true),
         ...(promptGuidance ? { promptGuidance } : {}),
+        ...(opts?.listingSupported ? { listingSupported: opts.listingSupported } : {}),
         origin: record.origin,
       }),
       // Host-owned membership must not re-enter the callable wrapper's graph walk.

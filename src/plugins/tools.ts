@@ -40,6 +40,7 @@ import {
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import {
   createPluginToolFactoryContext,
+  preparePluginToolListingSupport,
   type PluginToolOwnerContinuation,
 } from "./tool-factory-context.js";
 import {
@@ -52,7 +53,7 @@ import {
   inspectionToolOwners,
   samePluginToolSource,
 } from "./tool-inspection-state.js";
-import { setPluginToolMeta } from "./tool-metadata.js";
+import { setResolvedPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 function normalizeDenylist(list?: string[]) {
@@ -196,6 +197,8 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
 
 type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
+  /** Only the async assembly owner consumes passive listing callbacks. */
+  prepareListingSupport?: boolean;
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
@@ -506,7 +509,6 @@ function* resolvePluginToolsFromRegistry(
     }
     owners.delete(pluginId);
     const { registry, tools: registrations } = owner;
-    let trustedLocalMediaNames: Set<string> | undefined;
     const reportError = (entry: PluginToolRegistration, message: string) => {
       context.logger.error(message);
       recordToolDiagnostic(registry, {
@@ -618,6 +620,14 @@ function* resolvePluginToolsFromRegistry(
         }
         continue;
       }
+      const listing = preparePluginToolListingSupport(
+        entry,
+        factoryContext,
+        params.prepareListingSupport === true,
+      );
+      if (listing.ready) {
+        yield listing.ready;
+      }
       const selectedManifestToolNames =
         manifestPlugin && availabilityNames.length > 0
           ? new Set(allowlistNames.map((name) => normalizeToolPolicyName(name)))
@@ -723,18 +733,7 @@ function* resolvePluginToolsFromRegistry(
         existing.add(name);
         existingNormalized.add(normalizedToolName);
         pluginToolOwnersByName.set(normalizedToolName, entry.pluginId);
-        const metadata = manifestPlugin?.toolMetadata?.[name];
-        setPluginToolMeta(tool, {
-          pluginId: entry.pluginId,
-          ...(manifestPlugin?.kind ? { kind: manifestPlugin.kind } : {}),
-          optional: entry.optional || metadata?.optional === true,
-          workspaceAccess: entry.workspaceAccess ?? true,
-          replaySafe: metadata?.replaySafe === true,
-          sideEffecting: metadata?.sideEffecting === true,
-          trustedLocalMedia:
-            manifestPlugin?.origin === "bundled" &&
-            (trustedLocalMediaNames ??= new Set(manifestPlugin.contracts?.tools)).has(name),
-        });
+        setResolvedPluginToolMeta(tool, entry, manifestPlugin, listing.supported, name);
         tools.push(tool);
       }
     }

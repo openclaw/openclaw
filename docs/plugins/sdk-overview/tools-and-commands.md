@@ -35,6 +35,25 @@ operation continue to own their signal and work lifetime.
 
 Explicit widget presenters declare a unique model-visible target such as `node_panel`. Current-channel presenters use `target: "current_channel"`, provide a synchronous `match(context)` predicate over trusted delivery facts, and declare supported source kinds and delivery limits. Multiple transport presenters may coexist, but core selects an implicit route only when exactly one matches.
 
+Tool registrations may supply optional `listingSupported(context)` in their
+options; explicit presenters may supply the same optional callback alongside
+`availability`. It can return a boolean, `undefined`, or a promise of either.
+Asynchronous construction prepares it once for the current catalog. Return
+`false` only when existing prepared facts prove there is no supported route;
+configured or paired offline routes still return `true`. Missing callbacks,
+failed reads, and `undefined` preserve the declaration. Synchronous construction
+does not call the callback and preserves unknown support.
+
+This is passive listing support, not readiness or permission. Do not probe
+devices, discover models, refresh credentials, or contact remote services to
+answer it. Gateway-loaded node plugins can use `api.runtime.nodes.list()`, which
+reads the local prepared catalog; omit `connected: true` for support decisions.
+Execution keeps its live command, path, approval, and authority checks.
+Current-host omissions do not restrict a differently equipped child or scheduled
+run. For presenters, only the explicit target and its guidance are omitted;
+inline and pinned widget authoring remain available. Existing
+`availability(context)` still decides readiness at presentation time.
+
 Core validates the shared `show_widget` schema, composes the bounded HTML document, and passes immutable HTML plus an optional hosted URL to `present(...)`. Presenters return either a generic message receipt or a node receipt. Expected availability and presentation failures use the closed error result instead of throwing; core falls back inline only for an actual `inline-widgets` client and otherwise surfaces the failure.
 
 Computer Use providers use `registerComputerUseProvider(api, provider)` from

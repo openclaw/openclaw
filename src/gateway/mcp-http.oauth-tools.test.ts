@@ -9,12 +9,19 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 
 const pluginTools = vi.hoisted(() => ({
-  resolve: vi.fn(),
+  resolve: vi.fn<typeof import("../plugins/tools.js").resolvePluginTools>(),
 }));
 
 vi.mock("../plugins/tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/tools.js")>()),
-  resolvePluginTools: (params: unknown) => pluginTools.resolve(params),
+  resolvePluginTools: (...args: Parameters<typeof pluginTools.resolve>) =>
+    pluginTools.resolve(...args),
+  // oxlint-disable-next-line require-yield -- The resolver requires a generator; this fixture has no pending preparation.
+  *resolvePluginToolsSteps(
+    ...args: Parameters<typeof pluginTools.resolve>
+  ): ReturnType<typeof import("../plugins/tools.js").resolvePluginToolsSteps> {
+    return pluginTools.resolve(...args);
+  },
 }));
 
 describe("MCP loopback OAuth tools", () => {

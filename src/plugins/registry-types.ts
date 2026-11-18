@@ -79,6 +79,7 @@ export type PluginToolRegistration = PluginRegistrationOwner & {
   declaredNames?: ReadonlySet<string>;
   optional: boolean;
   workspaceAccess?: boolean | "execute";
+  listingSupported?: import("./tool-types.js").OpenClawPluginToolOptions["listingSupported"];
   /** Shown only while one of `names` is callable; see listToolPromptGuidance. */
   promptGuidance?: string;
   /** Loader-owned provenance. Missing values are conservative legacy registrations. */

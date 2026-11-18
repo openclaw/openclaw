@@ -6,6 +6,10 @@ import { textResult } from "./tools/tool-results.js";
 type ToolDefinition = Pick<AnyAgentTool, "name" | "parameters" | "description">;
 
 export type AgentToolAvailabilityBinding = {
+  /** Prepared current-runtime definition, applied after descendant eligibility capture. */
+  listingDefinition?: ToolDefinition;
+  /** Async-only passive preparation; synchronous construction leaves support unknown. */
+  prepareListing?: () => Promise<ToolDefinition | undefined>;
   /**
    * `offeredTools` shape the definition, so it stays stable across turns;
    * `callableTools` decide what this turn may execute.
@@ -39,6 +43,20 @@ export function getAgentToolAvailabilityBinding(
   tool: object,
 ): AgentToolAvailabilityBinding | undefined {
   return availabilityBindings.get(tool)?.binding;
+}
+
+/** Listing preparation must not clear an already recorded execution denial. */
+export function bindAgentToolListingDefinition(
+  tool: object,
+  definition: ToolDefinition | undefined,
+): void {
+  const metadata = availabilityBindings.get(tool);
+  if (metadata) {
+    availabilityBindings.set(tool, {
+      ...metadata,
+      binding: { ...metadata.binding, listingDefinition: definition },
+    });
+  }
 }
 
 /** Offered definitions can remain present even when this turn cannot execute them. */
