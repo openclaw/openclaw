@@ -27,6 +27,7 @@ import {
 import { registerSharedClientUsageTests } from "./shared-client-usage.test-support.js";
 import { registerSharedClientWebSocketStartupTests } from "./shared-client-websocket-startup.test-support.js";
 import { createClientHarness } from "./test-support.js";
+import { resolveCodexAppServerSpawnEnv, withCodexAppServerGitConfig } from "./transport-stdio.js";
 import { CODEX_APP_SERVER_VERSION, MIN_SUPPORTED_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 const mocks = vi.hoisted(() => ({
@@ -316,6 +317,37 @@ describe("shared Codex app-server client", () => {
     mocks.embeddedAgentLog.warn.mockClear();
     mocks.resolveDefaultAgentDir.mockClear();
   });
+
+  it.each(["catalog-first", "turn-first"])(
+    "reuses the native writer across Git policy preparation: %s",
+    async (order) => {
+      const start = vi
+        .spyOn(CodexAppServerClient, "start")
+        .mockImplementation(async () => createInitializingClientHarness().client);
+      const base = createStartOptions({
+        homeScope: "user",
+        env: { GIT_CONFIG_PARAMETERS: "'user.name=Native'" },
+      });
+      const turn = withCodexAppServerGitConfig(base, "'maintenance.auto=false' 'gc.auto=0'");
+      const starts = order === "catalog-first" ? [base, turn] : [turn, base];
+      const first = await getLeasedSharedCodexAppServerClient({ startOptions: starts[0] });
+      const second = await getLeasedSharedCodexAppServerClient({ startOptions: starts[1] });
+      try {
+        expect(second).toBe(first);
+        expect(start).toHaveBeenCalledTimes(1);
+        const startedOptions = start.mock.calls[0]?.[0];
+        if (!startedOptions) {
+          throw new Error("Expected app-server process options");
+        }
+        expect(resolveCodexAppServerSpawnEnv(startedOptions, {}).GIT_CONFIG_PARAMETERS).toBe(
+          "'user.name=Native' 'maintenance.auto=false' 'gc.auto=0'",
+        );
+      } finally {
+        releaseLeasedSharedCodexAppServerClient(second);
+        releaseLeasedSharedCodexAppServerClient(first);
+      }
+    },
+  );
 
   registerSharedClientWebSocketStartupTests({
     createStartOptions,
