@@ -4,7 +4,7 @@ import type { PluginMetricFamily } from "../api.js";
 import { MAX_PROMETHEUS_FAMILY_SERIES } from "./prometheus-family-budget.js";
 import { createMetricsHarness, expectMetrics } from "./service.test-helpers.js";
 
-// Scrapes here come from an authorized operator; the scope guard has its own test.
+// mock-isolation: supply a fixed operator scope without binding test scrapes to a live Gateway request context.
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginRuntimeGatewayRequestScope: () => ({
     client: { connect: { scopes: ["operator.read"] } },

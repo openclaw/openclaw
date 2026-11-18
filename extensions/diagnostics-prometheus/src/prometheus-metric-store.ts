@@ -74,10 +74,10 @@ const DROPPED_FAMILY_COUNTER_NAME = "openclaw_prometheus_family_series_dropped_t
 const warnedFamilies = new Set<string>();
 
 // Plugin families have no reserve: they share the pool and the per-family cap.
+const hasCoreReserve = (name: string): name is PrometheusMetricName =>
+  Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, name);
 const reserveFor = (name: string): number =>
-  Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, name)
-    ? PROMETHEUS_FAMILY_RESERVES[name as PrometheusMetricName]
-    : 0;
+  hasCoreReserve(name) ? PROMETHEUS_FAMILY_RESERVES[name] : 0;
 
 export function createPrometheusMetricStore(onSeriesDropped?: (name: string) => void) {
   const counters = createSeries<ScalarSample>();
