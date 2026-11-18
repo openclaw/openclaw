@@ -640,41 +640,6 @@ export function createGatewayReloadHandlers(
         });
       }
 
-      if (plan.restartGmailWatcher) {
-        const restartAbortController =
-          params.createGmailRestartAbortController?.() ?? new AbortController();
-        try {
-          await params.stopPostReadySidecars?.();
-          if (!restartAbortController.signal.aborted) {
-            const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
-              import("../hooks/gmail-watcher.js"),
-              import("../hooks/gmail-watcher-lifecycle.js"),
-            ]);
-            if (!restartAbortController.signal.aborted) {
-              await stopGmailWatcher().catch((err: unknown) => {
-                params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
-              });
-            }
-            if (!restartAbortController.signal.aborted) {
-              await startGmailWatcherWithLogs({
-                cfg: nextConfig,
-                log: params.logHooks,
-                signal: restartAbortController.signal,
-                scheduler: params.scheduler,
-                onSkipped: () =>
-                  params.logHooks.info(
-                    "skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)",
-                  ),
-              });
-            }
-          }
-        } catch (err) {
-          scheduleRecoveryRestart("gmail watcher reload", err);
-        } finally {
-          params.clearGmailRestartAbortController?.(restartAbortController);
-        }
-      }
-
       await restartGatewayChannels({
         params,
         nextConfig,

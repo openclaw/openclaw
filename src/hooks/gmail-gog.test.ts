@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { inspectGog, inspectGogUpgrade, upgradeGog } from "../../extensions/gmail/src/gmail-gog.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { SpawnResult } from "../process/exec.js";
-import { inspectGog, inspectGogUpgrade, upgradeGog } from "./gmail-gog.js";
 import { gogServeSchema } from "./gmail.test-support.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn() }));

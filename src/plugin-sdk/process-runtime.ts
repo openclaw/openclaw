@@ -65,3 +65,19 @@ export {
   readDarwinProcessCommandLine,
   type DarwinProcess,
 } from "../process/darwin-process-inspection.js";
+
+export { resolveExecutable, resolveExecutablePath } from "../infra/executable-path.js";
+export { hasBinary } from "../shared/config-eval.js";
+export { canAccessSync } from "../infra/path-existence.js";
+export { releaseChildProcessOutputAfterExit } from "../process/child-process.js";
+export { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
+export {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
+export { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+export {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+} from "../process/windows-command.js";

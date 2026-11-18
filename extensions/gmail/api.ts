@@ -1,0 +1,22 @@
+// Used by existing setup and HTTP mapping consumers during the cutover.
+export {
+  buildDefaultHookUrl,
+  buildGogWatchStartArgs,
+  buildTopicPath,
+  DEFAULT_GMAIL_LABEL,
+  DEFAULT_GMAIL_MAX_BYTES,
+  DEFAULT_GMAIL_RENEW_MINUTES,
+  DEFAULT_GMAIL_SERVE_BIND,
+  DEFAULT_GMAIL_SERVE_PATH,
+  DEFAULT_GMAIL_SERVE_PORT,
+  DEFAULT_GMAIL_SUBSCRIPTION,
+  DEFAULT_GMAIL_TOPIC,
+  GMAIL_INSECURE_TOKEN_ARGS_WARNING,
+  type GmailHookOverrides,
+  mergeHookPresets,
+  normalizeHooksPath,
+  normalizeServePath,
+  parseTopicPath,
+  resolveGmailHookMaxBytes,
+  resolveGmailHookRuntimeConfig,
+} from "./src/gmail.js";

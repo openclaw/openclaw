@@ -2,16 +2,18 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
-  type OpenClawConfig,
-  DEFAULT_GATEWAY_PORT,
-  type HooksGmailTailscaleMode,
   resolveGatewayPort,
-} from "../config/config.js";
+  DEFAULT_GATEWAY_PORT,
+} from "openclaw/plugin-sdk/gateway-config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
   resolveTrustedWindowsCmdExe,
-} from "../process/windows-command.js";
+} from "openclaw/plugin-sdk/process-runtime";
+
+type GmailConfig = NonNullable<NonNullable<OpenClawConfig["hooks"]>["gmail"]>;
+type HooksGmailTailscaleMode = NonNullable<NonNullable<GmailConfig["tailscale"]>["mode"]>;
 
 export const DEFAULT_GMAIL_LABEL = "INBOX";
 export const DEFAULT_GMAIL_TOPIC = "gog-gmail-watch";

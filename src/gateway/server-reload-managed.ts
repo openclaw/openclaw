@@ -113,21 +113,6 @@ export function startManagedGatewayConfigReloader(
       throw error;
     }
   };
-  let activeGmailRestartAbortController: AbortController | null = null;
-  const abortActiveGmailRestart = () => {
-    activeGmailRestartAbortController?.abort();
-    activeGmailRestartAbortController = null;
-  };
-  const createGmailRestartAbortController = (): AbortController => {
-    abortActiveGmailRestart();
-    const abortController = new AbortController();
-    if (lifecycle.signal.aborted) {
-      abortController.abort();
-      return abortController;
-    }
-    activeGmailRestartAbortController = abortController;
-    return abortController;
-  };
   // Keep accepted restart requirements visible until a replacement Gateway starts.
   let acceptedRestart: { plan: GatewayReloadPlan; sourceConfig: OpenClawConfig } | undefined;
   const {
@@ -150,12 +135,6 @@ export function startManagedGatewayConfigReloader(
     },
     releaseChannelRouteHandoffs: params.channelManager.releaseChannelRouteHandoffs,
     pruneInactiveChannelAccountState: params.channelManager.pruneInactiveChannelAccountState,
-    createGmailRestartAbortController,
-    clearGmailRestartAbortController: (abortController) => {
-      if (activeGmailRestartAbortController === abortController) {
-        activeGmailRestartAbortController = null;
-      }
-    },
     assertRestartReady: (config) =>
       import("../state/openclaw-database-preflight.js").then(({ assertOpenClawDatabasesReady }) =>
         assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart", config }),
@@ -447,7 +426,6 @@ export function startManagedGatewayConfigReloader(
       acceptedRestart = undefined;
       // Release managed waiters before the base reloader joins every active transaction.
       abortPendingChannelReloads();
-      abortActiveGmailRestart();
       await configReloader.stop();
     },
     hotReloadStatus: configReloader.hotReloadStatus,

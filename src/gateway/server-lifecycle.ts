@@ -634,7 +634,6 @@ export async function prepareGatewayLifecycle(params: {
               drainWorktreeRunEnd: () => worktreeRunEnd.drain(),
               drainRetainedOpenAiEmbeddingProviders:
                 shutdownRuntime.drainRetainedOpenAiEmbeddingProviders,
-              stopGmailWatcher: shutdownRuntime.stopGmailWatcher,
               closeProviderTransportDispatcherPool:
                 shutdownRuntime.closeProviderTransportDispatcherPool,
             },

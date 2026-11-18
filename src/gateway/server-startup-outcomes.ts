@@ -1,13 +1,11 @@
 // Fixed-vocabulary Gateway startup outcomes keep normal boot logs useful
 // without exposing configuration values, paths, or startup errors.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 
 const GATEWAY_STARTUP_SUBSYSTEMS = [
   "internal-hooks",
   "internal-startup-hook",
   "gateway-start-hooks",
-  "gmail-watcher",
   "gmail-model",
 ] as const;
 
@@ -16,10 +14,8 @@ type GatewayStartupSubsystem = (typeof GATEWAY_STARTUP_SUBSYSTEMS)[number];
 type GatewayStartupSkippedReason =
   | "not-configured"
   | "no-handlers-loaded"
-  | "disabled-by-environment"
   | "hooks-disabled"
-  | "superseded"
-  | "no-gmail-account";
+  | "superseded";
 
 type GatewayStartupOutcome =
   | { subsystem: GatewayStartupSubsystem; status: "loaded" | "scheduled" }
@@ -54,14 +50,6 @@ export function createGatewayStartupOutcomeRecorder(params: {
       : params.internalHooksConfigured
         ? "no-handlers-loaded"
         : "not-configured";
-  const gmailWatcher = !params.cfg.hooks?.enabled
-    ? "hooks-disabled"
-    : !params.cfg.hooks.gmail?.account
-      ? "no-gmail-account"
-      : isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)
-        ? "disabled-by-environment"
-        : "scheduled";
-
   const initial: GatewayStartupOutcome[] = [
     skipped("internal-hooks", internalHooks),
     skipped(
@@ -71,9 +59,6 @@ export function createGatewayStartupOutcomeRecorder(params: {
     params.gatewayStartHooks
       ? { subsystem: "gateway-start-hooks", status: "scheduled" }
       : skipped("gateway-start-hooks", "no-handlers-loaded"),
-    gmailWatcher === "scheduled"
-      ? { subsystem: "gmail-watcher", status: "scheduled" }
-      : skipped("gmail-watcher", gmailWatcher),
     params.cfg.hooks?.gmail?.model
       ? { subsystem: "gmail-model", status: "scheduled" }
       : skipped("gmail-model", "not-configured"),

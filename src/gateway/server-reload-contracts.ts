@@ -145,7 +145,6 @@ export type GatewayReloadHandlerParams = {
   releaseChannelRouteHandoffs: ChannelManager["releaseChannelRouteHandoffs"];
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;
   getChannelAutostartSuppression?: ChannelManager["getAutostartSuppression"];
-  stopPostReadySidecars?: () => Promise<void> | void;
   reloadPluginServices?: (config: OpenClawConfig, serviceIds: ReadonlySet<string>) => Promise<void>;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
@@ -165,17 +164,10 @@ export type GatewayReloadHandlerParams = {
     checkpoint?: () => Promise<void>;
     assertInvokerOwned?: () => void;
   }) => Promise<GatewayPluginReloadResult>;
-  logHooks: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-  };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   cronReconciliation: GatewayCronReconciliation;
-  createGmailRestartAbortController?: () => AbortController;
-  clearGmailRestartAbortController?: (controller: AbortController) => void;
   onCronRestart?: () => void;
   requestRecoveryRestart?: GatewayRestartEmitter;
   restartRecoveryAvailable?: boolean;

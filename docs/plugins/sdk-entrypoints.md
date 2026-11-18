@@ -602,3 +602,12 @@ entries in place from a caller-owned child environment. Copy inherited values
 first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.
+
+For services that launch a local companion executable, `process-runtime` also
+provides PATH lookup (`resolveExecutablePath`), bounded child output drain
+after exit (`releaseChildProcessOutputAfterExit`), and process-tree cleanup.
+The Windows command helpers preserve the host's quoting and trusted cmd.exe
+resolution when launching batch wrappers. Use `resolveCommandProcessSignal` and
+propagate `CommandProcessCleanupError` when a bounded probe cannot confirm that
+its child exited. Plugins that spawn a long-lived child remain responsible for
+closing it when the registered service stops.

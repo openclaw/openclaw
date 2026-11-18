@@ -88,7 +88,6 @@ export function createHotTailPlan(overrides: Partial<GatewayReloadPlan> = {}): G
     restartReasons: [],
     hotReasons: ["logging.level"],
     reloadHooks: false,
-    restartGmailWatcher: false,
     restartCron: false,
     reloadPlugins: false,
     restartChannels: new Set(),
@@ -230,7 +229,6 @@ export function createHotReloadHandlerTestParams(
     releaseChannelRouteHandoffs: vi.fn(),
     pruneInactiveChannelAccountState: vi.fn(),
     reloadPlugins: vi.fn(async () => makePluginReloadResult()),
-    logHooks: createInfoWarnErrorLogger(),
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload: createInfoWarnErrorLogger(),
@@ -279,7 +277,6 @@ export function createManagedReloadTestParams(
     reloadPlugins: async () => {
       throw new Error("Unexpected plugin reload");
     },
-    logHooks: log,
     logChannels: log,
     logCron: log,
     logReload: log,

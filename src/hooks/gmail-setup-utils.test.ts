@@ -23,13 +23,13 @@ const noisy = {
   stderr: `${progress}\r\n\u001b[31mstderr final detail\u001b[0m\r\n`,
 };
 
-let utils: typeof import("./gmail-setup-utils.js");
+let utils: typeof import("../../extensions/gmail/src/gmail-setup-utils.js");
 let configEval: typeof import("../shared/config-eval.js");
 beforeEach(async () => {
   runCommand.mockReset();
   vi.resetModules();
   configEval = await import("../shared/config-eval.js");
-  utils = await import("./gmail-setup-utils.js");
+  utils = await import("../../extensions/gmail/src/gmail-setup-utils.js");
 });
 afterEach(() => {
   vi.restoreAllMocks();

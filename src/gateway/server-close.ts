@@ -159,7 +159,6 @@ export type GatewayCloseParams = {
   disposeAllBundleLspRuntimes: () => Promise<void>;
   drainWorktreeRunEnd: () => Promise<void>;
   drainRetainedOpenAiEmbeddingProviders: () => Promise<void>;
-  stopGmailWatcher: () => Promise<void>;
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
@@ -433,7 +432,6 @@ async function closeGatewayResources(
       // so late completion cannot resume against a database torn down by shutdown.
       recordShutdownWarning(warnings, "media-cleanup");
     }
-    await shutdownStep("gmail-watcher", () => params.stopGmailWatcher());
     await shutdownStep("scheduled-services", params.stopScheduledServices);
     await shutdownStep("cron", () =>
       params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop(),

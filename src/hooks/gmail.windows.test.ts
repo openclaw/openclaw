@@ -5,7 +5,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
-const { resolveGogServeInvocation } = await import("./gmail.js");
+const { resolveGogServeInvocation } = await import("../../extensions/gmail/src/gmail.js");
 
 function expectedTrustedCmdExe(): string {
   return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");

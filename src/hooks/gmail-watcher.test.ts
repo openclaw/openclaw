@@ -58,7 +58,8 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => ({
   createSubsystemLogger: () => mocks.log,
 }));
 
-const { startGmailWatcher, stopGmailWatcher } = await import("./gmail-watcher.js");
+const { startGmailWatcher, stopGmailWatcher } =
+  await import("../../extensions/gmail/src/gmail-watcher.js");
 
 let nextMockPid = 1234;
 

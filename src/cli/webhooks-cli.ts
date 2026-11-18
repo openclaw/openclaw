@@ -1,7 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { danger } from "../globals.js";
-import { type GmailRunOptions, runGmailService, runGmailSetup } from "../hooks/gmail-ops.js";
 import {
   DEFAULT_GMAIL_LABEL,
   DEFAULT_GMAIL_MAX_BYTES,
@@ -11,7 +9,9 @@ import {
   DEFAULT_GMAIL_SERVE_PORT,
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
-} from "../hooks/gmail.js";
+} from "../../extensions/gmail/api.js";
+import { danger } from "../globals.js";
+import { type GmailRunOptions, runGmailService, runGmailSetup } from "../hooks/gmail-ops.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
