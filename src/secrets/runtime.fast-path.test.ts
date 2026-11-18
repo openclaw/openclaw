@@ -164,8 +164,12 @@ describe("secrets runtime fast path", () => {
     const totalAgents = 30;
     const agentDirs = Array.from({ length: totalAgents }, (_, i) => `/tmp/openclaw-agent-${i}`);
     let loadedCount = 0;
+    let atNextTurn: Promise<number> | undefined;
     const loadAuthStore = () => {
       loadedCount += 1;
+      atNextTurn ??= new Promise<number>((resolve) => {
+        setImmediate(() => resolve(loadedCount));
+      });
       return emptyAuthStore();
     };
 
@@ -175,11 +179,11 @@ describe("secrets runtime fast path", () => {
       agentDirs,
       loadAuthStore,
     });
-    const loadedBeforeYield = loadedCount;
     const snapshot = await resultPromise;
+    const loadedAtNextTurn = await atNextTurn;
 
-    expect(loadedBeforeYield).toBeGreaterThan(0);
-    expect(loadedBeforeYield).toBeLessThan(totalAgents);
+    expect(loadedAtNextTurn).toBeGreaterThan(0);
+    expect(loadedAtNextTurn).toBeLessThan(totalAgents);
     expect(loadedCount).toBe(totalAgents);
     expect(snapshot.authStores).toHaveLength(totalAgents);
   });
