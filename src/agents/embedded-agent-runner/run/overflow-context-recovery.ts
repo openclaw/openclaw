@@ -27,6 +27,7 @@ import {
 } from "../provider-prompt-state.js";
 import { retainEmbeddedSessionPromptState } from "../session-prompt-state.js";
 import {
+  estimateToolResultReductionPotential,
   resolveLiveToolResultMaxChars,
   restoreCacheTtlToolResultProjections,
   sessionLikelyHasOversizedToolResults,
@@ -229,7 +230,31 @@ async function recoverContextPressure(
     }
     return { action: "retry" };
   };
-  const truncateToolResults = async () => {
+  const promptBudget = isPreflightRecovery
+    ? asPositiveFiniteNumber(preflightRecovery?.promptBudgetBeforeReserve)
+    : undefined;
+  const estimatedPromptTokens = isPreflightRecovery
+    ? asPositiveFiniteNumber(preflightRecovery?.estimatedPromptTokens)
+    : undefined;
+  const requiredTokenReduction =
+    promptBudget !== undefined && estimatedPromptTokens !== undefined
+      ? Math.max(0, Math.ceil(estimatedPromptTokens - promptBudget))
+      : observedOverflowTokens !== undefined
+        ? Math.max(
+            0,
+            observedOverflowTokens -
+              contextTokenBudget +
+              Math.min(
+                8_192,
+                input.state.compactionRequestBudget?.reserveTokens ??
+                  Math.max(512, Math.floor(contextTokenBudget / 16)),
+              ),
+          )
+        : 0;
+  const truncateToolResults = async (
+    protectTrailingToolResults = false,
+    reductionTokens = requiredTokenReduction,
+  ) => {
     const { sessionManager, assertActive } = await input.prepareRecoverySession(contextTokenBudget);
     if (!sessionManager) {
       return {
@@ -253,7 +278,13 @@ async function recoverContextPressure(
         maxCharsOverride: resolveLiveToolResultMaxChars({
           contextWindowTokens: contextTokenBudget,
         }),
-        protectTrailingToolResults: preflightRecovery?.route === "compact_then_truncate",
+        ...(reductionTokens > 0
+          ? {
+              requiredTokenReduction:
+                reductionTokens + Math.max(256, Math.ceil(reductionTokens / 10)),
+            }
+          : {}),
+        protectTrailingToolResults,
         projectionState,
         ...target,
       });
@@ -261,12 +292,6 @@ async function recoverContextPressure(
       return result;
     });
   };
-  const promptBudget = isPreflightRecovery
-    ? asPositiveFiniteNumber(preflightRecovery?.promptBudgetBeforeReserve)
-    : undefined;
-  const estimatedPromptTokens = isPreflightRecovery
-    ? asPositiveFiniteNumber(preflightRecovery?.estimatedPromptTokens)
-    : undefined;
   const preflightPromptBudget = promptBudget === undefined ? undefined : Math.floor(promptBudget);
   const preflightEstimatedPromptTokens =
     estimatedPromptTokens === undefined ? undefined : Math.ceil(estimatedPromptTokens);
@@ -419,7 +444,7 @@ async function recoverContextPressure(
         declineBoundaryMaintenance(runParams.runId);
       }
       if (preflightRecovery?.route === "compact_then_truncate") {
-        const truncResult = await truncateToolResults();
+        const truncResult = await truncateToolResults(true, 0);
         if (truncResult.truncated) {
           log.info(
             `[context-overflow-precheck] post-compaction tool-result truncation succeeded for ${input.modelSelection.provider}/${input.modelSelection.model}; truncated ${truncResult.truncatedCount} tool result(s)`,
@@ -484,11 +509,19 @@ async function recoverContextPressure(
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
     });
-    const hasOversized = sessionLikelyHasOversizedToolResults({
-      messages: input.attempt.messagesSnapshot,
-      contextWindowTokens: input.contextTokenBudget,
-      maxCharsOverride: toolResultMaxChars,
-    });
+    const hasOversized =
+      sessionLikelyHasOversizedToolResults({
+        messages: input.attempt.messagesSnapshot,
+        contextWindowTokens: input.contextTokenBudget,
+        maxCharsOverride: toolResultMaxChars,
+      }) ||
+      (requiredTokenReduction > 0 &&
+        estimateToolResultReductionPotential({
+          messages: input.attempt.messagesSnapshot,
+          contextWindowTokens: input.contextTokenBudget,
+          maxCharsOverride: toolResultMaxChars,
+          aggregateMaxCharsOverride: 1,
+        }).maxReducibleChars > 0);
     if (hasOversized) {
       input.state.toolResultTruncationAttempted = true;
       log.warn(

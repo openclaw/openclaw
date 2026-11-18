@@ -1,4 +1,8 @@
 import { expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
+import { resolveTestOpenAIProviderCapabilities } from "../../../../packages/ai/src/providers/openai-provider.test-support.js";
+import { buildOpenAICompletionsParams } from "../../../../packages/ai/src/transports/openai-completions-params.js";
+import { makeCompletionsModel } from "../../../../packages/ai/src/transports/openai-completions.test-support.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.types.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
@@ -7,6 +11,7 @@ import { getAgentRunLifecycleGeneration } from "../../../infra/agent-run-registr
 import type { ToolResultMessage } from "../../../llm/types.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
+import { estimateMessageTokenPressure } from "../../sessions/context-token-pressure.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
@@ -201,6 +206,110 @@ it.each(["frozen", "cache-ttl"] as const)(
         manager.buildSessionContext().messages.find((message) => message.role === "toolResult")
           ?.content,
       ).toEqual(expectedContent);
+    });
+  },
+);
+
+it.each(["mid-turn precheck", "strict transport rejection"] as const)(
+  "continues a tool run after %s when small results exceed the remaining prompt budget",
+  async (source) => {
+    const contextTokenBudget = 32_768;
+    const promptBudget = contextTokenBudget - 8_192;
+    const manager = SessionManager.inMemory("/tmp/workspace");
+    await manager.appendMessageAsync(makeAgentUserMessage({ content: "history ".repeat(10_000) }));
+    for (let index = 0; index < 12; index += 1) {
+      const toolCallId = `read-${index}`;
+      await manager.appendMessageAsync(
+        makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: toolCallId, name: "read", arguments: {} }],
+          stopReason: "toolUse",
+        }),
+      );
+      await manager.appendMessageAsync({
+        role: "toolResult",
+        toolName: "read",
+        toolCallId,
+        content: [{ type: "text", text: "r".repeat(4_000) }],
+        isError: false,
+        timestamp: index + 2,
+      });
+    }
+    const before = manager.buildSessionContext().messages;
+    const estimatedPromptTokens = before.reduce(
+      (sum, message) => sum + estimateMessageTokenPressure(message),
+      0,
+    );
+    expect(estimatedPromptTokens).toBeGreaterThan(promptBudget);
+    const model = makeCompletionsModel({
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      contextWindow: contextTokenBudget,
+      maxTokens: 8_192,
+    });
+    const request = (messages: typeof before) => {
+      const host = getAiTransportHost();
+      configureAiTransportHost({
+        ...host,
+        resolveProviderRequestCapabilities: resolveTestOpenAIProviderCapabilities,
+      });
+      try {
+        const providerMessages = messages.filter(
+          (message) =>
+            message.role === "user" ||
+            message.role === "assistant" ||
+            message.role === "toolResult",
+        ) as Parameters<typeof buildOpenAICompletionsParams>[1]["messages"];
+        return buildOpenAICompletionsParams(
+          model,
+          { systemPrompt: "", messages: providerMessages },
+          { maxTokens: 8_192 },
+        );
+      } finally {
+        configureAiTransportHost(host);
+      }
+    };
+    let providerError: unknown;
+    try {
+      request(before);
+    } catch (error) {
+      providerError = error;
+    }
+    if (!(providerError instanceof Error)) {
+      throw new Error("Expected the strict transport to reject the oversized prompt");
+    }
+    expect(providerError.message).toContain("Context window exceeded");
+    await withRecovery(manager, "run-small-results", async (input) => {
+      input.contextTokenBudget = contextTokenBudget;
+      input.state.overflowCompactionAttempts = MAX_OVERFLOW_COMPACTION_ATTEMPTS;
+      const outcome = await recoverEmbeddedRunOverflow({
+        ...input,
+        promptError: source === "mid-turn precheck" ? input.promptError : providerError,
+        attempt: makeAttemptResult({
+          promptError: source === "mid-turn precheck" ? input.promptError : providerError,
+          promptErrorSource: source === "mid-turn precheck" ? "precheck" : "prompt",
+          messagesSnapshot: before,
+          replayMetadata: { replaySafe: false, hadPotentialSideEffects: true },
+          ...(source === "mid-turn precheck"
+            ? {
+                preflightRecovery: {
+                  route: "compact_only" as const,
+                  source: "mid-turn" as const,
+                  estimatedPromptTokens,
+                  promptBudgetBeforeReserve: promptBudget,
+                  overflowTokens: estimatedPromptTokens - promptBudget,
+                },
+              }
+            : {}),
+        }),
+      });
+      expect(outcome).toEqual({ action: "retry" });
+      const after = manager.buildSessionContext().messages;
+      expect(after.filter((message) => message.role === "toolResult")).toHaveLength(12);
+      expect(
+        after.reduce((sum, message) => sum + estimateMessageTokenPressure(message), 0),
+      ).toBeLessThanOrEqual(promptBudget);
+      expect(() => request(after)).not.toThrow();
     });
   },
 );

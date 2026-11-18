@@ -13,6 +13,7 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 }
 
 const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
+  /context window exceeded:\s*estimated input\s+([\d,]+)\s+leaves only\s+[\d,]+\s+output tokens/i,
   /input length(?:\s+and\s+max_tokens)?\s+exceed\s+context(?:\s+limit|\s+window)?\s*\(i\.e\s*([\d,]+)\s*\+\s*([\d,]+)\s*>\s*[\d,]+\)/i,
   /input length\s+and\s+`max_tokens`\s+exceed\s+context\s+limit:\s*([\d,]+)\s*\+\s*([\d,]+)\s*>\s*[\d,]+/i,
 
