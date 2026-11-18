@@ -191,9 +191,12 @@ describe("CodexAppServerEventProjector assistant projection", () => {
     });
   });
 
-  it("streams whitespace-only deltas as append-only assistant text", async () => {
+  it.each([
+    [["X", "\n\n", "```text", "\n", "a b", "\n", "```", " ", "done", "\n"]],
+    [["\n", "Hello"]],
+    [[" ", "\n", "Hello", " ", "world"]],
+  ])("streams whitespace-only deltas as append-only assistant text: %j", async (deltas) => {
     const { projector, onAgentEvent } = await fixture.observe();
-    const deltas = ["X", "\n\n", "```text", "\n", "a b", "\n", "```", " ", "done", "\n"];
     const answer = deltas.join("");
     await fixture.start(projector, finalItem("answer", ""));
     for (const value of deltas) {
