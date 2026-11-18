@@ -6,6 +6,8 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { refResolutionError } from "../secrets/resolve-errors.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 import { GatewaySecretRefUnavailableError } from "./credentials.js";
 
@@ -63,12 +65,15 @@ afterEach(() => {
 });
 
 describe("resolveGatewayCredentialsWithSecretInputs store refs", () => {
-  it("keeps the provider failure as the cause of an unavailable store-backed token", async () => {
+  it("preserves the provider failure off the rendered cause chain of an unavailable store-backed token", async () => {
     const { providerResolutionError } = await import("../secrets/resolve-errors.js");
+    // Resolution failures can quote payload-derived text: a malformed secret
+    // file's JSON.parse error carries the file's raw bytes in its message.
+    const payloadBytes = "violet meadow lantern";
     const failure = providerResolutionError({
       source: "store",
       provider: "default",
-      message: "Secret store database is unavailable",
+      message: `Secret store database is unavailable (near "${payloadBytes}")`,
     });
     storeMocks.failure = failure;
 
@@ -78,16 +83,68 @@ describe("resolveGatewayCredentialsWithSecretInputs store refs", () => {
     });
     expect(error).toBeInstanceOf(GatewaySecretRefUnavailableError);
     const unavailable = error as GatewaySecretRefUnavailableError;
-    expect(unavailable.cause).toBe(failure);
+    // The failure stays reachable for explicit logging, but not on the standard
+    // cause chain that the shared terminal formatter walks.
+    expect(unavailable.providerFailure).toBe(failure);
+    expect(unavailable.cause).toBeUndefined();
     expect(unavailable.message).toContain(
       "Provider error: SECRET_PROVIDER_UNAVAILABLE (source store, provider default)",
     );
     // A provider failure replaces the credential-override advice with provider
     // recovery guidance.
     expect(unavailable.message).not.toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(unavailable.message).toContain("restore access to the secret provider and retry");
+    // The shipped terminal rendering must not disclose the payload-derived text.
+    expect(formatErrorMessage(unavailable)).not.toContain(payloadBytes);
+    expect(formatErrorMessage(unavailable)).not.toContain("Secret store database is unavailable");
+  });
+
+  it("keeps reference-repair guidance for a ref-level not-found failure with an available provider", async () => {
+    const failure = refResolutionError({
+      code: "SECRET_REF_NOT_FOUND",
+      source: "store",
+      provider: "default",
+      refId: "GATEWAY_AUTH_TOKEN",
+      message: "Secret ref GATEWAY_AUTH_TOKEN was not found in the store",
+    });
+    storeMocks.failure = failure;
+
+    let error: unknown;
+    await resolveGatewayCredentialsWithSecretInputs({ config, env: {} }).catch((caught) => {
+      error = caught;
+    });
+    expect(error).toBeInstanceOf(GatewaySecretRefUnavailableError);
+    const unavailable = error as GatewaySecretRefUnavailableError;
+    expect(unavailable.providerFailure).toBe(failure);
     expect(unavailable.message).toContain(
-      "restore access to the secret provider and retry",
+      "Provider error: SECRET_REF_NOT_FOUND (source store, provider default)",
     );
+    expect(unavailable.message).toContain("repair the configured secret reference");
+    expect(unavailable.message).not.toContain("restore access to the secret provider");
+  });
+
+  it("keeps reference-repair guidance for a ref-level invalid failure", async () => {
+    const failure = refResolutionError({
+      code: "SECRET_REF_INVALID",
+      source: "store",
+      provider: "default",
+      refId: "GATEWAY_AUTH_TOKEN",
+      message: "Secret ref GATEWAY_AUTH_TOKEN is invalid",
+    });
+    storeMocks.failure = failure;
+
+    let error: unknown;
+    await resolveGatewayCredentialsWithSecretInputs({ config, env: {} }).catch((caught) => {
+      error = caught;
+    });
+    expect(error).toBeInstanceOf(GatewaySecretRefUnavailableError);
+    const unavailable = error as GatewaySecretRefUnavailableError;
+    expect(unavailable.providerFailure).toBe(failure);
+    expect(unavailable.message).toContain(
+      "Provider error: SECRET_REF_INVALID (source store, provider default)",
+    );
+    expect(unavailable.message).toContain("repair the configured secret reference");
+    expect(unavailable.message).not.toContain("restore access to the secret provider");
   });
   it("reads store refs from the configured engine when the process has none selected", async () => {
     mocks.resolveDatabaseEngineSelection.mockResolvedValue(postgresSelection);

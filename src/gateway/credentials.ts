@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  isProviderScopedSecretResolutionError,
+  isSecretResolutionError,
+} from "../secrets/resolve-errors.js";
+import {
   createGatewayCredentialPlan,
   type GatewayCredentialPlan,
   trimCredentialToUndefined,
@@ -30,41 +34,65 @@ export type GatewayRemoteCredentialFallback = "remote-env-local" | "remote-only"
 
 const GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE = "GATEWAY_SECRET_REF_UNAVAILABLE"; // pragma: allowlist secret
 
+const GATEWAY_SECRET_REF_CREDENTIAL_OVERRIDE_ADVICE = [
+  "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
+  "or run a gateway command path that resolves secret references before credential selection.",
+].join("\n");
+
+/**
+ * Scoped recovery advice for a preserved resolution failure. Provider-scoped
+ * failures (and refs that failed because their provider failed) need provider
+ * access restored; ref-scoped failures with an available provider need the
+ * reference or its value repaired instead.
+ */
+function gatewaySecretRefRecoveryAdvice(failure: unknown): string | undefined {
+  if (!isSecretResolutionError(failure)) {
+    return undefined;
+  }
+  if (
+    isProviderScopedSecretResolutionError(failure) ||
+    failure.code === "SECRET_REF_PROVIDER_ERROR" ||
+    failure.code === "SECRET_REF_PROVIDER_CONTRACT"
+  ) {
+    return "Fix: restore access to the secret provider and retry; the configured credential itself needs no change.";
+  }
+  return "Fix: repair the configured secret reference (source, provider, or id) or supply the missing value; the secret provider itself is available.";
+}
+
 /** Raised when a command path needs Gateway credentials before secret refs were resolved. */
 export class GatewaySecretRefUnavailableError extends Error {
   readonly code = GATEWAY_SECRET_REF_UNAVAILABLE_ERROR_CODE;
   readonly path: string;
+  /**
+   * Preserved resolution failure for callers that log causes deliberately.
+   * Deliberately NOT attached as the standard Error cause: the shared terminal
+   * formatter walks cause chains, and secret resolution failures can quote
+   * payload-derived input (for example a malformed secret file's contents).
+   */
+  readonly providerFailure?: unknown;
 
   constructor(
     path: string,
     options?: {
-      /** Underlying provider failure, preserved for callers that log causes. */
-      cause?: unknown;
-      /**
-       * Config-derived provider identity for the real failure. Never embed
-       * provider error text: resolution failures can quote payload-derived
-       * input (for example a malformed secret file's contents).
-       */
-      providerDiagnostic?: string;
+      /** Underlying resolution failure; never rendered by the shared formatter. */
+      providerFailure?: unknown;
     },
   ) {
+    const failure = options?.providerFailure;
     super(
       [
         `${path} is configured as a secret reference but is unavailable in this command path.`,
-        ...(options?.providerDiagnostic
+        ...(isSecretResolutionError(failure)
           ? [
-              `Provider error: ${options.providerDiagnostic}`,
-              "Fix: restore access to the secret provider and retry; the configured credential itself needs no change.",
+              `Provider error: ${failure.code} (source ${failure.source}, provider ${failure.provider})`,
+              gatewaySecretRefRecoveryAdvice(failure),
             ]
-          : [
-              "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
-              "or run a gateway command path that resolves secret references before credential selection.",
-            ]),
+          : [GATEWAY_SECRET_REF_CREDENTIAL_OVERRIDE_ADVICE]),
       ].join("\n"),
-      options?.cause !== undefined ? { cause: options.cause } : undefined,
     );
     this.name = "GatewaySecretRefUnavailableError";
     this.path = path;
+    this.providerFailure = failure;
   }
 }
 
