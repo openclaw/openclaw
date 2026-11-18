@@ -9,7 +9,10 @@ import {
   isSessionRunActiveForKey,
   resolveActiveSessionRunId,
 } from "../../sessions/session-controller.queries.js";
-import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../sessions/session-controller.target.js";
 import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
 import { REDACTED_SENTINEL } from "../redact-sentinel.js";
@@ -135,10 +138,7 @@ const MAX_DEFERRED_COMMAND_EXCHANGE_WAITS = 8;
  * until no turn is executing. Rows coordinated with a writer run or kept out of context
  * cannot move the fence.
  */
-function shouldDeferUntilActiveTurnSettles(params: CommandExchangeParams): boolean {
-  if (params.contextFreeCommand === true || params.expectedWriterRunId) {
-    return false;
-  }
+function resolveExchangeTarget(params: CommandExchangeParams): SessionTarget | undefined {
   const sessionKey = params.sessionKey.trim();
   try {
     // Same physical owner the recorder writes to; a logical key can span several stores.
@@ -150,14 +150,30 @@ function shouldDeferUntilActiveTurnSettles(params: CommandExchangeParams): boole
       );
     const storeScope =
       params.storePath ?? resolveSessionStorePathCore(params.config?.session?.store, { agentId });
-    const target = captureSessionTarget({ storeScope, sessionKey, agentId });
-    return (
-      resolveActiveSessionRunId(sessionKey, target, { executionStartedOnly: true }) !== undefined
-    );
+    return captureSessionTarget({ storeScope, sessionKey, agentId });
   } catch {
-    // Unresolvable ownership must not fail a delivered command; a busy key waits.
-    return isSessionRunActiveForKey(sessionKey);
+    return undefined;
   }
+}
+
+function shouldDeferUntilActiveTurnSettles(
+  params: CommandExchangeParams,
+  target: SessionTarget | undefined,
+): boolean {
+  if (params.contextFreeCommand === true || params.expectedWriterRunId) {
+    return false;
+  }
+  const sessionKey = params.sessionKey.trim();
+  try {
+    if (target) {
+      return (
+        resolveActiveSessionRunId(sessionKey, target, { executionStartedOnly: true }) !== undefined
+      );
+    }
+  } catch {
+    // Unresolvable ownership must not fail a delivered command; fall through.
+  }
+  return isSessionRunActiveForKey(sessionKey);
 }
 
 async function recordDeliveredCommandExchangeNow(params: CommandExchangeParams) {
@@ -170,10 +186,14 @@ async function recordDeliveredCommandExchangeNow(params: CommandExchangeParams) 
   }
 }
 
-async function recordAfterActiveTurnSettles(params: CommandExchangeParams) {
+async function recordAfterActiveTurnSettles(
+  params: CommandExchangeParams,
+  target: SessionTarget | undefined,
+) {
   for (let attempt = 0; attempt < MAX_DEFERRED_COMMAND_EXCHANGE_WAITS; attempt += 1) {
-    await waitForSessionRunIdle(params.sessionKey);
-    if (!shouldDeferUntilActiveTurnSettles(params)) {
+    // Only the receiving physical session's turn gates this write.
+    await waitForSessionRunIdle(params.sessionKey, undefined, target ? { target } : undefined);
+    if (!shouldDeferUntilActiveTurnSettles(params, target)) {
       return await recordDeliveredCommandExchangeNow(params);
     }
   }
@@ -187,8 +207,9 @@ async function recordAfterActiveTurnSettles(params: CommandExchangeParams) {
  * without cancelling the running answer.
  */
 export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
-  if (shouldDeferUntilActiveTurnSettles(params)) {
-    void recordAfterActiveTurnSettles(params).catch(() => {
+  const target = resolveExchangeTarget(params);
+  if (shouldDeferUntilActiveTurnSettles(params, target)) {
+    void recordAfterActiveTurnSettles(params, target).catch(() => {
       logVerbose("Command transcript recording failed after delivery");
     });
     return { ok: false as const, reason: "deferred until the active turn settles" };

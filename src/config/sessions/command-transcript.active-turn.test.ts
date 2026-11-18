@@ -106,3 +106,47 @@ it("scopes the active-turn check to the store being written", async () => {
     }),
   ).resolves.toMatchObject({ ok: true });
 });
+
+it("records once its own store's turn settles while another store stays busy", async () => {
+  const state = await createOpenClawTestState({ label: "command-own-store", applyEnv: false });
+  onTestFinished(() => state.cleanup());
+  const sessionKey = "agent:main:telegram:group:g3";
+  const [ownStore, otherStore] = [state.path("own.json"), state.path("other.json")];
+  const own = { agentId: "main", storePath: ownStore, sessionKey, sessionId: "own" };
+  await upsertSessionEntry({ ...own, entry: { sessionId: "own", updatedAt: 1 } });
+  const finishes = [createDeferred(), createDeferred()];
+  const starts = [createDeferred(), createDeferred()];
+  const turns = [ownStore, otherStore].map((storePath, index) =>
+    withSessionTurn(
+      { sessionKey, sessionId: `t${index}`, storePath, agentId: "main" },
+      async (operation) => {
+        markReplyOperationExecutionStarted(operation!);
+        starts[index].resolve();
+        await finishes[index].promise;
+      },
+    ),
+  );
+  await Promise.all(starts.map((start) => start.promise));
+  onTestFinished(async () => {
+    finishes[1].resolve();
+    await Promise.all(turns);
+  });
+
+  await expect(
+    recordDeliveredCommandExchange({
+      ...own,
+      config: { session: { store: ownStore } },
+      commandText: "/think",
+      commandId: "telegram:default:g3:1",
+      replyId: "menu",
+      replyText: "Choose level for /think.",
+    }),
+  ).resolves.toMatchObject({ ok: false, reason: "deferred until the active turn settles" });
+  finishes[0].resolve();
+  await turns[0];
+  // The other store's turn is still running; it must not hold this exchange back.
+  await vi.waitFor(
+    async () => expect(await readVisibleSessionTranscriptMessageEntries(own)).toHaveLength(2),
+    { timeout: 15_000 },
+  );
+});
