@@ -260,6 +260,12 @@ describe("assistant panel", () => {
     context.agentSelection.state.selectedId = "care";
     await update(panel, { pageSessionKey: "agent:research:task" });
     expect(home(panel)?.agentId).toBe("main");
+
+    // A picker-hidden agent keeps Home while its existing session holds the selection.
+    context.agents.state.agentsList?.agents.push({ id: "worker", hidden: true });
+    context.agentSelection.state.selectedId = "worker";
+    await update(panel, { pageSessionKey: "agent:worker:task" });
+    expect(home(panel)?.agentId).toBe("worker");
     context.agentSelection.state.selectedId = "research";
 
     await update(panel, { pageSessionKey: "agent:research:home" });
