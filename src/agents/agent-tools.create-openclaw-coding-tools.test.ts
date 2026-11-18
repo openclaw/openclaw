@@ -46,20 +46,15 @@ import {
   createHostSandboxFsBridge,
   createSandboxFsBridgeFromResolver,
 } from "./test-helpers/host-sandbox-fs-bridge.js";
-import {
-  createBaseOnlyToolConstructionPlan,
-  registerExplicitMediaToolConstructionTest,
-  createOpenClawOnlyToolConstructionPlan,
-  createPluginOnlyToolConstructionPlan,
-} from "./test-helpers/tool-construction-plan.js";
+import * as toolConstruction from "./test-helpers/tool-construction-plan.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant-");
-const openClawOnlyPlan = createOpenClawOnlyToolConstructionPlan();
-const pluginOnlyPlan = createPluginOnlyToolConstructionPlan();
-const baseOnlyPlan = createBaseOnlyToolConstructionPlan();
+const openClawOnlyPlan = toolConstruction.createOpenClawOnlyToolConstructionPlan();
+const pluginOnlyPlan = toolConstruction.createPluginOnlyToolConstructionPlan();
+const baseOnlyPlan = toolConstruction.createBaseOnlyToolConstructionPlan();
 const { skillLocator, fullSkillResult, skillReadTool } = createSkillReadFixture();
 
 function sandboxReadTool(root: string) {
@@ -448,7 +443,7 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("exec")).toBe(false);
   });
 
-  registerExplicitMediaToolConstructionTest(expectToolSurface);
+  toolConstruction.registerExplicitMediaToolConstructionTest(expectToolSurface);
 
   it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
     for (const runtimeToolAllowlist of [["group:messaging"], ["group:openclaw"], ["*"]]) {
@@ -604,6 +599,11 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(extractToolText(next)).toBe(original.slice(continuation?.cursor));
   });
+
+  toolConstruction.registerManifestProfileToolConstructionTest(
+    createOpenClawCodingTools,
+    openClawPluginTools,
+  );
 
   describe("plugin-only caller identity", () => {
     async function execute(options: NonNullable<Parameters<typeof createOpenClawCodingTools>[0]>) {

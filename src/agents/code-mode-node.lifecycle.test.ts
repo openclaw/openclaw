@@ -353,6 +353,23 @@ it("keeps repeated bursts warm, then retires surplus capacity during serial traf
   expect(burst.filter((pool) => !pool.isClosed)).toHaveLength(1);
 });
 
+it("retires every idle pool on critical memory pressure and admits fresh demand", async () => {
+  const start = fixture.pools.length;
+  expect(await Promise.all([run(), run()])).toMatchObject([
+    { status: "completed" },
+    { status: "completed" },
+  ]);
+  const idle = fixture.pools.slice(start);
+  expect(idle).toHaveLength(2);
+  expect(idle.every((pool) => !pool.isClosed)).toBe(true);
+  const pressure = channel("openclaw.memory.critical");
+  pressure.publish({});
+  expect(idle.every((pool) => pool.isClosed)).toBe(true);
+  expect(pressure.hasSubscribers).toBe(false);
+  expect(await run()).toMatchObject({ status: "completed" });
+  expect(idle).not.toContain(fixture.pools.at(-1));
+});
+
 it.each(["abort", "timeout"] as const)(
   "ends acquisition on %s while native retirement still owns its worker",
   async (reason) => {
