@@ -172,6 +172,9 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   emit("lifecycle", { phase: "start" });
   start("first", "printf first-command");
   output("First stdout line.");
+  // The first live event starts the lazy reducer; the startup imports above
+  // do not wait for the queued frames to reach it.
+  await vi.dynamicImportSettled();
   await expect.poll(() => state.chatToolMessages.length).toBe(1);
   await expect.poll(() => state.toolStreamSyncTimer).toBeNull();
   expect(JSON.stringify(state.chatToolMessages)).not.toContain("First stdout line.");

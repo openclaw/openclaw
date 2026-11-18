@@ -77,9 +77,10 @@ export const settingsViews: readonly ControlUiSettingsView[] = [
       function Overview() {
         const t = createTranslator(() => snapshot().locale);
         const MemoryOverview = createMemoryOverview(context, snapshot);
-        // Advance the admitted request and selected scope together before old data settles.
+        // Let Loading and the selected snapshot advance in the same frame.
+        // Only a same-scope probe should read ahead to retain the accepted cards.
         const payload = createMemo(() => {
-          const selected = latest(snapshot);
+          const selected = snapshot();
           if (!selected.agentId && selected.agentsError) {
             throw new Error(selected.agentsError);
           }
@@ -89,7 +90,7 @@ export const settingsViews: readonly ControlUiSettingsView[] = [
           if (!selected.connected) {
             throw new Error(t("memoryPage.overview.hero.gatewayOffline"));
           }
-          return latest(receipt)?.result ?? null;
+          return receipt()?.result ?? null;
         });
         // A probe keeps the accepted cards; explicit refreshes show the waking state.
         const loadingReset = createMemo(() => receipt()?.reset);
@@ -117,23 +118,17 @@ export const settingsViews: readonly ControlUiSettingsView[] = [
           );
         }
         const status = (): MemoryOverviewStatus => {
-          const accepted = latest(receipt)?.probe ? latest(payload) : payload();
+          const accepted = receipt()?.probe ? latest(payload) : payload();
           return accepted ? { kind: "ready", payload: accepted } : { kind: "idle" };
         };
         return (
-          <Loading
-            on={latest(loadingReset)}
-            fallback={<Presentation status={{ kind: "loading" }} />}
-          >
+          <Loading on={loadingReset()} fallback={<Presentation status={{ kind: "loading" }} />}>
             <Errored
               fallback={(error) => (
                 <Presentation status={{ kind: "error", message: context.formatError(error()) }} />
               )}
             >
-              <Presentation
-                status={status()}
-                probing={latest(receipt)?.probe && isPending(payload)}
-              />
+              <Presentation status={status()} probing={receipt()?.probe && isPending(payload)} />
             </Errored>
           </Loading>
         );

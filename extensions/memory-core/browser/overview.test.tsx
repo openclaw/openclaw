@@ -476,9 +476,13 @@ describe("Memory overview request presentation", () => {
   ])("retires a held probe when %s authority changes", async (_kind, patch) => {
     const f = fixture();
     await settle(f, 0, "accepted-engine");
-    findButton(f.container, /^Test$/)?.click();
+    const probe = findButton(f.container, /^Test$/)!;
+    probe.click();
+    await waitForSolid(() => expect(probe.disabled).toBe(true));
     f.update(patch);
     expect(f.request).toHaveBeenCalledTimes(3);
+    // The old probe and replacement read are both still held.
+    expectText(f.container, ["Waking memory"], ["accepted-engine", "Testing"]);
     f.pending[1]!.resolve(payload("retired-engine"));
     await f.pending[1]!.promise;
     await waitForSolid(() =>
@@ -494,21 +498,18 @@ describe("Memory overview request presentation", () => {
   ])("retires pending reads when %s without another Doctor request", async (kind, patch) => {
     const f = fixture();
     f.update(patch);
+    expect(f.request).toHaveBeenCalledTimes(1);
+    const status =
+      kind === "off"
+        ? "Memory is hibernating"
+        : kind === "offline"
+          ? "gateway is offline"
+          : "Waking memory";
+    expectText(f.container, [status], ["retired-engine", "Testing"]);
     f.pending[0]!.resolve(payload("retired-engine"));
     await f.pending[0]!.promise;
     flush();
-    expect(f.request).toHaveBeenCalledTimes(1);
-    expectText(
-      f.container,
-      [
-        kind === "off"
-          ? "Memory is hibernating"
-          : kind === "offline"
-            ? "gateway is offline"
-            : "Waking memory",
-      ],
-      ["retired-engine", "Testing"],
-    );
+    expectText(f.container, [status], ["retired-engine", "Testing"]);
   });
 
   it("retains disabled-engine reads and makes disposed controls harmless", async () => {
