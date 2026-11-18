@@ -48,6 +48,7 @@ export async function preflightUpdateCandidatePlugins(
     targetVersion: params.targetVersion,
     channel: execution.channel,
     timeoutMs: execution.updateStepTimeoutMs,
+    prefetch: true,
   });
   for (const warning of warnings) {
     defaultRuntime[execution.opts.json ? "error" : "log"](warning.message);

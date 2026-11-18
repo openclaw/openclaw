@@ -1805,10 +1805,24 @@ package and reports that plugin availability checking remains pending.
 Extended-stable does not accept `--tag`. Bundled and path-installed plugins do not
 require registry requests.
 
-This metadata check does not reserve downloads. Plugin-only download, install,
-or load failures remain actionable warnings after an otherwise successful core
-update. Snapshot inventory runs from the staged candidate package, so it uses
-the target version's plugin inspector. Snapshot inventory and candidate Doctor
+During a real update, plugin preflight also downloads selected exact-version npm
+archives before the serving Gateway stops. Downloads use script-free `npm pack`
+in a private disposable workspace and populate npm’s existing integrity-addressed
+transport cache. Post-core installation still resolves the current source and
+release cohort and performs the same compatibility, trust, integrity, and
+capability-consent checks. It reuses cached archive bytes when the selection and
+npm cache are unchanged; a changed selection, unavailable cache, or failed
+prefetch falls back to the normal install path. No plugin is installed, migrated,
+or executed during prefetch. Dry runs remain metadata-only. When an operator
+install policy is enabled, archive downloads stay with the normal installer so
+that its policy commands still decide admission before package side effects.
+
+This is best-effort preparation, not a download reservation or activation grant.
+The disposable pack workspace is removed after each attempt; npm owns its
+ordinary cache lifecycle, including after cancellation or rollback. Plugin-only
+download, install, or load failures remain actionable warnings after an otherwise
+successful core update. Snapshot inventory runs from the staged candidate
+package, so it uses the target version's plugin inspector. Snapshot inventory and candidate Doctor
 share plugin source inspection. An unparseable entry produces a warning with the
 plugin ID, source path, and parser error while its files are copied unchanged and
 other entries are checked.

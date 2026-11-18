@@ -74,7 +74,7 @@ async function runParams(root: string, kind: "package" | "git", state = root) {
   const control = path.join(root, "leases");
   await fs.mkdir(control);
   vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-  const env = { OPENCLAW_STATE_DIR: state };
+  const env = { OPENCLAW_STATE_DIR: state, XDG_CACHE_HOME: path.join(root, "cache") };
   const params = { ...executionParams(kind), root };
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
@@ -324,19 +324,15 @@ describe("mutable update execution", () => {
         mocks.pluginPreflight.mockImplementation(actual.preflightConfiguredNpmPluginTargets);
         expect((await execute())?.result.status).toBe("ok");
         expect(mocks.serviceStopped).toBe(false);
-        expect(mocks.npmMetadata).toHaveBeenCalledTimes(incompatible ? 1 : 0);
+        expect(mocks.npmMetadata).toHaveBeenCalledOnce();
         const warnings = await mocks.pluginPreflight.mock.results[0]?.value;
-        if (incompatible) {
-          expect(warnings).toMatchObject([
-            {
-              pluginId: "demo",
-              reason: expect.stringContaining("registry could not be reached: ECONNRESET"),
-            },
-          ]);
-          expect(mocks.runtimeError).toHaveBeenCalledWith(warnings[0].message);
-        } else {
-          expect(warnings).toEqual([]);
-        }
+        expect(warnings).toMatchObject([
+          {
+            pluginId: "demo",
+            reason: expect.stringContaining("registry could not be reached: ECONNRESET"),
+          },
+        ]);
+        expect(mocks.runtimeError).toHaveBeenCalledWith(warnings[0].message);
       }),
   );
 

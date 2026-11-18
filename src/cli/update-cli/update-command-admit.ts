@@ -425,6 +425,7 @@ async function inspectUpdateAdmission(
           targetVersion: candidateVersion,
           channel: context.target.channel,
           timeoutMs,
+          prefetch: true,
           installRecords:
             pluginInstallRecords ??
             loadInstalledPluginIndexInstallRecordsSync({

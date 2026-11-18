@@ -6,12 +6,15 @@ const mocks = vi.hoisted(() => ({
   metadata: vi.fn(),
   installs: vi.fn(),
   manifest: vi.fn(),
+  pack: vi.fn(),
 }));
 vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.targets.js", () => ({
   collectConfiguredNpmPluginTargets: mocks.targets,
 }));
-vi.mock("../../infra/install-source-utils.js", () => ({
+vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/install-source-utils.js")>()),
   resolveNpmSpecMetadata: mocks.metadata,
+  packNpmSpecToArchive: mocks.pack,
 }));
 vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: mocks.installs,
@@ -73,5 +76,32 @@ describe("core update plugin availability", () => {
 
     await expect(preflightConfiguredNpmPluginTargets(params)).rejects.toBe(failure);
     expect(mocks.metadata).toHaveBeenCalledOnce();
+  });
+
+  it("keeps failed archive preparation advisory and prepares the remaining target", async () => {
+    mocks.metadata.mockImplementation(async ({ spec }: { spec: string }) => ({
+      ok: true,
+      metadata: {
+        name: spec,
+        version: "2.0.0",
+        resolvedSpec: `${spec}@2.0.0`,
+        integrity: "fixture-integrity",
+      },
+    }));
+    mocks.pack.mockRejectedValueOnce(new Error("disk full")).mockResolvedValueOnce({
+      ok: true,
+      metadata: { resolvedSpec: "@example/second@2.0.0", integrity: "fixture-integrity" },
+    });
+
+    const warnings = await preflightConfiguredNpmPluginTargets({ ...params, prefetch: true });
+
+    expect(warnings).toMatchObject([
+      {
+        pluginId: "first",
+        reason: expect.stringContaining("download preparation failed: disk full"),
+      },
+    ]);
+    expect(warnings).toHaveLength(1);
+    expect(mocks.pack).toHaveBeenCalledTimes(2);
   });
 });
