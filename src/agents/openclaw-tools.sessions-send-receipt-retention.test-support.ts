@@ -93,6 +93,7 @@ export function registerSessionsSendReceiptRetentionTests({
 }) {
   it.each([
     "inline",
+    "history-deadline",
     "held",
     "before-expiry",
     "detached",
@@ -107,9 +108,11 @@ export function registerSessionsSendReceiptRetentionTests({
     "row-replaced",
   ] as const)("retains only the live requester's required delivered witness (%s)", async (mode) => {
     const pausedResume = mode.startsWith("paused-resume");
-    const deliveredEarly = mode !== "inline" && mode !== "held";
+    const held = mode === "held" || mode === "history-deadline";
+    const deliveredEarly = mode !== "inline" && !held;
     const retiresWitness = ![
       "inline",
+      "history-deadline",
       "held",
       "before-expiry",
       "detached",
@@ -141,6 +144,8 @@ export function registerSessionsSendReceiptRetentionTests({
       await seedDeliveredChild("receipt-original-" + index, childKeys[index]!, requesterSessionKey);
     }
     const replies = runIds.map(() => createDeferredCore());
+    const historyStarted = createDeferredCore();
+    const releaseHistory = createDeferredCore();
     const completions: Promise<Record<string, unknown>>[] = [];
     let dispatched = 0;
     const adoptedRun =
@@ -153,6 +158,13 @@ export function registerSessionsSendReceiptRetentionTests({
       calls.push(request);
       if (request.method === "agent" && childKeys.includes(String(request.params?.sessionKey))) {
         return { runId: runIds[dispatched++], status: "accepted", targetDisposition: "queued" };
+      }
+      if (mode === "history-deadline" && request.method === "chat.history") {
+        historyStarted.resolve();
+        await releaseHistory.promise;
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text: "RECEIPT-1" }] }],
+        };
       }
       if (request.method === "agent.wait") {
         const index = executionRunIds.indexOf(String(request.params?.runId));
@@ -170,7 +182,10 @@ export function registerSessionsSendReceiptRetentionTests({
               endedAt: Date.now(),
               terminalReply: {
                 disposition: "visible",
-                text: "RECEIPT-" + (index + 1),
+                text:
+                  mode === "history-deadline" && index === 0
+                    ? "RECEIPT-1…"
+                    : "RECEIPT-" + (index + 1),
               },
             };
           })();
@@ -279,18 +294,37 @@ export function registerSessionsSendReceiptRetentionTests({
           config,
         );
       }
-      if (mode === "inline") {
+      if (mode === "inline" || mode === "history-deadline") {
         replies[0]!.resolve();
       }
-      const early = await withCaller(() =>
+      if (mode === "history-deadline") {
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      }
+      const sending = withCaller(() =>
         sendTool(requesterSessionKey, requesterTurnRunId).execute("early-result", {
           sessionKey: childKeys[0],
           message: "Return early result",
           ...(mode === "adopted" ? { mode: "steer", watch: true } : {}),
-          timeoutSeconds: mode === "inline" ? 1 : 0,
+          timeoutSeconds: mode === "inline" || mode === "history-deadline" ? 1 : 0,
         }),
       );
-      expect(early.details).not.toHaveProperty("error");
+      if (mode === "history-deadline") {
+        await historyStarted.promise;
+        // The registry remains the delivery owner while reply materialization is parked.
+        expect(getSubagentRunByRunId(runIds[0]!)).toMatchObject({
+          expectsCompletionMessage: true,
+          completion: { required: true },
+        });
+        await vi.advanceTimersByTimeAsync(31_001);
+      }
+      const early = await sending;
+      if (mode === "history-deadline") {
+        vi.useRealTimers();
+        expect(early.details).toMatchObject({ status: "timeout" });
+        releaseHistory.resolve();
+      } else {
+        expect(early.details).not.toHaveProperty("error");
+      }
       if (adoptedRun) {
         expect(adoptedRun.queueMessage).toHaveBeenCalledOnce();
         clearActiveEmbeddedRun(childKeys[0]!, adoptedRun.handle, childKeys[0]!);
@@ -298,7 +332,9 @@ export function registerSessionsSendReceiptRetentionTests({
       expect(early.details).toMatchObject(
         mode === "inline"
           ? { status: "ok", reply: "RECEIPT-1" }
-          : { status: "accepted", delivery: { status: "pending" } },
+          : mode === "history-deadline"
+            ? { status: "timeout" }
+            : { status: "accepted", delivery: { status: "pending" } },
       );
       if (pausedResume) {
         expect(
@@ -367,7 +403,7 @@ export function registerSessionsSendReceiptRetentionTests({
           terminal.stop();
         }
       }
-      if (mode !== "held") {
+      if (!held) {
         await settleSessionWork();
       }
       expect(getSubagentRunByRunId(executionRunIds[0]!)).toMatchObject({
@@ -375,7 +411,7 @@ export function registerSessionsSendReceiptRetentionTests({
         requesterTurnRunId,
         execution: { status: "terminal" },
         delivery: {
-          status: mode === "held" ? "pending" : mode === "inline" ? "not_required" : "delivered",
+          status: held ? "pending" : mode === "inline" ? "not_required" : "delivered",
         },
       });
       const earlyReceipt = mergeAcceptedSessionSpawnsForRun(admission.operationalRunInstance)[0]!;
@@ -459,8 +495,8 @@ export function registerSessionsSendReceiptRetentionTests({
         runIds.map((runId, index) => ({ runId, childSessionKey: childKeys[index % 2] })),
       );
       expect(accepted.slice(1).every((receipt) => receipt.expectsCompletionMessage)).toBe(true);
-      if (mode === "inline" || mode === "held") {
-        expect(accepted[0]?.expectsCompletionMessage).toBe(mode === "held");
+      if (mode === "inline" || held) {
+        expect(accepted[0]?.expectsCompletionMessage).toBe(held);
       }
       for (let index = 1; index < runIds.length; index++) {
         expect(getSubagentRunByRunId(runIds[index]!)).toMatchObject({
@@ -506,11 +542,12 @@ export function registerSessionsSendReceiptRetentionTests({
         () => replies.forEach((pendingReply) => pendingReply.resolve()),
       );
       await settleSessionWork();
+      expect(dispatched).toBe(runIds.length);
       const delivered = requesterCalls(requesterSessionKey);
       expect(delivered).toHaveLength(deliveredEarly ? 2 : 1);
       const batch = delivered.at(-1)?.params;
       expect(batch).toMatchObject({ inputProvenance: { sourceTool: "subagent_settle" } });
-      if (mode === "held") {
+      if (held) {
         expect(batch?.message).toContain("RECEIPT-1");
       } else {
         expect(batch?.message).not.toContain("RECEIPT-1");
@@ -532,6 +569,8 @@ export function registerSessionsSendReceiptRetentionTests({
         expect(getSubagentRunByRunId(runId)).toBeUndefined();
       }
     } finally {
+      vi.useRealTimers();
+      releaseHistory.resolve();
       if (adoptedRun) {
         clearActiveEmbeddedRun(childKeys[0]!, adoptedRun.handle, childKeys[0]!);
       }

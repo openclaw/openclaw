@@ -88,9 +88,7 @@ export async function prepareSessionsSendCommunication(params: {
   acceptedReply?: SessionSendReplyAdmission;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
-  const message = params.message;
-  const dispatchMessage = params.dispatchMessage ?? message;
-  const inputProvenance = params.inputProvenance;
+  const dispatchMessage = params.dispatchMessage ?? params.message;
   const targetAgentId = params.target.agentId;
   const targetSessionKey = params.target.sessionKey;
   const targetsThread = Boolean(resolveSessionThreadInfo(targetSessionKey).threadId);
@@ -312,8 +310,10 @@ export async function prepareSessionsSendCommunication(params: {
     if (!closed) {
       closed = true;
       unsubscribe();
+      params.signal?.removeEventListener("abort", close);
     }
   };
+  params.signal?.addEventListener("abort", close, { once: true });
   try {
     assertSource();
     let source = await readSessionCommunicationLineage(params.source, read, assertSource);
@@ -431,7 +431,7 @@ export async function prepareSessionsSendCommunication(params: {
         approval,
         source: params.source,
         target: target[0]!,
-        message,
+        message: params.message,
         assertCurrent: () => {
           assertSource();
           assertTask();
@@ -554,7 +554,7 @@ export async function prepareSessionsSendCommunication(params: {
         request.params.sessionKey !== targetSessionKey ||
         request.params.agentId !== targetAgentId ||
         request.params.message !== dispatchMessage ||
-        !isDeepStrictEqual(request.params.inputProvenance, inputProvenance)
+        !isDeepStrictEqual(request.params.inputProvenance, params.inputProvenance)
       ) {
         throw new Error("Communication approval cannot be redirected to another session.");
       }
@@ -645,7 +645,7 @@ export async function prepareSessionsSendCommunication(params: {
         !resume &&
         sender.entry &&
         hasRunId &&
-        inputProvenance?.sourceTool === "sessions_send"
+        params.inputProvenance?.sourceTool === "sessions_send"
       ) {
         return withSessionSendDelivery(
           {

@@ -20,6 +20,7 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
   requesterSessionKey: string;
   requesterAgentId: string;
   requesterTurnRunId: string;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const assertCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
@@ -55,7 +56,13 @@ export async function acknowledgeSubagentResultForRequesterTurn(params: {
         postimages: new Map([[entry.runId, next]]),
       };
     },
-    { runs: subagentRuns, assertCurrent },
+    {
+      runs: subagentRuns,
+      assertCurrent: () => {
+        assertCurrent?.();
+        params.assertCurrent?.();
+      },
+    },
   );
   if (instance) {
     retireAcceptedSessionSpawnCompletionForRun(instance, accepted.receipt);
