@@ -157,7 +157,9 @@ export function ChatThread(input: ChatThreadInput) {
                   {!heldWarmBoot && (
                     <div class="chat-thread-content">
                       <div class="chat-thread-inner">
-                        <ChatConversationLoading route />
+                        {/* Construction usually ends within a frame or two; like fast
+                            history, it must not flash a loader on session switches. */}
+                        <ChatConversationLoading route={false} />
                       </div>
                     </div>
                   )}
@@ -313,7 +315,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     if (!renderReady()) {
       return (
         <div class="chat-thread-inner">
-          <ChatConversationLoading route />
+          <ChatConversationLoading route={false} />
         </div>
       );
     }

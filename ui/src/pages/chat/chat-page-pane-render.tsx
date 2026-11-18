@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import "../../components/resizable-divider.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
@@ -124,7 +124,11 @@ export function createChatPageSnapshot(layout: ChatSplitLayout, options: SplitRe
 }
 export type ChatPageSnapshot = ReturnType<typeof createChatPageSnapshot>;
 
-function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey: string }) {
+function ChatPageSession(props: {
+  options: ChatPagePaneRenderOptions;
+  sessionKey: string;
+  leaving: boolean;
+}) {
   const visible = () =>
     props.sessionKey === props.options.pane.sessionKey ||
     areUiSessionKeysEquivalent(props.sessionKey, props.options.pane.sessionKey);
@@ -156,6 +160,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
     "chat-pane-cache__pane",
     {
       "chat-pane-cache__pane--visible": visible(),
+      "chat-pane-cache__pane--leaving": props.leaving && !visible(),
       "chat-pane-cache__pane--active": active(),
       "chat-split-view__pane": props.options.splitMode,
     },
@@ -231,6 +236,22 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
 }
 
 function ChatPagePaneCell(props: { options: ChatPagePaneRenderOptions }) {
+  // The conversation shown before the latest switch; split-view.css keeps it on
+  // screen while a cold destination still shows only its loading state.
+  const selected = createMemo(() => props.options.pane.sessionKey, {
+    equals: areUiSessionKeysEquivalent,
+  });
+  const [leavingKey, setLeavingKey] = createSignal<string>();
+  createEffect(selected, (_current, previous) => {
+    if (!previous) {
+      return;
+    }
+    setLeavingKey(previous);
+    // Match the history loader's reveal. Later refreshes must never bring back
+    // a conversation the reader has already left.
+    const timer = window.setTimeout(() => setLeavingKey(undefined), 500);
+    return () => window.clearTimeout(timer);
+  });
   return (
     <div
       class={[
@@ -270,7 +291,13 @@ function ChatPagePaneCell(props: { options: ChatPagePaneRenderOptions }) {
         <For each={props.options.sessionSlots} keyed={false}>
           {(session) => (
             <For each={session() !== undefined && !props.options.unbound ? [session()!] : []}>
-              {(sessionKey) => <ChatPageSession options={props.options} sessionKey={sessionKey} />}
+              {(sessionKey) => (
+                <ChatPageSession
+                  options={props.options}
+                  sessionKey={sessionKey}
+                  leaving={areUiSessionKeysEquivalent(leavingKey(), sessionKey)}
+                />
+              )}
             </For>
           )}
         </For>

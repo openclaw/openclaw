@@ -572,6 +572,10 @@ openclaw-pending-session-create {
   contain: size layout;
 }
 
+.chat-thread-inner--virtual[data-initial-position-pending] {
+  visibility: hidden;
+}
+
 .chat-virtual-block {
   /* Keep the row window in local coordinates, even near a long transcript's
      tail. The outer extent owns scroll height; parked rows have no layout. */

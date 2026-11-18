@@ -114,7 +114,8 @@ it("defers hidden transcripts, retains revealed content, and cancels a closed pa
   const composer = pane.getByRole<HTMLTextAreaElement>("textbox");
   const viewport = pane.container.querySelector(".chat-thread-viewport");
   expect(viewport).not.toBeNull();
-  expect(pane.container.querySelector(".chat-conversation-loading")).not.toBeNull();
+  // The construction placeholder stays invisible unless preparation is slow.
+  expect(pane.container.querySelector(".chat-conversation-loading--delayed")).not.toBeNull();
   expect(pane.container.querySelector(".chat-thread--annotations")).not.toBeNull();
   await paint();
   expect(pane.container.querySelector(".chat-conversation-loading")).not.toBeNull();
