@@ -2631,7 +2631,7 @@ jobs:
       - name: Install Playwright WebKit
         id: ui_webkit
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && matrix.shard == 1 && needs.preflight.outputs.run_ui_webkit == 'true' }}
-        run: pnpm --dir ui exec playwright install --with-deps webkit
+        uses: ./.ci-harness/.github/actions/setup-playwright-webkit
 
       - name: Test Control UI WebKit overlays and focus
         if: ${{ !cancelled() && steps.ui_webkit.outcome == 'success' && (steps.ui_bun.outcome == 'success' || steps.ui_bun.outcome == 'skipped') && matrix.shard == 1 && needs.preflight.outputs.run_ui_webkit == 'true' }}
@@ -2755,7 +2755,7 @@ jobs:
 
       - name: Install selected Control UI E2E WebKit
         if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'webkit')
-        run: pnpm --dir ui exec playwright install --with-deps webkit
+        uses: ./.ci-harness/.github/actions/setup-playwright-webkit
 
       - name: Prepare selected Control UI E2E Gateway runtime
         if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'runtime')
