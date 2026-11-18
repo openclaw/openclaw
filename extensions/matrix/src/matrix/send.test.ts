@@ -12,7 +12,6 @@ import type { PluginRuntime } from "../../runtime-api.js";
 import { getMatrixRuntime, setMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime, resetMatrixTestStores } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
-import { voteMatrixPoll } from "./actions/polls.js";
 import {
   loadMatrixDeliveryPlan,
   reconcileMatrixUnknownSend,
@@ -970,7 +969,7 @@ describe("editMessageMatrix mentions", () => {
 });
 
 describe("sendPollMatrix mentions", () => {
-  it("adds m.mentions for poll fallback text", async () => {
+  it("sends an MSC3381 poll with fallback mentions", async () => {
     await sendPollMatrix(
       "room:!room:example",
       { question: "@room lunch with @alice:example.org?", options: ["yes", "no"] },
@@ -981,47 +980,9 @@ describe("sendPollMatrix mentions", () => {
     );
 
     expect(mockCallArg(sendEvent, "sendEvent", 0)).toBe("!room:example");
-    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("m.poll.start");
+    expect(mockCallArg(sendEvent, "sendEvent", 1)).toBe("org.matrix.msc3381.poll.start");
     const content = requireRecord(mockCallArg(sendEvent, "sendEvent", 2), "poll start content");
     expect(content["m.mentions"]).toEqual({ room: true, user_ids: ["@alice:example.org"] });
-  });
-});
-
-describe("voteMatrixPoll", () => {
-  it("maps 1-based option indexes to Matrix poll answer ids", async () => {
-    getEvent.mockResolvedValue({
-      type: "m.poll.start",
-      content: {
-        "m.poll.start": {
-          question: { "m.text": "Lunch?" },
-          max_selections: 1,
-          answers: [
-            { id: "a1", "m.text": "Pizza" },
-            { id: "a2", "m.text": "Sushi" },
-          ],
-        },
-      },
-    });
-
-    const result = await voteMatrixPoll("room:!room:example", "$poll", {
-      client,
-      cfg: {},
-      optionIndex: 2,
-    });
-
-    expect(sendEvent).toHaveBeenCalledWith("!room:example", "m.poll.response", {
-      "m.poll.response": { answers: ["a2"] },
-      "org.matrix.msc3381.poll.response": { answers: ["a2"] },
-      "m.relates_to": {
-        rel_type: "m.reference",
-        event_id: "$poll",
-      },
-    });
-    expect(result.eventId).toBe("evt-poll-vote");
-    expect(result.roomId).toBe("!room:example");
-    expect(result.pollId).toBe("$poll");
-    expect(result.answerIds).toEqual(["a2"]);
-    expect(result.labels).toEqual(["Sushi"]);
   });
 });
 

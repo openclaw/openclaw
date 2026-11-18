@@ -70,59 +70,8 @@
   --skeleton-base: var(--skeleton-base-raised);
 }
 
-@property --chat-dictation-edge-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-/* Dictation remains the same writing surface. A masked gradient paints inside
-   its actual radius and corner-shape, so capture never introduces a competing
-   rounded-rectangle geometry. */
-.agent-chat__input--dictating,
-.agent-chat__input--dictating:focus-within {
-  isolation: isolate;
-}
-
-.agent-chat__input--dictating::after {
-  content: "";
-  position: absolute;
-  z-index: 5;
-  inset: -1px;
-  padding: 1px;
-  border-radius: inherit;
-  corner-shape: inherit;
-  /* Comet, not a ring: a long fading tail behind a bright head, dark again
-     right in front of it, so the light reads as travelling, not as a ring. */
-  background: conic-gradient(
-    from var(--chat-dictation-edge-angle),
-    transparent 0deg 200deg,
-    color-mix(in srgb, var(--accent) 10%, transparent) 252deg,
-    color-mix(in srgb, var(--accent) 45%, transparent) 286deg,
-    color-mix(in srgb, var(--accent) 92%, white) 294deg,
-    transparent 301deg 360deg
-  );
-  -webkit-mask:
-    linear-gradient(white 0 0) content-box,
-    linear-gradient(white 0 0);
-  mask-composite: exclude;
-  animation: chat-dictation-edge-orbit 6.6s linear infinite;
-  pointer-events: none;
-}
-
-@keyframes chat-dictation-edge-orbit {
-  to {
-    --chat-dictation-edge-angle: 360deg;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .chat-controls__inline-select[open] > .chat-picker-overlay {
-    animation: none;
-  }
-
-  .agent-chat__input--dictating::after {
-    --chat-dictation-edge-angle: 238deg;
     animation: none;
   }
 }
@@ -2752,6 +2701,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__model-option {
+  --reorder-edge: 0px;
+  position: relative;
   order: var(--chat-model-rank, 0);
   content-visibility: auto;
   contain-intrinsic-block-size: auto 0px;
