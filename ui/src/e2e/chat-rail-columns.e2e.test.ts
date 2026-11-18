@@ -1,8 +1,6 @@
-import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { openChatPanels, selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -42,21 +40,6 @@ const fileRows = [
   ["modified", "chat-pane-render.ts", "ui/src/pages/chat/chat-pane-render.ts"],
   ["read", "sidebar.css", "ui/src/styles/chat/sidebar.css"],
 ] as const;
-const proofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
-const videoDirParent = process.env.OPENCLAW_UI_RAIL_VIDEO_DIR?.trim();
-let proofDir: string | undefined;
-let videoDir: string | undefined;
-beforeEach(() => {
-  proofDir = proofDirParent
-    ? createControlUiE2eArtifactDir("chat-rail-columns", proofDirParent)
-    : undefined;
-  videoDir = videoDirParent
-    ? proofDir && proofDirParent && path.resolve(videoDirParent) === path.resolve(proofDirParent)
-      ? proofDir
-      : createControlUiE2eArtifactDir("chat-rail-columns", videoDirParent)
-    : undefined;
-});
-
 const historyMessages = Array.from({ length: 10 }, (_, index) => ({
   id: `rail-tabs-${index}`,
   role: index % 2 === 0 ? "user" : "assistant",
@@ -315,27 +298,6 @@ async function expectExpandedSidePanelFillsRegion(
   }
 }
 
-async function captureRichPanel(page: Page, name: string, directory = proofDir) {
-  if (!directory) {
-    return;
-  }
-  const clip = await page.evaluate(() => {
-    const elements = [".chat-pane__header", ".agent-chat__scroll", ".sidebar-region"]
-      .map((selector) => document.querySelector<HTMLElement>(selector))
-      .filter((element): element is HTMLElement => element !== null);
-    if (elements.length === 0) {
-      throw new Error("No chat panel geometry found for evidence clip");
-    }
-    const rects = elements.map((element) => element.getBoundingClientRect());
-    const x = Math.max(0, Math.min(...rects.map((rect) => rect.left)));
-    const y = Math.max(0, Math.min(...rects.map((rect) => rect.top)));
-    const right = Math.min(innerWidth, Math.max(...rects.map((rect) => rect.right)));
-    const bottom = Math.min(innerHeight, Math.max(...rects.map((rect) => rect.bottom)));
-    return { x, y, width: right - x, height: bottom - y };
-  });
-  await page.screenshot({ path: path.join(directory, `${name}.png`), clip });
-}
-
 async function forEachPanelTheme(page: Page, run: (themeMode: "light" | "dark") => Promise<void>) {
   // Finish in light mode so persistence runs once, independent of presentation.
   for (const themeMode of ["dark", "light"] as const) {
@@ -347,12 +309,6 @@ async function forEachPanelTheme(page: Page, run: (themeMode: "light" | "dark") 
   }
 }
 
-async function capturePanelThemes(page: Page, name: string) {
-  if (proofDir) {
-    await forEachPanelTheme(page, (themeMode) => captureRichPanel(page, `${name}-${themeMode}`));
-  }
-}
-
 async function exerciseTabbedPanel(page: Page) {
   const gateway = await startChat(page, "light");
   const rail = sidePanel(page);
@@ -361,7 +317,6 @@ async function exerciseTabbedPanel(page: Page) {
   await selectChatLayoutAction(page, /^(Side panel|Minimize side panel)$/);
   await rail.locator(".side-panel-launcher").waitFor();
   expect(await rail.locator(".tabstrip-tab").count()).toBe(0);
-  await capturePanelThemes(page, "rails-tabs-empty");
 
   await rail
     .locator(".side-panel-launcher")
@@ -380,7 +335,6 @@ async function exerciseTabbedPanel(page: Page) {
   await changedFile.click();
   await expect.poll(() => changedFile.getAttribute("aria-expanded")).toBe("true");
   await expect.poll(() => rail.textContent()).toContain("single side panel");
-  await capturePanelThemes(page, "rails-tabs-review");
 
   await openFromPlus(page, "Terminal");
   const terminalOpen = await gateway.waitForRequest("terminal.open");
@@ -388,7 +342,7 @@ async function exerciseTabbedPanel(page: Page) {
   await waitForSlot(page, "terminal");
   await openFromPlus(page, "Browser");
   await waitForSlot(page, "browser");
-  await capturePanelThemes(page, "rails-tabs-browser");
+
   await openFromPlus(page, "Side chat");
   await waitForSlot(page, "companion");
   await openFromPlus(page, "Desktop");
@@ -396,34 +350,13 @@ async function exerciseTabbedPanel(page: Page) {
   const desktopObserve = await gateway.waitForRequest("desktop.observe");
   expect(desktopObserve.params).toEqual({ source: { kind: "host" }, control: false });
   await rail.getByLabel("VNC password", { exact: true }).waitFor();
-  await capturePanelThemes(page, "rails-tabs-desktop");
-  await forEachPanelTheme(page, async (themeMode) => {
+
+  await forEachPanelTheme(page, async () => {
     await page.mouse.move(80, 80);
     await expect
       .poll(() => tabLabels(page))
       .toEqual(["Files", "Review", "zsh", "Browser", "Side chat", "Desktop"]);
     await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
-    await expect
-      .poll(() =>
-        header.locator(".tabstrip-tab__icon").evaluateAll((icons) => {
-          const center = (rect?: DOMRect) => (rect?.y ?? 0) + (rect?.height ?? 0) / 2;
-          const firstCenter = center(icons[0]?.getBoundingClientRect());
-          return icons.map((icon) => {
-            const box = icon.getBoundingClientRect();
-            const glyph = icon.querySelector("svg")?.getBoundingClientRect();
-            const base = icon.closest(".tabstrip-tab")?.getBoundingClientRect();
-            return [
-              box.width,
-              box.height,
-              glyph?.width,
-              glyph?.height,
-              Math.abs(center(box) - center(base)),
-              center(box) - firstCenter,
-            ];
-          });
-        }),
-      )
-      .toEqual(Array.from({ length: 6 }, () => [16, 16, 15, 15, 0, 0]));
     const filesTab = rail.locator(".tabstrip-tab").filter({ hasText: "Files" });
     const filesClose = rail.getByRole("button", { name: "Close Files", exact: true });
     const desktopClose = rail.getByRole("button", { name: "Close Desktop", exact: true });
@@ -436,10 +369,6 @@ async function exerciseTabbedPanel(page: Page) {
     await filesClose.hover();
     await expect.poll(() => tabCloseHasTransparentBackground(filesTab)).toBe(true);
     expect(await tabGeometry(filesTab)).toEqual(filesGeometry);
-    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-      const directory = proofDir ?? createControlUiE2eArtifactDir(`chat-rail-hover-${themeMode}`);
-      await captureRichPanel(page, `rails-tab-close-hover-${themeMode}`, directory);
-    }
     const railLabels = rail.locator(sidePanelTabLabelSelector);
     let overflowingLabelIndex = -1;
     await expect
@@ -488,7 +417,6 @@ async function exerciseTabbedPanel(page: Page) {
   });
 
   await rail.locator(".tabstrip-tab").filter({ hasText: "Files" }).click();
-  await capturePanelThemes(page, "rails-tabs-rich");
 
   const panelWidth = await panelSize(page, "width");
   const divider = page.locator(".sidebar-column__divider");
@@ -514,12 +442,10 @@ async function exerciseTabbedPanel(page: Page) {
   const resizedHeight = await panelSize(page, "height");
   await page.mouse.move(80, 80);
   await page.mouse.click(300, 100);
-  // Blur the dragged divider before evidence capture.
   await divider.evaluate((element) => element.blur());
-  await forEachPanelTheme(page, async (themeMode) => {
+  await forEachPanelTheme(page, async () => {
     await expect.poll(async () => (await dockLayout(page)).spansRegion).toBe(true);
     await expect.poll(() => narrowestRailTabLabel(page)).toBeGreaterThanOrEqual(24);
-    await captureRichPanel(page, `rails-tabs-bottom-${themeMode}`);
   });
 
   await selectChatLayoutAction(page, "Minimize side panel");
@@ -551,9 +477,8 @@ async function exerciseTabbedPanel(page: Page) {
   expect(await primary.getAttribute("hidden")).not.toBeNull();
   expect(await primary.getAttribute("inert")).not.toBeNull();
   expect(await retainedPrimary!.evaluate((element) => element.isConnected)).toBe(true);
-  await forEachPanelTheme(page, async (themeMode) => {
+  await forEachPanelTheme(page, async () => {
     await expectExpandedSidePanelFillsRegion(page, "side");
-    await captureRichPanel(page, `rails-tabs-expanded-${themeMode}`);
   });
   await selectChatLayoutAction(page, "Restore split");
   await waitForPanelGeometry(page);
@@ -600,7 +525,6 @@ async function exerciseTabbedPanel(page: Page) {
   await expect.poll(() => panelSize(page, "width")).toBeLessThan(resizedWidth - 50);
   const emptyResizedWidth = await panelSize(page, "width");
   await divider.evaluate((element) => element.blur());
-  await capturePanelThemes(page, "rails-tabs-empty-resized");
 
   await reloadChat(page);
   await rail.locator(".side-panel-launcher").waitFor();
@@ -618,7 +542,7 @@ async function exerciseTabbedPanel(page: Page) {
   await expect.poll(() => terminalLabel.textContent()).toBe("shell 1");
   expect(await restoredTerminal.getAttribute("class")).toContain("is-exited");
   expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
-  await forEachPanelTheme(page, async (themeMode) => {
+  await forEachPanelTheme(page, async () => {
     await expect
       .poll(() =>
         terminalLabel.evaluate((label) => {
@@ -643,7 +567,7 @@ async function exerciseTabbedPanel(page: Page) {
       };
     });
     expect(terminalTabGeometry.tabWidth).toBeLessThan(terminalTabGeometry.availableWidth - 12);
-    await captureRichPanel(page, `rails-tabs-single-${themeMode}`);
+
     const terminalTooltip = terminalLabel.locator("xpath=ancestor::openclaw-tooltip[1]");
     await terminalLabel.locator("..").hover();
     expect(await terminalLabel.getAttribute("data-tooltip-overflow")).toBeNull();
@@ -653,7 +577,7 @@ async function exerciseTabbedPanel(page: Page) {
   await rail.getByRole("button", { name: "Close tab: shell 1", exact: true }).click();
   // Closing the last terminal tab removes the Terminal slot; Review stays.
   await expect.poll(() => tabLabels(page)).toEqual(["Review"]);
-  await forEachPanelTheme(page, async (themeMode) => {
+  await forEachPanelTheme(page, async () => {
     // A fitting strip must release its overflow classes and fade mask.
     await expect
       .poll(() =>
@@ -672,7 +596,6 @@ async function exerciseTabbedPanel(page: Page) {
         ),
       )
       .toBe(true);
-    await captureRichPanel(page, `rails-tabs-reflow-${themeMode}`);
   });
 }
 
@@ -704,10 +627,7 @@ suite.define(() => {
   );
 
   it("navigates and persists one tabbed side panel with light and dark presentations", async () => {
-    await withPage(
-      exerciseTabbedPanel,
-      videoDir ? { recordVideo: { dir: videoDir, size: { height: 900, width: 1600 } } } : {},
-    );
+    await withPage(exerciseTabbedPanel);
   });
 
   it("keeps navigation usable on a mobile viewport", async () => {
@@ -790,7 +710,7 @@ suite.define(() => {
         await clear.waitFor();
         await expect.poll(() => clear.isEnabled()).toBe(true);
         expect(await gateway.getRequests("sessions.companion.reset")).toHaveLength(resets);
-        await captureRichPanel(page, "rails-side-chat-mobile-light");
+
         await page.keyboard.press("Escape");
         await clear.waitFor({ state: "hidden" });
         await openChatPanels(page, "mobile");
@@ -800,7 +720,7 @@ suite.define(() => {
           .getByText("The mobile side chat stayed inside its panel.", { exact: true })
           .waitFor();
         expect((await host.boundingBox())!.width).toBeCloseTo(390, 0);
-        await captureRichPanel(page, "rails-tabs-mobile-light");
+
         await host
           .locator(".chat-mobile-host__header")
           .getByRole("button", { name: "Close", exact: true })

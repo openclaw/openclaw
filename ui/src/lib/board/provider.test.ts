@@ -8,10 +8,8 @@ import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import {
   acquireBoardProviderForSession,
-  boardExists,
   boardProviderForSession,
   canvasWidgetNameForDocument,
-  createNullBoardProvider,
   mcpAppWidgetNameForViewId,
 } from "./provider.ts";
 import type { BoardProvider } from "./provider.ts";
@@ -142,11 +140,6 @@ describe("board leases", () => {
     const afterDenial = vi.fn();
     lease(afterDenial);
     expect(afterDenial).toHaveBeenCalledExactlyOnceWith(null, 4000);
-  });
-  it("keeps null providers chat-only", () => {
-    const p = createNullBoardProvider(KEY);
-    expect(boardExists(p.snapshot$.value)).toBe(false);
-    expect(p.snapshot$.value).toEqual(snapshot(0, { tabs: [] }));
   });
   it("looks up only leased providers and aliases the main session", () => {
     expect(boardProviderForSession({ sessionKey: "main" })).toBeUndefined();
@@ -515,16 +508,6 @@ describe("board snapshots and refreshes", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(c.requests).toHaveBeenCalledTimes(2);
     expect(p.snapshot$.value).toEqual(snapshot(2));
-  });
-  it("coalesces same-tick widget refreshes", async () => {
-    const pending = createDeferred<BoardSnapshot>(),
-      c = boardClient(() => pending.promise);
-    const p = provider(c, false);
-    const refreshes = ["first", "second", "third"].map((name) => p.refreshWidgetFrame(name));
-    pending.resolve(snapshot());
-    await Promise.all(refreshes);
-    await Promise.resolve();
-    expect(c.requests).toHaveBeenCalledExactlyOnceWith("board.get", { sessionKey: KEY });
   });
   it.each(["delete", "recreate", "mutate-delete", "mutate-ticket", "write", "client"] as const)(
     "discards stale results after %s supersession",

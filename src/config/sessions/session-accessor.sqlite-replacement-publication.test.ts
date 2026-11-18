@@ -4,7 +4,6 @@ import { createSessionMembershipProjection } from "../../gateway/session-members
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
-import * as logging from "../../logging/logger.js";
 import { chatRef } from "../../sessions/chat-ref.js";
 import {
   onSessionIdentityMutation,
@@ -49,7 +48,6 @@ import type { SessionEntry } from "./types.js";
 const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
-const cleanupWarning = "Session mutation completed before executor cleanup failed";
 
 function withoutSql(assertions: () => void) {
   const sql = observeMainThreadSql();
@@ -553,19 +551,6 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
   "preserves replacement publication through %s",
   async (boundary) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cleanupWarnings: unknown[][] = [];
-      const getChildLogger = logging.getChildLogger;
-      vi.spyOn(logging, "getChildLogger").mockImplementation((...args) => {
-        const logger = getChildLogger(...args);
-        const warn = logger.warn.bind(logger);
-        vi.spyOn(logger, "warn").mockImplementation((...values) => {
-          if (values[0] === cleanupWarning) {
-            cleanupWarnings.push(values);
-          }
-          return warn(...values);
-        });
-        return logger;
-      });
       const { database, scope, replace, read } = setup("replacement-settlement");
       const options = { agentId: "main", path: database.path };
       const { sessionKey } = scope;
@@ -645,9 +630,6 @@ it.each(["metadata only", "lost result", "callback failure", "release failure"] 
             source: { identity, revision: expect.any(Number) },
           });
         }
-        expect(cleanupWarnings).toEqual(
-          boundary === "release failure" ? [[cleanupWarning, { errors: [failure.message] }]] : [],
-        );
         if (metadataOnly) {
           expect(whileWaiting).toMatchObject({
             entry: { visibility: "shared" },

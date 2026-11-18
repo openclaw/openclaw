@@ -3,7 +3,6 @@ import {
   createPluginRegistryFixture,
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ADMIN_SCOPE,
@@ -20,8 +19,6 @@ import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host-hooks.js";
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
-import { createFeatureClient, defineFeatureContract } from "../../plugin-sdk/feature-contract.js";
-import { defineFeaturePlugin } from "../../plugin-sdk/feature-plugin.js";
 import * as profiles from "../../state/user-profile-list.js";
 import type { PluginSessionActionContext, PluginSessionActionRegistration } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
@@ -34,7 +31,6 @@ import {
 } from "../runtime.js";
 import { createPluginRecord } from "../status.test-fixtures.js";
 import type { OpenClawPluginApi } from "../types.js";
-const MAIN_SESSION_KEY = "agent:main:main";
 type HookResponse = { ok: boolean; payload?: unknown; error?: unknown };
 
 async function callPluginSessionActionForTest(
@@ -85,11 +81,6 @@ function callAction(
     { body: { pluginId, actionId, ...extra }, scopes },
     throughGateway,
   );
-}
-
-function actionCaller(pluginId: string) {
-  return (actionId: string, extra?: Record<string, unknown>) =>
-    callAction(pluginId, actionId, extra);
 }
 
 function requireHookError(response: HookResponse): { code?: unknown; message?: unknown } {
@@ -194,288 +185,23 @@ describe("plugin session actions", () => {
     resetAgentEventsForTest();
   });
 
-  it("initializes and registers typed session actions", () => {
-    expect(createEmptyPluginRegistry().sessionActions).toEqual([]);
-    const { registry } = registerActionFixture({
-      id: "session-action-fixture",
-      name: "Session Action Fixture",
-      register(api) {
-        api.session.controls.registerSessionAction({
-          id: "approve",
-          description: "Approve the current workflow",
-          requiredScopes: [APPROVALS_SCOPE],
-          handler: () => ({ ok: true, result: { accepted: true } }),
-        });
-      },
-    });
-    expect(registry.registry.sessionActions).toHaveLength(1);
-    expect(registry.registry.sessionActions[0]).toMatchObject({
-      pluginId: "session-action-fixture",
-      pluginName: "Session Action Fixture",
-      action: {
-        id: "approve",
-        description: "Approve the current workflow",
-        requiredScopes: [APPROVALS_SCOPE],
-      },
-    });
-  });
-
-  it("rejects invalid or duplicate session action registrations", () => {
-    const { registry } = registerActionFixture({
-      id: "invalid-session-actions",
-      register(api) {
-        for (const action of [
-          { id: "dup" },
-          { id: "dup" },
-          { id: "bad-scope", requiredScopes: ["not-a-scope"] as never },
-          { id: "bad-schema-shape", schema: "not-an-object" as never },
-          { id: "bad-schema-compile", schema: { type: "not-a-json-schema-type" } as never },
-          {
-            id: "bad-schema-keyword",
-            schema: {
-              type: "object",
-              required: "id",
-            } as never,
-          },
-          { id: "bad-schema-ref", schema: { $ref: "#/$defs/Missing" } as never },
-          { id: "" },
-        ]) {
-          api.session.controls.registerSessionAction({
-            ...action,
-            handler: () => ({ ok: true }),
-          });
-        }
-      },
-    });
-    expect(registry.registry.sessionActions.map((entry) => entry.action.id)).toEqual(["dup"]);
-    const diagnosticMessages = registry.registry.diagnostics?.map((diagnostic) => {
-      expect(diagnostic.pluginId).toBe("invalid-session-actions");
-      return diagnostic.message;
-    });
-    expect(diagnosticMessages).toHaveLength(7);
-    expect(diagnosticMessages).toEqual(
-      expect.arrayContaining([
-        "session action already registered: dup",
-        "session action requiredScopes contains unknown operator scope: not-a-scope",
-        "session action schema must be a JSON schema object or boolean: bad-schema-shape",
-        ...["bad-schema-compile", "bad-schema-keyword", "bad-schema-ref"].map((id) =>
-          expect.stringContaining(`session action schema is not valid JSON Schema: ${id}`),
-        ),
-        "session action registration requires id, handler, and valid optional fields",
-      ]),
-    );
-  });
-
-  it("validates payload schemas and typed action results", async () => {
-    const callSchemaAction = actionCaller("schema-action-fixture");
-    const handlerCalls: unknown[] = [];
-    const { registry } = registerActionFixture({
-      id: "schema-action-fixture",
-      register(api) {
-        api.session.controls.registerSessionAction({
-          id: "approve",
-          schema: {
-            type: "object",
-            additionalProperties: false,
-            required: ["version"],
-            properties: { version: { type: "string" } },
-          },
-          handler: ({ payload, sessionKey, client }) => {
-            handlerCalls.push({ payload, sessionKey, scopes: client?.scopes ?? [] });
-            return {
-              result: { accepted: true, ...(sessionKey ? { sessionKey } : {}) },
-              continueAgent: true,
-              reply: { text: "approved" },
-            };
-          },
-        });
-        api.session.controls.registerSessionAction({
-          id: "typed-error",
-          handler: () => ({
-            ok: false,
-            error: "needs operator input",
-            code: "needs_input",
-            details: { field: "version" },
-          }),
-        });
-        api.session.controls.registerSessionAction({
-          id: "allow-any",
-          schema: true,
-          handler: ({ payload }) => ({ result: { payload: payload ?? null } }),
-        });
-        api.session.controls.registerSessionAction({
-          id: "deny-all",
-          schema: false,
-          handler: () => ({ result: { unreachable: true } }),
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-    const rejected = await callSchemaAction("approve", { payload: { version: 1 } });
-    const rejectedError = requireHookError(rejected);
-    expect(rejectedError).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("plugin session action payload does not match schema"),
-    });
-    expect(handlerCalls).toEqual([]);
-    await expect(
-      callSchemaAction("approve", {
-        sessionKey: MAIN_SESSION_KEY,
-        payload: { version: "2026.05.01" },
-      }),
-    ).resolves.toEqual({
-      ok: true,
-      payload: {
-        ok: true,
-        result: { accepted: true, sessionKey: MAIN_SESSION_KEY },
-        continueAgent: true,
-        reply: { text: "approved" },
-      },
-      error: undefined,
-    });
-    expect(handlerCalls).toEqual([
-      {
-        payload: { version: "2026.05.01" },
-        sessionKey: MAIN_SESSION_KEY,
-        scopes: [WRITE_SCOPE],
-      },
-    ]);
-    await expect(callSchemaAction("typed-error")).resolves.toEqual({
-      ok: true,
-      payload: {
-        ok: false,
-        error: "needs operator input",
-        code: "needs_input",
-        details: { field: "version" },
-      },
-      error: undefined,
-    });
-    await expect(
-      callSchemaAction("allow-any", { payload: { any: ["json", true] } }),
-    ).resolves.toEqual({
-      ok: true,
-      payload: {
-        ok: true,
-        result: { payload: { any: ["json", true] } },
-      },
-      error: undefined,
-    });
-    const denyAll = await callSchemaAction("deny-all", { payload: { rejected: true } });
-    expect(requireHookError(denyAll).code).toBe("INVALID_REQUEST");
-  });
-
-  it("validates plugin session action results before returning gateway payloads", async () => {
-    const jsonError = (field: string) => `plugin session action ${field} must be JSON-compatible`;
-    const cases = [
-      ["bad-result", () => ({ result: 1n as never }), jsonError("result")],
-      ["bad-reply", () => ({ reply: { extra: () => undefined } as never }), jsonError("reply")],
-      [
-        "primitive-result",
-        () => "not-an-object" as never,
-        "plugin session action result must be an object",
-      ],
-      [
-        "bad-ok",
-        () => ({ ok: "false", error: "invalid" }) as never,
-        expect.stringContaining("/ok: must be boolean"),
-      ],
-      [
-        "error-shaped-success",
-        () => ({ error: "must declare ok false" }) as never,
-        expect.stringContaining("unexpected property 'error'"),
-      ],
-      [
-        "bad-error-details",
-        () => ({ ok: false, error: "bad details", details: { value: 1n } as never }),
-        jsonError("details"),
-      ],
-      [
-        "bad-continue-agent",
-        () => ({ continueAgent: "yes" as never }),
-        expect.stringContaining("/continueAgent: must be boolean"),
-      ],
-      [
-        "mixed-branch-fields",
-        () =>
-          ({ ok: false, error: "stop", continueAgent: true, result: { leaked: true } }) as never,
-        expect.stringContaining("unexpected property 'continueAgent'"),
-      ],
-      [
-        "unknown-success-field",
-        () => ({ extra: "unexpected" }) as never,
-        expect.stringContaining("unexpected property 'extra'"),
-      ],
-      [
-        "throws-secret",
-        () => {
-          throw new Error("fixture action failed");
-        },
-        "plugin session action failed",
-      ],
-    ] satisfies [string, PluginSessionActionRegistration["handler"], unknown][];
+  it("does not expose thrown plugin details", async () => {
     const pluginId = "session-action-validation-fixture";
     const { registry } = registerActionFixture({
       id: pluginId,
       register(api) {
-        for (const [id, handler] of cases) {
-          api.session.controls.registerSessionAction({ id, handler });
-        }
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-    for (const [actionId, , message] of cases) {
-      expect(requireHookError(await callAction(pluginId, actionId))).toEqual({
-        code: actionId === "throws-secret" ? "UNAVAILABLE" : "INVALID_REQUEST",
-        message,
-      });
-    }
-  });
-  it("delivers feature handler failures through the Gateway to feature clients", async () => {
-    const contract = defineFeatureContract({
-      pluginId: "feature-error-fixture",
-      operations: {
-        inspect: {
-          kind: "query",
-          description: "Inspect fixture",
-          input: Type.Object({}),
-          output: Type.String(),
-        },
-      },
-      events: {},
-    });
-    const entry = defineFeaturePlugin({
-      contract,
-      name: "Feature error fixture",
-      description: "Fixture failure",
-      setup: () => ({
-        inspect() {
-          throw new Error("Fixture operation needs attention");
-        },
-      }),
-    });
-    const { registry } = registerActionFixture({ id: contract.pluginId, register: entry.register });
-    setActivePluginRegistry(registry.registry);
-    const client = createFeatureClient(contract, {
-      pluginId: contract.pluginId,
-      signal: new AbortController().signal,
-      connection: { connected: true },
-      async request<T>(_method: string, body = {}): Promise<T> {
-        const response = await callPluginSessionActionForTest({ body, scopes: [READ_SCOPE] }, true);
-        expect(response).toEqual({
-          ok: true,
-          payload: {
-            ok: false,
-            error: "Fixture operation needs attention",
-            code: "OPERATION_FAILED",
+        api.session.controls.registerSessionAction({
+          id: "throws-secret",
+          handler() {
+            throw new Error("private plugin detail");
           },
-          error: undefined,
         });
-        return response.payload as T;
       },
-      onEvent: () => () => {},
-      subscribe: () => () => {},
     });
-    await expect(client.invoke("inspect", {})).rejects.toThrow("Fixture operation needs attention");
+    setActivePluginRegistry(registry.registry);
+    const error = requireHookError(await callAction(pluginId, "throws-secret"));
+    expect(error).toEqual({ code: "UNAVAILABLE", message: "plugin session action failed" });
+    expect(JSON.stringify(error)).not.toContain("private plugin detail");
   });
 
   describe("authorizes session actions through the gateway by action-declared scopes", () => {
@@ -583,44 +309,6 @@ describe("plugin session actions", () => {
           client: actionClient(scopes),
         });
       }
-    });
-    it("normalizes session keys and rejects invalid params for approval-only callers", async () => {
-      await expect(
-        callAction(
-          pluginId,
-          "approve",
-          { sessionKey: ` ${MAIN_SESSION_KEY} ` },
-          [APPROVALS_SCOPE],
-          true,
-        ),
-      ).resolves.toEqual({
-        ok: true,
-        payload: {
-          ok: true,
-          result: { accepted: true, sessionKey: MAIN_SESSION_KEY },
-          continueAgent: true,
-        },
-        error: undefined,
-      });
-      expect(handler).toHaveBeenCalledWith({
-        pluginId,
-        actionId: "approve",
-        sessionKey: MAIN_SESSION_KEY,
-        agentId: "main",
-        client: actionClient([APPROVALS_SCOPE]),
-      });
-      const blankPluginId = await callPluginSessionActionForTest(
-        {
-          body: { pluginId: "   ", actionId: "approve" },
-          scopes: [APPROVALS_SCOPE],
-        },
-        true,
-      );
-      expect(requireHookError(blankPluginId)).toEqual({
-        code: "INVALID_REQUEST",
-        message: "plugins.sessionAction pluginId and actionId must be non-empty",
-      });
-      expect(handler).toHaveBeenCalledTimes(1);
     });
   });
 

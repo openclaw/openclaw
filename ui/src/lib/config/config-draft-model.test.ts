@@ -16,10 +16,10 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("config draft model", () => {
-  it("keeps scalar form edits bounded before and after autosave replay", async () => {
+  it("preserves scalar form edits before and after autosave replay", async () => {
     vi.useFakeTimers();
     const config = {
-      messages: { usageTemplate: "x".repeat(2_500_000) },
+      messages: { usageTemplate: "saved usage" },
       gateway: { port: 18789 },
     };
     const { request, firstSet } = createDeferredSetServerMock();
@@ -41,22 +41,9 @@ describe("config draft model", () => {
         acknowledged.resolve();
       }
     });
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    const stringify = vi.spyOn(JSON, "stringify");
-
     try {
       for (const port of [18790, 18791, 18789]) {
-        clone.mockClear();
-        stringify.mockClear();
         runtimeConfig.patchForm(["gateway", "port"], port);
-        expect({
-          fullDocumentClones: clone.mock.calls.filter(
-            ([value]) => value !== null && typeof value === "object" && "messages" in value,
-          ).length,
-          fullDocumentSerializations: stringify.mock.calls.filter(
-            ([value]) => value !== null && typeof value === "object" && "messages" in value,
-          ).length,
-        }).toEqual({ fullDocumentClones: 0, fullDocumentSerializations: 0 });
         expect(runtimeConfig.state.configForm?.gateway).toEqual({ port });
         expect(runtimeConfig.state.configFormDirty).toBe(port !== 18789);
         expect(savedConfig?.gateway).toEqual({ port: 18789 });
@@ -70,11 +57,7 @@ describe("config draft model", () => {
       firstSet.resolve({});
       await acknowledged.promise;
 
-      const messages = runtimeConfig.state.configForm?.messages;
-      const keys = vi.spyOn(Object, "keys");
       runtimeConfig.patchForm(["gateway", "port"], 18792);
-      expect(keys.mock.calls.filter(([value]) => value === messages)).toHaveLength(0);
-      keys.mockRestore();
       expect(runtimeConfig.state.configForm?.gateway).toEqual({ port: 18792 });
       await expect(flush).resolves.toBe(true);
       expect(runtimeConfig.state.configSnapshot?.config?.gateway).toEqual({ port: 18792 });

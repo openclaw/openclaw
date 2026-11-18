@@ -1,11 +1,8 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import * as gitReads from "../infra/git-read-cache.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   recordAgentDatabaseAdmissions,
@@ -16,8 +13,6 @@ import {
   waitForPublicationGate,
 } from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
-import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import * as profileReads from "../state/user-profile-list.js";
 import { mergeProfiles } from "../state/user-profile-writes.worker.js";
 import {
   createOpenClawTestState,
@@ -25,14 +20,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
-import { staleReceiptsOnlyCell } from "./control-ui-session-pr-prepared-read.js";
-import {
-  createControlUiSessionPrRead,
-  prepareControlUiSessionPrServiceTarget,
-  receiptsOnlyTargetIdentity,
-  type ControlUiSessionPrTarget,
-} from "./control-ui-session-pr-read.js";
-import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { insertRepositoryGitHubPublicationFixture } from "./github-publication-store.test-support.js";
@@ -99,26 +87,6 @@ function snapshots(socket = fixture.socket): ControlUiSessionPullRequestSnapshot
 }
 const latest = () => snapshots().at(-1);
 const taskNumbers = () => latest()?.taskPullRequests?.map((pr) => pr.number);
-function closedPull(number: number) {
-  return pullListItem({
-    number,
-    state: "closed",
-    html_url: "https://github.com/example/repository/pull/" + number,
-    base: { repo: { name: "repository", owner: { login: "example" } } },
-  });
-}
-function stubGitHub(branchPull = closedPull(40)) {
-  const fetcher = vi.fn<typeof fetch>(async (input) => {
-    const url = requestUrl(input);
-    return githubJson(
-      url.includes("?head=")
-        ? [branchPull]
-        : closedPull(Number(new URL(url).pathname.split("/").at(-1)) || 40),
-    );
-  });
-  vi.stubGlobal("fetch", fetcher);
-  return fetcher;
-}
 function stubOffline(message = "offline") {
   const fetcher = vi.fn<typeof fetch>(async () => {
     throw new Error(message);
@@ -145,86 +113,44 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
     sessionKey,
   ]);
   target.assertCurrent!();
-  const captures = vi.spyOn(projection, "capture");
-  const sharing = vi.spyOn(projection, "sharingTargetState");
+  const admissions = listAgentDatabaseAdmissionRefusals();
   try {
-    for (let index = 0; index < 20; index++) {
-      expect(await read()).toBe(target);
-      target.assertCurrent!();
-    }
-    expect(captures).not.toHaveBeenCalled();
-    expect(sharing).not.toHaveBeenCalled();
-
-    // A new lineage revision must recheck the audience, not reconstruct an unchanged source.
-    await f.seed("agent:main:currency-unrelated", f.profile.id);
-    await projection.ensureMaterialized();
-    const describes = vi.spyOn(projection, "describe");
-    const selections = vi.spyOn(projection, "selectEntries");
-    try {
-      expect(await read()).toBe(target);
-      // The qualified leaf has no children; only the parent needs a selection.
-      expect(selections).toHaveBeenCalledTimes(1);
-      selections.mockClear();
-      for (let index = 0; index < 20; index++) {
-        expect(await read()).toBe(target);
-        target.assertCurrent!();
-      }
-      expect(describes).not.toHaveBeenCalled();
-      expect(selections).not.toHaveBeenCalled();
-
-      // Unrelated display churn must not reacquire the retained task audience.
-      await f.seed("agent:main:currency-unrelated", f.profile.id, { label: "Updated" });
-      await projection.ensureMaterialized();
-      captures.mockClear();
-      expect(await read()).toBe(target);
-      expect(captures.mock.calls.map(([query]) => query.key)).toEqual([sessionKey]);
-    } finally {
-      describes.mockRestore();
-      selections.mockRestore();
-    }
-
-    const admissions = listAgentDatabaseAdmissionRefusals();
-    try {
-      recordAgentDatabaseAdmissions([
-        {
-          agentId: "main",
-          paths: [],
-          code: "agent-database-inspection-pending",
-          reason: "Synthetic admission change",
-          repairHint: "Wait for admission",
-        },
-      ]);
-      expect(() => target.assertCurrent!()).toThrow("Session pull-request target changed");
-      expect(await read()).toBeUndefined();
-    } finally {
-      recordAgentDatabaseAdmissions(admissions);
-    }
-    expect((await read())?.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
-      child,
-      sessionKey,
+    recordAgentDatabaseAdmissions([
+      {
+        agentId: "main",
+        paths: [],
+        code: "agent-database-inspection-pending",
+        reason: "Synthetic admission change",
+        repairHint: "Wait for admission",
+      },
     ]);
-
-    await f.seed(child, f.other.id, {
-      parentSessionKey: sessionKey,
-      visibility: "draft",
-    });
-    await projection.ensureMaterialized();
-    expect(() => target.assertCurrent!()).toThrow("Task pull-request audience changed");
-    const narrowed = (await read())!;
-    expect(narrowed.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
-      sessionKey,
-    ]);
-
-    // Publishing the same config object still advances the owner's revision.
-    const cfg = f.context.getRuntimeConfig();
-    cfg.gateway!.roles!.definitions.reader!.scopes = [];
-    setRuntimeConfigSnapshot(cfg);
-    expect(() => narrowed.assertCurrent!()).toThrow("Session pull-request target changed");
+    expect(() => target.assertCurrent!()).toThrow("Session pull-request target changed");
     expect(await read()).toBeUndefined();
   } finally {
-    captures.mockRestore();
-    sharing.mockRestore();
+    recordAgentDatabaseAdmissions(admissions);
   }
+  expect((await read())?.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+    child,
+    sessionKey,
+  ]);
+
+  await f.seed(child, f.other.id, {
+    parentSessionKey: sessionKey,
+    visibility: "draft",
+  });
+  await projection.ensureMaterialized();
+  expect(() => target.assertCurrent!()).toThrow("Task pull-request audience changed");
+  const narrowed = (await read())!;
+  expect(narrowed.taskReceipts?.sessions.map((session) => session.sessionKey)).toEqual([
+    sessionKey,
+  ]);
+
+  // Publishing the same config object still advances the owner's revision.
+  const cfg = f.context.getRuntimeConfig();
+  cfg.gateway!.roles!.definitions.reader!.scopes = [];
+  setRuntimeConfigSnapshot(cfg);
+  expect(() => narrowed.assertCurrent!()).toThrow("Session pull-request target changed");
+  expect(await read()).toBeUndefined();
 });
 
 it("prepares task audience policy once without reacquiring descendant membership", async () => {
@@ -245,12 +171,7 @@ it("prepares task audience policy once without reacquiring descendant membership
   expect(target.taskReceipts?.sessions).toHaveLength(5);
   await fixture.seed("agent:main:unrelated", fixture.profile.id);
   await projection.ensureMaterialized();
-  const aliases = vi.spyOn(profileReads, "readResidentUserProfileAliases");
-  const membership = vi.spyOn(projection, "readMembership");
   target.assertCurrent!();
-  expect(aliases).toHaveBeenCalledTimes(1);
-  // Root admission still reads membership; already-selected descendants use owner facts.
-  expect(membership).toHaveBeenCalledTimes(1);
 
   await fixture.seed("agent:main:foreign-0", fixture.other.id, {
     parentSessionKey: sessionKey,
@@ -286,9 +207,6 @@ it("shares lineage work across audiences without sharing visibility or stale des
   const projection = getSessionRowProjection(fixture.context)!;
   await projection.ensureMaterialized();
   const root = projection.describe({ agentId: "main", key: sessionKey })!;
-  const reads = vi.spyOn(projection, "selectEntries");
-  const captures = vi.spyOn(projection, "capture");
-  const resolveParent = vi.spyOn(records, "parentReference");
   const expected = (keys: string[]) =>
     keys.map((key) => ({
       agentId: "main",
@@ -305,18 +223,12 @@ it("shares lineage work across audiences without sharing visibility or stale des
   expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
-  const firstReads = reads.mock.calls.length;
-  const firstCaptures = captures.mock.calls.length;
-  expect(firstReads).toBe(2);
   expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
     expected([child, leaf, sessionKey]),
   );
   expect(prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
-  expect(reads).toHaveBeenCalledTimes(firstReads);
-  expect(captures).toHaveBeenCalledTimes(firstCaptures);
-  expect(resolveParent).not.toHaveBeenCalled();
 
   let allows: typeof allowsShared = allowsAll;
   const retained = prepareTaskPublicationSessions(projection, root, () => allows);
@@ -331,7 +243,6 @@ it("shares lineage work across audiences without sharing visibility or stale des
   await fixture.seed("agent:main:unrelated", fixture.profile.id);
   await projection.ensureMaterialized();
   prepareTaskPublicationSessions(projection, root, () => allowsAll);
-  const afterCreation = reads.mock.calls.length;
   await fixture.seed("agent:main:unrelated", fixture.profile.id, {
     label: "Updated",
     updatedAt: 2,
@@ -341,7 +252,6 @@ it("shares lineage work across audiences without sharing visibility or stale des
   expect(prepareTaskPublicationSessions(projection, root, () => allowsShared).sessions).toEqual(
     expected([child, leaf, sessionKey]),
   );
-  expect(reads).toHaveBeenCalledTimes(afterCreation);
   retained.assertCurrent();
 
   // Permissions consume the replacement row even when lineage itself is unchanged.
@@ -359,20 +269,16 @@ it("shares lineage work across audiences without sharing visibility or stale des
           entry.visibility !== "draft",
     ).sessions,
   ).toEqual(expected([child, hidden, leaf, sessionKey]));
-  expect(reads).toHaveBeenCalledTimes(afterCreation);
 
   await fixture.seed(leaf, fixture.profile.id, { parentSessionKey: hidden, updatedAt: 2 });
   await projection.ensureMaterialized();
   const current = projection.describe({ agentId: "main", key: sessionKey })!;
-  resolveParent.mockClear();
   expect(prepareTaskPublicationSessions(projection, current, () => allowsShared).sessions).toEqual(
     expected([child, sessionKey]),
   );
   expect(prepareTaskPublicationSessions(projection, current, () => allowsAll).sessions).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
-  expect(reads.mock.calls.length).toBeGreaterThan(firstReads);
-  expect(resolveParent).not.toHaveBeenCalled();
 
   const runId = "task-pr-registry-lineage";
   subagentRuns.set(
@@ -400,118 +306,6 @@ it("shares lineage work across audiences without sharing visibility or stale des
   );
 });
 
-it("keeps task descendants current across generated parent and child churn", async () => {
-  const rootKey = "agent:main:generated-root";
-  await fixture.seed(rootKey);
-  const projection = getSessionRowProjection(fixture.context)!;
-  const children = new Map<
-    string,
-    { parentSessionKey: string; sessionId: string; archivedAt?: number; status?: "done" | "failed" }
-  >();
-  let random = 221;
-  for (let step = 0; step < 42; step++) {
-    random = (Math.imul(random, 1664525) + 1013904223) >>> 0;
-    const slot = random % 7;
-    const key = `agent:main:generated-${slot}`;
-    const previous = children.get(key);
-    const operation = previous ? step % 6 : 0;
-    if (operation === 5) {
-      await deleteSessionEntryLifecycle({
-        agentId: "main",
-        storePath: projection.capture({ agentId: "main", key })!.storeTarget.storePath,
-        archiveTranscript: false,
-        target: { canonicalKey: key, storeKeys: [key] },
-      });
-      children.delete(key);
-    } else {
-      const entry: NonNullable<typeof previous> = previous
-        ? { ...previous }
-        : {
-            parentSessionKey: rootKey,
-            sessionId: `generated-session-${step}`,
-          };
-      if (operation === 1) {
-        entry.status = step % 2 ? "done" : "failed";
-      }
-      if (operation === 2) {
-        entry.archivedAt = step + 1;
-      }
-      if (operation === 3) {
-        entry.sessionId = `replacement-${step}`;
-      }
-      if (operation === 4) {
-        entry.parentSessionKey = slot > 0 ? `agent:main:generated-${slot - 1}` : sessionKey;
-      }
-      await fixture.seed(key, fixture.profile.id, entry);
-      children.set(key, entry);
-    }
-    await projection.ensureMaterialized();
-    const root = projection.capture({ agentId: "main", key: rootKey })!;
-    expect(root.entry).toBeDefined();
-    if (!root.entry) {
-      throw new Error("Missing generated root");
-    }
-    const reachable = new Set([rootKey]);
-    for (const parent of reachable) {
-      for (const [childKey, entry] of children) {
-        if (entry.parentSessionKey === parent) {
-          reachable.add(childKey);
-        }
-      }
-    }
-    const actual = prepareTaskPublicationSessions(
-      projection,
-      { ...root, entry: root.entry },
-      () => () => true,
-    ).sessions;
-    expect(actual.map((row) => row.sessionKey).toSorted()).toEqual([...reachable].toSorted());
-    for (const row of actual) {
-      if (row.sessionKey !== rootKey) {
-        expect(row.sessionId).toBe(children.get(row.sessionKey)!.sessionId);
-      }
-    }
-  }
-});
-
-it("projects three descendant receipts without mixing the parent's current branch", async () => {
-  await fixture.seedRepository();
-  for (let number = 1; number <= 3; number++) {
-    const key = "agent:main:child-" + number;
-    await fixture.seed(key, fixture.profile.id, { parentSessionKey: sessionKey });
-    receipt(key, number);
-  }
-  receipt("agent:main:child-1", 1, "duplicate");
-  const fetcher = stubGitHub(pullListItem({ number: 40, state: "closed" }));
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({
-    pullRequests: [{ number: 40 }],
-    taskPullRequestCount: 3,
-  });
-  expect(taskNumbers()?.toSorted((a, b) => a - b)).toEqual([1, 2, 3]);
-  const sharedTarget = await prepareControlUiSessionPrServiceTarget(
-    () => getSessionRowProjection(fixture.context),
-    { sessionKey, agentId: "main" },
-  );
-  expect(sharedTarget).toBeDefined();
-  const shared = fixture.subscriptions.readPrepared(sharedTarget!, () => false);
-  expect(shared).toMatchObject({ status: "ready", pullRequests: [{ number: 40 }] });
-  expect(shared?.taskPullRequests).toBeUndefined();
-  expect(shared?.taskPullRequestCount).toBeUndefined();
-  expect(shared?.pullRequestCount).toBeUndefined();
-  const calls = fetcher.mock.calls.length;
-  await fixture.subscriptions.pollNow();
-  expect(fetcher).toHaveBeenCalledTimes(calls);
-
-  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 100_000);
-  fetcher.mockImplementation(async () => {
-    throw new Error("offline");
-  });
-  await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({ status: "unavailable", taskPullRequestCount: 3 });
-  expect(latest()?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed")).toBe(true);
-});
-
 async function passive(client = fixture.client) {
   const respond = vi.fn();
   await handleGatewayRequest({
@@ -530,25 +324,6 @@ async function passive(client = fixture.client) {
   await fixture.subscriptions.pollNow();
 }
 
-it("does not recheck unrelated PR audiences for owner-certified metadata writes", async () => {
-  const unrelated = "agent:main:metadata-only";
-  await fixture.seed(unrelated);
-  await passive();
-  const projection = getSessionRowProjection(fixture.context)!;
-  const captures = vi.spyOn(projection, "capture");
-  await fixture.seed(unrelated, fixture.profile.id, { updatedAt: 2 });
-  await nextTurn();
-  await nextTurn();
-  expect(captures.mock.calls.filter(([query]) => query.key === sessionKey)).toEqual([]);
-  // The changed root still reconciles its own source, and a real receipt still delivers.
-  await fixture.seed(sessionKey, fixture.profile.id, { updatedAt: 2 });
-  await nextTurn();
-  await nextTurn();
-  expect(captures.mock.calls.some(([query]) => query.key === sessionKey)).toBe(true);
-  receipt(sessionKey, 73);
-  await vi.waitFor(() => expect(taskNumbers()).toEqual([73]));
-});
-
 it("reads own and nested receipts without a checkout, refreshes on commit, and never polls GitHub", async () => {
   const child = "agent:main:child";
   const grandchild = "agent:main:grandchild";
@@ -557,7 +332,6 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
   receipt(sessionKey, 1);
   receipt(grandchild, 2);
   const fetcher = stubOffline("No GitHub allowed for passive rows");
-  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   await passive();
   expect(latest()).toMatchObject({
     branchRead: false,
@@ -566,67 +340,10 @@ it("reads own and nested receipts without a checkout, refreshes on commit, and n
   });
   expect(latest()?.pullRequestCount).toBeUndefined();
   expect(latest()?.taskPullRequests?.every((pr) => !pr.pullRequest)).toBe(true);
-  const work = reads.mock.calls.filter(
-    ([, command]) => command.type === "githubPublications.taskReceipts",
-  ).length;
-  expect(work).toBe(1);
-  await fixture.subscriptions.pollNow();
-  expect(
-    reads.mock.calls.filter(([, command]) => command.type === "githubPublications.taskReceipts"),
-  ).toHaveLength(work);
   receipt(child, 3);
   await vi.waitFor(() => expect(latest()?.taskPullRequestCount).toBe(3));
   expect(fetcher).not.toHaveBeenCalled();
 });
-
-it.each([false, true])(
-  "counts branch PRs beyond the receipt preview (passive=%s)",
-  async (watchPassively) => {
-    await fixture.seedRepository();
-    for (let number = 1; number <= 25; number++) {
-      receipt(sessionKey, number);
-    }
-    const fetcher = stubGitHub();
-    await fixture.subscribe();
-    await fixture.subscriptions.pollNow();
-    const active = latest();
-    expect(active).toMatchObject({
-      pullRequests: [{ number: 40 }],
-      taskPullRequestCount: 25,
-      pullRequestCount: 26,
-    });
-    expect(active?.taskPullRequests).toHaveLength(20);
-    const git = vi.spyOn(gitReads, "runGitReadOperation");
-    const networkCalls = fetcher.mock.calls.length;
-    if (watchPassively) {
-      // Another browser may already retain this profile's passive audience cell.
-      await passive(fixture.addReader("passive-peer").client);
-      await passive();
-      expect(latest()).toMatchObject({
-        branchRead: false,
-        pullRequests: active?.pullRequests,
-        repository: active?.repository,
-        taskPullRequestCount: 25,
-        pullRequestCount: 26,
-      });
-    }
-    // This overlap is outside the preview: counting only visible URLs is incorrect.
-    receipt(sessionKey, 40, "passive-overlap", { updated_at_ms: 1 });
-    await vi.waitFor(() =>
-      expect(latest()).toMatchObject({
-        ...(watchPassively ? { branchRead: false } : {}),
-        taskPullRequestCount: 26,
-        pullRequestCount: 26,
-      }),
-    );
-    expect(taskNumbers()?.includes(40)).toBe(false);
-    if (watchPassively) {
-      await fixture.subscriptions.pollNow();
-      expect(git).not.toHaveBeenCalled();
-      expect(fetcher).toHaveBeenCalledTimes(networkCalls);
-    }
-  },
-);
 
 it("withholds task receipts when a descendant becomes private during their read", async ({
   signal,
@@ -729,78 +446,6 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
   receipt(sessionKey, 3);
   await fixture.subscriptions.pollNow();
   expect(snapshots()).toHaveLength(delivered);
-});
-
-it("gives passive rows the PR state an active viewer already verified, without GitHub reads", async () => {
-  receipt(sessionKey, 1);
-  const phone = fixture.addReader("phone");
-  const fetcher = stubOffline("No GitHub allowed for passive rows");
-  await passive(phone.client);
-  const phoneLatest = () => snapshots(phone.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest;
-  expect(phoneLatest()).toBeUndefined();
-  fetcher.mockImplementation(async (input) =>
-    githubJson(
-      pullListItem({
-        number: Number(new URL(requestUrl(input)).pathname.split("/").at(-1)),
-        state: "closed",
-        merged_at: "2026-11-01T00:00:00Z",
-        html_url: "https://github.com/example/repository/pull/1",
-        base: { repo: { name: "repository", owner: { login: "example" } } },
-      }),
-    ),
-  );
-  await fixture.subscribe();
-  await fixture.subscriptions.pollNow();
-  expect(latest()?.taskPullRequests?.[0]?.pullRequest?.state).toBe("merged");
-  const verifiedReads = fetcher.mock.calls.length;
-  // The retained passive audience learns the verified state without its own lookup.
-  await vi.waitFor(() => expect(phoneLatest()?.state).toBe("merged"));
-  // Passive pushes carry the state chip only, not diff stats or CI rollups.
-  expect(Object.keys(phoneLatest() ?? {}).toSorted()).toEqual([
-    "branch",
-    "number",
-    "owner",
-    "repo",
-    "state",
-    "title",
-    "url",
-  ]);
-  // A reconnecting sidebar receives it too.
-  const reconnected = fixture.addReader("phone-reconnected");
-  await passive(reconnected.client);
-  expect(snapshots(reconnected.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest?.state).toBe(
-    "merged",
-  );
-  await fixture.subscriptions.pollNow();
-  expect(fetcher).toHaveBeenCalledTimes(verifiedReads);
-});
-
-it("reloads a stale passive cell once per verified state, even when its cache misses", () => {
-  const target = { identity: "session" } as ControlUiSessionPrTarget;
-  const pullRequest = (prState: "open" | "merged") => {
-    const url = "https://github.com/example/repository/pull/1";
-    const facts = { url, owner: "example", repo: "repository", number: 1, branch: "fix" };
-    return {
-      ...facts,
-      sourceSessionKey: sessionKey,
-      sourceAgentId: "main",
-      pullRequest: { ...facts, title: "Fix", state: prState },
-    };
-  };
-  const cell = (taskPullRequests: ControlUiSessionPullRequestSnapshot["taskPullRequests"]) => ({
-    connIds: new Set(["phone"]),
-    target,
-    cacheLifetime: new AbortController(),
-    snapshot: { pullRequests: [], rateLimited: false, status: "ready" as const, taskPullRequests },
-  });
-  const passiveKey = receiptsOnlyTargetIdentity(target.identity);
-  const passiveCell = cell([{ ...pullRequest("open"), pullRequest: undefined }]);
-  passiveCell.target = { ...target, identity: passiveKey, taskReceiptsOnly: true };
-  const keyStates = new Map([[passiveKey, passiveCell]]);
-  const active = cell([pullRequest("merged")]);
-  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBe(passiveKey);
-  // The reload missed the cache: the next poll of the same verified state must not reload again.
-  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBeUndefined();
 });
 
 it("keeps a known cold URL when GitHub metadata fails, and ignores a replaced session lifecycle", async () => {

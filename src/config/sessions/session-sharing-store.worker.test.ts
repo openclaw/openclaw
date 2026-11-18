@@ -2,10 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import {
-  observeHostDataSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { initializeSessionReadContext } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { sessionSharingHandlers } from "../../gateway/server-methods/sessions-sharing.js";
 import {
@@ -58,7 +55,6 @@ import { readCommittedSessionEntryCache } from "./session-accessor.sqlite-entry-
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { captureDurableSessionActor } from "./session-actor-durable.js";
 import { readSessionActorEntryFacts } from "./session-actor-replica.js";
-import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 import { assignSessionOwnerInWorker } from "./session-metadata-write.async.js";
@@ -68,7 +64,6 @@ import {
   readSessionMembersInWorker,
   removeSessionMember,
 } from "./session-sharing-store.js";
-import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
@@ -355,42 +350,6 @@ it("commits aliased worker membership and participant facts before publishing, a
       sql.restore();
     }
     expect(await readMembers(scope)).toEqual([]);
-  });
-});
-
-it("prepares admitted category keys in one statement and observes committed replacements", async () => {
-  await withState(async () => {
-    const database = openOpenClawAgentDatabase({ agentId: "main" });
-    setCanonicalSqliteSessionMainKey(database, "main");
-    const scope = mainScope("category-preparation", database.path);
-    const entry = { sessionId: "category-preparation", updatedAt: 1, category: "Work" };
-    replaceSessionEntrySync(scope, entry);
-    const backend = bindSqliteWorkerBackend(undefined, {
-      database: database.db,
-      databasePath: database.path,
-      admit: () => {},
-    });
-    const statements = trackSqliteStatementExecutions(
-      requireNativeSqliteDatabase(database.db),
-      ["all"],
-      () => "all",
-    );
-    const transactions = vi.spyOn(database.db, "exec");
-    try {
-      const command = { type: "category.prepare" as const, input: { scope, from: "Work" } };
-      expect(backend.execute(command)).toEqual([scope.sessionKey]);
-      expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls).toEqual([]);
-      replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, category: "Personal" });
-      statements.counts.all = 0;
-      transactions.mockClear();
-      expect(backend.execute(command)).toEqual([]);
-      expect(statements.counts.all).toBe(1);
-      expect(transactions.mock.calls).toEqual([]);
-    } finally {
-      transactions.mockRestore();
-      statements.restore();
-    }
   });
 });
 

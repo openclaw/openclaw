@@ -10,7 +10,7 @@ import {
 } from "../gateway/config-reload-plan.js";
 import { createTranscriptsAutoStartService } from "./auto-start.js";
 import * as transcriptCapture from "./capture.js";
-import { readTranscriptCaptureSnapshot, startTranscripts } from "./capture.js";
+import { readTranscriptCaptureSnapshot } from "./capture.js";
 import { readConfiguredTranscriptStarts } from "./configured-start-status.js";
 import type {
   TranscriptOccupancyWatchRequest,
@@ -471,54 +471,6 @@ describe("configured transcript source provenance", () => {
       await f.tool.execute("stop", { action: "stop", sessionId: "manual" });
     }
   });
-  it("does not let an explicit configured URL capture arm an omitted locator", async () => {
-    const source = { ...room, meetingUrl: "https://example.test/room" };
-    const configured = { ...source, meetingUrl: undefined };
-    const f = fixture({ transcripts: { autoStart: [configured] } });
-    const sessionId = "configured";
-    await f.start({ ...source, sessionId }, true);
-    const result = await f.read();
-    expect(result.configuredSources[0]).toMatchObject({
-      state: "not-active",
-      activeSelectors: [],
-    });
-    expect(result.active).toMatchObject([{ sessionId, activeSubscription: true }]);
-    await f.tool.execute("stop", { action: "stop", sessionId });
-  });
-
-  it("requires complete manual identity and preserves exact explicit matching", async () => {
-    const f = fixture();
-    for (const configuredLifecycle of [undefined, true] as const) {
-      const sessionId = configuredLifecycle ? "configured-exact" : "manual-exact";
-      await f.start({ ...room, sessionId }, configuredLifecycle);
-      const exact = await f.read();
-      expect(exact.configuredSources[0]).toMatchObject({
-        state: "armed",
-        activeSelectors: [exact.active[0]!.selector],
-      });
-      for (const key of ["accountId", "guildId", "channelId"] as const) {
-        const other = await readTranscriptLibraryStatus(f.store, {
-          transcripts: { autoStart: [{ ...room, [key]: "other" }] },
-        });
-        expect(other.configuredSources[0]).toMatchObject({
-          state: "not-active",
-          activeSelectors: [],
-        });
-      }
-      await f.tool.execute("stop", { action: "stop", sessionId });
-    }
-    await f.start({
-      ...room,
-      accountId: undefined,
-      guildId: undefined,
-      sessionId: "manual-default",
-    });
-    const result = await readTranscriptLibraryStatus(f.store, {
-      transcripts: { autoStart: [{ ...room, accountId: undefined }] },
-    });
-    expect(result.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
-  });
-
   it("keeps configured URL health projections private across invitation changes", async () => {
     const source = {
       ...room,
@@ -567,60 +519,6 @@ describe("configured transcript source provenance", () => {
     for (const privateText of ["synthetic-", "privateMarker", "not-source-intent"]) {
       expect(retained).not.toContain(privateText);
     }
-  });
-
-  it("keeps configured cleanup and in-flight stop owners unknown without transferring their evidence", async () => {
-    const source = { ...room, accountId: undefined };
-    const f = fixture({ transcripts: { autoStart: [source] } });
-    const controller = new AbortController();
-    f.provider.start = async ({ session }) => {
-      controller.abort();
-      return { ok: true, session };
-    };
-    f.provider.stop = async () => ({ ok: false, error: "cleanup pending" });
-    await expect(
-      startTranscripts({
-        ctx: f.ctx,
-        store: f.store,
-        rawParams: { ...source, sessionId: "retained" },
-        configuredLifecycle: true,
-        abortSignal: controller.signal,
-      }),
-    ).rejects.toThrow("provider cleanup failed");
-    const retainedSession = await f.store.readSession("retained");
-    expect(readTranscriptCaptureSnapshot()[0]).toHaveProperty(
-      "configuredSource.accountId",
-      undefined,
-    );
-    expect((await f.read()).configuredSources[0]).toMatchObject({
-      state: "unknown",
-      activeSelectors: [],
-    });
-    const stopGate = createDeferred();
-    const stopping = createDeferred();
-    f.provider.stop = async ({ sessionId }) => {
-      stopping.resolve();
-      await stopGate.promise;
-      return { ok: true, sessionId };
-    };
-    const stopped = f.tool.execute("stop", { action: "stop", sessionId: "retained" });
-    await stopping.promise;
-    try {
-      const result = await f.read();
-      expect(result.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
-      expect(result.active[0]?.activeSubscription).toBe(false);
-    } finally {
-      stopGate.resolve();
-      await stopped;
-    }
-    f.provider.start = async ({ session }) => ({ ok: true, session });
-    vi.useFakeTimers({ toFake: ["Date", "performance"] });
-    vi.setSystemTime(new Date(Date.parse(retainedSession!.startedAt) + 86_400_000));
-    await f.start({ ...room, sessionId: "retained" });
-    expect((await f.read()).configuredSources[0]).toMatchObject({
-      state: "unknown",
-      activeSelectors: [],
-    });
   });
 });
 

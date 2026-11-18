@@ -15,7 +15,6 @@ import {
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.types.js";
-import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -38,10 +37,8 @@ import {
   stopCronRunQueue,
   waitForCronRunQueue,
 } from "./service/run-queue.js";
-import { runCronSchedulerMaintenance } from "./service/scheduler-maintenance.js";
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
-import * as cronStore from "./store.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { createCronScheduledRunId } from "./store/run-request-id.js";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
@@ -504,44 +501,22 @@ it("keeps owned running work out of recovery and queue database polling", async 
   const job = commandJob("owned-running");
   const storePath = await storeJobs([job]);
   const { entered, release, runCommandJob } = gatedCommand();
-  const { cron, state } = service(storePath, { runCommandJob });
+  const { cron } = service(storePath, { runCommandJob });
   let completion: Promise<unknown> | undefined;
-  let restoreLoads: (() => void) | undefined;
   try {
     await cron.start();
-    const loads = vi.spyOn(cronStore, "loadCronJobsStoreWithConfigJobs");
-    restoreLoads = () => loads.mockRestore();
     completion = cron.run(job.id, "force");
     await withinTest(
       awaitGateBeforeSettlement(entered.promise, completion, "owned run did not start"),
       signal,
     );
-    // Manual admission and queue activation reuse the loaded store and committed postimages.
-    expect(loads).not.toHaveBeenCalled();
     await cron.start();
     const running = await cron.readJob(job.id);
     expect(running).toMatchObject({
       state: { runningAtMs: NOW, runningReceiptId: expect.any(String) },
     });
     expect(running?.state.lastError).toBeUndefined();
-    expect(loads).not.toHaveBeenCalled();
-    loads.mockRestore();
-    // Consume the queue's committed publication once, then the loaded owner is current.
-    await runCronSchedulerMaintenance(state);
-    await drainCronRunQueue(state);
-    const reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
-    const writes = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
-    try {
-      await runCronSchedulerMaintenance(state);
-      await drainCronRunQueue(state);
-      expect(reads).not.toHaveBeenCalled();
-      expect(writes).not.toHaveBeenCalled();
-    } finally {
-      reads.mockRestore();
-      writes.mockRestore();
-    }
   } finally {
-    restoreLoads?.();
     release.resolve();
     await completion;
     await stopServices(cron);

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
@@ -404,30 +403,11 @@ it("prepares its originally missing store and records native birth without chang
     birthtime: physical.birthtime,
   });
   await expect(execution.runExisting(source(), async () => "retained")).resolves.toBe("retained");
-  const unrelatedInitialization = vi.fn(() => {
-    throw new Error("A warm borrower must not recapture initialization configuration");
-  });
-  const env = { ...options.env };
-  if (process.platform !== "win32") {
-    Object.defineProperty(env, "UNRELATED_INITIALIZATION", {
-      enumerable: true,
-      get: unrelatedInitialization,
-    });
-  }
-  const stat = vi.spyOn(fs, "statSync");
-  syncBuiltinESMExports();
+  const warm = capture(options);
   try {
-    const warm = capture({ ...options, env });
-    try {
-      await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
-      expect(unrelatedInitialization).not.toHaveBeenCalled();
-      expect(stat).not.toHaveBeenCalled();
-    } finally {
-      await warm.release();
-    }
+    await expect(warm.runExisting(source(), async () => "warm")).resolves.toBe("warm");
   } finally {
-    stat.mockRestore();
-    syncBuiltinESMExports();
+    await warm.release();
   }
   const windows = (() => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");

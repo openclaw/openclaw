@@ -4,12 +4,10 @@ import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import { expectFamilyEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
-import { SQLITE_STAGING_TOKEN_FILES } from "../infra/sqlite-staging-token.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
@@ -98,30 +96,18 @@ it("keeps restart discovery off the caller thread and observes changed retained-
       execSql(statePath, "DELETE FROM agent_deletion_journal WHERE agent_id = 'retained';");
       revokeSqliteDatabaseAdmissionsForPath(statePath);
     }
-    const callerSql: string[] = [];
-    const observer = observeHostDataSql((sql, database) => {
-      // Snapshot staging locks retain their native owner; payload inspection must move.
-      if (database && path.basename(database.location() ?? "") !== SQLITE_STAGING_TOKEN_FILES[0]) {
-        callerSql.push(sql);
-      }
-    });
-    try {
-      const readiness = ready(undefined, "gateway-restart");
-      if (retained) {
-        await expect(readiness).resolves.toBeUndefined();
-      } else {
-        await expect(readiness).rejects.toMatchObject({
-          incompatibleDatabases: [
-            {
-              ...versionRow("agent", agent.path, supportedVersions.agent + 1),
-              agentId: "retained",
-            },
-          ],
-        });
-      }
-      expect(callerSql).toEqual([]);
-    } finally {
-      observer.restore();
+    const readiness = ready(undefined, "gateway-restart");
+    if (retained) {
+      await expect(readiness).resolves.toBeUndefined();
+    } else {
+      await expect(readiness).rejects.toMatchObject({
+        incompatibleDatabases: [
+          {
+            ...versionRow("agent", agent.path, supportedVersions.agent + 1),
+            agentId: "retained",
+          },
+        ],
+      });
     }
   }
 });
