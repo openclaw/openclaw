@@ -701,6 +701,27 @@ else process.stdout.write(JSON.stringify(value));
 }
 
 describe("publication status real CLI", () => {
+  it.each([false, true])(
+    "prints a verification verdict without changing JSON (json=%s)",
+    async (json) => {
+      const result = await runPublicationCli(publicationFixture(), [
+        "verify",
+        "--run",
+        "77",
+        ...(json ? ["--json"] : []),
+      ]);
+      expect(result.status, result.stderr).toBe(0);
+      if (json) {
+        expect(JSON.parse(result.stdout)).toEqual({ valid: true });
+      } else {
+        expect(result.stdout).toContain("VERIFIED: Full Release Validation run 77");
+        expect(result.stdout).toContain(
+          `--target-sha ${TARGET_SHA} --full-release-validation-run-id 77 --workflow-sha ${SHA} --release-profile beta --skip-dispatch`,
+        );
+      }
+    },
+  );
+
   it.each([
     "failed publisher",
     "truncated packages",

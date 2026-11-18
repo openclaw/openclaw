@@ -34,6 +34,11 @@ pnpm frv prioritize --restore <record> [--dry-run]
 | `continue --failed`    | Retries each child once as it becomes terminal, while siblings/parent may run; adopts active attempts and leaves green children untouched. A repeated failure exits immediately with attempt/budget. Ghost duplicate attempts require fresh all-group FRV. After green child evidence and original parent completion, reruns parent once to restore the same plan and reseal; early Decision/Drain disagreement does not waive plan/attempt checks. |
 | `prioritize --restore` | Recovers former priority-gate deferrals; see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery). Active validation no longer pauses CI/supporting workflows.                                                                                                                                                                                                       |
 
+Successful `verify` output ends with a verdict and the verified candidate inputs
+(target SHA, validation run, tooling SHA, and release profile). These can be reused
+with `release:candidate`; supply the intended tag, channel, route, and any required
+SDK acknowledgement separately. `--json` retains the verifier evidence alone.
+
 Retry selection for `rerun --child` and continuation:
 
 | Condition                                                                                                                                  | Mode / action                                                                                                                                                                                                            |

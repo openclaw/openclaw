@@ -4003,6 +4003,15 @@ async function main() {
     const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
     await releaseSealedPriority(client, options.runId);
+    if (!options.json) {
+      console.log(`VERIFIED: Full Release Validation run ${options.runId}`);
+      console.log(
+        `Candidate inputs: --target-sha ${plan.targetSha} --full-release-validation-run-id ${options.runId} --workflow-sha ${plan.trustedWorkflow.sha} --release-profile ${String(plan.releaseProfile)} --skip-dispatch`,
+      );
+      console.log(
+        "Supply the release tag, channel, route, and any required SDK acknowledgement; these are not inferred from verification.",
+      );
+    }
     return;
   }
   const loaded = await loadPlanForCommand(options, client);
