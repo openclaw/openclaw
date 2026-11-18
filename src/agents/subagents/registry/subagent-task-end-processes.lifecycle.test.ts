@@ -210,7 +210,11 @@ it.each<EndCause>([
       await fixture.settle();
       if (keeps) {
         expect(pids.filter(isPidAlive)).toEqual(pids);
-        expect(liveInScope(childKey)).toHaveLength(3);
+        // The service, the hand-off and the survivor stay tracked (the survivor's own short-lived
+        // children may be tracked too, until the reaper sees them exit).
+        expect(liveInScope(childKey).map(({ pid }) => pid)).toEqual(
+          expect.arrayContaining(pids.slice(0, 3)),
+        );
       } else {
         expect(pids.filter(isPidAlive)).toEqual([]);
         expect(liveInScope(childKey)).toEqual([]);

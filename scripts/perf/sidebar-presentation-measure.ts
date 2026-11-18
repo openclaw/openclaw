@@ -194,7 +194,7 @@ const [
   { serializeGatewayFrame },
   { createEmptyPluginRegistry },
   { setActivePluginRegistry },
-  { addSession, createProcessSession, deleteSession },
+  { registerProcessSession, deleteSession },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
@@ -269,25 +269,23 @@ function distribution(samples: number[]) {
 try {
   for (let index = 0; index < backgroundProcesses; index++) {
     const rowIndex = sessions - 1 - (index % pageSize);
-    addSession(
-      createProcessSession({
-        id: `sidebar-process-${index}`,
-        scopeKey: index % 2 ? keyFor(rowIndex) : `sidebar-${rowIndex}`,
-        agentId: index % 3 ? "main" : undefined,
-        command: "synthetic background work",
-        cleanupMs: 60_000,
-        startedAt: 1_800_000_000_000,
-        maxOutputChars: 10_000,
-        totalOutputChars: 0,
-        pendingStdoutChars: 0,
-        pendingStderrChars: 0,
-        pendingOutputDropped: false,
-        exited: false,
-        truncated: false,
-        backgrounded: true,
-        cursorKeyMode: "normal",
-      }),
-    );
+    registerProcessSession({
+      id: `sidebar-process-${index}`,
+      scopeKey: index % 2 ? keyFor(rowIndex) : `sidebar-${rowIndex}`,
+      agentId: index % 3 ? "main" : undefined,
+      command: "synthetic background work",
+      cleanupMs: 60_000,
+      startedAt: 1_800_000_000_000,
+      maxOutputChars: 10_000,
+      totalOutputChars: 0,
+      pendingStdoutChars: 0,
+      pendingStderrChars: 0,
+      pendingOutputDropped: false,
+      exited: false,
+      truncated: false,
+      backgrounded: true,
+      cursorKeyMode: "normal",
+    });
   }
   runOpenClawAgentWriteTransaction(
     (database) => {

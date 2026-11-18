@@ -165,9 +165,9 @@ async function terminate(
   group: boolean,
 ): Promise<StopOutcome> {
   const graceEnds = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
-  const stopGroup = async (group: number) => {
-    const outcome = await forceGroupAfterGrace(group, graceEnds);
-    entry.heldGroup = outcome.status === "uncertain" ? group : undefined;
+  const stopGroup = async (target: number) => {
+    const outcome = await forceGroupAfterGrace(target, graceEnds);
+    entry.heldGroup = outcome.status === "uncertain" ? target : undefined;
     return outcome;
   };
   // The survivor is gone; a retry stops what remains of its group.
