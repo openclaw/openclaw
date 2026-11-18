@@ -1,4 +1,5 @@
 import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
+import type { ControlUiSurfaceProps } from "../../../../../src/plugin-sdk/control-ui.js";
 import type { RunFailureCause } from "../../../../../src/shared/run-failure-notice.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
@@ -10,6 +11,7 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
+import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import type { FailedMessageEditSource } from "../failed-message-edit.ts";
 import { openChatRewindConfirmation } from "./chat-message-confirmation-view.tsx";
 
@@ -36,6 +38,7 @@ function panelPlacement(line: HTMLElement, panel: HTMLElement): "bottom" | "top"
 
 /** One terminal notice, separate from assistant prose and preserved partial output. */
 export function ChatRunFailureNotice(props: {
+  feedback?: ControlUiSurfaceProps["run-failure-feedback"];
   summary: string;
   cause?: RunFailureCause;
   repeatCount?: number;
@@ -189,7 +192,15 @@ export function ChatRunFailureNotice(props: {
             {t("chat.recovery.tryAgain")}
           </button>
         </Show>
-        <ReportIssueLink />
+        <Show when={props.feedback} fallback={<ReportIssueLink />}>
+          {(feedback) => (
+            <PluginSurface
+              surface="run-failure-feedback"
+              props={feedback()}
+              renderDefault={ReportIssueLink}
+            />
+          )}
+        </Show>
       </div>
     </openclaw-chat-run-failure-notice>
   );

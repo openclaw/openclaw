@@ -372,7 +372,7 @@ describe("createCodexDynamicToolBridge", () => {
     const manyFields = kind === "high-cardinality";
     const { execute, response } = await runSchemaToolCall({
       arguments: manyFields
-        ? Object.fromEntries(propertyNames.map((name) => [name, 47]))
+        ? Object.fromEntries(propertyNames.map((name) => [name, {}]))
         : { [`unexpected_property_${"x".repeat(240)}`]: true },
       callId: "call-bounded-validation",
       name: "bounded_validation_tool",
@@ -532,8 +532,6 @@ describe("createCodexDynamicToolBridge", () => {
     expect(unavailableExecute).not.toHaveBeenCalled();
     expect(onToolOutcome).toHaveBeenLastCalledWith({
       toolName: unavailableToolName,
-      argsHash: "",
-      resultHash: "",
       terminalPresentation: undefined,
       presentationOnly: true,
     });

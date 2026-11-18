@@ -182,6 +182,21 @@ struct OpenClawIDOwnerEnrollmentTests {
         #expect(throws: OpenClawIDOwnerEnrollmentError.handoffInvalid) {
             try OpenClawIDOwnerEnrollmentClient.verifyHandoff(handoff, claw: vectors.claw, keys: stranger)
         }
+        // A member's devices add each other without a certificate; each kind refuses the other's handoff.
+        let member = OpenClawIDDiscoveryClaw(
+            id: vectors.claw.id, hostname: vectors.claw.hostname, relationship: "member", role: "operator",
+            online: true)
+        let memberHandoff = try OpenClawIDCanonicalJSON.object([
+            "root_pub": .string(vectors.text("kit", "root_pub")), "binding": binding, "cert": .null,
+        ])
+        #expect(try OpenClawIDOwnerEnrollmentClient.verifyHandoff(memberHandoff, claw: member, keys: keys) ==
+            vectors.text("kit", "root_fp"))
+        #expect(throws: OpenClawIDOwnerEnrollmentError.handoffInvalid) {
+            try OpenClawIDOwnerEnrollmentClient.verifyHandoff(handoff, claw: member, keys: keys)
+        }
+        #expect(throws: OpenClawIDOwnerEnrollmentError.handoffInvalid) {
+            try OpenClawIDOwnerEnrollmentClient.verifyHandoff(memberHandoff, claw: vectors.claw, keys: keys)
+        }
     }
 
     @Test func `kit enrollment re-signs after seq conflict and pins only the listed device`() async throws {
@@ -285,8 +300,68 @@ struct OpenClawIDOwnerEnrollmentTests {
             discoveryOrigin: #require(URL(string: "https://discovery.example")), deviceStore: deviceStore,
             nodeStore: TrustStore(), http: discovery, now: { (try? vectors.now) ?? 0 }, sleep: { _ in })
         let approver = try vectors.identity("device_seed_hex")
+        let cert = try OpenClawIDStatement.sign(
+            "OwnerDeviceCert", body: Self.certBody(keys, now: vectors.now), signer: approver)
+        await discovery.onEnrollment(Self.approve(vectors: vectors, approver: approver, cert: cert, memberRole: nil))
+        let codes = Codes()
+        // Undecided for the first polls, while the sealed handoff is already waiting.
+        let answers = Answers(pending: 3, then: matches)
+        let attempt = { try await client.approveFromDevice(
+            session: Self.session, claw: vectors.claw, keys: keys, label: "Example Mac",
+            node: vectors.description, onCode: { await codes.append($0) }, confirmed: { await answers.next() }) }
+        if matches {
+            let enrolled = try await attempt()
+            #expect(try enrolled.rootFingerprint == vectors.text("kit", "root_fp"))
+            #expect(enrolled.memberRole == nil)
+            #expect(await deviceStore.saved?.peerKey == keys.peer.peerKey)
+        } else {
+            await #expect(throws: OpenClawIDOwnerEnrollmentError.denied) { try await attempt() }
+            #expect(await deviceStore.saved == nil)
+            #expect(await discovery.steps.last == "abort")
+        }
+        #expect(await discovery.recipients.first == "owners")
+        #expect(await codes.values.count == 1)
+        #expect(await codes.values.first?.count == 6)
+        #expect(await answers.asked >= 3)
+    }
+
+    @Test func `a member's other device adds this one to their account with no certificate or node`() async throws {
+        let vectors = try Vectors()
+        let full = try vectors.keys
+        let keys = OpenClawIDOwnerDeviceKeys(device: full.device, peer: full.peer, node: nil)
+        let discovery = try Discovery(vectors: vectors)
+        let deviceStore = TrustStore()
+        let client = try OpenClawIDOwnerEnrollmentClient(
+            discoveryOrigin: #require(URL(string: "https://discovery.example")), deviceStore: deviceStore,
+            nodeStore: nil, http: discovery, now: { (try? vectors.now) ?? 0 }, sleep: { _ in })
+        let claw = OpenClawIDDiscoveryClaw(
+            id: vectors.claw.id, hostname: vectors.claw.hostname, relationship: "member", role: "operator",
+            online: true)
+        let approver = try OpenClawIDNodeIdentity(seed: Data(repeating: 8, count: 32))
+        await discovery.onEnrollment(Self.approve(
+            vectors: vectors, approver: approver, cert: .null, memberRole: "operator"))
+        let enrolled = try await client.approveFromDevice(
+            session: Self.session, claw: claw, keys: keys, label: "Example Mac", node: nil,
+            onCode: { _ in }, confirmed: { true })
+        #expect(try enrolled.rootFingerprint == vectors.text("kit", "root_fp"))
+        #expect(enrolled.memberRole == "operator")
+        #expect(await deviceStore.saved?.peerKey == keys.peer.peerKey)
+        // The request goes to the member's own devices, never to the owners.
+        #expect(await discovery.recipients.first == "self")
+        guard case let .object(start) = await discovery.start else { throw OpenClawIDNodeEnrollmentError.malformed }
+        #expect(start["node"] == nil)
+    }
+
+    /// Plays the approving device E: accept, check the commitment, admit N at the Gateway (listed
+    /// as an owner device, or under the member's account with `memberRole`), then seal `cert`.
+    private static func approve(
+        vectors: Vectors,
+        approver: OpenClawIDNodeIdentity,
+        cert: OpenClawIDCanonicalJSON,
+        memberRole: String?) -> Discovery.EnrollmentHook
+    {
         let ephemeralE = Curve25519.KeyAgreement.PrivateKey()
-        await discovery.onEnrollment { step, data, requestID, discovery in
+        return { step, data, requestID, discovery in
             switch step {
             case "start":
                 await discovery.mail(Self.enrollment(requestID, "accept", [
@@ -324,13 +399,11 @@ struct OpenClawIDOwnerEnrollmentTests {
                         "binding",
                         "published_at",
                     ])["binding"]!
-                let cert = try OpenClawIDStatement.sign(
-                    "OwnerDeviceCert", body: Self.certBody(keys, now: vectors.now), signer: approver)
                 let handoff = try OpenClawIDCanonicalJSON.object([
                     "root_pub": .string(vectors.text("kit", "root_pub")), "binding": binding, "cert": cert,
                 ])
                 let box = try AES.GCM.seal(handoff.encoded, using: key)
-                try await discovery.publish(seq: 3, listed: true)
+                try await discovery.publish(seq: 3, listed: true, memberRole: memberRole)
                 await discovery.mail(Self.enrollment(requestID, "sealed", [
                     "nonce": .string(OpenClawIDNodeIdentity.hex(box.nonce)),
                     "ciphertext": .string(OpenClawIDNodeIdentity.hex(box.ciphertext + box.tag)),
@@ -338,24 +411,6 @@ struct OpenClawIDOwnerEnrollmentTests {
             default: break
             }
         }
-        let codes = Codes()
-        // Undecided for the first polls, while the sealed handoff is already waiting.
-        let answers = Answers(pending: 3, then: matches)
-        let attempt = { try await client.approveFromDevice(
-            session: Self.session, claw: vectors.claw, keys: keys, label: "Example Mac",
-            node: vectors.description, onCode: { await codes.append($0) }, confirmed: { await answers.next() }) }
-        if matches {
-            let enrolled = try await attempt()
-            #expect(try enrolled.rootFingerprint == vectors.text("kit", "root_fp"))
-            #expect(await deviceStore.saved?.peerKey == keys.peer.peerKey)
-        } else {
-            await #expect(throws: OpenClawIDOwnerEnrollmentError.denied) { try await attempt() }
-            #expect(await deviceStore.saved == nil)
-            #expect(await discovery.steps.last == "abort")
-        }
-        #expect(await codes.values.count == 1)
-        #expect(await codes.values.first?.count == 6)
-        #expect(await answers.asked >= 3)
     }
 
     @Test func `a declined SAS request ends without a pin`() async throws {
@@ -508,6 +563,7 @@ struct OpenClawIDOwnerEnrollmentTests {
         private(set) var bound: [String] = []
         private(set) var start: OpenClawIDCanonicalJSON?
         private(set) var steps: [String] = []
+        private(set) var recipients: [String] = []
 
         init(vectors: Vectors) throws {
             let response = try vectors.node["response"]!.fields(["descriptor", "snapshot"])
@@ -539,8 +595,9 @@ struct OpenClawIDOwnerEnrollmentTests {
             self.inbox.append(message)
         }
 
-        /// Re-signs the snapshot at `seq`, listing this Mac's W and W_node when admitted.
-        func publish(seq: Int64, listed: Bool) throws {
+        /// Re-signs the snapshot at `seq`, listing this Mac's W and W_node as an owner device when
+        /// admitted, or its W under a member account with `memberRole`.
+        func publish(seq: Int64, listed: Bool, memberRole: String? = nil) throws {
             guard case var .object(body) = try self.snapshot.fields([
                 "v",
                 "type",
@@ -552,7 +609,12 @@ struct OpenClawIDOwnerEnrollmentTests {
             else { return }
             body["seq"] = .integer(seq)
             body["issued_at"] = .integer(self.now)
-            if listed {
+            if listed, let memberRole {
+                body["members"] = try .array(body["members"]!.list() + [.object([
+                    "account_id": .string("acct_fixture"), "role": .string(memberRole),
+                    "peer_keys": .array([.string(self.keys.peer.peerKey)]),
+                ])])
+            } else if listed {
                 body["owner_devices"] = try .array(body["owner_devices"]!.list() + [.object([
                     "device_pub": .string(self.keys.device.signingKey),
                     "caps": .array(OpenClawIDOwnerEnrollmentClient.ownerCapabilities.map { .string($0) }),
@@ -598,6 +660,7 @@ struct OpenClawIDOwnerEnrollmentTests {
                     try await self.rootHook?(change, self)
                 case "enrollment":
                     try self.steps.append(payload["step"]!.text())
+                    try self.recipients.append(mail["to"]!.text())
                     guard case let .object(data) = payload["data"]! else { break }
                     try await self.enrollmentHook?(
                         payload["step"]!.text(), data, payload["request_id"]!.text(), self)

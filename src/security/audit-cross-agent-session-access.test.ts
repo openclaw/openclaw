@@ -154,7 +154,7 @@ describe("security audit cross-agent session access", () => {
       cfg: { agents: { entries: { home: {}, work: { sandbox: { mode: "all" } } } } },
       detail: [
         `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- work: sandboxed sessions clamped to their spawn tree; its transcripts remain readable by the agents above.",
+          "- work: sandboxed sessions clamped to their spawn tree; its chat history remains readable by the agents above.",
         'work: sandbox.mode="all"',
         "different trust levels",
       ],
@@ -191,7 +191,7 @@ describe("security audit cross-agent session access", () => {
       },
       detail: [
         `- home: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- work: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
+          "- work: session tools removed by agent tool policy; its chat history remains readable by the agents above.",
       ],
       absent: "- work: unsandboxed",
     },
@@ -213,7 +213,7 @@ describe("security audit cross-agent session access", () => {
       detail: [
         "Agents: home, work",
         `- work: unsandboxed sessions; allowed session tools: ${sessionTools.join(", ")}.\n` +
-          "- home: session tools removed by agent tool policy; its transcripts remain readable by the agents above.",
+          "- home: session tools removed by agent tool policy; its chat history remains readable by the agents above.",
       ],
     },
   ] satisfies Array<{ name: string; cfg: OpenClawConfig; detail: string[]; absent?: string }>)(

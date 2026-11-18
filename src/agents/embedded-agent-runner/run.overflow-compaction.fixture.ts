@@ -6,6 +6,7 @@ import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
+import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeLeaseOptions,
@@ -26,6 +27,7 @@ export async function acquireOverflowCompactionPreparedModelRuntime(
   const metadataSnapshot = admitted
     ? admitted.pluginMetadataSnapshot
     : { ...emptyPluginMetadataSnapshot, workspaceDir: input.workspaceDir };
+  const modelCatalog: ModelCatalogSnapshot = { entries: [], routeVariants: [] };
   const snapshot = {
     agentId: input.agentId,
     agentDir: input.agentDir,
@@ -35,6 +37,7 @@ export async function acquireOverflowCompactionPreparedModelRuntime(
       ? { ...pluginRegistry, agentHarnesses: [...pluginRegistry.agentHarnesses] }
       : undefined,
     metadataSnapshot,
+    modelCatalog,
     createStores: () => ({ authStorage: {}, modelRegistry: {} }),
   };
   return {

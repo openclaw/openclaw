@@ -242,6 +242,10 @@ entered in the address bar navigate the current tab, with independent Back and
 Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
 including their loaded documents while you switch between them.
 
+Hold Ctrl or Cmd to suppress link hover previews while opening several links.
+Pressing either key also dismisses an open preview and cancels a pending one.
+Normal hover and keyboard-focus previews resume on the next interaction after release.
+
 Loaded reader documents and link previews stay visible while the same Gateway
 reconnects. The reader refreshes after reconnect without clearing its address
 draft. Changing Gateway or losing reader access clears the protected content.

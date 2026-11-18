@@ -60,7 +60,10 @@ import {
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { SessionEntryCreationNotCommittedError } from "./session-creation-operation.js";
-import { composeSessionSourceAssertion } from "./session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceEffect,
+} from "./session-source-authority.js";
 import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
@@ -75,6 +78,7 @@ type ReplacementProjectionOptions = {
   fieldPatch?: SessionEntryReplacementCommit["fieldPatch"];
   onCommittedEntries?: SessionEntryWorkerLifecycle["onCommittedEntries"];
   retainedExecution?: OpenClawAgentDatabaseExecution;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
@@ -195,6 +199,10 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
     ];
   });
   const commit = async (assertSourceCurrent?: () => void) => {
+    const source = await prepareSessionSourceEffect(
+      composeSessionSourceAssertion([params.assertCommitAllowed, assertSourceCurrent]),
+    );
+    await using _ = { [Symbol.asyncDispose]: async () => source.release?.() };
     const config = params.skipMaintenance === false ? resolveMaintenanceConfig() : undefined;
     const preservation =
       config && config.mode !== "warn"
@@ -221,9 +229,14 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
           },
           {
             ...memory.authority,
+            workspaceEvidence: [
+              ...(memory.authority.workspaceEvidence ?? []),
+              ...(source.workspaceEvidence ?? []),
+            ],
+            readCustody: [...(memory.authority.readCustody ?? []), ...(source.readCustody ?? [])],
             assertCurrent() {
               memory.authority.assertCurrent();
-              assertSourceCurrent?.();
+              source.assertCurrent();
               preservation?.capture();
             },
           },
@@ -381,6 +394,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                       params.assertCommitAllowed?.();
                     },
                     params.retainedExecution,
+                    params.followRegistration,
                   );
                   result = await read();
                 }

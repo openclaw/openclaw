@@ -93,7 +93,6 @@ export function createExecution(
         logGateway: { error: vi.fn(), warn: vi.fn() },
       },
       io: { emitAcceptance: vi.fn(), emitFinal: vi.fn() },
-      releaseCronContinuationClaimWithRecovery: async () => true,
     } as unknown as Parameters<typeof startAgentRunExecution>[0],
   };
 }

@@ -1,5 +1,9 @@
 import { isMainThread } from "node:worker_threads";
 import {
+  getSqliteDatabaseAdmissionSourceForPath,
+  hasSqliteDatabaseSchemaAdmissionForIdentity,
+} from "../../infra/sqlite-database-admission.js";
+import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
@@ -84,6 +88,11 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   const databaseOptions = toDatabaseOptions(resolved);
   assertAgentSessionWriteAdmission(databaseOptions, resolved.agentId);
   const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
+  const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
+  const admitted =
+    useWorker && typeof captured?.databaseIdentity !== "string"
+      ? getSqliteDatabaseAdmissionSourceForPath(databasePath)
+      : undefined;
   const targetIdentity =
     typeof captured?.databaseIdentity === "string"
       ? {
@@ -91,10 +100,11 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
           canonicalPath: databasePath,
           birthtime: captured.databaseBirthtime,
         }
-      : readDatabasePathIdentitySync(databasePath);
+      : admitted && hasSqliteDatabaseSchemaAdmissionForIdentity(admitted.identity)
+        ? { ...admitted.identity, canonicalPath: admitted.canonicalPath }
+        : readDatabasePathIdentitySync(databasePath);
   resolved.path = databasePath;
   databaseOptions.path = databasePath;
-  const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
   const ensure = options.workerGuard?.ensureIdentitySource;
   if (
     ensure &&

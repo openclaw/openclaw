@@ -397,6 +397,7 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
         sessionsResult: { ...createSessionsListResult(), sessions: [session] },
       }) as unknown as ChatPageHost;
+      state.chatModelCatalogInitialized = false;
       state.chatModelSwitchPromises = {};
       onTestFinished(() => {
         container.remove();

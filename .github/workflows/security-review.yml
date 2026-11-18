@@ -160,6 +160,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
+            /scripts/github/dependency-manifests.mjs
             /scripts/github/guard-review.mjs
             /scripts/github/guard-shared.mjs
             /scripts/github/security-review-policy.mjs
@@ -167,6 +168,7 @@ jobs:
             /scripts/github/security-review.mjs
             /scripts/github/security-sensitive-guard.mjs
             /scripts/lib/bounded-response.mjs
+            /scripts/lib/release-version.mjs
             /.github/security-review-policy.yml
             /.github/actions/setup-security-review/action.yml
             /.github/actions/setup-security-review/package.json
@@ -187,6 +189,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
+            /scripts/github/dependency-manifests.mjs
             /scripts/github/guard-review.mjs
             /scripts/github/guard-shared.mjs
             /scripts/github/security-review-policy.mjs
@@ -194,6 +197,7 @@ jobs:
             /scripts/github/security-review.mjs
             /scripts/github/security-sensitive-guard.mjs
             /scripts/lib/bounded-response.mjs
+            /scripts/lib/release-version.mjs
             /.github/security-review-policy.yml
             /.github/actions/setup-security-review/action.yml
             /.github/actions/setup-security-review/package.json
@@ -213,6 +217,25 @@ jobs:
         timeout-minutes: 3
         uses: ./.github/actions/setup-security-review
 
+      - name: Create organization membership token
+        id: membership-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-members: read
+
+      - name: Create fallback organization membership token
+        id: membership-token-fallback
+        if: steps.membership-token.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-members: read
+
       # Preparation is limited to direct PR events. CI-completion, scheduled,
       # and command reviews retain their own fresh enforcement/publication step.
       - name: Prepare security review
@@ -220,6 +243,7 @@ jobs:
         if: github.event_name == 'pull_request_target' && github.event.action != 'closed' && matrix.pr == github.event.pull_request.number
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_APP_TOKEN: ${{ steps.membership-token.outputs.token || steps.membership-token-fallback.outputs.token }}
           OPENCLAW_SECURITY_REVIEW_MODE: prepare
         run: node scripts/github/security-review.mjs
 
@@ -252,6 +276,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          GH_APP_TOKEN: ${{ steps.membership-token.outputs.token || steps.membership-token-fallback.outputs.token }}
           OPENCLAW_SECURITY_REVIEW_MODE: autoscrub
         run: node scripts/github/security-review.mjs
 
@@ -259,6 +284,7 @@ jobs:
         if: ${{ !cancelled() && steps.runtime.outcome == 'success' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GH_APP_TOKEN: ${{ steps.membership-token.outputs.token || steps.membership-token-fallback.outputs.token }}
           OPENCLAW_SECURITY_REVIEW_MODE: enforce
         run: |
           if [ "${{ steps.detect.outputs.completed }}" = "true" ]; then

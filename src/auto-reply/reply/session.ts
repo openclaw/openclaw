@@ -133,7 +133,7 @@ import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js"
 import {
   clearCommittedSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
-  stopSessionResetSubagents,
+  stopSessionResetWork,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 import { runReplySessionRolloverMutation } from "./session-rollover-mutation.js";
@@ -246,7 +246,7 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
               assertCurrent: () => params.signal?.throwIfAborted(),
             });
             try {
-              return await stopSessionResetSubagents({
+              return await stopSessionResetWork({
                 cfg: params.cfg,
                 sessionKey: candidate.sessionKey,
                 agentId: attemptContext.agentId,

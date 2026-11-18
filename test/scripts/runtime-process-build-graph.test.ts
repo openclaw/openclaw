@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 import {
+  getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
   standaloneRuntimeProcessBuildEntries,
 } from "../../scripts/lib/runtime-process-core-build-entries.mts";
@@ -20,8 +21,87 @@ const forbiddenInputs = [
   /^src\/infra\/update-run-write\.ts$/u,
   /^src\/infra\/update-failure-facts\.ts$/u,
 ];
+// The transcript reader constructs SessionManagerCore to plan compaction. Host hydration layered
+// on that class restores cold storage, which reaches the session controller and plugin loader.
+const readerHostHydrationInputs = new Set([
+  "src/agents/sessions/session-manager-hydration.ts",
+  "src/config/sessions/session-transcript-hydration.ts",
+  "src/config/sessions/session-cold-storage.ts",
+]);
+// Every private chunk is one installed file, and published updaters refuse installed trees over
+// 50,000 entries. This is a tripwire for a worker re-emitting the application graph, not the
+// release budget: the transcript reader emitted about 5,800 chunks when it reached cold-storage
+// restoration, and the largest private graph is otherwise under 400.
+const PRIVATE_CHUNK_LIMIT = 1_000;
+// Plugin-owned workers are packaged by their plugin build, outside the core configs.
+const codeSplitWorkers = Object.keys(standaloneRuntimeProcessBuildEntries).filter(
+  (name) =>
+    !name.startsWith("extensions/") && getStandaloneRuntimeProcessOutputOptions(name).codeSplitting,
+);
+
+/** Build one standalone worker exactly as packaged, without its declarations or maps. */
+async function buildStandaloneRuntimeProcess(name: string) {
+  const [{ build: buildRuntime }, { default: buildConfigs }] = await Promise.all([
+    import("tsdown"),
+    import("../../tsdown.config.ts"),
+  ]);
+  const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
+  const selected = configs.find(
+    (config) =>
+      config.entry &&
+      typeof config.entry === "object" &&
+      !Array.isArray(config.entry) &&
+      Object.hasOwn(config.entry, name),
+  );
+  if (!selected) {
+    throw new Error(`Missing runtime build config: ${name}`);
+  }
+  const { bundles } = await buildRuntime({
+    ...selected,
+    config: false,
+    outDir: fs.realpathSync(createTempDir("runtime-private-chunks-")),
+    dts: false,
+    sourcemap: false,
+    logLevel: "silent",
+  });
+  return {
+    chunks: bundles.flatMap((bundle) => bundle.chunks.filter((chunk) => chunk.type === "chunk")),
+    dispose: async () => {
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
+    },
+  };
+}
 
 describe("standalone runtime process build graph", () => {
+  it("keeps host logging out of transcript navigation static imports", async () => {
+    const entry = "src/agents/sessions/session-manager-navigation.ts";
+    const result = await build({
+      absWorkingDir: repoRoot,
+      entryPoints: [entry],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      packages: "external",
+      write: false,
+      metafile: true,
+    });
+    const reached = new Set<string>();
+    const visit = (input: string) => {
+      if (reached.has(input)) {
+        return;
+      }
+      reached.add(input);
+      for (const imported of result.metafile.inputs[input]?.imports ?? []) {
+        if (!imported.external && imported.kind !== "dynamic-import") {
+          visit(imported.path);
+        }
+      }
+    };
+    visit(entry);
+    expect(reached.has("src/logger.ts")).toBe(false);
+  });
   it("keeps small workers out of shared Gateway chunks", () => {
     const workers = [
       "infra/update-state-sizes.entry",
@@ -40,41 +120,26 @@ describe("standalone runtime process build graph", () => {
     ).toEqual(["fixture/shared"]);
   });
 
-  const postgresLazyWorkers = [
-    "state/openclaw-state-lease-heartbeat.worker",
-    "cron/store/read-only.worker",
+  const lazyWorkers = [
+    ...["state/openclaw-state-lease-heartbeat.worker", "cron/store/read-only.worker"].map(
+      (name) => ({
+        name,
+        optional: [
+          "src/state/openclaw-state-db-engine.ts",
+          "src/state/postgres-schema.generated/runtime.ts",
+        ],
+      }),
+    ),
+    {
+      name: "process/supervisor/service-child-group-anchor",
+      optional: ["src/node-host/node-worker-lineage-completion.ts"],
+    },
   ];
-  it.each(postgresLazyWorkers)(
-    "keeps PostgreSQL outside %s static imports",
-    async (name) => {
-      const [{ build: buildRuntime }, { default: buildConfigs }] = await Promise.all([
-        import("tsdown"),
-        import("../../tsdown.config.ts"),
-      ]);
-      const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
-      const selected = configs.find(
-        (config) =>
-          config.entry &&
-          typeof config.entry === "object" &&
-          !Array.isArray(config.entry) &&
-          Object.hasOwn(config.entry, name),
-      );
-      if (!selected) {
-        throw new Error("Missing runtime build config");
-      }
-      const root = fs.realpathSync(createTempDir("runtime-private-chunks-"));
-      const { bundles } = await buildRuntime({
-        ...selected,
-        config: false,
-        outDir: root,
-        dts: false,
-        sourcemap: false,
-        logLevel: "silent",
-      });
+  it.each(lazyWorkers)(
+    "keeps optional handlers outside $name static imports",
+    async ({ name, optional }) => {
+      const { chunks, dispose } = await buildStandaloneRuntimeProcess(name);
       try {
-        const chunks = bundles.flatMap((bundle) =>
-          bundle.chunks.filter((chunk) => chunk.type === "chunk"),
-        );
         const byName = new Map(chunks.map((chunk) => [chunk.fileName, chunk]));
         const entry = chunks.find((chunk) => chunk.isEntry);
         expect(entry).toBeDefined();
@@ -105,11 +170,7 @@ describe("standalone runtime process build graph", () => {
         };
         const eager = closure(false);
         const reachable = closure(true);
-        const postgres = [
-          "src/state/openclaw-state-db-engine.ts",
-          "src/state/postgres-schema.generated/runtime.ts",
-        ];
-        for (const source of postgres) {
+        for (const source of optional) {
           const owners = chunks.filter((chunk) =>
             Object.entries(chunk.modules).some(
               ([id, module]) =>
@@ -123,13 +184,25 @@ describe("standalone runtime process build graph", () => {
           ).toBe(true);
           expect(
             owners.filter((chunk) => eager.has(chunk.fileName)).map((chunk) => chunk.fileName),
-            `SQLite eagerly loads ${source}`,
+            `${name} eagerly loads ${source}`,
           ).toEqual([]);
         }
       } finally {
-        for (const bundle of bundles) {
-          await bundle[Symbol.asyncDispose]();
-        }
+        await dispose();
+      }
+    },
+    60_000,
+  );
+
+  it.each(codeSplitWorkers)(
+    "keeps %s from re-emitting the application graph as private chunks",
+    async (name) => {
+      const { chunks, dispose } = await buildStandaloneRuntimeProcess(name);
+      try {
+        expect(chunks.length).toBeLessThanOrEqual(PRIVATE_CHUNK_LIMIT);
+        expect(chunks.some((chunk) => chunk.isEntry)).toBe(true);
+      } finally {
+        await dispose();
       }
     },
     60_000,
@@ -154,6 +227,9 @@ describe("standalone runtime process build graph", () => {
       expect(
         inputs.filter((input) => forbiddenInputs.some((pattern) => pattern.test(input))),
       ).toEqual([]);
+      if (name === "config/sessions/session-transcript.worker") {
+        expect(inputs.filter((input) => readerHostHydrationInputs.has(input))).toEqual([]);
+      }
       if (name === "infra/sqlite-source-revision.worker") {
         expect(
           inputs.filter((input) =>

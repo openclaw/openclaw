@@ -5,16 +5,30 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { authorizeHttpGatewayConnect } from "./auth.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { classifyGatewayProbePath } from "./gateway-http-route-contracts.js";
-import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
-import { isLocalDirectRequest } from "./net.js";
+import {
+  hasGatewayProxyIdentityHeaders,
+  readPreparedGatewayIngressAttribution,
+} from "./ingress-attribution.js";
+import {
+  isLocalDirectRequest,
+  isLoopbackAddress,
+  isLoopbackHost,
+  isTrustedProxyAddress,
+  resolveHostName,
+} from "./net.js";
 import { getHttpAuthUtilsModule } from "./server-http-modules.js";
 import type {
   PreparedReadinessChecker,
   StartupChecker,
   StartupResult,
 } from "./server/readiness.js";
+import { hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
 
-function startupProbeBody(result: StartupResult, includeDetails: boolean): string {
+function startupProbeBody(
+  result: StartupResult,
+  includeDetails: boolean,
+  includeBootId = false,
+): string {
   if (!includeDetails) {
     return JSON.stringify({ ok: result.ok, status: result.status });
   }
@@ -25,6 +39,9 @@ function startupProbeBody(result: StartupResult, includeDetails: boolean): strin
     buildId: resolveRuntimeServiceBuildId(),
     uptimeMs: result.uptimeMs,
     ...(result.status === "starting" ? { pendingReason: result.pendingReason } : {}),
+    ...(includeBootId && result.status === "started"
+      ? { gatewayBootId: result.gatewayBootId }
+      : {}),
   });
 }
 
@@ -60,12 +77,10 @@ export async function handleGatewayProbeRequest(
   let statusCode: number;
   let body: string;
   if ((status === "ready" && getReadiness) || status === "startup") {
+    const ingress = readPreparedGatewayIngressAttribution(req);
     // Subsystem details belong only to local direct or authenticated callers.
     async function shouldIncludeGatewayProbeDetails(): Promise<boolean> {
-      if (
-        readPreparedGatewayIngressAttribution(req)?.kind === "direct-local" ||
-        (!readPreparedGatewayIngressAttribution(req) && isLocalDirectRequest(req))
-      ) {
+      if (ingress?.kind === "direct-local" || (!ingress && isLocalDirectRequest(req))) {
         return true;
       }
       if (resolvedAuth.mode === "none") {
@@ -86,16 +101,10 @@ export async function handleGatewayProbeRequest(
       ).ok;
     }
     const readiness = status === "ready" ? getReadiness : undefined;
-    const readPrepared = await readiness?.prepare().then(
-      ({ publish }) => publish,
-      (error: unknown) => () => {
-        throw error;
-      },
-    );
     const includeDetails = await shouldIncludeGatewayProbeDetails();
     try {
-      if (readPrepared) {
-        const result = readPrepared();
+      if (readiness) {
+        const result = readiness();
         statusCode = result.ready ? 200 : 503;
         const recentCrashes = includeDetails ? getGatewayRecentCrashes() : [];
         body = JSON.stringify(
@@ -106,7 +115,21 @@ export async function handleGatewayProbeRequest(
       } else {
         const result = getStartup?.() ?? { ok: true, status: "started", uptimeMs: 0 };
         statusCode = result.ok ? 200 : 503;
-        body = startupProbeBody(result, includeDetails);
+        // The boot observation requires listener attribution and a loopback socket on both ends.
+        const includeBootId =
+          req.url === "/startupz" &&
+          req.headers["x-openclaw-startup-boot-id"] === "1" &&
+          ingress?.kind === "direct-local" &&
+          isLoopbackAddress(req.socket.localAddress) &&
+          isLoopbackHost(resolveHostName(req.headers.host)) &&
+          !isTrustedProxyAddress(ingress.clientIp, trustedProxies) &&
+          !hasGatewayProxyIdentityHeaders(req, resolvedAuth.trustedProxy) &&
+          !hasGatewayDelegationClaim(req, resolvedAuth.trustedProxy?.userHeader) &&
+          req.headers.origin === undefined &&
+          req.headers.authorization === undefined &&
+          req.headers["proxy-authorization"] === undefined &&
+          req.headers.cookie === undefined;
+        body = startupProbeBody(result, includeDetails, includeBootId);
       }
     } catch {
       statusCode = 503;

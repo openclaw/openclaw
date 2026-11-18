@@ -164,7 +164,7 @@ async function createNativePublicationTransport(
     if (argv[0] !== "gh") {
       throw new Error("Unexpected combined fixture command");
     }
-    inspect?.publisher(options?.env, argv);
+    inspect?.publisher(options?.preparedEnv ?? options?.env, argv);
     if (unavailable && argv.some((arg) => arg.endsWith("/git/blobs"))) {
       return {
         ...commandResult("", 1),
@@ -508,7 +508,7 @@ describe("personal publisher credential custody", () => {
   });
   it.each([
     "allowed",
-    "requester-revoked",
+    "requester-disconnected",
     "execution-reselected",
     "cancelled-before",
     "cancelled-after",
@@ -617,11 +617,11 @@ describe("personal publisher credential custody", () => {
     mocks.prepareRepositoryIntegration.mockImplementation(async (identity, input) => {
       integrationSignal = input.signal;
       negativeExercised ||= [
-        "requester-revoked",
+        "requester-disconnected",
         "execution-reselected",
         "cancelled-before",
       ].includes(scenario);
-      if (scenario === "requester-revoked") {
+      if (scenario === "requester-disconnected") {
         person.runtime.live = false;
       }
       if (scenario === "execution-reselected") {
@@ -637,7 +637,10 @@ describe("personal publisher credential custody", () => {
       mocks.runCommand.mockImplementation((argv, options) => {
         const deniedRepository =
           scenario === "read-denied" ? "owner/repository" : "upstream/repository";
-        if (options?.env?.GH_TOKEN === sharedToken && argv.includes("repos/" + deniedRepository)) {
+        if (
+          (options?.preparedEnv ?? options?.env)?.GH_TOKEN === sharedToken &&
+          argv.includes("repos/" + deniedRepository)
+        ) {
           negativeExercised = true;
           return {
             ...commandResult("", 1),
@@ -681,6 +684,8 @@ describe("personal publisher credential custody", () => {
       .catch(() => ({ status: "rejected" as const }));
     if (scenario !== "allowed") {
       expect(negativeExercised).toBe(true);
+    }
+    if (scenario !== "allowed" && scenario !== "requester-disconnected") {
       if (scenario === "execution-unavailable") {
         expect(result).toMatchObject({
           status: "failed",
@@ -739,6 +744,11 @@ describe("personal publisher credential custody", () => {
     expect(personalApiCalls).toBeGreaterThan(0);
     expect(personalAtWorker).toBe(false);
     expect(sharedAtWorker).toBe(true);
+    if (scenario === "requester-disconnected") {
+      await expect(preparePersonalPublicationFixtureAction(person)).rejects.toThrow(
+        "current authenticated human Gateway connection",
+      );
+    }
   });
 });
 

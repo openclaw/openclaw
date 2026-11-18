@@ -31,6 +31,17 @@ export async function settleExecProcessExit({
   } = finalOutcome;
   const markProcessExited = () =>
     markExited(session, exitCode, exitSignal, processStatus, exitReason, noOutputTimedOut);
+  // Keep the output file only when it holds output the wake or result omits.
+  const file = session.outputFile;
+  if (file) {
+    // An exit wake shows only the tail; a foreground result or process log shows the window.
+    const visibleChars =
+      session.backgrounded && session.notifyOnExit ? session.tail.length : session.output.length;
+    if (!(await file.close()) || session.totalOutputChars <= visibleChars) {
+      session.outputFile = undefined;
+      await file.remove();
+    }
+  }
   try {
     const shouldNotify = !session.exited;
     const settlement = onSettledBeforeNotify?.(finalOutcome);

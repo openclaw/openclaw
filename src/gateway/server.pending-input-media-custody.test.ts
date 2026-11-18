@@ -249,7 +249,17 @@ it.for(
       const media = expectDefined(saved[0], "real inbound file");
       const pending = await sessionAccessor.listSessionPendingInputs(f.scope);
       const transcript = sessionAccessor.loadTranscriptEventsSync(f.scope);
-      expect(pending.total).toBe(0);
+      if (!chat && outcome === "unknown") {
+        // Lost admission evidence no longer hides durable input from history/recovery.
+        expect(pending).toMatchObject({
+          total: 1,
+          items: [{ id: expect.any(String), runId: f.runId, state: "queued" }],
+        });
+        expect(JSON.stringify(pending.items[0]?.message)).toContain(media.id);
+        expect(JSON.stringify(pending.items[0]?.message)).toContain(request.message);
+      } else {
+        expect(pending.total).toBe(0);
+      }
       if (goal && outcome !== "refused") {
         expect(sessionAccessor.loadSessionEntry(f.scope)?.goal?.objective).toBe(request.message);
       }
@@ -297,6 +307,8 @@ it.for(
             current: true,
             pending: { run_id: f.runId, state: "queued" },
           });
+          // History exposes the opaque storage ID, not the request's idempotency key.
+          expect(pending.items[0]?.id).toBe(source.pending?.input_id);
           expect(source.pending?.message_json).toContain(media.id);
           expect(source.pending?.message_json).toContain(request.message);
         } else if (accepted) {

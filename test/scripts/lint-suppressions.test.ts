@@ -170,6 +170,8 @@ describe("production lint suppressions", () => {
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // Node MessagePort and Worker postMessage have no Window target-origin parameter.
         "scripts/diagnostics/windows-link-service.mjs|unicorn/require-post-message-target-origin|5",
+        // The retained-runtime observer calls captured native Set.forEach with its real receiver.
+        "scripts/e2e/lib/upgrade-survivor/installed-terminal-directory-watch.mjs|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -191,6 +193,8 @@ describe("production lint suppressions", () => {
         // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
+        // Aggregate logs strip only SGR color and reject other control bytes that could hide errors.
+        "scripts/lib/release-validation-waivers.mjs|no-control-regex|2",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
@@ -238,6 +242,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // Node worker ports have no browser target origin.
+        "scripts/perf/remote-catalog-inheritance-measure.mjs|unicorn/require-post-message-target-origin|1",
         // SQLite observers preserve native methods for restoration and forward each live receiver.
         "scripts/perf/schema-crossing-observer.ts|@typescript-eslint/unbound-method|1",
         // Native transaction timing forwards the live receiver and restores the original method.
@@ -250,6 +256,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-pr-currency-measure.ts|typescript/unbound-method|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The resource probe forwards the live pool receiver and restores the exact captured method.
+        "scripts/perf/skill-resource-admission-measure.mjs|typescript/unbound-method|1",
         // The admission-charge probe forwards runTask with the original pool receiver.
         "scripts/perf/state-read-worker-bench.ts|typescript/unbound-method|1",
         // Backup attribution forwards the native SQLite receiver and restores both methods in finally.
@@ -285,7 +293,6 @@ describe("production lint suppressions", () => {
         "src/agents/computer-use-node-capabilities.ts|unicorn/no-array-sort|1",
         // Sort only freshly materialized private arrays; avoid a second copying sort.
         "src/agents/embedded-agent-runner/model.static-catalog.ts|unicorn/no-array-sort|2",
-        "src/agents/embedded-agent-runner/post-compaction-loop-guard.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-context-summary.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
         // Stream wrappers preserve the original source iterator's rejection value.
@@ -299,6 +306,8 @@ describe("production lint suppressions", () => {
         // Binary output must escape C0/C1 bytes while preserving tab, LF and CR.
         "src/agents/shell-utils.ts|no-control-regex|1",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
+        // MCP catalog metadata is snapshotted through JSON so undefined members are dropped.
+        "src/agents/tool-search-prepared-catalog.ts|unicorn/prefer-structured-clone|1",
         // Media list snapshots must honor the JSON serialization contract; structuredClone cannot materialize plugin-bound proxies.
         "src/agents/tools/media-generate-tool-actions-shared.ts|unicorn/prefer-structured-clone|1",
         // Board private helpers only sort cloned layouts or freshly filtered arrays.

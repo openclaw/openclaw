@@ -12,6 +12,7 @@ import {
 } from "./chat-model-account-control.tsx";
 import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
 import { ChatModelCatalogState, isModelCatalogLoading } from "./chat-model-catalog-state.tsx";
+import { createChatModelFavoriteReorder } from "./chat-model-favorite-reorder.ts";
 import {
   createChatModelFavorites,
   createChatModelFavoritesOpening,
@@ -57,8 +58,6 @@ registerModelProviderAuthEnglish();
 
 type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
-  onSelectionClose: (event: MouseEvent) => void;
-  searchRef: (element: HTMLInputElement) => void;
 };
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
@@ -308,7 +307,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       entry.runtimeOverride ??
         (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
     );
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
     event.stopPropagation();
@@ -317,7 +316,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       return;
     }
     panel.params.onTargetSelect?.(groupId, value);
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   // Retain the route boundary across unrelated owner publications.
   const renderDirect = (render: () => JSX.Element) => render();
@@ -338,12 +337,26 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       </Show>
     );
   }
+  const favoriteRows = createMemo(
+    () =>
+      state().orderedProviderGroups.find(([provider]) => provider === FAVORITES_GROUP)?.[1].lead,
+  );
+  const reorderFavorite = createChatModelFavoriteReorder({
+    scope: owner.scope,
+    rows: favoriteRows,
+    disabled: () => disabled() || favorites.disabled(),
+    move: (source, destination, side) => favorites.move(source, destination, side),
+  });
   function ModelOption(props: {
     entry: ModelPickerOption;
     provider: string;
     hideCooldown?: boolean;
   }) {
     const key = createMemo(() => modelRowKey(props.entry, props.provider));
+    const model = createMemo(() => props.entry.value);
+    const reorder = createMemo(() =>
+      props.provider === FAVORITES_GROUP ? reorderFavorite(model) : undefined,
+    );
     return (
       <>
         {renderRow(key(), () => (
@@ -367,6 +380,9 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                     },
                   }
                 : undefined
+            }
+            reorder={
+              !searchView?.filtering() && (favoriteRows()?.length ?? 0) > 1 ? reorder() : undefined
             }
             hideCooldown={props.hideCooldown}
             index={state().optionIndex.get(key()) ?? 0}
@@ -505,7 +521,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             <div class="chat-controls__model-search-wrap">
               <Icon name="search" />
               <input
-                ref={[search?.inputRef(), panel.searchRef]}
+                ref={searchView?.inputRef()}
                 class="chat-controls__model-search"
                 data-chat-model-search="true"
                 type="search"

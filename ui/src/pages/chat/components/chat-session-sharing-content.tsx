@@ -321,6 +321,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     visibility() !== "shared" &&
     visibility() !== "draft" &&
     props.membersAvailable !== false &&
+    (!props.state?.error || Boolean(result())) &&
     (!result() ||
       Boolean(props.state?.read) ||
       Boolean(props.state?.error) ||
@@ -554,7 +555,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                     // A failed load or an unencodable URL drops the code; copy still works.
                     <Errored fallback={null}>
                       <Loading>
-                        <ChatSessionPublicQr url={url()} compact controls={controls} />
+                        <ChatSessionPublicQr url={url()} />
                       </Loading>
                     </Errored>
                   )}

@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
-import { attachHistoryActivity } from "../chat-history-request.ts";
+import { attachHistoryActivity } from "../chat-history-snapshot.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 
 export type TestMessage = Record<string, unknown>;

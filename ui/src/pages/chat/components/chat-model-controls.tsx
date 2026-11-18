@@ -62,16 +62,18 @@ function resolveCatalogTriggerStatus(
   if (state.status === "error") {
     return optionCount === 0 ? t("chat.modelControls.modelsUnavailable") : undefined;
   }
-  if (!state.hasSnapshot && ["idle", "loading"].includes(state.status)) {
-    return undefined;
-  }
   if (state.hasSnapshot && optionCount === 0) {
     return t("chat.modelControls.noModelsAvailable");
   }
   return undefined;
 }
 
-function createChatModelControls(props: ChatModelControlsProps): Accessor<{
+type ModelControlsViewProps = ChatModelControlsProps & {
+  showEffort?: boolean;
+  initialDefaultsPending?: boolean;
+};
+
+function createChatModelControls(props: ModelControlsViewProps): Accessor<{
   model: ChatModelPickerParams;
   effort: ChatEffortPickerParams;
   showEffort: boolean;
@@ -228,7 +230,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const currentProviderHint = sessionProvider ?? "";
     // This control owns the saved preference, not the model observed on a run.
     // A running turn can report its old model (or fallback) after a new choice is saved.
-    const triggerModelValue = currentOverride;
     const defaultProviderHint = defaultsProvider ?? "";
     const defaultCatalogEntry = catalog.entry(defaultModel);
     const canonicalDefaultLabel = resolveChatModelPickerLabel(defaultCatalogEntry, defaultLabel);
@@ -408,17 +409,15 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     // A lock prevents model changes; the concrete selection still owns its label.
     // Without a selection, neither the runtime nor the agent default identifies it.
     const committedModelLabel =
-      modelSelectionLocked === true && !triggerModelValue
+      modelSelectionLocked === true && !currentOverride
         ? translate("chat.selectors.lockedSessionModel")
         : resolveChatModelPickerLabel(
-            catalog.entry(triggerModelValue || defaultModel),
+            catalog.entry(currentOverride || defaultModel),
             formatPickerModelLabel(
-              selectOptions.find((entry) => entry.value === triggerModelValue)?.label ??
-                (catalog.entry(triggerModelValue)?.name.trim() ||
-                  triggerModelValue ||
-                  defaultLabel),
+              selectOptions.find((entry) => entry.value === currentOverride)?.label ??
+                (catalog.entry(currentOverride)?.name.trim() || currentOverride || defaultLabel),
             ),
-            triggerModelValue || defaultModel ? triggerRuntime : null,
+            currentOverride || defaultModel ? triggerRuntime : null,
           );
     return {
       catalog,
@@ -436,7 +435,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       selectedAgentRuntime,
       sessionModelPinned,
       committedModelLabel,
-      triggerModelValue,
       triggerRuntime,
     };
   });
@@ -510,7 +508,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       selectedAgentRuntime,
       sessionModelPinned,
       committedModelLabel,
-      triggerModelValue,
       triggerRuntime,
     } = selection();
     const catalogState = props.modelCatalogState;
@@ -530,15 +527,20 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     const fastMode = props.modelSwitching
       ? { ...presentedFastMode, disabled: true }
       : presentedFastMode;
-    const catalogTriggerStatus = retired
-      ? resolveCatalogTriggerStatus(catalogState, 0)
-      : policy?.restricted && !currentOverride && !defaultModel
-        ? t(
-            modelOptions.length
-              ? "chat.modelControls.selectionRequired"
-              : "chat.modelControls.noPermittedModels",
-          )
-        : resolveCatalogTriggerStatus(catalogState, modelOptions.length);
+    const catalogTriggerStatus =
+      catalogState.status === "ready" &&
+      catalogState.pendingProviders?.length &&
+      modelOptions.length === 0
+        ? undefined
+        : retired
+          ? resolveCatalogTriggerStatus(catalogState, 0)
+          : policy?.restricted && !currentOverride && !defaultModel
+            ? t(
+                modelOptions.length
+                  ? "chat.modelControls.selectionRequired"
+                  : "chat.modelControls.noPermittedModels",
+              )
+            : resolveCatalogTriggerStatus(catalogState, modelOptions.length);
     const hasResolvableModel =
       catalogState.hasSnapshot &&
       (catalogState.status === "ready" ||
@@ -640,8 +642,14 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         selectedAgentRuntime,
         sessionModelPinned,
         sessionKey: props.sessionKey,
-        triggerModelLabel: formatPickerModelLabel(committedModelLabel),
-        triggerModelValue: triggerModelValue || undefined,
+        triggerModelLabel:
+          props.initialDefaultsPending &&
+          !currentOverride &&
+          !defaultModel &&
+          !props.modelSelectionLocked
+            ? ""
+            : formatPickerModelLabel(committedModelLabel),
+        triggerModelValue: currentOverride || undefined,
         triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
@@ -686,10 +694,15 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-export function ChatModelControls(props: ChatModelControlsProps & { showEffort?: boolean }) {
+export function ChatModelControls(props: ModelControlsViewProps) {
   const controls = createChatModelControls(props);
   return (
-    <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
+    <div
+      class="chat-controls__session chat-controls__model chat-controls__model-settings"
+      data-model-pending={
+        !(controls().model.triggerStatusLabel ?? controls().model.triggerModelLabel) || undefined
+      }
+    >
       <ChatModelPicker {...controls().model} />
       {props.showEffort !== false && controls().showEffort ? (
         <ChatEffortPicker {...controls().effort} />

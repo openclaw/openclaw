@@ -38,7 +38,13 @@ without known dimensions keep a 3:2 frame while displayed, with the full image
 fitted inside it. Previously learned dimensions size the next preview without
 moving the surrounding messages when the image decodes.
 
-Opening a transcript image or video shows a shared viewer for supported media in
+Uploaded videos show a thumbnail or a compact Play card in chat. Choose **Play**
+to load the player in place; scrolling past a video does not prepare or convert
+it for playback. The player’s expand action opens the larger media viewer and
+pauses inline playback. Leaving the conversation releases the player. If your
+browser blocks automatic playback after conversion, use the player’s Play control.
+
+Opening a transcript image or expanding a video shows a shared viewer for supported media in
 the loaded thread, including inline Markdown images, your own attachments, and
 earlier response turns.
 When more than one item is available, use the visible previous/next buttons,
@@ -100,6 +106,12 @@ credentials, or private URLs, and the links suppress the browser referrer. Revie
 anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
 for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
 
+## Answer an agent question
+
+Agent questions appear above the message box. You can keep writing or queue a
+follow-up while the question is expanded; sending a chat message does not answer
+the question. Use its choices and **Submit**, or **Skip**, to resolve it.
+
 ## Edit a failed message
 
 If a model rejects a message (for example, because it contains too many images),
@@ -112,10 +124,15 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions. Large local histories are copied incrementally.
-If an individual event or the history navigation metadata exceeds the safe memory
-budget, the request fails without changing the conversation; other sessions remain
-available. Export the transcript to inspect it.
+Rewinding does not undo external actions. Rewinding and switching branches keep
+the existing conversation and move only its active branch, so neither copies the
+transcript. Both still read its history navigation, and a selection far from the
+current branch is republished by background reconciliation, so their cost follows
+the shape and size of that navigation rather than the stored message bytes.
+Forking a conversation copies its history incrementally. If the selected message,
+an individual event, or the history navigation metadata exceeds the safe memory
+budget, that rewind or fork fails without changing the conversation; other
+sessions remain available. Export the transcript to inspect it.
 
 ## Command palette file attachments
 
@@ -157,6 +174,10 @@ Open **Workspace** on New session to choose a saved project, a recent folder, or
 a repository URL. Long lists show the search field immediately; search remains
 available from the magnifying-glass button on shorter lists and stays visible
 while you scroll.
+
+For a new worktree, type part of a branch name in **From** to filter the loaded
+repository branches. The menu shows up to eight matches; you can still enter a
+custom branch, tag, or commit, or leave it blank for the Gateway default.
 
 Saved repositories show a repository icon and their `org/repo` identity when the
 Gateway provides it. Search matches both that identity and the project display

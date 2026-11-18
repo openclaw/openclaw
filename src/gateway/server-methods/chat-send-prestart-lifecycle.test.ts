@@ -42,7 +42,7 @@ it("retains accepted restart intent after pre-runtime dispatch fully settles", a
       ),
     ).toBe(false);
     await persistRunningSessionsForRestart({ cfg: {} });
-    expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({ queuedInputIds: [] });
+    expect(loadSessionEntry(fixture.scope)?.resumeAfterRestart).toEqual({});
   } finally {
     resetGatewayWorkAdmission();
   }
@@ -54,6 +54,8 @@ it.for(["held", "setup-error"] as const)(
     await using fixture = await createFixture({ active: false });
     const runId = `prestart-${outcome}`;
     fixture.params.idempotencyKey = runId;
+    // Crash recovery before runtime start compares the scope admission recorded.
+    vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", "token-a");
     await patchSessionEntryCore(fixture.scope, () => ({
       status: "done",
       lifecycleRevision: "prior-lifecycle",
@@ -78,6 +80,7 @@ it.for(["held", "setup-error"] as const)(
       expect(response.mock.calls[0]?.[0]).toBe(true);
       expect(entry).toMatchObject({
         lifecycleRunId: runId,
+        lifecycleRestartScope: "token-a",
         activeWriterRunId: runId,
       });
       expect(entry?.status).toBeUndefined();

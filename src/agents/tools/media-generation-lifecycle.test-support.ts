@@ -80,25 +80,6 @@ export async function withHeldMediaGenerationResult(
   }
 }
 
-/** Join the exact cron cleanup tail before this fixture restores module mocks. */
-export async function withHeldCronMediaGenerationResult(
-  ...args: Parameters<typeof withHeldMediaGenerationResult>
-) {
-  const cleanup = vi.spyOn(
-    await import("../../cron/run-continuation-cleanup.js"),
-    "removeCronRunContinuationSessionIfIdle",
-  );
-  try {
-    await withHeldMediaGenerationResult(...args);
-  } finally {
-    try {
-      await Promise.all(cleanup.mock.results.map(({ value }) => value));
-    } finally {
-      cleanup.mockRestore();
-    }
-  }
-}
-
 export function defineMediaGenerationCancellationTests(
   params: ToolContract & {
     setup: (phase: "preparation" | "reference" | "accepted") => {

@@ -120,7 +120,7 @@ function decodeTurnItemCursor(cursor?: string): { turnCursor?: string; itemId?: 
       Buffer.from(cursor.slice(TURN_ITEM_CURSOR_PREFIX.length), "base64url").toString(),
     );
   } catch {
-    throw new CatalogParamsError("invalid Codex transcript item cursor");
+    throw new CatalogParamsError("invalid Codex chat history item cursor");
   }
   if (
     !Array.isArray(value) ||
@@ -130,7 +130,7 @@ function decodeTurnItemCursor(cursor?: string): { turnCursor?: string; itemId?: 
     typeof value[1] !== "string" ||
     !value[1]
   ) {
-    throw new CatalogParamsError("invalid Codex transcript item cursor");
+    throw new CatalogParamsError("invalid Codex chat history item cursor");
   }
   return { turnCursor: value[0], itemId: value[1] };
 }
@@ -154,7 +154,7 @@ export async function readLegacyCodexTranscriptPage(
   const anchorIndex = itemId ? source.findIndex(({ item }) => item.id === itemId) : -1;
   if (itemId && anchorIndex < 0) {
     throw new CatalogParamsError(
-      "Codex transcript changed; refresh the session before loading older items",
+      "Codex chat history changed; refresh the session before loading older items",
     );
   }
   const remaining = source.slice(anchorIndex + 1);
@@ -169,14 +169,14 @@ export async function readLegacyCodexTranscriptPage(
         : nativeCursor
       : undefined;
     if (partial && !cursor) {
-      throw new Error("Codex app-server did not provide a transcript continuation anchor");
+      throw new Error("Codex app-server did not provide a chat history continuation anchor");
     }
     return { items, ...(cursor ? { nextCursor: cursor } : {}) };
   };
   let bounded = result();
   while (!pageFitsNodeTransport(bounded)) {
     if (items.length <= 1) {
-      throw new Error("Codex transcript item exceeds the safe response size");
+      throw new Error("Codex chat history item exceeds the safe response size");
     }
     items.pop();
     bounded = result();
@@ -201,7 +201,7 @@ export async function readCodexCatalogTranscriptPage(
       sortDirection: "desc",
       ...(request.cursor ? { cursor: request.cursor } : {}),
     });
-    const nextCursor = readControlCursor(page.nextCursor, "transcript next response");
+    const nextCursor = readControlCursor(page.nextCursor, "chat history next response");
     const items = projectTranscriptPage(page.data, limit);
     const result = { items, ...(nextCursor ? { nextCursor } : {}) };
     const fittingCount = items.length - (pageFitsNodeTransport(result) ? 0 : 1);
@@ -209,7 +209,7 @@ export async function readCodexCatalogTranscriptPage(
       return result;
     }
     if (fittingCount < 1) {
-      throw new Error("Codex transcript item exceeds the safe response size");
+      throw new Error("Codex chat history item exceeds the safe response size");
     }
     // The native cursor must describe exactly the delivered entries. Never slice and retain it.
     limit = fittingCount;

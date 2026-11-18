@@ -268,6 +268,8 @@ export type PluginManifestSetup = {
 };
 
 export type PluginManifestDoctorContract = {
+  /** Explicit recovery subtrees, beneath this plugin's declared CLI roots. */
+  recoveryCli?: string[][];
   configRepair?: boolean;
   resolveSessionStoreAgentIds?: boolean;
   /**

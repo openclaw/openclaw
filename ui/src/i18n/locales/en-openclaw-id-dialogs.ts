@@ -1,8 +1,9 @@
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
-// Strings of the OpenClaw ID dialogs (Make reachable, Your devices, device sign-in). They load
-// with the dialogs, not with the sidebar, and merge into the openclawId namespace.
+// Strings of the OpenClaw ID dialogs (Make reachable, Your devices, device sign-in) and the
+// member welcome. They load with those views, not with the sidebar, and merge into the
+// openclawId namespace.
 const enOpenClawIdDialogs = {
   openclawId: {
     approvalWaiting: "Waiting for the other device’s verification number…",
@@ -16,6 +17,16 @@ const enOpenClawIdDialogs = {
     runsTools: "Runs tools",
     revokeNode: "Its node goes too: {device} stops running tools for your claw.",
     approvalDeny: "They do not match",
+    approvalMemberRequest: "They are asking to add a browser to their access.",
+    approvalMemberApprove: "Approve browser",
+    approvalMemberDeny: "Deny request",
+    approvalMemberCompare:
+      "Approve only if {member} reads you the code over a channel you trust. If you were not expecting this, deny.",
+    approvalMemberUncertain:
+      "Could not confirm the approval. In Access, check {member}’s device list. If this browser has access, use Remove before starting a new request.",
+    approvalMemberDevices: "Member devices in Access",
+    approvalMemberCode: "Enter the code the member reads to you",
+    approvalReportedLocation: "Location reported by OpenClaw ID: {location}",
     approvalApprove: "The numbers match",
     approvalEmpty:
       "No new devices are waiting for approval. Start “Approve from another device” on the new device.",
@@ -37,6 +48,22 @@ const enOpenClawIdDialogs = {
     recoveryKitLine:
       "Keep your recovery kit safe. You need it if you lose access to all your devices.",
     signedInLinkCode: "Signed in as {account}.",
+    welcomeTitle: "Welcome to {name}.",
+    welcomeTitlePlain: "Welcome.",
+    welcomeInvitedBy: "{inviter} invited you.",
+    welcomeAccount: "You are signed in as {account}.",
+    welcomeAskName: "What should people here call you?",
+    welcomeName: "Your name",
+    welcomeSkip: "Skip for now",
+    welcomeNameFailed: "Your name was not saved. Try again.",
+    welcomeAskPhoto: "Nice to meet you, {name}. Want to add a photo?",
+    welcomePhoto: "Upload photo",
+    welcomePhotoSkip: "Not now",
+    welcomePhotoFailed: "That photo was not saved. Try again.",
+    welcomePhotoInvalid: "That image could not be read. Choose a PNG, JPEG or WebP image.",
+    welcomePhotoSourceTooLarge: "Choose an image that is 10 MB or smaller.",
+    welcomePhotoTooLarge: "That image is still too large after resizing. Choose a simpler image.",
+    welcomeDone: "People here see you as {name}. You can change this in Profile.",
     dialogTitle: "Turn on remote access",
     dialogDescription: "Open this claw from your other devices.",
     nameBody: "Choose a name for this claw.",

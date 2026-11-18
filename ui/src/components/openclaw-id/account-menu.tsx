@@ -31,6 +31,7 @@ registerEnglishCatalog(registerOpenClawIdEnglish);
 const VALUE_PREFIX = "openclaw-id:";
 const SIGN_IN = `${VALUE_PREFIX}sign-in`;
 const MAKE_REACHABLE = `${VALUE_PREFIX}make-reachable`;
+const APPROVE_DEVICE = `${VALUE_PREFIX}approve-device`;
 const DEVICES = `${VALUE_PREFIX}devices`;
 const SIGN_OUT = `${VALUE_PREFIX}sign-out`;
 const COPY_LINK = `${VALUE_PREFIX}copy-link`;
@@ -184,6 +185,10 @@ function keyAttentionEntries(
     entries.push(renderSidebarMenuAction(PUBLISH_KEYS, t("openclawId.publishNewKeys"), "radio"));
   }
   return entries;
+}
+
+function isTunnelMember(status: OpenClawIdStatusResult): boolean {
+  return status.channel === "tunnel" && status.connection?.kind === "member" && !status.owner;
 }
 
 /**
@@ -357,7 +362,16 @@ export function openClawIdMenuEntries(
     // Moving to new keys stays on the computer that runs this claw; publishing them does not.
     entries.push(...keyAttentionEntries(status, publication ?? status.publication));
   }
-  if (status.owner && status.link.linked && (status.channel === "tunnel" || openClawIdAccount())) {
+  if (isTunnelMember(status)) {
+    entries.push(
+      renderSidebarMenuAction(APPROVE_DEVICE, t("openclawId.approveNewDevice"), "plus"),
+      renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"),
+    );
+  } else if (
+    status.owner &&
+    status.link.linked &&
+    (status.channel === "tunnel" || openClawIdAccount())
+  ) {
     entries.push(renderSidebarMenuAction(DEVICES, t("openclawId.yourDevices"), "monitor"));
   }
   return entries;
@@ -468,7 +482,11 @@ export function selectOpenClawIdMenuValue(
     return false;
   }
   const { client, status } = context;
-  if (value === DEVICES && client && status?.owner) {
+  if ((value === APPROVE_DEVICE || value === DEVICES) && isTunnelMember(status)) {
+    window.location.assign(
+      `/_loader/?stay=1&view=${value === APPROVE_DEVICE ? "approve" : "devices"}`,
+    );
+  } else if (value === DEVICES && client && status?.owner) {
     openDialog(async () =>
       (await import("./owner-devices-dialog.tsx")).showOwnerDevicesDialog({ client }),
     );

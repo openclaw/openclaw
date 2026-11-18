@@ -1,14 +1,8 @@
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
 import type {
   ManagedWorktreeRecord,
   WorktreeWorkerAuthority,
 } from "../../agents/worktrees/types.js";
-
-export type LocalWorkspaceCapture = {
-  root: string;
-  sourceDev: bigint;
-  snapshotDev: bigint;
-  capturedAtMs: number;
-};
 
 export type LocalWorkspaceOwner = {
   agentId: string;
@@ -28,7 +22,10 @@ export type LocalWorkspaceCustody = {
   projectionRevision?: number;
   prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>;
   canonicalPaths?: () => Promise<Set<string>>;
+  /** Resume guest writes after settlement while retaining canonical workspace custody. */
+  resume?: () => Promise<void>;
   synchronizeProjection?: () => Promise<void>;
+  markPhase?: (phase: LocalWorkspacePausePhase) => void;
   assertCurrent: () => void;
   workerAuthority: WorktreeWorkerAuthority;
 };

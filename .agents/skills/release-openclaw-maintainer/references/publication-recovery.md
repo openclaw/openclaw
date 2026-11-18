@@ -87,9 +87,12 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Qualification harness/contract defect: repair the frozen candidate closure,
-  freeze a new C/Q, and rebind evidence. Missing contracts require deliberate
-  backports, not a newer-main harness.
+- Qualification harness/contract defect: a tooling-only repair can preserve C
+  and select an explicit reviewed main-ancestor Q through a new admission and
+  successful parent. Missing contracts need a deliberate Q repair or candidate
+  backport, not a moving-main fallback. Follow the
+  [frozen-C recovery procedure](../../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate);
+  never edit the old request or relabel a failed FRV.
 - P-only admission/verifier/publisher, credential, infrastructure, monitor,
   approval, or selector failure: keep C/Q and recover the smallest failed surface.
   Change independent P only when needed; preserve original producer identities.
@@ -486,11 +489,7 @@ verify packaging after publish; it does not authorize republishing.
 
 ## Check the bootstrap token
 
-Before publishing a never-published npm package, check the repository's actual
-`NPM_TOKEN` in an approved GitHub Actions job. Disable shell tracing, write the
-token to a private temporary npmrc, and run `npm whoami` against
-`https://registry.npmjs.org` with that file and an otherwise clean environment.
-Suppress account output, remove the temporary file, and retain the run URL.
-Never print or upload the token. A local login or secret update time is not a
-substitute for this check. Successful authentication does not establish package
-permissions or approve publication; failures go to the credential owner.
+Ask the release credential owner to confirm the repository `NPM_TOKEN` is ready
+with scope/package-creation access before bootstrap dispatch. No standalone token
+probe exists: keep liveness unverified without evidence for that token, and do
+not publish or rotate credentials to test it.

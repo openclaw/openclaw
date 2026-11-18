@@ -1,9 +1,9 @@
 import {
   commitCompactionSummary,
   resolveSummaryFloorChars,
+  type PreparedCompactionFloor,
 } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
-import type { SessionTreeEntry } from "../../../../packages/agent-core/src/harness/types.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
@@ -14,10 +14,7 @@ import {
   estimateVariableRequestTokens,
   type FixedRequestTokenPressure,
 } from "../context-token-pressure.js";
-import type {
-  CompactionRequestBudget,
-  CompactionRequestConstraints,
-} from "./request-budget.types.js";
+import type { CompactionRequestBudget } from "./preparation.types.js";
 
 const log = createSubsystemLogger("agents/session");
 const promptRequestBudgets = new WeakMap<PromptOptions, CompactionRequestBudget>();
@@ -121,7 +118,7 @@ export function withCompactionQueuedContext(
 }
 
 export function estimateCompactedRequestTokens(
-  messages: Iterable<AgentMessage>,
+  messages: AgentMessage[],
   budget: CompactionRequestBudget,
 ): number {
   return (
@@ -166,18 +163,25 @@ export function commitSessionCompactionSummary(
   preparation: Parameters<typeof commitCompactionSummary>[1],
   withoutSummary: boolean,
   replayBudget: () => number | undefined,
+  preparedFloor?: PreparedCompactionFloor,
 ): string {
-  return commitCompactionSummary(result, preparation, withoutSummary, replayBudget, (reduction) =>
-    log.warn(
-      `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
-        `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
-        `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
-    ),
+  return commitCompactionSummary(
+    result,
+    preparation,
+    withoutSummary,
+    replayBudget,
+    (reduction) =>
+      log.warn(
+        `[compaction] summary floor ${reduction.keptChars ? "shrunk" : "dropped"} for the ` +
+          `${reduction.source} token budget: kept ${reduction.keptChars}/${reduction.floorChars} ` +
+          `floor chars; summaryTokenBudget=${reduction.tokenBudget}`,
+      ),
+    preparedFloor,
   );
 }
 
 export function assertCompactionRequestCanFit(
-  messages: Iterable<AgentMessage>,
+  messages: AgentMessage[],
   budget: CompactionRequestBudget | undefined,
   hasCompactableHistory: boolean,
 ): void {
@@ -197,7 +201,7 @@ export function assertCompactionRequestCanFit(
 
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
-  messages: Iterable<AgentMessage>,
+  messages: AgentMessage[],
   maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
@@ -224,28 +228,4 @@ export function resolveCompactionRetentionBudget(
         : maxTokens,
     reserveTokens: summaryTokens,
   };
-}
-
-/** Locate the admitted pending request before choosing a compaction cut. */
-export function resolveCompactionPendingEntryIndex(
-  pathEntries: SessionTreeEntry[],
-  constraints: CompactionRequestConstraints,
-  pendingUserIdempotencyKey?: string,
-): number {
-  const pendingEntryIndex =
-    constraints.pendingUserEntryId || pendingUserIdempotencyKey
-      ? pathEntries.findLastIndex(
-          (entry) =>
-            entry.type === "message" &&
-            entry.message.role === "user" &&
-            (constraints.pendingUserEntryId
-              ? entry.id === constraints.pendingUserEntryId
-              : "idempotencyKey" in entry.message &&
-                entry.message.idempotencyKey === pendingUserIdempotencyKey),
-        )
-      : -1;
-  if (constraints.pendingUserEntryId && pendingEntryIndex < 0) {
-    throw new Error("Compaction cannot find the admitted pending user request.");
-  }
-  return pendingEntryIndex;
 }

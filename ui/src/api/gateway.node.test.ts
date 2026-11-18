@@ -540,7 +540,7 @@ describe("GatewayBrowserClient", () => {
       code: "BROWSER_WEBSOCKET_SECURITY_ERROR",
       reason: "security error",
       guidance:
-        "Browser refused the Gateway WebSocket for security reasons. Use wss:// when the Control UI is served over HTTPS/Tailscale Serve, or open the loopback dashboard at http://127.0.0.1:18789.",
+        "Browser refused the Gateway WebSocket for security reasons. Use wss:// when OpenClaw is served over HTTPS/Tailscale Serve, or open it on loopback at http://127.0.0.1:18789.",
     },
     {
       name: "SyntaxError",
