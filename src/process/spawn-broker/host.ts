@@ -397,6 +397,7 @@ export class SpawnBrokerHost {
       this.markNativeReady = undefined;
       receiver.clear();
       this.available = false;
+      this.resourceClaims?.closeAdmission();
       this.sendMessage = undefined;
       // Every failure retires the transport, including send/receive failures while
       // IPC is still connected. The broker ignores supervisor signals until this

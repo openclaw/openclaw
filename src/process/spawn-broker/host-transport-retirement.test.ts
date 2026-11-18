@@ -240,6 +240,7 @@ it.each([
   "native callback",
   "startup receipt",
   "child error",
+  "disconnect",
   "pipe setup",
   "pipe receipt callback",
   "pipe receipt throw",
@@ -251,6 +252,8 @@ it.each([
     const fixture = brokerFixture();
     const { host, worker } = fixture;
     await fixture.ready();
+    const admissionAtDisconnect = vi.fn(() => host.nativeResourceAdmissionClosed);
+    worker.once("disconnect", admissionAtDisconnect);
     const failed = createDeferredCore<Error>();
     const callbacks = { message: vi.fn(), failed: vi.fn((error: Error) => failed.resolve(error)) };
     const lease = fixture.capture(callbacks);
@@ -290,6 +293,8 @@ it.each([
       });
     } else if (failure === "child error") {
       worker.emit("error", new Error("synthetic child IPC error"));
+    } else if (failure === "disconnect") {
+      fixture.disconnect();
     } else if (failure === "pipe setup") {
       worker.emit("message", { type: "pipe", id: child.requestId, fd: 1 });
     } else if (failure === "orphan launch refusal") {
@@ -308,8 +313,13 @@ it.each([
       });
     }
 
+    if (failure === "disconnect") {
+      expect(host.nativeResourceAdmissionClosed).toBe(true);
+      expect(() => fixture.capture()).toThrow();
+    }
     // Proxy rejection and failed write delivery are not native settlement receipts.
     await failed.promise;
+    expect(admissionAtDisconnect).toHaveReturnedWith(true);
     await child.waitForClose();
     expect(fixture.disconnect).toHaveBeenCalledOnce();
     expect(fixture.kill).not.toHaveBeenCalled();
