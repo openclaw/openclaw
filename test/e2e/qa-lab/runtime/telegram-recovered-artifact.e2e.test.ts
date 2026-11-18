@@ -14,12 +14,20 @@ import {
   startQaMockOpenAiServer,
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
-import { isProjectedForwardedMessage } from "../../../../src/gateway/chat-display-projection.helpers.js";
+import {
+  hasTranscriptMediaFacts,
+  isProjectedForwardedMessage,
+} from "../../../../src/gateway/chat-display-projection.helpers.js";
 import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
 import { listenLoopback } from "../../../helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
+import {
+  createRequestSummary,
+  deliveryQueueDiagnostics,
+  rethrowWithDeliveryDiagnostics,
+} from "./delivery-diagnostics.test-support.js";
 import {
   bindTelegramProof,
   telegramProofChannel,
@@ -66,12 +74,35 @@ const toolCalls: JsonObject[] = [];
 const completedWrites: JsonObject[] = [];
 const finalizers: Array<{ requestId: number; callId: unknown }> = [];
 const markerResponses: boolean[] = [];
+const requests = createRequestSummary();
+const modelTrace: Array<{
+  requestId: number;
+  transport: "POST";
+  latestUserHasMarker: boolean;
+  replyHasMarker: boolean;
+  toolCalls: Array<{ callId: string | null; write: boolean }>;
+  toolResults: Array<string | null>;
+}> = [];
+const traceCallId = (id: unknown) => (typeof id === "string" ? sliceUtf16Safe(id, 0, 96) : null);
+let webSocketUpgradeAttempts = 0;
 let overloads = 0;
 let modelRequestId = 0;
 let overloadedRequestId = 0;
 const marker = `QA-RECOVERED-ARTIFACT-${randomUUID()}`;
 const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
   const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+  const operation =
+    /^\/bot[^/]+\/(getMe|getUpdates|getChat|sendMessage|sendDocument|sendChatAction)$/u.exec(
+      pathname,
+    )?.[1];
+  requests.record(
+    req.method ?? "OTHER",
+    operation
+      ? `/bot/:token/${operation}`
+      : pathname === "/v1/responses"
+        ? "/v1/responses"
+        : "/other",
+  );
   if (!pathname.startsWith("/v1/") && !pathname.endsWith("/sendDocument")) {
     await api.handle(req, res);
     return;
@@ -81,8 +112,35 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     const body = raw.length ? (JSON.parse(raw.toString()) as JsonObject) : {};
     const input = (body.input ?? []) as JsonObject[];
     const modelRequest = pathname === "/v1/responses";
+    let trace: (typeof modelTrace)[number] | undefined;
     if (modelRequest) {
       modelRequestId += 1;
+    }
+    // This HTTP proxy rejects upgrades before they can exchange model frames.
+    if (modelRequest && req.headers.upgrade?.toLowerCase() === "websocket") {
+      webSocketUpgradeAttempts += 1;
+    }
+    if (modelRequest && req.method === "POST") {
+      trace = {
+        requestId: modelRequestId,
+        transport: "POST",
+        latestUserHasMarker: Boolean(
+          JSON.stringify(input.findLast((item) => item.role === "user"))?.includes(marker),
+        ),
+        replyHasMarker: false,
+        toolCalls: [],
+        toolResults: input
+          .filter(
+            (item) =>
+              item.type === "function_call_output" || item.type === "custom_tool_call_output",
+          )
+          .slice(-4)
+          .map((item) => traceCallId(item.call_id)),
+      };
+      modelTrace.push(trace);
+      if (modelTrace.length > 8) {
+        modelTrace.shift();
+      }
     }
     const completedWrite = input.find(
       (item) =>
@@ -130,7 +188,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           (item.type === "function_call" || item.type === "custom_tool_call")
         ) {
           toolCalls.push(item);
-          if (JSON.stringify(item).includes(FILE_NAME)) {
+          const write = JSON.stringify(item).includes(FILE_NAME);
+          if (trace && trace.toolCalls.length < 4) {
+            trace.toolCalls.push({ callId: traceCallId(item.call_id), write });
+          }
+          if (write) {
             writeCalls.push(item);
           }
         }
@@ -142,6 +204,9 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         )
       ) {
         markerResponses.push(finalizer);
+        if (trace) {
+          trace.replyHasMarker = true;
+        }
       }
     }
     res.writeHead(upstream.status, {
@@ -327,6 +392,7 @@ test("delivers a recovered artifact once while preserving its inter-session tran
     expect(documents).toHaveLength(0);
     // Exclude seed-run context reads, but count every recovery tool call.
     const recoveryToolStart = toolCalls.length;
+    const artifactLogStart = gateway.markLogs();
     const receipt = (await gateway.call("chat.send", {
       sessionKey,
       message: `Empty response after write recovery QA check: write ${FILE_NAME}, then reply with exact marker: \`${marker}\nMEDIA:./${FILE_NAME}\`.`,
@@ -344,8 +410,70 @@ test("delivers a recovered artifact once while preserving its inter-session tran
       { runId: receipt.runId, timeoutMs: 30_000 },
       { timeoutMs: 35_000 },
     );
-    expect(waited).toMatchObject({ status: "ok" });
-    await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
+    try {
+      expect(waited).toMatchObject({ status: "ok" });
+      await expect.poll(() => documents.length, { timeout: 30_000 }).toBe(1);
+    } catch (error) {
+      const authoredHistory = await gateway
+        .call("chat.history", { sessionKey, limit: 30 }, { timeoutMs: 1_000 })
+        .then((result: unknown) => {
+          const { messages } = result as { messages: Array<Record<string, unknown>> };
+          const authored = messages.filter(
+            (message) => message.role === "assistant" && !isProjectedForwardedMessage(message),
+          );
+          return {
+            marker: authored.some((message) => JSON.stringify(message.content).includes(marker)),
+            media: authored.some(
+              (message) =>
+                hasTranscriptMediaFacts(message) ||
+                (Array.isArray(message.content) &&
+                  message.content.some((block) => block?.type === "attachment")),
+            ),
+          };
+        })
+        .catch(() => "unavailable");
+      rethrowWithDeliveryDiagnostics(error, () => {
+        const logs = gateway.readLogsSince(artifactLogStart);
+        return {
+          runId: receipt.runId,
+          overloadedRequestId,
+          finalizers: finalizers.slice(-4).map(({ requestId, callId }) => ({
+            requestId,
+            callId: traceCallId(callId),
+          })),
+          documentsReceived: documents.length,
+          webSocketUpgradeAttempts,
+          modelTrace,
+          requests: requests.snapshot(),
+          authoredHistory,
+          ...deliveryQueueDiagnostics(gateway, [sessionKey], []),
+          finalizationAndDispatch: logs
+            .split("\n")
+            .flatMap((line) => {
+              if (line.includes("running isolated finalization")) {
+                return ["finalization_started"];
+              }
+              if (line.includes("settled-turn finalization completed without a visible answer")) {
+                return ["finalization_empty"];
+              }
+              if (line.includes("settled-turn finalization failed:")) {
+                return ["finalization_failed"];
+              }
+              if (line.includes("webchat media finalization failed:")) {
+                return ["media_finalization_failed"];
+              }
+              if (line.includes("Failed to route reply to telegram:")) {
+                return ["telegram_dispatch_failed"];
+              }
+              if (line.includes("followup queue: origin reply suppressed by source policy")) {
+                return ["origin_dispatch_suppressed"];
+              }
+              return [];
+            })
+            .slice(-6),
+        };
+      });
+    }
     const history = (await gateway.call("chat.history", { sessionKey, limit: 30 })) as {
       messages: Array<{ role: string; content: unknown }>;
     };
