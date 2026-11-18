@@ -90,6 +90,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Telnyx (AI inference)](/providers/telnyx)
 - [Tencent Cloud (TokenHub / TokenPlan)](/providers/tencent)
 - [Together AI](/providers/together)
+- [Unsloth Studio (local models)](/providers/unsloth)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [vLLM (local models)](/providers/vllm)

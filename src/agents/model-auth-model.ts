@@ -460,7 +460,13 @@ export function applyAuthHeaderOverride<T extends Pick<Model, "provider" | "head
     return sentinelModel;
   }
   const providerConfig = resolveMergedModelProviderConfig(cfg, sentinelModel.provider);
-  if (!providerConfig?.authHeader) {
+  // Unsloth Studio keys are bearer tokens. Default that header on unless the
+  // provider entry explicitly turns it off, so an env-backed token is sent.
+  const useBearerAuth =
+    providerConfig?.authHeader === true ||
+    (providerConfig?.authHeader !== false &&
+      normalizeProviderId(sentinelModel.provider) === "unsloth");
+  if (!useBearerAuth) {
     return sentinelModel;
   }
   // Explicit request auth already owns the credential-bearing headers. The
