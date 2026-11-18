@@ -585,6 +585,7 @@ test.each(["view", "invited"] as const)(
       const viewer = ensureProfileForEmail("worker-search@example.test").id;
       const context = requestContext({
         agents: { entries: { main: {} } },
+        tools: { sessions: { visibility: "all" } },
         gateway: {
           roles: {
             default: "viewer",
@@ -597,8 +598,8 @@ test.each(["view", "invited"] as const)(
       setRuntimeConfigSnapshot(context.getRuntimeConfig());
       const client = identifiedClient(viewer);
       const read = transcriptSearch.searchSessionTranscripts;
-      for (const scoped of [true, false]) {
-        const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
+      for (const mode of ["scope", "keys", "recall"] as const) {
+        const key = await seed("main", `worker-revoked-${mode}`, "foreign", "needle");
         if (others === "invited") {
           await addSessionMember(
             { agentId: "main", sessionKey: key },
@@ -623,10 +624,23 @@ test.each(["view", "invited"] as const)(
         try {
           const response = await search(context, client, {
             query: "needle",
-            ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
+            ...(mode === "scope"
+              ? { scope: {} }
+              : mode === "keys"
+                ? { sessionKeys: [key] }
+                : {
+                    recall: {
+                      requesterAgentId: "main",
+                      requesterSessionKey: "agent:main:main",
+                      visibility: "all",
+                    },
+                  }),
           });
           expect(response.ok).toBe(true);
-          expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
+          expect(response.payload).toEqual({
+            results: [],
+            ...(mode === "scope" ? { sessions: [] } : {}),
+          });
         } finally {
           spy.mockRestore();
         }
