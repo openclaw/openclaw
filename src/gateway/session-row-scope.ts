@@ -260,10 +260,22 @@ export function prepareSessionRowScopes(
   prepared: CombinedSessionStoreScopeTargets,
 ) {
   const ownerAgentIds: ReadonlySet<string> = new Set(listAgentIds(cfg));
-  // Resident stores are keyed by canonical filename; another spelling of the same file
-  // (a different case on a case-insensitive volume) must select that store.
-  const residentPath = (pathname: string) =>
-    residentPaths.get(pathname) ?? residentPaths.get(resolveDatabasePathKey(pathname)) ?? pathname;
+  const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
+  // Resident stores are keyed by canonical filename. Admission may name the same file
+  // another way (a different case on a case-insensitive volume), so resolve each physical
+  // target once here; row queries then compare the prepared strings only.
+  const residentTargets = new Map<string, string>();
+  const residentTarget = (pathname: string) => {
+    let target = residentTargets.get(pathname);
+    if (target === undefined) {
+      target =
+        residentPaths.get(pathname) ??
+        residentPaths.get(resolveDatabasePathKey(pathname)) ??
+        pathname;
+      residentTargets.set(pathname, target);
+    }
+    return target;
+  };
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const admittedIdentity = (pathname: string) => {
     const identity = getSqliteDatabaseAdmissionIdentityForPath(pathname);
@@ -306,11 +318,11 @@ export function prepareSessionRowScopes(
         const agentId = identity.slice(0, separator);
         const locator = path.resolve(identity.slice(separator + 1));
         const owners = aliases.get(locator) ?? new Map<string, string>();
-        owners.set(agentId, residentPath(physical.storePath));
+        owners.set(agentId, residentTarget(physical.storePath));
         aliases.set(locator, owners);
       }
       const paths = resolved.durableTargets.map((target) =>
-        residentPath(
+        residentTarget(
           expectDefined(
             resolved.physicalTargets.get(`${target.agentId}\0${target.storePath}`),
             "physical source",
