@@ -1076,7 +1076,7 @@ span.new-session-page__select {
 /* Keep the keyboard's visible canvas separate from its panned layout extent. */
 :root[data-shell-keyboard] .new-session-page__scroll {
   /* Even a roomy keyboard canvas needs space for the identity, tray, and Send. */
-  --new-session-draft-height-limit: 34cqh;
+  --new-session-draft-height-limit: max(48px, 25cqh);
 
   container: new-session / size;
   max-height: var(--shell-visible-height);
