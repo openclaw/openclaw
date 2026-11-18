@@ -23,7 +23,7 @@ import {
 } from "../worker/node-bundle-install-protocol.js";
 import { sameWorkerBuild } from "../worker/worker-build-identity.js";
 import {
-  readReceipt,
+  readNodeWorkerBundleReceipt,
   validateInstalledBundle,
   verifyBundleArchive,
   publishExpandedBundle,
@@ -500,7 +500,7 @@ export class NodeWorkerBundleInstaller {
         "bundles",
         params.bundleHash,
       );
-      const receipt = await readReceipt(bundleDir);
+      const receipt = await readNodeWorkerBundleReceipt(bundleDir);
       const installed =
         receipt?.bundleHash === params.bundleHash &&
         (await validateInstalledBundle(bundleDir, receipt));

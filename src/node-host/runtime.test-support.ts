@@ -57,13 +57,15 @@ vi.mock("./node-worker-workspace.js", () => ({
   },
 }));
 
-vi.mock("./plugin-node-host.js", () => ({
+vi.mock("./plugin-node-host.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-node-host.js")>()),
   ensureNodeHostPluginRegistry: vi.fn(async () => ({
     ready: Promise.resolve(),
     isReady: () => true,
   })),
   hasRegisteredNodeHostCommandActiveWork: mocks.pluginHasActiveWork,
   notifyRegisteredNodeHostCommandDisconnect: mocks.disconnectPlugins,
+  watchRegisteredNodeHostCommandAvailability: () => async () => {},
   isRegisteredNodeHostCommandDuplex: vi.fn((command: string) => command === "test.duplex"),
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: ["terminal"],

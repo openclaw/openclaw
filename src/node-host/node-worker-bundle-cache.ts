@@ -55,7 +55,7 @@ export async function verifyBundleArchive(params: {
   }
 }
 
-export async function readReceipt(
+export async function readNodeWorkerBundleReceipt(
   bundleDir: string,
 ): Promise<WorkerAdmissionHandshake | undefined> {
   try {
@@ -87,7 +87,7 @@ export async function validateInstalledBundle(
     if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
       return false;
     }
-    const receipt = await readReceipt(bundleDir);
+    const receipt = await readNodeWorkerBundleReceipt(bundleDir);
     if (!receipt || !sameWorkerBuild(receipt, expected)) {
       return false;
     }
