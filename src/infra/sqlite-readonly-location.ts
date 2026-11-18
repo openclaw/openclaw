@@ -653,15 +653,55 @@ export function prepareSqliteReadOnlyLocationSyncInProcess(
   );
 }
 
+// Every attempt saw committed writes reach the main file or restart the WAL.
+const LIVE_WRITER_CHANGES: ReadonlySet<SqliteSnapshotChangeReason> = new Set([
+  "wal-copy-unstable",
+  "main-changed-during-copy",
+  "wal-changed-during-copy",
+]);
+
 /** Artifact-preserving byte copy in the isolated child, without source extent sharing. */
-export function prepareSqliteReadOnlyCopyInProcess(
+export async function prepareSqliteReadOnlyCopyInProcess(
   pathname: string,
   stagingRoot?: SqliteSnapshotDestination,
   expectedSourceIdentity?: DatabaseFileIdentity,
 ): Promise<PreparedSqliteReadOnlyLocation> {
-  return copyPreparedLocation(
-    prepareArtifactPreservingCopy(pathname, stagingRoot, expectedSourceIdentity),
-  );
+  try {
+    return await copyPreparedLocation(
+      prepareArtifactPreservingCopy(pathname, stagingRoot, expectedSourceIdentity),
+    );
+  } catch (error) {
+    if (!(error instanceof SqliteSourceChangedError) || !LIVE_WRITER_CHANGES.has(error.reason)) {
+      throw error;
+    }
+    const canonicalPath = fs.realpathSync.native(pathname);
+    const source = openPinnedFile(canonicalPath, expectedSourceIdentity);
+    try {
+      const sidecars = readSourceSidecars(canonicalPath);
+      if (
+        readSourceJournalMode(canonicalPath, expectedSourceIdentity) !== "wal" ||
+        !sidecars.wal ||
+        !sidecars.shm ||
+        sidecars.journal
+      ) {
+        throw error;
+      }
+      // Only a live writer can keep checkpointing past every byte copy, and it holds the
+      // WAL index open: one read transaction cannot recover it or change its 96-byte
+      // commit header, only reader slots after it. Idle and crashed families, which a
+      // native open could recover, never churn and keep their byte-neutral copy.
+      const prepared = await createOnlineReadOnlyBackup(canonicalPath, stagingRoot);
+      try {
+        assertPinnedIdentityUnchanged(source);
+      } catch (identityError) {
+        prepared.cleanup();
+        throw identityError;
+      }
+      return prepared;
+    } finally {
+      fs.closeSync(source.descriptor);
+    }
+  }
 }
 
 export function prepareSqliteReadOnlyLocationInProcess(

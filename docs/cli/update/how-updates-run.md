@@ -706,6 +706,10 @@ Live snapshots use SQLite read transactions and private backups while writers
 continue. Artifact-preserving planning and Doctor checks retain byte-neutral
 copies that leave source SHM unchanged. WAL copies capture a bounded prefix
 within one verified WAL generation, so appended commits do not require a quiet database.
+When a live writer checkpoints during every copy attempt, the WAL family takes
+one read transaction instead of refusing: that writer keeps the WAL index current,
+so SQLite may update reader slots but not the commit header that update captures
+compare. Families without a live index never churn and stay byte-neutral.
 Incomplete WAL families and crash journals are recovered privately without
 creating missing source sidecars. Inspection budgets include database
 and journal sizes, cold startup, and repeated IO passes for every discovered
