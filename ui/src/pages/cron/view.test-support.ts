@@ -137,7 +137,7 @@ export function getElement<T extends Element>(
   return element;
 }
 
-export function selectSegmented(control: HTMLElement) {
+function selectSegmented(control: HTMLElement) {
   getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
 }
 
