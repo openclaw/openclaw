@@ -72,7 +72,8 @@ const documents: Array<{ chatId: string; name: string; content: string }> = [];
 const writeCalls: JsonObject[] = [];
 const toolCalls: JsonObject[] = [];
 const completedWrites: JsonObject[] = [];
-const finalizers: Array<{ requestId: number; callId: unknown; emittedArtifact: boolean | null }> = [];
+const finalizers: Array<{ requestId: number; callId: unknown; emittedArtifact: boolean | null }> =
+  [];
 const markerResponses: boolean[] = [];
 const requests = createRequestSummary();
 let overloads = 0;
@@ -87,7 +88,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
     )?.[1];
   requests.record(
     req.method,
-    operation ? `/bot/:token/${operation}` : pathname === "/v1/responses" ? "/v1/responses" : "/other",
+    operation
+      ? `/bot/:token/${operation}`
+      : pathname === "/v1/responses"
+        ? "/v1/responses"
+        : "/other",
   );
   if (!pathname.startsWith("/v1/") && !pathname.endsWith("/sendDocument")) {
     await api.handle(req, res);

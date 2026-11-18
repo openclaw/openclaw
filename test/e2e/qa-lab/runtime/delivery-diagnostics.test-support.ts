@@ -22,7 +22,8 @@ export function deliveryErrorCode(error: string | null | undefined) {
     return "unresolved_send";
   }
   return (
-    /\b(?:EACCES|ECONNREFUSED|ECONNRESET|ENOENT|ETIMEDOUT|SQLITE_BUSY)\b/u.exec(error)?.[0] ?? "other"
+    /\b(?:EACCES|ECONNREFUSED|ECONNRESET|ENOENT|ETIMEDOUT|SQLITE_BUSY)\b/u.exec(error)?.[0] ??
+    "other"
   );
 }
 
@@ -59,12 +60,14 @@ function readQueue(env: NodeJS.ProcessEnv, sessionKeys: string[], ids: string[],
             return {
               id: row.id,
               queue: row.queue_name,
-              at: Number(row.updated_at),
+              at: row.updated_at,
               status: row.status,
               recoveryState: row.recovery_state,
-              attempts: entry ? resolveDeliveryQueueAttemptCount(entry) : Number(row.retry_count),
+              attempts: entry ? resolveDeliveryQueueAttemptCount(entry) : row.retry_count,
               leaseOwnerPresent: Boolean(
-                entry?.producerClaimId || entry?.platformSendAttemptId || (entry && "owner" in entry),
+                entry?.producerClaimId ||
+                entry?.platformSendAttemptId ||
+                (entry && "owner" in entry),
               ),
               lastErrorCode: deliveryErrorCode(row.last_error),
               prepared: prepared?.entries
@@ -143,13 +146,14 @@ export function createRequestSummary() {
   const counts = new Map<string, { method: string; path: string; count: number }>();
   return {
     record(method: string | undefined, path: string) {
-      method = method && /^(?:GET|POST|PUT|PATCH|DELETE|HEAD)$/u.test(method) ? method : "OTHER";
-      const key = `${method} ${path}`;
+      const httpMethod =
+        method && /^(?:GET|POST|PUT|PATCH|DELETE|HEAD)$/u.test(method) ? method : "OTHER";
+      const key = `${httpMethod} ${path}`;
       const existing = counts.get(key);
       if (existing) {
         existing.count += 1;
       } else {
-        counts.set(key, { method, path, count: 1 });
+        counts.set(key, { method: httpMethod, path, count: 1 });
       }
     },
     snapshot: () => [...counts.values()],
@@ -158,7 +162,7 @@ export function createRequestSummary() {
 
 export async function rethrowWithDeliveryDiagnostics(
   error: unknown,
-  collect: () => unknown | Promise<unknown>,
+  collect: () => object | Promise<object>,
 ): Promise<never> {
   if (error instanceof Error) {
     let diagnostics = "unavailable";
