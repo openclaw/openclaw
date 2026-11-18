@@ -714,6 +714,21 @@ describe("managed service update handoff", () => {
     }
   });
 
+  it("refuses a Windows Scheduled Task handoff before spawning the updater", async () => {
+    // Stopping the task would end the Job that also holds the helper (#169844).
+    await expect(
+      startHandoff({
+        supervisor: "schtasks",
+        env: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway" },
+        meta: { sessionKey },
+      }),
+    ).rejects.toMatchObject({
+      reason: "managed-service-handoff-failed",
+      message: expect.stringContaining("Nothing was changed"),
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   itUnix("refuses missing Node before parking the Gateway", async () => {
     const originalExecPath = process.execPath;
     const runtimePaths = await import("../daemon/runtime-paths.js");
@@ -737,7 +752,7 @@ describe("managed service update handoff", () => {
     { supervisors: [undefined], timeoutMs: 1_800_000 },
     { supervisors: ["systemd"], timeoutMs: undefined },
     { supervisors: ["systemd"], timeoutMs: 1_800_000 },
-    { supervisors: ["launchd", "schtasks"], timeoutMs: 1_800_000 },
+    { supervisors: ["launchd"], timeoutMs: 1_800_000 },
   ] as const)(
     "preserves launch metadata for $supervisors (timeout=$timeoutMs)",
     async ({ supervisors, timeoutMs }) => {
@@ -776,9 +791,7 @@ describe("managed service update handoff", () => {
           ? { ...systemd.env, INVOCATION_ID: "gateway-invocation", KEEP_ME: "1" }
           : supervisor === "launchd"
             ? { OPENCLAW_LAUNCHD_LABEL: "test.gateway", HOME: "/Users/test" }
-            : supervisor === "schtasks"
-              ? { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway" }
-              : { ...supervisorEnv, ...serviceIdentityEnv, KEEP_ME: "1" };
+            : { ...supervisorEnv, ...serviceIdentityEnv, KEEP_ME: "1" };
         const result = await startHandoff({
           timeoutMs,
           ...(systemd

@@ -1,2 +1,0 @@
-# One real devices-view regression: preserve warning DOM across fresh snapshots, update details, and remove resolved warnings.
-50

@@ -21,7 +21,6 @@ import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
 import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
-import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
 import { participantLabel, formatSessionAge, sessionAttribution } from "./session-hovercard.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
@@ -573,16 +572,6 @@ export function SessionHovercard(props: SessionHovercardInput) {
               </section>
             </Show>
           </div>
-        </Show>
-        <Show when={props.row?.attention?.kind === "error"}>
-          <section class="session-hovercard__section session-hovercard__error">
-            <span class="session-hovercard__error-icon" aria-hidden="true">
-              <Icon name="alertTriangle" />
-            </span>
-            <span>
-              {props.row?.attention ? sessionAttentionSubtitle(props.row.attention, t) : ""}
-            </span>
-          </section>
         </Show>
         <Show when={commentary() || headsUp()}>
           <section

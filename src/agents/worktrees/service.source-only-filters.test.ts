@@ -133,6 +133,22 @@ it("keeps source-only clones away from an inherited external Git index", async (
   expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
 });
 
+it("keeps ordinary and source-only templates warm when their callers interleave", async () => {
+  for (const [index, sourceOnly] of [false, true, false, true].entries()) {
+    const created = await service.create({
+      repoRoot: repo,
+      name: `interleaved-${index}`,
+      baseRef: "HEAD",
+      runSetupScript: false,
+      provisionIgnoredFiles: !sourceOnly,
+    });
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+    await fs.writeFile(path.join(created.path, "README.md"), `task ${index}\n`);
+  }
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+});
+
 it("reuses and refreshes source-only templates without running host filters", async () => {
   await configure("repository", "smudge", repo);
   const first = await createSourceOnly("template-first");
@@ -159,8 +175,11 @@ it("reuses and refreshes source-only templates without running host filters", as
   const third = await createSourceOnly("template-third");
   expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new revision\r\n");
   expect(backend.createTemplate).toHaveBeenCalledTimes(2);
-  expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
-  expect((await readTemplateAsync(process.env, original!.cacheKey))?.id).toBe(policyTemplate?.id);
+  expect(backend.cloneTemplate).toHaveBeenCalledTimes(5); // Refresh stages an independent generation.
+  expect((await readTemplateAsync(process.env, original!.cacheKey))?.id).not.toBe(
+    policyTemplate?.id,
+  );
+  expect(await fs.readFile(path.join(policyTemplate!.path, "README.md"), "utf8")).toBe("base\r\n");
   await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
 });
 

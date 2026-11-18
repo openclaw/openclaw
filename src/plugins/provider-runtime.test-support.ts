@@ -6,6 +6,18 @@ import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { AnyAgentTool } from "./types.js";
 
 type ProviderRuntime = typeof import("./provider-runtime.js");
+
+export async function loadProviderRuntimeTestOwners() {
+  // Load after suite mocks are installed so every owner uses the same registry hooks.
+  const auth = await import("./provider-runtime-auth.js");
+  const catalog = await import("./provider-catalog-augment.js");
+  const failover = await import("./provider-failover.js");
+  const { createProviderExternalAuthResolver } = await import("./provider-external-auth-core.js");
+  const hooks = await import("./provider-hook-runtime.js");
+  const externalAuth = createProviderExternalAuthResolver(hooks);
+  return { auth, catalog, failover, externalAuth, hooks };
+}
+
 export const PROVIDER_RUNTIME_TEST_MODEL: ProviderRuntimeModel & {
   headers?: Record<string, string>;
 } = {
@@ -76,7 +88,7 @@ export function expectCodexMissingAuthHint(
 }
 
 export async function expectAugmentedCodexCatalog(
-  augmentCatalog: ProviderRuntime["augmentModelCatalogWithProviderPlugins"],
+  augmentCatalog: typeof import("./provider-catalog-augment.js").augmentModelCatalogWithProviderPlugins,
   expectedEntries = expectedAugmentedOpenaiCodexCatalogEntries,
 ) {
   const env = process.env;

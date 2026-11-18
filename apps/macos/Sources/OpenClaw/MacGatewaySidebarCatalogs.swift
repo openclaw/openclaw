@@ -8,7 +8,7 @@ extension MacGatewayChatTransport: OpenClawSidebarCatalogTransport {
         AsyncStream { continuation in
             let task = Task { @MainActor in
                 var observedLease: GatewayConnection.ServerLease?
-                for await delivery in await self.connection.subscribe() {
+                for await delivery in await self.connection.subscribe(matching: { _ in false }) {
                     guard !Task.isCancelled else { break }
                     if case .disconnected = delivery.event, observedLease == delivery.serverLease {
                         observedLease = nil

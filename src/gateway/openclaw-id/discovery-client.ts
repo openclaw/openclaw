@@ -23,6 +23,8 @@ export class DiscoveryRequestError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** The published binding a descriptor refusal carries (untrusted until verified). */
+    readonly binding?: unknown,
   ) {
     super(message);
   }
@@ -80,15 +82,19 @@ export function createDiscoveryClient(params: {
     if (!response.ok) {
       let code = "unavailable";
       let message = `Discovery ${endpoint} failed with HTTP ${response.status}`;
+      let binding: unknown;
       try {
         // SAFETY: every field is optional and read with ?? fallbacks; a non-object body throws into the catch.
-        const parsed = JSON.parse(text) as { error?: { code?: string; message?: string } };
+        const parsed = JSON.parse(text) as {
+          error?: { code?: string; message?: string; binding?: unknown };
+        };
         code = parsed.error?.code ?? code;
         message = parsed.error?.message ?? message;
+        binding = parsed.error?.binding;
       } catch {
         // Non-JSON error bodies keep the generic message.
       }
-      throw new DiscoveryRequestError(response.status, code, message);
+      throw new DiscoveryRequestError(response.status, code, message, binding);
     }
     // SAFETY: T is the response shape Discovery's API documents for this endpoint; callers read it defensively.
     return (text ? JSON.parse(text) : undefined) as T;
@@ -104,8 +110,25 @@ export function createDiscoveryClient(params: {
     /** Reads only this Gateway's registration, authenticated by the currently registered K_gw. */
     getRegistration: (clawId: string) =>
       call<GetRegistrationResponse>("getRegistration", { claw_id: clawId }),
-    publishDescriptor: (descriptor: ClawDescriptor) =>
-      call<void>("publishDescriptor", { claw_id: descriptor.claw_id }, { descriptor }),
+    /**
+     * Publishes the descriptor; a re-bind's new binding carries its snapshot in the same
+     * write (discovery.md, "Re-bind"), so Discovery never holds one without the other.
+     */
+    publishDescriptor: (
+      descriptor: ClawDescriptor,
+      rebind?: { snapshot: SignedStatement<"MembershipSnapshot">; code: string },
+    ) =>
+      call<void>(
+        "publishDescriptor",
+        { claw_id: descriptor.claw_id },
+        rebind ? { descriptor, ...rebind } : { descriptor },
+      ),
+    /**
+     * The descriptor Discovery publishes for this claw, read with the owner account's one-time
+     * code (not spent). Untrusted: the owner verifies it with the root before using it.
+     */
+    getPublishedDescriptor: (clawId: string, code: string) =>
+      call<{ descriptor: unknown }>("getPublishedDescriptor", { claw_id: clawId }, { code }),
     publishSnapshot: (clawId: string, snapshot: SignedStatement<"MembershipSnapshot">) =>
       call<void>("publishSnapshot", { claw_id: clawId }, { snapshot }),
     /** Long-polls the Gateway mailbox after `cursor`. */

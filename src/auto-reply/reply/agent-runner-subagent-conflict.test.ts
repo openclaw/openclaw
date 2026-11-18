@@ -102,6 +102,7 @@ it("settles a reply visibly when the reactivation cohort changes before replacem
   const admission = createReplyInputAdmission({
     followupRun,
     replyOperation,
+    runId: "reply-followup",
     sessionKey,
     storePath: target.storePath,
     sourceTurnId: "reply-followup",

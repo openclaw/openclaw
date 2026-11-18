@@ -13,6 +13,10 @@ import {
 import { collectPackageDistImportErrors } from "./package-dist-imports.mjs";
 import { isRecord } from "./record-shared.mjs";
 
+const PATCHED_CIAO_NAME = "@homebridge/ciao";
+const PATCHED_CIAO_ENTRY = `${PATCHED_CIAO_NAME}/native.js`;
+const DIST_SCRIPT_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
+
 type BundledPackage = {
   entries: ReadonlySet<string>;
   files: string[];
@@ -160,9 +164,17 @@ export function collectBundledDependencyErrors({
   const errors: string[] = [];
   const dependencies = isRecord(packageJson.dependencies) ? packageJson.dependencies : {};
   const bundledDependencies = new Set(listBundleDependencies(packageJson));
-  const required = new Map<string, string>([
-    [PATCHED_MCP_NAME, "its patched runtime must not be replaced by the registry package"],
-  ]);
+  const patchedRuntime = "its patched runtime must not be replaced by the registry package";
+  const required = new Map<string, string>([[PATCHED_MCP_NAME, patchedRuntime]]);
+  // Registry Ciao lacks the patch-only native entry. Released packages that
+  // import the package root stay valid with the registry dependency.
+  if (
+    runtime.files.some(
+      (file) => DIST_SCRIPT_RE.test(file) && runtime.readText(file).includes(PATCHED_CIAO_ENTRY),
+    )
+  ) {
+    required.set(PATCHED_CIAO_NAME, patchedRuntime);
+  }
   if (requireBundledWorkspaceDeps) {
     required.set("@openclaw/ai", "it is private to the OpenClaw workspace");
   }

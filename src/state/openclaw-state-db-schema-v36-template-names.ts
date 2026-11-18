@@ -38,7 +38,7 @@ type VersionedTemplateTable = keyof Pick<
   | "template_cron_refs"
   | "template_mcp_server_refs"
 >;
-const recordVersions: readonly (readonly [
+export const TEMPLATE_RECORD_VERSIONS: readonly (readonly [
   VersionedTemplateTable,
   readonly (readonly [string, string])[],
 ])[] = [
@@ -241,7 +241,7 @@ function migrateTemplateStateNames(db: DatabaseSync, previousVersion: number): b
     }
     changed = true;
   }
-  for (const [table, versions] of recordVersions) {
+  for (const [table, versions] of TEMPLATE_RECORD_VERSIONS) {
     if (tables.has(table)) {
       for (const [previous, current] of versions) {
         executeSqliteQuerySync(
@@ -314,5 +314,5 @@ BEGIN
     ALTER TABLE agent_provenance ADD CONSTRAINT agent_provenance_created_via_check
       CHECK (created_via IN ('operator', 'agent', 'template'));
   END IF;
-  ${recordVersions.map(([table, versions]) => versionUpdates(table, versions)).join("\n")}
+  ${TEMPLATE_RECORD_VERSIONS.map(([table, versions]) => versionUpdates(table, versions)).join("\n")}
 END $template_names_v36$;`;

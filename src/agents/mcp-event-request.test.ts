@@ -11,7 +11,15 @@ const mocks = vi.hoisted(() => ({
   token: vi.fn(),
   authorizationRequired: vi.fn(),
 }));
-vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: mocks.lookup,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 // mock-isolation: Exercise the real guarded transport with deterministic external HTTP responses.
 vi.mock("../infra/net/undici-runtime.js", () => ({
   createHttp1Agent: () => ({ close: async () => {}, destroy: async () => {} }),

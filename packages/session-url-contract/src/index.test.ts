@@ -1,11 +1,46 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildControlUiCatalogSessionUrl, buildControlUiSessionPath } from "./index.js";
 import {
   matchControlUiCatalogSharePath,
   parseControlUiSessionPath,
   type ControlUiSessionPathTarget,
 } from "./parse.js";
+import { isIncognitoSessionKey } from "./session-key.js";
 import { buildControlUiCatalogSharePath } from "./share-build.js";
+
+it("rejects ordinary session keys without allocating normalized strings", () => {
+  const trim = vi.spyOn(String.prototype, "trim");
+  const lower = vi.spyOn(String.prototype, "toLowerCase");
+  let result: boolean;
+  let normalizations: number;
+  try {
+    result = isIncognitoSessionKey("  Agent:Main:Subagent:Ordinary-Session  ");
+    normalizations = trim.mock.calls.length + lower.mock.calls.length;
+  } finally {
+    trim.mockRestore();
+    lower.mockRestore();
+  }
+  expect(result).toBe(false);
+  expect(normalizations).toBe(0);
+});
+
+it.each<[string | undefined | null, boolean]>([
+  [undefined, false],
+  [null, false],
+  ["", false],
+  [" \tAgEnT:Main:DaShBoArD:InCoGnItO-Private\n", true],
+  ["agent:main:subagent:incognito-private", true],
+  ["agent:main:internal-session-effects:incognito-private", true],
+  ["agent:main:dashboard:incognito-", false],
+  ["agent:main:dashboard:incognito- \t\n", false],
+  ["\uFEFFagent:main:dashboard:incognito- a \t\n", true],
+  ["agent:main:ſubagent:incognito-private", false],
+  ["agent:main:other:incognito-private", false],
+  ["agent:main:dashboard:incognito-private:extra", false],
+  ["agent:main:dashboard:İNCOGNITO-private", false],
+])("classifies private session key %s", (key, expected) => {
+  expect(isIncognitoSessionKey(key)).toBe(expected);
+});
 
 const SHARE_ROUTE = {
   kind: "thread-id-prefix",

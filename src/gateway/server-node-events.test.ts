@@ -33,7 +33,7 @@ const {
   enqueueSystemEventEntry: enqueue,
   captureSessionEventTargetForHost: captureTarget,
   enqueueSessionEventForHost: handoff,
-  agentCommandFromIngress: dispatch,
+  agentCommandFromGatewayIngress: dispatch,
   upsertSessionEntryCore: touchSession,
   loadSessionEntry: lookupSession,
   registerApnsRegistration: registerApns,
@@ -628,7 +628,12 @@ describe("notifications changed events", () => {
       );
       expect(handoff).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ source: "device", agentId, sessionKey }),
+        expect.objectContaining({
+          source: "device",
+          agentId,
+          sessionKey,
+          replyExpectation: "optional",
+        }),
       );
     },
   );

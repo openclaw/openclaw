@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
 import type { OpenClawDatabaseSchemaPreflight } from "./openclaw-database-preflight.types.js";
@@ -37,6 +38,7 @@ function fixture<T>(targets: readonly T[], timed = false) {
     run(
       inspect: Parameters<typeof preflightAgentDatabasesBounded<T>>[1],
       canDefer?: (target: T) => boolean,
+      cleanClose?: (target: T) => boolean,
     ) {
       const run = preflightAgentDatabasesBounded(
         targets,
@@ -50,6 +52,7 @@ function fixture<T>(targets: readonly T[], timed = false) {
           ? {
               signal: gateway.signal,
               canDefer,
+              cleanClose,
               defer,
               track: (work) => tracked.push(work),
             }
@@ -110,6 +113,29 @@ it("shares one foreground wait across active and queued agent inspections", asyn
   ]);
 });
 
+it("inspects clean-closed stores before unsealed ones so only unsealed stores defer", async () => {
+  await using f = fixture([0, 1, 2, 3, 4, 5], true);
+  void f.run(
+    async (target, inspection) => {
+      if (target < 2) {
+        await f.pending[target]!.promise;
+      }
+      inspection.indeterminate.push({ kind: "agent", path: `agent-${target}`, reason: "fixture" });
+    },
+    () => true,
+    (target) => target >= 2,
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(f.settled).toBe(true);
+  expect(f.defer.mock.calls[0]![0].map(({ target }) => target)).toEqual([0, 1]);
+  expect(f.result.indeterminate.map((entry) => entry.path)).toEqual([
+    "agent-2",
+    "agent-3",
+    "agent-4",
+    "agent-5",
+  ]);
+});
+
 it("keeps unowned custom stores in strict foreground admission", async () => {
   await using f = fixture(["custom.sqlite"], true);
   const run = f.run(
@@ -131,7 +157,7 @@ it("keeps deferred inspections alive until the Gateway owner stops", async () =>
   await sqliteInspection.withSqliteReadOnlyWorkerScope(async () => {
     const foreground = f.run(
       async () => {
-        signal = sqliteInspection.resolveSqliteInspectionSignal();
+        signal = resolveSqliteInspectionSignal();
         await f.pending[0]!.promise;
         signal?.throwIfAborted();
       },

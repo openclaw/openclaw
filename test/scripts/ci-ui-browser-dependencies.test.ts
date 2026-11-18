@@ -10,6 +10,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 it.each([
   "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts",
   "ui/src/e2e/tooltip-first-activation.e2e.test.ts",
+  "ui/src/e2e/overlay-menu-swap-webkit.e2e.test.ts",
   "ui/src/e2e/logs-scroll.e2e.test.ts",
   "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
   "ui/src/e2e/chat-history-reading-stability.e2e.test.ts",
@@ -38,9 +39,23 @@ export default { test: {
   maxWorkers: 2, sequence: { sequencer: UiE2eSequencer },
 } };\n`,
   );
+  symlinkSync(
+    path.resolve("test/vitest/vitest.pattern-file.ts"),
+    local("test/vitest/vitest.pattern-file.ts"),
+  );
   for (const [command, body] of [
-    ["pnpm", 'printf "%s\\n" "$*" >> "$UI_BROWSER_INSTALLS"'],
+    [
+      "pnpm",
+      'printf "%s\\n" "$*" >> "$UI_BROWSER_INSTALLS"; [ "$*" != "--dir ui exec which playwright" ] || echo playwright',
+    ],
+    ["playwright", 'printf "playwright %s\\n" "$*" >> "$UI_BROWSER_INSTALLS"'],
     ["node", 'printf "%s\\n" "$@" > "$UI_BROWSER_ARGS"'],
+    // Keep the install's apt drop-in and mirror edits away from the host.
+    ["id", "echo 1000"],
+    [
+      "sudo",
+      '[ "$1" = -n ] && shift; [ "$1" = env ] && exec "$@"; [ "$1" != tee ] || cat > /dev/null',
+    ],
   ] as const) {
     workflow.writeExecutable(local(`bin/${command}`), ["#!/bin/sh", body]);
   }
@@ -68,7 +83,15 @@ export default { test: {
   };
   run(1);
   run(2);
-  expect(read("installs")).toBe("--dir ui exec playwright install --with-deps webkit\n");
+  expect(read("installs")).toBe(
+    [
+      "--dir ui exec which playwright",
+      "playwright install-deps webkit",
+      "--dir ui exec playwright install-deps webkit",
+      "--dir ui exec playwright install webkit",
+      "",
+    ].join("\n"),
+  );
   writeFileSync(local("installs"), "");
   run(1, [sibling]);
   expect(read("installs")).toBe("");

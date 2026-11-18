@@ -23,7 +23,7 @@ function linkDependencies(root: string, dependencies: Record<string, string>) {
   }
 }
 
-it("loads bundled Mistral and Bun proxy support from production dependencies", async () => {
+it("loads bundled provider SDKs and Bun proxy support from production dependencies", async () => {
   const root = createTempDir("openclaw-ai-package-");
   const outDir = path.join(root, "dist");
   const { bundles } = await build({
@@ -51,6 +51,8 @@ it("loads bundled Mistral and Bun proxy support from production dependencies", a
     expect(fs.readFileSync(path.join(outDir, "mistral.LICENSE"), "utf8")).toContain(
       "Apache License",
     );
+    expect(fs.readFileSync(path.join(outDir, "openai.LICENSE"), "utf8")).toContain("Apache");
+    expect(fs.readFileSync(path.join(outDir, "ws.LICENSE"), "utf8")).toContain("MIT");
     const script = `
       import assert from "node:assert/strict";
       import { registerHooks } from "node:module";
@@ -59,6 +61,8 @@ it("loads bundled Mistral and Bun proxy support from production dependencies", a
       let startedProvider = false;
       registerHooks({ resolve(specifier, context, next) {
         assert(!specifier.startsWith("@mistralai/"), "Mistral SDK must be bundled");
+        assert(specifier !== "openai" && !specifier.startsWith("openai/"),
+          "OpenAI SDK must be bundled");
         loadedDependencies.add(specifier);
         return next(specifier, context);
       }, load(url, context, next) {
@@ -101,6 +105,17 @@ it("loads bundled Mistral and Bun proxy support from production dependencies", a
       assert.deepEqual(result.content, [{ type: "text", text: "bundled response" }]);
       assert.equal(request.model, "mistral-test");
       assert.equal(request.messages[0].content, "hello");
+      const completion = await runtime.stream({
+        id: "openai-test", name: "OpenAI Test", api: "openai-completions",
+        provider: "openai", baseUrl: "https://openai.invalid", reasoning: false,
+        input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 128000, maxTokens: 8192
+      }, {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }]
+      }, { apiKey: "fixture-key" }).result();
+      assert.equal(completion.stopReason, "stop", JSON.stringify(completion));
+      assert.deepEqual(completion.content, [{ type: "text", text: "bundled response" }]);
+      assert.equal(request.model, "openai-test");
       assert(loadedDependencies.has("zod-to-json-schema"));
       if (process.argv[1] === "with-telemetry") {
         assert(loadedDependencies.has("@opentelemetry/semantic-conventions/incubating"));

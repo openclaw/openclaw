@@ -17,6 +17,7 @@ export function createPackageSwapResults(
   startedAt: number,
 ) {
   const warnings: string[] = [];
+  const diagnostics: string[] = [];
   const integrityFailures: NonNullable<UpdateStepResult["failureFacts"]> = [];
   const step = (
     exitCode: number,
@@ -33,6 +34,7 @@ export function createPackageSwapResults(
     stdoutTail,
     stderrTail,
     ...(warnings.length > 0 ? { warnings: [...warnings] } : {}),
+    ...(diagnostics.length > 0 ? { diagnostics: [...diagnostics] } : {}),
     ...(exitCode !== 0
       ? {
           failureFacts: integrityFailures.length
@@ -154,6 +156,19 @@ export function createPackageSwapResults(
       packageRollbackVerified: boolean,
       baselineError?: Error,
     ): StagedPackageSwapResult {
+      if (baselineError?.cause instanceof PackageIntegrityMismatchError) {
+        const cause = baselineError.cause;
+        diagnostics.push(cause.message);
+        integrityFailures.push(
+          ...cause.differences.map((message) =>
+            createUpdateFailureFact({
+              check: "package-swap",
+              code: "baseline-scan-failed",
+              message,
+            }),
+          ),
+        );
+      }
       return {
         status: "failed",
         activePackageRoot,

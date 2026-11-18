@@ -1,3 +1,0 @@
-# Project-qualified scores, outcome isolation, invalid models, and prior dependency gaps.
-# Includes the existing native decision integration assertions.
-134

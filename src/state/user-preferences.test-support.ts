@@ -27,9 +27,12 @@ export function getUserPreferences(
 export function setUserPreferences(
   profileId: string,
   entries: Record<string, unknown>,
-  options: OpenClawStateDatabaseOptions & { expectedEntries?: Record<string, unknown> } = {},
+  options: OpenClawStateDatabaseOptions & {
+    expectedEntries?: Record<string, unknown>;
+    trustedProxyGitCoauthor?: true;
+  } = {},
 ): Result<void, UserPreferenceError> {
-  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries);
+  const prepared = prepareUserPreferenceUpdate(entries, options.expectedEntries, options);
   if (!prepared.ok) {
     return prepared;
   }

@@ -1,10 +1,43 @@
 import { spawnSync } from "node:child_process";
-import { describe, expect, it, vi } from "vitest";
-import { readProcessTreeCpuMs } from "../../scripts/lib/gateway-bench-probes.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  readProcessTreeCpuMs,
+  startGatewayRssSampling,
+} from "../../scripts/lib/gateway-bench-probes.ts";
 
 vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
 
+afterEach(() => {
+  vi.useRealTimers();
+  vi.resetAllMocks();
+});
+
 describe("gateway benchmark process probes", () => {
+  it("leaves an idle interval between slow process measurements", () => {
+    vi.useFakeTimers();
+    let measurements = 0;
+    vi.mocked(spawnSync).mockImplementation(() => {
+      measurements++;
+      if (measurements < 5) {
+        vi.advanceTimersByTime(200);
+      }
+      return {
+        status: 0,
+        stdout: process.platform === "win32" ? "1,1048576" : "1024",
+      } as never;
+    });
+
+    const sampler = startGatewayRssSampling({ pid: 123 });
+    try {
+      vi.advanceTimersByTime(100);
+      expect(measurements).toBe(2);
+      expect(sampler.sample()).toBe(1);
+    } finally {
+      sampler.stop();
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.skipIf(process.platform === "win32")("parses day-prefixed process-tree CPU times", () => {
     vi.mocked(spawnSync).mockReturnValue({
       status: 0,

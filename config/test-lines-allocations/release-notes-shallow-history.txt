@@ -1,2 +1,0 @@
-27
-# Real shallow-clone release-note verifier regression.

@@ -476,6 +476,8 @@ export const zh_CN = {
       testAiProgress: "正在用真实 completion 测试 AI 访问…",
       testAiSuccess: "AI 访问正常，在 {seconds} 秒内回复。",
       testAiTitle: "AI 访问测试",
+      utilityOnlyNote: "请为 agent 对话选择提供商，或选择暂时跳过。",
+      utilityOnlyTitle: "选择 agent 的模型",
       whatSetup: "你想设置什么？",
       workspaceConflictConfirm: "将现有 agent fleet 迁移到请求的工作区吗？",
       workspaceConflictNotice:

@@ -8,6 +8,7 @@ import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispa
 import type { GatewayLifecycleTypingParams } from "../../../gateway/server-instance-runtime.types.js";
 import { getGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
+import { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbound/message.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
@@ -15,6 +16,7 @@ import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../..
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import type { SubagentCompletion } from "../../../shared/subagent-completion.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import {
@@ -34,10 +36,7 @@ import {
   SourceOwnerChangedError,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
-import {
-  sendSubagentAnnounceMessage,
-  tryResolveSubagentRequesterAgentId,
-} from "./subagent-announce-delivery.runtime.js";
+import { tryResolveSubagentRequesterAgentId } from "./subagent-announce-delivery.runtime.js";
 import {
   sourceOwnerChangedResult,
   type SubagentAnnounceDeliveryResult,
@@ -49,6 +48,7 @@ import { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 export async function runAnnounceAgentCall(params: {
   agentParams: Record<string, unknown>;
   controllerInput?: SessionControllerInput;
+  subagentCompletions?: readonly SubagentCompletion[];
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   agentToolCaller?: import("../../../gateway/server-methods/client-types.js").TrustedAgentToolCaller;
@@ -92,17 +92,18 @@ export async function runAnnounceAgentCall(params: {
   timer?.unref();
   try {
     signal.throwIfAborted();
-    const dispatch = async () => {
-      if (params.onBeforeDispatch) {
-        await params.onBeforeDispatch();
-      }
-      signal.throwIfAborted();
-      if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
-        throw new SourceOwnerChangedError();
-      }
-      return runOutsideAdmittedGenerationScopes(() =>
-        dispatchGatewayMethodInProcess("agent", params.agentParams, {
+    const dispatch = () =>
+      runOutsideAdmittedGenerationScopes(async () => {
+        if (params.onBeforeDispatch) {
+          await params.onBeforeDispatch();
+        }
+        signal.throwIfAborted();
+        if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
+          throw new SourceOwnerChangedError();
+        }
+        return dispatchGatewayMethodInProcess("agent", params.agentParams, {
           controllerInput: params.controllerInput,
+          subagentCompletions: params.subagentCompletions,
           cancelOnDeadline: true,
           privateCompletion: params.privateCompletion,
           replyExpectation: params.replyExpectation,
@@ -174,9 +175,8 @@ export async function runAnnounceAgentCall(params: {
             }
           },
           resolveGatewayContext: params.resolveGatewayContext,
-        }),
-      );
-    };
+        });
+      });
     const continuationCaller = params.controllerInput?.continuationCaller;
     const dispatched = runOutsideOperatorToolGatewayAuthority(() =>
       continuationCaller ? continuationCaller.run(dispatch) : dispatch(),
@@ -459,8 +459,6 @@ export async function deliverCompletionDirect(params: {
         ? {
             transcriptExpectedGeneration: {
               sessionKey: params.requesterSessionKey,
-              sessionId: params.requesterSessionId,
-              lifecycleRevision: params.requesterLifecycleRevision,
             },
           }
         : {}),

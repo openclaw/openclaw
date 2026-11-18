@@ -16,6 +16,7 @@ import {
 import { projectAgents, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
+import { navigateToAgent } from "../agents/route-navigation.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import { createModelProviderConfigActions } from "./config-actions.ts";
 import { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
@@ -94,8 +95,6 @@ export function createModelProviders(
       }
     },
     onComplete: ({ client, data }) => {
-      // A page refresh settles its feedback; an overlapping picker Retry is best effort.
-      core.resetCatalog();
       supplemental.adoptCoreData(client, data);
     },
     onCatalogComplete: (result) => {
@@ -106,7 +105,7 @@ export function createModelProviders(
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({
-    isLoading: () => loaderPending || !routeDataObserved || core.loading || supplemental.loading,
+    isLoading: () => loaderPending || !routeDataObserved || supplemental.loading,
     reload: () => supplemental.loadUsage(),
     onIncompleteUsageExhausted: notify,
   });
@@ -652,6 +651,8 @@ export function createModelProviders(
       providerUsageFailed: data.providerUsageFailed,
       updatedAt: data.updatedAt,
       onOpenUsage: () => context.navigate("usage"),
+      onOpenAgent: (agentId: string) => navigateToAgent(context, agentId, null, "overview"),
+      basePath: context.basePath,
       credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),
       ...values,

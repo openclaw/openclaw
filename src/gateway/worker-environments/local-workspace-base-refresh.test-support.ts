@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, vi } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as localWorkspaceStore from "./local-workspace-store.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
@@ -18,8 +17,10 @@ export async function proveResumedBaseRefresh(params: {
   root: string;
   repo: string;
   canonical: string;
+  log: Mock<(message: string) => void>;
 }) {
   const { owner, canonical } = params;
+  params.log.mockClear();
   const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
   const readSource = (root: string) => fs.readFile(path.join(root, "source.txt"), "utf8");
   const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
@@ -55,24 +56,12 @@ export async function proveResumedBaseRefresh(params: {
   await expect(
     withLocalWorkspaceProjection(owner, async (state) => {
       const checkouts = await fs.mkdtemp(path.join(params.root, "refresh-"));
-      for (const [name, commit] of [
-        ["before", sourceHead],
-        ["after", selectedBase],
-      ] as const) {
-        await prepareLocalWorkspaceCheckout({
-          source: canonical,
-          destination: path.join(checkouts, name),
-          temporaryRoot: checkouts,
-          baseCommit: commit,
-          branch: "refresh",
-          signal: new AbortController().signal,
-          assertCurrent: () => {},
-        });
-      }
       const baseline = await state.baselineDocument();
       const refreshed = await prepareWorkspaceBaseRefresh({
-        beforeRoot: path.join(checkouts, "before"),
-        afterRoot: path.join(checkouts, "after"),
+        root: canonical,
+        beforeTree: sourceHead,
+        afterTree: selectedBase,
+        temporaryRoot: checkouts,
         baseCommit: selectedBase,
         baseRaw: baseline.rawManifest,
         baseRef: baseline.manifestRef,
@@ -97,13 +86,8 @@ export async function proveResumedBaseRefresh(params: {
     pending_target: "projection",
   });
   expect(await readSource(projection)).toBe("refreshed\n");
-  // The next turn is stopped before writing; the bytes it inherited must stay applied.
+  // Acceptance retries must not journal files already applied by the interrupted turn.
   stopAt.stage = "projection-journal";
-  await expect(withLocalWorkspaceProjection(owner, (state) => state.reuse())).rejects.toThrow(
-    "turn stopped",
-  );
-  expect(await readSource(projection)).toBe("refreshed\n");
-  stopAt.stage = undefined;
   await withLocalWorkspaceProjection(owner, (state) => state.reuse());
   expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
     base_commit: selectedBase,
@@ -113,4 +97,22 @@ export async function proveResumedBaseRefresh(params: {
   });
   expect(await readSource(canonical)).toBe("refreshed\n");
   expect(await readSource(projection)).toBe("refreshed\n");
+  const lines = params.log.mock.calls.map(([line]) => line);
+  const starts = lines.filter((line) => line.startsWith("Local workspace reconcile start:"));
+  const finishes = lines.filter((line) => line.startsWith("Local workspace reconcile finish:"));
+  expect(finishes.map((line) => /outcome=(\w+)/u.exec(line)?.[1])).toEqual([
+    "applied",
+    "aborted",
+    "replayed",
+  ]);
+  expect(starts).toHaveLength(3);
+  expect(new Set(starts.map((line) => /"plan":"([a-f0-9]{16})"/u.exec(line)?.[1])).size).toBe(1);
+  expect(new Set(starts.map((line) => /"attempt":"([a-f0-9-]+)"/u.exec(line)?.[1])).size).toBe(3);
+  for (const [index, start] of starts.entries()) {
+    const correlation = start.split("correlation=")[1];
+    expect(finishes[index]).toContain(`correlation=${correlation} outcome=`);
+    expect(start).toMatch(/"baseCommit":"[a-f0-9]{12}","targetCommit":"[a-f0-9]{12}"/u);
+    expect(start).not.toContain(owner.worktree.id);
+    expect(start).not.toContain(canonical);
+  }
 }

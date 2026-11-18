@@ -94,6 +94,13 @@ export function isOAuthRefreshFence(credential: OAuthRefreshFenceCredential | un
   return parseOAuthRefreshFence(credential) !== undefined;
 }
 
+/** True once the refresh owner settled the claim as failed: the sign-in must be redone. */
+export function isFailedOAuthRefreshFence(
+  credential: OAuthRefreshFenceCredential | undefined,
+): boolean {
+  return parseOAuthRefreshFence(credential)?.state === "failed";
+}
+
 /** True only while the durable refresh owner may still settle its claim. */
 export function isPendingOAuthRefreshFence(
   credential: OAuthRefreshFenceCredential | undefined,

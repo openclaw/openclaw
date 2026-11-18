@@ -55,7 +55,11 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
   abortSignal: AbortSignal;
   executeCodeModeTool: ToolSearchCatalogToolExecutor;
 }) {
-  const buildCatalog = (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
+  let pinToolListing: ((tools: AnyAgentTool[], refresh: boolean) => AnyAgentTool[]) | undefined;
+  const buildCatalog = (
+    recordQuarantine: RuntimeToolSchemaQuarantineRecorder,
+    refreshListing = false,
+  ) => {
     const { attempt, preparedToolBase } = input;
     const {
       codeModeControlsEnabledForRun,
@@ -66,7 +70,9 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       toolSearchControlsEnabledForRun,
       toolsEnabled,
     } = preparedToolBase;
-    const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
+    const { clientTools, uncompactedEffectiveTools: currentTools } = input.bundleTools;
+    const uncompactedEffectiveTools =
+      pinToolListing?.(currentTools, refreshListing) ?? currentTools;
     const abortSignal = preparedToolBase.toolAbortSignal ?? input.abortSignal;
     // Detached skill review keeps every foreground schema for prompt-cache reuse
     // but executes only the allowed tools. Wrap before catalog compaction so a
@@ -322,7 +328,40 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     liveAllowedToolNames: new Set(current.toolSearchRunPlan.liveAllowedToolNames),
     capabilityToolNames: new Set(current.toolSearchRunPlan.capabilityToolNames),
   };
+  const refreshTools = (
+    recordQuarantine: RuntimeToolSchemaQuarantineRecorder,
+    refreshListing = true,
+  ) => {
+    const next = buildCatalog(recordQuarantine, refreshListing);
+    current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
+    for (const key of [...promptPlanKeys, "replayAllowedToolNames"] as const) {
+      const target = current.toolSearchRunPlan[key];
+      // Earlier tool calls remain valid history, even after their live authority is revoked.
+      if (key !== "replayAllowedToolNames") {
+        target.clear();
+      }
+      for (const name of next.toolSearchRunPlan[key]) {
+        target.add(name);
+      }
+    }
+    Object.assign(current.toolSearch, next.toolSearch);
+    for (const key of promptPlanKeys) {
+      hostPromptPlan[key] = new Set(next.toolSearchRunPlan[key]);
+    }
+    current.deferredDirectoryToolsCallable = next.deferredDirectoryToolsCallable;
+    current.emptyExplicitToolAllowlistError = next.emptyExplicitToolAllowlistError;
+    current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
+  };
   return Object.assign(current, {
+    installToolListingPin: async (pin: NonNullable<typeof pinToolListing>) => {
+      pinToolListing = pin;
+      const tools = input.bundleTools.uncompactedEffectiveTools;
+      if (pin(tools, false) === tools) {
+        return false;
+      }
+      await withRuntimeToolSchemaQuarantine((record) => refreshTools(record, false));
+      return true;
+    },
     applyPromptToolPolicy: (allowedNames: ReadonlySet<string>) => {
       if (!current.toolSearch.catalogRegistered) {
         finalizeAgentToolAvailability(current.effectiveTools, {
@@ -339,26 +378,8 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
         }
       }
     },
-    refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
-      const next = buildCatalog(recordQuarantine);
-      current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
-      for (const key of [...promptPlanKeys, "replayAllowedToolNames"] as const) {
-        const target = current.toolSearchRunPlan[key];
-        // Earlier tool calls remain valid history, even after their live authority is revoked.
-        if (key !== "replayAllowedToolNames") {
-          target.clear();
-        }
-        for (const name of next.toolSearchRunPlan[key]) {
-          target.add(name);
-        }
-      }
-      Object.assign(current.toolSearch, next.toolSearch);
-      for (const key of promptPlanKeys) {
-        hostPromptPlan[key] = new Set(next.toolSearchRunPlan[key]);
-      }
-      current.emptyExplicitToolAllowlistError = next.emptyExplicitToolAllowlistError;
-      current.toolSearchRunPlan.hasCallableTools = next.toolSearchRunPlan.hasCallableTools;
-    },
+    refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) =>
+      refreshTools(recordQuarantine),
   });
 }
 

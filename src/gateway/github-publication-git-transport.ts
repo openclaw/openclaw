@@ -2,13 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { githubRepositoryUrl } from "../agents/github-host.js";
+import type { LocalWorkspacePausePhase } from "../agents/sandbox/types.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
-import { hasErrnoCode } from "../infra/errno.js";
-import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
-import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
+import { gitNullConfigPath } from "../infra/git-exec.js";
 import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-network-retry.js";
+import { withGitObjectStoreTransport } from "../infra/git-object-store-transport.js";
 import { createCommandError } from "../process/command-error.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -16,11 +18,18 @@ import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
+import { publicationCommandEnv } from "./github-publication-command-env.js";
+import { GitHubPublicationApiError } from "./github-publication-failure.js";
 import { createGitHubPublicationGitError } from "./github-publication-git-error.js";
+import {
+  assertGitHubPublicationIndexHasNoFilters,
+  readOptionalAttributeFile,
+} from "./github-publication-git-metadata.js";
 
 type GitCommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  prepareEnv?: () => NodeJS.ProcessEnv;
   input?: string | Buffer | (() => string | Buffer);
   maxOutputBytes?: number;
   beforeRun?: () => void;
@@ -57,14 +66,9 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
       (timeoutMs) =>
         runCommandBuffered(argv, {
           ...(options.cwd ? { cwd: options.cwd } : {}),
-          env: {
-            ...(argv[0] === "git"
-              ? gitReadOnlyEnvironment(argv.slice(1), options.env ?? {})
-              : (options.env ?? {})),
-            GIT_NO_REPLACE_OBJECTS: "1",
-            // Pin every command against repository hooks; explicit hook-disabling -c flags stay stronger.
-            ...appendGitConfig(gitMaintenanceEnvironment(), [["core.hooksPath", os.devNull]]),
-          },
+          ...(options.prepareEnv
+            ? { preparedEnv: options.prepareEnv() }
+            : { env: publicationCommandEnv(argv, options.env) }),
           // Resolve optional disclosure after beforeRun, directly at the transport boundary.
           ...(options.input !== undefined
             ? { input: typeof options.input === "function" ? options.input() : options.input }
@@ -84,6 +88,9 @@ export async function requirePublicationCommand(
 ): Promise<string> {
   const result = await runPublicationCommand(argv, options);
   if (result.code !== 0 || result.error) {
+    if (argv[0] === "gh") {
+      throw new GitHubPublicationApiError(result, options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
+    }
     throw createCommandError(
       argv[0] ?? "command",
       { ...result, stdout: Buffer.alloc(0) },
@@ -156,56 +163,115 @@ export async function requireGitHubPublicationCommit(
   cwd: string,
   env: NodeJS.ProcessEnv,
   failure: string,
-  options: { contents?: boolean; commitPresent?: boolean } = {},
+  options: { contents?: boolean; commitPresent?: boolean; baseBranch?: string } = {},
 ) {
-  const fetch = async (missing?: string[]) => {
-    const result = await run(
-      [
-        ...GITHUB_CREDENTIAL_ARGS,
-        "-c",
-        `core.hooksPath=${os.devNull}`,
-        "-c",
-        "core.fsmonitor=false",
-        "fetch",
-        "--no-auto-maintenance",
-        "--no-tags",
-        "--no-write-fetch-head",
-        "--recurse-submodules=no",
-        // Keep ancestry and tree metadata; callers request file contents below.
-        ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
-        "--",
-        githubRepositoryUrl(repository, host),
-        ...(missing ? [] : [sha]),
-      ],
-      { cwd, env, ...(missing ? { input: `${missing.join("\n")}\n` } : {}) },
-    );
-    if (result.code !== 0 || result.error) {
-      throw createGitHubPublicationGitError(
-        failure,
-        missing ? "content fetch" : "commit fetch",
-        result,
-        DEFAULT_COMMAND_TIMEOUT_MS,
+  const promisor = `remote.${githubRepositoryUrl(repository, host)}.promisor`;
+  const fetch = async (missing?: string[], tips = [sha]) => {
+    const command = async (directory: string, argv: string[], gitEnv = env, input?: string) => {
+      const result = await run(argv, { cwd: directory, env: gitEnv, input });
+      if (result.error && hasCommandProcessCleanupError(result.error)) {
+        throw result.error;
+      }
+      if (result.code !== 0 || result.error) {
+        throw createGitHubPublicationGitError(
+          failure,
+          missing ? "content fetch" : "commit fetch",
+          result,
+          DEFAULT_COMMAND_TIMEOUT_MS,
+        );
+      }
+      return result.stdout.toString("utf8").trim();
+    };
+    const acquire = (directory: string, gitEnv: NodeJS.ProcessEnv) =>
+      command(
+        directory,
+        [
+          ...GITHUB_CREDENTIAL_ARGS,
+          "-c",
+          `core.hooksPath=${os.devNull}`,
+          "-c",
+          "core.fsmonitor=false",
+          ...(directory === cwd ? [] : ["-c", "core.alternateRefsCommand=true"]),
+          ...(missing ? ["-c", "fetch.negotiationAlgorithm=noop"] : []),
+          "fetch",
+          "--no-auto-maintenance",
+          "--no-tags",
+          "--no-write-fetch-head",
+          "--recurse-submodules=no",
+          // Match managed base refresh: omit unrelated session histories from negotiation.
+          ...tips.map((tip) => `--negotiation-tip=${tip}`),
+          // Explicit blob wants still hydrate; retain promisor packs for both fetch paths.
+          "--filter=blob:none",
+          ...(missing ? ["--quiet", "--stdin"] : []),
+          "--",
+          githubRepositoryUrl(repository, host),
+          ...(missing ? [] : [`${sha}:refs/openclaw/fetched/${sha}`]),
+        ],
+        gitEnv,
+        missing ? `${missing.join("\n")}\n` : undefined,
       );
+    // Git must register a new URL's promisor in the source repository before
+    // temporary metadata can borrow its object store without losing lazy hydration.
+    const registered =
+      tips.length > 0
+        ? await command(cwd, ["git", "config", "--type=bool", "--default=false", "--get", promisor])
+        : "false";
+    // Without a cached base, retain Git's ordinary discovery of common history.
+    if (registered !== "true" && !missing) {
+      await acquire(cwd, env);
+    } else {
+      if (missing && registered !== "true") {
+        await command(cwd, ["git", "config", promisor, "true"]);
+      }
+      const isolatedEnv = {
+        ...env,
+        GIT_DIR: undefined,
+        GIT_COMMON_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+      };
+      await withGitObjectStoreTransport(
+        cwd,
+        (directory, args) => command(directory, ["git", ...args], isolatedEnv),
+        (directory, objects) =>
+          acquire(directory, { ...isolatedEnv, GIT_OBJECT_DIRECTORY: objects }),
+      );
+    }
+    if (!missing && registered === "true") {
+      // Temporary transport metadata is discarded; retain successful acquisition in the owner.
+      await command(cwd, ["git", "update-ref", `refs/openclaw/fetched/${sha}`, sha]);
     }
   };
   if (!options.commitPresent) {
     // Fetching a present non-promisor commit still makes Git enumerate every
-    // promisor object for connectivity. Probe the physical commit without lazy
-    // fetching or trusting commit-graph metadata; content hydration stays below.
+    // promisor object for connectivity. Probe physical commits without lazy
+    // fetching or commit-graph metadata; collect cached base tips in the same process.
     const present = await run(
       [
         "git",
         "-c",
         "core.commitGraph=false",
-        "rev-list",
-        "--missing=allow-any",
-        "--no-walk",
-        `${sha}^{commit}`,
+        "cat-file",
+        "--batch-check=%(objectname) %(objecttype)",
       ],
-      { cwd, env },
+      {
+        cwd,
+        env,
+        input: [
+          sha,
+          "refs/remotes/origin/HEAD",
+          ...(options.baseBranch ? [`refs/remotes/origin/${options.baseBranch}`] : []),
+        ]
+          .map((ref) => `${ref}^{commit}\n`)
+          .join(""),
+      },
     );
-    if (present.code !== 0 || !present.stdout.toString("utf8").trim()) {
-      await fetch();
+    const [commit, ...tips] = present.stdout
+      .toString("utf8")
+      .trim()
+      .split("\n")
+      .map((line) => (line.endsWith(" commit") ? line.slice(0, -7) : ""));
+    if (present.code !== 0 || !commit) {
+      await fetch(undefined, tips.filter(Boolean));
     }
   }
   if (!options.contents) {
@@ -237,16 +303,17 @@ export async function requireGitHubPublicationCommit(
       .filter((line) => line.startsWith("?"))
       .map((line) => line.slice(1));
   };
-  const missing = await missingObjects();
-  if (missing.length) {
-    // A known partial-clone commit can still lack its tree contents after fetch.
-    // Hydrate through the selected authenticated URL before any offline snapshots.
+  let missing = await missingObjects();
+  // A missing tree reveals its blobs after the first filtered fetch; explicit
+  // blob wants complete the snapshot in at most one further batch.
+  for (let round = 0; missing.length && round < 2; round++) {
     await fetch(missing);
-    if ((await missingObjects("content verification")).length) {
-      throw new Error(
-        `${failure} Git content verification failed: required objects are still missing after fetching.`,
-      );
-    }
+    missing = await missingObjects("content verification");
+  }
+  if (missing.length) {
+    throw new Error(
+      `${failure} Git content verification failed: required objects are still missing after fetching.`,
+    );
   }
 }
 
@@ -302,29 +369,6 @@ export async function assertSafeGitPublicationWorkspace(
   }
 }
 
-function assertNoGitFilterAttributes(contents: Buffer): void {
-  for (const line of contents.toString("latin1").split(/\r?\n/u)) {
-    const fields = line.trimStart().split(/[\t ]+/u);
-    if (!fields[0] || fields[0].startsWith("#")) {
-      continue;
-    }
-    if (fields.slice(1).some((field) => /^(?:-|!)?filter(?:=|$)/u.test(field))) {
-      throw new Error("GitHub publication workspace uses an unsupported Git clean filter.");
-    }
-  }
-}
-
-async function readOptionalAttributeFile(file: string): Promise<Buffer | undefined> {
-  try {
-    return await fs.readFile(file);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 export async function readGitHubPublicationTree(
   cwd: string,
   workspaceTree: string,
@@ -338,77 +382,6 @@ export async function readGitHubPublicationTree(
     throw new Error("GitHub publication workspace tree could not be verified.");
   }
   return listing.stdout;
-}
-
-async function assertGitHubPublicationIndexHasNoFilters(
-  cwd: string,
-  indexFile: string,
-): Promise<void> {
-  // This private index just produced the accepted tree, including admission pruning.
-  // Select attributes in Git instead of buffering every path in that tree.
-  const listing = await runPublicationCommand(
-    [
-      "git",
-      "-c",
-      "core.fsmonitor=false",
-      "ls-files",
-      "--cached",
-      "--format=%(objectname)",
-      "--",
-      ":(top,icase,glob)**/.gitattributes",
-    ],
-    {
-      cwd,
-      env: { GIT_INDEX_FILE: indexFile, GIT_LITERAL_PATHSPECS: "0" },
-      maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES,
-    },
-  );
-  if (listing.code !== 0) {
-    throw new Error("GitHub publication workspace attributes could not be verified.");
-  }
-  const attributeObjects = new Set(
-    listing.stdout.toString("utf8").trim().split("\n").filter(Boolean),
-  );
-  if (attributeObjects.size > 1024) {
-    throw new Error("GitHub publication workspace has too many Git attribute files.");
-  }
-  for (const objectId of attributeObjects) {
-    const blob = await runPublicationCommand(["git", "cat-file", "blob", objectId], { cwd });
-    if (blob.code !== 0) {
-      throw new Error("GitHub publication workspace attributes could not be verified.");
-    }
-    assertNoGitFilterAttributes(blob.stdout);
-  }
-
-  const infoPath = await runPublicationCommand(
-    ["git", "rev-parse", "--git-path", "info/attributes"],
-    {
-      cwd,
-    },
-  );
-  if (infoPath.code !== 0) {
-    throw new Error("GitHub publication workspace attributes could not be verified.");
-  }
-  const attributeFiles = await Promise.all(
-    ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"].map(
-      async (name) => await runPublicationCommand(["git", "var", name], { cwd }),
-    ),
-  );
-  if (attributeFiles.some((result) => result.code !== 0)) {
-    throw new Error("GitHub publication workspace attributes could not be verified.");
-  }
-  const paths = [
-    path.resolve(cwd, infoPath.stdout.toString("utf8").trim()),
-    ...attributeFiles.flatMap((result) =>
-      result.stdout.length > 0 ? [result.stdout.toString("utf8").trim()] : [],
-    ),
-  ];
-  for (const file of paths) {
-    const contents = await readOptionalAttributeFile(file);
-    if (contents) {
-      assertNoGitFilterAttributes(contents);
-    }
-  }
 }
 
 export async function captureGitHubPublicationWorkspaceSnapshot(params: {
@@ -432,15 +405,18 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
   return await withSettledLocalWorkspacePath(params, async (custody) => {
+    custody?.markPhase?.("operation.sourceAdmission");
     const admittedPaths = await custody?.canonicalPaths?.();
     const bound = {
       ...params,
+      markPhase: custody?.markPhase,
       assertCurrent: () => {
         context.admission.assertCurrent();
         params.assertCurrent?.();
         custody?.assertCurrent();
       },
     };
+    custody?.markPhase?.("operation.gitPolicy");
     const [{ readLiveRegistryWorktreeByPath }, { withManagedWorktreeGit }, { getRuntimeConfig }] =
       await Promise.all([
         import("../agents/worktrees/registry-read.js"),
@@ -472,6 +448,7 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
   params: {
     cwd: string;
     assertCurrent?: () => void;
+    markPhase?: (phase: LocalWorkspacePausePhase) => void;
   },
   policy?: WorktreeGitPolicy,
   admittedPaths?: ReadonlySet<string>,
@@ -490,7 +467,9 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
             input,
           },
         );
+  params.markPhase?.("operation.snapshotSafety");
   await step(() => assertSafeGitPublicationWorkspace(params.cwd, runPublicationCommand));
+  params.markPhase?.("operation.snapshotIndex");
   const sourceHeadCommit = await command(["git", "rev-parse", "--verify", "HEAD^{commit}"], {
     cwd: params.cwd,
   });
@@ -512,6 +491,7 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
     const sourceIndexTree = await git(["write-tree"], env);
     // Ordinary staging preserves unchanged blobs; renormalization would rewrite unrelated CRLF files.
     try {
+      params.markPhase?.("operation.snapshotStage");
       // Allow quiet scans and buffered file progress; a hard bound stops endless progress.
       const args = ["-c", `core.attributesFile=${os.devNull}`, "add", "-A", "--verbose"];
       const options = {
@@ -536,6 +516,7 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
         { cause },
       );
     }
+    params.markPhase?.("operation.snapshotAdmission");
     let workspaceTree = await git(["write-tree"], env);
     if (admittedPaths) {
       // Staging must not turn guest-edited ignore rules into host admission.
@@ -568,9 +549,18 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
         workspaceTree = await git(["write-tree"], env);
       }
     }
-    await step(() => assertGitHubPublicationIndexHasNoFilters(params.cwd, env.GIT_INDEX_FILE));
+    params.markPhase?.("operation.snapshotVerification");
+    await step(() =>
+      assertGitHubPublicationIndexHasNoFilters(
+        params.cwd,
+        env.GIT_INDEX_FILE,
+        runPublicationCommand,
+        TREE_LISTING_MAX_OUTPUT_BYTES,
+      ),
+    );
     return { sourceHeadCommit, sourceIndexTree, workspaceTree };
   } finally {
+    params.markPhase?.("operation.snapshotCleanup");
     await fs.rm(tempDir, { recursive: true, force: true });
   }
 }
@@ -682,4 +672,11 @@ export function githubPublicationUpdateRefArgs(
     commit,
     previousHead,
   ];
+}
+
+export function gitHubPublicationObjectSha(value: unknown): string {
+  if (!isRecord(value) || typeof value.sha !== "string" || !/^[a-f0-9]{40}$/u.test(value.sha)) {
+    throw new Error("GitHub returned an invalid Git object identity.");
+  }
+  return value.sha;
 }

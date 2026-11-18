@@ -11,8 +11,9 @@ openclaw-sidebar-agent-roster {
   grid-template-rows: 46px;
   align-items: center;
   column-gap: 8px;
-  margin-inline: -6px;
-  padding-inline: 6px 13px;
+  /* Reclaim the section inset so the fill runs flush with the session rows. */
+  margin-inline: -8px;
+  padding-inline: 8px 15px;
   border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--muted);
@@ -328,8 +329,8 @@ openclaw-sidebar-agent-roster {
   flex-basis: 12px;
 }
 .sidebar-session-team-state .session-glyph__ring {
+  --spinner-art: initial;
   inset: 0;
-  mask: var(--spinner-mask);
 }
 @media (hover: none), (pointer: coarse) {
   .sidebar-agent-roster__actions {

@@ -1,4 +1,8 @@
-// Run only on an approved benchmark host with synthetic state and --expose-gc --trace-gc-nvp.
+// Synthetic owner replay (no WebSocket/model latency claim):
+// node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-catalog-selection-measure.ts
+//   --event-mix --operations 240 --yield-ms 0 --allocations --state-dir <fresh-dir> --output <json>
+// Run A/A-control/B five times. 24 polls = one virtual minute; real commits every 12 polls.
+// Separate allocation tracing from untraced latency/GC runs when using tail metrics as gates.
 import assert from "node:assert/strict";
 import { createHash, hash } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync, writeSync } from "node:fs";
@@ -30,6 +34,8 @@ const { values } = parseArgs({
     output: { type: "string" },
     allocations: { type: "boolean", default: false },
     unchanged: { type: "boolean", default: false },
+    // 12 staggered UI pollers (24/min), 16 streaming sessions, cron state every 10 s.
+    "event-mix": { type: "boolean", default: false },
     adopted: { type: "boolean", default: false },
     "empty-catalogs": { type: "boolean", default: false },
     "queue-wait-ms": { type: "string", default: "0" },
@@ -62,7 +68,7 @@ writeFileSync(configPath, JSON.stringify(cfg));
 process.env = {
   ...createGatewayBenchEnv(path.join(stateDir, "home"), configPath, { startupTrace: false }),
   OPENCLAW_STATE_DIR: stateDir,
-  TMPDIR: path.join(stateDir, "tmp"),
+  TMPDIR: process.env.TMPDIR,
 };
 const profilePath = path.join(stateDir, "allocation.heapprofile");
 // Identify the main isolate before imports can start database workers.
@@ -84,6 +90,9 @@ const [
   { setActivePluginRegistry },
   { createSubsystemLogger },
   { scheduleGatewayRequestStart },
+  { sessionChanges },
+  { sessionsListHandler },
+  { sessionSubscriptionHandlers },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.js"),
@@ -98,6 +107,9 @@ const [
   import("../../src/plugins/runtime.js"),
   import("../../src/logging/subsystem.js"),
   import("../../src/gateway/server/ws-connection/request-start.js"),
+  import("../../src/sessions/session-row-changes.js"),
+  import("../../src/gateway/server-methods/sessions-read.js"),
+  import("../../src/gateway/server-methods/sessions-subscriptions.js"),
 ]);
 
 const agents = ["main", "work"] as const;
@@ -149,11 +161,13 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
   let selectionBytes = 0;
   let catalogBytes = 0;
   let adoptedBytes = 0;
+  let snapshotBytes = 0;
   const visit = (
     node: HeapProfiler.SamplingHeapProfileNode,
     inSelection = false,
     inCatalog = false,
     inAdopted = false,
+    inSnapshot = false,
   ) => {
     const selection =
       inSelection ||
@@ -163,11 +177,13 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
       inCatalog || node.callFrame.url.includes("/src/gateway/server-methods/session-catalog");
     const adopted =
       inAdopted || node.callFrame.functionName === "listAdoptedSessionCatalogSessions";
+    const snapshot = inSnapshot || node.callFrame.url.includes("session-catalog-entry-snapshot");
     totalBytes += node.selfSize;
     selectionBytes += selection ? node.selfSize : 0;
     catalogBytes += catalog ? node.selfSize : 0;
     adoptedBytes += adopted ? node.selfSize : 0;
-    node.children.forEach((child) => visit(child, selection, catalog, adopted));
+    snapshotBytes += snapshot ? node.selfSize : 0;
+    node.children.forEach((child) => visit(child, selection, catalog, adopted, snapshot));
   };
   visit(profile.head);
   return {
@@ -179,6 +195,7 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
     catalogBytesPerOperation: catalogBytes / operations,
     adoptedBytes,
     adoptedBytesPerOperation: adoptedBytes / operations,
+    snapshotBytesPerOperation: snapshotBytes / operations,
   };
 }
 
@@ -313,11 +330,13 @@ try {
     selectionPreparations++;
     return prepareSelection(...args);
   };
-  // This fixture supplies only the context fields consumed by sessions.catalog.list.
+  // Supply the context fields consumed by catalog and sidebar reads.
   const context = bindSessionRowProjection(
     {
       getRuntimeConfig: () => cfg,
       logGateway: createSubsystemLogger("benchmark/catalog"),
+      subscribeSessionEvents(_connId: string) {},
+      forgetConnectionAncestors(_connId: string) {},
     },
     () => {
       projectionAcquisitions++;
@@ -490,13 +509,42 @@ try {
       includeObjectsCollectedByMinorGC: true,
     });
   }
+  const hostLoadBefore = os.loadavg();
   const before = process.memoryUsage();
   const cpu = process.cpuUsage();
   loop.reset();
   writeGatewayGcTraceMarker("heap-start", profilePath);
   measuredStart = performance.now();
   for (let index = 0; index < operations; index++) {
-    if (!values.unchanged) {
+    if (values["event-mix"]) {
+      // Replay owner publications, without pretending these are real model/socket frames.
+      // Unchanged transcript publications and runtime state must not replace stored entries.
+      for (let active = 0; active < 16; active++) {
+        const target = { agentId: "main", sessionKey: keyFor("main", active) };
+        sessionChanges.emit({ ...target, scope: "runtime", facts: { kind: "unchanged" } });
+        sessionChanges.emit({ ...target, scope: "transcript", facts: { kind: "unchanged" } });
+      }
+      sessionChanges.emit({ all: true, scope: "agent-runs" });
+      if (index % 4 === 0) {
+        sessionChanges.emit({
+          agentId: "main",
+          sessionKey: keyFor("main", 0),
+          scope: "automation",
+        });
+      }
+      // A completed turn commits usage/activity every 30 virtual seconds.
+      if (index % 12 === 0) {
+        const active = Math.floor(index / 12) % 16;
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: keyFor("main", active) },
+          {
+            ...entryFor("main", active, index + 1),
+            inputTokens: index + 10,
+            outputTokens: index + 5,
+          },
+        );
+      }
+    } else if (!values.unchanged) {
       const agentId = agents[index % agents.length]!;
       const rowIndex = Math.floor(index / agents.length) % sessionsPerAgent;
       replaceSessionEntrySync(
@@ -506,6 +554,20 @@ try {
     }
     if (!values["empty-catalogs"]) {
       await projection.ensureMaterialized();
+    }
+    if (values["event-mix"]) {
+      const method = index < 12 ? "sessions.subscribe" : "sessions.list";
+      await (index < 12 ? sessionSubscriptionHandlers[method]! : sessionsListHandler)({
+        req: { type: "req", id: `sidebar-${index}`, method },
+        params: { agentId: "main", limit: 20 },
+        context,
+        client: {
+          connId: `control-ui-${index % 12}`,
+          connect: { role: "operator", scopes: ["operator.admin"] },
+        } as Parameters<typeof handler>[0]["client"],
+        isWebchatConnect: () => true,
+        respond: (ok, _payload, error) => assert.ok(ok, JSON.stringify(error)),
+      });
     }
     const settleQueue = queueWaitMs ? await admitCatalog() : undefined;
     let result: Awaited<ReturnType<typeof list>>;
@@ -553,7 +615,12 @@ try {
   };
   assert.equal(counts.providerCalls, operations * catalogAgents.length);
   assert.equal(counts.providerRows, values["empty-catalogs"] ? 0 : operations * sessionCount);
-  assert.equal(counts.providerRevisions, values.unchanged ? 0 : operations * catalogAgents.length);
+  if (!values["event-mix"]) {
+    assert.equal(
+      counts.providerRevisions,
+      values.unchanged ? 0 : operations * catalogAgents.length,
+    );
+  }
   assert.equal(counts.adoptedCalls, adoption ? operations : 0);
   assert.equal(counts.queuedStarts, queueWaitMs ? operations * 6 : 0);
   const finalGolden = await golden();
@@ -573,10 +640,25 @@ try {
   const result = {
     scope:
       "in-process real sessions.catalog.list handler with persisted synthetic session rows; no transport or model latency claim",
-    workload: values.unchanged ? "unchanged-warm-list" : "metadata-update-and-list",
+    workload: values["event-mix"]
+      ? "streaming-cron-poll-publications"
+      : values.unchanged
+        ? "unchanged-warm-list"
+        : "metadata-update-and-list",
+    eventMix: values["event-mix"]
+      ? {
+          activeSessions: 16,
+          uiPollers: 12,
+          virtualMinutes: operations / 24,
+          capturesAndFreezesPerMinute:
+            counts.providerRevisions / catalogAgents.length / (operations / 24),
+          missRate: counts.providerRevisions / catalogAgents.length / operations,
+        }
+      : undefined,
     measurementScope: values["empty-catalogs"]
       ? "Handler latency and thread CPU include its projection wait after the metadata write. Remaining row settling follows the handler; allocation, GC, process CPU and elapsed include the write, all settling, response digest and pacing."
       : "Handler latency and thread CPU exclude the metadata write and row settling; allocation, GC, process CPU and elapsed include the write, settling, response digest and pacing.",
+    hostLoad: { before: hostLoadBefore, after: os.loadavg() },
     node: process.version,
     sessionCount,
     agents: agents.length,

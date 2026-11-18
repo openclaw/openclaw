@@ -13,7 +13,7 @@ import type { CostUsageTotals } from "./session-cost-usage.types.js";
 export const USAGE_COST_QUARTER_SCOPE = "session-cost-usage-quarters-v1";
 
 export const QUARTER_MS = 15 * 60 * 1000;
-const FORMAT = 2;
+const FORMAT = 3;
 
 export const TOTAL_FIELDS = [
   "input",
@@ -27,6 +27,7 @@ export const TOTAL_FIELDS = [
   "cacheReadCost",
   "cacheWriteCost",
   "missingCostEntries",
+  "cacheUnmeasuredInput",
 ] as const;
 export const MESSAGE_FIELDS = [
   "total",

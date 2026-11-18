@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import type { ProjectRecent } from "../../../packages/gateway-protocol/src/index.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -27,6 +27,14 @@ import {
 import { listProjectRecents } from "./projects-recents.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
+
+beforeEach(() => {
+  // Read-scoped listings check repository visibility; recents must not depend on live GitHub.
+  const visibility = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(Response.json({ visibility: "public" }));
+  return () => visibility.mockRestore();
+});
 
 const folderRecent = (name: string) => ({
   kind: "folder",

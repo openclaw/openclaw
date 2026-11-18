@@ -1,2 +1,0 @@
-# Cover the mobile sheet selected-tab thumb resolving to the shared selected-surface token.
-12

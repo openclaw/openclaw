@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
+import { createAdmittedHostCapabilityTestFixture } from "../agents/harness/host-capability.test-support.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import * as configCli from "../cli/config-cli.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -53,7 +56,10 @@ export function registerGatewayToolFinalEffectTests() {
       vi.unstubAllEnvs();
     });
 
-    async function fixture(workspaceOnly?: boolean) {
+    async function fixture(
+      workspaceOnly?: boolean,
+      nativeDefault: false | "export" | "harness" | "sdk" = false,
+    ) {
       const stateDir = tempDirs.make("openclaw-gateway-effects-");
       const configPath = path.join(stateDir, "openclaw.json");
       const workspaceDir = path.join(stateDir, "task");
@@ -64,7 +70,8 @@ export function registerGatewayToolFinalEffectTests() {
         agents: { defaults: { model: "openai/gpt-5.5@openai:verified" } },
         auth: { profiles: { "openai:verified": { provider: "openai", mode: "api_key" } } },
         tools: {
-          allow: ["openclaw", "view_image"],
+          allow: ["openclaw", "view_image", ...(nativeDefault ? ["exec"] : [])],
+          ...(nativeDefault ? {} : { openclaw: { autoApproveChanges: true } }),
           ...(workspaceOnly === undefined ? {} : { fs: { workspaceOnly } }),
         },
       };
@@ -123,18 +130,43 @@ export function registerGatewayToolFinalEffectTests() {
         broadcastToConnIds: () => undefined,
         hasExecApprovalClients: () => true,
       } as unknown as GatewayRequestContext;
-      const operationalRunInstance = createOperationalRunInstanceRef("gateway-effects");
+      const host =
+        nativeDefault === "harness"
+          ? await createAdmittedHostCapabilityTestFixture({
+              runId: "gateway-effects",
+              agentId: "main",
+              sessionKey: "agent:main:effects",
+              config: cfg,
+              workspaceDir,
+            })
+          : undefined;
+      const operationalRunInstance =
+        host?.admittedRunContext.operationalRunInstance ??
+        createOperationalRunInstanceRef("gateway-effects");
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      const tools = await metadata.run(() =>
-        resolveGatewayScopedTools({
-          cfg,
-          sessionKey: "agent:main:effects",
-          surface: "loopback",
-          senderIsOwner: true,
-          workspaceDir,
-          agentDir: path.join(stateDir, "agent"),
-          modelHasVision: true,
-        }),
+      const toolOptions = {
+        cfg,
+        sessionKey: "agent:main:effects",
+        senderIsOwner: true,
+        workspaceDir,
+        agentDir: path.join(stateDir, "agent"),
+        modelHasVision: true,
+      };
+      const tools = await metadata.run(async () =>
+        host
+          ? {
+              tools: await host.hostCapabilities.createToolSurfaceAsync!({
+                ...toolOptions,
+                config: cfg,
+              }),
+            }
+          : nativeDefault === "sdk"
+            ? { tools: await createOpenClawCodingToolsAsync({ ...toolOptions, config: cfg }) }
+            : resolveGatewayScopedTools({
+                ...toolOptions,
+                surface: "loopback",
+                ...(nativeDefault ? { mediatedToolNames: ["exec"] } : {}),
+              }),
       );
       const delegate = tools.tools.find((tool) => tool.name === "openclaw");
       const image = tools.tools.find((tool) => tool.name === "view_image");
@@ -170,7 +202,6 @@ export function registerGatewayToolFinalEffectTests() {
         requested,
         authority,
         call,
-        execution: inference.binding.execution,
         requestCount: () => requestCount,
         close: async () => {
           for (const record of await manager.listPendingRecords()) {
@@ -179,10 +210,36 @@ export function registerGatewayToolFinalEffectTests() {
           await manager.drain();
           await Promise.allSettled(executions);
           await engine.dispose();
+          host?.closeHost();
+          host?.closeAdmission();
           await closeOpenClawStateDatabaseByPathAsync(databasePath);
         },
       };
     }
+
+    it.each(["export", "harness", "sdk"] as const)(
+      "requires exact approval for %s execution with unknown client restrictions",
+      async (surface) => {
+        const f = await fixture(undefined, surface);
+        try {
+          const pending = f.call();
+          expect(
+            await Promise.race([
+              f.requested.promise.then(() => "approval"),
+              pending.then(() => "completed"),
+            ]),
+          ).toBe("approval");
+          expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
+          const [record] = await f.manager.listPendingRecords();
+          assert(record);
+          await f.manager.resolve(record.id, "deny", "fixture-operator");
+          await pending;
+          expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
+        } finally {
+          await f.close();
+        }
+      },
+    );
 
     it.each([undefined, false])(
       "persists permitted Gateway delegation with workspaceOnly=%s without approval",
@@ -209,8 +266,7 @@ export function registerGatewayToolFinalEffectTests() {
       async (outcome) => {
         const f = await fixture(true);
         const controller = new AbortController();
-        const applyStarted = createDeferred();
-        const releaseApply = createDeferred();
+        const revokeBeforeWrite = vi.fn(() => releaseAgentRunDelegatedAuthority(f.authority));
         let pending: ReturnType<typeof f.call> | undefined;
         try {
           pending = f.call(controller.signal);
@@ -226,16 +282,13 @@ export function registerGatewayToolFinalEffectTests() {
           assert(record);
           const completion = f.session.pendingApproval?.completion;
           assert(completion);
-          // Pause external inference preparation, not the approval owner or persistent sink.
+          // Exact commands skip inference. Revoke after approval and hand off to the real writer.
           if (outcome === "precommit-revoked") {
-            const execution = f.execution;
-            vi.mocked(setupInference.resolvePersistentApplyInference).mockImplementationOnce(
-              async () => {
-                applyStarted.resolve();
-                await releaseApply.promise;
-                return execution;
-              },
-            );
+            const runConfigSet = configCli.runConfigSet;
+            vi.spyOn(configCli, "runConfigSet").mockImplementationOnce((opts) => {
+              revokeBeforeWrite();
+              return runConfigSet(opts);
+            });
           }
           if (outcome === "tool-cancelled") {
             expect(f.manager.isPending(record)).toBe(true);
@@ -246,11 +299,6 @@ export function registerGatewayToolFinalEffectTests() {
             await f.manager.forceDenyIfRuntimeAuthorityClosed(record.id);
           } else {
             expect(await f.manager.resolve(record.id, "allow-once", "fixture-operator")).toBe(true);
-            if (outcome === "precommit-revoked") {
-              await applyStarted.promise;
-              releaseAgentRunDelegatedAuthority(f.authority);
-              releaseApply.resolve();
-            }
           }
           const result = await pending.then(
             (value) => ({ value }),
@@ -263,6 +311,9 @@ export function registerGatewayToolFinalEffectTests() {
           }
           // A cancelled tool wait can finish before the approval owner's durable handoff.
           await completion;
+          if (outcome === "precommit-revoked") {
+            expect(revokeBeforeWrite).toHaveBeenCalledOnce();
+          }
           if (outcome === "approve") {
             expect(result).toHaveProperty("value");
             expect(JSON.parse(await fs.readFile(f.configPath, "utf8"))).toMatchObject({
@@ -286,7 +337,6 @@ export function registerGatewayToolFinalEffectTests() {
             expect(await fs.readFile(f.configPath, "utf8")).toBe(f.original);
           }
         } finally {
-          releaseApply.resolve();
           controller.abort();
           await pending?.catch(() => undefined);
           await f.close();

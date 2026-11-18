@@ -1,2 +1,0 @@
-# Real-Gateway contract tests: Test access and Test & use pass reasoning models in each API family (completions, messages, responses) and fail a broken request rewrite; shared reasoning upstream fixture.
-    354

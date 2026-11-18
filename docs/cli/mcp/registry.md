@@ -54,14 +54,16 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
 
-CLI `login`, `logout`, `probe`, `doctor --probe`, and saved-server mutations
-(`add`, `set`, `configure`, `tools`, `unset`) require the local Gateway to be
-stopped. They acquire exclusive state ownership before loading writable state
-and retain it through OAuth callbacks, credential refresh, and cleanup. If a
-Gateway owns the selected state directory, the command refuses with stop-and-retry
-guidance before attempting a local write. Use the Control UI for supported live
-MCP settings and sign-in operations. `list`, `show`, `status`, and `doctor`
-without `--probe` remain available while the Gateway runs.
+Saved-server mutations (`add`, `set`, `configure`, `tools`, `unset`) work while the
+local Gateway runs. The CLI sends the change to that Gateway, which owns config
+writes and clears stale OAuth credentials when a server is replaced or removed.
+With the Gateway stopped, these commands acquire exclusive local state ownership.
+`login` and `logout` also use the running Gateway for shared operator credentials.
+
+`probe`, `doctor --probe`, and the probe that `add` runs by default (or `configure --probe`)
+stay offline-only: they launch the server and can refresh credentials. With the Gateway
+running, `add` refuses until you pass `--no-probe`; stop the Gateway to probe. `list`,
+`show`, `status`, and `doctor` without `--probe` remain available while the Gateway runs.
 
 ### Saved MCP server definitions
 

@@ -335,13 +335,13 @@ export class SampleVault extends VaultScanner {
   }
   async attachment(input: { id: string; path: string; sha256: string; offset?: number }) {
     const data = await this.scan(),
-      records = data.records.filter((r) => r.id === input.id);
-    const evidence =
-      records.length === 1
-        ? records[0]!.metadata.evidence?.find(
-            (e) => e.path === input.path && e.sha256 === input.sha256,
-          )
-        : undefined;
+      records = data.records.filter((r) => r.id === input.id),
+      record = records.length === 1 ? records[0] : undefined;
+    const evidence = record
+      ? [...(record.metadata.evidence ?? []), ...annotationEvidence(record.metadata)].find(
+          (e) => e.path === input.path && e.sha256 === input.sha256,
+        )
+      : undefined;
     if (!evidence) {
       throw new Error("Attachment unavailable in this record and scope");
     }

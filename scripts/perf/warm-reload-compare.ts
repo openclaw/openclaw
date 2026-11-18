@@ -33,7 +33,7 @@ type ComparisonRun = {
     firstDashboardContentDomMs?: number | null;
   };
   auditedPaint?: { main: { atMs: number }; dashboard: { atMs: number } | null };
-  visual: Census & { unmasked: Census; visibleChangeCensus?: Census };
+  visual?: Census & { unmasked: Census; visibleChangeCensus?: Census };
 };
 type ComparisonResult = { arm: string; route: string; runs: ComparisonRun[] };
 type ComparisonPair = {
@@ -155,14 +155,14 @@ function metrics(
 ): Record<string, number | null> {
   const geometry = run.probe.detailsGeometry;
   return {
-    visibleStates: run.visual.visibleChangeCensus?.distinctStates ?? null,
-    visibleStateOccurrences: run.visual.visibleChangeCensus?.timeline.length ?? null,
-    pixelStates: run.visual.distinctStates,
-    pixelStateOccurrences: run.visual.timeline.length,
-    unmaskedPixelStates: run.visual.unmasked.distinctStates,
-    unmaskedPixelStateOccurrences: run.visual.unmasked.timeline.length,
-    lastVisibleChangeMs: run.visual.visibleChangeCensus?.lastVisualChangeMs ?? null,
-    lastPixelChangeMs: run.visual.lastVisualChangeMs,
+    visibleStates: run.visual?.visibleChangeCensus?.distinctStates ?? null,
+    visibleStateOccurrences: run.visual?.visibleChangeCensus?.timeline.length ?? null,
+    pixelStates: run.visual?.distinctStates ?? null,
+    pixelStateOccurrences: run.visual?.timeline.length ?? null,
+    unmaskedPixelStates: run.visual?.unmasked.distinctStates ?? null,
+    unmaskedPixelStateOccurrences: run.visual?.unmasked.timeline.length ?? null,
+    lastVisibleChangeMs: run.visual?.visibleChangeCensus?.lastVisualChangeMs ?? null,
+    lastPixelChangeMs: run.visual?.lastVisualChangeMs ?? null,
     boardWidgetSkeletonMs: run.probe.boardWidgetSkeletonMs ?? null,
     allBoardWidgetsVisibleMs: run.probe.allBoardWidgetsVisibleMs ?? null,
     cachedBoardLayoutMs: run.probe.cachedBoardLayoutMs ?? null,
@@ -200,8 +200,12 @@ function metrics(
 }
 
 async function comparisonSheets(base: ComparisonRun, candidate: ComparisonRun, directory: string) {
-  const census = (run: ComparisonRun) => run.visual.visibleChangeCensus ?? run.visual;
-  const timelines = [census(base).timeline, census(candidate).timeline];
+  if (!base.visual || !candidate.visual) {
+    return [];
+  }
+  const timelines = [base.visual, candidate.visual].map(
+    (visual) => (visual.visibleChangeCensus ?? visual).timeline,
+  );
   const times = [...new Set(timelines.flatMap((timeline) => timeline.map((entry) => entry.atMs)))];
   times.sort((a, b) => a - b);
   const files: string[] = [];

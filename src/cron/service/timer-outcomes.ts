@@ -295,8 +295,9 @@ export function applyJobResult(
         atMs: result.endedAt,
         consecutiveErrors: job.state.consecutiveErrors ?? 0,
         terminalOneShot: true,
-        // Cooldown and incident suppression remain the alert owner's decision.
-        notify: failureNotification === "unavailable" && !opts.replay,
+        failureNotificationDetail: result.failureNotificationDetail,
+        // Disabling the job is new information even when a prior alert was suppressed.
+        notify: failureNotification !== "queued" && !opts.replay,
         deferredNotifications: opts.deferredNotifications,
       });
     }
@@ -310,13 +311,17 @@ export function applyJobResult(
       if (!opts.replay) {
         // The gone conversation cannot accept the notice; its owning agent gets it instead.
         const notice = cronNotificationJob(job);
-        const { agentId } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
-        const { sessionKey, ...ownerNotice } = notice;
+        const { agentId, sessionKey } = resolveCronNotificationQueueOwner(notice, "auto-disabled");
         opts.deferredNotifications.push({
           kind: "auto-disabled",
           job:
             sessionKey === result.parentUnavailable.parentSessionKey
-              ? { ...ownerNotice, ...(agentId ? { agentId } : {}) }
+              ? {
+                  ...notice,
+                  owner: undefined,
+                  sessionKey: undefined,
+                  ...(agentId ? { agentId } : {}),
+                }
               : notice,
           text: result.error ?? "Automation paused: its parent conversation is unavailable.",
         });
@@ -342,6 +347,7 @@ export function applyJobResult(
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;
+      terminalOneShot = isOneShotSchedule && runFailed;
     } else if (job.schedule.kind === "event") {
       // The transferred ingress receipt owns this occurrence. A timer retry
       // would lose its immutable event and could repeat an external side effect.
@@ -644,8 +650,10 @@ export function applyTriggerNoFireResult(
   job.state.runningAtMs = undefined;
   job.state.runningReceiptId = undefined;
   delete job.state.runningScheduleChangeId;
+  // A completed quiet check ends any waiting episode, like a payload run's completion.
+  delete job.state.admissionDeferred;
   job.updatedAtMs = result.endedAt;
-  if (!result.triggerEval.busy && opts.triggerOwnership !== "stale") {
+  if (opts.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
     // reset error streaks, but preserve delivery history and its alert cooldown.
     job.state.consecutiveErrors = 0;

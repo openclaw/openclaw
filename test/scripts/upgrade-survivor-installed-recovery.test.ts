@@ -115,7 +115,7 @@ it.skipIf(process.platform === "win32")(
         fs.writeFileSync(path.join(original, 'node_modules/.package-lock.json'), 'hidden cache');
         fs.chmodSync(original, 0o755);
         fs.chmodSync(path.join(original, 'node_modules'), 0o750);
-        fs.chmodSync(path.join(original, 'payload'), 0o644);
+        fs.chmodSync(path.join(original, 'payload'), 0o664);
         fs.chmodSync(path.join(original, 'node_modules/.package-lock.json'), 0o664);
         const before = capturePackageTree(original);
         assert(before.some(entry => entry.path === ''));
@@ -124,16 +124,16 @@ it.skipIf(process.platform === "win32")(
           before.find(entry => entry.path === 'alias').identity);
         assert.throws(() => assertPackageTree(before, before, { tightenPermissions: true }), /mode/);
         for (const entry of before) {
-          if (entry.kind !== 'link') fs.chmodSync(path.join(original, entry.path), entry.mode & 0o7700);
+          if (entry.kind !== 'link') fs.chmodSync(path.join(original, entry.path), entry.mode & 0o7755);
         }
         fs.renameSync(original, displaced);
         const after = capturePackageTree(displaced);
         assert.throws(() => assertPackageTree(before, after), /mode/);
         assert.equal(assertPackageTree(before, after, { tightenPermissions: true }), after);
         assertPackageTree(after, capturePackageTree(displaced));
-        fs.chmodSync(path.join(displaced, 'payload'), 0o644);
+        fs.chmodSync(path.join(displaced, 'payload'), 0o664);
         assert.throws(() => assertPackageTree(after, capturePackageTree(displaced)), /mode/);
-        fs.chmodSync(path.join(displaced, 'payload'), 0o600);
+        fs.chmodSync(path.join(displaced, 'payload'), 0o644);
         for (const [name, contents] of [['payload', 'different bytes'],
           ['node_modules/.package-lock.json', 'different cache']]) {
           const file = path.join(displaced, name);
@@ -164,8 +164,8 @@ it("rejects owner, special-bit, alias and partial-mode drift at the tightening b
   fs.writeFileSync(path.join(directory, "payload"), "package bytes");
   const captured = capturePackageTree(directory);
   const file = captured.find((entry) => entry.path === "payload")!;
-  const before = [{ ...file, mode: 0o6755 }];
-  const tightened = [{ ...before[0]!, mode: 0o6700 }];
+  const before = [{ ...file, mode: 0o6777 }];
+  const tightened = [{ ...before[0]!, mode: 0o6755 }];
   expect(assertPackageTree(before, tightened, { tightenPermissions: true })).toBe(tightened);
   for (const [field, value] of [
     ["uid", `${file.uid}-changed`],
@@ -173,10 +173,11 @@ it("rejects owner, special-bit, alias and partial-mode drift at the tightening b
     ["identity", `${file.identity}-changed`],
     ["kind", "directory"],
     ["content", "changed bytes"],
-    ["mode", 0o6600], // Lost owner execute permission.
-    ["mode", 0o4700], // Lost a special bit.
-    ["mode", 0o6740], // Only partly tightened.
-    ["mode", 0o6777], // Widened access.
+    ["mode", 0o6655], // Lost owner execute permission.
+    ["mode", 0o4755], // Lost a special bit.
+    ["mode", 0o6775], // Only partly tightened: group write remains.
+    ["mode", 0o6700], // Lost the group/other read and execute access that must stay.
+    ["mode", 0o6777], // Not tightened.
   ] as const) {
     expect(() =>
       assertPackageTree(before, [{ ...tightened[0]!, [field]: value }], {
