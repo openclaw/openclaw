@@ -6,6 +6,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { commit, git, initGit } from "./mobile-release-git.test-support.js";
 
 const mocks = vi.hoisted(() => ({ repo: "", command: vi.fn(), gateway: vi.fn(), rpc: vi.fn() }));
 vi.mock("../../scripts/lib/repo-root.mjs", async (importOriginal) => ({
@@ -16,11 +17,16 @@ vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) =>
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mjs")>()),
   runManagedCommand: mocks.command,
 }));
-vi.mock("../../scripts/lib/ios-release-gateway.js", () => ({
+vi.mock("../../scripts/lib/ios-release-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/ios-release-gateway.js")>()),
   prepareIOSReleaseGateway: mocks.gateway,
 }));
-vi.mock("../../src/gateway/call.js", () => ({ callGateway: mocks.rpc }));
-vi.mock("../helpers/openclaw-test-instance.js", () => ({
+vi.mock("../../src/gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/gateway/call.js")>()),
+  callGateway: mocks.rpc,
+}));
+vi.mock("../helpers/openclaw-test-instance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../helpers/openclaw-test-instance.js")>()),
   createOpenClawTestInstance: async () => ({
     startGateway: async () => {},
     cleanup: async () => {},
@@ -37,26 +43,11 @@ const suiteDirs = useAutoCleanupTempDirTracker(afterAll);
 let main: typeof import("../../scripts/android-release-e2e.js").main;
 let candidateSha: string;
 const originalExitCode = process.exitCode;
-function git(root: string, ...args: string[]) {
-  return execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-}
 function checkout(root: string) {
-  mkdirSync(root, { recursive: true });
-  git(root, "init", "-q");
+  initGit(root, { name: "Fixture", email: "fixture@example.invalid" });
   writeFileSync(path.join(root, ".gitignore"), "apps/android/**/build/\n");
   writeFileSync(path.join(root, "identity.txt"), path.basename(root));
-  git(root, "add", ".gitignore", "identity.txt");
-  git(
-    root,
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "commit",
-    "-qm",
-    "fixture",
-  );
-  return git(root, "rev-parse", "HEAD");
+  return commit(root, "fixture");
 }
 beforeAll(async () => {
   mocks.repo = path.join(suiteDirs.make("android-release-suite-"), "candidate");
@@ -187,6 +178,9 @@ it.each([
     const serialRoles = new Map<string, string>();
     const phasePids = new Map<string, number>();
     const finishes = new Map<string, () => void>();
+    const traffic = Object.fromEntries(
+      ["request", "response", "event"].map((kind) => ["/openclaw/wear/v1/" + kind, 1]),
+    );
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -201,16 +195,8 @@ it.each([
             nodeId: "release-" + role,
             pid: phasePids.get(role),
             healthy: true,
-            inbound: {
-              "/openclaw/wear/v1/request": 1,
-              "/openclaw/wear/v1/response": 1,
-              "/openclaw/wear/v1/event": 1,
-            },
-            outbound: {
-              "/openclaw/wear/v1/request": 1,
-              "/openclaw/wear/v1/response": 1,
-              "/openclaw/wear/v1/event": 1,
-            },
+            inbound: traffic,
+            outbound: traffic,
           }),
         };
       }),

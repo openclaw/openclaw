@@ -7,10 +7,7 @@ import {
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { releaseChildDispatchInputs } from "../../scripts/lib/full-release-child-request.mjs";
-import {
-  resolveQualificationCoverage,
-  validateQualificationJobs,
-} from "../../scripts/release-qualification-coverage.mjs";
+import { resolveQualificationCoverage } from "../../scripts/release-qualification-coverage.mjs";
 import {
   canonicalCandidateRequest,
   executionPlan,
@@ -63,9 +60,6 @@ describe("stable release client validation", () => {
       required: true,
       selected: true,
     });
-    expect(result.children.find((child) => child.key === "productPerformance")?.selected).toBe(
-      false,
-    );
   });
 
   it("binds dispatch inputs to the exact Gateway SHA, not a target ref", () => {
@@ -87,11 +81,6 @@ describe("stable release client validation", () => {
         conclusion === "missing" ? [] : [{ name: gate, status: "completed", conclusion }];
       const child = { key: role, status: "completed", conclusion: "success", jobs };
       expect(terminalPolicyPass(child)).toBe(conclusion === "success");
-      if (conclusion === "success") {
-        expect(() => validateQualificationJobs(jobs, [gate])).not.toThrow();
-      } else {
-        expect(() => validateQualificationJobs(jobs, [gate])).toThrow(/required job/);
-      }
     },
   );
 

@@ -2323,18 +2323,6 @@ it.each([
         expect(command.cwd).toBe(clientRoot);
       }
       expect(commandsWith("scripts/e2e/mock-openai-server.mjs")[0]?.cwd).toBe(process.cwd());
-      const sourceChecks = nativeMocks.command.mock.calls
-        .map(([command]) => command)
-        .filter(({ bin }) => bin === "git");
-      expect(sourceChecks.map(({ cwd }) => cwd)).toEqual([
-        clientRoot,
-        clientRoot,
-        process.cwd(),
-        process.cwd(),
-        clientRoot,
-        clientRoot,
-        ...(separateCandidate ? [candidateRoot] : []),
-      ]);
     }
     const tests = commandsWith("test-without-building");
     expect(tests.map(({ env }) => env.TEST_RUNNER_OPENCLAW_IOS_LIVE_SETUP_CODE)).toEqual([

@@ -13,28 +13,59 @@ describe("stable client compatibility release wiring", () => {
     "admits independent candidate and qualification roots for stable %s clients",
     (platform) => {
       const native = parse(readFileSync(`.github/workflows/${platform}-release-e2e.yml`, "utf8"));
+      for (const input of ["client_sha", "client_release_tag"]) {
+        expect(native.on.workflow_dispatch.inputs[input]).toMatchObject({
+          type: "string",
+          default: "",
+        });
+      }
       const steps = native.jobs.qualify.steps;
       const admission = steps[0].run.slice(steps[0].run.indexOf('if [[ -n "$CLIENT_SHA"'));
-      for (const client of ["", "c".repeat(40)]) {
+      expect(child.jobs[platform].needs).toBe("select");
+      expect(child.jobs[platform].with.client_sha).toBe("${{ needs.select.outputs.sha }}");
+      for (const [client, tag, target, status] of [
+        ["", "", "b", 0],
+        ["c", "v2026.11.5", "b", 0],
+        ["c", "v2026.11.5", "a", 0],
+        ["", "", "a", 1],
+        ["", "v2026.11.5", "b", 1],
+        ["c", "", "b", 1],
+      ] as const) {
         const result = spawnSync("bash", ["-eu", "-c", admission], {
           env: {
             ...process.env,
-            CLIENT_SHA: client,
-            CLIENT_RELEASE_TAG: client ? "v2026.11.5" : "",
-            TARGET_SHA: "a".repeat(40),
+            CLIENT_SHA: client.repeat(40),
+            CLIENT_RELEASE_TAG: tag,
+            TARGET_SHA: target.repeat(40),
             GITHUB_SHA: "b".repeat(40),
           },
         });
-        expect(result.status).toBe(client ? 0 : 1);
+        expect(result.status).toBe(status);
       }
       expect(
         steps.find(
           (step: { name?: string }) => step.name === "Checkout independent candidate Gateway",
         ).with.ref,
       ).toBe("${{ inputs.target_sha }}");
+      expect(
+        steps.find(
+          (step: { name?: string }) => step.name === "Checkout frozen stable client source",
+        ).with,
+      ).toMatchObject({
+        ref: "${{ inputs.client_sha }}",
+        path: ".openclaw/tmp/stable-client",
+        "persist-credentials": false,
+      });
+      expect(
+        steps.find((step: { name?: string }) => step.name === "Prepare stable Gateway selection")
+          .if,
+      ).toBe("inputs.client_sha == ''");
       const nativeRun = steps.find((step: { name?: string }) =>
         step.name?.startsWith("Qualify "),
       ).run;
+      expect(nativeRun).toContain("--client-root");
+      expect(nativeRun).toContain("--client-sha");
+      expect(nativeRun).toContain("--client-release-tag");
       expect(nativeRun).toContain('--harness-sha "$GITHUB_SHA"');
       expect(nativeRun).toContain(
         '--candidate-root "$GITHUB_WORKSPACE/.openclaw/tmp/candidate-gateway"',
