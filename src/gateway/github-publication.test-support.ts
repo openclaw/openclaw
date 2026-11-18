@@ -545,6 +545,21 @@ export function installGitHubPublicationTestHarness(
         mock.mockReset();
       }
     }
+    // Non-isolated workers may have loaded the real identity module before this fixture.
+    // Cover that existing module view too, without replacing repository admission.
+    const nativeIdentity = await vi.importActual<
+      typeof import("../agents/github-tool-identity.js")
+    >("../agents/github-tool-identity.js");
+    const nativePreparation = vi
+      .spyOn(nativeIdentity, "prepareGitHubPublicationIdentity")
+      .mockImplementation(mocks.prepareIdentity);
+    const nativeOptions = vi
+      .spyOn(nativeIdentity, "prepareGitHubPublicationOptionsIdentity")
+      .mockImplementation(mocks.prepareIdentity);
+    onTestFinished(() => {
+      nativePreparation.mockRestore();
+      nativeOptions.mockRestore();
+    });
     root = tempDirs.make("openclaw-publication-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     realWorktree = harnessOptions.realWorktree ?? false;
