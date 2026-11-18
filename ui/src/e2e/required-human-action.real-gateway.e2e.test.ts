@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import { expect, it } from "vitest";
+import { expect, it, onTestFailed } from "vitest";
 import { stampConfigWriteMetadata } from "../../../src/config/io.meta.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import {
@@ -272,6 +272,13 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it.each(ids)("keeps %s task-bound and requires a real recheck", async (caseId) => {
+    let phase = "started";
+    onTestFailed(() => {
+      console.error(
+        "[required-human-action]",
+        JSON.stringify({ caseId, phase, ...jobs.get(caseId) }),
+      );
+    });
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, locale: "en-US", serviceWorkers: "block" },
       async ({ page, context }) => {
@@ -280,6 +287,7 @@ suite.define(() => {
           expect(result.code, result.stderr).toBe(0);
           return result.stdout;
         });
+        phase = "paired";
         const key = "agent:main:" + caseId;
         const rpc = <T = unknown>(method: string, params: Record<string, unknown>) =>
           evaluateControlUiContext(
@@ -292,8 +300,10 @@ suite.define(() => {
           agentId: "main",
           label: "Required manual step " + caseId,
         });
+        phase = "session-created";
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key, "chat"));
         await waitForControlUiGatewayReady(page);
+        phase = "gateway-ready";
         await rpc("chat.send", {
           sessionKey: key,
           message:
@@ -302,10 +312,12 @@ suite.define(() => {
             ", record progress once, complete the app-dependent task, and continue after the required human-only step. The task is already authorized.",
           idempotencyKey: caseId + "-original",
         });
+        phase = "original-sent";
         const panel = page
           .locator(".chat-question-panel")
           .filter({ hasText: "required manual setup step" });
         await panel.waitFor();
+        phase = "question-visible";
         const state = jobs.get(caseId)!;
         expect(state.effects).toBe(0);
         expect(
@@ -328,9 +340,13 @@ suite.define(() => {
         } else if (caseId === "manual-in-panel") {
           expect(await panel.getByRole("link", { name: "Open link", exact: true }).count()).toBe(0);
           const manual = await context.newPage();
+          phase = "manual-page-created";
           await manual.goto(origin + "/manual?case=" + caseId);
+          phase = "manual-page-loaded";
           await manual.getByRole("button", { name: "Complete manual step" }).click();
+          phase = "manual-click-completed";
           await manual.close();
+          phase = "manual-page-closed";
         }
         if (caseId === "manual-cancelled") {
           await panel.getByRole("button", { name: "Skip", exact: true }).click();
@@ -338,6 +354,7 @@ suite.define(() => {
           await panel.getByRole("radio", { name: /^Ready to recheck/ }).click();
           await panel.getByRole("button", { name: "Submit", exact: true }).click();
         }
+        phase = "answer-submitted";
         const finalText =
           caseId === "manual-cancelled"
             ? "Required step stopped; dependent work was not resumed for " + caseId + "."
@@ -349,9 +366,11 @@ suite.define(() => {
                 caseId +
                 "; recorded progress was not repeated.";
         await page.getByRole("paragraph").filter({ hasText: finalText }).waitFor();
+        phase = "final-response-visible";
         await page
           .getByRole("button", { name: "Stop", exact: true })
           .waitFor({ state: "detached" });
+        phase = "run-stopped";
         expect(state.effects).toBe(
           caseId === "manual-success" || caseId === "manual-in-panel" ? 1 : 0,
         );
